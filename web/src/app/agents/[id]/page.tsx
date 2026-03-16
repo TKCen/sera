@@ -129,7 +129,7 @@ export default function AgentDetailPage() {
         </div>
         <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost">
           <Settings size={16} />
-          Edit Manifest
+          Edit
         </Link>
       </div>
 

@@ -1,0 +1,93 @@
+
+> web@0.1.0 dev
+> next dev
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.0.2:3000
+
+✓ Starting...
+Attention: Next.js now collects completely anonymous telemetry regarding usage.
+This information is used to shape Next.js' roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://nextjs.org/telemetry
+
+✓ Ready in 1954ms
+○ Compiling /agents/[id]/edit ...
+ GET /agents/architect-prime/edit 200 in 6.4s (compile: 6.1s, render: 307ms)
+(node:2098) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Failed to proxy http://localhost:3001/api/health AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+Failed to proxy http://localhost:3001/api/agents/architect-prime AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+Failed to proxy http://localhost:3001/api/skills AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+ GET /agents/architect-prime/edit 200 in 129ms (compile: 28ms, render: 102ms)
+Failed to proxy http://localhost:3001/api/health AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+Failed to proxy http://localhost:3001/api/agents/architect-prime AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+Failed to proxy http://localhost:3001/api/skills AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+ GET /agents/architect-prime/edit 200 in 102ms (compile: 24ms, render: 79ms)
+Failed to proxy http://localhost:3001/api/health AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+Failed to proxy http://localhost:3001/api/agents/architect-prime AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+Failed to proxy http://localhost:3001/api/skills AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}
+AggregateError:
+    at ignore-listed frames {
+  code: 'ECONNREFUSED'
+}

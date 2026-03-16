@@ -226,21 +226,28 @@ function ProviderCard({
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('providers');
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [llmConfig, setLlmConfig] = useState<{ temperature?: number }>({});
   const [loading, setLoading] = useState(true);
 
-  const fetchProviders = async () => {
+  const fetchData = async () => {
     try {
-      const res = await fetch('/api/core/providers');
-      const data = await res.json();
+      const [providersRes, llmRes] = await Promise.all([
+        fetch('/api/core/providers'),
+        fetch('/api/core/config/llm')
+      ]);
+      const data = await providersRes.json();
       setProviders(data.providers);
+
+      const llmData = await llmRes.json();
+      setLlmConfig(llmData);
     } catch (err) {
-      console.error('Failed to fetch providers:', err);
+      console.error('Failed to fetch data:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchProviders(); }, []);
+  useEffect(() => { fetchData(); }, []);
 
   const handleSave = async (id: string, cfg: { baseUrl: string; apiKey: string; model: string }) => {
     await fetch(`/api/core/providers/${id}`, {
@@ -248,7 +255,7 @@ export default function SettingsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),
     });
-    await fetchProviders();
+    await fetchData();
   };
 
   const handleTest = async (id: string) => {
@@ -265,7 +272,7 @@ export default function SettingsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ providerId: id }),
     });
-    await fetchProviders();
+    await fetchData();
   };
 
   const localProviders = providers.filter(p => p.category === 'local');
@@ -408,16 +415,21 @@ export default function SettingsPage() {
                 </h3>
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
-                      Temperature
-                    </label>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                        Temperature
+                      </label>
+                      <span className="text-xs text-sera-accent font-mono">{llmConfig?.temperature ?? 0.7}</span>
+                    </div>
                     <input
                       type="range"
                       min="0"
                       max="1"
                       step="0.1"
-                      defaultValue="0.7"
-                      className="w-full accent-sera-accent"
+                      value={llmConfig?.temperature ?? 0.7}
+                      readOnly
+                      className="w-full accent-sera-accent opacity-70 cursor-not-allowed"
+                      title="Temperature is currently configured via backend settings"
                     />
                     <div className="flex justify-between text-[10px] text-sera-text-dim">
                       <span>Precise (0)</span>

@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
@@ -21,9 +22,28 @@ import { MEMORY_BLOCK_TYPES } from './types.js';
  */
 export class MemoryBlockStore {
   private readonly basePath: string;
+  private cache: Map<MemoryBlockType, MemoryBlock> = new Map();
+  private watcher: fsSync.FSWatcher | null = null;
 
   constructor(basePath: string) {
     this.basePath = basePath;
+    this.initWatcher();
+  }
+
+  private initWatcher(): void {
+    const blocksDir = path.join(this.basePath, 'blocks');
+    if (fsSync.existsSync(blocksDir)) {
+      this.watcher = fsSync.watch(blocksDir, { recursive: true }, (eventType, filename) => {
+        if (filename && filename.endsWith('.md')) {
+          this.invalidateCache();
+        }
+      });
+    }
+  }
+
+  /** Invalidates the entire cache, forcing the next loadAll/loadBlock to read from disk. */
+  private invalidateCache(): void {
+    this.cache.clear();
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -44,6 +64,17 @@ export class MemoryBlockStore {
   /** Ensure the directory for a block type exists. */
   private async ensureBlockDir(type: MemoryBlockType): Promise<void> {
     await fs.mkdir(this.blockDir(type), { recursive: true });
+    if (!this.watcher) {
+      this.initWatcher(); // Retry watcher initialization if directory was just created
+    }
+  }
+
+  /** Stop the watcher to prevent memory leaks */
+  destroy(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
   }
 
   /** Serialize a MemoryEntry to a markdown string with frontmatter. */
@@ -112,6 +143,10 @@ export class MemoryBlockStore {
 
   /** Load all entries for a given block type. */
   async loadBlock(type: MemoryBlockType): Promise<MemoryBlock> {
+    if (this.cache.has(type)) {
+      return this.cache.get(type)!;
+    }
+
     await this.ensureBlockDir(type);
     const dir = this.blockDir(type);
     const files = await fs.readdir(dir);
@@ -126,7 +161,9 @@ export class MemoryBlockStore {
     // Sort by creation date (oldest first)
     entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-    return { type, entries };
+    const block = { type, entries };
+    this.cache.set(type, block);
+    return block;
   }
 
   /** Load all blocks. */
@@ -158,11 +195,18 @@ export class MemoryBlockStore {
     const filename = `${this.slugify(entry.title)}.md`;
     const filepath = path.join(this.blockDir(type), filename);
     await fs.writeFile(filepath, this.serialize(entry), 'utf8');
+    this.invalidateCache();
     return entry;
   }
 
   /** Retrieve a single entry by UUID. */
   async getEntry(id: string): Promise<MemoryEntry | null> {
+    // Check cache first
+    for (const block of this.cache.values()) {
+      const cachedEntry = block.entries.find((e) => e.id === id);
+      if (cachedEntry) return cachedEntry;
+    }
+
     const result = await this.findEntryFile(id);
     if (!result) return null;
     const raw = await fs.readFile(result.filepath, 'utf8');
@@ -178,6 +222,7 @@ export class MemoryBlockStore {
     entry.content = content;
     entry.updatedAt = new Date().toISOString();
     await fs.writeFile(result.filepath, this.serialize(entry), 'utf8');
+    this.invalidateCache();
     return entry;
   }
 
@@ -186,6 +231,7 @@ export class MemoryBlockStore {
     const result = await this.findEntryFile(id);
     if (!result) return false;
     await fs.unlink(result.filepath);
+    this.invalidateCache();
     return true;
   }
 
@@ -206,6 +252,7 @@ export class MemoryBlockStore {
     const filename = `${this.slugify(entry.title)}.md`;
     const filepath = path.join(this.blockDir(toType), filename);
     await fs.writeFile(filepath, this.serialize(entry), 'utf8');
+    this.invalidateCache();
     return entry;
   }
 
@@ -221,6 +268,7 @@ export class MemoryBlockStore {
       entry.refs.push(toId);
       entry.updatedAt = new Date().toISOString();
       await fs.writeFile(result.filepath, this.serialize(entry), 'utf8');
+      this.invalidateCache();
     }
     return true;
   }
@@ -236,6 +284,7 @@ export class MemoryBlockStore {
     entry.refs.splice(idx, 1);
     entry.updatedAt = new Date().toISOString();
     await fs.writeFile(result.filepath, this.serialize(entry), 'utf8');
+    this.invalidateCache();
     return true;
   }
 

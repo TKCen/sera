@@ -2,7 +2,15 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, Loader2, Bot, User, Brain, Eye, Map, Zap, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { subscribeToThoughts, type ThoughtEvent, disconnectClient } from '../../lib/centrifugo';
+
+interface AgentInfo {
+  name: string;
+  role: string;
+  displayName: string;
+}
 
 interface ChatMessage {
   id: string;
@@ -33,6 +41,8 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [thoughts, setThoughts] = useState<ThoughtEvent[]>([]);
   const [showThoughts, setShowThoughts] = useState(true);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [selectedAgentName, setSelectedAgentName] = useState<string>('architect-prime');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const thoughtsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -45,11 +55,31 @@ export default function ChatPage() {
     thoughtsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [thoughts]);
 
+  // Fetch available agents
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const res = await fetch('/api/core/agents');
+        if (res.ok) {
+          const data = await res.json();
+          setAgents(data);
+          if (data.length > 0 && !data.find((a: AgentInfo) => a.name === selectedAgentName)) {
+            setSelectedAgentName(data[0].name);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch agents:', err);
+      }
+    };
+    fetchAgents();
+  }, [selectedAgentName]);
+
   // Subscribe to agent thoughts via Centrifugo
   useEffect(() => {
-    // Default agent for thought streaming — uses first agent
-    // In the future this will be dynamic based on the active agent
-    const unsubscribe = subscribeToThoughts('architect-prime', (event) => {
+    if (!selectedAgentName) return;
+
+    setThoughts([]); // Clear thoughts when switching agents
+    const unsubscribe = subscribeToThoughts(selectedAgentName, (event) => {
       setThoughts(prev => [...prev.slice(-49), event]); // Keep last 50 thoughts
     });
 
@@ -57,7 +87,7 @@ export default function ChatPage() {
       unsubscribe();
       disconnectClient();
     };
-  }, []);
+  }, [selectedAgentName]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
@@ -79,7 +109,7 @@ export default function ChatPage() {
       const res = await fetch('/api/core/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: trimmed, conversationId }),
+        body: JSON.stringify({ message: trimmed, conversationId, agentName: selectedAgentName }),
       });
       const data = await res.json();
 
@@ -116,10 +146,28 @@ export default function ChatPage() {
     }
   };
 
+  const agentSelector = (
+    <div className="absolute top-4 right-8 z-10 flex items-center gap-2">
+      <label className="text-xs text-sera-text-muted">Agent:</label>
+      <select
+        value={selectedAgentName}
+        onChange={(e) => setSelectedAgentName(e.target.value)}
+        className="bg-sera-surface border border-sera-border rounded px-2 py-1 text-xs text-sera-text focus:outline-none focus:border-sera-accent"
+      >
+        {agents.map((agent) => (
+          <option key={agent.name} value={agent.name}>
+            {agent.displayName || agent.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
   // Empty state
   if (messages.length === 0 && !isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full px-8">
+      <div className="flex flex-col items-center justify-center h-full px-8 relative">
+        {agentSelector}
         <div className="w-16 h-16 rounded-2xl bg-sera-accent-soft flex items-center justify-center mb-6">
           <Bot size={32} className="text-sera-accent" />
         </div>
@@ -158,7 +206,8 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
+      {agentSelector}
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
         {/* Messages */}
@@ -175,13 +224,19 @@ export default function ChatPage() {
                   ? 'bg-sera-accent text-sera-bg'
                   : 'bg-sera-surface border border-sera-border text-sera-text'
               }`}>
-                <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+                <div className={`text-sm break-words leading-relaxed prose prose-sm max-w-none ${msg.sender === 'user' ? 'prose-invert text-sera-bg' : 'text-sera-text'}`}>
+                  {msg.sender === 'user' ? (
+                    <p className="whitespace-pre-wrap m-0">{msg.text}</p>
+                  ) : (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                  )}
+                </div>
                 {msg.thought && msg.thought !== msg.text && (
-                  <details className="mt-2 border-t border-sera-border pt-2">
-                    <summary className="text-[11px] text-sera-text-dim cursor-pointer hover:text-sera-accent transition-colors">
+                  <details className={`mt-2 border-t pt-2 ${msg.sender === 'user' ? 'border-sera-bg/20' : 'border-sera-border'}`}>
+                    <summary className={`text-[11px] cursor-pointer transition-colors ${msg.sender === 'user' ? 'text-sera-bg/70 hover:text-sera-bg' : 'text-sera-text-dim hover:text-sera-accent'}`}>
                       Thought process
                     </summary>
-                    <p className="text-[11px] text-sera-text-muted mt-1 italic">{msg.thought}</p>
+                    <p className={`text-[11px] mt-1 italic ${msg.sender === 'user' ? 'text-sera-bg/80' : 'text-sera-text-muted'}`}>{msg.thought}</p>
                   </details>
                 )}
                 <span className="text-[10px] opacity-50 mt-1.5 block">

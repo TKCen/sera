@@ -19,8 +19,10 @@ export function createIntercomRouter(
   const router = Router();
 
   /**
-   * POST /publish — publish a raw message to a channel.
-   * Body: { agent, channel, type, payload }
+   * Publish a raw message to a channel.
+   * @param req Express request containing agent, channel, type, and payload in body
+   * @param res Express response
+   * @returns {Promise<void>}
    */
   router.post('/publish', async (req, res) => {
     try {
@@ -62,8 +64,10 @@ export function createIntercomRouter(
   });
 
   /**
-   * POST /dm — send a direct message to another agent.
-   * Body: { from, to, payload }
+   * Send a direct message to another agent.
+   * @param req Express request containing from, to, and payload in body
+   * @param res Express response
+   * @returns {Promise<void>}
    */
   router.post('/dm', async (req, res) => {
     try {
@@ -96,7 +100,10 @@ export function createIntercomRouter(
   });
 
   /**
-   * GET /history?channel=...&limit=...
+   * Retrieve channel history.
+   * @param req Express request containing channel and optional limit in query
+   * @param res Express response
+   * @returns {Promise<void>}
    */
   router.get('/history', async (req, res) => {
     try {
@@ -122,8 +129,10 @@ export function createIntercomRouter(
   });
 
   /**
-   * GET /channels?agent=...
    * List channels the given agent can interact with.
+   * @param req Express request containing agent in query
+   * @param res Express response
+   * @returns {void}
    */
   router.get('/channels', (req, res) => {
     const { agent } = req.query as { agent?: string };

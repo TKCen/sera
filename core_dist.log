@@ -1,0 +1,64 @@
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[Orchestrator] Loaded 3 agents from manifests
+[Orchestrator] Primary agent: architect-prime
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[CircleRegistry] Loaded: development (development.circle.yaml)
+[CircleRegistry] Loaded: operations (operations.circle.yaml)
+[CircleRegistry] Registered 2 circles
+[Orchestrator] Watching for agent changes in /app/agents
+❌ Database initialization failed: AggregateError [ECONNREFUSED]:
+    at /app/core/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async initDb (file:///app/core/dist/lib/database.js:10:9) {
+  code: 'ECONNREFUSED',
+  [errors]: [
+    Error: connect ECONNREFUSED ::1:5432
+        at createConnectionError (node:net:1678:14)
+        at afterConnectMultiple (node:net:1708:16) {
+      errno: -111,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 5432
+    },
+    Error: connect ECONNREFUSED 127.0.0.1:5432
+        at createConnectionError (node:net:1678:14)
+        at afterConnectMultiple (node:net:1708:16) {
+      errno: -111,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 5432
+    }
+  ]
+}
+Failed to start SERA Core: AggregateError [ECONNREFUSED]:
+    at /app/core/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async initDb (file:///app/core/dist/lib/database.js:10:9) {
+  code: 'ECONNREFUSED',
+  [errors]: [
+    Error: connect ECONNREFUSED ::1:5432
+        at createConnectionError (node:net:1678:14)
+        at afterConnectMultiple (node:net:1708:16) {
+      errno: -111,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 5432
+    },
+    Error: connect ECONNREFUSED 127.0.0.1:5432
+        at createConnectionError (node:net:1678:14)
+        at afterConnectMultiple (node:net:1708:16) {
+      errno: -111,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 5432
+    }
+  ]
+}

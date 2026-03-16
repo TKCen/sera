@@ -58,6 +58,23 @@ export class IntercomService {
   }
 
   /**
+   * Check who is subscribed to a Centrifugo channel.
+   */
+  async presence(channel: string): Promise<Record<string, unknown>> {
+    try {
+      const res = await this.http.post('', {
+        method: 'presence',
+        params: { channel },
+      });
+      return res.data?.result?.presence || {};
+    } catch (err) {
+      const message = err instanceof AxiosError ? err.message : String(err);
+      console.error(`[Intercom] Failed to get presence for ${channel}: ${message}`);
+      return {};
+    }
+  }
+
+  /**
    * Retrieve channel history from Centrifugo.
    */
   async getHistory(channel: string, limit: number = 50): Promise<unknown[]> {

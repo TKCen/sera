@@ -1,118 +1,136 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
-import { Bot, MessageSquare, BookOpen, Clock, ArrowLeft } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Bot, ArrowLeft, Shield, Settings, BookOpen, Cpu, MessageSquare, Wrench, Users } from 'lucide-react';
 import Link from 'next/link';
 
-type Tab = 'sessions' | 'knowledge';
-
-interface Session {
-  id: string;
-  title: string;
-  lastMessage: string;
-  timestamp: string;
-  messageCount: number;
+interface AgentDetail {
+  name: string;
+  displayName: string;
+  role: string;
+  tier: number;
+  circle: string;
+  icon: string;
+  manifest: {
+    apiVersion: string;
+    kind: string;
+    metadata: Record<string, any>;
+    identity: {
+      role: string;
+      description: string;
+      communicationStyle?: string;
+      principles?: string[];
+    };
+    model: {
+      provider: string;
+      name: string;
+      temperature?: number;
+      fallback?: Array<{ provider: string; name: string; maxComplexity?: number }>;
+    };
+    tools?: { allowed?: string[]; denied?: string[] };
+    skills?: string[];
+    subagents?: { allowed?: Array<{ role: string; maxInstances?: number; requiresApproval?: boolean }> };
+    intercom?: {
+      canMessage?: string[];
+      channels?: { publish?: string[]; subscribe?: string[] };
+    };
+    resources?: { memory?: string; cpu?: string };
+    workspace?: { provider?: string; path?: string };
+    memory?: { personalMemory?: string; sharedKnowledge?: string };
+  };
 }
 
-interface KnowledgeItem {
-  id: string;
-  title: string;
-  type: 'memory' | 'document' | 'archive';
-  updated: string;
-  summary: string;
-}
+type Tab = 'overview' | 'tools' | 'intercom';
 
-// Mock data — will be replaced with real API calls
-const mockSessions: Session[] = [
-  {
-    id: 's1',
-    title: 'Debugging Docker Build',
-    lastMessage: 'The issue was with the module resolution in the Dockerfile…',
-    timestamp: '2 hours ago',
-    messageCount: 24,
-  },
-  {
-    id: 's2',
-    title: 'Architecture Discussion',
-    lastMessage: 'I recommend using the event-driven approach for…',
-    timestamp: '5 hours ago',
-    messageCount: 18,
-  },
-  {
-    id: 's3',
-    title: 'Code Review — API Routes',
-    lastMessage: 'The error handling looks good, but consider adding…',
-    timestamp: 'Yesterday',
-    messageCount: 12,
-  },
-];
-
-const mockKnowledge: KnowledgeItem[] = [
-  {
-    id: 'k1',
-    title: 'Project Architecture',
-    type: 'memory',
-    updated: '1 hour ago',
-    summary: 'Sera uses a monorepo structure with core (Node.js + TypeScript) and web (Next.js) packages.',
-  },
-  {
-    id: 'k2',
-    title: 'User Preferences',
-    type: 'memory',
-    updated: '3 hours ago',
-    summary: 'Prefers TypeScript, dark mode, and modern sleek UI design. Uses Docker extensively.',
-  },
-  {
-    id: 'k3',
-    title: 'Homelab Docker Setup',
-    type: 'document',
-    updated: 'Yesterday',
-    summary: 'Documentation on the Docker Compose configuration for the homelab environment.',
-  },
-];
-
-const agentNames: Record<string, { name: string; role: string }> = {
-  '1': { name: 'Sera-Primary', role: 'Coordinator' },
-  '2': { name: 'Sera-Researcher', role: 'Researcher' },
+const TIER_LABELS: Record<number, { label: string; class: string; desc: string }> = {
+  1: { label: 'Tier 1 — Restricted', class: 'sera-badge-muted', desc: 'Read-only filesystem, no network' },
+  2: { label: 'Tier 2 — Standard', class: 'sera-badge-warning', desc: 'Read-write workspace, SERA network' },
+  3: { label: 'Tier 3 — Privileged', class: 'sera-badge-error', desc: 'Full access, bridged network' },
 };
 
 export default function AgentDetailPage() {
   const params = useParams();
-  const agentId = params.id as string;
-  const [activeTab, setActiveTab] = useState<Tab>('sessions');
+  const agentName = params.id as string;
+  const [agent, setAgent] = useState<AgentDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>('overview');
 
-  const agent = agentNames[agentId] || { name: `Agent ${agentId}`, role: 'Worker' };
+  useEffect(() => {
+    fetch(`/api/core/agents/${agentName}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Agent not found`);
+        return res.json();
+      })
+      .then(setAgent)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [agentName]);
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode; count: number }[] = [
-    { id: 'sessions', label: 'Sessions', icon: <MessageSquare size={15} />, count: mockSessions.length },
-    { id: 'knowledge', label: 'Knowledge', icon: <BookOpen size={15} />, count: mockKnowledge.length },
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-sm text-sera-text-muted">Loading…</span>
+      </div>
+    );
+  }
+
+  if (error || !agent) {
+    return (
+      <div className="p-8 max-w-5xl mx-auto">
+        <Link href="/agents" className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+          <ArrowLeft size={14} /> Back to Agents
+        </Link>
+        <div className="sera-card-static p-6 text-center">
+          <Bot size={32} className="text-sera-text-dim mx-auto mb-3" />
+          <p className="text-sm text-sera-error">{error || 'Agent not found'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const m = agent.manifest;
+  const tierInfo = TIER_LABELS[agent.tier] || TIER_LABELS[1];
+
+  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: 'overview', label: 'Overview', icon: <Cpu size={15} /> },
+    { id: 'tools', label: 'Tools & Skills', icon: <Wrench size={15} /> },
+    { id: 'intercom', label: 'Intercom', icon: <MessageSquare size={15} /> },
   ];
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="mb-8">
-        <Link
-          href="/agents"
-          className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4"
-        >
-          <ArrowLeft size={14} />
-          Back to Agents
-        </Link>
+      {/* Breadcrumb */}
+      <Link href="/agents" className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+        <ArrowLeft size={14} /> Back to Agents
+      </Link>
 
+      {/* Header */}
+      <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-sera-accent-soft flex items-center justify-center">
-            <Bot size={24} className="text-sera-accent" />
+          <div className="w-14 h-14 rounded-xl bg-sera-accent-soft flex items-center justify-center text-2xl">
+            {agent.icon}
           </div>
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="sera-page-title">{agent.name}</h1>
-              <span className="sera-badge-success">Running</span>
+              <h1 className="sera-page-title">{agent.displayName}</h1>
+              <span className={tierInfo.class}>
+                <Shield size={10} className="inline mr-0.5" />
+                {tierInfo.label}
+              </span>
             </div>
             <p className="text-sm text-sera-text-muted mt-0.5">{agent.role}</p>
+            <div className="flex items-center gap-2 mt-1.5">
+              <span className="sera-badge-accent">{agent.circle}</span>
+              <span className="text-[11px] text-sera-text-dim font-mono">{agent.name}</span>
+            </div>
           </div>
         </div>
+        <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost">
+          <Settings size={16} />
+          Edit Manifest
+        </Link>
       </div>
 
       {/* Tabs */}
@@ -121,87 +139,235 @@ export default function AgentDetailPage() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`
-              flex items-center gap-2 px-4 py-3 text-sm font-medium
-              border-b-2 transition-colors duration-150
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors duration-150
               ${activeTab === tab.id
                 ? 'border-sera-accent text-sera-accent'
                 : 'border-transparent text-sera-text-muted hover:text-sera-text'
-              }
-            `}
+              }`}
           >
             {tab.icon}
             {tab.label}
-            <span className={`
-              text-[11px] px-1.5 py-0.5 rounded-md
-              ${activeTab === tab.id
-                ? 'bg-sera-accent-soft text-sera-accent'
-                : 'bg-sera-surface text-sera-text-dim'
-              }
-            `}>
-              {tab.count}
-            </span>
           </button>
         ))}
       </div>
 
-      {/* Tab Content */}
-      {activeTab === 'sessions' && (
-        <div className="space-y-2">
-          {mockSessions.map((session) => (
-            <div
-              key={session.id}
-              className="sera-card p-4 cursor-pointer group"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-medium text-sera-text group-hover:text-sera-accent transition-colors">
-                    {session.title}
-                  </h3>
-                  <p className="text-xs text-sera-text-muted mt-1 truncate">
-                    {session.lastMessage}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 ml-4 flex-shrink-0">
-                  <span className="text-[11px] text-sera-text-dim flex items-center gap-1">
-                    <MessageSquare size={11} />
-                    {session.messageCount}
-                  </span>
-                  <span className="text-[11px] text-sera-text-dim flex items-center gap-1">
-                    <Clock size={11} />
-                    {session.timestamp}
-                  </span>
-                </div>
+      {/* Overview Tab */}
+      {activeTab === 'overview' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Identity */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Identity</h3>
+            <p className="text-sm text-sera-text leading-relaxed mb-3">{m.identity.description}</p>
+            {m.identity.communicationStyle && (
+              <div className="mb-3">
+                <span className="text-[11px] text-sera-text-dim uppercase tracking-wide">Communication Style</span>
+                <p className="text-xs text-sera-text-muted mt-1">{m.identity.communicationStyle}</p>
               </div>
+            )}
+            {m.identity.principles && m.identity.principles.length > 0 && (
+              <div>
+                <span className="text-[11px] text-sera-text-dim uppercase tracking-wide">Principles</span>
+                <ul className="mt-1 space-y-1">
+                  {m.identity.principles.map((p, i) => (
+                    <li key={i} className="text-xs text-sera-text-muted flex items-start gap-1.5">
+                      <span className="text-sera-accent mt-0.5">•</span>
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Model */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Model Configuration</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-sera-text-muted">Provider</span>
+                <span className="sera-badge-accent">{m.model.provider}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-sera-text-muted">Model</span>
+                <span className="text-sm text-sera-text font-mono">{m.model.name}</span>
+              </div>
+              {m.model.temperature !== undefined && (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-sera-text-muted">Temperature</span>
+                  <span className="text-sm text-sera-text">{m.model.temperature}</span>
+                </div>
+              )}
+              {m.model.fallback && m.model.fallback.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-sera-border">
+                  <span className="text-[11px] text-sera-text-dim uppercase tracking-wide">Fallback Models</span>
+                  {m.model.fallback.map((fb, i) => (
+                    <div key={i} className="flex items-center justify-between mt-1.5">
+                      <span className="text-xs text-sera-text-muted font-mono">{fb.provider}/{fb.name}</span>
+                      {fb.maxComplexity && (
+                        <span className="text-[11px] text-sera-text-dim">max complexity: {fb.maxComplexity}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+          </div>
+
+          {/* Resources */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Resources</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-sera-text-muted">Security Tier</span>
+                <span className={tierInfo.class}>{tierInfo.label}</span>
+              </div>
+              <p className="text-[11px] text-sera-text-dim">{tierInfo.desc}</p>
+              {m.resources && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-sera-text-muted">Memory Limit</span>
+                    <span className="text-sm text-sera-text font-mono">{m.resources.memory || '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-sera-text-muted">CPU Limit</span>
+                    <span className="text-sm text-sera-text font-mono">{m.resources.cpu || '—'}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Workspace & Memory */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Workspace & Memory</h3>
+            <div className="space-y-3">
+              {m.workspace && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-sera-text-muted">Storage Provider</span>
+                    <span className="sera-badge-muted">{m.workspace.provider || 'default'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-sera-text-muted">Workspace Path</span>
+                    <span className="text-xs text-sera-text font-mono truncate max-w-[200px]">{m.workspace.path || '—'}</span>
+                  </div>
+                </>
+              )}
+              {m.memory && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-sera-text-muted">Personal Memory</span>
+                    <span className="text-xs text-sera-text font-mono truncate max-w-[200px]">{m.memory.personalMemory || '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-sera-text-muted">Shared Knowledge</span>
+                    <span className="text-xs text-sera-text font-mono truncate max-w-[200px]">{m.memory.sharedKnowledge || '—'}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {activeTab === 'knowledge' && (
-        <div className="space-y-2">
-          {mockKnowledge.map((item) => (
-            <div
-              key={item.id}
-              className="sera-card p-4 cursor-pointer group"
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-medium text-sera-text group-hover:text-sera-accent transition-colors">
-                    {item.title}
-                  </h3>
-                  <span className="sera-badge-muted">{item.type}</span>
-                </div>
-                <span className="text-[11px] text-sera-text-dim flex items-center gap-1">
-                  <Clock size={11} />
-                  {item.updated}
-                </span>
-              </div>
-              <p className="text-xs text-sera-text-muted leading-relaxed">
-                {item.summary}
-              </p>
+      {/* Tools & Skills Tab */}
+      {activeTab === 'tools' && (
+        <div className="space-y-6">
+          {/* Allowed Tools */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Allowed Tools</h3>
+            <div className="flex flex-wrap gap-2">
+              {m.tools?.allowed?.map((tool) => (
+                <span key={tool} className="sera-badge-accent">{tool}</span>
+              )) || <span className="text-xs text-sera-text-dim">No tools configured</span>}
             </div>
-          ))}
+          </div>
+
+          {/* Denied Tools */}
+          {m.tools?.denied && m.tools.denied.length > 0 && (
+            <div className="sera-card-static p-5">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Denied Tools</h3>
+              <div className="flex flex-wrap gap-2">
+                {m.tools.denied.map((tool) => (
+                  <span key={tool} className="sera-badge-error">{tool}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Skills */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Skills</h3>
+            <div className="flex flex-wrap gap-2">
+              {m.skills?.map((skill) => (
+                <span key={skill} className="sera-badge bg-purple-500/15 text-purple-400">{skill}</span>
+              )) || <span className="text-xs text-sera-text-dim">No skills configured</span>}
+            </div>
+          </div>
+
+          {/* Subagents */}
+          {m.subagents?.allowed && m.subagents.allowed.length > 0 && (
+            <div className="sera-card-static p-5">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Allowed Subagents</h3>
+              <div className="space-y-2">
+                {m.subagents.allowed.map((sa) => (
+                  <div key={sa.role} className="flex items-center justify-between py-1.5">
+                    <div className="flex items-center gap-2">
+                      <Users size={14} className="text-sera-text-dim" />
+                      <span className="text-sm text-sera-text">{sa.role}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {sa.maxInstances && (
+                        <span className="text-[11px] text-sera-text-dim">max: {sa.maxInstances}</span>
+                      )}
+                      {sa.requiresApproval && (
+                        <span className="sera-badge-warning">Approval Required</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Intercom Tab */}
+      {activeTab === 'intercom' && (
+        <div className="space-y-6">
+          {/* Can Message */}
+          <div className="sera-card-static p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Can Message</h3>
+            <div className="flex flex-wrap gap-2">
+              {m.intercom?.canMessage?.map((peer) => (
+                <Link key={peer} href={`/agents/${peer}`} className="sera-badge-accent hover:brightness-110 transition-all">
+                  {peer}
+                </Link>
+              )) || <span className="text-xs text-sera-text-dim">No peers configured</span>}
+            </div>
+          </div>
+
+          {/* Channels */}
+          {m.intercom?.channels && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="sera-card-static p-5">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Publish Channels</h3>
+                <div className="flex flex-wrap gap-2">
+                  {m.intercom.channels.publish?.map((ch) => (
+                    <span key={ch} className="sera-badge bg-emerald-500/15 text-emerald-400">{ch}</span>
+                  )) || <span className="text-xs text-sera-text-dim">None</span>}
+                </div>
+              </div>
+              <div className="sera-card-static p-5">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Subscribe Channels</h3>
+                <div className="flex flex-wrap gap-2">
+                  {m.intercom.channels.subscribe?.map((ch) => (
+                    <span key={ch} className="sera-badge bg-blue-500/15 text-blue-400">{ch}</span>
+                  )) || <span className="text-xs text-sera-text-dim">None</span>}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

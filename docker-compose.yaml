@@ -14,6 +14,7 @@ services:
       - ./core/config:/app/config
     environment:
       - NODE_ENV=development
+      - WORKSPACE_DIR=/app/workspace
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api
       - QDRANT_URL=http://qdrant:6333

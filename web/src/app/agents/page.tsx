@@ -1,76 +1,59 @@
 'use client';
 
-import { Bot, Plus, Settings as SettingsIcon, Play, Square } from 'lucide-react';
-import { useState } from 'react';
+import { Bot, Plus, Settings as SettingsIcon, Shield, RefreshCw } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
 
 interface Agent {
-  id: string;
   name: string;
+  displayName: string;
   role: string;
-  model: string;
-  status: 'running' | 'stopped';
+  tier: number;
+  circle: string;
+  icon: string;
 }
 
-interface AgentTemplate {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  categoryColor: string;
-}
-
-const mockRunningAgents: Agent[] = [
-  { id: '1', name: 'Sera-Primary', role: 'Coordinator', model: 'gemini-3-flash', status: 'running' },
-  { id: '2', name: 'Sera-Researcher', role: 'Researcher', model: 'gemini-3-flash', status: 'running' },
-];
-
-const agentTemplates: AgentTemplate[] = [
-  {
-    id: 'general',
-    name: 'General Assistant',
-    category: 'General',
-    description: 'A versatile conversational agent that can help with everyday tasks, answer questions, and provide recommendations.',
-    categoryColor: 'bg-sera-accent-soft text-sera-accent',
-  },
-  {
-    id: 'code-helper',
-    name: 'Code Helper',
-    category: 'Development',
-    description: 'A programming-focused agent that writes, reviews, and debugs code across multiple languages.',
-    categoryColor: 'bg-purple-500/15 text-purple-400',
-  },
-  {
-    id: 'researcher',
-    name: 'Researcher',
-    category: 'Research',
-    description: 'An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries.',
-    categoryColor: 'bg-blue-500/15 text-blue-400',
-  },
-  {
-    id: 'writer',
-    name: 'Writer',
-    category: 'Creative',
-    description: 'A creative writing agent that helps with drafting, editing, and improving written content of all kinds.',
-    categoryColor: 'bg-pink-500/15 text-pink-400',
-  },
-  {
-    id: 'devops',
-    name: 'DevOps Engineer',
-    category: 'Development',
-    description: 'A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting.',
-    categoryColor: 'bg-purple-500/15 text-purple-400',
-  },
-  {
-    id: 'data-analyst',
-    name: 'Data Analyst',
-    category: 'Analytics',
-    description: 'A data-focused agent that helps analyze datasets, create queries, and interpret statistical results.',
-    categoryColor: 'bg-amber-500/15 text-amber-400',
-  },
-];
+const TIER_LABELS: Record<number, { label: string; class: string }> = {
+  1: { label: 'Tier 1', class: 'sera-badge-muted' },
+  2: { label: 'Tier 2', class: 'sera-badge-warning' },
+  3: { label: 'Tier 3', class: 'sera-badge-error' },
+};
 
 export default function AgentsPage() {
-  const [agents] = useState<Agent[]>(mockRunningAgents);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
+
+  const fetchAgents = async () => {
+    try {
+      const res = await fetch('/api/core/agents');
+      if (!res.ok) throw new Error(`Failed to fetch agents: ${res.statusText}`);
+      const data = await res.json();
+      setAgents(data);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAgents();
+  }, []);
+
+  const handleReload = async () => {
+    setReloading(true);
+    try {
+      await fetch('/api/core/agents/reload', { method: 'POST' });
+      await fetchAgents();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setReloading(false);
+    }
+  };
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -80,83 +63,89 @@ export default function AgentsPage() {
           <h1 className="sera-page-title">Agents</h1>
           <p className="text-sm text-sera-text-muted mt-1">Manage and monitor your autonomous agents</p>
         </div>
-        <button className="sera-btn-primary">
-          <Plus size={16} />
-          New Agent
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleReload}
+            disabled={reloading}
+            className="sera-btn-ghost"
+            title="Reload agent manifests from disk"
+          >
+            <RefreshCw size={16} className={reloading ? 'animate-spin' : ''} />
+            Reload
+          </button>
+        </div>
       </div>
 
-      {/* Running Agents */}
-      {agents.length > 0 && (
-        <section className="mb-10">
+      {/* Loading */}
+      {loading && (
+        <div className="flex items-center justify-center py-20">
+          <div className="flex items-center gap-3 text-sera-text-muted">
+            <RefreshCw size={18} className="animate-spin" />
+            <span className="text-sm">Loading agents…</span>
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="sera-card-static p-4 mb-6 border-sera-error/30 bg-sera-error/5">
+          <p className="text-sm text-sera-error">{error}</p>
+        </div>
+      )}
+
+      {/* Agents Grid */}
+      {!loading && agents.length > 0 && (
+        <section>
           <h2 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4">
-            Your Agents
+            Registered Agents ({agents.length})
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {agents.map((agent) => (
-              <a
-                key={agent.id}
-                href={`/agents/${agent.id}`}
-                className="sera-card p-4 group cursor-pointer"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="w-9 h-9 rounded-lg bg-sera-accent-soft flex items-center justify-center">
-                    <Bot size={18} className="text-sera-accent" />
+            {agents.map((agent) => {
+              const tierInfo = TIER_LABELS[agent.tier] || TIER_LABELS[1];
+              return (
+                <Link
+                  key={agent.name}
+                  href={`/agents/${agent.name}`}
+                  className="sera-card p-4 group cursor-pointer"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-sera-accent-soft flex items-center justify-center text-lg">
+                      {agent.icon}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className={tierInfo.class}>
+                        <Shield size={10} className="inline mr-0.5" />
+                        {tierInfo.label}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="sera-badge-success">
-                      {agent.status === 'running' ? 'Running' : 'Stopped'}
-                    </span>
-                    <button
-                      className="p-1 rounded-md hover:bg-sera-surface-hover transition-colors"
-                      onClick={(e) => { e.preventDefault(); }}
-                    >
-                      <SettingsIcon size={14} className="text-sera-text-dim" />
-                    </button>
+                  <h3 className="text-sm font-semibold text-sera-text group-hover:text-sera-accent transition-colors">
+                    {agent.displayName}
+                  </h3>
+                  <p className="text-xs text-sera-text-muted mt-1 line-clamp-2">{agent.role}</p>
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="sera-badge-accent">{agent.circle}</span>
+                    <span className="text-[11px] text-sera-text-dim font-mono">{agent.name}</span>
                   </div>
-                </div>
-                <h3 className="text-sm font-semibold text-sera-text group-hover:text-sera-accent transition-colors">
-                  {agent.name}
-                </h3>
-                <p className="text-xs text-sera-text-muted mt-1">{agent.role}</p>
-                <p className="text-[11px] text-sera-text-dim mt-2 font-mono">{agent.model}</p>
-              </a>
-            ))}
+                </Link>
+              );
+            })}
           </div>
         </section>
       )}
 
-      {/* Agent Templates */}
-      <section>
-        <h2 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4">
-          Start a New Agent
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {agentTemplates.map((template) => (
-            <button
-              key={template.id}
-              className="sera-card p-5 text-left group"
-              onClick={() => console.log(`Launch agent: ${template.id}`)}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <h3 className="text-sm font-semibold text-sera-text group-hover:text-sera-accent transition-colors">
-                  {template.name}
-                </h3>
-                <span className={`sera-badge ${template.categoryColor}`}>
-                  {template.category}
-                </span>
-              </div>
-              <p className="text-xs text-sera-text-muted leading-relaxed">
-                {template.description}
-              </p>
-              <div className="mt-4 flex items-center gap-1.5 text-xs text-sera-text-dim group-hover:text-sera-accent transition-colors">
-                <Play size={12} />
-                <span>Launch</span>
-              </div>
-            </button>
-          ))}
+      {/* Empty State */}
+      {!loading && agents.length === 0 && !error && (
+        <div className="flex flex-col items-center justify-center py-20">
+          <div className="w-14 h-14 rounded-xl bg-sera-surface flex items-center justify-center mb-4">
+            <Bot size={28} className="text-sera-text-dim" />
+          </div>
+          <h3 className="text-sm font-semibold text-sera-text mb-1">No agents found</h3>
+          <p className="text-xs text-sera-text-muted text-center max-w-sm">
+            Create AGENT.yaml files in the <code className="text-sera-accent">sera/agents/</code> directory to register agents.
+          </p>
         </div>
-      </section>
+      )}
     </div>
   );
 }

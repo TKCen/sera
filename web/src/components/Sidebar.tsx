@@ -10,6 +10,8 @@ import {
   Settings,
   Plus,
   Circle,
+  Users,
+  Wrench,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -30,6 +32,8 @@ const navGroups: NavGroup[] = [
     items: [
       { label: 'New Chat', href: '/chat', icon: <Plus size={16} /> },
       { label: 'Agents', href: '/agents', icon: <Bot size={16} /> },
+      { label: 'Circles', href: '/circles', icon: <Users size={16} /> },
+      { label: 'Tools', href: '/tools', icon: <Wrench size={16} /> },
     ],
   },
   {

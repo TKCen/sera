@@ -24,17 +24,26 @@ import { createIntercomRouter } from './routes/intercom.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
 import { registerBuiltinSkills } from './skills/builtins/index.js';
 import { PartySessionManager } from './circles/PartyMode.js';
+import { createAgentRouter } from './routes/agents.js';
+import { createCircleRouter } from './routes/circles.js';
+import { createSkillsRouter } from './routes/skills.js';
 
 const app = express();
 
+// ── Workspace Root ───────────────────────────────────────────────────────────
+// In Docker the workspace is mounted at /app/workspace but the compiled JS
+// lives at /app/dist. WORKSPACE_DIR overrides the default resolution.
+const workspaceRoot = process.env.WORKSPACE_DIR
+  ?? path.resolve(import.meta.dirname, '..', '..');
+
 // ── Agent System ──────────────────────────────────────────────────────────────
 const orchestrator = new Orchestrator();
-const agentsDir = path.resolve(import.meta.dirname, '..', '..', 'agents');
+const agentsDir = path.join(workspaceRoot, 'agents');
 orchestrator.loadAgentsFromManifests(agentsDir);
 
 // ── Circle System ─────────────────────────────────────────────────────────────
 const circleRegistry = new CircleRegistry();
-const circlesDir = path.resolve(import.meta.dirname, '..', '..', 'circles');
+const circlesDir = path.join(workspaceRoot, 'circles');
 const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
 circleRegistry.loadFromDirectory(circlesDir, agentManifests);
 
@@ -64,6 +73,16 @@ mcpRegistry.getAllTools().then(async () => {
   }
 }).catch(() => { /* MCP servers may not be connected yet */ });
 
+// ── Route Modules ────────────────────────────────────────────────────────────
+const agentRouter = createAgentRouter(orchestrator, agentsDir);
+const circleRouter = createCircleRouter(
+  circleRegistry,
+  circlesDir,
+  () => AgentManifestLoader.loadAllManifests(agentsDir),
+  orchestrator,
+);
+const skillsRouter = createSkillsRouter(skillRegistry, orchestrator);
+
 // ── Party Mode ───────────────────────────────────────────────────────────────
 const partySessionManager = new PartySessionManager();
 
@@ -75,11 +94,9 @@ app.use(express.json());
 app.use('/api/lsp', lspRouter);
 app.use('/api/sandbox', sandboxRouter);
 app.use('/api/intercom', intercomRouter);
-
-// ─── Skills API ───────────────────────────────────────────────────────────────
-app.get('/api/skills', (req, res) => {
-  res.json(skillRegistry.listAll());
-});
+app.use('/api/agents', agentRouter);
+app.use('/api/circles', circleRouter);
+app.use('/api/skills', skillsRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -89,43 +106,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ─── Agents API ───────────────────────────────────────────────────────────────
-app.get('/api/agents', (req, res) => {
-  res.json(orchestrator.listAgents());
-});
-
-app.get('/api/agents/:name', (req, res) => {
-  const info = orchestrator.getAgentInfo(req.params.name);
-  if (!info) {
-    return res.status(404).json({ error: `Agent "${req.params.name}" not found` });
-  }
-  res.json(info);
-});
-
-app.post('/api/agents/reload', (req, res) => {
-  try {
-    const result = orchestrator.reloadAgents();
-    res.json({ success: true, ...result });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── Circles API ──────────────────────────────────────────────────────────────
-app.get('/api/circles', (req, res) => {
-  res.json(circleRegistry.listCircleSummaries());
-});
-
-app.get('/api/circles/:name', (req, res) => {
-  const circle = circleRegistry.getCircle(req.params.name);
-  if (!circle) {
-    return res.status(404).json({ error: `Circle "${req.params.name}" not found` });
-  }
-  res.json({
-    ...circle,
-    projectContext: circleRegistry.getProjectContext(req.params.name) ?? null,
-  });
-});
+// ─── Agents, Circles, and Skills routes are now handled by route modules ────
 
 // ─── Party Mode API ──────────────────────────────────────────────────────────
 

@@ -24,6 +24,11 @@ export class MCPRegistry {
     return this.clients.get(name);
   }
 
+  /** Expose all registered clients for iteration (used by SkillRegistry bridge). */
+  getClients(): ReadonlyMap<string, MCPClient> {
+    return this.clients;
+  }
+
   async getAllTools() {
     const allTools = [];
     for (const [name, client] of this.clients) {

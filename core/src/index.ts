@@ -21,6 +21,8 @@ import { SandboxManager } from './sandbox/SandboxManager.js';
 import { createSandboxRouter } from './routes/sandbox.js';
 import { IntercomService } from './intercom/IntercomService.js';
 import { createIntercomRouter } from './routes/intercom.js';
+import { SkillRegistry } from './skills/SkillRegistry.js';
+import { registerBuiltinSkills } from './skills/builtins/index.js';
 
 const app = express();
 
@@ -50,11 +52,27 @@ const intercomRouter = createIntercomRouter(intercomService, (agentName: string)
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
 
+// ── Skills System ────────────────────────────────────────────────────────────
+const skillRegistry = new SkillRegistry();
+registerBuiltinSkills(skillRegistry, memoryManager);
+// MCP tools are bridged asynchronously — they'll be available after server start
+mcpRegistry.getAllTools().then(async () => {
+  const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
+  if (count > 0) {
+    console.log(`[SkillRegistry] Bridged ${count} MCP tool(s) as skills`);
+  }
+}).catch(() => { /* MCP servers may not be connected yet */ });
+
 app.use(cors());
 app.use(express.json());
 app.use('/api/lsp', lspRouter);
 app.use('/api/sandbox', sandboxRouter);
 app.use('/api/intercom', intercomRouter);
+
+// ─── Skills API ───────────────────────────────────────────────────────────────
+app.get('/api/skills', (req, res) => {
+  res.json(skillRegistry.listAll());
+});
 
 app.get('/api/health', (req, res) => {
   res.json({

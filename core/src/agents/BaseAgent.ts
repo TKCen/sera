@@ -4,6 +4,7 @@ import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
 import { IdentityService } from './identity/IdentityService.js';
+import { Logger } from '../lib/logger.js';
 
 export abstract class BaseAgent {
   public readonly name: string;
@@ -14,6 +15,7 @@ export abstract class BaseAgent {
   protected llmProvider: LLMProvider;
   protected manifest: AgentManifest;
   protected intercom: IntercomService | undefined;
+  protected logger: Logger;
 
   /** Queue of incoming intercom messages for the reasoning loop. */
   protected messageQueue: Array<{ from: string; payload: Record<string, unknown> }> = [];
@@ -29,6 +31,7 @@ export abstract class BaseAgent {
     this.llmProvider = llmProvider;
     this.intercom = intercom;
     this.systemPrompt = IdentityService.generateSystemPrompt(manifest);
+    this.logger = new Logger(this.name);
   }
 
   public updateLlmProvider(llmProvider: LLMProvider) {
@@ -61,7 +64,7 @@ export abstract class BaseAgent {
         content,
       );
     } catch (err) {
-      console.error(`[${this.name}] Failed to publish thought:`, err);
+      this.logger.error(`Failed to publish thought:`, err);
     }
   }
 
@@ -76,7 +79,7 @@ export abstract class BaseAgent {
     payload: Record<string, unknown>,
   ): Promise<void> {
     if (!this.intercom) {
-      console.warn(`[${this.name}] Intercom not configured, cannot send message`);
+      this.logger.warn(`Intercom not configured, cannot send message`);
       return;
     }
     await this.intercom.sendDirectMessage(this.manifest, toAgent, payload);
@@ -99,24 +102,24 @@ export abstract class BaseAgent {
   // ── Reasoning Steps (with thought streaming) ───────────────────────────────
 
   protected async observe(context: string): Promise<void> {
-    console.log(`[${this.name}] Observing: ${context.substring(0, 50)}...`);
+    this.logger.debug(`Observing: ${context.substring(0, 50)}...`);
     await this.publishThought('observe', context);
   }
 
   protected async plan(goal: string): Promise<string> {
-    console.log(`[${this.name}] Planning for goal: ${goal}`);
+    this.logger.debug(`Planning for goal: ${goal}`);
     await this.publishThought('plan', `Planning for: ${goal}`);
     return `Plan for ${goal}`;
   }
 
   protected async act(action: any): Promise<any> {
-    console.log(`[${this.name}] Acting: ${JSON.stringify(action)}`);
+    this.logger.debug(`Acting: ${JSON.stringify(action)}`);
     await this.publishThought('act', `Executing: ${JSON.stringify(action)}`);
     return { status: 'success' };
   }
 
   protected async reflect(outcome: any): Promise<void> {
-    console.log(`[${this.name}] Reflecting on outcome: ${JSON.stringify(outcome)}`);
+    this.logger.debug(`Reflecting on outcome: ${JSON.stringify(outcome)}`);
     await this.publishThought('reflect', `Outcome: ${JSON.stringify(outcome)}`);
   }
 }

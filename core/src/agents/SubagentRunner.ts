@@ -12,6 +12,9 @@ import type { AgentManifest } from './manifest/types.js';
 import type { SandboxInfo } from '../sandbox/types.js';
 import { SandboxManager } from '../sandbox/SandboxManager.js';
 import { TierPolicy, PolicyViolationError } from '../sandbox/TierPolicy.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('SubagentRunner');
 
 // ── SubagentResult ──────────────────────────────────────────────────────────────
 
@@ -72,8 +75,8 @@ export class SubagentRunner {
 
     // ── Check approval requirement ────────────────────────────────────────
     if (allowedEntry.requiresApproval) {
-      console.log(
-        `[SubagentRunner] Subagent "${childRole}" for "${parentName}" requires human approval — auto-approved for now`,
+      logger.info(
+        `Subagent "${childRole}" for "${parentName}" requires human approval — auto-approved for now`,
       );
       // Future: integrate with approval workflow
     }
@@ -95,8 +98,8 @@ export class SubagentRunner {
       },
     });
 
-    console.log(
-      `[SubagentRunner] Spawned subagent "${childRole}" for "${parentName}" → ${sandbox.containerId.substring(0, 12)}`,
+    logger.info(
+      `Spawned subagent "${childRole}" for "${parentName}" → ${sandbox.containerId.substring(0, 12)}`,
     );
 
     return sandbox;

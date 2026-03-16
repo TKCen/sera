@@ -66,9 +66,10 @@ export function createCircleRouter(
       fs.writeFileSync(filePath, yamlStr, 'utf-8');
 
       // Reload circles
-      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests());
+      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests()).then(() => {
+        res.status(201).json({ success: true, name: body.metadata.name });
+      }).catch(err => res.status(500).json({ error: err.message }));
 
-      res.status(201).json({ success: true, name: body.metadata.name });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -92,9 +93,10 @@ export function createCircleRouter(
       fs.writeFileSync(filePath, yamlStr, 'utf-8');
 
       // Reload
-      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests());
+      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests()).then(() => {
+        res.json({ success: true });
+      }).catch(err => res.status(500).json({ error: err.message }));
 
-      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -111,8 +113,9 @@ export function createCircleRouter(
     try {
       fs.unlinkSync(filePath);
       // Reload to remove from registry
-      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests());
-      res.json({ success: true });
+      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests()).then(() => {
+        res.json({ success: true });
+      }).catch(err => res.status(500).json({ error: err.message }));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

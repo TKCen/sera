@@ -27,6 +27,7 @@ import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
+import { Logger } from './lib/logger.js';
 
 const app = express();
 
@@ -45,7 +46,7 @@ orchestrator.loadAgentsFromManifests(agentsDir);
 const circleRegistry = new CircleRegistry();
 const circlesDir = path.join(workspaceRoot, 'circles');
 const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
-circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
 
 // ── Sandbox Manager ──────────────────────────────────────────────────────────
 const sandboxManager = new SandboxManager();
@@ -69,7 +70,8 @@ registerBuiltinSkills(skillRegistry, memoryManager);
 mcpRegistry.getAllTools().then(async () => {
   const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
   if (count > 0) {
-    console.log(`[SkillRegistry] Bridged ${count} MCP tool(s) as skills`);
+    const logger = new Logger('SkillRegistry');
+    logger.info(`Bridged ${count} MCP tool(s) as skills`);
   }
 }).catch(() => { /* MCP servers may not be connected yet */ });
 
@@ -538,7 +540,8 @@ app.post('/api/providers/active', (req, res) => {
 export { app };
 
 const shutdown = async () => {
-  console.log('Shutting down SERA Core...');
+  const logger = new Logger('SERACore');
+  logger.info('Shutting down SERA Core...');
   orchestrator.stopWatching();
   await lspManager.stopAll();
 };
@@ -550,10 +553,12 @@ if (process.env.NODE_ENV !== 'test') {
   const port = process.env.PORT || 3001;
   initDb().then(() => {
     app.listen(port, () => {
-      console.log(`SERA Core orchestrator listening at http://localhost:${port}`);
+      const logger = new Logger('SERACore');
+      logger.info(`SERA Core orchestrator listening at http://localhost:${port}`);
     });
   }).catch(err => {
-    console.error('Failed to start SERA Core:', err);
+    const logger = new Logger('SERACore');
+    logger.error('Failed to start SERA Core:', err);
     process.exit(1);
   });
 }

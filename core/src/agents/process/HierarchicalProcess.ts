@@ -12,7 +12,9 @@ import type {
   ProcessResult,
   ProcessRunResult,
 } from './types.js';
+import { Logger } from '../../lib/logger.js';
 
+const logger = new Logger('HierarchicalProcess');
 const DEFAULT_MAX_RETRIES = 2;
 
 export class HierarchicalProcess implements ProcessStrategy {
@@ -130,8 +132,8 @@ export class HierarchicalProcess implements ProcessStrategy {
           };
         }
 
-        console.log(
-          `[HierarchicalProcess] Manager rejected attempt ${attempt + 1} for task "${task.id}"`,
+        logger.info(
+          `Manager rejected attempt ${attempt + 1} for task "${task.id}"`,
         );
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);

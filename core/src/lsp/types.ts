@@ -20,12 +20,6 @@ export interface SymbolInformation {
   containerName?: string;
 }
 
-export interface LspCapabilities {
-  definition: boolean;
-  references: boolean;
-  documentSymbol: boolean;
-}
-
 export interface LspClientOptions {
   rootUri: string;
   serverCommand: string;

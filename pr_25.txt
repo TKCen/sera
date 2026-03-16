@@ -1,0 +1,32 @@
+title:	feat: implement end-to-end chat wiring for agent routing and history
+state:	OPEN
+author:	TKCen
+labels:	
+assignees:	
+reviewers:	
+projects:	
+milestone:	
+number:	25
+url:	https://github.com/TKCen/sera/pull/25
+additions:	1839
+deletions:	91
+auto-merge:	disabled
+--
+This PR completes the end-to-end wiring for the SERA Chat System.
+
+**Backend Changes:**
+- The `/api/chat` endpoint now accepts an `agentName` to dynamically route requests to the specified agent via `orchestrator.getAgent()`.
+- The endpoint now retrieves the conversation history (using the `conversationId`) and passes it into the agent.
+- `BaseAgent`, `PrimaryAgent`, and `WorkerAgent` have been updated. The `process` method signature now accepts `history: ChatMessage[] = []`. Agents prepend this external history to their system prompt and current message, fixing the issue where they lacked context across multiple API requests.
+- Added explicit error catching in the chat endpoint to return a `404` if the requested agent isn't found, and specific messages for timeouts vs LLM errors.
+
+**Frontend Changes:**
+- Added `react-markdown`, `remark-gfm`, and `@tailwindcss/typography` to render Markdown properly in chat bubbles.
+- Introduced an Agent Selector dropdown at the top right of the chat view. It fetches the available agents on mount.
+- The `handleSend` function now includes the `agentName` in the POST body.
+- The component dynamically updates the `subscribeToThoughts` Centrifugo listener when the selected agent changes.
+- Agent "thoughts" are now rendered in a collapsible `<details>` panel below the main message content.
+- Created a robust Next.js proxy route handler (`web/src/app/api/core/[...path]/route.ts`) that intercepts `GET` and `POST` requests and forwards them to the core backend (`http://localhost:3001`). This replaced relying solely on the `next.config.ts` rewrite, which was failing to properly proxy the `GET /api/agents` request.
+
+---
+*PR created automatically by Jules for task [15241665658687110365](https://jules.google.com/task/15241665658687110365) started by @TKCen*

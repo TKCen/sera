@@ -29,6 +29,12 @@ function getLanguageId(filePath: string) {
   }
 }
 
+/**
+ * Gets definition for a symbol at a specific file location.
+ * @param req Express request containing filePath, line, and character in body
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 router.post('/definition', async (req, res) => {
   try {
     const { filePath, line, character } = req.body;
@@ -48,6 +54,12 @@ router.post('/definition', async (req, res) => {
   }
 });
 
+/**
+ * Finds all references for a symbol at a specific file location.
+ * @param req Express request containing filePath, line, and character in body
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 router.post('/references', async (req, res) => {
   try {
     const { filePath, line, character } = req.body;
@@ -67,6 +79,12 @@ router.post('/references', async (req, res) => {
   }
 });
 
+/**
+ * Returns all symbols found within a file.
+ * @param req Express request containing filePath in body
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 router.post('/symbols', async (req, res) => {
   try {
     const { filePath } = req.body;

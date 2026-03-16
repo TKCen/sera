@@ -8,6 +8,21 @@ agents:
   - architect-prime
   - developer-prime
   - researcher-prime
+channels:
+  - id: dev-general
+    name: General Development
+    description: General discussions about development
+  - id: dev-alerts
+    name: Alerts
+    description: Development alerts and notifications
+  - id: dev-reviews
+    name: Code Reviews
+    description: Code review requests and discussions
+knowledge:
+  qdrantCollection: development-knowledge
+projectContext:
+  path: development/project-context.md
+  autoLoad: true
 partyMode:
   enabled: true
   orchestrator: architect-prime

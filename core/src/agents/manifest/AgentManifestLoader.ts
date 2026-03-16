@@ -3,6 +3,9 @@ import path from 'path';
 import yaml from 'js-yaml';
 import type { AgentManifest, SecurityTier } from './types.js';
 import { KNOWN_TOP_LEVEL_FIELDS, VALID_TIERS } from './types.js';
+import { Logger } from '../../lib/logger.js';
+
+const logger = new Logger('AgentManifestLoader');
 
 // ── Validation Errors ───────────────────────────────────────────────────────────
 
@@ -35,8 +38,10 @@ export class AgentManifestLoader {
    * Scan a directory for *.agent.yaml files and load all valid manifests.
    */
   static loadAllManifests(dirPath: string): AgentManifest[] {
+    console.time('[AgentManifestLoader] loadAllManifests');
     if (!fs.existsSync(dirPath)) {
-      console.warn(`[AgentManifestLoader] Agents directory not found: ${dirPath}`);
+      logger.warn(`Agents directory not found: ${dirPath}`);
+      console.timeEnd('[AgentManifestLoader] loadAllManifests');
       return [];
     }
 
@@ -47,12 +52,13 @@ export class AgentManifestLoader {
       try {
         const manifest = AgentManifestLoader.loadManifest(path.join(dirPath, file));
         manifests.push(manifest);
-        console.log(`[AgentManifestLoader] Loaded: ${manifest.metadata.name} (${file})`);
+        logger.info(`Loaded: ${manifest.metadata.name} (${file})`);
       } catch (err) {
-        console.error(`[AgentManifestLoader] Failed to load ${file}:`, (err as Error).message);
+        logger.error(`Failed to load ${file}:`, (err as Error).message);
       }
     }
 
+    console.timeEnd('[AgentManifestLoader] loadAllManifests');
     return manifests;
   }
 

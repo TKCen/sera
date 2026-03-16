@@ -1,0 +1,18 @@
+title:	docs: Add comprehensive API documentation and JSDoc routing comments
+state:	OPEN
+author:	TKCen
+labels:	
+assignees:	
+reviewers:	
+projects:	
+milestone:	
+number:	23
+url:	https://github.com/TKCen/sera/pull/23
+additions:	2343
+deletions:	62
+auto-merge:	disabled
+--
+This PR addresses the task of cataloging the SERA core API. It introduces a `docs/API_SCHEMAS.md` for human-readable markdown documentation, a `docs/openapi.yaml` for an OpenAPI 3.1 compliant machine-readable specification, and inline JSDoc comments on the backend Express route handlers in the `core/src/` folder. All unit tests successfully pass with these changes.
+
+---
+*PR created automatically by Jules for task [6199714580815442821](https://jules.google.com/task/6199714580815442821) started by @TKCen*

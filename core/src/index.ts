@@ -27,6 +27,7 @@ import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
+import { Logger } from './lib/logger.js';
 
 const app = express();
 
@@ -45,7 +46,7 @@ orchestrator.loadAgentsFromManifests(agentsDir);
 const circleRegistry = new CircleRegistry();
 const circlesDir = path.join(workspaceRoot, 'circles');
 const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
-circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
 
 // ── Sandbox Manager ──────────────────────────────────────────────────────────
 const sandboxManager = new SandboxManager();
@@ -59,6 +60,8 @@ const intercomRouter = createIntercomRouter(intercomService, (agentName: string)
   return agentManifests.find(m => m.metadata.name === agentName);
 });
 
+orchestrator.setIntercom(intercomService);
+
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
 
@@ -69,7 +72,8 @@ registerBuiltinSkills(skillRegistry, memoryManager);
 mcpRegistry.getAllTools().then(async () => {
   const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
   if (count > 0) {
-    console.log(`[SkillRegistry] Bridged ${count} MCP tool(s) as skills`);
+    const logger = new Logger('SkillRegistry');
+    logger.info(`Bridged ${count} MCP tool(s) as skills`);
   }
 }).catch(() => { /* MCP servers may not be connected yet */ });
 
@@ -98,6 +102,12 @@ app.use('/api/agents', agentRouter);
 app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
 
+/**
+ * Health check endpoint.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -110,6 +120,12 @@ app.get('/api/health', (req, res) => {
 
 // ─── Party Mode API ──────────────────────────────────────────────────────────
 
+/**
+ * Creates a party session for a circle.
+ * @param req Express request containing circleId in params
+ * @param res Express response
+ * @returns {void}
+ */
 app.post('/api/circles/:circleId/party', (req, res) => {
   try {
     const circle = circleRegistry.getCircle(req.params.circleId);
@@ -141,6 +157,12 @@ app.post('/api/circles/:circleId/party', (req, res) => {
   }
 });
 
+/**
+ * Sends a message to a party session.
+ * @param req Express request containing message in body
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/circles/:circleId/party/:sessionId', async (req, res) => {
   try {
     const session = partySessionManager.getSession(req.params.sessionId);
@@ -164,6 +186,12 @@ app.post('/api/circles/:circleId/party/:sessionId', async (req, res) => {
   }
 });
 
+/**
+ * Ends a party session.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.delete('/api/circles/:circleId/party/:sessionId', async (req, res) => {
   const ended = partySessionManager.endSession(req.params.sessionId);
   if (!ended) {
@@ -172,12 +200,24 @@ app.delete('/api/circles/:circleId/party/:sessionId', async (req, res) => {
   res.json({ success: true });
 });
 
+/**
+ * Lists party sessions for a circle.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.get('/api/circles/:circleId/party', (req, res) => {
   res.json(partySessionManager.listSessions(req.params.circleId));
 });
 
 // ─── Memory Blocks API ────────────────────────────────────────────────────────
 
+/**
+ * Gets all memory blocks.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.get('/api/memory/blocks', async (req, res) => {
   try {
     const blocks = await memoryManager.getAllBlocks();
@@ -187,6 +227,12 @@ app.get('/api/memory/blocks', async (req, res) => {
   }
 });
 
+/**
+ * Gets a specific memory block by type.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.get('/api/memory/blocks/:type', async (req, res) => {
   const type = req.params.type as MemoryBlockType;
   if (!MEMORY_BLOCK_TYPES.includes(type)) {
@@ -200,6 +246,12 @@ app.get('/api/memory/blocks/:type', async (req, res) => {
   }
 });
 
+/**
+ * Adds an entry to a specific memory block.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/memory/blocks/:type', async (req, res) => {
   const type = req.params.type as MemoryBlockType;
   if (!MEMORY_BLOCK_TYPES.includes(type)) {
@@ -219,6 +271,12 @@ app.post('/api/memory/blocks/:type', async (req, res) => {
 
 // ─── Memory Entries API ───────────────────────────────────────────────────────
 
+/**
+ * Gets a specific memory entry.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.get('/api/memory/entries/:id', async (req, res) => {
   try {
     const entry = await memoryManager.getEntry(req.params.id);
@@ -231,6 +289,12 @@ app.get('/api/memory/entries/:id', async (req, res) => {
   }
 });
 
+/**
+ * Updates a memory entry.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.put('/api/memory/entries/:id', async (req, res) => {
   const { content } = req.body;
   if (!content) {
@@ -247,6 +311,12 @@ app.put('/api/memory/entries/:id', async (req, res) => {
   }
 });
 
+/**
+ * Deletes a memory entry.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.delete('/api/memory/entries/:id', async (req, res) => {
   try {
     const deleted = await memoryManager.deleteEntry(req.params.id);
@@ -261,6 +331,12 @@ app.delete('/api/memory/entries/:id', async (req, res) => {
 
 // ─── Memory Refs API ──────────────────────────────────────────────────────────
 
+/**
+ * Adds a reference link between memory entries.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/memory/entries/:id/refs', async (req, res) => {
   const { targetId } = req.body;
   if (!targetId) {
@@ -277,6 +353,12 @@ app.post('/api/memory/entries/:id/refs', async (req, res) => {
   }
 });
 
+/**
+ * Removes a reference link.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.delete('/api/memory/entries/:id/refs/:targetId', async (req, res) => {
   try {
     const ok = await memoryManager.removeRef(req.params.id, req.params.targetId);
@@ -291,6 +373,12 @@ app.delete('/api/memory/entries/:id/refs/:targetId', async (req, res) => {
 
 // ─── Memory Graph API ─────────────────────────────────────────────────────────
 
+/**
+ * Gets the memory graph.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.get('/api/memory/graph', async (req, res) => {
   try {
     const graph = await memoryManager.getGraph();
@@ -300,6 +388,12 @@ app.get('/api/memory/graph', async (req, res) => {
   }
 });
 
+/**
+ * Searches memory entries.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.get('/api/memory/search', async (req, res) => {
   try {
     const { query, limit } = req.query;
@@ -316,6 +410,12 @@ app.get('/api/memory/search', async (req, res) => {
   }
 });
 
+/**
+ * Triggers codebase ingestion.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/ingest', async (req, res) => {
   try {
     const ingestionService = new IngestionService();
@@ -327,6 +427,12 @@ app.post('/api/ingest', async (req, res) => {
   }
 });
 
+/**
+ * Queries the vector database.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/query', async (req, res) => {
   try {
     const { query, limit } = req.body;
@@ -346,6 +452,12 @@ app.post('/api/query', async (req, res) => {
   }
 });
 
+/**
+ * Executes a task using the orchestrator.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/execute', async (req, res) => {
   const { prompt } = req.body;
   try {
@@ -359,6 +471,12 @@ app.post('/api/execute', async (req, res) => {
 // ─── Chat API ─────────────────────────────────────────────────────────────────
 const conversations = new Map<string, { role: string; content: string }[]>();
 
+/**
+ * Sends a chat message.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, conversationId: incomingId } = req.body;
@@ -398,10 +516,22 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // ─── Config API ───────────────────────────────────────────────────────────────
+/**
+ * Gets legacy LLM config.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.get('/api/config/llm', (req, res) => {
   res.json(config.llm);
 });
 
+/**
+ * Updates legacy LLM config.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.post('/api/config/llm', (req, res) => {
   try {
     const newConfig = req.body;
@@ -417,6 +547,12 @@ app.post('/api/config/llm', (req, res) => {
   }
 });
 
+/**
+ * Tests legacy LLM config.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/config/llm/test', async (req, res) => {
   try {
     const testProvider = new OpenAIProvider();
@@ -438,6 +574,12 @@ app.post('/api/config/llm/test', async (req, res) => {
 
 // ─── Provider Management API ──────────────────────────────────────────────────
 
+/**
+ * Gets providers catalog.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.get('/api/providers', (req, res) => {
   const savedConfig = config.providers;
   const catalog = PROVIDER_CATALOG.map(provider => ({
@@ -452,6 +594,12 @@ app.get('/api/providers', (req, res) => {
   });
 });
 
+/**
+ * Updates provider config.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.put('/api/providers/:id', (req, res) => {
   try {
     const { id } = req.params;
@@ -477,6 +625,12 @@ app.put('/api/providers/:id', (req, res) => {
   }
 });
 
+/**
+ * Tests specific provider.
+ * @param req Express request
+ * @param res Express response
+ * @returns {Promise<void>}
+ */
 app.post('/api/providers/:id/test', async (req, res) => {
   try {
     const { id } = req.params;
@@ -511,6 +665,12 @@ app.post('/api/providers/:id/test', async (req, res) => {
   }
 });
 
+/**
+ * Sets active provider.
+ * @param req Express request
+ * @param res Express response
+ * @returns {void}
+ */
 app.post('/api/providers/active', (req, res) => {
   try {
     const { providerId } = req.body;
@@ -538,7 +698,8 @@ app.post('/api/providers/active', (req, res) => {
 export { app };
 
 const shutdown = async () => {
-  console.log('Shutting down SERA Core...');
+  const logger = new Logger('SERACore');
+  logger.info('Shutting down SERA Core...');
   orchestrator.stopWatching();
   await lspManager.stopAll();
 };
@@ -550,10 +711,12 @@ if (process.env.NODE_ENV !== 'test') {
   const port = process.env.PORT || 3001;
   initDb().then(() => {
     app.listen(port, () => {
-      console.log(`SERA Core orchestrator listening at http://localhost:${port}`);
+      const logger = new Logger('SERACore');
+      logger.info(`SERA Core orchestrator listening at http://localhost:${port}`);
     });
   }).catch(err => {
-    console.error('Failed to start SERA Core:', err);
+    const logger = new Logger('SERACore');
+    logger.error('Failed to start SERA Core:', err);
     process.exit(1);
   });
 }

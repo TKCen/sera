@@ -1,0 +1,1586 @@
+openapi: 3.1.0
+info:
+  title: SERA Core API
+  description: REST API for SERA Core service managing agents, circles, memory, skills, and sandbox environments.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3001/api
+    description: Local Development
+  - url: http://sera-core:3001/api
+    description: Docker Deployment
+
+# Empty security array applies globally so security-defined passes,
+# as SERA Core doesn't appear to mandate global api key checks natively at this API level
+security: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  timestamp:
+                    type: string
+
+  /agents:
+    get:
+      tags:
+        - Agents
+      summary: List all agents
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentManifest'
+
+  /agents/{name}:
+    get:
+      tags:
+        - Agents
+      summary: Get agent details
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInfo'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agents/{name}/manifest/raw:
+    get:
+      tags:
+        - Agents
+      summary: Get raw YAML manifest
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw YAML manifest
+          content:
+            text/yaml:
+              schema:
+                type: string
+        '404':
+          description: Manifest not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agents/{name}/manifest:
+    put:
+      tags:
+        - Agents
+      summary: Update agent manifest
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentManifest'
+      responses:
+        '200':
+          description: Manifest updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agents/reload:
+    post:
+      tags:
+        - Agents
+      summary: Reload all agents
+      responses:
+        '200':
+          description: Agents reloaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /circles:
+    get:
+      tags:
+        - Circles
+      summary: List all circles
+      responses:
+        '200':
+          description: List of circles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CircleSummary'
+    post:
+      tags:
+        - Circles
+      summary: Create new circle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CircleManifest'
+      responses:
+        '201':
+          description: Circle created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  name:
+                    type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Circle already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /circles/{name}:
+    get:
+      tags:
+        - Circles
+      summary: Get circle details
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Circle details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CircleDetails'
+        '404':
+          description: Circle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Circles
+      summary: Update circle manifest
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CircleManifest'
+      responses:
+        '200':
+          description: Circle updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: Circle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Circles
+      summary: Delete circle
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Circle deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: Circle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /circles/{name}/context:
+    put:
+      tags:
+        - Circles
+      summary: Update project context
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+              required:
+                - content
+      responses:
+        '200':
+          description: Context updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /circles/{circleId}/party:
+    post:
+      tags:
+        - Party Mode
+      summary: Create party session
+      parameters:
+        - name: circleId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartySessionInfo'
+    get:
+      tags:
+        - Party Mode
+      summary: List party sessions
+      parameters:
+        - name: circleId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PartySessionInfo'
+
+  /circles/{circleId}/party/{sessionId}:
+    post:
+      tags:
+        - Party Mode
+      summary: Send message to party session
+      parameters:
+        - name: circleId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+              required:
+                - message
+      responses:
+        '200':
+          description: Response received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  responses:
+                    type: array
+                    items:
+                      type: object
+                  active:
+                    type: boolean
+    delete:
+      tags:
+        - Party Mode
+      summary: End party session
+      parameters:
+        - name: circleId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session ended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /chat:
+    post:
+      tags:
+        - Chat
+      summary: Send chat message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                conversationId:
+                  type: string
+              required:
+                - message
+      responses:
+        '200':
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationId:
+                    type: string
+                  reply:
+                    type: string
+                  thought:
+                    type: string
+
+  /execute:
+    post:
+      tags:
+        - Execution
+      summary: Execute task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+              required:
+                - prompt
+      responses:
+        '200':
+          description: Task result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+
+  /memory/blocks:
+    get:
+      tags:
+        - Memory
+      summary: Get all memory blocks
+      responses:
+        '200':
+          description: List of memory blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MemoryBlock'
+
+  /memory/blocks/{type}:
+    get:
+      tags:
+        - Memory
+      summary: Get memory block by type
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Memory block
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryBlock'
+    post:
+      tags:
+        - Memory
+      summary: Add memory block entry
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                refs:
+                  type: array
+                  items:
+                    type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                source:
+                  type: string
+              required:
+                - title
+                - content
+      responses:
+        '201':
+          description: Entry added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+
+  /memory/entries/{id}:
+    get:
+      tags:
+        - Memory
+      summary: Get memory entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Memory entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+    put:
+      tags:
+        - Memory
+      summary: Update memory entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+              required:
+                - content
+      responses:
+        '200':
+          description: Entry updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+    delete:
+      tags:
+        - Memory
+      summary: Delete memory entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Entry deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /memory/entries/{id}/refs:
+    post:
+      tags:
+        - Memory
+      summary: Add reference link
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                targetId:
+                  type: string
+              required:
+                - targetId
+      responses:
+        '200':
+          description: Link added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /memory/entries/{id}/refs/{targetId}:
+    delete:
+      tags:
+        - Memory
+      summary: Remove reference link
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: targetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Link removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /memory/graph:
+    get:
+      tags:
+        - Memory
+      summary: Get memory graph
+      responses:
+        '200':
+          description: Memory graph
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryGraph'
+
+  /memory/search:
+    get:
+      tags:
+        - Memory
+      summary: Search memory
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SearchResult'
+
+  /ingest:
+    post:
+      tags:
+        - Vector Search
+      summary: Trigger codebase ingestion
+      responses:
+        '200':
+          description: Ingestion started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /query:
+    post:
+      tags:
+        - Vector Search
+      summary: Query vector database
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                limit:
+                  type: integer
+              required:
+                - query
+      responses:
+        '200':
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+
+  /skills:
+    get:
+      tags:
+        - Skills
+      summary: List all skills
+      responses:
+        '200':
+          description: List of skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillInfo'
+
+  /skills/agents/{name}/tools:
+    put:
+      tags:
+        - Skills
+      summary: Update allowed tools (Informational)
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                allowed:
+                  type: array
+                  items:
+                    type: string
+              required:
+                - allowed
+      responses:
+        '200':
+          description: Tool update validation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  currentAllowed:
+                    type: array
+                    items:
+                      type: string
+                  requested:
+                    type: array
+                    items:
+                      type: string
+
+  /sandbox:
+    get:
+      tags:
+        - Sandbox
+      summary: List sandbox containers
+      parameters:
+        - name: agentName
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of containers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContainerInfo'
+
+  /sandbox/spawn:
+    post:
+      tags:
+        - Sandbox
+      summary: Spawn container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentName:
+                  type: string
+                type:
+                  type: string
+                image:
+                  type: string
+                command:
+                  type: string
+                env:
+                  type: object
+                workDir:
+                  type: string
+                subagentRole:
+                  type: string
+                task:
+                  type: string
+              required:
+                - agentName
+                - type
+                - image
+      responses:
+        '201':
+          description: Container spawned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContainerResult'
+        '403':
+          description: Policy violation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sandbox/exec:
+    post:
+      tags:
+        - Sandbox
+      summary: Execute command in container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentName:
+                  type: string
+                containerId:
+                  type: string
+                command:
+                  type: string
+              required:
+                - agentName
+                - containerId
+                - command
+      responses:
+        '200':
+          description: Command execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecResult'
+
+  /sandbox/{id}:
+    delete:
+      tags:
+        - Sandbox
+      summary: Remove container
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: agentName
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Container removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /sandbox/{id}/logs:
+    get:
+      tags:
+        - Sandbox
+      summary: Get container logs
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tail
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Container logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: string
+
+  /sandbox/tool:
+    post:
+      tags:
+        - Sandbox
+      summary: Run ephemeral tool container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentName:
+                  type: string
+                toolName:
+                  type: string
+                command:
+                  type: string
+                image:
+                  type: string
+                timeoutSeconds:
+                  type: integer
+              required:
+                - agentName
+                - toolName
+                - command
+      responses:
+        '200':
+          description: Tool run result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolRunResult'
+
+  /sandbox/subagent:
+    post:
+      tags:
+        - Sandbox
+      summary: Spawn subagent container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentName:
+                  type: string
+                subagentRole:
+                  type: string
+                task:
+                  type: string
+                image:
+                  type: string
+              required:
+                - agentName
+                - subagentRole
+                - task
+      responses:
+        '201':
+          description: Subagent spawned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubagentRunResult'
+
+  /intercom/publish:
+    post:
+      tags:
+        - Intercom
+      summary: Publish message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent:
+                  type: string
+                channel:
+                  type: string
+                type:
+                  type: string
+                payload:
+                  type: object
+              required:
+                - agent
+                - channel
+                - type
+                - payload
+      responses:
+        '200':
+          description: Message published
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    $ref: '#/components/schemas/MessageObject'
+
+  /intercom/dm:
+    post:
+      tags:
+        - Intercom
+      summary: Direct message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from:
+                  type: string
+                to:
+                  type: string
+                payload:
+                  type: object
+              required:
+                - from
+                - to
+                - payload
+      responses:
+        '200':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    $ref: '#/components/schemas/MessageObject'
+
+  /intercom/history:
+    get:
+      tags:
+        - Intercom
+      summary: Get channel history
+      parameters:
+        - name: channel
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Channel history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channel:
+                    type: string
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MessageObject'
+
+  /intercom/channels:
+    get:
+      tags:
+        - Intercom
+      summary: List agent channels
+      parameters:
+        - name: agent
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  /lsp/definition:
+    post:
+      tags:
+        - LSP
+      summary: Get definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filePath:
+                  type: string
+                line:
+                  type: integer
+                character:
+                  type: integer
+              required:
+                - filePath
+                - line
+                - character
+      responses:
+        '200':
+          description: Definition
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  definition:
+                    type: object
+
+  /lsp/references:
+    post:
+      tags:
+        - LSP
+      summary: Get references
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filePath:
+                  type: string
+                line:
+                  type: integer
+                character:
+                  type: integer
+              required:
+                - filePath
+                - line
+                - character
+      responses:
+        '200':
+          description: References
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  references:
+                    type: array
+                    items:
+                      type: object
+
+  /lsp/symbols:
+    post:
+      tags:
+        - LSP
+      summary: Get document symbols
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filePath:
+                  type: string
+              required:
+                - filePath
+      responses:
+        '200':
+          description: Symbols
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbols:
+                    type: array
+                    items:
+                      type: object
+
+  /config/llm:
+    get:
+      tags:
+        - Configuration
+      summary: Get LLM config
+      responses:
+        '200':
+          description: LLM Config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LLMConfig'
+    post:
+      tags:
+        - Configuration
+      summary: Update LLM config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LLMConfig'
+      responses:
+        '200':
+          description: Config updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /config/llm/test:
+    post:
+      tags:
+        - Configuration
+      summary: Test LLM config
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  model:
+                    type: string
+                  response:
+                    type: string
+                  error:
+                    type: string
+
+  /providers:
+    get:
+      tags:
+        - Configuration
+      summary: Get providers catalog
+      responses:
+        '200':
+          description: Providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activeProvider:
+                    type: string
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderConfig'
+
+  /providers/{id}:
+    put:
+      tags:
+        - Configuration
+      summary: Update provider config
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                baseUrl:
+                  type: string
+                apiKey:
+                  type: string
+                model:
+                  type: string
+      responses:
+        '200':
+          description: Config updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /providers/{id}/test:
+    post:
+      tags:
+        - Configuration
+      summary: Test specific provider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  provider:
+                    type: string
+                  response:
+                    type: string
+                  error:
+                    type: string
+
+  /providers/active:
+    post:
+      tags:
+        - Configuration
+      summary: Set active provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                providerId:
+                  type: string
+              required:
+                - providerId
+      responses:
+        '200':
+          description: Active provider set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  activeProvider:
+                    type: string
+
+components:
+  schemas:
+    AgentManifest:
+      type: object
+      properties:
+        metadata:
+          type: object
+          properties:
+            name:
+              type: string
+        # Other agent fields omitted for brevity
+    AgentInfo:
+      type: object
+      properties:
+        name:
+          type: string
+    CircleSummary:
+      type: object
+      properties:
+        name:
+          type: string
+    CircleManifest:
+      type: object
+      properties:
+        metadata:
+          type: object
+          properties:
+            name:
+              type: string
+    CircleDetails:
+      type: object
+      properties:
+        name:
+          type: string
+        projectContext:
+          type: object
+    PartySessionInfo:
+      type: object
+      properties:
+        id:
+          type: string
+    MemoryBlock:
+      type: object
+      properties:
+        id:
+          type: string
+    MemoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+    MemoryGraph:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+        edges:
+          type: array
+          items:
+            type: object
+    SearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+        score:
+          type: number
+    SkillInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        usedBy:
+          type: array
+          items:
+            type: string
+    ContainerInfo:
+      type: object
+      properties:
+        id:
+          type: string
+    ContainerResult:
+      type: object
+      properties:
+        id:
+          type: string
+    ExecResult:
+      type: object
+      properties:
+        exitCode:
+          type: integer
+        stdout:
+          type: string
+        stderr:
+          type: string
+    ToolRunResult:
+      type: object
+      properties:
+        exitCode:
+          type: integer
+        output:
+          type: string
+    SubagentRunResult:
+      type: object
+      properties:
+        id:
+          type: string
+    MessageObject:
+      type: object
+      properties:
+        id:
+          type: string
+        agent:
+          type: string
+        payload:
+          type: object
+    LLMConfig:
+      type: object
+      properties:
+        baseUrl:
+          type: string
+        apiKey:
+          type: string
+        model:
+          type: string
+    ProviderConfig:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string

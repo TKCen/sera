@@ -16,6 +16,9 @@ export class Reflector {
   /** Number of oldest entries to summarise per compaction cycle. */
   static readonly DEFAULT_BATCH_SIZE = 5;
 
+  /** Configurable override for threshold. */
+  static compactionThreshold: number | undefined;
+
   /**
    * Run a compaction cycle if the core block exceeds the threshold.
    * Returns the summary entry if compaction occurred, or null otherwise.
@@ -25,7 +28,7 @@ export class Reflector {
     llmProvider: LLMProvider,
     opts?: { threshold?: number; batchSize?: number },
   ): Promise<MemoryEntry | null> {
-    const threshold = opts?.threshold ?? Reflector.DEFAULT_THRESHOLD;
+    const threshold = opts?.threshold ?? Reflector.compactionThreshold ?? Reflector.DEFAULT_THRESHOLD;
     const batchSize = opts?.batchSize ?? Reflector.DEFAULT_BATCH_SIZE;
 
     const coreBlock = await memoryManager.getBlock('core');
@@ -42,18 +45,38 @@ export class Reflector {
       .map(e => `## ${e.title}\n${e.content}`)
       .join('\n\n---\n\n');
 
-    const response = await llmProvider.chat([
-      {
-        role: 'system',
-        content:
-          'You are a memory compaction assistant. Summarise the following knowledge entries ' +
-          'into a single concise summary paragraph that preserves all key facts and decisions. ' +
-          'Do NOT add any preamble or explanation — output only the summary.',
-      },
-      { role: 'user', content: contentForSummary },
-    ]);
-
-    const summaryContent = response.content.trim();
+    let summaryContent = '';
+    try {
+      const response = await llmProvider.chat([
+        {
+          role: 'system',
+          content:
+            'You are a memory compaction assistant. Summarise the following knowledge entries ' +
+            'into a single concise summary paragraph that preserves all key facts and decisions. ' +
+            'Do NOT add any preamble or explanation — output only the summary.',
+        },
+        { role: 'user', content: contentForSummary },
+      ]);
+      summaryContent = response.content.trim();
+    } catch (err) {
+      console.warn(`[Reflector] First summarisation attempt failed. Retrying... Error:`, err);
+      try {
+        const retryResponse = await llmProvider.chat([
+          {
+            role: 'system',
+            content:
+              'You are a memory compaction assistant. Summarise the following knowledge entries ' +
+              'into a single concise summary paragraph that preserves all key facts and decisions. ' +
+              'Do NOT add any preamble or explanation — output only the summary.',
+          },
+          { role: 'user', content: contentForSummary },
+        ]);
+        summaryContent = retryResponse.content.trim();
+      } catch (retryErr) {
+        console.error(`[Reflector] Summarisation failed after retry. Skipping compaction. Error:`, retryErr);
+        return null;
+      }
+    }
 
     // Collect the IDs of compacted entries for the ref chain
     const compactedIds = toCompact.map(e => e.id);
@@ -74,7 +97,7 @@ export class Reflector {
     }
 
     console.log(
-      `[Reflector] Compacted ${toCompact.length} core entries into archive summary "${summaryEntry.title}"`,
+      `[Reflector] Metrics: Compacted ${toCompact.length} core entries into 1 archive summary entry (ID: ${summaryEntry.id}). Summary Title: "${summaryEntry.title}"`
     );
 
     return summaryEntry;

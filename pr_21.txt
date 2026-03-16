@@ -1,0 +1,21 @@
+title:	Wire SERA dashboard pages to real API endpoints
+state:	OPEN
+author:	TKCen
+labels:	
+assignees:	
+reviewers:	
+projects:	
+milestone:	
+number:	21
+url:	https://github.com/TKCen/sera/pull/21
+additions:	115
+deletions:	17
+auto-merge:	disabled
+--
+This change updates the SERA dashboard pages to ensure they correctly wire to real backend API endpoints. Specifically:
+1. `agents/[id]/page.tsx`: Now fetches and displays the agent's memory blocks in a new tab, and includes a "Chat with this agent" button.
+2. `settings/page.tsx`: Now fetches `/api/core/config/llm` in addition to the providers, mapping the agent default temperature configuration to the slider component.
+3. Verified `agents`, `circles`, and `tools` root pages are already correctly wired.
+
+---
+*PR created automatically by Jules for task [3881724319953874142](https://jules.google.com/task/3881724319953874142) started by @TKCen*

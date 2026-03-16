@@ -157,6 +157,7 @@ export default function AgentDetailPage() {
             </div>
           </div>
         </div>
+<<<<<<< HEAD
         <div className="flex items-center gap-2">
           <Link href={`/chat?agent=${agent.name}`} className="sera-btn-primary">
             <MessageSquare size={16} />
@@ -167,6 +168,12 @@ export default function AgentDetailPage() {
             Edit Manifest
           </Link>
         </div>
+=======
+        <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost">
+          <Settings size={16} />
+          Edit
+        </Link>
+>>>>>>> main
       </div>
 
       {/* Tabs */}

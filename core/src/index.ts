@@ -17,6 +17,8 @@ import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SandboxManager } from './sandbox/SandboxManager.js';
 import { createSandboxRouter } from './routes/sandbox.js';
+import { IntercomService } from './intercom/IntercomService.js';
+import { createIntercomRouter } from './routes/intercom.js';
 
 const app = express();
 
@@ -37,6 +39,12 @@ const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) =>
   return agentManifests.find(m => m.metadata.name === agentName);
 });
 
+// ── Intercom Service ─────────────────────────────────────────────────────────
+const intercomService = new IntercomService();
+const intercomRouter = createIntercomRouter(intercomService, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
+
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
 
@@ -44,6 +52,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/api/lsp', lspRouter);
 app.use('/api/sandbox', sandboxRouter);
+app.use('/api/intercom', intercomRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({

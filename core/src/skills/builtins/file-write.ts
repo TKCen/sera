@@ -16,10 +16,10 @@ export const fileWriteSkill: SkillDefinition = {
     { name: 'content', type: 'string', description: 'Content to write to the file', required: true },
   ],
   handler: async (params) => {
-    const filePath = params['path'];
+    const rawPath = params['path'];
     const content = params['content'];
 
-    if (!filePath || typeof filePath !== 'string') {
+    if (!rawPath || typeof rawPath !== 'string') {
       return { success: false, error: 'Parameter "path" is required and must be a string' };
     }
     if (typeof content !== 'string') {
@@ -27,9 +27,17 @@ export const fileWriteSkill: SkillDefinition = {
     }
 
     try {
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, content, 'utf-8');
-      return { success: true, data: { path: filePath, bytesWritten: content.length } };
+      const workspaceDir = process.env.WORKSPACE_DIR || process.cwd();
+      const resolvedPath = path.resolve(workspaceDir, rawPath);
+      const rootPath = path.resolve(workspaceDir);
+
+      if (resolvedPath !== rootPath && !resolvedPath.startsWith(rootPath + path.sep)) {
+        return { success: false, error: 'Path traversal detected' };
+      }
+
+      await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+      await fs.writeFile(resolvedPath, content, 'utf-8');
+      return { success: true, data: { path: resolvedPath, bytesWritten: content.length } };
     } catch (err) {
       return {
         success: false,

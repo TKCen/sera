@@ -54,6 +54,18 @@ export function createSandboxRouter(
         return res.status(400).json({ error: 'type and image are required' });
       }
 
+      if (!manifest.metadata.tier) {
+        return res.status(403).json({ error: 'Agent manifest must define a valid security tier' });
+      }
+
+      if (manifest.metadata.tier === 1 && type === 'subagent') {
+        throw new PolicyViolationError(
+          `Agent "${manifest.metadata.name}" (Tier 1) cannot spawn subagents`,
+          manifest.metadata.name,
+          'spawn_tier_violation',
+        );
+      }
+
       const result = await sandboxManager.spawn(manifest, {
         agentName: manifest.metadata.name,
         type,
@@ -83,8 +95,28 @@ export function createSandboxRouter(
 
       const { containerId, command } = req.body;
 
-      if (!containerId || !command) {
-        return res.status(400).json({ error: 'containerId and command are required' });
+      if (!containerId || !command || !Array.isArray(command) || command.length === 0) {
+        return res.status(400).json({ error: 'containerId and command array are required' });
+      }
+
+      const toolName = command[0] as string;
+
+      if (manifest.tools?.denied?.includes(toolName)) {
+        throw new PolicyViolationError(
+          `Agent "${manifest.metadata.name}" is explicitly denied tool/command "${toolName}"`,
+          manifest.metadata.name,
+          'tool_denied',
+        );
+      }
+
+      if (manifest.tools?.allowed && manifest.tools.allowed.length > 0) {
+        if (!manifest.tools.allowed.includes(toolName)) {
+          throw new PolicyViolationError(
+            `Agent "${manifest.metadata.name}" is not allowed tool/command "${toolName}"`,
+            manifest.metadata.name,
+            'tool_not_allowed',
+          );
+        }
       }
 
       const result = await sandboxManager.exec(manifest, {

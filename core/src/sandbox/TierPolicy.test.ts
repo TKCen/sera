@@ -31,6 +31,26 @@ function makeManifest(overrides?: Partial<AgentManifest>): AgentManifest {
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
 describe('TierPolicy', () => {
+  describe('getTierLimits boundaries', () => {
+    it('should correctly enforce Tier 1 boundaries: no network, ro filesystem', () => {
+      const limits = TierPolicy.getTierLimits(1);
+      expect(limits.networkMode).toBe('none');
+      expect(limits.filesystemMode).toBe('ro');
+    });
+
+    it('should correctly enforce Tier 2 boundaries: sera_net network, rw filesystem', () => {
+      const limits = TierPolicy.getTierLimits(2);
+      expect(limits.networkMode).toBe('sera_net');
+      expect(limits.filesystemMode).toBe('rw');
+    });
+
+    it('should correctly enforce Tier 3 boundaries: bridge network, rw filesystem', () => {
+      const limits = TierPolicy.getTierLimits(3);
+      expect(limits.networkMode).toBe('bridge');
+      expect(limits.filesystemMode).toBe('rw');
+    });
+  });
+
   describe('getTierLimits', () => {
     it('should return correct limits for tier 1 (Read Only)', () => {
       const limits = TierPolicy.getTierLimits(1);

@@ -15,6 +15,9 @@ import type {
 import { SequentialProcess } from './SequentialProcess.js';
 import { ParallelProcess } from './ParallelProcess.js';
 import { HierarchicalProcess } from './HierarchicalProcess.js';
+import { Logger } from '../../lib/logger.js';
+
+const logger = new Logger('ProcessManager');
 
 export class ProcessManager {
   private strategies: Map<ProcessType, ProcessStrategy> = new Map();
@@ -50,8 +53,8 @@ export class ProcessManager {
       );
     }
 
-    console.log(
-      `[ProcessManager] Running ${type} process with ${tasks.length} task(s) and ${agents.size} agent(s)`,
+    logger.info(
+      `Running ${type} process with ${tasks.length} task(s) and ${agents.size} agent(s)`,
     );
 
     return strategy.execute(tasks, agents, managerAgent);

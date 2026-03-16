@@ -6,16 +6,34 @@ import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
+<<<<<<< HEAD
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('Orchestrator');
+=======
+import type { IntercomService } from '../intercom/IntercomService.js';
+>>>>>>> main
 
 export class Orchestrator {
   private agents: Map<string, BaseAgent> = new Map();
   private manifests: Map<string, AgentManifest> = new Map();
   private primaryAgentName: string | undefined;
   private processManager: ProcessManager = new ProcessManager();
+  private intercom: IntercomService | undefined;
 
   /** Active file watcher (if any). */
   private watcher: fs.FSWatcher | undefined;
   private agentsDir: string | undefined;
+
+  /**
+   * Set the IntercomService and propagate to all loaded agents.
+   */
+  public setIntercom(intercom: IntercomService): void {
+    this.intercom = intercom;
+    for (const agent of this.agents.values()) {
+      agent.setIntercom(intercom);
+    }
+  }
 
   /**
    * Load agents from AGENT.yaml manifests in a directory.
@@ -34,9 +52,9 @@ export class Orchestrator {
       this.primaryAgentName = sorted[0];
     }
 
-    console.log(`[Orchestrator] Loaded ${manifests.size} agents from manifests`);
+    logger.info(`Loaded ${manifests.size} agents from manifests`);
     if (this.primaryAgentName) {
-      console.log(`[Orchestrator] Primary agent: ${this.primaryAgentName}`);
+      logger.info(`Primary agent: ${this.primaryAgentName}`);
     }
   }
 
@@ -60,30 +78,32 @@ export class Orchestrator {
     for (const name of diff.removed) {
       this.agents.delete(name);
       this.manifests.delete(name);
-      console.log(`[Orchestrator] Removed agent: ${name}`);
+      logger.info(`Removed agent: ${name}`);
     }
 
     // Add new agents
     for (const manifest of diff.added) {
       const agent = AgentFactory.createAgent(manifest);
+      if (this.intercom) agent.setIntercom(this.intercom);
       this.agents.set(manifest.metadata.name, agent);
       this.manifests.set(manifest.metadata.name, manifest);
-      console.log(`[Orchestrator] Added agent: ${manifest.metadata.name}`);
+      logger.info(`Added agent: ${manifest.metadata.name}`);
     }
 
     // Update changed agents
     for (const manifest of diff.updated) {
       const agent = AgentFactory.createAgent(manifest);
+      if (this.intercom) agent.setIntercom(this.intercom);
       this.agents.set(manifest.metadata.name, agent);
       this.manifests.set(manifest.metadata.name, manifest);
-      console.log(`[Orchestrator] Updated agent: ${manifest.metadata.name}`);
+      logger.info(`Updated agent: ${manifest.metadata.name}`);
     }
 
     // Reset primary if it was removed
     if (this.primaryAgentName && !this.agents.has(this.primaryAgentName)) {
       const sorted = Array.from(this.manifests.keys()).sort();
       this.primaryAgentName = sorted[0];
-      console.log(`[Orchestrator] Primary agent reassigned: ${this.primaryAgentName}`);
+      logger.info(`Primary agent reassigned: ${this.primaryAgentName}`);
     }
 
     return {
@@ -99,7 +119,7 @@ export class Orchestrator {
   watchAgentsDirectory(dirPath?: string): void {
     const dir = dirPath ?? this.agentsDir;
     if (!dir) {
-      console.warn('[Orchestrator] No agents directory to watch');
+      logger.warn('No agents directory to watch');
       return;
     }
 
@@ -115,16 +135,16 @@ export class Orchestrator {
       // Debounce rapid changes (e.g., editor save)
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        console.log(`[Orchestrator] Detected change in ${filename}, reloading agents...`);
+        logger.info(`Detected change in ${filename}, reloading agents...`);
         try {
           this.reloadAgents(dir);
         } catch (err) {
-          console.error(`[Orchestrator] Failed to reload agents:`, err);
+          logger.error(`Failed to reload agents:`, err);
         }
       }, 500);
     });
 
-    console.log(`[Orchestrator] Watching for agent changes in ${dir}`);
+    logger.info(`Watching for agent changes in ${dir}`);
   }
 
   /**
@@ -134,7 +154,7 @@ export class Orchestrator {
     if (this.watcher) {
       this.watcher.close();
       this.watcher = undefined;
-      console.log('[Orchestrator] Stopped watching agents directory');
+      logger.info('Stopped watching agents directory');
     }
   }
 
@@ -230,7 +250,7 @@ export class Orchestrator {
    * Uses the ProcessManager with sequential strategy internally.
    */
   async executeTask(description: string) {
-    console.log(`[Orchestrator] Starting task: ${description}`);
+    logger.info(`Starting task: ${description}`);
 
     const primaryAgent = this.getPrimaryAgent();
     if (!primaryAgent) throw new Error('No primary agent configured');

@@ -1,10 +1,14 @@
-import fs from 'fs';
+import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { CircleManifest } from './types.js';
 import { KNOWN_CIRCLE_FIELDS } from './types.js';
 import { ManifestValidationError } from '../agents/manifest/AgentManifestLoader.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('CircleRegistry');
 
 // ── Registry ────────────────────────────────────────────────────────────────────
 
@@ -15,34 +19,35 @@ export class CircleRegistry {
   /**
    * Load and validate a single CIRCLE.yaml file.
    */
-  static loadCircle(filePath: string): CircleManifest {
-    if (!fs.existsSync(filePath)) {
+  static async loadCircle(filePath: string): Promise<CircleManifest> {
+    if (!existsSync(filePath)) {
       throw new ManifestValidationError(`Circle manifest file not found: ${filePath}`);
     }
 
-    const raw = yaml.load(fs.readFileSync(filePath, 'utf-8'));
+    const content = await fs.readFile(filePath, 'utf-8');
+    const raw = yaml.load(content);
     return CircleRegistry.validateCircle(raw, filePath);
   }
 
   /**
    * Scan a directory for *.circle.yaml files and load all valid circle manifests.
    */
-  static loadAllCircles(dirPath: string): CircleManifest[] {
-    if (!fs.existsSync(dirPath)) {
-      console.warn(`[CircleRegistry] Circles directory not found: ${dirPath}`);
+  static async loadAllCircles(dirPath: string): Promise<CircleManifest[]> {
+    if (!existsSync(dirPath)) {
+      logger.warn(`Circles directory not found: ${dirPath}`);
       return [];
     }
 
-    const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.circle.yaml'));
+    const files = (await fs.readdir(dirPath)).filter(f => f.endsWith('.circle.yaml'));
     const circles: CircleManifest[] = [];
 
     for (const file of files) {
       try {
-        const circle = CircleRegistry.loadCircle(path.join(dirPath, file));
+        const circle = await CircleRegistry.loadCircle(path.join(dirPath, file));
         circles.push(circle);
-        console.log(`[CircleRegistry] Loaded: ${circle.metadata.name} (${file})`);
+        logger.info(`Loaded: ${circle.metadata.name} (${file})`);
       } catch (err) {
-        console.error(`[CircleRegistry] Failed to load ${file}:`, (err as Error).message);
+        logger.error(`Failed to load ${file}:`, (err as Error).message);
       }
     }
 
@@ -140,15 +145,15 @@ export class CircleRegistry {
   /**
    * Register circles from a directory, validating agent references against loaded manifests.
    */
-  loadFromDirectory(circlesDir: string, agentManifests: AgentManifest[] = []): void {
-    const circles = CircleRegistry.loadAllCircles(circlesDir);
+  async loadFromDirectory(circlesDir: string, agentManifests: AgentManifest[] = []): Promise<void> {
+    const circles = await CircleRegistry.loadAllCircles(circlesDir);
 
     for (const circle of circles) {
       // Validate agent references (warn but don't fail)
       const missing = CircleRegistry.validateAgentReferences(circle, agentManifests);
       if (missing.length > 0) {
-        console.warn(
-          `[CircleRegistry] Circle "${circle.metadata.name}" references unknown agents: ${missing.join(', ')}`,
+        logger.warn(
+          `Circle "${circle.metadata.name}" references unknown agents: ${missing.join(', ')}`,
         );
       }
 
@@ -156,33 +161,33 @@ export class CircleRegistry {
 
       // Load project context if configured
       if (circle.projectContext?.path) {
-        this.loadProjectContext(circle, circlesDir);
+        await this.loadProjectContext(circle, circlesDir);
       }
     }
 
-    console.log(`[CircleRegistry] Registered ${circles.length} circles`);
+    logger.info(`Registered ${circles.length} circles`);
   }
 
   /**
    * Load the project-context.md for a circle.
    * Resolves the path relative to the circles directory.
    */
-  loadProjectContext(circle: CircleManifest, circlesDir: string): string | undefined {
+  async loadProjectContext(circle: CircleManifest, circlesDir: string): Promise<string | undefined> {
     if (!circle.projectContext?.path) return undefined;
 
     // Resolve relative to the circles directory
     const contextPath = path.resolve(circlesDir, circle.projectContext.path);
 
-    if (!fs.existsSync(contextPath)) {
-      console.warn(
-        `[CircleRegistry] Project context not found for "${circle.metadata.name}": ${contextPath}`,
+    if (!existsSync(contextPath)) {
+      logger.warn(
+        `Project context not found for "${circle.metadata.name}": ${contextPath}`,
       );
       return undefined;
     }
 
-    const content = fs.readFileSync(contextPath, 'utf-8');
+    const content = await fs.readFile(contextPath, 'utf-8');
     this.projectContexts.set(circle.metadata.name, content);
-    console.log(`[CircleRegistry] Loaded project context for "${circle.metadata.name}"`);
+    logger.info(`Loaded project context for "${circle.metadata.name}"`);
     return content;
   }
 

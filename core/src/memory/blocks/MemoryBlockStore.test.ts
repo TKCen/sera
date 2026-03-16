@@ -222,4 +222,84 @@ describe('MemoryBlockStore', () => {
     const results = await store.search('matching', 3);
     expect(results).toHaveLength(3);
   });
+
+  // ── Edge Cases ──────────────────────────────────────────────────────────────
+
+  it('should skip malformed YAML frontmatter without crashing', async () => {
+    const dir = path.join(tmpDir, 'blocks', 'core');
+    await fs.mkdir(dir, { recursive: true });
+
+    // Write a deliberately broken file
+    await fs.writeFile(
+      path.join(dir, 'broken.md'),
+      '---\nmissing id and title and type\n---\nSome content'
+    );
+
+    // Write a valid file
+    await store.addEntry('core', { title: 'Valid Entry', content: 'Valid content' });
+
+    // Should load the valid one and ignore the broken one
+    const block = await store.loadBlock('core');
+    expect(block.entries).toHaveLength(1);
+    expect(block.entries[0]!.title).toBe('Valid Entry');
+  });
+
+  it('should handle concurrent writes to the same block type', async () => {
+    const promises: Promise<any>[] = [];
+    for (let i = 0; i < 20; i++) {
+      promises.push(
+        store.addEntry('core', { title: `Concurrent Entry ${i}`, content: `Content ${i}` })
+      );
+    }
+
+    await Promise.all(promises);
+
+    const block = await store.loadBlock('core');
+    expect(block.entries).toHaveLength(20);
+  });
+
+  it('should handle concurrent updates to the same entry gracefully', async () => {
+    const entry = await store.addEntry('core', { title: 'Shared Entry', content: 'Initial' });
+
+    const promises: Promise<any>[] = [];
+    for (let i = 0; i < 10; i++) {
+      promises.push(store.updateEntry(entry.id, `Update ${i}`));
+    }
+
+    await Promise.all(promises);
+
+    const retrieved = await store.getEntry(entry.id);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.content).toMatch(/Update \d/);
+  });
+
+  it('should handle very large content', async () => {
+    // 150KB of content
+    const largeContent = 'A'.repeat(150 * 1024);
+
+    const entry = await store.addEntry('core', {
+      title: 'Large Entry',
+      content: largeContent
+    });
+
+    const retrieved = await store.getEntry(entry.id);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.content).toBe(largeContent);
+  });
+
+  it('should handle special characters in titles', async () => {
+    const weirdTitle = 'My @Weird #Title! (With spaces)';
+    const entry = await store.addEntry('core', { title: weirdTitle, content: 'Special characters.' });
+
+    expect(entry.title).toBe(weirdTitle);
+
+    const retrieved = await store.getEntry(entry.id);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.title).toBe(weirdTitle);
+
+    // Check slugified filename
+    const dir = path.join(tmpDir, 'blocks', 'core');
+    const files = await fs.readdir(dir);
+    expect(files).toContain('my-weird-title-with-spaces.md');
+  });
 });

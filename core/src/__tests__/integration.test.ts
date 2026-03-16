@@ -1,0 +1,142 @@
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import request from 'supertest';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+
+// Mock database initialization to avoid connecting to actual PostgreSQL
+vi.mock('../lib/database.js', () => ({
+  initDb: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock the LLM provider to avoid real API calls in /api/chat
+vi.mock('../lib/llm/OpenAIProvider.js', () => {
+  return {
+    OpenAIProvider: class {
+      async *chat() {
+        yield 'Mocked response';
+      }
+      async complete() {
+        return { content: 'Mocked response' };
+      }
+    }
+  };
+});
+
+// Mock Qdrant/vector dependencies
+vi.mock('../services/embedding.service.js', () => ({
+  EmbeddingService: {
+    getInstance: vi.fn().mockReturnValue({
+      generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+    }),
+  },
+}));
+
+vi.mock('../services/vector.service.js', () => ({
+  VectorService: vi.fn().mockImplementation(() => ({
+    search: vi.fn().mockResolvedValue([]),
+  })),
+}));
+
+// Set up a temporary directory for memory storage before importing the app
+let tempMemoryPath: string;
+let app: any;
+
+beforeAll(async () => {
+  tempMemoryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'sera-memory-'));
+  process.env.MEMORY_PATH = tempMemoryPath;
+
+  // Dynamically import the Express app after mocks and env vars are in place
+  const appModule = await import('../index.js');
+  app = appModule.app;
+});
+
+afterAll(async () => {
+  if (tempMemoryPath) {
+    await fs.rm(tempMemoryPath, { recursive: true, force: true });
+  }
+});
+
+describe('SERA Integration Tests', () => {
+  describe('a. Agent loading', () => {
+    it('should register agents from AGENT.yaml manifests', async () => {
+      const res = await request(app).get('/api/agents');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThan(0);
+
+      const names = res.body.map((a: any) => a.name); // Orchestrator.listAgents returns array of { name, ... }
+      expect(names).toContain('architect-prime');
+      expect(names).toContain('developer-prime');
+      expect(names).toContain('researcher-prime');
+    });
+  });
+
+  describe('b. Circle loading', () => {
+    it('should validate agent references against loaded manifests and load circles', async () => {
+      const res = await request(app).get('/api/circles');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThan(0);
+
+      const names = res.body.map((c: any) => c.name);
+      expect(names).toContain('development');
+      expect(names).toContain('operations');
+    });
+  });
+
+  describe('c. Chat flow', () => {
+    it('should hit the orchestrator and use the loaded agent mock', async () => {
+      const res = await request(app)
+        .post('/api/chat')
+        .send({ message: 'Hello, world!' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('reply');
+      // Our mock returns 'Mocked response' but PrimaryAgent wraps it depending on structure
+      // Wait, primary agent extracts finalAnswer or thought, so let's just check it's defined
+      expect(typeof res.body.reply).toBe('string');
+      // Our mock response doesn't have `<final_answer>` block so PrimaryAgent might extract it differently,
+      // but it should not crash.
+    });
+  });
+
+  describe('d. Memory flow', () => {
+    let createdId: string;
+
+    it('should create a memory entry via POST /api/memory/blocks/:type', async () => {
+      const res = await request(app)
+        .post('/api/memory/blocks/core')
+        .send({ title: 'Test Memory', content: 'This is a test memory content.' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('id');
+      expect(res.body.title).toBe('Test Memory');
+      expect(res.body.content).toBe('This is a test memory content.');
+
+      createdId = res.body.id;
+    });
+
+    it('should retrieve the created memory entry via GET /api/memory/entries/:id', async () => {
+      expect(createdId).toBeDefined();
+      const res = await request(app).get(`/api/memory/entries/${createdId}`);
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(createdId);
+      expect(res.body.title).toBe('Test Memory');
+      expect(res.body.content).toBe('This is a test memory content.');
+    });
+  });
+
+  describe('e. Skills flow', () => {
+    it('should have builtin skills registered after server boot', async () => {
+      const res = await request(app).get('/api/skills');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThan(0);
+
+      const skillIds = res.body.map((s: any) => s.id);
+      expect(skillIds).toContain('file-read');
+      expect(skillIds).toContain('file-write');
+    });
+  });
+});

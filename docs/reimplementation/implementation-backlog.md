@@ -287,27 +287,57 @@
 
 ---
 
-## 🧠 Epic 5: Memory Blocks (Letta-style)
+## 🧠 Epic 5: Memory Blocks (Letta-style × Obsidian-style)
 
-*Upgrade the POC memory system to structured, self-improvable memory blocks.*
+*Upgrade the POC memory system to structured, graph-linked memory blocks stored as human-readable markdown files.*
+
+### Storage Format
+
+Each memory entry is a markdown file with YAML frontmatter:
+
+```markdown
+---
+id: a1b2c3d4-...
+title: Project Testing Stack
+type: core
+tags: [tooling, testing]
+refs: [e5f6g7h8-...]
+source: agent
+createdAt: 2026-03-16T22:00:00Z
+updatedAt: 2026-03-16T22:00:00Z
+---
+
+The project uses **Vitest** for unit testing with `supertest` for HTTP assertions.
+See also [[CI Pipeline Config]] for the pipeline configuration.
+```
+
+Entries are organized in block-type folders (`memory/blocks/human/`, `persona/`, `core/`, `archive/`).
+Graph edges come from: explicit `refs` in frontmatter + `[[Title]]` wikilinks in content.
+
+---
 
 ### Story 5.1: Structured Memory Blocks
 
 > **As an** agent,
-> **I want** my memory organized into distinct blocks (Human, Persona, Core, Archive),
-> **so that** I can selectively edit and improve different aspects of my knowledge over time.
+> **I want** my memory organized into distinct blocks (Human, Persona, Core, Archive) as readable markdown files,
+> **so that** I can selectively edit and improve different aspects of my knowledge over time, with traceable links between entries.
 
 **Acceptance Criteria:**
-- [ ] Create `MemoryBlock` types: `human` (info about the user), `persona` (agent's self-model), `core` (essential knowledge), `archive` (long-term storage)
-- [ ] Each block is persisted as a structured file in the agent's memory volume
-- [ ] Agents can read, update, and append to their memory blocks within their reasoning loop
-- [ ] Working memory (current context window) is assembled from relevant blocks
-- [ ] Refactor existing `MemoryManager` to use blocks instead of flat arrays
+- [ ] Create `MemoryBlockType` (`human`, `persona`, `core`, `archive`) and `MemoryEntry` types (id, title, type, content, refs, tags, source, timestamps)
+- [ ] Each entry is a `.md` file with YAML frontmatter, named by slugified title (e.g. `project-testing-stack.md`)
+- [ ] Agents can read, create, update, and delete memory entries within their reasoning loop
+- [ ] Entries link via `refs` (explicit) and `[[Title]]` wikilinks (implicit) for graph visualization
+- [ ] Working memory context is assembled from `human` + `persona` + `core` block entries
+- [ ] API endpoint `GET /api/memory/graph` returns all entries + edges for graph visualization
+- [ ] Refactor existing `MemoryManager` to use `MemoryBlockStore`; remove old flat-array and markdown archival system
 
 **Files:**
 - `[NEW]` `core/src/memory/blocks/types.ts`
 - `[NEW]` `core/src/memory/blocks/MemoryBlockStore.ts`
 - `[MODIFY]` `core/src/memory/manager.ts` — block-based memory
+- `[MODIFY]` `core/src/index.ts` — new block/entry/graph API routes
+- `[DELETE]` `core/src/memory/archival.ts`
+- `[DELETE]` `core/src/memory/test-memory.ts`
 
 ---
 
@@ -318,11 +348,11 @@
 > **so that** my working memory stays focused while retaining important context long-term.
 
 **Acceptance Criteria:**
-- [ ] Background process monitors working memory size per agent
-- [ ] When working memory exceeds threshold, oldest entries are summarized by the LLM
-- [ ] Summaries are stored in the `archive` memory block
-- [ ] Original entries are removed from working memory after compaction
-- [ ] Compaction events are logged to the audit trail
+- [ ] Background process monitors `core` block entry count per agent
+- [ ] When `core` exceeds threshold (20 entries), oldest entries are summarized by the LLM
+- [ ] Summary is stored as a new `archive` entry that refs back to the original entries (preserving trace chain)
+- [ ] Original entries are moved to `archive` type (preserving their IDs and existing refs)
+- [ ] Compaction events are logged to the audit trail with `source: 'reflector'`
 
 **Files:**
 - `[NEW]` `core/src/memory/Reflector.ts`

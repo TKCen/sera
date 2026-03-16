@@ -1,24 +1,17 @@
-export interface MemoryMetadata {
-  tags?: string[];
-  createdAt: string;
-  updatedAt: string;
-  [key: string]: any;
-}
+/**
+ * Memory types — re-exports from the blocks system.
+ *
+ * This module provides a convenience barrel export for memory-related types.
+ */
+export type {
+  MemoryBlockType,
+  MemoryEntry,
+  MemoryBlock,
+  MemoryGraph,
+  GraphNode,
+  GraphEdge,
+  CreateEntryOptions,
+  MemorySource,
+} from './blocks/types.js';
 
-export interface ArchivalMemory {
-  id?: string;
-  title: string;
-  content: string;
-  metadata: MemoryMetadata;
-}
-
-export interface WorkingMemory {
-  context: string[];
-  recentInteractions: any[];
-}
-
-export interface SearchOptions {
-  tags?: string[] | undefined;
-  query?: string | undefined;
-  limit?: number | undefined;
-}
+export { MEMORY_BLOCK_TYPES } from './blocks/types.js';

@@ -12,6 +12,8 @@ import { Orchestrator } from './agents/Orchestrator.js';
 import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MemoryManager } from './memory/manager.js';
+import type { MemoryBlockType } from './memory/types.js';
+import { MEMORY_BLOCK_TYPES } from './memory/types.js';
 import { CircleRegistry } from './circles/CircleRegistry.js';
 import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
@@ -83,15 +85,125 @@ app.get('/api/circles/:name', (req, res) => {
   });
 });
 
-// Memory API endpoints
-app.post('/api/memory/archive', async (req, res) => {
+// ─── Memory Blocks API ────────────────────────────────────────────────────────
+
+app.get('/api/memory/blocks', async (req, res) => {
   try {
-    const { title, content, tags } = req.body;
-    if (!title || !content) {
-      return res.status(400).json({ error: 'Title and content are required' });
+    const blocks = await memoryManager.getAllBlocks();
+    res.json(blocks);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/memory/blocks/:type', async (req, res) => {
+  const type = req.params.type as MemoryBlockType;
+  if (!MEMORY_BLOCK_TYPES.includes(type)) {
+    return res.status(400).json({ error: `Invalid block type "${type}". Must be one of: ${MEMORY_BLOCK_TYPES.join(', ')}` });
+  }
+  try {
+    const block = await memoryManager.getBlock(type);
+    res.json(block);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/memory/blocks/:type', async (req, res) => {
+  const type = req.params.type as MemoryBlockType;
+  if (!MEMORY_BLOCK_TYPES.includes(type)) {
+    return res.status(400).json({ error: `Invalid block type "${type}"` });
+  }
+  const { title, content, refs, tags, source } = req.body;
+  if (!title || !content) {
+    return res.status(400).json({ error: 'title and content are required' });
+  }
+  try {
+    const entry = await memoryManager.addEntry(type, { title, content, refs, tags, source });
+    res.status(201).json(entry);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Memory Entries API ───────────────────────────────────────────────────────
+
+app.get('/api/memory/entries/:id', async (req, res) => {
+  try {
+    const entry = await memoryManager.getEntry(req.params.id);
+    if (!entry) {
+      return res.status(404).json({ error: 'Entry not found' });
     }
-    const path = await memoryManager.archive(title, content, tags);
-    res.json({ success: true, path });
+    res.json(entry);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/memory/entries/:id', async (req, res) => {
+  const { content } = req.body;
+  if (!content) {
+    return res.status(400).json({ error: 'content is required' });
+  }
+  try {
+    const entry = await memoryManager.updateEntry(req.params.id, content);
+    if (!entry) {
+      return res.status(404).json({ error: 'Entry not found' });
+    }
+    res.json(entry);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/memory/entries/:id', async (req, res) => {
+  try {
+    const deleted = await memoryManager.deleteEntry(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Entry not found' });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Memory Refs API ──────────────────────────────────────────────────────────
+
+app.post('/api/memory/entries/:id/refs', async (req, res) => {
+  const { targetId } = req.body;
+  if (!targetId) {
+    return res.status(400).json({ error: 'targetId is required' });
+  }
+  try {
+    const ok = await memoryManager.addRef(req.params.id, targetId);
+    if (!ok) {
+      return res.status(404).json({ error: 'Source entry not found' });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/memory/entries/:id/refs/:targetId', async (req, res) => {
+  try {
+    const ok = await memoryManager.removeRef(req.params.id, req.params.targetId);
+    if (!ok) {
+      return res.status(404).json({ error: 'Ref not found' });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Memory Graph API ─────────────────────────────────────────────────────────
+
+app.get('/api/memory/graph', async (req, res) => {
+  try {
+    const graph = await memoryManager.getGraph();
+    res.json(graph);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -99,29 +211,18 @@ app.post('/api/memory/archive', async (req, res) => {
 
 app.get('/api/memory/search', async (req, res) => {
   try {
-    const { query, tags, limit } = req.query;
-    const results = await memoryManager.searchArchival({
-      query: query as string,
-      tags: tags ? (Array.isArray(tags) ? tags as string[] : [tags as string]) : undefined,
-      limit: limit ? parseInt(limit as string) : undefined
-    });
+    const { query, limit } = req.query;
+    if (!query) {
+      return res.status(400).json({ error: 'query parameter is required' });
+    }
+    const results = await memoryManager.search(
+      query as string,
+      limit ? parseInt(limit as string) : undefined,
+    );
     res.json(results);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
-
-app.get('/api/memory/working', (req, res) => {
-  res.json(memoryManager.getWorkingMemory());
-});
-
-app.post('/api/memory/working', (req, res) => {
-  const { info } = req.body;
-  if (!info) {
-    return res.status(400).json({ error: 'Info is required' });
-  }
-  memoryManager.addToWorkingMemory(info);
-  res.json({ success: true });
 });
 
 app.post('/api/ingest', async (req, res) => {

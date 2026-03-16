@@ -5,6 +5,23 @@ import { useState, useEffect } from 'react';
 import { Bot, ArrowLeft, Shield, Settings, BookOpen, Cpu, MessageSquare, Wrench, Users } from 'lucide-react';
 import Link from 'next/link';
 
+interface MemoryEntry {
+  id: string;
+  title: string;
+  type: string;
+  content: string;
+  refs: string[];
+  tags: string[];
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface MemoryBlock {
+  type: string;
+  entries: MemoryEntry[];
+}
+
 interface AgentDetail {
   name: string;
   displayName: string;
@@ -41,7 +58,7 @@ interface AgentDetail {
   };
 }
 
-type Tab = 'overview' | 'tools' | 'intercom';
+type Tab = 'overview' | 'tools' | 'intercom' | 'memory';
 
 const TIER_LABELS: Record<number, { label: string; class: string; desc: string }> = {
   1: { label: 'Tier 1 — Restricted', class: 'sera-badge-muted', desc: 'Read-only filesystem, no network' },
@@ -56,6 +73,8 @@ export default function AgentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [memoryBlocks, setMemoryBlocks] = useState<MemoryBlock[]>([]);
+  const [loadingMemory, setLoadingMemory] = useState(false);
 
   useEffect(() => {
     fetch(`/api/core/agents/${agentName}`)
@@ -66,6 +85,16 @@ export default function AgentDetailPage() {
       .then(setAgent)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+
+    setLoadingMemory(true);
+    fetch('/api/core/memory/blocks')
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Failed to fetch memory');
+        return res.json();
+      })
+      .then(setMemoryBlocks)
+      .catch((err) => console.error('Error fetching memory:', err))
+      .finally(() => setLoadingMemory(false));
   }, [agentName]);
 
   if (loading) {
@@ -97,6 +126,7 @@ export default function AgentDetailPage() {
     { id: 'overview', label: 'Overview', icon: <Cpu size={15} /> },
     { id: 'tools', label: 'Tools & Skills', icon: <Wrench size={15} /> },
     { id: 'intercom', label: 'Intercom', icon: <MessageSquare size={15} /> },
+    { id: 'memory', label: 'Memory', icon: <BookOpen size={15} /> },
   ];
 
   return (
@@ -127,10 +157,16 @@ export default function AgentDetailPage() {
             </div>
           </div>
         </div>
-        <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost">
-          <Settings size={16} />
-          Edit Manifest
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href={`/chat?agent=${agent.name}`} className="sera-btn-primary">
+            <MessageSquare size={16} />
+            Chat with this agent
+          </Link>
+          <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost">
+            <Settings size={16} />
+            Edit Manifest
+          </Link>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -328,6 +364,56 @@ export default function AgentDetailPage() {
                 ))}
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Memory Tab */}
+      {activeTab === 'memory' && (
+        <div className="space-y-6">
+          {loadingMemory ? (
+            <div className="flex items-center justify-center py-20">
+              <span className="text-sm text-sera-text-muted">Loading memory...</span>
+            </div>
+          ) : memoryBlocks.length === 0 ? (
+            <div className="sera-card-static p-8 text-center">
+              <BookOpen size={24} className="text-sera-text-dim mx-auto mb-3" />
+              <p className="text-sm text-sera-text-muted">No memory blocks found.</p>
+            </div>
+          ) : (
+            memoryBlocks.map((block) => (
+              <div key={block.type} className="sera-card-static p-5">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4">
+                  {block.type} Block ({block.entries.length})
+                </h3>
+                {block.entries.length === 0 ? (
+                  <p className="text-xs text-sera-text-dim italic">No entries</p>
+                ) : (
+                  <div className="space-y-3">
+                    {block.entries.map((entry) => (
+                      <div key={entry.id} className="border border-sera-border rounded-lg p-3 bg-sera-bg/30">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-medium text-sera-text">{entry.title}</h4>
+                          <span className="text-[10px] text-sera-text-dim font-mono">
+                            {new Date(entry.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-xs text-sera-text-muted whitespace-pre-wrap">{entry.content}</p>
+                        {entry.tags && entry.tags.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {entry.tags.map((tag) => (
+                              <span key={tag} className="text-[10px] bg-sera-surface px-1.5 py-0.5 rounded text-sera-text-dim">
+                                #{tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
           )}
         </div>
       )}

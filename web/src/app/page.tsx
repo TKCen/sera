@@ -1,4 +1,43 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+
+const TypingMessage = ({ text, sender }: { text: string, sender: string }) => {
+  const [displayedText, setDisplayedText] = useState('');
+
+  useEffect(() => {
+    let i = 0;
+    const interval = setInterval(() => {
+      setDisplayedText(text.slice(0, i));
+      i++;
+      if (i > text.length) clearInterval(interval);
+    }, 30);
+    return () => clearInterval(interval);
+  }, [text]);
+
+  return (
+    <div className="flex gap-4">
+      <span className="text-secondary font-bold">{sender}:</span>
+      <p className="text-primary/90">{displayedText}<span className="animate-pulse">_</span></p>
+    </div>
+  );
+};
+
 export default function Home() {
+  const [uptime, setUptime] = useState('00h 00m 00s');
+
+  useEffect(() => {
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      const seconds = Math.floor((Date.now() - startTime) / 1000);
+      const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+      const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+      const s = (seconds % 60).toString().padStart(2, '0');
+      setUptime(`${h}h ${m}m ${s}s`);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="max-w-6xl mx-auto py-12 space-y-8">
       <header className="flex items-center justify-between border-b border-primary/20 pb-6 mb-12">
@@ -8,7 +47,7 @@ export default function Home() {
           </h1>
           <p className="text-muted-foreground font-mono mt-2 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-            SYSTEM_UPTIME: 00h 00m 00s
+            SYSTEM_UPTIME: {uptime}
           </p>
         </div>
         <div className="flex gap-4">
@@ -36,12 +75,12 @@ export default function Home() {
         </aside>
 
         {/* Main Terminal / Chat Area */}
-        <section className="col-span-9 glass-panel flex flex-col relative overflow-hidden">
+        <section className="col-span-9 glass-panel flex flex-col relative overflow-hidden hologram-flicker">
           <div className="flex-1 p-6 font-mono text-sm space-y-4 overflow-y-auto">
-            <div className="flex gap-4">
-              <span className="text-secondary font-bold">SERA:</span>
-              <p className="text-primary/90">Initializing neural links... Standby for input.</p>
-            </div>
+            <TypingMessage
+              sender="SERA"
+              text="Initializing neural links... Standby for input. System stability confirmed. Holographic interface active."
+            />
           </div>
           
           <div className="p-4 border-t border-white/5 bg-black/20">

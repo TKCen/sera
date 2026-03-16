@@ -15,6 +15,12 @@ export function createSkillsRouter(
   const router = Router();
 
   // ── List all skills ───────────────────────────────────────────────────────
+  /**
+   * Lists all registered skills (both built-in and MCP-bridged) and which agents use them.
+   * @param req Express request
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/', (req, res) => {
     const skills = skillRegistry.listAll();
 
@@ -38,6 +44,12 @@ export function createSkillsRouter(
   });
 
   // ── Update an agent's tools.allowed list ──────────────────────────────────
+  /**
+   * Validates tool additions for an agent (informational).
+   * @param req Express request containing agent name in params and allowed tools array in body
+   * @param res Express response
+   * @returns {void}
+   */
   router.put('/agents/:name/tools', (req, res) => {
     const name = req.params.name;
     const manifest = orchestrator.getManifest(name);

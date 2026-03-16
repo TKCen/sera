@@ -6,19 +6,34 @@ import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
+<<<<<<< HEAD
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('Orchestrator');
+=======
+import type { IntercomService } from '../intercom/IntercomService.js';
+>>>>>>> main
 
 export class Orchestrator {
   private agents: Map<string, BaseAgent> = new Map();
   private manifests: Map<string, AgentManifest> = new Map();
   private primaryAgentName: string | undefined;
   private processManager: ProcessManager = new ProcessManager();
+  private intercom: IntercomService | undefined;
 
   /** Active file watcher (if any). */
   private watcher: fs.FSWatcher | undefined;
   private agentsDir: string | undefined;
+
+  /**
+   * Set the IntercomService and propagate to all loaded agents.
+   */
+  public setIntercom(intercom: IntercomService): void {
+    this.intercom = intercom;
+    for (const agent of this.agents.values()) {
+      agent.setIntercom(intercom);
+    }
+  }
 
   /**
    * Load agents from AGENT.yaml manifests in a directory.
@@ -69,6 +84,7 @@ export class Orchestrator {
     // Add new agents
     for (const manifest of diff.added) {
       const agent = AgentFactory.createAgent(manifest);
+      if (this.intercom) agent.setIntercom(this.intercom);
       this.agents.set(manifest.metadata.name, agent);
       this.manifests.set(manifest.metadata.name, manifest);
       logger.info(`Added agent: ${manifest.metadata.name}`);
@@ -77,6 +93,7 @@ export class Orchestrator {
     // Update changed agents
     for (const manifest of diff.updated) {
       const agent = AgentFactory.createAgent(manifest);
+      if (this.intercom) agent.setIntercom(this.intercom);
       this.agents.set(manifest.metadata.name, agent);
       this.manifests.set(manifest.metadata.name, manifest);
       logger.info(`Updated agent: ${manifest.metadata.name}`);

@@ -100,23 +100,23 @@ export abstract class BaseAgent {
 
   protected async observe(context: string): Promise<void> {
     console.log(`[${this.name}] Observing: ${context.substring(0, 50)}...`);
-    await this.publishThought('observe', context);
+    this.publishThought('observe', context).catch(err => console.error(err));
   }
 
   protected async plan(goal: string): Promise<string> {
     console.log(`[${this.name}] Planning for goal: ${goal}`);
-    await this.publishThought('plan', `Planning for: ${goal}`);
+    this.publishThought('plan', `Planning for: ${goal}`).catch(err => console.error(err));
     return `Plan for ${goal}`;
   }
 
   protected async act(action: any): Promise<any> {
     console.log(`[${this.name}] Acting: ${JSON.stringify(action)}`);
-    await this.publishThought('act', `Executing: ${JSON.stringify(action)}`);
+    this.publishThought('act', `Executing: ${JSON.stringify(action)}`).catch(err => console.error(err));
     return { status: 'success' };
   }
 
   protected async reflect(outcome: any): Promise<void> {
     console.log(`[${this.name}] Reflecting on outcome: ${JSON.stringify(outcome)}`);
-    await this.publishThought('reflect', `Outcome: ${JSON.stringify(outcome)}`);
+    this.publishThought('reflect', `Outcome: ${JSON.stringify(outcome)}`).catch(err => console.error(err));
   }
 }

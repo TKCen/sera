@@ -7,14 +7,16 @@ services:
       dockerfile: Dockerfile
     container_name: sera-core
     restart: unless-stopped
-    volumes:
-      - ./core:/app
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./memory:/app/memory
     environment:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - ./core:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./memory:/app/memory
+      - .:/app/workspace:ro
     networks:
       - sera_net
       - agent_net
@@ -68,6 +70,19 @@ services:
       - sera_net
       - agent_net
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: sera-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - sera_net
+      - agent_net
+
 networks:
   sera_net:
     name: sera_net
@@ -77,3 +92,4 @@ networks:
 
 volumes:
   sera_db_data:
+  qdrant_data:

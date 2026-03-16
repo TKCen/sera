@@ -1,43 +1,140 @@
+import fs from 'fs';
 import path from 'path';
 import { BaseAgent } from './BaseAgent.js';
-import { PrimaryAgent } from './PrimaryAgent.js';
-import { WorkerAgent } from './WorkerAgent.js';
-import type { AgentTask } from './types.js';
+import { AgentFactory } from './AgentFactory.js';
+import { ProcessManager } from './process/ProcessManager.js';
+import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
-import { AgentManifestLoader } from './manifest/AgentManifestLoader.js';
-import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
 
 export class Orchestrator {
   private agents: Map<string, BaseAgent> = new Map();
   private manifests: Map<string, AgentManifest> = new Map();
-  private tasks: AgentTask[] = [];
   private primaryAgentName: string | undefined;
+  private processManager: ProcessManager = new ProcessManager();
+
+  /** Active file watcher (if any). */
+  private watcher: fs.FSWatcher | undefined;
+  private agentsDir: string | undefined;
 
   /**
    * Load agents from AGENT.yaml manifests in a directory.
    * The first agent loaded becomes the primary agent (used for chat routing).
    */
   loadAgentsFromManifests(dirPath: string): void {
-    const loadedManifests = AgentManifestLoader.loadAllManifests(dirPath);
+    this.agentsDir = dirPath;
+    const { agents, manifests } = AgentFactory.createAllFromDirectory(dirPath);
 
-    for (const manifest of loadedManifests) {
-      const provider = ProviderFactory.createFromManifest(manifest);
-      const agent = new WorkerAgent(manifest, provider);
+    this.agents = agents;
+    this.manifests = manifests;
 
-      this.agents.set(manifest.metadata.name, agent);
-      this.manifests.set(manifest.metadata.name, manifest);
-
-      // First agent alphabetically or we can designate primary by convention
-      if (!this.primaryAgentName) {
-        this.primaryAgentName = manifest.metadata.name;
-      }
+    // Set primary to alphabetically first agent
+    const sorted = Array.from(manifests.keys()).sort();
+    if (sorted.length > 0) {
+      this.primaryAgentName = sorted[0];
     }
 
-    console.log(`[Orchestrator] Loaded ${loadedManifests.length} agents from manifests`);
-
+    console.log(`[Orchestrator] Loaded ${manifests.size} agents from manifests`);
     if (this.primaryAgentName) {
       console.log(`[Orchestrator] Primary agent: ${this.primaryAgentName}`);
+    }
+  }
+
+  /**
+   * Re-scan the agents directory and reload manifests.
+   * Adds new agents, removes deleted ones, and updates changed ones.
+   */
+  reloadAgents(dirPath?: string): {
+    added: string[];
+    removed: string[];
+    updated: string[];
+  } {
+    const dir = dirPath ?? this.agentsDir;
+    if (!dir) {
+      throw new Error('No agents directory configured. Call loadAgentsFromManifests first.');
+    }
+
+    const diff = AgentFactory.diffAgents(this.manifests, dir);
+
+    // Remove deleted agents
+    for (const name of diff.removed) {
+      this.agents.delete(name);
+      this.manifests.delete(name);
+      console.log(`[Orchestrator] Removed agent: ${name}`);
+    }
+
+    // Add new agents
+    for (const manifest of diff.added) {
+      const agent = AgentFactory.createAgent(manifest);
+      this.agents.set(manifest.metadata.name, agent);
+      this.manifests.set(manifest.metadata.name, manifest);
+      console.log(`[Orchestrator] Added agent: ${manifest.metadata.name}`);
+    }
+
+    // Update changed agents
+    for (const manifest of diff.updated) {
+      const agent = AgentFactory.createAgent(manifest);
+      this.agents.set(manifest.metadata.name, agent);
+      this.manifests.set(manifest.metadata.name, manifest);
+      console.log(`[Orchestrator] Updated agent: ${manifest.metadata.name}`);
+    }
+
+    // Reset primary if it was removed
+    if (this.primaryAgentName && !this.agents.has(this.primaryAgentName)) {
+      const sorted = Array.from(this.manifests.keys()).sort();
+      this.primaryAgentName = sorted[0];
+      console.log(`[Orchestrator] Primary agent reassigned: ${this.primaryAgentName}`);
+    }
+
+    return {
+      added: diff.added.map(m => m.metadata.name),
+      removed: diff.removed,
+      updated: diff.updated.map(m => m.metadata.name),
+    };
+  }
+
+  /**
+   * Watch the agents directory for .agent.yaml changes and auto-reload.
+   */
+  watchAgentsDirectory(dirPath?: string): void {
+    const dir = dirPath ?? this.agentsDir;
+    if (!dir) {
+      console.warn('[Orchestrator] No agents directory to watch');
+      return;
+    }
+
+    if (this.watcher) {
+      this.watcher.close();
+    }
+
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    this.watcher = fs.watch(dir, (eventType, filename) => {
+      if (!filename?.endsWith('.agent.yaml')) return;
+
+      // Debounce rapid changes (e.g., editor save)
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        console.log(`[Orchestrator] Detected change in ${filename}, reloading agents...`);
+        try {
+          this.reloadAgents(dir);
+        } catch (err) {
+          console.error(`[Orchestrator] Failed to reload agents:`, err);
+        }
+      }, 500);
+    });
+
+    console.log(`[Orchestrator] Watching for agent changes in ${dir}`);
+  }
+
+  /**
+   * Stop the file watcher.
+   */
+  stopWatching(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = undefined;
+      console.log('[Orchestrator] Stopped watching agents directory');
     }
   }
 
@@ -57,6 +154,14 @@ export class Orchestrator {
 
   getAgent(name: string): BaseAgent | undefined {
     return this.agents.get(name);
+  }
+
+  getManifest(name: string): AgentManifest | undefined {
+    return this.manifests.get(name);
+  }
+
+  getAllManifests(): AgentManifest[] {
+    return Array.from(this.manifests.values());
   }
 
   getPrimaryAgent(): BaseAgent | undefined {
@@ -87,36 +192,65 @@ export class Orchestrator {
     }));
   }
 
+  /**
+   * Get detailed info for a single agent.
+   */
+  getAgentInfo(name: string): {
+    name: string;
+    displayName: string;
+    role: string;
+    tier: number;
+    circle: string;
+    icon: string;
+    manifest: AgentManifest;
+  } | undefined {
+    const manifest = this.manifests.get(name);
+    if (!manifest) return undefined;
+    return {
+      name: manifest.metadata.name,
+      displayName: manifest.metadata.displayName,
+      role: manifest.identity.role,
+      tier: manifest.metadata.tier,
+      circle: manifest.metadata.circle,
+      icon: manifest.metadata.icon,
+      manifest,
+    };
+  }
+
   updateLlmProvider(llmProvider: LLMProvider) {
     for (const agent of this.agents.values()) {
       agent.updateLlmProvider(llmProvider);
     }
   }
 
+  // ── Process-Managed Execution ──────────────────────────────────────────────
+
+  /**
+   * Execute a single task using the primary agent (backward-compatible).
+   * Uses the ProcessManager with sequential strategy internally.
+   */
   async executeTask(description: string) {
     console.log(`[Orchestrator] Starting task: ${description}`);
 
     const primaryAgent = this.getPrimaryAgent();
     if (!primaryAgent) throw new Error('No primary agent configured');
 
-    const response = await primaryAgent.process(description);
+    const result = await this.processManager.runSingle(description, primaryAgent);
+    return result.finalOutput || 'No answer provided.';
+  }
 
-    if (response.action) {
-      console.log(`[Orchestrator] Agent requested tool: ${response.action.tool}`);
-      // Future: execute tool via SkillRegistry / MCPRegistry
-    }
+  /**
+   * Execute multiple tasks using a specified process pattern.
+   */
+  async executeWithProcess(
+    type: ProcessType,
+    tasks: ProcessTask[],
+    managerAgentName?: string,
+  ): Promise<ProcessRunResult> {
+    const managerAgent = managerAgentName
+      ? this.agents.get(managerAgentName)
+      : undefined;
 
-    if (response.delegation) {
-      console.log(`[Orchestrator] Delegating to ${response.delegation.agentRole}`);
-      const worker = this.agents.get(response.delegation.agentRole);
-      if (worker) {
-        const workerResponse = await worker.process(response.delegation.task);
-        return workerResponse.finalAnswer;
-      } else {
-        throw new Error(`Agent "${response.delegation.agentRole}" not found`);
-      }
-    }
-
-    return response.finalAnswer || "No answer provided.";
+    return this.processManager.run(type, tasks, this.agents, managerAgent);
   }
 }

@@ -23,6 +23,7 @@ import { IntercomService } from './intercom/IntercomService.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
 import { registerBuiltinSkills } from './skills/builtins/index.js';
+import { PartySessionManager } from './circles/PartyMode.js';
 
 const app = express();
 
@@ -63,6 +64,12 @@ mcpRegistry.getAllTools().then(async () => {
   }
 }).catch(() => { /* MCP servers may not be connected yet */ });
 
+// ── Party Mode ───────────────────────────────────────────────────────────────
+const partySessionManager = new PartySessionManager();
+
+// ── Agent File Watcher ───────────────────────────────────────────────────────
+orchestrator.watchAgentsDirectory(agentsDir);
+
 app.use(cors());
 app.use(express.json());
 app.use('/api/lsp', lspRouter);
@@ -87,6 +94,23 @@ app.get('/api/agents', (req, res) => {
   res.json(orchestrator.listAgents());
 });
 
+app.get('/api/agents/:name', (req, res) => {
+  const info = orchestrator.getAgentInfo(req.params.name);
+  if (!info) {
+    return res.status(404).json({ error: `Agent "${req.params.name}" not found` });
+  }
+  res.json(info);
+});
+
+app.post('/api/agents/reload', (req, res) => {
+  try {
+    const result = orchestrator.reloadAgents();
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Circles API ──────────────────────────────────────────────────────────────
 app.get('/api/circles', (req, res) => {
   res.json(circleRegistry.listCircleSummaries());
@@ -101,6 +125,74 @@ app.get('/api/circles/:name', (req, res) => {
     ...circle,
     projectContext: circleRegistry.getProjectContext(req.params.name) ?? null,
   });
+});
+
+// ─── Party Mode API ──────────────────────────────────────────────────────────
+
+app.post('/api/circles/:circleId/party', (req, res) => {
+  try {
+    const circle = circleRegistry.getCircle(req.params.circleId);
+    if (!circle) {
+      return res.status(404).json({ error: `Circle "${req.params.circleId}" not found` });
+    }
+
+    // Gather agents from the orchestrator that belong to this circle
+    const agents = new Map<string, any>();
+    for (const agentName of circle.agents) {
+      const agent = orchestrator.getAgent(agentName);
+      if (agent) agents.set(agentName, agent);
+    }
+
+    const orchestratorAgentName = circle.partyMode?.orchestrator;
+    const orchestratorAgentInstance = orchestratorAgentName
+      ? orchestrator.getAgent(orchestratorAgentName)
+      : undefined;
+
+    const session = partySessionManager.createSession(
+      circle,
+      agents,
+      orchestratorAgentInstance,
+    );
+
+    res.status(201).json(session.getInfo());
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/circles/:circleId/party/:sessionId', async (req, res) => {
+  try {
+    const session = partySessionManager.getSession(req.params.sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Party session not found' });
+    }
+
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const responses = await session.sendMessage(message);
+    res.json({
+      sessionId: req.params.sessionId,
+      responses,
+      active: session.isActive(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/circles/:circleId/party/:sessionId', async (req, res) => {
+  const ended = partySessionManager.endSession(req.params.sessionId);
+  if (!ended) {
+    return res.status(404).json({ error: 'Party session not found' });
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/circles/:circleId/party', (req, res) => {
+  res.json(partySessionManager.listSessions(req.params.circleId));
 });
 
 // ─── Memory Blocks API ────────────────────────────────────────────────────────
@@ -466,6 +558,7 @@ export { app };
 
 const shutdown = async () => {
   console.log('Shutting down SERA Core...');
+  orchestrator.stopWatching();
   await lspManager.stopAll();
 };
 

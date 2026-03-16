@@ -9,8 +9,9 @@ import type { AgentManifest } from '../manifest/types.js';
 export class IdentityService {
   /**
    * Generate a complete system prompt from an agent manifest.
+   * Optionally injects circle project context into the prompt.
    */
-  static generateSystemPrompt(manifest: AgentManifest): string {
+  static generateSystemPrompt(manifest: AgentManifest, circleContext?: string): string {
     const sections: string[] = [];
 
     // ── Role & Persona ────────────────────────────────────────────────────────
@@ -61,6 +62,11 @@ export class IdentityService {
         })
         .join('\n');
       sections.push(`## Subagents You Can Spawn\n${subList}`);
+    }
+
+    // ── Project Context (Circle Constitution) ─────────────────────────────────
+    if (circleContext) {
+      sections.push(`## Project Context\nThe following project context is shared by all agents in your circle:\n\n${circleContext.trim()}`);
     }
 
     // ── Response Format ───────────────────────────────────────────────────────

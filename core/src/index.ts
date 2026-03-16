@@ -12,7 +12,11 @@ import { Orchestrator } from './agents/Orchestrator.js';
 import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MemoryManager } from './memory/manager.js';
+import { CircleRegistry } from './circles/CircleRegistry.js';
+import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
+import { SandboxManager } from './sandbox/SandboxManager.js';
+import { createSandboxRouter } from './routes/sandbox.js';
 
 const app = express();
 
@@ -21,12 +25,25 @@ const orchestrator = new Orchestrator();
 const agentsDir = path.resolve(import.meta.dirname, '..', '..', 'agents');
 orchestrator.loadAgentsFromManifests(agentsDir);
 
+// ── Circle System ─────────────────────────────────────────────────────────────
+const circleRegistry = new CircleRegistry();
+const circlesDir = path.resolve(import.meta.dirname, '..', '..', 'circles');
+const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
+circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+
+// ── Sandbox Manager ──────────────────────────────────────────────────────────
+const sandboxManager = new SandboxManager();
+const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
+
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
 
 app.use(cors());
 app.use(express.json());
 app.use('/api/lsp', lspRouter);
+app.use('/api/sandbox', sandboxRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -39,6 +56,22 @@ app.get('/api/health', (req, res) => {
 // ─── Agents API ───────────────────────────────────────────────────────────────
 app.get('/api/agents', (req, res) => {
   res.json(orchestrator.listAgents());
+});
+
+// ─── Circles API ──────────────────────────────────────────────────────────────
+app.get('/api/circles', (req, res) => {
+  res.json(circleRegistry.listCircleSummaries());
+});
+
+app.get('/api/circles/:name', (req, res) => {
+  const circle = circleRegistry.getCircle(req.params.name);
+  if (!circle) {
+    return res.status(404).json({ error: `Circle "${req.params.name}" not found` });
+  }
+  res.json({
+    ...circle,
+    projectContext: circleRegistry.getProjectContext(req.params.name) ?? null,
+  });
 });
 
 // Memory API endpoints

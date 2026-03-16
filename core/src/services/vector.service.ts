@@ -8,9 +8,10 @@ export interface VectorPoint {
 
 export class VectorService {
   private client: QdrantClient;
-  private collectionName = 'codebase';
+  private collectionName: string;
 
-  constructor() {
+  constructor(collectionName: string = 'codebase') {
+    this.collectionName = collectionName;
     this.client = new QdrantClient({
       url: process.env.QDRANT_URL || 'http://localhost:6333',
     });

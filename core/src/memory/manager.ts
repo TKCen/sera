@@ -1,12 +1,23 @@
+import path from 'path';
 import { ArchivalMemoryStore } from './archival.js';
 import type { ArchivalMemory, WorkingMemory, SearchOptions } from './types.js';
 
 export class MemoryManager {
   private archivalStore: ArchivalMemoryStore;
   private workingMemory: WorkingMemory;
+  public readonly circleId?: string;
 
-  constructor() {
-    this.archivalStore = new ArchivalMemoryStore();
+  constructor(circleId?: string) {
+    if (circleId !== undefined) {
+      this.circleId = circleId;
+    }
+
+    // When a circleId is provided, namespace the memory path under circles/{circleId}
+    const customPath = circleId
+      ? path.join(process.env.MEMORY_PATH || path.join(process.cwd(), '..', 'memory'), 'circles', circleId)
+      : undefined;
+
+    this.archivalStore = new ArchivalMemoryStore(customPath);
     this.workingMemory = {
       context: [],
       recentInteractions: []

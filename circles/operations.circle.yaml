@@ -1,0 +1,30 @@
+apiVersion: sera/v1
+kind: Circle
+metadata:
+  name: operations
+  displayName: "Operations Circle"
+  description: "Infrastructure monitoring, deployment, and incident response"
+
+agents: []
+
+knowledge:
+  qdrantCollection: operations-knowledge
+  postgresSchema: circle_operations
+
+channels:
+  - name: deployment-requests
+    type: persistent
+  - name: incident-reports
+    type: persistent
+  - name: system-alerts
+    type: ephemeral
+
+partyMode:
+  enabled: false
+
+connections:
+  - circle: development
+    bridgeChannels:
+      - deployment-requests
+      - incident-reports
+    auth: internal

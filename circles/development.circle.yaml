@@ -1,0 +1,39 @@
+apiVersion: sera/v1
+kind: Circle
+metadata:
+  name: development
+  displayName: "Development Circle"
+  description: "Software architecture, development, and code review"
+
+projectContext:
+  path: development/project-context.md
+  autoLoad: true
+
+agents:
+  - architect-prime
+  - developer-prime
+  - researcher-prime
+
+knowledge:
+  qdrantCollection: development-knowledge
+  postgresSchema: circle_development
+
+channels:
+  - name: architecture-decisions
+    type: persistent
+  - name: code-review-requests
+    type: ephemeral
+  - name: research-findings
+    type: persistent
+
+partyMode:
+  enabled: true
+  orchestrator: architect-prime
+  selectionStrategy: relevance
+
+connections:
+  - circle: operations
+    bridgeChannels:
+      - deployment-requests
+      - incident-reports
+    auth: internal

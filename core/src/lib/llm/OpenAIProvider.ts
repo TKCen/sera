@@ -13,25 +13,35 @@ export class OpenAIProvider implements LLMProvider {
     });
   }
 
-  async chat(messages: ChatMessage[]): Promise<LLMResponse> {
+  async *chat(messages: ChatMessage[]): AsyncGenerator<string, void, unknown> {
     try {
-      const response = await this.client.chat.completions.create({
+      const stream = await this.client.chat.completions.create({
         model: config.llm.model,
         messages: messages as any, // types match logically
         temperature: 0.7,
+        stream: true,
       });
 
-      return {
-        content: response.choices[0]?.message?.content || '',
-        usage: {
-          promptTokens: response.usage?.prompt_tokens || 0,
-          completionTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-        },
-      };
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          process.stdout.write(content);
+          yield content;
+        }
+      }
+      console.log(''); // newline after stream finishes
     } catch (error: any) {
-      console.error('LLM Chat Error:', error);
-      throw new Error(`LLM provider failed: ${error.message}`);
+      console.error('\nLLM Chat Error:', error);
+
+      let errorMessage = error.message || 'Unknown error occurred';
+
+      if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
+        errorMessage = 'Connection Refused: Ensure LM Studio (or your local LLM) is running and accessible.';
+      } else if (error.status === 404 || error.message?.includes('not found') || error.code === 'model_not_found') {
+        errorMessage = 'Model Not Found: Check if the correct model is loaded in LM Studio/OpenAI.';
+      }
+
+      throw new Error(`LLM provider failed: ${errorMessage}`);
     }
   }
 }

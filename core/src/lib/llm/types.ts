@@ -10,5 +10,5 @@ export interface LLMResponse {
 }
 
 export interface LLMProvider {
-  chat(messages: ChatMessage[]): Promise<LLMResponse>;
+  chat(messages: ChatMessage[]): AsyncGenerator<string, void, unknown>;
 }

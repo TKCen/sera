@@ -24,28 +24,33 @@ You MUST respond in JSON format with the following structure:
 
     this.history.push({ role: 'user', content: input });
 
-    const response = await this.llmProvider.chat([
+    const stream = this.llmProvider.chat([
       { role: 'system', content: this.systemPrompt },
       ...this.history
     ]);
 
-    this.history.push({ role: 'assistant', content: response.content });
+    let fullContent = '';
+    for await (const chunk of stream) {
+      fullContent += chunk;
+    }
+
+    this.history.push({ role: 'assistant', content: fullContent });
 
     try {
       // Basic extraction of JSON from the response
-      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      const jsonMatch = fullContent.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         return JSON.parse(jsonMatch[0]);
       }
       return {
         thought: 'Received non-JSON response from LLM, assuming it is the final answer.',
-        finalAnswer: response.content
+        finalAnswer: fullContent
       };
     } catch (error) {
       console.error('Failed to parse agent response:', error);
       return {
         thought: 'I encountered an error parsing my own thoughts.',
-        finalAnswer: response.content
+        finalAnswer: fullContent
       };
     }
   }

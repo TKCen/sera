@@ -19,6 +19,9 @@ export class MemoryManager {
   public readonly circleId?: string;
   public readonly agentId?: string;
 
+  // Simple in-memory rate limiting state
+  private static readonly writeTimestamps = new Map<string, number[]>();
+
   constructor(opts?: { circleId?: string; agentId?: string; basePath?: string }) {
     const rootPath = opts?.basePath
       ?? process.env.MEMORY_PATH
@@ -42,27 +45,58 @@ export class MemoryManager {
     }
   }
 
+  // ── Rate Limiting ─────────────────────────────────────────────────────────
+
+  private checkRateLimit(): void {
+    const key = this.agentId ?? this.circleId ?? 'global';
+    const now = Date.now();
+    const timestamps = MemoryManager.writeTimestamps.get(key) ?? [];
+
+    // Filter out timestamps older than 1 minute
+    const recent = timestamps.filter(t => now - t < 60000);
+    recent.push(now);
+
+    MemoryManager.writeTimestamps.set(key, recent);
+
+    if (recent.length > 10) {
+      console.warn(`[MemoryManager] Rate limit warning: More than 10 memory entries written in the last minute by ${key}.`);
+    }
+  }
+
   // ── Entry Operations (delegates to store) ─────────────────────────────────
 
   async addEntry(type: MemoryBlockType, opts: CreateEntryOptions): Promise<MemoryEntry> {
+    if (!type || typeof type !== 'string') throw new Error('Invalid type parameter');
+    if (!opts || typeof opts !== 'object') throw new Error('Invalid options parameter');
+    if (!opts.title || typeof opts.title !== 'string') throw new Error('opts.title is required');
+    if (typeof opts.content !== 'string') throw new Error('opts.content is required');
+
+    this.checkRateLimit();
     return this.store.addEntry(type, opts);
   }
 
   async getEntry(id: string): Promise<MemoryEntry | null> {
+    if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
     return this.store.getEntry(id);
   }
 
   async updateEntry(id: string, content: string): Promise<MemoryEntry | null> {
+    if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
+    if (typeof content !== 'string') throw new Error('Invalid content parameter');
+
+    this.checkRateLimit();
     return this.store.updateEntry(id, content);
   }
 
   async deleteEntry(id: string): Promise<boolean> {
+    if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
     return this.store.deleteEntry(id);
   }
 
   // ── Block Operations ────────────────────────────────────────────────────────
 
   async getBlock(type: MemoryBlockType): Promise<MemoryBlock> {
+    if (!type || typeof type !== 'string') throw new Error('Invalid type parameter');
     return this.store.loadBlock(type);
   }
 
@@ -73,10 +107,16 @@ export class MemoryManager {
   // ── Ref Operations ──────────────────────────────────────────────────────────
 
   async addRef(fromId: string, toId: string): Promise<boolean> {
+    if (!fromId || typeof fromId !== 'string') throw new Error('Invalid fromId parameter');
+    if (!toId || typeof toId !== 'string') throw new Error('Invalid toId parameter');
+    this.checkRateLimit();
     return this.store.addRef(fromId, toId);
   }
 
   async removeRef(fromId: string, toId: string): Promise<boolean> {
+    if (!fromId || typeof fromId !== 'string') throw new Error('Invalid fromId parameter');
+    if (!toId || typeof toId !== 'string') throw new Error('Invalid toId parameter');
+    this.checkRateLimit();
     return this.store.removeRef(fromId, toId);
   }
 
@@ -89,7 +129,13 @@ export class MemoryManager {
   // ── Search ──────────────────────────────────────────────────────────────────
 
   async search(query: string, limit?: number): Promise<MemoryEntry[]> {
-    return this.store.search(query, limit);
+    if (typeof query !== 'string') return [];
+    if (!query.trim()) return [];
+    if (limit !== undefined && (typeof limit !== 'number' || limit <= 0)) {
+       throw new Error('Limit must be a positive number');
+    }
+    const results = await this.store.search(query, limit);
+    return results || [];
   }
 
   // ── Context Assembly ────────────────────────────────────────────────────────
@@ -133,6 +179,8 @@ export class MemoryManager {
    * Preserves ID, refs, and all metadata.
    */
   async archiveEntry(entryId: string): Promise<MemoryEntry | null> {
+    if (!entryId || typeof entryId !== 'string') throw new Error('Invalid entryId parameter');
+    this.checkRateLimit();
     return this.store.moveEntry(entryId, 'archive');
   }
 }

@@ -20,6 +20,11 @@ export const webSearchSkill: SkillDefinition = {
       return { success: false, error: 'Parameter "query" is required and must be a string' };
     }
 
+    // Prevent direct URL or IP address queries to mitigate SSRF
+    if (/^(https?:\/\/|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/i.test(query)) {
+      return { success: false, error: 'Direct URLs and IP addresses are not allowed in search queries' };
+    }
+
     try {
       // Dynamic import to avoid top-level dependency
       const { default: axios } = await import('axios');

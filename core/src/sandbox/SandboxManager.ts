@@ -100,6 +100,10 @@ export class SandboxManager {
     // ── Create and start ────────────────────────────────────────────────────
     this.audit('spawn', agentName, { type: request.type, image: request.image });
 
+    if (manifest.metadata.tier === 3) {
+      this.audit('spawn', agentName, { warning: 'Tier 3 container spawned with full capabilities', type: request.type });
+    }
+
     const container = await this.docker.createContainer(createOptions);
     await container.start();
     const info = await container.inspect();
@@ -138,7 +142,20 @@ export class SandboxManager {
       );
     }
 
+    // Tier 1 agents cannot exec shell commands
+    if (manifest.metadata.tier === 1) {
+      throw new PolicyViolationError(
+        `Agent "${manifest.metadata.name}" (Tier 1) cannot exec commands`,
+        manifest.metadata.name,
+        'exec_tier_violation',
+      );
+    }
+
     this.audit('exec', manifest.metadata.name, { containerId: request.containerId, command: request.command });
+
+    if (manifest.metadata.tier === 3) {
+      this.audit('exec', manifest.metadata.name, { warning: 'Executing command in Tier 3 container with full capabilities' });
+    }
 
     const container = this.docker.getContainer(request.containerId);
     const exec = await container.exec({

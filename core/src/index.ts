@@ -59,6 +59,8 @@ const intercomRouter = createIntercomRouter(intercomService, (agentName: string)
   return agentManifests.find(m => m.metadata.name === agentName);
 });
 
+orchestrator.setIntercom(intercomService);
+
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
 

@@ -4,113 +4,208 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ─── Sera Design System ─────────────────────────────────────────────────── */
+
 @theme {
-  --color-background: #050505;
-  --color-foreground: #f8f8ff;
+  /* Backgrounds */
+  --color-sera-bg: #0a0a0f;
+  --color-sera-surface: #12121a;
+  --color-sera-surface-hover: #1a1a25;
+  --color-sera-surface-active: #1e1e2a;
 
+  /* Borders */
+  --color-sera-border: rgba(255, 255, 255, 0.08);
+  --color-sera-border-active: rgba(0, 229, 255, 0.3);
+
+  /* Text */
+  --color-sera-text: #e8eaed;
+  --color-sera-text-muted: #8b8fa3;
+  --color-sera-text-dim: #555770;
+
+  /* Accent */
+  --color-sera-accent: #00e5ff;
+  --color-sera-accent-soft: rgba(0, 229, 255, 0.1);
+  --color-sera-accent-medium: rgba(0, 229, 255, 0.2);
+
+  /* Status */
+  --color-sera-success: #34d399;
+  --color-sera-warning: #fbbf24;
+  --color-sera-error: #f87171;
+
+  /* Semantic mapping */
+  --color-background: #0a0a0f;
+  --color-foreground: #e8eaed;
   --color-primary: #00e5ff;
-  --color-primary-foreground: #050505;
-
-  --color-secondary: #ff1744;
-  --color-secondary-foreground: #f8f8ff;
-
-  --color-muted: #455a64;
-  --color-muted-foreground: #94a3b8;
-
-  --color-accent: #ff1744;
-  --color-accent-foreground: #f8f8ff;
-
-  --color-border: rgba(0, 229, 255, 0.2);
-  --color-input: rgba(0, 229, 255, 0.1);
+  --color-primary-foreground: #0a0a0f;
+  --color-muted: #555770;
+  --color-muted-foreground: #8b8fa3;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-input: #12121a;
   --color-ring: #00e5ff;
 
-  --radius-lg: 0.75rem;
-  --radius-md: calc(0.75rem - 2px);
-  --radius-sm: calc(0.75rem - 4px);
+  /* Radii */
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "Space Grotesk", monospace;
+  /* Fonts */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
 }
+
+/* ─── Base ────────────────────────────────────────────────────────────────── */
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: var(--color-sera-border);
   }
+
   body {
-    @apply bg-background text-foreground font-sans antialiased;
-    background-image: 
-      radial-gradient(circle at 50% 50%, rgba(0, 229, 255, 0.05) 0%, transparent 50%),
-      linear-gradient(rgba(18, 18, 20, 0.5) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(18, 18, 20, 0.5) 1px, transparent 1px);
-    background-size: 100% 100%, 40px 40px, 40px 40px;
+    @apply bg-sera-bg text-sera-text font-sans antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
-  /* Scanline effect */
-  body::before {
-    content: " ";
-    @apply fixed inset-0 pointer-events-none z-50;
-    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
-                linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
-    background-size: 100% 4px, 3px 100%;
-    animation: scanline 10s linear infinite;
+  /* Clean focus styles */
+  :focus-visible {
+    outline: 2px solid var(--color-sera-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 
-  /* Grid overlay */
-  body::after {
-    content: " ";
-    @apply fixed inset-0 pointer-events-none z-40 opacity-10;
-    background-image:
-      linear-gradient(to right, rgba(0, 229, 255, 0.1) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(0, 229, 255, 0.1) 1px, transparent 1px);
-    background-size: 50px 50px;
+  /* Smooth scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
   }
 }
+
+/* ─── Component Classes ───────────────────────────────────────────────────── */
 
 @layer components {
-  .glass-panel {
-    @apply backdrop-blur-xl bg-white/5 border border-white/10 rounded-lg shadow-2xl;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.05);
+  /* Card / Panel */
+  .sera-card {
+    @apply bg-sera-surface border border-sera-border rounded-xl;
+    transition: border-color 150ms ease, background-color 150ms ease;
   }
 
-  .glow-text {
-    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+  .sera-card:hover {
+    @apply border-sera-border-active bg-sera-surface-hover;
   }
 
-  .glitch-hover {
-    @apply transition-all duration-300;
+  .sera-card-static {
+    @apply bg-sera-surface border border-sera-border rounded-xl;
   }
 
-  .glitch-hover:hover {
-    text-shadow: 2px 0 #ff1744, -2px 0 #00e5ff;
-    animation: glitch 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
+  /* Buttons */
+  .sera-btn-primary {
+    @apply inline-flex items-center justify-center gap-2
+      bg-sera-accent text-sera-bg font-medium text-sm
+      px-4 py-2.5 rounded-lg
+      transition-all duration-150 ease-out;
+  }
+
+  .sera-btn-primary:hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+
+  .sera-btn-primary:active {
+    transform: translateY(0);
+  }
+
+  .sera-btn-ghost {
+    @apply inline-flex items-center justify-center gap-2
+      text-sera-text-muted text-sm
+      px-3 py-2 rounded-lg
+      transition-all duration-150 ease-out;
+  }
+
+  .sera-btn-ghost:hover {
+    @apply bg-sera-surface-hover text-sera-text;
+  }
+
+  /* Badge */
+  .sera-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md
+      text-[11px] font-medium tracking-wide uppercase;
+  }
+
+  .sera-badge-success {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md
+      text-[11px] font-medium tracking-wide uppercase
+      bg-sera-success/15 text-sera-success;
+  }
+
+  .sera-badge-warning {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md
+      text-[11px] font-medium tracking-wide uppercase
+      bg-sera-warning/15 text-sera-warning;
+  }
+
+  .sera-badge-error {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md
+      text-[11px] font-medium tracking-wide uppercase
+      bg-sera-error/15 text-sera-error;
+  }
+
+  .sera-badge-accent {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md
+      text-[11px] font-medium tracking-wide uppercase
+      bg-sera-accent-soft text-sera-accent;
+  }
+
+  .sera-badge-muted {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md
+      text-[11px] font-medium tracking-wide uppercase
+      bg-sera-surface-hover text-sera-text-muted;
+  }
+
+  /* Section Label */
+  .sera-section-label {
+    @apply text-[10px] font-semibold uppercase tracking-[0.12em] text-sera-text-dim
+      px-3 py-2;
+  }
+
+  /* Input */
+  .sera-input {
+    @apply w-full bg-sera-surface border border-sera-border rounded-lg
+      py-2.5 px-3 text-sm text-sera-text
+      placeholder:text-sera-text-dim
+      focus:outline-none focus:border-sera-border-active
+      transition-colors duration-150;
+  }
+
+  /* Page Header */
+  .sera-page-header {
+    @apply flex items-center justify-between pb-6 mb-6 border-b border-sera-border;
+  }
+
+  .sera-page-title {
+    @apply text-2xl font-semibold text-sera-text tracking-tight;
   }
 }
 
-@keyframes glitch {
-  0% { transform: translate(0) }
-  20% { transform: translate(-2px, 2px) }
-  40% { transform: translate(-2px, -2px) }
-  60% { transform: translate(2px, 2px) }
-  80% { transform: translate(2px, -2px) }
-  100% { transform: translate(0) }
-}
+/* ─── Reduced Motion ──────────────────────────────────────────────────────── */
 
-@keyframes scanline {
-  0% { transform: translateY(0); }
-  100% { transform: translateY(4px); }
-}
-
-@keyframes flicker {
-  0% { opacity: 0.97; }
-  5% { opacity: 0.95; }
-  10% { opacity: 0.9; }
-  15% { opacity: 0.95; }
-  20% { opacity: 0.98; }
-  25% { opacity: 0.95; }
-  30% { opacity: 0.9; }
-  100% { opacity: 1; }
-}
-
-.hologram-flicker {
-  animation: flicker 0.15s infinite;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

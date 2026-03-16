@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { Inter, Space_Grotesk } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import Sidebar from "@/components/Sidebar";
 import "./globals.css";
 
 const inter = Inter({
@@ -7,14 +8,14 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
-const spaceGrotesk = Space_Grotesk({
+const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
   title: "SERA | Sandboxed Extensible Reasoning Agent",
-  description: "Your local autonomous coding partner.",
+  description: "Your local autonomous agentic platform.",
 };
 
 export default function RootLayout({
@@ -24,13 +25,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.variable} ${spaceGrotesk.variable} antialiased`}>
-        <div className="min-h-screen flex flex-col relative overflow-hidden">
-          {/* Ambient Glow */}
-          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/10 rounded-full blur-[120px] pointer-events-none" />
-          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-secondary/5 rounded-full blur-[120px] pointer-events-none" />
-          
-          <main className="flex-1 relative z-10 p-6">
+      <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>
+        <div className="flex h-screen overflow-hidden">
+          <Sidebar />
+          <main className="flex-1 overflow-y-auto">
             {children}
           </main>
         </div>

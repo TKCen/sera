@@ -8,8 +8,6 @@ services:
     container_name: sera-core
     restart: unless-stopped
     volumes:
-      - ./core:/app
-      - /app/node_modules
       - .:/app/workspace
       - /var/run/docker.sock:/var/run/docker.sock
       - ./memory:/app/memory
@@ -37,7 +35,9 @@ services:
     restart: unless-stopped
     # Port 3000 is internal, NPM will proxy to it.
     environment:
+      - HOSTNAME=0.0.0.0
       - NEXT_PUBLIC_CENTRIFUGO_URL=ws://localhost:10001/connection/websocket
+      - CORE_API_URL=http://sera-core:3001
     labels:
       - "homepage.group=AI Agents"
       - "homepage.name=SERA"

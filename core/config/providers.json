@@ -1,0 +1,10 @@
+{
+  "activeProvider": "lmstudio",
+  "providers": {
+    "lmstudio": {
+      "baseUrl": "http://host.docker.internal:1234/v1",
+      "apiKey": "sk-lm-NkQPzwtp:rY9DQQQkmgMezQERTStC",
+      "model": "lmstudio-local"
+    }
+  }
+}

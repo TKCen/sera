@@ -1,10 +1,12 @@
 import express from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors';
 import { IngestionService } from './services/ingestion.service.js';
 import { EmbeddingService } from './services/embedding.service.js';
 import { VectorService } from './services/vector.service.js';
 import { initDb } from './lib/database.js';
 import { config } from './lib/config.js';
+import { PROVIDER_CATALOG } from './lib/providers.js';
 import { Orchestrator } from './agents/Orchestrator.js';
 import { PrimaryAgent } from './agents/PrimaryAgent.js';
 import { WorkerAgent } from './agents/WorkerAgent.js';
@@ -117,6 +119,48 @@ app.post('/api/execute', async (req, res) => {
   }
 });
 
+// ─── Chat API ─────────────────────────────────────────────────────────────────
+const conversations = new Map<string, { role: string; content: string }[]>();
+
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { message, conversationId: incomingId } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const conversationId = incomingId || uuidv4();
+
+    // Get or create conversation history
+    if (!conversations.has(conversationId)) {
+      conversations.set(conversationId, []);
+    }
+    const history = conversations.get(conversationId)!;
+    history.push({ role: 'user', content: message });
+
+    // Process through the primary agent
+    const primaryAgent = orchestrator.getAgent('primary');
+    if (!primaryAgent) {
+      return res.status(500).json({ error: 'Primary agent not registered' });
+    }
+
+    const response = await primaryAgent.process(message);
+    const reply = response.finalAnswer || response.thought || 'No response generated.';
+
+    history.push({ role: 'assistant', content: reply });
+
+    res.json({
+      conversationId,
+      reply,
+      thought: response.thought,
+    });
+  } catch (error: any) {
+    console.error('Chat error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Config API ───────────────────────────────────────────────────────────────
 app.get('/api/config/llm', (req, res) => {
   res.json(config.llm);
 });
@@ -131,6 +175,124 @@ app.post('/api/config/llm', (req, res) => {
     orchestrator.updateLlmProvider(newLlmProvider);
     
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/config/llm/test', async (req, res) => {
+  try {
+    const testProvider = new OpenAIProvider();
+    const response = await testProvider.chat([
+      { role: 'user', content: 'Respond with exactly: CONNECTION_OK' }
+    ]);
+    res.json({
+      success: true,
+      model: config.llm.model,
+      response: response.content.substring(0, 100),
+    });
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// ─── Provider Management API ──────────────────────────────────────────────────
+
+app.get('/api/providers', (req, res) => {
+  const savedConfig = config.providers;
+  const catalog = PROVIDER_CATALOG.map(provider => ({
+    ...provider,
+    configured: !!savedConfig.providers[provider.id]?.baseUrl,
+    isActive: savedConfig.activeProvider === provider.id,
+    savedConfig: savedConfig.providers[provider.id] || null,
+  }));
+  res.json({
+    activeProvider: savedConfig.activeProvider,
+    providers: catalog,
+  });
+});
+
+app.put('/api/providers/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { baseUrl, apiKey, model } = req.body;
+
+    // Verify provider exists in catalog
+    const provider = PROVIDER_CATALOG.find(p => p.id === id);
+    if (!provider) {
+      return res.status(404).json({ error: `Provider '${id}' not found` });
+    }
+
+    config.saveProviderConfig(id, { baseUrl, apiKey, model });
+
+    // If this is the active provider, re-init the LLM provider
+    if (config.providers.activeProvider === id) {
+      const newLlmProvider = new OpenAIProvider();
+      orchestrator.updateLlmProvider(newLlmProvider);
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/providers/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const providerConfig = config.getProviderConfig(id);
+    const catalogEntry = PROVIDER_CATALOG.find(p => p.id === id);
+
+    if (!providerConfig?.baseUrl) {
+      return res.json({ success: false, error: 'Provider not configured. Save settings first.' });
+    }
+
+    // Create a temporary provider with this config
+    const testProvider = new OpenAIProvider({
+      baseUrl: providerConfig.baseUrl,
+      apiKey: providerConfig.apiKey || 'not-needed',
+      model: providerConfig.model || catalogEntry?.models[0]?.id || 'test',
+    });
+
+    const response = await testProvider.chat([
+      { role: 'user', content: 'Respond with exactly: CONNECTION_OK' }
+    ]);
+
+    res.json({
+      success: true,
+      provider: catalogEntry?.name || id,
+      response: response.content.substring(0, 100),
+    });
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+app.post('/api/providers/active', (req, res) => {
+  try {
+    const { providerId } = req.body;
+    if (!providerId) {
+      return res.status(400).json({ error: 'providerId is required' });
+    }
+
+    const provider = PROVIDER_CATALOG.find(p => p.id === providerId);
+    if (!provider) {
+      return res.status(404).json({ error: `Provider '${providerId}' not found` });
+    }
+
+    config.setActiveProvider(providerId);
+
+    // Re-init the LLM provider with the new active config
+    const newLlmProvider = new OpenAIProvider();
+    orchestrator.updateLlmProvider(newLlmProvider);
+
+    res.json({ success: true, activeProvider: providerId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

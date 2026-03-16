@@ -10,6 +10,10 @@ export class Orchestrator {
     this.agents.set(agent.role, agent);
   }
 
+  getAgent(role: string): BaseAgent | undefined {
+    return this.agents.get(role);
+  }
+
   updateLlmProvider(llmProvider: LLMProvider) {
     for (const agent of this.agents.values()) {
       agent.updateLlmProvider(llmProvider);

@@ -3,21 +3,33 @@ import type { LLMProvider, LLMResponse } from './types.js';
 import type { ChatMessage } from '../../agents/types.js';
 import { config } from '../config.js';
 
+interface OpenAIProviderConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export class OpenAIProvider implements LLMProvider {
   private client: OpenAI;
+  private configOverride: OpenAIProviderConfig | undefined;
 
-  constructor() {
-    this.client = new OpenAI({
-      baseURL: config.llm.baseUrl,
-      apiKey: config.llm.apiKey,
-    });
+  constructor(override?: OpenAIProviderConfig) {
+    this.configOverride = override;
+    const baseURL = override?.baseUrl || config.llm.baseUrl;
+    const apiKey = override?.apiKey || config.llm.apiKey;
+
+    this.client = new OpenAI({ baseURL, apiKey });
+  }
+
+  private get model(): string {
+    return this.configOverride?.model || config.llm.model;
   }
 
   async chat(messages: ChatMessage[]): Promise<LLMResponse> {
     try {
       const response = await this.client.chat.completions.create({
-        model: config.llm.model,
-        messages: messages as any, // types match logically
+        model: this.model,
+        messages: messages as any,
         temperature: 0.7,
       });
 

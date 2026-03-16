@@ -7,6 +7,9 @@ RUN npm install
 
 COPY . .
 
+ARG CORE_API_URL=http://sera-core:3001
+ENV CORE_API_URL=${CORE_API_URL}
+
 RUN npm run build
 
 FROM node:20-alpine AS runner

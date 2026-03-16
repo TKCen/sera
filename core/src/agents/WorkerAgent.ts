@@ -7,9 +7,13 @@ export class WorkerAgent extends BaseAgent {
     super(name, role, `You are a specialized worker agent with role: ${role}`, llmProvider);
   }
 
-  async process(input: string): Promise<AgentResponse> {
+  async process(input: string, onChunk?: (chunk: string) => void): Promise<AgentResponse> {
     await this.observe(input);
     console.log(`[${this.name}] Working on specialized task...`);
+
+    if (onChunk) {
+      onChunk(`[${this.name}] Working on specialized task...`);
+    }
 
     return {
       thought: `I have completed the task: ${input}`,

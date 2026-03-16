@@ -34,4 +34,37 @@ export class OpenAIProvider implements LLMProvider {
       throw new Error(`LLM provider failed: ${error.message}`);
     }
   }
+
+  async chatStream(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<LLMResponse> {
+    try {
+      const stream = await this.client.chat.completions.create({
+        model: config.llm.model,
+        messages: messages as any,
+        temperature: 0.7,
+        stream: true,
+      });
+
+      let fullContent = '';
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          fullContent += content;
+          onChunk(content);
+        }
+      }
+
+      return {
+        content: fullContent,
+        usage: {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        },
+      };
+    } catch (error: any) {
+      console.error('LLM Chat Stream Error:', error);
+      throw new Error(`LLM provider stream failed: ${error.message}`);
+    }
+  }
 }

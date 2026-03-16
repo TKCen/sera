@@ -19,15 +19,24 @@ You MUST respond in JSON format with the following structure:
     );
   }
 
-  async process(input: string): Promise<AgentResponse> {
+  async process(input: string, onChunk?: (chunk: string) => void): Promise<AgentResponse> {
     await this.observe(input);
 
     this.history.push({ role: 'user', content: input });
 
-    const response = await this.llmProvider.chat([
-      { role: 'system', content: this.systemPrompt },
-      ...this.history
-    ]);
+    let response;
+
+    if (onChunk && this.llmProvider.chatStream) {
+      response = await this.llmProvider.chatStream([
+        { role: 'system', content: this.systemPrompt },
+        ...this.history
+      ], onChunk);
+    } else {
+      response = await this.llmProvider.chat([
+        { role: 'system', content: this.systemPrompt },
+        ...this.history
+      ]);
+    }
 
     this.history.push({ role: 'assistant', content: response.content });
 

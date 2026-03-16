@@ -11,4 +11,5 @@ export interface LLMResponse {
 
 export interface LLMProvider {
   chat(messages: ChatMessage[]): Promise<LLMResponse>;
+  chatStream?(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<LLMResponse>;
 }

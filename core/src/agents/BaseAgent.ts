@@ -15,7 +15,7 @@ export abstract class BaseAgent {
     this.llmProvider = llmProvider;
   }
 
-  abstract process(input: string): Promise<AgentResponse>;
+  abstract process(input: string, onChunk?: (chunk: string) => void): Promise<AgentResponse>;
 
   protected async observe(context: string): Promise<void> {
     console.log(`[${this.name}] Observing: ${context.substring(0, 50)}...`);

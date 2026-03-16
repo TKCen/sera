@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile
     container_name: sera-core
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./core:/app
       - /app/node_modules
@@ -19,9 +21,12 @@ services:
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api
       - QDRANT_URL=http://qdrant:6333
+      - LLM_PROVIDER=${LLM_PROVIDER:-lm-studio}
+      - LM_STUDIO_URL=${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
+      - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-meta-llama-3-8b-instruct}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
       - LLM_API_KEY=${LLM_API_KEY:-lm-studio}
-      - LLM_MODEL=${LLM_MODEL:-model-identifier}
+      - LLM_MODEL=${LLM_MODEL:-meta-llama-3-8b-instruct}
     ports:
       - "3001:3001"
     networks:

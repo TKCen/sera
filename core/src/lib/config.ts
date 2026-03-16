@@ -4,15 +4,17 @@ import path from 'path';
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'llm.json');
 
 export interface LLMConfig {
+  provider: 'lm-studio' | 'openai' | string;
   baseUrl: string;
   apiKey: string;
   model: string;
 }
 
 const defaultConfig: LLMConfig = {
-  baseUrl: process.env.LLM_BASE_URL || 'http://localhost:1234/v1',
+  provider: process.env.LLM_PROVIDER || 'lm-studio',
+  baseUrl: process.env.LM_STUDIO_URL || process.env.LLM_BASE_URL || 'http://localhost:1234/v1',
   apiKey: process.env.LLM_API_KEY || 'lm-studio',
-  model: process.env.LLM_MODEL || 'model-identifier',
+  model: process.env.LM_STUDIO_MODEL || process.env.LLM_MODEL || 'meta-llama-3-8b-instruct',
 };
 
 function loadConfig(): LLMConfig {

@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import path from 'path';
 import type { SkillDefinition } from '../types.js';
 
 /**
@@ -14,14 +15,22 @@ export const fileReadSkill: SkillDefinition = {
     { name: 'path', type: 'string', description: 'Absolute or relative path to the file', required: true },
   ],
   handler: async (params) => {
-    const filePath = params['path'];
-    if (!filePath || typeof filePath !== 'string') {
+    const rawPath = params['path'];
+    if (!rawPath || typeof rawPath !== 'string') {
       return { success: false, error: 'Parameter "path" is required and must be a string' };
     }
 
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      return { success: true, data: { path: filePath, content } };
+      const workspaceDir = process.env.WORKSPACE_DIR || process.cwd();
+      const resolvedPath = path.resolve(workspaceDir, rawPath);
+      const rootPath = path.resolve(workspaceDir);
+
+      if (resolvedPath !== rootPath && !resolvedPath.startsWith(rootPath + path.sep)) {
+        return { success: false, error: 'Path traversal detected' };
+      }
+
+      const content = await fs.readFile(resolvedPath, 'utf-8');
+      return { success: true, data: { path: resolvedPath, content } };
     } catch (err) {
       return {
         success: false,

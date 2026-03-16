@@ -1,22 +1,11 @@
 import { BaseAgent } from './BaseAgent.js';
-import type { AgentResponse, AgentRole } from './types.js';
+import type { AgentResponse } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
+import type { AgentManifest } from './manifest/types.js';
 
 export class PrimaryAgent extends BaseAgent {
-  constructor(llmProvider: LLMProvider) {
-    super(
-      'Sera-Primary',
-      'primary',
-      `You are the primary coordinator agent of SERA (Sandboxed Extensible Reasoning Agent).
-Your goal is to understand user requests and either handle them directly or delegate to specialized workers.
-You MUST respond in JSON format with the following structure:
-{
-  "thought": "your inner monologue",
-  "delegation": { "agentRole": "worker|researcher", "task": "description" } // optional
-  "finalAnswer": "your response to the user" // optional
-}`,
-      llmProvider
-    );
+  constructor(manifest: AgentManifest, llmProvider: LLMProvider) {
+    super(manifest, llmProvider);
   }
 
   async process(input: string): Promise<AgentResponse> {
@@ -32,19 +21,19 @@ You MUST respond in JSON format with the following structure:
     this.history.push({ role: 'assistant', content: response.content });
 
     try {
-      // Basic extraction of JSON from the response
+      // Extract JSON from the response
       const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         return JSON.parse(jsonMatch[0]);
       }
       return {
-        thought: 'Received non-JSON response from LLM, assuming it is the final answer.',
+        thought: 'Received non-JSON response from LLM, treating as final answer.',
         finalAnswer: response.content
       };
     } catch (error) {
       console.error('Failed to parse agent response:', error);
       return {
-        thought: 'I encountered an error parsing my own thoughts.',
+        thought: 'Error parsing response.',
         finalAnswer: response.content
       };
     }

@@ -1,19 +1,40 @@
 import { BaseAgent } from './BaseAgent.js';
-import type { AgentResponse, AgentRole } from './types.js';
+import type { AgentResponse } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
+import type { AgentManifest } from './manifest/types.js';
 
 export class WorkerAgent extends BaseAgent {
-  constructor(name: string, role: AgentRole, llmProvider: LLMProvider) {
-    super(name, role, `You are a specialized worker agent with role: ${role}`, llmProvider);
+  constructor(manifest: AgentManifest, llmProvider: LLMProvider) {
+    super(manifest, llmProvider);
   }
 
   async process(input: string): Promise<AgentResponse> {
     await this.observe(input);
-    console.log(`[${this.name}] Working on specialized task...`);
 
-    return {
-      thought: `I have completed the task: ${input}`,
-      finalAnswer: `Specialized result for: ${input}`
-    };
+    this.history.push({ role: 'user', content: input });
+
+    const response = await this.llmProvider.chat([
+      { role: 'system', content: this.systemPrompt },
+      ...this.history
+    ]);
+
+    this.history.push({ role: 'assistant', content: response.content });
+
+    try {
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+      return {
+        thought: `Completed task: ${input}`,
+        finalAnswer: response.content
+      };
+    } catch (error) {
+      console.error('Failed to parse worker response:', error);
+      return {
+        thought: 'Error parsing response.',
+        finalAnswer: response.content
+      };
+    }
   }
 }

@@ -1,15 +1,24 @@
-import type { AgentRole, AgentResponse, ChatMessage, AgentTask } from './types.js';
+import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
+import type { AgentManifest } from './manifest/types.js';
+import { IdentityService } from './identity/IdentityService.js';
 
 export abstract class BaseAgent {
-  protected history: ChatMessage[] = [];
+  public readonly name: string;
+  public readonly role: string;
 
-  constructor(
-    public name: string,
-    public role: AgentRole,
-    protected systemPrompt: string,
-    protected llmProvider: LLMProvider
-  ) {}
+  protected history: ChatMessage[] = [];
+  protected systemPrompt: string;
+  protected llmProvider: LLMProvider;
+  protected manifest: AgentManifest;
+
+  constructor(manifest: AgentManifest, llmProvider: LLMProvider) {
+    this.manifest = manifest;
+    this.name = manifest.metadata.displayName;
+    this.role = manifest.metadata.name;
+    this.llmProvider = llmProvider;
+    this.systemPrompt = IdentityService.generateSystemPrompt(manifest);
+  }
 
   public updateLlmProvider(llmProvider: LLMProvider) {
     this.llmProvider = llmProvider;

@@ -7,6 +7,7 @@ interface OpenAIProviderConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  temperature?: number;
 }
 
 export class OpenAIProvider implements LLMProvider {
@@ -30,7 +31,7 @@ export class OpenAIProvider implements LLMProvider {
       const response = await this.client.chat.completions.create({
         model: this.model,
         messages: messages as any,
-        temperature: 0.7,
+        temperature: this.configOverride?.temperature ?? 0.7,
       });
 
       return {

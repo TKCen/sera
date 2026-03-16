@@ -1,4 +1,4 @@
-export type AgentRole = 'primary' | 'worker' | 'researcher' | 'reviewer';
+export type AgentRole = string;
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';

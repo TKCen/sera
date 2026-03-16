@@ -1,3 +1,4 @@
+import path from 'path';
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors';
@@ -8,8 +9,6 @@ import { initDb } from './lib/database.js';
 import { config } from './lib/config.js';
 import { PROVIDER_CATALOG } from './lib/providers.js';
 import { Orchestrator } from './agents/Orchestrator.js';
-import { PrimaryAgent } from './agents/PrimaryAgent.js';
-import { WorkerAgent } from './agents/WorkerAgent.js';
 import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MemoryManager } from './memory/manager.js';
@@ -17,14 +16,13 @@ import lspRouter, { lspManager } from './routes/lsp.js';
 
 const app = express();
 
-const llmProvider = new OpenAIProvider();
+// ── Agent System ──────────────────────────────────────────────────────────────
 const orchestrator = new Orchestrator();
+const agentsDir = path.resolve(import.meta.dirname, '..', '..', 'agents');
+orchestrator.loadAgentsFromManifests(agentsDir);
+
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
-
-// Register agents
-orchestrator.registerAgent(new PrimaryAgent(llmProvider));
-orchestrator.registerAgent(new WorkerAgent('Sera-Researcher', 'researcher', llmProvider));
 
 app.use(cors());
 app.use(express.json());
@@ -36,6 +34,11 @@ app.get('/api/health', (req, res) => {
     service: 'sera-core',
     timestamp: new Date().toISOString()
   });
+});
+
+// ─── Agents API ───────────────────────────────────────────────────────────────
+app.get('/api/agents', (req, res) => {
+  res.json(orchestrator.listAgents());
 });
 
 // Memory API endpoints
@@ -139,9 +142,9 @@ app.post('/api/chat', async (req, res) => {
     history.push({ role: 'user', content: message });
 
     // Process through the primary agent
-    const primaryAgent = orchestrator.getAgent('primary');
+    const primaryAgent = orchestrator.getPrimaryAgent();
     if (!primaryAgent) {
-      return res.status(500).json({ error: 'Primary agent not registered' });
+      return res.status(500).json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
     }
 
     const response = await primaryAgent.process(message);

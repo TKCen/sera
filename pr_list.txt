@@ -1,0 +1,5 @@
+10	LSP Integration for Deep Code Understanding	feat/lsp-integration-17144745757025473875	DRAFT	2026-03-16T12:09:49Z
+9	Phase 1: UI Polish & Core Stability	phase-1-polish-and-stability-2008930412121569887	DRAFT	2026-03-16T12:09:24Z
+8	Implement Obsidian-compatible markdown memory system	feature/obsidian-memory-system-4278362429323985401	DRAFT	2026-03-16T12:07:31Z
+7	Vector Database Integration and RAG Implementation	feat/rag-integration-phase-2-2307848204950952393	DRAFT	2026-03-16T12:06:06Z
+6	Integrate MCP and Multi-Agent Orchestration	phase-3-execution-engine-mcp-multi-agent-10571877914301565196	DRAFT	2026-03-16T12:04:41Z

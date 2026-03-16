@@ -40,7 +40,7 @@ export abstract class BaseAgent {
     this.intercom = intercom;
   }
 
-  abstract process(input: string): Promise<AgentResponse>;
+  abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;
 
   // ── Thought Streaming ──────────────────────────────────────────────────────
 

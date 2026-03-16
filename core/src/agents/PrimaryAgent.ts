@@ -1,5 +1,5 @@
 import { BaseAgent } from './BaseAgent.js';
-import type { AgentResponse } from './types.js';
+import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 
@@ -8,17 +8,18 @@ export class PrimaryAgent extends BaseAgent {
     super(manifest, llmProvider);
   }
 
-  async process(input: string): Promise<AgentResponse> {
+  async process(input: string, history: ChatMessage[] = []): Promise<AgentResponse> {
     await this.observe(input);
 
-    this.history.push({ role: 'user', content: input });
+    const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
     const response = await this.llmProvider.chat([
       { role: 'system', content: this.systemPrompt },
-      ...this.history
+      ...fullHistory
     ]);
 
-    this.history.push({ role: 'assistant', content: response.content });
+    // Keep internal history in sync just in case, but rely on passed history
+    this.history = [...fullHistory, { role: 'assistant', content: response.content } as ChatMessage];
 
     try {
       // Extract JSON from the response

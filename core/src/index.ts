@@ -357,11 +357,12 @@ app.post('/api/execute', async (req, res) => {
 });
 
 // ─── Chat API ─────────────────────────────────────────────────────────────────
-const conversations = new Map<string, { role: string; content: string }[]>();
+import type { ChatMessage } from './agents/types.js';
+const conversations = new Map<string, ChatMessage[]>();
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, conversationId: incomingId } = req.body;
+    const { message, conversationId: incomingId, agentName } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
     }
@@ -373,26 +374,42 @@ app.post('/api/chat', async (req, res) => {
       conversations.set(conversationId, []);
     }
     const history = conversations.get(conversationId)!;
-    history.push({ role: 'user', content: message });
 
-    // Process through the primary agent
-    const primaryAgent = orchestrator.getPrimaryAgent();
-    if (!primaryAgent) {
-      return res.status(500).json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
+    // Process through the specified agent or the primary agent
+    let agent;
+    if (agentName) {
+      agent = orchestrator.getAgent(agentName);
+      if (!agent) {
+        return res.status(404).json({ error: `Agent "${agentName}" not found.` });
+      }
+    } else {
+      agent = orchestrator.getPrimaryAgent();
+      if (!agent) {
+        return res.status(500).json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
+      }
     }
 
-    const response = await primaryAgent.process(message);
-    const reply = response.finalAnswer || response.thought || 'No response generated.';
+    try {
+      const response = await agent.process(message, history);
+      const reply = response.finalAnswer || response.thought || 'No response generated.';
 
-    history.push({ role: 'assistant', content: reply });
+      history.push({ role: 'user', content: message });
+      history.push({ role: 'assistant', content: reply });
 
-    res.json({
-      conversationId,
-      reply,
-      thought: response.thought,
-    });
+      res.json({
+        conversationId,
+        reply,
+        thought: response.thought,
+      });
+    } catch (agentError: any) {
+      console.error(`[${agent.name}] Error during processing:`, agentError);
+      if (agentError.name === 'AbortError' || agentError.message.includes('timeout')) {
+         return res.status(504).json({ error: `Agent "${agent.name}" timed out while processing.` });
+      }
+      return res.status(500).json({ error: `LLM error from "${agent.name}": ${agentError.message}` });
+    }
   } catch (error: any) {
-    console.error('Chat error:', error);
+    console.error('Chat API error:', error);
     res.status(500).json({ error: error.message });
   }
 });

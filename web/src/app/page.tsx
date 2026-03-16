@@ -1,31 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import SettingsMenu from '@/components/SettingsMenu';
-
-const TypingMessage = ({ text, sender }: { text: string, sender: string }) => {
-  const [displayedText, setDisplayedText] = useState('');
-
-  useEffect(() => {
-    let i = 0;
-    const interval = setInterval(() => {
-      setDisplayedText(text.slice(0, i));
-      i++;
-      if (i > text.length) clearInterval(interval);
-    }, 30);
-    return () => clearInterval(interval);
-  }, [text]);
-
-  return (
-    <div className="flex gap-4">
-      <span className="text-secondary font-bold">{sender}:</span>
-      <p className="text-primary/90">{displayedText}<span className="animate-pulse">_</span></p>
-    </div>
-  );
-};
+import { useChat } from '@/hooks/useChat';
+import { MessageBubble } from '@/components/MessageBubble';
 
 export default function Home() {
   const [uptime, setUptime] = useState('00h 00m 00s');
+  const [inputValue, setInputValue] = useState('');
+  const { messages, sendMessage, isConnected } = useChat();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const startTime = Date.now();
@@ -38,6 +22,24 @@ export default function Home() {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (inputValue.trim()) {
+        sendMessage(inputValue);
+        setInputValue('');
+      }
+    }
+  };
 
   return (
     <div className="max-w-6xl mx-auto py-12 space-y-8">
@@ -58,7 +60,9 @@ export default function Home() {
           </div>
           <div className="glass-panel px-4 py-2 flex items-center gap-3">
             <span className="text-xs font-mono text-muted-foreground">THOUGHT_SYNC</span>
-            <span className="text-xs font-mono text-primary">CONNECTED</span>
+            <span className={`text-xs font-mono ${isConnected ? 'text-primary' : 'text-yellow-400'}`}>
+              {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+            </span>
           </div>
           <SettingsMenu />
         </div>
@@ -78,21 +82,30 @@ export default function Home() {
 
         {/* Main Terminal / Chat Area */}
         <section className="col-span-9 glass-panel flex flex-col relative overflow-hidden hologram-flicker">
-          <div className="flex-1 p-6 font-mono text-sm space-y-4 overflow-y-auto">
-            <TypingMessage
-              sender="SERA"
-              text="Initializing neural links... Standby for input. System stability confirmed. Holographic interface active."
-            />
+          <div className="flex-1 p-6 font-mono space-y-4 overflow-y-auto">
+            {messages.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                id={msg.id}
+                role={msg.role}
+                content={msg.content}
+                isThinking={msg.isThinking}
+              />
+            ))}
+            <div ref={messagesEndRef} />
           </div>
           
           <div className="p-4 border-t border-white/5 bg-black/20">
             <div className="relative">
               <input 
                 type="text" 
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="PROMPT SERA..."
                 className="w-full bg-input border border-primary/20 rounded-md py-3 pl-4 pr-12 text-sm font-mono focus:outline-none focus:border-primary/50 transition-colors placeholder:text-muted-foreground/50"
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono bg-primary/10 text-primary px-2 py-1 rounded border border-primary/20">
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono bg-primary/10 text-primary px-2 py-1 rounded border border-primary/20 pointer-events-none">
                 ↵ ENTER
               </div>
             </div>

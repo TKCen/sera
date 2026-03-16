@@ -7,19 +7,23 @@ services:
       dockerfile: Dockerfile
     container_name: sera-core
     restart: unless-stopped
+    volumes:
+      - ./core:/app
+      - /app/node_modules
+      - .:/app/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./memory:/app/memory
     environment:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api
       - QDRANT_URL=http://qdrant:6333
-    volumes:
-      - ./core:/app
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./memory:/app/memory
-      - .:/app/workspace:ro
+    ports:
+      - "3001:3001"
     networks:
       - sera_net
       - agent_net
+    command: node dist/index.js
 
   sera-web:
     build:
@@ -57,7 +61,7 @@ services:
       - agent_net
 
   sera-db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: sera-db
     restart: unless-stopped
     environment:

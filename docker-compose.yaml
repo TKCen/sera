@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  sera-core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: sera-core
+    restart: unless-stopped
+    volumes:
+      - ./core:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./memory:/app/memory
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
+      - CENTRIFUGO_API_URL=http://centrifugo:8000/api
+    networks:
+      - sera_net
+      - agent_net
+
+  sera-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: sera-web
+    restart: unless-stopped
+    # Port 3000 is internal, NPM will proxy to it.
+    environment:
+      - NEXT_PUBLIC_CENTRIFUGO_URL=ws://localhost:10001/connection/websocket
+    labels:
+      - "homepage.group=AI Agents"
+      - "homepage.name=SERA"
+      - "homepage.icon=devicon-robot"
+      - "homepage.description=Sandboxed Extensible Reasoning Agent"
+      - "homepage.href=http://sera.localhost"
+      - "homepage.widget.type=custom"
+      - "homepage.widget.url=http://sera-web:3000/api/health"
+    networks:
+      - sera_net
+      - agent_net
+    depends_on:
+      - sera-core
+
+  centrifugo:
+    image: centrifugo/centrifugo:latest
+    container_name: sera-centrifugo
+    restart: unless-stopped
+    ports:
+      - "10001:8000"
+    volumes:
+      - ./centrifugo/config.json:/centrifugo/config.json
+    networks:
+      - sera_net
+      - agent_net
+
+  sera-db:
+    image: postgres:15-alpine
+    container_name: sera-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=sera_user
+      - POSTGRES_PASSWORD=sera_pass
+      - POSTGRES_DB=sera_db
+    volumes:
+      - sera_db_data:/var/lib/postgresql/data
+    networks:
+      - sera_net
+      - agent_net
+
+networks:
+  sera_net:
+    name: sera_net
+    driver: bridge
+  agent_net:
+    external: true
+
+volumes:
+  sera_db_data:

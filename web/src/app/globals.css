@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: #050505;
+  --color-foreground: #f8f8ff;
+
+  --color-primary: #00e5ff;
+  --color-primary-foreground: #050505;
+
+  --color-secondary: #ff1744;
+  --color-secondary-foreground: #f8f8ff;
+
+  --color-muted: #455a64;
+  --color-muted-foreground: #94a3b8;
+
+  --color-accent: #ff1744;
+  --color-accent-foreground: #f8f8ff;
+
+  --color-border: rgba(0, 229, 255, 0.2);
+  --color-input: rgba(0, 229, 255, 0.1);
+  --color-ring: #00e5ff;
+
+  --radius-lg: 0.75rem;
+  --radius-md: calc(0.75rem - 2px);
+  --radius-sm: calc(0.75rem - 4px);
+
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "Space Grotesk", monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    background-image: 
+      radial-gradient(circle at 50% 50%, rgba(0, 229, 255, 0.05) 0%, transparent 50%),
+      linear-gradient(rgba(18, 18, 20, 0.5) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(18, 18, 20, 0.5) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+  }
+
+  /* Scanline effect */
+  body::before {
+    content: " ";
+    @apply fixed inset-0 pointer-events-none z-50;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
+                linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+    background-size: 100% 4px, 3px 100%;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply backdrop-blur-xl bg-white/5 border border-white/10 rounded-lg shadow-2xl;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.05);
+  }
+
+  .glow-text {
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+  }
+
+  .glitch-hover {
+    @apply transition-all duration-300;
+  }
+
+  .glitch-hover:hover {
+    text-shadow: 2px 0 #ff1744, -2px 0 #00e5ff;
+    animation: glitch 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
+  }
+}
+
+@keyframes glitch {
+  0% { transform: translate(0) }
+  20% { transform: translate(-2px, 2px) }
+  40% { transform: translate(-2px, -2px) }
+  60% { transform: translate(2px, 2px) }
+  80% { transform: translate(2px, -2px) }
+  100% { transform: translate(0) }
+}

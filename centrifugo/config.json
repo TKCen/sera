@@ -1,0 +1,5 @@
+{
+  "secret": "sera-secret-key",
+  "api_key": "sera-api-key",
+  "allowed_origins": ["*"]
+}

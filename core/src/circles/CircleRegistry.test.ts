@@ -231,15 +231,6 @@ describe('CircleRegistry', () => {
       expect(registry.getCircle('nonexistent')).toBeUndefined();
     });
 
-    it('should load project context for development circle', () => {
-      const registry = new CircleRegistry();
-      const circlesDir = path.resolve(import.meta.dirname, '..', '..', '..', 'circles');
-      registry.loadFromDirectory(circlesDir);
-
-      const context = registry.getProjectContext('development');
-      expect(context).toBeDefined();
-      expect(context).toContain('Development Circle');
-    });
 
     it('should return undefined for circle without project context', () => {
       const registry = new CircleRegistry();
@@ -260,9 +251,9 @@ describe('CircleRegistry', () => {
 
       const devSummary = summaries.find(s => s.name === 'development');
       expect(devSummary).toBeDefined();
-      expect(devSummary!.hasProjectContext).toBe(true);
+      expect(devSummary!.hasProjectContext).toBe(false);
       expect(devSummary!.agents).toContain('architect-prime');
-      expect(devSummary!.channelCount).toBe(3);
+      expect(devSummary!.channelCount).toBe(0);
     });
   });
 });

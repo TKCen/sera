@@ -21,11 +21,23 @@ export function createCircleRouter(
   const router = Router();
 
   // ── List all circles ──────────────────────────────────────────────────────
+  /**
+   * Returns summaries of all registered circles.
+   * @param req Express request
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/', (req, res) => {
     res.json(circleRegistry.listCircleSummaries());
   });
 
   // ── Get circle detail ─────────────────────────────────────────────────────
+  /**
+   * Retrieves details and project context for a specific circle.
+   * @param req Express request containing circle name in params
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/:name', (req, res) => {
     const circle = circleRegistry.getCircle(req.params.name);
     if (!circle) {
@@ -38,6 +50,12 @@ export function createCircleRouter(
   });
 
   // ── Create new circle ─────────────────────────────────────────────────────
+  /**
+   * Creates a new circle and saves its manifest.
+   * @param req Express request containing new circle manifest in body
+   * @param res Express response
+   * @returns {void}
+   */
   router.post('/', (req, res) => {
     try {
       const body = req.body;
@@ -75,6 +93,12 @@ export function createCircleRouter(
   });
 
   // ── Update circle manifest ────────────────────────────────────────────────
+  /**
+   * Updates an existing circle's configuration.
+   * @param req Express request containing circle name in params and updated manifest in body
+   * @param res Express response
+   * @returns {void}
+   */
   router.put('/:name', (req, res) => {
     const name = req.params.name;
     const circle = circleRegistry.getCircle(name);
@@ -101,6 +125,12 @@ export function createCircleRouter(
   });
 
   // ── Delete circle ─────────────────────────────────────────────────────────
+  /**
+   * Removes a circle manifest from disk.
+   * @param req Express request containing circle name in params
+   * @param res Express response
+   * @returns {void}
+   */
   router.delete('/:name', (req, res) => {
     const name = req.params.name;
     const filePath = findCircleFile(circlesDir, name);
@@ -119,6 +149,12 @@ export function createCircleRouter(
   });
 
   // ── Update project context ────────────────────────────────────────────────
+  /**
+   * Updates the project context markdown file for a circle.
+   * @param req Express request containing circle name in params and context content in body
+   * @param res Express response
+   * @returns {void}
+   */
   router.put('/:name/context', (req, res) => {
     const name = req.params.name;
     const circle = circleRegistry.getCircle(name);

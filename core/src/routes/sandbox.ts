@@ -43,6 +43,12 @@ export function createSandboxRouter(
 
   // ── POST /spawn — Spawn a sandbox container ──────────────────────────────
 
+  /**
+   * Spawns a new container for persistent tasks or agents.
+   * @param req Express request containing agentName and container specs in body
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
   router.post('/spawn', async (req, res) => {
     try {
       const manifest = getManifestOrFail(req.body.agentName, res);
@@ -76,6 +82,12 @@ export function createSandboxRouter(
 
   // ── POST /exec — Execute command in a container ──────────────────────────
 
+  /**
+   * Runs a command in an already running container.
+   * @param req Express request containing agentName, containerId, and command in body
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
   router.post('/exec', async (req, res) => {
     try {
       const manifest = getManifestOrFail(req.body.agentName, res);
@@ -104,6 +116,12 @@ export function createSandboxRouter(
 
   // ── DELETE /:id — Remove a container ─────────────────────────────────────
 
+  /**
+   * Stops and removes a container.
+   * @param req Express request containing container id in params and agentName in query
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
   router.delete('/:id', async (req, res) => {
     try {
       const manifest = getManifestOrFail(req.query.agentName as string, res);
@@ -121,6 +139,12 @@ export function createSandboxRouter(
 
   // ── GET /:id/logs — Get container logs ───────────────────────────────────
 
+  /**
+   * Retrieves logs from a container.
+   * @param req Express request containing container id in params and optional tail in query
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
   router.get('/:id/logs', async (req, res) => {
     try {
       const tail = req.query.tail ? parseInt(req.query.tail as string) : undefined;
@@ -133,6 +157,12 @@ export function createSandboxRouter(
 
   // ── GET / — List all sandbox containers ──────────────────────────────────
 
+  /**
+   * Lists active sandbox containers.
+   * @param req Express request containing optional agentName in query
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/', (req, res) => {
     const agentName = req.query.agentName as string | undefined;
     const containers = sandboxManager.listContainers(agentName);
@@ -141,6 +171,12 @@ export function createSandboxRouter(
 
   // ── POST /tool — Run a tool in an ephemeral container ────────────────────
 
+  /**
+   * Runs a short-lived container to execute a single tool.
+   * @param req Express request containing agentName, toolName, and command in body
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
   router.post('/tool', async (req, res) => {
     try {
       const manifest = getManifestOrFail(req.body.agentName, res);
@@ -171,6 +207,12 @@ export function createSandboxRouter(
 
   // ── POST /subagent — Spawn a subagent ────────────────────────────────────
 
+  /**
+   * Spawns a specialized subagent container.
+   * @param req Express request containing agentName, subagentRole, and task in body
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
   router.post('/subagent', async (req, res) => {
     try {
       const manifest = getManifestOrFail(req.body.agentName, res);

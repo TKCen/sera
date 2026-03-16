@@ -18,11 +18,23 @@ export function createAgentRouter(
   const router = Router();
 
   // ── List all agents ────────────────────────────────────────────────────────
+  /**
+   * Lists all loaded agents.
+   * @param req Express request
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/', (req, res) => {
     res.json(orchestrator.listAgents());
   });
 
   // ── Get agent detail ───────────────────────────────────────────────────────
+  /**
+   * Gets detailed information for a specific agent.
+   * @param req Express request containing agent name in params
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/:name', (req, res) => {
     const info = orchestrator.getAgentInfo(req.params.name);
     if (!info) {
@@ -32,6 +44,12 @@ export function createAgentRouter(
   });
 
   // ── Get raw YAML manifest ─────────────────────────────────────────────────
+  /**
+   * Retrieves the raw YAML manifest file for the agent.
+   * @param req Express request containing agent name in params
+   * @param res Express response
+   * @returns {void}
+   */
   router.get('/:name/manifest/raw', (req, res) => {
     const name = req.params.name;
     const filePath = findManifestFile(agentsDir, name);
@@ -48,6 +66,12 @@ export function createAgentRouter(
   });
 
   // ── Update agent manifest ─────────────────────────────────────────────────
+  /**
+   * Updates the agent's manifest and triggers a live reload.
+   * @param req Express request containing agent name in params and updated manifest in body
+   * @param res Express response
+   * @returns {void}
+   */
   router.put('/:name/manifest', (req, res) => {
     const name = req.params.name;
     const body = req.body;
@@ -85,6 +109,12 @@ export function createAgentRouter(
   });
 
   // ── Force reload all manifests ────────────────────────────────────────────
+  /**
+   * Forces a full reload of all agent manifests from disk.
+   * @param req Express request
+   * @param res Express response
+   * @returns {void}
+   */
   router.post('/reload', (req, res) => {
     try {
       const result = orchestrator.reloadAgents();

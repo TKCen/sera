@@ -18,15 +18,26 @@ import type {
   SandboxType,
 } from './types.js';
 import { TierPolicy, PolicyViolationError } from './TierPolicy.js';
+import { StorageProviderFactory } from '../storage/StorageProvider.js';
+import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 
 // ── SandboxManager ──────────────────────────────────────────────────────────────
 
 export class SandboxManager {
   private docker: Docker;
   private containers: Map<string, SandboxInfo> = new Map();
+  private storageFactory: StorageProviderFactory;
 
-  constructor(docker?: Docker) {
+  constructor(docker?: Docker, storageFactory?: StorageProviderFactory) {
     this.docker = docker ?? new Docker({ socketPath: '/var/run/docker.sock' });
+
+    // Default: register local (bind-mount) provider
+    if (storageFactory) {
+      this.storageFactory = storageFactory;
+    } else {
+      this.storageFactory = new StorageProviderFactory('local');
+      this.storageFactory.register(new LocalStorageProvider());
+    }
   }
 
   /**
@@ -53,11 +64,15 @@ export class SandboxManager {
       ([k, v]) => `${k}=${v}`,
     );
 
-    // Workspace mount
-    const workspacePath = manifest.workspace?.path ?? `/workspaces/${agentName}`;
-    const binds = [
-      `${workspacePath}:${request.workDir ?? '/workspace'}:${limits.filesystemMode}`,
-    ];
+    // Workspace mount — delegate to the storage provider
+    const provider = this.storageFactory.getProvider(manifest.workspace?.provider);
+    const bindMount = provider.getBindMount(
+      agentName,
+      request.workDir ?? '/workspace',
+      limits.filesystemMode,
+      manifest.workspace?.path,
+    );
+    const binds = [bindMount];
 
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,

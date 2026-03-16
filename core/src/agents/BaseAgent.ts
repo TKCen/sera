@@ -1,13 +1,19 @@
 import type { AgentRole, AgentResponse, ChatMessage, AgentTask } from './types.js';
+import type { LLMProvider } from '../lib/llm/types.js';
 
 export abstract class BaseAgent {
+  protected history: ChatMessage[] = [];
+
   constructor(
     public name: string,
     public role: AgentRole,
-    protected systemPrompt: string
+    protected systemPrompt: string,
+    protected llmProvider: LLMProvider
   ) {}
 
-  protected history: ChatMessage[] = [];
+  public updateLlmProvider(llmProvider: LLMProvider) {
+    this.llmProvider = llmProvider;
+  }
 
   abstract process(input: string): Promise<AgentResponse>;
 

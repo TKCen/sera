@@ -1,9 +1,10 @@
 import { BaseAgent } from './BaseAgent.js';
 import type { AgentResponse, AgentRole } from './types.js';
+import type { LLMProvider } from '../lib/llm/types.js';
 
 export class WorkerAgent extends BaseAgent {
-  constructor(name: string, role: AgentRole) {
-    super(name, role, `You are a specialized worker agent with role: ${role}`);
+  constructor(name: string, role: AgentRole, llmProvider: LLMProvider) {
+    super(name, role, `You are a specialized worker agent with role: ${role}`, llmProvider);
   }
 
   async process(input: string): Promise<AgentResponse> {

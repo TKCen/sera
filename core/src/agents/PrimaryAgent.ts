@@ -1,29 +1,52 @@
 import { BaseAgent } from './BaseAgent.js';
 import type { AgentResponse, AgentRole } from './types.js';
+import type { LLMProvider } from '../lib/llm/types.js';
 
 export class PrimaryAgent extends BaseAgent {
-  constructor() {
-    super('Sera-Primary', 'primary', 'You are the primary coordinator agent.');
+  constructor(llmProvider: LLMProvider) {
+    super(
+      'Sera-Primary',
+      'primary',
+      `You are the primary coordinator agent of SERA (Sandboxed Extensible Reasoning Agent).
+Your goal is to understand user requests and either handle them directly or delegate to specialized workers.
+You MUST respond in JSON format with the following structure:
+{
+  "thought": "your inner monologue",
+  "delegation": { "agentRole": "worker|researcher", "task": "description" } // optional
+  "finalAnswer": "your response to the user" // optional
+}`,
+      llmProvider
+    );
   }
 
   async process(input: string): Promise<AgentResponse> {
     await this.observe(input);
-    const plan = await this.plan(input);
 
-    // Mock logic: if input contains "research", delegate
-    if (input.toLowerCase().includes('research')) {
+    this.history.push({ role: 'user', content: input });
+
+    const response = await this.llmProvider.chat([
+      { role: 'system', content: this.systemPrompt },
+      ...this.history
+    ]);
+
+    this.history.push({ role: 'assistant', content: response.content });
+
+    try {
+      // Basic extraction of JSON from the response
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
       return {
-        thought: 'I need to research this topic, delegating to research agent.',
-        delegation: {
-          agentRole: 'researcher',
-          task: `Research about: ${input}`
-        }
+        thought: 'Received non-JSON response from LLM, assuming it is the final answer.',
+        finalAnswer: response.content
+      };
+    } catch (error) {
+      console.error('Failed to parse agent response:', error);
+      return {
+        thought: 'I encountered an error parsing my own thoughts.',
+        finalAnswer: response.content
       };
     }
-
-    return {
-      thought: 'I can handle this directly.',
-      finalAnswer: `Processed: ${input}`
-    };
   }
 }

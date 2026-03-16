@@ -34,6 +34,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "gray-matter": "^4.0.3",
+    "openai": "^6.29.0",
     "pg": "^8.13.0",
     "typescript-language-server": "^4.4.0",
     "uuid": "^13.0.0",

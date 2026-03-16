@@ -1,15 +1,17 @@
 import { Orchestrator } from './agents/Orchestrator.js';
 import { PrimaryAgent } from './agents/PrimaryAgent.js';
 import { WorkerAgent } from './agents/WorkerAgent.js';
+import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 
 async function main() {
   console.log('--- Starting SERA Multi-Agent Demo ---');
 
+  const llmProvider = new OpenAIProvider();
   const orchestrator = new Orchestrator();
 
   // Register agents
-  orchestrator.registerAgent(new PrimaryAgent());
-  orchestrator.registerAgent(new WorkerAgent('Sera-Researcher', 'researcher'));
+  orchestrator.registerAgent(new PrimaryAgent(llmProvider));
+  orchestrator.registerAgent(new WorkerAgent('Sera-Researcher', 'researcher', llmProvider));
 
   console.log('\n--- Scenario 1: Simple Task ---');
   const result1 = await orchestrator.executeTask('Hello, who are you?');

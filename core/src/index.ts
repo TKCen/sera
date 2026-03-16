@@ -4,22 +4,25 @@ import { IngestionService } from './services/ingestion.service.js';
 import { EmbeddingService } from './services/embedding.service.js';
 import { VectorService } from './services/vector.service.js';
 import { initDb } from './lib/database.js';
+import { config } from './lib/config.js';
 import { Orchestrator } from './agents/Orchestrator.js';
 import { PrimaryAgent } from './agents/PrimaryAgent.js';
 import { WorkerAgent } from './agents/WorkerAgent.js';
+import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MemoryManager } from './memory/manager.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 
 const app = express();
 
+const llmProvider = new OpenAIProvider();
 const orchestrator = new Orchestrator();
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
 
 // Register agents
-orchestrator.registerAgent(new PrimaryAgent());
-orchestrator.registerAgent(new WorkerAgent('Sera-Researcher', 'researcher'));
+orchestrator.registerAgent(new PrimaryAgent(llmProvider));
+orchestrator.registerAgent(new WorkerAgent('Sera-Researcher', 'researcher', llmProvider));
 
 app.use(cors());
 app.use(express.json());
@@ -114,10 +117,20 @@ app.post('/api/execute', async (req, res) => {
   }
 });
 
-app.get('/api/tools', async (req, res) => {
+app.get('/api/config/llm', (req, res) => {
+  res.json(config.llm);
+});
+
+app.post('/api/config/llm', (req, res) => {
   try {
-    const tools = await mcpRegistry.getAllTools();
-    res.json({ tools });
+    const newConfig = req.body;
+    config.saveLlmConfig(newConfig);
+    
+    // Re-initialize LLM provider and agents
+    const newLlmProvider = new OpenAIProvider();
+    orchestrator.updateLlmProvider(newLlmProvider);
+    
+    res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import SettingsMenu from '@/components/SettingsMenu';
 
 const TypingMessage = ({ text, sender }: { text: string, sender: string }) => {
   const [displayedText, setDisplayedText] = useState('');
@@ -59,6 +60,7 @@ export default function Home() {
             <span className="text-xs font-mono text-muted-foreground">THOUGHT_SYNC</span>
             <span className="text-xs font-mono text-primary">CONNECTED</span>
           </div>
+          <SettingsMenu />
         </div>
       </header>
 

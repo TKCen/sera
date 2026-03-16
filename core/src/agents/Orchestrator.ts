@@ -1,5 +1,6 @@
 import { BaseAgent } from './BaseAgent.js';
 import type { AgentRole, AgentTask } from './types.js';
+import type { LLMProvider } from '../lib/llm/types.js';
 
 export class Orchestrator {
   private agents: Map<string, BaseAgent> = new Map();
@@ -7,6 +8,12 @@ export class Orchestrator {
 
   registerAgent(agent: BaseAgent) {
     this.agents.set(agent.role, agent);
+  }
+
+  updateLlmProvider(llmProvider: LLMProvider) {
+    for (const agent of this.agents.values()) {
+      agent.updateLlmProvider(llmProvider);
+    }
   }
 
   async executeTask(description: string) {

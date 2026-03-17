@@ -11,10 +11,12 @@ import { Router } from 'express';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { IntercomError, IntercomPermissionError } from '../intercom/IntercomService.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
+import type { BridgeService } from '../intercom/BridgeService.js';
 
 export function createIntercomRouter(
   intercom: IntercomService,
   resolveManifest: (agentName: string) => AgentManifest | undefined,
+  bridge?: BridgeService,
 ): Router {
   const router = Router();
 
@@ -148,6 +150,31 @@ export function createIntercomRouter(
 
     const channels = intercom.getAgentChannels(manifest);
     res.json(channels);
+  });
+
+  /**
+   * Receive a bridged message from a remote instance.
+   * @param req Express request containing channel and message in body
+   * @param res Express response
+   * @returns {Promise<void>}
+   */
+  router.post('/bridge/receive', async (req, res) => {
+    try {
+      if (!bridge) {
+        return res.status(501).json({ error: 'Bridge service not enabled' });
+      }
+
+      const { channel, message } = req.body;
+      if (!channel || !message) {
+        return res.status(400).json({ error: 'Required fields: channel, message' });
+      }
+
+      await bridge.receive(channel, message);
+      res.json({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
   });
 
   return router;

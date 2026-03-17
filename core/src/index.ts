@@ -23,6 +23,7 @@ import { Logger } from './lib/logger.js';
 const logger = new Logger('Server');
 import { createSandboxRouter } from './routes/sandbox.js';
 import { IntercomService } from './intercom/IntercomService.js';
+import { BridgeService } from './intercom/BridgeService.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
 import { registerBuiltinSkills } from './skills/builtins/index.js';
@@ -66,9 +67,17 @@ const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) =>
 
 // ── Intercom Service ─────────────────────────────────────────────────────────
 const intercomService = new IntercomService();
-const intercomRouter = createIntercomRouter(intercomService, (agentName: string) => {
-  return agentManifests.find(m => m.metadata.name === agentName);
-});
+const bridgeService = new BridgeService();
+bridgeService.init(intercomService, circleRegistry);
+intercomService.setBridgeService(bridgeService);
+
+const intercomRouter = createIntercomRouter(
+  intercomService,
+  (agentName: string) => {
+    return agentManifests.find(m => m.metadata.name === agentName);
+  },
+  bridgeService,
+);
 
 orchestrator.setIntercom(intercomService);
 

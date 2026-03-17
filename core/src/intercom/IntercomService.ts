@@ -165,8 +165,10 @@ export class IntercomService {
       const parts = toAgent.split('@');
       const remoteAgent = parts[0];
       const remoteCircle = parts[1];
-      // Note: we don't strictly use the instance part in the channel name,
-      // the bridge service uses the circle name to find the connection.
+      
+      if (!remoteAgent || !remoteCircle) {
+        throw new Error(`Invalid remote agent address: ${toAgent}. Expected agent@circle`);
+      }
 
       const channel = ChannelNamespace.bridgeDm(circle, remoteCircle, fromAgent, remoteAgent);
       return this.publishMessage(fromAgent, circle, channel, 'message', payload, {
@@ -274,7 +276,9 @@ export class IntercomService {
     const dmPeers = (manifest.intercom?.canMessage ?? []).map(peer => {
       if (peer.includes('@')) {
         const parts = peer.split('@');
-        return ChannelNamespace.bridgeDm(circle, parts[1], agentId, parts[0]);
+        if (parts[0] && parts[1]) {
+          return ChannelNamespace.bridgeDm(circle, parts[1], agentId, parts[0]);
+        }
       }
       return ChannelNamespace.dm(circle, agentId, peer);
     });

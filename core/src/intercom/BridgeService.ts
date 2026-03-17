@@ -102,10 +102,12 @@ export class BridgeService {
 
     if (parts[1] === 'dm') {
       // bridge:dm:{circleA}:{circleB}:{agentA}:{agentB}
-      targetCircle = this.findRemoteCircle([parts[2], parts[3]]);
+      const circles = [parts[2], parts[3]].filter((p): p is string => !!p);
+      targetCircle = this.findRemoteCircle(circles);
     } else {
       // bridge:{circleA}:{circleB}:{name}
-      targetCircle = this.findRemoteCircle([parts[1], parts[2]]);
+      const circles = [parts[1], parts[2]].filter((p): p is string => !!p);
+      targetCircle = this.findRemoteCircle(circles);
     }
 
     if (targetCircle) {

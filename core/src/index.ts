@@ -39,6 +39,7 @@ import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
 import { createAuditRouter } from './routes/audit.js';
+import { createOpenAICompatRouter } from './routes/openai-compat.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -152,6 +153,8 @@ app.use('/api/budget', budgetRouter);
 
 const auditRouter = createAuditRouter();
 app.use('/api/audit', auditRouter);
+const openAICompatRouter = createOpenAICompatRouter(orchestrator);
+app.use('/v1', openAICompatRouter);
 
 /**
  * Health check endpoint.

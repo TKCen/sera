@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { execSync } from 'child_process';
 import type { ChatMessage, ToolCall, ToolDefinition } from './llmClient.js';
 import { log } from './logger.js';
@@ -35,6 +36,23 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           },
         },
         required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update-environment',
+      description: 'Rebuild the agent sandbox environment with a new Dockerfile. Useful for installing missing toolchains (Python, Rust, etc.).',
+      parameters: {
+        type: 'object',
+        properties: {
+          dockerfile: {
+            type: 'string',
+            description: 'The full content of the Dockerfile to build. Should usually extend the current image.',
+          },
+        },
+        required: ['dockerfile'],
       },
     },
   },
@@ -82,9 +100,20 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
 
 export class RuntimeToolExecutor {
   private workspacePath: string;
+  private coreUrl: string;
+  private identityToken: string;
+  private agentName: string;
 
-  constructor(workspacePath: string = '/workspace') {
+  constructor(
+    workspacePath: string = '/workspace',
+    coreUrl: string = process.env.SERA_CORE_URL || 'http://sera-core:3001',
+    identityToken: string = process.env.SERA_IDENTITY_TOKEN || '',
+    agentName: string = process.env.AGENT_NAME || 'unknown',
+  ) {
     this.workspacePath = workspacePath;
+    this.coreUrl = coreUrl;
+    this.identityToken = identityToken;
+    this.agentName = agentName;
   }
 
   /**
@@ -104,7 +133,7 @@ export class RuntimeToolExecutor {
   /**
    * Execute a single tool call and return a tool-role ChatMessage.
    */
-  executeTool(toolCall: ToolCall): ChatMessage {
+  async executeTool(toolCall: ToolCall): Promise<ChatMessage> {
     const { id, function: fn } = toolCall;
     const toolName = fn.name;
 
@@ -132,6 +161,8 @@ export class RuntimeToolExecutor {
         case 'shell-exec':
           result = this.shellExec(params.command as string);
           break;
+        case 'update-environment':
+          return await this.updateEnvironment(params.dockerfile as string, id);
         default:
           result = `Error: Unknown tool "${toolName}"`;
       }
@@ -155,8 +186,12 @@ export class RuntimeToolExecutor {
   /**
    * Execute multiple tool calls sequentially.
    */
-  executeToolCalls(toolCalls: ToolCall[]): ChatMessage[] {
-    return toolCalls.map((tc) => this.executeTool(tc));
+  async executeToolCalls(toolCalls: ToolCall[]): Promise<ChatMessage[]> {
+    const results: ChatMessage[] = [];
+    for (const tc of toolCalls) {
+      results.push(await this.executeTool(tc));
+    }
+    return results;
   }
 
   // ── Built-in Tool Handlers ─────────────────────────────────────────────────
@@ -175,6 +210,36 @@ export class RuntimeToolExecutor {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(resolved, content, 'utf-8');
     return `File written: ${filePath} (${content.length} bytes)`;
+  }
+
+  private async updateEnvironment(dockerfile: string, toolCallId: string): Promise<ChatMessage> {
+    try {
+      const response = await axios.post(
+        `${this.coreUrl}/api/sandbox/build`,
+        {
+          agentName: this.agentName,
+          dockerfile,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${this.identityToken}`,
+          },
+        },
+      );
+
+      return {
+        role: 'tool',
+        tool_call_id: toolCallId,
+        content: `Environment successfully built. New image: ${response.data.image}. The agent must be restarted to use this environment.`,
+      };
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error || err.message;
+      return {
+        role: 'tool',
+        tool_call_id: toolCallId,
+        content: `Error building environment: ${errorMsg}`,
+      };
+    }
   }
 
   private shellExec(command: string): string {

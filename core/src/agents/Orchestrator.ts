@@ -157,6 +157,64 @@ export class Orchestrator {
   }
 
   /**
+   * Restart an agent instance, optionally with a new image.
+   */
+  async restartInstance(instanceId: string, newImage?: string): Promise<BaseAgent> {
+    logger.info(`Restarting agent instance: ${instanceId}${newImage ? ` with new image: ${newImage}` : ''}`);
+
+    // 1. Get current instance info
+    const instance = await AgentFactory.getInstance(instanceId);
+    if (!instance) throw new Error(`Agent instance "${instanceId}" not found`);
+
+    // 2. Stop current instance
+    await this.stopInstance(instanceId);
+
+    // 3. Start new instance (optionally with new image)
+    const manifest = this.manifests.get(instance.templateName);
+    if (!manifest) throw new Error(`Template "${instance.templateName}" not found`);
+
+    const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
+    if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
+    if (this.meteringEngine && this.agentScheduler) {
+      agent.setMetering(this.meteringEngine, this.agentScheduler);
+    }
+
+    if (this.sandboxManager) {
+      // Issue a JWT for the agent container
+      let identityToken: string | undefined;
+      if (this.identityService) {
+        identityToken = this.identityService.signToken({
+          agentId: instance.id,
+          circleId: manifest.metadata.circle,
+          capabilities: manifest.tools?.allowed ?? [],
+        });
+      }
+
+      const sandbox = await this.sandboxManager.spawn(manifest, {
+        type: 'agent',
+        agentName: manifest.metadata.name,
+        image: newImage || 'sera-agent-worker:latest',
+        hostWorkspacePath: instance.workspacePath,
+        env: {
+          AGENT_NAME: instance.name,
+          AGENT_INSTANCE_ID: instance.id,
+          SERA_CORE_URL: process.env.SERA_API_URL || 'http://sera-core:3001',
+          ...(identityToken ? { SERA_IDENTITY_TOKEN: identityToken } : {}),
+          CENTRIFUGO_API_URL: process.env.CENTRIFUGO_API_URL || 'http://centrifugo:8000/api',
+          CENTRIFUGO_API_KEY: process.env.CENTRIFUGO_API_KEY || 'sera-api-key',
+        }
+      });
+
+      agent.setContainerId(sandbox.containerId);
+      await AgentFactory.updateContainerId(instance.id, sandbox.containerId);
+      logger.info(`Spawned container ${sandbox.containerId} for restarted agent ${instance.name}`);
+    }
+
+    this.agents.set(instance.id, agent);
+    return agent;
+  }
+
+  /**
    * Stop an agent instance, removing it from memory and cleaning up its container.
    */
   async stopInstance(instanceId: string): Promise<void> {

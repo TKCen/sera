@@ -49,6 +49,30 @@ export function createSandboxRouter(
    * @param res Express response
    * @returns {Promise<void>}
    */
+  // ── POST /build — Build a custom image ───────────────────────────────────
+
+  /**
+   * Builds a custom Docker image for an agent.
+   * @param req Express request containing agentName and dockerfile in body
+   * @param res Express response
+   */
+  router.post('/build', async (req, res) => {
+    try {
+      const manifest = getManifestOrFail(req.body.agentName, res);
+      if (!manifest) return;
+
+      const { dockerfile } = req.body;
+      if (!dockerfile || typeof dockerfile !== 'string') {
+        return res.status(400).json({ error: 'dockerfile is required' });
+      }
+
+      const tagName = await sandboxManager.buildImage(manifest, dockerfile);
+      res.json({ success: true, image: tagName });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   router.post('/spawn', async (req, res) => {
     try {
       const manifest = getManifestOrFail(req.body.agentName, res);

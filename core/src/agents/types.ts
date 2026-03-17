@@ -21,6 +21,7 @@ export interface AgentResponse {
     task: string;
   };
   finalAnswer?: string;
+  relaunchImage?: string;
 }
 
 export interface AgentInstance {

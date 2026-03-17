@@ -84,6 +84,14 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
         await sessionStore.addMessage({ sessionId, role: 'user', content: message });
         await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
 
+        // Handle relaunch if requested
+        if (response.relaunchImage && agentInstanceId) {
+          logger.info(`Relaunching agent instance ${agentInstanceId} with new image ${response.relaunchImage}`);
+          orchestrator.restartInstance(agentInstanceId, response.relaunchImage).catch(err => {
+            logger.error(`Failed to restart agent instance ${agentInstanceId}:`, err);
+          });
+        }
+
         // Auto-title on first exchange
         if (isNew) {
           const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
@@ -164,6 +172,14 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
         // Persist messages
         await sessionStore.addMessage({ sessionId, role: 'user', content: message });
         await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+
+        // Handle relaunch if requested
+        if (response.relaunchImage && agentInstanceId) {
+          logger.info(`Relaunching agent instance ${agentInstanceId} with new image ${response.relaunchImage}`);
+          orchestrator.restartInstance(agentInstanceId, response.relaunchImage).catch(err => {
+            logger.error(`Failed to restart agent instance ${agentInstanceId}:`, err);
+          });
+        }
 
         // Auto-title on first exchange
         if (isNew) {

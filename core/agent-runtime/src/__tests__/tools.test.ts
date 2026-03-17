@@ -19,7 +19,7 @@ describe('RuntimeToolExecutor', () => {
   });
 
   describe('executeTool()', () => {
-    it('handles file-read of a real temp file', () => {
+    it('handles file-read of a real temp file', async () => {
       const filePath = path.join(tempDir, 'test.txt');
       fs.writeFileSync(filePath, 'hello world', 'utf-8');
 
@@ -32,12 +32,12 @@ describe('RuntimeToolExecutor', () => {
         },
       };
 
-      const result = executor.executeTool(toolCall);
+      const result = await executor.executeTool(toolCall);
       expect(result.role).toBe('tool');
       expect(result.content).toBe('hello world');
     });
 
-    it('handles file-write and creates the file', () => {
+    it('handles file-write and creates the file', async () => {
       const toolCall: ToolCall = {
         id: 'call_123',
         type: 'function',
@@ -47,7 +47,7 @@ describe('RuntimeToolExecutor', () => {
         },
       };
 
-      const result = executor.executeTool(toolCall);
+      const result = await executor.executeTool(toolCall);
       expect(result.role).toBe('tool');
       expect(result.content).toContain('File written: new-file.txt');
 
@@ -55,7 +55,7 @@ describe('RuntimeToolExecutor', () => {
       expect(fileContent).toBe('new content');
     });
 
-    it('blocks path traversal (../../etc/passwd)', () => {
+    it('blocks path traversal (../../etc/passwd)', async () => {
       const toolCall: ToolCall = {
         id: 'call_123',
         type: 'function',
@@ -65,12 +65,12 @@ describe('RuntimeToolExecutor', () => {
         },
       };
 
-      const result = executor.executeTool(toolCall);
+      const result = await executor.executeTool(toolCall);
       expect(result.role).toBe('tool');
       expect(result.content).toContain('Path traversal blocked');
     });
 
-    it('handles shell-exec (echo hello)', () => {
+    it('handles shell-exec (echo hello)', async () => {
       const toolCall: ToolCall = {
         id: 'call_123',
         type: 'function',
@@ -80,17 +80,17 @@ describe('RuntimeToolExecutor', () => {
         },
       };
 
-      const result = executor.executeTool(toolCall);
+      const result = await executor.executeTool(toolCall);
       expect(result.role).toBe('tool');
       expect(result.content.trim()).toBe('hello');
     });
   });
 
   describe('getToolDefinitions()', () => {
-    it('returns all 3 built-in tools when no filter is given', () => {
+    it('returns all 4 built-in tools when no filter is given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(3);
-      expect(tools.map((t) => t.function.name).sort()).toEqual(['file-read', 'file-write', 'shell-exec']);
+      expect(tools.length).toBe(4);
+      expect(tools.map((t) => t.function.name).sort()).toEqual(['file-read', 'file-write', 'shell-exec', 'update-environment']);
     });
 
     it('filters tools by allowed list', () => {

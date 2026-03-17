@@ -59,6 +59,7 @@ export class ToolExecutor {
         agentInstanceId,
         containerId,
         sandboxManager: this.sandboxManager,
+        manifest,
       };
 
       // Parse arguments

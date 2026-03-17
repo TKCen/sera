@@ -10,6 +10,8 @@
 
 import Docker from 'dockerode';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+import { Readable } from 'stream';
 import type { AgentManifest } from '../agents/manifest/types.js';
 import type {
   SandboxInfo,
@@ -48,6 +50,61 @@ export class SandboxManager {
         process.env.HOST_WORKSPACES_DIR
       ));
     }
+  }
+
+  /**
+   * Build a custom image for an agent based on a Dockerfile.
+   * Implements caching by tagging the image with a hash of the content.
+   */
+  async buildImage(manifest: AgentManifest, dockerfile: string): Promise<string> {
+    const agentName = manifest.metadata.name.toLowerCase();
+    const hash = crypto.createHash('sha256').update(dockerfile).digest('hex').substring(0, 12);
+    const tagName = `sera-agent-${agentName}:${hash}`;
+
+    // ── Check if image already exists ───────────────────────────────────────
+    try {
+      await this.docker.getImage(tagName).inspect();
+      logger.info(`Image ${tagName} already exists, skipping build.`);
+      return tagName;
+    } catch (err) {
+      // Image doesn't exist, proceed to build
+    }
+
+    this.audit('build', manifest.metadata.name, { tagName });
+
+    // ── Prepare build context ───────────────────────────────────────────────
+    // We use a simple tar stream containing the Dockerfile
+    const tar = (await import('tar-stream')).default;
+    const pack = tar.pack();
+    pack.entry({ name: 'Dockerfile' }, dockerfile);
+    pack.finalize();
+
+    // ── Build ───────────────────────────────────────────────────────────────
+    const stream = await this.docker.buildImage(pack as unknown as NodeJS.ReadableStream, {
+      t: tagName,
+    });
+
+    // Wait for build to complete
+    await new Promise((resolve, reject) => {
+      this.docker.modem.followProgress(stream, (err, res) => {
+        if (err) {
+          logger.error(`Build failed for ${tagName}:`, err);
+          reject(err);
+        } else {
+          // Check for errors in the output stream
+          const hasError = res?.some((step: any) => step.error);
+          if (hasError) {
+            const errorStep = res.find((step: any) => step.error);
+            reject(new Error(errorStep.error));
+          } else {
+            resolve(res);
+          }
+        }
+      });
+    });
+
+    logger.info(`Successfully built image: ${tagName}`);
+    return tagName;
   }
 
   /**

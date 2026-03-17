@@ -88,7 +88,7 @@ export class ReasoningLoop {
             messages.push(assistantMsg);
 
             // Execute tools natively
-            const toolResults = this.tools.executeToolCalls(response.toolCalls);
+            const toolResults = await this.tools.executeToolCalls(response.toolCalls);
 
             // Publish results and add to conversation
             for (const result of toolResults) {

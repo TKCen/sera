@@ -36,6 +36,7 @@ export interface AgentContext {
   agentInstanceId: string | undefined;
   containerId: string | undefined;
   sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
+  manifest?: import('../agents/manifest/types.js').AgentManifest;
 }
 
 // ── Skill Handler ───────────────────────────────────────────────────────────────

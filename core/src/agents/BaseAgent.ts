@@ -252,6 +252,25 @@ export abstract class BaseAgent {
               this.containerId,
             );
 
+            // Check if any tool result indicates a relaunch requirement
+            for (const result of toolResults) {
+              if (result.content.includes('"relaunchRequired":true')) {
+                try {
+                  const data = JSON.parse(result.content);
+                  if (data.relaunchRequired && data.image) {
+                    await this.publishThought('reflect', `🚀 Environment updated. Relaunching agent with image: ${data.image}`);
+                    return {
+                      thought: 'Rebuilt environment, relaunching.',
+                      finalAnswer: 'My environment has been updated. I am restarting now to apply the changes.',
+                      relaunchImage: data.image
+                    };
+                  }
+                } catch {
+                  // Fallback if content is not JSON (though update-environment skill should return JSON)
+                }
+              }
+            }
+
             // Record audit entries for tool calls
             const auditService = AuditService.getInstance();
             const auditId = this.agentInstanceId || this.role;

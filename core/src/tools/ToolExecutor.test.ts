@@ -171,6 +171,7 @@ describe('ToolExecutor', () => {
         agentInstanceId: undefined,
         containerId: undefined,
         sandboxManager: undefined,
+        manifest: minimalManifest(),
       });
     });
 

@@ -16,7 +16,6 @@ import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
 import { createSandboxRouter } from './routes/sandbox.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { createAgentRouter } from './routes/agents.js';
-import { createAgentTemplatesRouter } from './routes/agent-templates.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
 import { createSessionRouter } from './routes/sessions.js';
@@ -98,10 +97,12 @@ const startServer = async () => {
 
   app.use(cors());
   app.use(express.json());
+
+  app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
+
   app.use('/api/sandbox', sandboxRouter);
   app.use('/api/intercom', intercomRouter);
   app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
-  app.use('/api/agent-templates', createAgentTemplatesRouter(orchestrator, agentsDir));
   app.use('/api/circles', createCircleRouter(circleRegistry, circlesDir, () => AgentManifestLoader.loadAllManifests(agentsDir), orchestrator));
   app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator));
   
@@ -124,8 +125,6 @@ const startServer = async () => {
   app.use('/api/audit', createAuditRouter());
   app.use('/v1', createOpenAICompatRouter(orchestrator));
   app.use('/api/lsp', lspRouter);
-
-  app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
   const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };
   
@@ -154,7 +153,10 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-if (process.env.NODE_ENV !== 'test') {
+const isMainModule = import.meta.url === `file://${process.argv[1]}` ||
+                   (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename));
+
+if (process.env.NODE_ENV !== 'test' && isMainModule) {
   startServer().catch(err => {
     logger.error('Failed to start server:', err);
     process.exit(1);

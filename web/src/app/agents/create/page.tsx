@@ -38,11 +38,12 @@ export default function CreateAgentPage() {
   ];
 
   const buildManifest = () => {
+    const internalName = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return {
       apiVersion: 'sera/v1',
       kind: 'Agent',
       metadata: {
-        name: name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+        name: internalName,
         displayName,
         icon: '🤖',
         circle: 'general',
@@ -70,10 +71,11 @@ export default function CreateAgentPage() {
     setError(null);
 
     try {
-      const res = await fetch('/api/core/agent-templates', {
-        method: 'POST',
+      const manifest = buildManifest();
+      const res = await fetch(`/api/core/agents/${manifest.metadata.name}/manifest`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildManifest()),
+        body: JSON.stringify(manifest),
       });
 
       if (!res.ok) {
@@ -99,7 +101,7 @@ export default function CreateAgentPage() {
     setIsPreviewLoading(true);
 
     try {
-      const res = await fetch('/api/core/agent-templates/test-chat', {
+      const res = await fetch('/api/core/agents/test-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

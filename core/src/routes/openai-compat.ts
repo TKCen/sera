@@ -76,7 +76,7 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
     // Attempt to resolve agent manifest by name (model)
     const manifest = orchestrator.getManifest(model);
     if (!manifest) {
-      return res.status(404).json({ error: { message: `Model/Agent "${model}" not found` } });
+      return res.status(404).json({ error: { message: `model_not_found: ${model}` } });
     }
 
     // Map request messages to internal ChatMessage format

@@ -26,7 +26,9 @@ import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
 import { createAuditRouter } from './routes/audit.js';
 import { createOpenAICompatRouter } from './routes/openai-compat.js';
+import { createPartyRouter } from './routes/party.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
+import { PartySessionManager } from './circles/PartyMode.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { IdentityService } from './auth/IdentityService.js';
 import { MeteringService } from './metering/MeteringService.js';
@@ -106,8 +108,11 @@ const startServer = async () => {
   app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator));
   
   const sessionStore = new SessionStore();
+  const partyManager = new PartySessionManager();
+
   app.use('/api/sessions', createSessionRouter(sessionStore));
   app.use('/api', createChatRouter(sessionStore, orchestrator));
+  app.use('/api/party', createPartyRouter(partyManager, circleRegistry, orchestrator));
   
   const identityService = new IdentityService();
   const meteringService = new MeteringService();
@@ -125,7 +130,7 @@ const startServer = async () => {
   app.use('/v1', createOpenAICompatRouter(orchestrator));
   app.use('/api/lsp', lspRouter);
 
-  app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+  app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
 
   const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };
   

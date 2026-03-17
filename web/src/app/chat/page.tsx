@@ -32,6 +32,8 @@ interface MessageThought {
 interface ChatMessage {
   id: string;
   sender: 'user' | 'sera';
+  agentName?: string;
+  agentDisplayName?: string;
   text: string;
   thoughts: MessageThought[];
   isStreaming: boolean;
@@ -63,6 +65,10 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [instances, setInstances] = useState<AgentInstance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
+  const [circles, setCircles] = useState<any[]>([]);
+  const [selectedCircleId, setSelectedCircleId] = useState<string | null>(null);
+  const [isPartyMode, setIsPartyMode] = useState(false);
+  const [partySessionId, setPartySessionId] = useState<string | null>(null);
   const [showThinking, setShowThinking] = useState(true);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -105,7 +111,20 @@ export default function ChatPage() {
   // Fetch sessions on mount
   useEffect(() => {
     fetchSessions();
+    fetchCircles();
   }, []);
+
+  const fetchCircles = async () => {
+    try {
+      const res = await fetch('/api/core/circles');
+      if (res.ok) {
+        const data = await res.json();
+        setCircles(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch circles:', err);
+    }
+  };
 
   const fetchSessions = async () => {
     try {
@@ -146,6 +165,8 @@ export default function ChatPage() {
 
   const startNewSession = () => {
     setSessionId(null);
+    setPartySessionId(null);
+    setIsPartyMode(false);
     setMessages([]);
     inputRef.current?.focus();
   };
@@ -189,7 +210,49 @@ export default function ChatPage() {
       timestamp: new Date(),
     };
 
-    // Create a placeholder for the streaming response
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setIsLoading(true);
+
+    if (isPartyMode && partySessionId) {
+      try {
+        const res = await fetch(`/api/core/party/${partySessionId}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: trimmed }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Party chat failed');
+
+        const newMessages: ChatMessage[] = data.responses.map((r: any) => ({
+          id: r.id,
+          sender: 'sera',
+          agentName: r.agentName,
+          agentDisplayName: r.agentDisplayName,
+          text: r.content,
+          thoughts: [],
+          isStreaming: false,
+          timestamp: new Date(r.timestamp),
+        }));
+
+        setMessages(prev => [...prev, ...newMessages]);
+        setIsLoading(false);
+      } catch (err: any) {
+        const errorMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          sender: 'sera',
+          text: `Party Mode Error: ${err.message}`,
+          thoughts: [],
+          isStreaming: false,
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, errorMsg]);
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // Standard single-agent streaming chat logic
     const seraMsgId = crypto.randomUUID();
     const seraMsg: ChatMessage = {
       id: seraMsgId,
@@ -200,9 +263,7 @@ export default function ChatPage() {
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMsg, seraMsg]);
-    setInput('');
-    setIsLoading(true);
+    setMessages(prev => [...prev, seraMsg]);
     // Auto-expand thoughts while streaming
     setExpandedThoughts(prev => new Set(prev).add(seraMsgId));
 
@@ -224,7 +285,6 @@ export default function ChatPage() {
     currentThoughtsRef.current = unsubThoughts;
 
     try {
-      // POST to the streaming endpoint — it returns immediately with the messageId
       const res = await fetch('/api/core/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -235,42 +295,31 @@ export default function ChatPage() {
         }),
       });
       const data = await res.json();
-
       if (!res.ok) throw new Error(data.error || 'Stream request failed');
 
       if (data.sessionId) setSessionId(data.sessionId);
       const messageId = data.messageId;
 
-      // Subscribe to the streaming channel for token-by-token delivery
       const unsubStream = subscribeToStream(
         messageId,
-        // onToken: accumulate text
         (token: string) => {
           setMessages(prev => prev.map(msg =>
-            msg.id === seraMsgId
-              ? { ...msg, text: msg.text + token }
-              : msg
+            msg.id === seraMsgId ? { ...msg, text: msg.text + token } : msg
           ));
         },
-        // onDone: mark streaming complete
         () => {
           setMessages(prev => prev.map(msg =>
-            msg.id === seraMsgId
-              ? { ...msg, isStreaming: false }
-              : msg
+            msg.id === seraMsgId ? { ...msg, isStreaming: false } : msg
           ));
           setIsLoading(false);
-          // Auto-collapse thoughts after streaming
           setExpandedThoughts(prev => {
             const next = new Set(prev);
             next.delete(seraMsgId);
             return next;
           });
-          // Clean up subscriptions
           unsubThoughts();
           currentThoughtsRef.current = null;
           inputRef.current?.focus();
-          // Refresh sessions list
           fetchSessions();
         },
       );
@@ -278,11 +327,7 @@ export default function ChatPage() {
     } catch (err: any) {
       setMessages(prev => prev.map(msg =>
         msg.id === seraMsgId
-          ? {
-              ...msg,
-              text: `Error: ${err.message}. Check your LLM configuration in Settings.`,
-              isStreaming: false,
-            }
+          ? { ...msg, text: `Error: ${err.message}`, isStreaming: false }
           : msg
       ));
       setIsLoading(false);
@@ -290,7 +335,7 @@ export default function ChatPage() {
       currentThoughtsRef.current = null;
       inputRef.current?.focus();
     }
-  }, [input, isLoading, sessionId, selectedInstanceId]);
+  }, [input, isLoading, sessionId, selectedInstanceId, isPartyMode, partySessionId]);
 
   // Cleanup subscriptions on unmount
   useEffect(() => {
@@ -307,23 +352,75 @@ export default function ChatPage() {
     }
   };
 
+  const startPartyMode = async (circleId: string) => {
+    try {
+      setIsLoading(true);
+      const res = await fetch('/api/core/party/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ circleId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPartySessionId(data.sessionId);
+        setIsPartyMode(true);
+        setSelectedCircleId(circleId);
+        setMessages([]);
+        setSessionId(null);
+      }
+    } catch (err) {
+      console.error('Failed to start party mode:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const agentSelector = (
-    <div className="flex items-center gap-2">
-      <label className="text-xs text-sera-text-muted">Agent:</label>
-      <select
-        value={selectedInstanceId || ''}
-        onChange={(e) => {
-          setSelectedInstanceId(e.target.value);
-          startNewSession();
-        }}
-        className="bg-sera-surface border border-sera-border rounded px-2 py-1 text-xs text-sera-text focus:outline-none focus:border-sera-accent"
-      >
-        {instances.map((instance) => (
-          <option key={instance.id} value={instance.id}>
-            {instance.name} ({instance.templateName})
-          </option>
-        ))}
-      </select>
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-sera-text-muted">Agent:</label>
+        <select
+          value={selectedInstanceId || ''}
+          onChange={(e) => {
+            setSelectedInstanceId(e.target.value);
+            startNewSession();
+          }}
+          className="flex-1 bg-sera-surface border border-sera-border rounded px-2 py-1 text-xs text-sera-text focus:outline-none focus:border-sera-accent"
+        >
+          {instances.map((instance) => (
+            <option key={instance.id} value={instance.id}>
+              {instance.name} ({instance.templateName})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-sera-text-muted">Circle:</label>
+        <div className="flex-1 flex gap-1">
+          <select
+            value={selectedCircleId || ''}
+            onChange={(e) => setSelectedCircleId(e.target.value)}
+            className="flex-1 bg-sera-surface border border-sera-border rounded px-2 py-1 text-xs text-sera-text focus:outline-none focus:border-sera-accent"
+          >
+            <option value="">Select Circle...</option>
+            {circles.map((c) => (
+              <option key={c.name} value={c.name}>{c.displayName}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => selectedCircleId && startPartyMode(selectedCircleId)}
+            disabled={!selectedCircleId || isLoading}
+            className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+              isPartyMode
+                ? 'bg-sera-accent text-sera-bg'
+                : 'bg-sera-surface border border-sera-border text-sera-text hover:border-sera-accent hover:text-sera-accent'
+            }`}
+          >
+            PARTY
+          </button>
+        </div>
+      </div>
     </div>
   );
 
@@ -622,8 +719,15 @@ export default function ChatPage() {
           {messages.map((msg) => (
             <div key={msg.id} className={`flex gap-3 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
               {msg.sender === 'sera' && (
-                <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Bot size={16} className="text-sera-accent" />
+                <div className="flex flex-col items-center flex-shrink-0">
+                  <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center mt-0.5 relative group">
+                    <Bot size={16} className="text-sera-accent" />
+                    {msg.agentDisplayName && (
+                      <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-sera-surface border border-sera-border rounded text-[10px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                        {msg.agentDisplayName}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
               <div className={`max-w-[70%] rounded-xl px-4 py-3 ${
@@ -633,6 +737,13 @@ export default function ChatPage() {
               }`}>
                 {/* Inline thinking block (Gemini-style) */}
                 {renderThinkingBlock(msg)}
+
+                {/* Agent name label for Party Mode */}
+                {msg.sender === 'sera' && msg.agentDisplayName && (
+                  <div className="text-[10px] font-bold text-sera-accent mb-1 uppercase tracking-wider">
+                    {msg.agentDisplayName}
+                  </div>
+                )}
 
                 {/* Message content */}
                 <div className={`text-sm break-words leading-relaxed prose prose-sm max-w-none ${msg.sender === 'user' ? 'prose-invert text-sera-bg' : 'text-sera-text'}`}>

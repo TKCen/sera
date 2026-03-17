@@ -140,7 +140,13 @@ export class PartySession {
       const prompt = contextParts.join('\n\n');
 
       try {
-        const response = await agent.process(prompt);
+        const history: any[] = this.messages.slice(-10).map(m => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content,
+          name: m.agentName
+        }));
+
+        const response = await agent.process(prompt, history);
         const content = response.finalAnswer || response.thought || '';
 
         const msg: PartyMessage = {
@@ -244,7 +250,7 @@ export class PartySession {
         const response = await this.orchestratorAgent.process(
           `Given the user message: "${userMessage}"\n\n` +
           `Select 2-3 of the following agents that are most relevant to respond:\n${agentList}\n\n` +
-          `Respond with ONLY the agent names, comma-separated. No explanation.`,
+          `Respond with ONLY the agent names, comma-separated. No explanation. Only include the agent names exactly as provided in the list.`
         );
 
         const text = response.finalAnswer || response.thought || '';

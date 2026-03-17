@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import type { ProviderConfig, ProvidersConfig } from './providers.js';
+import { Logger } from './logger.js';
+
+const logger = new Logger('Config');
 
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'llm.json');
 const PROVIDERS_CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json');
@@ -25,7 +28,7 @@ function loadLegacyConfig(): LLMConfig {
       return { ...defaultConfig, ...JSON.parse(data) };
     }
   } catch (err) {
-    console.error('Failed to load LLM config:', err);
+    logger.error('Failed to load LLM config:', err);
   }
   return defaultConfig;
 }
@@ -43,7 +46,7 @@ function loadProvidersConfig(): ProvidersConfig {
       return { ...defaultProvidersConfig, ...JSON.parse(data) };
     }
   } catch (err) {
-    console.error('Failed to load providers config:', err);
+    logger.error('Failed to load providers config:', err);
   }
   return defaultProvidersConfig;
 }
@@ -56,7 +59,7 @@ function saveProvidersConfig(cfg: ProvidersConfig) {
     }
     fs.writeFileSync(PROVIDERS_CONFIG_PATH, JSON.stringify(cfg, null, 2));
   } catch (err) {
-    console.error('Failed to save providers config:', err);
+    logger.error('Failed to save providers config:', err);
     throw err;
   }
 }
@@ -87,7 +90,7 @@ export const config = {
       }
       fs.writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2));
     } catch (err) {
-      console.error('Failed to save LLM config:', err);
+      logger.error('Failed to save LLM config:', err);
       throw err;
     }
   },

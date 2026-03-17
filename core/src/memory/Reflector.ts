@@ -1,6 +1,9 @@
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { MemoryManager } from './manager.js';
 import type { MemoryEntry } from './blocks/types.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('Reflector');
 
 /**
  * Reflector — auto-compaction service for agent memory.
@@ -59,7 +62,7 @@ export class Reflector {
       ]);
       summaryContent = response.content.trim();
     } catch (err) {
-      console.warn(`[Reflector] First summarisation attempt failed. Retrying... Error:`, err);
+      logger.warn(`First summarisation attempt failed. Retrying...`, err);
       try {
         const retryResponse = await llmProvider.chat([
           {
@@ -73,7 +76,7 @@ export class Reflector {
         ]);
         summaryContent = retryResponse.content.trim();
       } catch (retryErr) {
-        console.error(`[Reflector] Summarisation failed after retry. Skipping compaction. Error:`, retryErr);
+        logger.error(`Summarisation failed after retry. Skipping compaction.`, retryErr);
         return null;
       }
     }
@@ -96,8 +99,8 @@ export class Reflector {
       await memoryManager.store.moveEntry(entry.id, 'archive');
     }
 
-    console.log(
-      `[Reflector] Metrics: Compacted ${toCompact.length} core entries into 1 archive summary entry (ID: ${summaryEntry.id}). Summary Title: "${summaryEntry.title}"`
+    logger.info(
+      `Compacted ${toCompact.length} core entries into 1 archive summary (ID: ${summaryEntry.id}). Title: "${summaryEntry.title}"`
     );
 
     return summaryEntry;

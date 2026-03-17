@@ -6,13 +6,10 @@ import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
-<<<<<<< HEAD
 import { Logger } from '../lib/logger.js';
+import type { IntercomService } from '../intercom/IntercomService.js';
 
 const logger = new Logger('Orchestrator');
-=======
-import type { IntercomService } from '../intercom/IntercomService.js';
->>>>>>> main
 
 export class Orchestrator {
   private agents: Map<string, BaseAgent> = new Map();

@@ -10,6 +10,7 @@ export class WorkerAgent extends BaseAgent {
 
   async process(input: string, history: ChatMessage[] = []): Promise<AgentResponse> {
     await this.observe(input);
+    await this.plan(input);
 
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
@@ -23,14 +24,18 @@ export class WorkerAgent extends BaseAgent {
     try {
       const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+        const parsed = JSON.parse(jsonMatch[0]);
+        await this.reflect({ thought: parsed.thought, finalAnswer: parsed.finalAnswer });
+        return parsed;
       }
-      return {
+      const result: AgentResponse = {
         thought: `Completed task: ${input}`,
-        finalAnswer: response.content
+        finalAnswer: response.content,
       };
+      await this.reflect(result);
+      return result;
     } catch (error) {
-      console.error('Failed to parse worker response:', error);
+      this.logger.error('Failed to parse worker response:', error);
       return {
         thought: 'Error parsing response.',
         finalAnswer: response.content

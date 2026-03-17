@@ -6,6 +6,9 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('PartyMode');
 import type { BaseAgent } from '../agents/BaseAgent.js';
 import type { CircleManifest, SelectionStrategy } from './types.js';
 
@@ -153,7 +156,7 @@ export class PartySession {
         this.messages.push(msg);
         priorResponses += `${agent.name}: ${content}\n\n`;
       } catch (err) {
-        console.error(`[PartyMode] Agent "${agent.role}" failed:`, err);
+        logger.error(`Agent "${agent.role}" failed:`, err);
       }
     }
 
@@ -314,8 +317,8 @@ export class PartySessionManager {
     const session = new PartySession(circle.metadata.name, circleAgents, sessionConfig);
 
     this.sessions.set(session.sessionId, session);
-    console.log(
-      `[PartyMode] Created session ${session.sessionId} for circle "${circle.metadata.name}" ` +
+    logger.info(
+      `Created session ${session.sessionId} for circle "${circle.metadata.name}" ` +
       `with ${circleAgents.size} agents (strategy: ${circle.partyMode.selectionStrategy ?? 'all'})`,
     );
 

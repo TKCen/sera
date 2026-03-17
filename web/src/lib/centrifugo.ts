@@ -12,11 +12,15 @@ import { Centrifuge, type Subscription, type PublicationContext } from 'centrifu
 let client: Centrifuge | null = null;
 
 function getCentrifugoUrl(): string {
-  // Use the env var configured in docker-compose / next.config
-  return (
-    process.env['NEXT_PUBLIC_CENTRIFUGO_URL'] ||
-    'ws://localhost:10001/connection/websocket'
-  );
+  if (typeof window === 'undefined') {
+    // Server-side rendering — won't actually connect
+    return 'ws://localhost:10001/connection/websocket';
+  }
+  // Use env var if set, otherwise construct from current host
+  const envUrl = process.env['NEXT_PUBLIC_CENTRIFUGO_URL'];
+  if (envUrl) return envUrl;
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${window.location.hostname}:10001/connection/websocket`;
 }
 
 export function getClient(): Centrifuge {

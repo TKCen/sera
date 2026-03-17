@@ -1,4 +1,7 @@
 import pg from 'pg';
+import { Logger } from './logger.js';
+
+const logger = new Logger('Database');
 
 const { Pool } = pg;
 
@@ -30,9 +33,9 @@ export const initDb = async () => {
       USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
     `);
 
-    console.log('✅ Database initialized with pgvector');
+    logger.info('Database initialized with pgvector');
   } catch (err) {
-    console.error('❌ Database initialization failed:', err);
+    logger.error('Database initialization failed:', err);
     throw err;
   }
 };

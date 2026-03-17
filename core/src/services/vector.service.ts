@@ -1,4 +1,7 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('VectorService');
 
 export interface VectorPoint {
   id: string | number;
@@ -28,7 +31,7 @@ export class VectorService {
           distance: 'Cosine',
         },
       });
-      console.log(`Collection ${this.collectionName} created.`);
+      logger.info(`Collection ${this.collectionName} created.`);
     }
   }
 

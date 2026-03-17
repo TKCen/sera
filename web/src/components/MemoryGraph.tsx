@@ -69,11 +69,7 @@ export default function MemoryGraph({
     return () => window.removeEventListener("resize", updateDimensions);
   }, []);
 
-  const handleNodeClick = useCallback((node: any) => {
-    if (onNodeClick) {
-      onNodeClick(node as GraphNode);
-    }
-  }, [onNodeClick]);
+  const lastClickRef = useRef<{ id: string; time: number } | null>(null);
 
   const handleNodeDoubleClick = useCallback((node: any) => {
     if (onNodeDoubleClick) {
@@ -82,6 +78,21 @@ export default function MemoryGraph({
       router.push(`/memory/${node.id}`);
     }
   }, [onNodeDoubleClick, router]);
+
+  const handleNodeClick = useCallback((node: any) => {
+    const now = Date.now();
+    if (lastClickRef.current && lastClickRef.current.id === node.id && now - lastClickRef.current.time < 300) {
+      // Double click
+      handleNodeDoubleClick(node);
+      lastClickRef.current = null;
+    } else {
+      // Single click
+      lastClickRef.current = { id: node.id, time: now };
+      if (onNodeClick) {
+        onNodeClick(node as GraphNode);
+      }
+    }
+  }, [onNodeClick, handleNodeDoubleClick]);
 
   // Transform data to fit react-force-graph
   const graphData = useMemo(() => {
@@ -155,7 +166,6 @@ export default function MemoryGraph({
         linkWidth={(link: any) => link.kind === "wikilink" ? 1 : 1.5}
         linkLineDash={(link: any) => link.kind === "wikilink" ? [2, 2] : null}
         onNodeClick={handleNodeClick}
-        onNodeDoubleClick={handleNodeDoubleClick}
         d3AlphaDecay={0.02}
         d3VelocityDecay={0.3}
       />

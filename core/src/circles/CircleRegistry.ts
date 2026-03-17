@@ -125,6 +125,13 @@ export class CircleRegistry {
       );
     }
 
+    // ── projectContext (optional) ──────────────────────────────────────────
+    if (obj['projectContext'] !== undefined) {
+      CircleRegistry.requireObject(obj, 'projectContext', ctx);
+      const pc = obj['projectContext'] as Record<string, unknown>;
+      CircleRegistry.requireString(pc, 'path', `${ctx} projectContext`);
+    }
+
     return obj as unknown as CircleManifest;
   }
 
@@ -229,7 +236,7 @@ export class CircleRegistry {
         name: c.metadata.name,
         displayName: c.metadata.displayName,
         agents: c.agents,
-        hasProjectContext: this.projectContexts.has(c.metadata.name),
+        hasProjectContext: !!c.projectContext || this.projectContexts.has(c.metadata.name),
         channelCount: c.channels?.length ?? 0,
       };
       if (c.metadata.description !== undefined) {

@@ -20,6 +20,9 @@ import type {
 import { TierPolicy, PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('SandboxManager');
 
 // ── SandboxManager ──────────────────────────────────────────────────────────────
 
@@ -262,8 +265,8 @@ export class SandboxManager {
    * Audit trail logging.
    */
   private audit(operation: string, agentName: string, details: Record<string, unknown>): void {
-    console.log(
-      `[SandboxManager] ${operation.toUpperCase()} | agent=${agentName} | ${JSON.stringify(details)}`,
+    logger.info(
+      `${operation.toUpperCase()} | agent=${agentName} | ${JSON.stringify(details)}`,
     );
   }
 }

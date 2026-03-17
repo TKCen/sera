@@ -2,6 +2,9 @@ import OpenAI from 'openai';
 import type { LLMProvider, LLMResponse } from './types.js';
 import type { ChatMessage } from '../../agents/types.js';
 import { config } from '../config.js';
+import { Logger } from '../logger.js';
+
+const logger = new Logger('OpenAIProvider');
 
 interface OpenAIProviderConfig {
   baseUrl: string;
@@ -43,7 +46,7 @@ export class OpenAIProvider implements LLMProvider {
         },
       };
     } catch (error: any) {
-      console.error('LLM Chat Error:', error);
+      logger.error('LLM Chat Error:', error);
       throw new Error(`LLM provider failed: ${error.message}`);
     }
   }

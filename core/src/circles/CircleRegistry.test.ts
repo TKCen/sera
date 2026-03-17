@@ -279,7 +279,7 @@ describe('CircleRegistry', () => {
       expect(devSummary).toBeDefined();
       expect(devSummary!.hasProjectContext).toBe(true);
       expect(devSummary!.agents).toContain('architect-prime');
-      expect(devSummary!.channelCount).toBe(0); // Assuming no channels in development circle
+      expect(devSummary!.channelCount).toBe(3); // Updated to match development.circle.yaml
     });
   });
 });

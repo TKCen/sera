@@ -8,6 +8,7 @@
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
+import { Logger } from '../lib/logger.js';
 import { ChannelNamespace } from './ChannelNamespace.js';
 import type {
   IntercomMessage,
@@ -24,6 +25,8 @@ const CENTRIFUGO_API_URL = process.env['CENTRIFUGO_API_URL'] || 'http://centrifu
 const CENTRIFUGO_API_KEY = process.env['CENTRIFUGO_API_KEY'] || 'sera-api-key';
 
 // ── Service ─────────────────────────────────────────────────────────────────────
+
+const logger = new Logger('Intercom');
 
 export class IntercomService {
   private readonly http: AxiosInstance;
@@ -52,7 +55,7 @@ export class IntercomService {
       });
     } catch (err) {
       const message = err instanceof AxiosError ? err.message : String(err);
-      console.error(`[Intercom] Failed to publish to ${channel}: ${message}`);
+      logger.error(`Failed to publish to ${channel}: ${message}`);
       throw new IntercomError(`Publish failed: ${message}`, channel);
     }
   }
@@ -69,7 +72,7 @@ export class IntercomService {
       return res.data?.result?.presence || {};
     } catch (err) {
       const message = err instanceof AxiosError ? err.message : String(err);
-      console.error(`[Intercom] Failed to get presence for ${channel}: ${message}`);
+      logger.error(`Failed to get presence for ${channel}: ${message}`);
       return {};
     }
   }
@@ -87,7 +90,7 @@ export class IntercomService {
       return Array.isArray(publications) ? publications.map((p: any) => p.data) : [];
     } catch (err) {
       const message = err instanceof AxiosError ? err.message : String(err);
-      console.error(`[Intercom] Failed to get history for ${channel}: ${message}`);
+      logger.error(`Failed to get history for ${channel}: ${message}`);
       return [];
     }
   }

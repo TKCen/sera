@@ -137,7 +137,7 @@ export default function ChatPage() {
       setIsLoading(false);
       inputRef.current?.focus();
     }
-  }, [input, isLoading, conversationId]);
+  }, [input, isLoading, conversationId, selectedAgentName]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -265,7 +265,7 @@ export default function ChatPage() {
         </div>
 
         {/* Thought Stream Panel */}
-        {showThoughts && thoughts.length > 0 && (
+        {showThoughts && (thoughts.length > 0 || isLoading) && (
           <div className="w-80 border-l border-sera-border bg-sera-surface/50 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-sera-border">
               <div className="flex items-center gap-2">
@@ -280,6 +280,12 @@ export default function ChatPage() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {thoughts.length === 0 && isLoading && (
+                <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                  <Brain size={20} className="text-sera-accent/30 mb-2" />
+                  <p className="text-[11px] text-sera-text-dim">Waiting for agent thoughts…</p>
+                </div>
+              )}
               {thoughts.map((thought, i) => (
                 <div
                   key={`${thought.timestamp}-${i}`}
@@ -309,7 +315,7 @@ export default function ChatPage() {
       <div className="border-t border-sera-border p-4">
         <div className="max-w-3xl mx-auto">
           {/* Toggle thoughts button (when panel is hidden) */}
-          {!showThoughts && thoughts.length > 0 && (
+          {!showThoughts && (thoughts.length > 0 || isLoading) && (
             <button
               onClick={() => setShowThoughts(true)}
               className="flex items-center gap-1.5 text-[11px] text-sera-text-dim hover:text-sera-accent transition-colors mb-2"

@@ -1,5 +1,8 @@
 import path from 'path';
 import { MemoryBlockStore } from './blocks/MemoryBlockStore.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('MemoryManager');
 import type {
   MemoryBlockType,
   MemoryEntry,
@@ -59,7 +62,7 @@ export class MemoryManager {
     MemoryManager.writeTimestamps.set(key, recent);
 
     if (recent.length > 10) {
-      console.warn(`[MemoryManager] Rate limit warning: More than 10 memory entries written in the last minute by ${key}.`);
+      logger.warn(`Rate limit: More than 10 memory entries written in the last minute by ${key}.`);
     }
   }
 

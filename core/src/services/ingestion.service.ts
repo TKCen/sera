@@ -3,6 +3,9 @@ import path from 'path';
 import { EmbeddingService } from './embedding.service.js';
 import { VectorService } from './vector.service.js';
 import { v4 as uuidv4 } from 'uuid';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('Ingestion');
 
 export class IngestionService {
   private workspaceRoot = '/app/workspace';
@@ -12,7 +15,7 @@ export class IngestionService {
   constructor() {}
 
   public async ingestCodebase() {
-    console.log('Starting codebase ingestion...');
+    logger.info('Starting codebase ingestion...');
     const files = await this.recursiveReadDir(this.workspaceRoot);
 
     // Ensure collection exists (MiniLM-L6-v2 produces 384 dimensional vectors)
@@ -25,7 +28,7 @@ export class IngestionService {
         const content = await fs.readFile(file, 'utf-8');
         const chunks = this.chunkText(content);
 
-        console.log(`Processing ${file} (${chunks.length} chunks)`);
+        logger.info(`Processing ${file} (${chunks.length} chunks)`);
 
         const points = [];
         for (let i = 0; i < chunks.length; i++) {
@@ -48,10 +51,10 @@ export class IngestionService {
           await this.vectorService.upsertPoints(points);
         }
       } catch (error) {
-        console.error(`Error processing file ${file}:`, error);
+        logger.error(`Error processing file ${file}:`, error);
       }
     }
-    console.log('Codebase ingestion complete.');
+    logger.info('Codebase ingestion complete.');
   }
 
   private async recursiveReadDir(dir: string): Promise<string[]> {

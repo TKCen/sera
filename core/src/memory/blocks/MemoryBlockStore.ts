@@ -2,6 +2,9 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
+import { Logger } from '../../lib/logger.js';
+
+const logger = new Logger('MemoryBlockStore');
 import { v4 as uuidv4 } from 'uuid';
 import type {
   MemoryBlockType,
@@ -154,8 +157,18 @@ export class MemoryBlockStore {
 
     for (const file of files) {
       if (!file.endsWith('.md')) continue;
-      const raw = await fs.readFile(path.join(dir, file), 'utf8');
-      entries.push(this.parse(raw));
+      try {
+        const raw = await fs.readFile(path.join(dir, file), 'utf8');
+        const entry = this.parse(raw);
+        if (entry.id) {
+          entries.push(entry);
+        } else {
+          logger.warn(`Skipping entry with missing ID in ${file}`);
+        }
+      } catch (err) {
+        logger.error(`Failed to parse ${file}:`, err);
+        // Skip malformed entries
+      }
     }
 
     // Sort by creation date (oldest first)

@@ -102,7 +102,6 @@ export abstract class BaseAgent {
   // ── Reasoning Steps (with thought streaming) ───────────────────────────────
 
   protected async observe(context: string): Promise<void> {
-<<<<<<< HEAD
     this.logger.debug(`Observing: ${context.substring(0, 50)}...`);
     await this.publishThought('observe', context);
   }
@@ -110,36 +109,17 @@ export abstract class BaseAgent {
   protected async plan(goal: string): Promise<string> {
     this.logger.debug(`Planning for goal: ${goal}`);
     await this.publishThought('plan', `Planning for: ${goal}`);
-=======
-    console.log(`[${this.name}] Observing: ${context.substring(0, 50)}...`);
-    this.publishThought('observe', context).catch(err => console.error(err));
-  }
-
-  protected async plan(goal: string): Promise<string> {
-    console.log(`[${this.name}] Planning for goal: ${goal}`);
-    this.publishThought('plan', `Planning for: ${goal}`).catch(err => console.error(err));
->>>>>>> main
     return `Plan for ${goal}`;
   }
 
   protected async act(action: any): Promise<any> {
-<<<<<<< HEAD
     this.logger.debug(`Acting: ${JSON.stringify(action)}`);
     await this.publishThought('act', `Executing: ${JSON.stringify(action)}`);
-=======
-    console.log(`[${this.name}] Acting: ${JSON.stringify(action)}`);
-    this.publishThought('act', `Executing: ${JSON.stringify(action)}`).catch(err => console.error(err));
->>>>>>> main
     return { status: 'success' };
   }
 
   protected async reflect(outcome: any): Promise<void> {
-<<<<<<< HEAD
     this.logger.debug(`Reflecting on outcome: ${JSON.stringify(outcome)}`);
     await this.publishThought('reflect', `Outcome: ${JSON.stringify(outcome)}`);
-=======
-    console.log(`[${this.name}] Reflecting on outcome: ${JSON.stringify(outcome)}`);
-    this.publishThought('reflect', `Outcome: ${JSON.stringify(outcome)}`).catch(err => console.error(err));
->>>>>>> main
   }
 }

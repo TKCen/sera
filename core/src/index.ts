@@ -18,6 +18,9 @@ import { CircleRegistry } from './circles/CircleRegistry.js';
 import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SandboxManager } from './sandbox/SandboxManager.js';
+import { Logger } from './lib/logger.js';
+
+const logger = new Logger('Server');
 import { createSandboxRouter } from './routes/sandbox.js';
 import { IntercomService } from './intercom/IntercomService.js';
 import { createIntercomRouter } from './routes/intercom.js';
@@ -27,8 +30,6 @@ import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
-import { Logger } from './lib/logger.js';
-
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -420,7 +421,7 @@ app.post('/api/ingest', async (req, res) => {
   try {
     const ingestionService = new IngestionService();
     // Non-blocking ingestion
-    ingestionService.ingestCodebase().catch(err => console.error('Ingestion error:', err));
+    ingestionService.ingestCodebase().catch(err => logger.error('Ingestion error:', err));
     res.json({ message: 'Ingestion started' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -520,14 +521,14 @@ app.post('/api/chat', async (req, res) => {
         thought: response.thought,
       });
     } catch (agentError: any) {
-      console.error(`[${agent.name}] Error during processing:`, agentError);
+      logger.error(`[${agent.name}] Error during processing:`, agentError);
       if (agentError.name === 'AbortError' || agentError.message.includes('timeout')) {
          return res.status(504).json({ error: `Agent "${agent.name}" timed out while processing.` });
       }
       return res.status(500).json({ error: `LLM error from "${agent.name}": ${agentError.message}` });
     }
   } catch (error: any) {
-    console.error('Chat API error:', error);
+    logger.error('Chat API error:', error);
     res.status(500).json({ error: error.message });
   }
 });

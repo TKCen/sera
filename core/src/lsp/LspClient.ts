@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from 'child_process';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('LspClient');
 import * as rpc from 'vscode-jsonrpc/node.js';
 import {
   InitializeRequest,
@@ -57,7 +60,7 @@ export class LspClient {
       await this.connection.sendRequest(InitializeRequest.method, initializeParams);
       await this.connection.sendNotification(InitializedNotification.method, {});
     } catch (error) {
-      console.error('Failed to initialize LSP server:', error);
+      logger.error('Failed to initialize LSP server:', error);
       throw error;
     }
   }

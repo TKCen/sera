@@ -1,5 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('MCPClient');
 
 export class MCPClient {
   private client: Client;
@@ -24,7 +27,7 @@ export class MCPClient {
 
   async connect() {
     await this.client.connect(this.transport);
-    console.log("Connected to MCP server");
+    logger.info('Connected to MCP server');
   }
 
   async listTools() {

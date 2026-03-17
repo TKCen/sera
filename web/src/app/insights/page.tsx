@@ -36,7 +36,7 @@ export default function InsightsPage() {
     async function fetchGraph() {
       try {
         setLoading(true);
-        const res = await fetch('/api/memory/graph');
+        const res = await fetch('/api/core/memory/graph');
         if (!res.ok) {
           throw new Error('Failed to load memory graph');
         }
@@ -59,7 +59,7 @@ export default function InsightsPage() {
       }
       try {
         setEntryLoading(true);
-        const res = await fetch(`/api/memory/entries/${selectedNode.id}`);
+        const res = await fetch(`/api/core/memory/entries/${selectedNode.id}`);
         if (!res.ok) {
           throw new Error('Failed to load entry');
         }

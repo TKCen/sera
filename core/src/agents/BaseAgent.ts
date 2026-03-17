@@ -29,12 +29,9 @@ export abstract class BaseAgent {
   protected manifest: AgentManifest;
   protected intercom: IntercomService | undefined;
   protected toolExecutor: ToolExecutor | undefined;
-<<<<<<< HEAD
   protected meteringEngine: MeteringEngine | undefined;
   protected agentScheduler: AgentScheduler | undefined;
-=======
   protected memoryManager: MemoryManager | undefined;
->>>>>>> main
   protected logger: Logger;
   protected loopGuard: LoopGuard;
 
@@ -82,16 +79,15 @@ export abstract class BaseAgent {
     this.toolExecutor = toolExecutor;
   }
 
-<<<<<<< HEAD
   /** Attach metering components after construction. */
   public setMetering(engine: MeteringEngine, scheduler: AgentScheduler): void {
     this.meteringEngine = engine;
     this.agentScheduler = scheduler;
-=======
+  }
+
   /** Attach a MemoryManager after construction. */
   public setMemoryManager(memoryManager: MemoryManager): void {
     this.memoryManager = memoryManager;
->>>>>>> main
   }
 
   abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;

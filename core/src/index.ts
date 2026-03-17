@@ -65,10 +65,18 @@ const startServer = async () => {
   orchestrator.setSandboxManager(sandboxManager);
 
   registerBuiltinSkills(skillRegistry, memoryManager);
-  mcpRegistry.getAllTools().then(async () => {
-    const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
-    if (count > 0) logger.info(`Bridged ${count} MCP tool(s) as skills`);
-  }).catch(() => {});
+
+  // Register the native Symbol MCP server
+  const isTs = import.meta.url.endsWith('.ts');
+  const symbolServerPath = path.join(import.meta.dirname, 'mcp', 'server', isTs ? 'symbol-server.ts' : 'symbol-server.js');
+  const nodeArgs = isTs ? ['--no-warnings', '--loader', 'ts-node/esm', symbolServerPath] : [symbolServerPath];
+
+  mcpRegistry.registerClient('symbol-server', 'node', nodeArgs)
+    .then(async () => {
+      const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
+      if (count > 0) logger.info(`Bridged ${count} MCP tool(s) as skills`);
+    })
+    .catch(err => logger.error('Failed to register Symbol MCP server:', err));
 
   const manifests = orchestrator.getAllManifests();
   for (const manifest of manifests) {

@@ -20,6 +20,13 @@ export interface SymbolInformation {
   containerName?: string;
 }
 
+export interface WorkspaceSymbol {
+  name: string;
+  kind: number;
+  location: Location | { uri: string };
+  containerName?: string;
+}
+
 export interface LspClientOptions {
   rootUri: string;
   serverCommand: string;

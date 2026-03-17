@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
+import path from 'path';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('LspClient');
@@ -13,9 +14,12 @@ import {
   type ReferenceParams,
   DocumentSymbolRequest,
   type DocumentSymbolParams,
+  WorkspaceSymbolRequest,
+  type WorkspaceSymbolParams,
   type Location,
   type SymbolInformation,
   type DocumentSymbol,
+  type WorkspaceSymbol,
   DidOpenTextDocumentNotification,
   type DidOpenTextDocumentParams
 } from 'vscode-languageserver-protocol';
@@ -34,7 +38,14 @@ export class LspClient {
   }
 
   async start(): Promise<void> {
-    this.process = spawn(this.options.serverCommand, this.options.serverArgs);
+    const env = { ...process.env };
+    if (this.options.serverCommand === 'typescript-language-server') {
+      // Ensure local node_modules/.bin is in PATH for the LSP server
+      const localBin = path.resolve(process.cwd(), 'node_modules', '.bin');
+      env.PATH = `${localBin}${path.delimiter}${env.PATH}`;
+    }
+
+    this.process = spawn(this.options.serverCommand, this.options.serverArgs, { env });
 
     this.connection = rpc.createMessageConnection(
       new rpc.StreamMessageReader(this.process.stdout!),
@@ -46,6 +57,7 @@ export class LspClient {
     const initializeParams: InitializeParams = {
       processId: process.pid,
       rootUri: this.options.rootUri,
+      rootPath: URI.parse(this.options.rootUri).fsPath,
       capabilities: {
         textDocument: {
           definition: { dynamicRegistration: true },
@@ -116,6 +128,16 @@ export class LspClient {
     };
 
     return this.connection.sendRequest(DocumentSymbolRequest.method, params) as Promise<SymbolInformation[] | DocumentSymbol[] | null>;
+  }
+
+  async getWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[] | null> {
+    if (!this.connection) throw new Error('LSP connection not established');
+
+    const params: WorkspaceSymbolParams = {
+      query
+    };
+
+    return this.connection.sendRequest(WorkspaceSymbolRequest.method, params) as Promise<WorkspaceSymbol[] | null>;
   }
 
   async stop(): Promise<void> {

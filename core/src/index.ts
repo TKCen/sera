@@ -29,6 +29,7 @@ import { registerBuiltinSkills } from './skills/builtins/index.js';
 import { ToolExecutor } from './tools/ToolExecutor.js';
 import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
+import { createAgentTemplatesRouter } from './routes/agent-templates.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
 import { SessionStore } from './sessions/SessionStore.js';
@@ -112,6 +113,7 @@ const intercomRouter = createIntercomRouter(intercomService, (agentName: string)
 
 // ── Route Modules ────────────────────────────────────────────────────────────
 const agentRouter = createAgentRouter(orchestrator, agentsDir);
+const agentTemplatesRouter = createAgentTemplatesRouter(orchestrator, agentsDir);
 const circleRouter = createCircleRouter(
   circleRegistry,
   circlesDir,
@@ -144,6 +146,7 @@ app.use('/api/lsp', lspRouter);
 app.use('/api/sandbox', sandboxRouter);
 app.use('/api/intercom', intercomRouter);
 app.use('/api/agents', agentRouter);
+app.use('/api/agent-templates', agentTemplatesRouter);
 app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
 app.use('/api/sessions', sessionRouter);

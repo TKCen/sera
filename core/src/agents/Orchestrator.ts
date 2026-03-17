@@ -60,6 +60,11 @@ export class Orchestrator {
     this.identityService = identityService;
   }
 
+  /** Get the tool executor. */
+  public getToolExecutor(): ToolExecutor | undefined {
+    return this.toolExecutor;
+  }
+
   /**
    * Load agent templates from AGENT.yaml manifests in a directory.
    */

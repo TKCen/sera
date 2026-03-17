@@ -14,7 +14,7 @@ describe('AgentFactory', () => {
       expect(templates.size).toBe(5);
 
       const names = Array.from(templates.keys()).sort();
-      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer-prime']);
+      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer']);
     });
 
     it('should return empty map for a non-existent directory', () => {

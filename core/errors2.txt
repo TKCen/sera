@@ -1,0 +1,11 @@
+src/agents/BaseAgent.ts(221,25): error TS18048: 'tc' is possibly 'undefined'.
+src/agents/BaseAgent.ts(222,30): error TS18048: 'tc' is possibly 'undefined'.
+src/agents/BaseAgent.ts(223,27): error TS18048: 'tr' is possibly 'undefined'.
+src/agents/BaseAgent.ts(223,53): error TS18048: 'tr' is possibly 'undefined'.
+src/agents/BaseAgent.ts(223,92): error TS18048: 'tr' is possibly 'undefined'.
+src/audit/AuditService.ts(112,15): error TS7022: 'dataToHash' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+src/audit/AuditService.ts(113,15): error TS7022: 'computedHash' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+src/routes/openai-compat.ts(1,18): error TS1484: 'Request' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+src/routes/openai-compat.ts(1,27): error TS1484: 'Response' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+src/routes/openai-compat.ts(6,10): error TS1484: 'ChatMessage' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+src/routes/openai-compat.ts(91,19): error TS18048: 'lastMsg' is possibly 'undefined'.

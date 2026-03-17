@@ -211,21 +211,33 @@ export function createAgentRouter(
 
 /**
  * Find the YAML manifest file for a given agent name.
- * Searches for `<name>.agent.yaml` in the agents directory.
+ * Searches for `<name>.agent.yaml` in the agents directory and AGENT.yaml in subdirectories.
  */
 function findManifestFile(agentsDir: string, agentName: string): string | undefined {
   if (!fs.existsSync(agentsDir)) return undefined;
 
-  const files = fs.readdirSync(agentsDir).filter(f => f.endsWith('.agent.yaml'));
-  for (const file of files) {
-    try {
-      const filePath = path.join(agentsDir, file);
-      const manifest = AgentManifestLoader.loadManifest(filePath);
-      if (manifest.metadata.name === agentName) {
-        return filePath;
+  const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    let filePath: string | undefined;
+
+    if (entry.isFile() && entry.name.endsWith('.agent.yaml')) {
+      filePath = path.join(agentsDir, entry.name);
+    } else if (entry.isDirectory()) {
+      const subDirAgentFile = path.join(agentsDir, entry.name, 'AGENT.yaml');
+      if (fs.existsSync(subDirAgentFile)) {
+        filePath = subDirAgentFile;
       }
-    } catch {
-      // Skip invalid manifests
+    }
+
+    if (filePath) {
+      try {
+        const manifest = AgentManifestLoader.loadManifest(filePath);
+        if (manifest.metadata.name === agentName) {
+          return filePath;
+        }
+      } catch {
+        // Skip invalid manifests
+      }
     }
   }
 

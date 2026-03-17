@@ -29,6 +29,7 @@ import { registerBuiltinSkills } from './skills/builtins/index.js';
 import { ToolExecutor } from './tools/ToolExecutor.js';
 import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
+import { createAgentTemplatesRouter } from './routes/agent-templates.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
 import { createChatRouter } from './routes/chat.js';
@@ -41,6 +42,11 @@ import { AgentScheduler } from './metering/AgentScheduler.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { TelegramAdapter } from './channels/adapters/TelegramAdapter.js';
+import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
+import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
+import { createAuditRouter } from './routes/audit.js';
+import { createOpenAICompatRouter } from './routes/openai-compat.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -49,31 +55,11 @@ const app = express();
 const workspaceRoot = process.env.WORKSPACE_DIR
   ?? path.resolve(import.meta.dirname, '..', '..');
 
-// ── Agent System ──────────────────────────────────────────────────────────────
-const orchestrator = new Orchestrator();
-const agentsDir = path.join(workspaceRoot, 'agents');
-orchestrator.loadTemplates(agentsDir);
-
-// ── Circle System ─────────────────────────────────────────────────────────────
-const circleRegistry = new CircleRegistry();
-const circlesDir = path.join(workspaceRoot, 'circles');
-const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
-await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+// ── Intercom Service ─────────────────────────────────────────────────────────
+const intercomService = new IntercomService();
 
 // ── Sandbox Manager ──────────────────────────────────────────────────────────
 const sandboxManager = new SandboxManager();
-orchestrator.setSandboxManager(sandboxManager);
-const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
-  return agentManifests.find(m => m.metadata.name === agentName);
-});
-
-// ── Intercom Service ─────────────────────────────────────────────────────────
-const intercomService = new IntercomService();
-const intercomRouter = createIntercomRouter(intercomService, (agentName: string) => {
-  return agentManifests.find(m => m.metadata.name === agentName);
-});
-
-orchestrator.setIntercom(intercomService);
 
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
@@ -92,10 +78,45 @@ mcpRegistry.getAllTools().then(async () => {
 
 // ── Tool Executor ────────────────────────────────────────────────────────────
 const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
+
+// ── Agent System ──────────────────────────────────────────────────────────────
+const orchestrator = new Orchestrator();
+const agentsDir = path.join(workspaceRoot, 'agents');
+orchestrator.loadTemplates(agentsDir);
+
+orchestrator.setIntercom(intercomService);
 orchestrator.setToolExecutor(toolExecutor);
+orchestrator.setSandboxManager(sandboxManager);
+
+// Re-register agents from templates into orchestrator instance map for backward-compatible /api/chat
+const registerAgents = async () => {
+  const manifests = orchestrator.getAllManifests();
+  for (const manifest of manifests) {
+    const agent = (await import('./agents/AgentFactory.js')).AgentFactory.createAgent(manifest, undefined, intercomService);
+    agent.setIntercom(intercomService);
+    agent.setToolExecutor(toolExecutor);
+    orchestrator.registerAgent(agent);
+  }
+};
+await registerAgents();
+
+// ── Circle System ─────────────────────────────────────────────────────────────
+const circleRegistry = new CircleRegistry();
+const circlesDir = path.join(workspaceRoot, 'circles');
+const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
+await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+
+const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
+
+const intercomRouter = createIntercomRouter(intercomService, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
 
 // ── Route Modules ────────────────────────────────────────────────────────────
 const agentRouter = createAgentRouter(orchestrator, agentsDir);
+const agentTemplatesRouter = createAgentTemplatesRouter(orchestrator, agentsDir);
 const circleRouter = createCircleRouter(
   circleRegistry,
   circlesDir,
@@ -134,6 +155,7 @@ app.use('/api/lsp', lspRouter);
 app.use('/api/sandbox', sandboxRouter);
 app.use('/api/intercom', intercomRouter);
 app.use('/api/agents', agentRouter);
+app.use('/api/agent-templates', agentTemplatesRouter);
 app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
 app.use('/api/sessions', sessionRouter);
@@ -144,6 +166,49 @@ app.use('/api/agents', heartbeatRouter);
 
 const budgetRouter = createBudgetRouter();
 app.use('/api/budget', budgetRouter);
+
+// ── External Channels ────────────────────────────────────────────────────────
+const channelOptions = {
+  rateLimitWindow: config.channels.rateLimit.windowMs,
+  maxMessagesPerWindow: config.channels.rateLimit.maxMessages,
+};
+
+if (config.channels.telegram.token) {
+  const telegramAdapter = new TelegramAdapter(
+    config.channels.telegram.token,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  telegramAdapter.start().catch(err => logger.error('Failed to start Telegram adapter:', err));
+}
+
+if (config.channels.discord.token) {
+  const discordAdapter = new DiscordAdapter(
+    config.channels.discord.token,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  discordAdapter.start().catch(err => logger.error('Failed to start Discord adapter:', err));
+}
+
+if (config.channels.whatsapp.token && config.channels.whatsapp.phoneNumberId) {
+  const whatsappAdapter = new WhatsAppAdapter(
+    config.channels.whatsapp.token,
+    config.channels.whatsapp.phoneNumberId,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  whatsappAdapter.start().catch(err => logger.error('Failed to start WhatsApp adapter:', err));
+}
+
+const auditRouter = createAuditRouter();
+app.use('/api/audit', auditRouter);
+
+const openAICompatRouter = createOpenAICompatRouter(orchestrator);
+app.use('/v1', openAICompatRouter);
 
 /**
  * Health check endpoint.

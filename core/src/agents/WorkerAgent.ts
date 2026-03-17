@@ -17,12 +17,34 @@ export class WorkerAgent extends BaseAgent {
     await this.observe(input);
     await this.plan(input);
 
+    // ── Quota Check ───────────────────────────────────────────────────
+    if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
+      const allowed = await this.agentScheduler.isWithinQuota(
+        this.agentInstanceId || this.role,
+        this.manifest.resources.maxLlmTokensPerHour,
+      );
+      if (!allowed) {
+        const errorMsg = '⚠️ Hourly token quota exceeded. Request denied.';
+        await this.publishThought('reflect', errorMsg);
+        return { thought: 'Quota exceeded', finalAnswer: errorMsg };
+      }
+    }
+
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
     const response = await this.llmProvider.chat([
       { role: 'system', content: this.systemPrompt },
       ...fullHistory
     ]);
+
+    // Record usage
+    if (response.usage && this.meteringEngine) {
+      await this.meteringEngine.record({
+        agentId: this.agentInstanceId || this.role,
+        model: this.manifest.model.name,
+        ...response.usage,
+      });
+    }
 
     this.history = [...fullHistory, { role: 'assistant', content: response.content } as ChatMessage];
 

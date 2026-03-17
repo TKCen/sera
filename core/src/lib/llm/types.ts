@@ -43,6 +43,7 @@ export interface LLMResponse {
 export interface LLMStreamChunk {
   token: string;
   done: boolean;
+  usage?: LLMUsage;
 }
 
 // ── LLM Provider ────────────────────────────────────────────────────────────────

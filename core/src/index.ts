@@ -36,6 +36,8 @@ import { SessionStore } from './sessions/SessionStore.js';
 import { createSessionRouter } from './routes/sessions.js';
 import { IdentityService } from './auth/IdentityService.js';
 import { MeteringService } from './metering/MeteringService.js';
+import { MeteringEngine } from './metering/MeteringEngine.js';
+import { AgentScheduler } from './metering/AgentScheduler.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
@@ -115,9 +117,12 @@ const sessionRouter = createSessionRouter(sessionStore);
 // ── Security Gateway (v2) ────────────────────────────────────────────────────
 const identityService = new IdentityService();
 const meteringService = new MeteringService();
+const meteringEngine = new MeteringEngine();
+const agentScheduler = new AgentScheduler();
 const llmProxyRouter = createLlmProxyRouter(identityService, meteringService);
 
 // Wire identity into orchestrator for JWT issuance on container spawn
+orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
 
 // ── Agent File Watcher ───────────────────────────────────────────────────────

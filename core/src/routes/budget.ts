@@ -18,7 +18,11 @@ export function createBudgetRouter(): Router {
         `SELECT
            DATE_TRUNC('day', created_at) AS date,
            SUM(total_tokens) AS total_tokens
-         FROM token_usage
+         FROM (
+           SELECT total_tokens, created_at FROM token_usage
+           UNION ALL
+           SELECT total_tokens, created_at FROM usage_events
+         ) combined_usage
          WHERE created_at >= NOW() - INTERVAL '7 days'
          GROUP BY DATE_TRUNC('day', created_at)
          ORDER BY date ASC`
@@ -46,7 +50,11 @@ export function createBudgetRouter(): Router {
         `SELECT
            agent_id,
            SUM(total_tokens) AS total_tokens
-         FROM token_usage
+         FROM (
+           SELECT agent_id, total_tokens FROM token_usage
+           UNION ALL
+           SELECT agent_id, total_tokens FROM usage_events
+         ) combined_usage
          GROUP BY agent_id
          ORDER BY total_tokens DESC`
       );
@@ -74,7 +82,11 @@ export function createBudgetRouter(): Router {
         `SELECT
            DATE_TRUNC('day', created_at) AS date,
            SUM(total_tokens) AS total_tokens
-         FROM token_usage
+         FROM (
+           SELECT agent_id, total_tokens, created_at FROM token_usage
+           UNION ALL
+           SELECT agent_id, total_tokens, created_at FROM usage_events
+         ) combined_usage
          WHERE agent_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
          GROUP BY DATE_TRUNC('day', created_at)
          ORDER BY date ASC`,

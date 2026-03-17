@@ -1,6 +1,7 @@
 import path from 'path';
 import { MemoryBlockStore } from './blocks/MemoryBlockStore.js';
 import { Logger } from '../lib/logger.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('MemoryManager');
 import type {
@@ -75,7 +76,24 @@ export class MemoryManager {
     if (typeof opts.content !== 'string') throw new Error('opts.content is required');
 
     this.checkRateLimit();
-    return this.store.addEntry(type, opts);
+    const entry = await this.store.addEntry(type, opts);
+
+    const auditId = this.agentId || this.circleId;
+    if (auditId) {
+      const auditService = AuditService.getInstance();
+      try {
+        await auditService.record(auditId, 'memory_add', {
+          type,
+          id: entry.id,
+          title: entry.title,
+          source: entry.source
+        });
+      } catch (auditErr) {
+        logger.error('Failed to record audit entry:', auditErr);
+      }
+    }
+
+    return entry;
   }
 
   async getEntry(id: string): Promise<MemoryEntry | null> {
@@ -88,12 +106,46 @@ export class MemoryManager {
     if (typeof content !== 'string') throw new Error('Invalid content parameter');
 
     this.checkRateLimit();
-    return this.store.updateEntry(id, content);
+    const entry = await this.store.updateEntry(id, content);
+
+    const auditId = this.agentId || this.circleId;
+    if (auditId && entry) {
+      const auditService = AuditService.getInstance();
+      try {
+        await auditService.record(auditId, 'memory_update', {
+          id: entry.id,
+          title: entry.title,
+          type: entry.type
+        });
+      } catch (auditErr) {
+        logger.error('Failed to record audit entry:', auditErr);
+      }
+    }
+
+    return entry;
   }
 
   async deleteEntry(id: string): Promise<boolean> {
     if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
-    return this.store.deleteEntry(id);
+
+    const entry = await this.getEntry(id);
+    const deleted = await this.store.deleteEntry(id);
+
+    const auditId = this.agentId || this.circleId;
+    if (auditId && deleted && entry) {
+      const auditService = AuditService.getInstance();
+      try {
+        await auditService.record(auditId, 'memory_delete', {
+          id: entry.id,
+          title: entry.title,
+          type: entry.type
+        });
+      } catch (auditErr) {
+        logger.error('Failed to record audit entry:', auditErr);
+      }
+    }
+
+    return deleted;
   }
 
   // ── Block Operations ────────────────────────────────────────────────────────

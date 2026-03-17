@@ -1,4 +1,5 @@
 import { BaseAgent } from './BaseAgent.js';
+import { AuditService } from '../audit/AuditService.js';
 import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
@@ -25,6 +26,24 @@ export class WorkerAgent extends BaseAgent {
     ]);
 
     this.history = [...fullHistory, { role: 'assistant', content: response.content } as ChatMessage];
+
+    if (response.toolCalls && response.toolCalls.length > 0 && this.toolExecutor) {
+      // ── Agentic Tool Loop ──────────────────────────────────────────────────
+      // Note: WorkerAgent.process currently doesn't implement the full tool loop
+      // like processStream does. This is a known limitation in the current core.
+      // However, if we ever add it, we should record audit entries.
+    }
+
+    const auditService = AuditService.getInstance();
+    const auditId = this.agentInstanceId || this.role;
+    try {
+      await auditService.record(auditId, 'chat', {
+        input,
+        response: response.content.length > 500 ? response.content.substring(0, 500) + '...' : response.content
+      });
+    } catch (auditErr) {
+      this.logger.error('Failed to record audit entry:', auditErr);
+    }
 
     try {
       const jsonMatch = response.content.match(/\{[\s\S]*\}/);

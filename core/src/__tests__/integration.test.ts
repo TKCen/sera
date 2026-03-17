@@ -38,9 +38,11 @@ vi.mock('../services/embedding.service.js', () => ({
 }));
 
 vi.mock('../services/vector.service.js', () => ({
-  VectorService: vi.fn().mockImplementation(() => ({
-    search: vi.fn().mockResolvedValue([]),
-  })),
+  VectorService: class {
+    async search() { return []; }
+    async upsertPoints() {}
+    async deletePoints() {}
+  }
 }));
 
 // Mock IntercomService to avoid HTTP calls to Centrifugo
@@ -126,13 +128,13 @@ describe('SERA Integration Tests', () => {
         .post('/api/chat')
         .send({ message: 'Hello, world!' });
 
+      if (res.status !== 200) {
+        console.error('500 ERROR CAUSE:', res.body);
+      }
+
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('reply');
-      // Our mock returns 'Mocked response' but PrimaryAgent wraps it depending on structure
-      // Wait, primary agent extracts finalAnswer or thought, so let's just check it's defined
       expect(typeof res.body.reply).toBe('string');
-      // Our mock response doesn't have `<final_answer>` block so PrimaryAgent might extract it differently,
-      // but it should not crash.
     });
   });
 

@@ -1,0 +1,809 @@
+
+> core@1.0.0 test
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90mD:/projects/homelab/sera/core[39m
+
+ [32mÔ£ô[39m src/skills/builtins/shell-exec.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32mÔ£ô[39m src/skills/SkillRegistry.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32mÔ£ô[39m agent-runtime/src/__tests__/manifest.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32mÔ£ô[39m dist/skills/builtins/shell-exec.test.js [2m([22m[2m4 tests[22m[2m)[22m[32m 102[2mms[22m[39m
+stderr | src/auth/IdentityService.test.ts > IdentityService > constructor fallback > should generate a random secret when no JWT_SECRET is set
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+[90mstdout[2m | src/circles/PartyMode.test.ts[2m > [22m[2mPartySessionManager[2m > [22m[2mshould create and retrieve sessions
+[22m[39m[PartyMode] Created session 4a9e234f-25d7-4ad8-8801-8da9b2a682e8 for circle "test-circle" with 2 agents (strategy: all)
+
+stderr | dist/tools/ToolExecutor.test.js > ToolExecutor > executeTool > should handle thrown exceptions in skill execution
+[ToolExecutor] Tool execution error for "test": Error: Unexpected crash
+    at D:/projects/homelab/sera/core/src/tools/ToolExecutor.test.ts:222:50
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:2309:64
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool()[2m > [22m[2mblocks path traversal (../../etc/passwd)
+[22m[39m[2026-03-17T20:49:53.768Z] [agent-runtime] [ERROR] Tool execution error for "file-read": Error: Path traversal blocked: "../../etc/passwd" resolves outside workspace
+    at RuntimeToolExecutor.resolveSafe (D:/projects/homelab/sera/core/agent-runtime/src/tools.ts:209:13)
+    at RuntimeToolExecutor.fileRead (D:/projects/homelab/sera/core/agent-runtime/src/tools.ts:165:27)
+    at RuntimeToolExecutor.executeTool (D:/projects/homelab/sera/core/agent-runtime/src/tools.ts:127:25)
+    at D:/projects/homelab/sera/core/agent-runtime/src/__tests__/tools.test.ts:68:31
+    at [90mfile:///D:/projects/homelab/sera/core/[39mnode_modules/[4m@vitest[24m/runner/dist/index.js:296:11
+    at [90mfile:///D:/projects/homelab/sera/core/[39mnode_modules/[4m@vitest[24m/runner/dist/index.js:1258:26
+    at [90mfile:///D:/projects/homelab/sera/core/[39mnode_modules/[4m@vitest[24m/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel [90m(file:///D:/projects/homelab/sera/core/[39mnode_modules/[4m@vitest[24m/runner/dist/index.js:1678:10[90m)[39m
+    at [90mfile:///D:/projects/homelab/sera/core/[39mnode_modules/[4m@vitest[24m/runner/dist/index.js:1660:20
+
+stderr | src/tools/ToolExecutor.test.ts > ToolExecutor > executeTool > should handle thrown exceptions in skill execution
+[ToolExecutor] Tool execution error for "test": Error: Unexpected crash
+    at D:/projects/homelab/sera/core/src/tools/ToolExecutor.test.ts:222:50
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/core/node_modules/@vitest/runner/dist/index.js:2309:64
+
+[90mstdout[2m | src/circles/PartyMode.test.ts[2m > [22m[2mPartySessionManager[2m > [22m[2mshould end and remove sessions
+[22m[39m[PartyMode] Created session ee3c9dfc-54e9-4e66-987b-9c155e68a809 for circle "test-circle" with 2 agents (strategy: all)
+
+[90mstdout[2m | src/circles/PartyMode.test.ts[2m > [22m[2mPartySessionManager[2m > [22m[2mshould list sessions filtered by circle
+[22m[39m[PartyMode] Created session feeb3c75-aeed-480e-b2c0-d87c20e3fc18 for circle "test-circle" with 2 agents (strategy: all)
+
+ [32mÔ£ô[39m src/auth/IdentityService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32mÔ£ô[39m dist/tools/ToolExecutor.test.js [2m([22m[2m10 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32mÔ£ô[39m src/tools/ToolExecutor.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32mÔ£ô[39m src/circles/PartyMode.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32mÔ£ô[39m agent-runtime/src/__tests__/tools.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32mÔ£ô[39m dist/skills/SkillRegistry.test.js [2m([22m[2m20 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+stderr | dist/auth/IdentityService.test.js > IdentityService > constructor fallback > should generate a random secret when no JWT_SECRET is set
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2mloadAllCircles[2m > [22m[2mshould load all example circles from the circles directory
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/agents/manifest/AgentManifestLoader.test.ts[2m > [22m[2mAgentManifestLoader[2m > [22m[2mloadAllManifests[2m > [22m[2mshould load all example manifests from the agents directory
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.943ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2mloadAllCircles[2m > [22m[2mshould load all example circles from the circles directory
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/agents/manifest/AgentManifestLoader.test.ts[2m > [22m[2mAgentManifestLoader[2m > [22m[2mloadAllManifests[2m > [22m[2mshould return empty array for non-existent directory
+[22m[39m[AgentManifestLoader] loadAllManifests: 0.264ms
+
+stderr | src/circles/CircleRegistry.test.ts > CircleRegistry > loadAllCircles > should return empty array for non-existent directory
+[CircleRegistry] Circles directory not found: /nonexistent/dir
+
+stderr | src/agents/manifest/AgentManifestLoader.test.ts > AgentManifestLoader > loadAllManifests > should return empty array for non-existent directory
+[AgentManifestLoader] Agents directory not found: /nonexistent/dir
+
+ [32mÔ£ô[39m dist/auth/IdentityService.test.js [2m([22m[2m7 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.292ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+ [32mÔ£ô[39m src/agents/manifest/AgentManifestLoader.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 3.979ms
+
+[90mstdout[2m | dist/circles/PartyMode.test.js[2m > [22m[2mPartySessionManager[2m > [22m[2mshould create and retrieve sessions
+[22m[39m[PartyMode] Created session 56b3099a-a826-4d7f-a97b-f6684ecdc777 for circle "test-circle" with 2 agents (strategy: all)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/circles/PartyMode.test.js[2m > [22m[2mPartySessionManager[2m > [22m[2mshould end and remove sessions
+[22m[39m[PartyMode] Created session cf17ca11-0cb3-4511-9fd3-2c9a661fbf3f for circle "test-circle" with 2 agents (strategy: all)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/circles/PartyMode.test.js[2m > [22m[2mPartySessionManager[2m > [22m[2mshould list sessions filtered by circle
+[22m[39m[PartyMode] Created session 2c8ee44a-5873-4e14-9c36-5f28b33ad9a9 for circle "test-circle" with 2 agents (strategy: all)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+ [32mÔ£ô[39m dist/circles/PartyMode.test.js [2m([22m[2m11 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 2.845ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 2.711ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+ [32mÔ£ô[39m src/circles/CircleRegistry.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2mloadAllCircles[2m > [22m[2mshould load all example circles from the circles directory
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/agents/manifest/AgentManifestLoader.test.js[2m > [22m[2mAgentManifestLoader[2m > [22m[2mloadAllManifests[2m > [22m[2mshould load all example manifests from the agents directory
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.993ms
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2mloadAllCircles[2m > [22m[2mshould load all example circles from the circles directory
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/agents/manifest/AgentManifestLoader.test.js[2m > [22m[2mAgentManifestLoader[2m > [22m[2mloadAllManifests[2m > [22m[2mshould return empty array for non-existent directory
+[22m[39m[AgentManifestLoader] loadAllManifests: 0.315ms
+
+stderr | dist/circles/CircleRegistry.test.js > CircleRegistry > loadAllCircles > should return empty array for non-existent directory
+[CircleRegistry] Circles directory not found: /nonexistent/dir
+
+stderr | dist/agents/manifest/AgentManifestLoader.test.js > AgentManifestLoader > loadAllManifests > should return empty array for non-existent directory
+[AgentManifestLoader] Agents directory not found: /nonexistent/dir
+
+ [32mÔ£ô[39m dist/agents/manifest/AgentManifestLoader.test.js [2m([22m[2m17 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 5.902ms
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 3.979ms
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 2.905ms
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 3.066ms
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | dist/circles/CircleRegistry.test.js[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+ [32mÔ£ô[39m dist/circles/CircleRegistry.test.js [2m([22m[2m24 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+[90mstdout[2m | dist/agents/process/ProcessManager.test.js[2m > [22m[2mProcessManager[2m > [22m[2msequential[2m > [22m[2mshould execute tasks in order with context chaining
+[22m[39m[ProcessManager] Running sequential process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | dist/agents/process/ProcessManager.test.js[2m > [22m[2mProcessManager[2m > [22m[2msequential[2m > [22m[2mshould handle agent failures gracefully
+[22m[39m[ProcessManager] Running sequential process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | dist/agents/process/ProcessManager.test.js[2m > [22m[2mProcessManager[2m > [22m[2mparallel[2m > [22m[2mshould execute all tasks concurrently
+[22m[39m[ProcessManager] Running parallel process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | dist/agents/process/ProcessManager.test.js[2m > [22m[2mProcessManager[2m > [22m[2mhierarchical[2m > [22m[2mshould have the manager review worker results
+[22m[39m[ProcessManager] Running hierarchical process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | dist/agents/process/ProcessManager.test.js[2m > [22m[2mProcessManager[2m > [22m[2mrunSingle[2m > [22m[2mshould run a single task with one agent
+[22m[39m[ProcessManager] Running sequential process with 1 task(s) and 1 agent(s)
+
+ [32mÔ£ô[39m dist/agents/process/ProcessManager.test.js [2m([22m[2m7 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+[90mstdout[2m | src/routes/llmProxy.test.ts[2m > [22m[2mLLM Proxy Router[2m > [22m[2mPOST /chat/completions[2m > [22m[2mshould proxy a chat request and return OpenAI-format response
+[22m[39m[LLMProxy] Proxy request | agent=test-agent model=test-model messages=1 tools=0
+
+[90mstdout[2m | src/routes/llmProxy.test.ts[2m > [22m[2mLLM Proxy Router[2m > [22m[2mPOST /chat/completions[2m > [22m[2mshould record metering after successful call
+[22m[39m[LLMProxy] Proxy request | agent=test-agent model=test-model messages=1 tools=0
+
+[90mstdout[2m | src/memory/Reflector.test.ts[2m > [22m[2mReflector[2m > [22m[2mshould compact oldest entries when over threshold
+[22m[39m[Reflector] Compacted 3 core entries into 1 archive summary (ID: d8fb4989-7144-4044-9b7f-eccf46a2615c). Title: "Summary ÔÇö Entry 0, Entry 1, Entry 2"
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should return 429 when budget is exceeded
+[LLMProxy] Budget exceeded | agent=test-agent hourly=50000/10000 daily=50000/100000
+
+[90mstdout[2m | dist/routes/llmProxy.test.js[2m > [22m[2mLLM Proxy Router[2m > [22m[2mPOST /chat/completions[2m > [22m[2mshould proxy a chat request and return OpenAI-format response
+[22m[39m[LLMProxy] Proxy request | agent=test-agent model=test-model messages=1 tools=0
+
+ [32mÔ£ô[39m src/routes/llmProxy.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | dist/routes/llmProxy.test.js[2m > [22m[2mLLM Proxy Router[2m > [22m[2mPOST /chat/completions[2m > [22m[2mshould record metering after successful call
+[22m[39m[LLMProxy] Proxy request | agent=test-agent model=test-model messages=1 tools=0
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | dist/routes/llmProxy.test.js > LLM Proxy Router > POST /chat/completions > should return 429 when budget is exceeded
+[LLMProxy] Budget exceeded | agent=test-agent hourly=50000/10000 daily=50000/100000
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+ [32mÔ£ô[39m dist/routes/llmProxy.test.js [2m([22m[2m8 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | dist/memory/Reflector.test.js[2m > [22m[2mReflector[2m > [22m[2mshould compact oldest entries when over threshold
+[22m[39m[Reflector] Compacted 3 core entries into 1 archive summary (ID: 17ccdafa-6b70-441f-a890-54f4669f53b1). Title: "Summary ÔÇö Entry 0, Entry 1, Entry 2"
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould create and start a container with tier limits
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine:latest"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould apply tier 1 limits (read-only, no network)
+[22m[39m[SandboxManager] SPAWN | agent=readonly-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould enforce maxInstances for subagents
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"subagent","image":"node:20"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould execute a command in a running container
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould execute a command in a running container
+[22m[39m[SandboxManager] EXEC | agent=test-agent | {"containerId":"container-abc123","command":["echo","hello"]}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould reject exec from a different agent
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+stderr | dist/memory/Reflector.test.js > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould stop and remove a container
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/memory/Reflector.test.ts[2m > [22m[2mReflector[2m > [22m[2mshould preserve ref chain for traceability
+[22m[39m[Reflector] Compacted 3 core entries into 1 archive summary (ID: 91d281ec-4a42-4e09-be54-7076674e1de5). Title: "Summary ÔÇö E1, E2, E3"
+
+stderr | dist/memory/Reflector.test.js > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould stop and remove a container
+[22m[39m[SandboxManager] REMOVE | agent=test-agent | {"containerId":"container-abc123"}
+
+stderr | dist/memory/Reflector.test.js > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould reject removal by non-owner
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mlistContainers[2m > [22m[2mshould list all containers
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+ [32mÔ£ô[39m src/sandbox/TierPolicy.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mlistContainers[2m > [22m[2mshould filter by agent name
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+stderr | dist/memory/Reflector.test.js > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mcountSubagents[2m > [22m[2mshould count running subagents by role
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"subagent","image":"node:20"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould create and start a container with tier limits
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine:latest"}
+
+stderr | dist/memory/Reflector.test.js > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould apply tier 1 limits (read-only, no network)
+[22m[39m[SandboxManager] SPAWN | agent=readonly-agent | {"type":"tool","image":"alpine"}
+
+ [32mÔ£ô[39m src/sandbox/SandboxManager.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32mÔ£ô[39m src/memory/Reflector.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 286[2mms[22m[39m
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould enforce maxInstances for subagents
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"subagent","image":"node:20"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould execute a command in a running container
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould execute a command in a running container
+[22m[39m[SandboxManager] EXEC | agent=test-agent | {"containerId":"container-abc123","command":["echo","hello"]}
+
+stderr | dist/memory/Reflector.test.js > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould reject exec from a different agent
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould stop and remove a container
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould stop and remove a container
+[22m[39m[SandboxManager] REMOVE | agent=test-agent | {"containerId":"container-abc123"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould reject removal by non-owner
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mlistContainers[2m > [22m[2mshould list all containers
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+ [32mÔ£ô[39m dist/sandbox/TierPolicy.test.js [2m([22m[2m25 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mlistContainers[2m > [22m[2mshould filter by agent name
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"tool","image":"alpine"}
+
+[90mstdout[2m | dist/sandbox/SandboxManager.test.js[2m > [22m[2mSandboxManager[2m > [22m[2mcountSubagents[2m > [22m[2mshould count running subagents by role
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"type":"subagent","image":"node:20"}
+
+ [32mÔ£ô[39m dist/sandbox/SandboxManager.test.js [2m([22m[2m13 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2msequential[2m > [22m[2mshould execute tasks in order with context chaining
+[22m[39m[ProcessManager] Running sequential process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2msequential[2m > [22m[2mshould handle agent failures gracefully
+[22m[39m[ProcessManager] Running sequential process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2mparallel[2m > [22m[2mshould execute all tasks concurrently
+[22m[39m[ProcessManager] Running parallel process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | dist/memory/Reflector.test.js[2m > [22m[2mReflector[2m > [22m[2mshould preserve ref chain for traceability
+[22m[39m[Reflector] Compacted 3 core entries into 1 archive summary (ID: 8e004e42-bfb1-4aba-95b2-1307fd13d86d). Title: "Summary ÔÇö E1, E2, E3"
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2mhierarchical[2m > [22m[2mshould have the manager review worker results
+[22m[39m[ProcessManager] Running hierarchical process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2mrunSingle[2m > [22m[2mshould run a single task with one agent
+[22m[39m[ProcessManager] Running sequential process with 1 task(s) and 1 agent(s)
+
+ [32mÔ£ô[39m src/agents/process/ProcessManager.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32mÔ£ô[39m dist/memory/Reflector.test.js [2m([22m[2m3 tests[22m[2m)[22m[32m 255[2mms[22m[39m
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should return "warn" at WARN_THRESHOLD (3) identical calls
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+[90mstdout[2m | dist/agents/stability/SessionRepair.test.js[2m > [22m[2mSessionRepair[2m > [22m[2mshould remove empty messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 2 empty msgs removed, 0 consecutive msgs merged
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should return "block" at BLOCK_THRESHOLD (5) identical calls
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+[LoopGuard] WARNING: "web-search" called 4 times with same args (block at 5)
+[LoopGuard] BLOCKED duplicate tool call: "web-search" called 5 times with same args
+
+[90mstdout[2m | dist/agents/stability/SessionRepair.test.js[2m > [22m[2mSessionRepair[2m > [22m[2mshould remove orphaned tool messages
+[22m[39m[SessionRepair] Session repaired: 1 orphaned tool msgs removed, 0 empty msgs removed, 0 consecutive msgs merged
+
+ [32mÔ£ô[39m dist/sessions/SessionStore.test.js [2m([22m[2m12 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should track different calls independently
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+[90mstdout[2m | dist/agents/stability/SessionRepair.test.js[2m > [22m[2mSessionRepair[2m > [22m[2mshould merge consecutive user messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 0 empty msgs removed, 1 consecutive msgs merged
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should track different tool names independently
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+[90mstdout[2m | dist/agents/stability/SessionRepair.test.js[2m > [22m[2mSessionRepair[2m > [22m[2mshould merge consecutive assistant messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 0 empty msgs removed, 2 consecutive msgs merged
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should clear all state on reset
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+[90mstdout[2m | dist/agents/stability/SessionRepair.test.js[2m > [22m[2mSessionRepair[2m > [22m[2mshould handle all repair types simultaneously
+[22m[39m[SessionRepair] Session repaired: 1 orphaned tool msgs removed, 1 empty msgs removed, 1 consecutive msgs merged
+
+ [32mÔ£ô[39m src/agents/stability/LoopGuard.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32mÔ£ô[39m dist/agents/stability/SessionRepair.test.js [2m([22m[2m11 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+stderr | dist/agents/stability/LoopGuard.test.js > LoopGuard > should return "warn" at WARN_THRESHOLD (3) identical calls
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+[90mstdout[2m | agent-runtime/src/__tests__/llmClient.test.ts[2m > [22m[2mLLMClient[2m > [22m[2mchat()[2m > [22m[2mthrows on 429 budget-exceeded response
+[22m[39m[2026-03-17T20:49:54.269Z] [agent-runtime] [ERROR] LLM proxy error: 429 ÔÇö {"error":{"message":"budget exceeded"}}
+
+stderr | dist/agents/stability/LoopGuard.test.js > LoopGuard > should return "block" at BLOCK_THRESHOLD (5) identical calls
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+ [32mÔ£ô[39m agent-runtime/src/__tests__/llmClient.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+[LoopGuard] WARNING: "web-search" called 4 times with same args (block at 5)
+[LoopGuard] BLOCKED duplicate tool call: "web-search" called 5 times with same args
+ [32mÔ£ô[39m src/sessions/SessionStore.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32mÔ£ô[39m dist/agents/stability/LoopGuard.test.js [2m([22m[2m11 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+
+stderr | dist/agents/stability/LoopGuard.test.js > LoopGuard > should track different calls independently
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+stderr | dist/agents/stability/LoopGuard.test.js > LoopGuard > should track different tool names independently
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+stderr | dist/agents/stability/LoopGuard.test.js > LoopGuard > should clear all state on reset
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould remove empty messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 2 empty msgs removed, 0 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould remove orphaned tool messages
+[22m[39m[SessionRepair] Session repaired: 1 orphaned tool msgs removed, 0 empty msgs removed, 0 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould merge consecutive user messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 0 empty msgs removed, 1 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould merge consecutive assistant messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 0 empty msgs removed, 2 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould handle all repair types simultaneously
+[22m[39m[SessionRepair] Session repaired: 1 orphaned tool msgs removed, 1 empty msgs removed, 1 consecutive msgs merged
+
+ [32mÔ£ô[39m src/agents/stability/SessionRepair.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mÔ£ô[39m src/intercom/IntercomService.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32mÔ£ô[39m dist/intercom/ChannelNamespace.test.js [2m([22m[2m27 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mÔ£ô[39m dist/intercom/IntercomService.test.js [2m([22m[2m9 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+[90mstdout[2m | dist/metering/MeteringService.test.js[2m > [22m[2mMeteringService[2m > [22m[2mrecordUsage[2m > [22m[2mshould insert a token_usage row
+[22m[39m[MeteringService] Usage recorded | agent=agent-001 model=gpt-4 prompt=100 completion=50
+
+[90mstdout[2m | src/agents/AgentFactory.test.ts[2m > [22m[2mAgentFactory[2m > [22m[2mloadTemplates[2m > [22m[2mshould load all manifests from the agents directory
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 9.105ms
+
+[90mstdout[2m | src/agents/AgentFactory.test.ts[2m > [22m[2mAgentFactory[2m > [22m[2mloadTemplates[2m > [22m[2mshould return empty map for a non-existent directory
+[22m[39m[AgentManifestLoader] loadAllManifests: 0.243ms
+
+stderr | src/agents/AgentFactory.test.ts > AgentFactory > loadTemplates > should return empty map for a non-existent directory
+[AgentManifestLoader] Agents directory not found: /nonexistent/dir
+
+ [32mÔ£ô[39m dist/metering/MeteringService.test.js [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+[90mstdout[2m | src/agents/AgentFactory.test.ts[2m > [22m[2mAgentFactory[2m > [22m[2mcreateAgent[2m > [22m[2mshould create an agent from a manifest
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.295ms
+
+ [32mÔ£ô[39m src/agents/AgentFactory.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+stderr | dist/channels/adapters.test.js > Channel Adapters > TelegramAdapter > should enforce rate limits and not call agent
+[Channel:Telegram] Rate limit exceeded for user 123
+
+ [32mÔ£ô[39m dist/channels/adapters.test.js [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32mÔ£ô[39m src/intercom/ChannelNamespace.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+[90mstdout[2m | dist/agents/AgentFactory.test.js[2m > [22m[2mAgentFactory[2m > [22m[2mloadTemplates[2m > [22m[2mshould load all manifests from the agents directory
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 9.089ms
+
+[90mstdout[2m | dist/agents/AgentFactory.test.js[2m > [22m[2mAgentFactory[2m > [22m[2mloadTemplates[2m > [22m[2mshould return empty map for a non-existent directory
+[22m[39m[AgentManifestLoader] loadAllManifests: 0.259ms
+
+stderr | dist/agents/AgentFactory.test.js > AgentFactory > loadTemplates > should return empty map for a non-existent directory
+[AgentManifestLoader] Agents directory not found: /nonexistent/dir
+
+[90mstdout[2m | dist/agents/AgentFactory.test.js[2m > [22m[2mAgentFactory[2m > [22m[2mcreateAgent[2m > [22m[2mshould create an agent from a manifest
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 3.906ms
+
+ [32mÔ£ô[39m dist/agents/AgentFactory.test.js [2m([22m[2m3 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstdout[2m | src/metering/MeteringService.test.ts[2m > [22m[2mMeteringService[2m > [22m[2mrecordUsage[2m > [22m[2mshould insert a token_usage row
+[22m[39m[MeteringService] Usage recorded | agent=agent-001 model=gpt-4 prompt=100 completion=50
+
+ [32mÔ£ô[39m src/metering/MeteringService.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+stderr | src/channels/adapters.test.ts > Channel Adapters > TelegramAdapter > should enforce rate limits and not call agent
+[Channel:Telegram] Rate limit exceeded for user 123
+
+ [32mÔ£ô[39m src/channels/adapters.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32mÔ£ô[39m dist/storage/StorageProvider.test.js [2m([22m[2m18 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32mÔ£ô[39m src/storage/StorageProvider.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+stderr | src/memory/blocks/MemoryBlockStore.test.ts > MemoryBlockStore > should skip malformed YAML frontmatter without crashing
+[MemoryBlockStore] Skipping entry with missing ID in broken.md
+
+stderr | dist/memory/blocks/MemoryBlockStore.test.js > MemoryBlockStore > should skip malformed YAML frontmatter without crashing
+[MemoryBlockStore] Skipping entry with missing ID in broken.md
+
+ [32mÔ£ô[39m src/memory/blocks/MemoryBlockStore.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 1146[2mms[22m[39m
+[90mstdout[2m | src/app.test.ts
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.815ms
+[Orchestrator] Loaded 5 agent templates
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 2.066ms
+
+[90mstdout[2m | src/app.test.ts
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/app.test.ts
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/app.test.ts
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/app.test.ts
+[22m[39m[CircleRegistry] Registered 2 circles
+
+ [32mÔ£ô[39m dist/memory/blocks/MemoryBlockStore.test.js [2m([22m[2m19 tests[22m[2m)[22m[33m 1075[2mms[22m[39m
+stderr | src/app.test.ts
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+[90mstdout[2m | src/app.test.ts
+[22m[39m[Orchestrator] Watching for agent changes in D:\projects\homelab\sera\agents
+
+ [32mÔ£ô[39m src/app.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+[90mstdout[2m | dist/app.test.js
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.619ms
+[Orchestrator] Loaded 5 agent templates
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 2.011ms
+
+[90mstdout[2m | dist/app.test.js
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/app.test.js
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/app.test.js
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/app.test.js
+[22m[39m[CircleRegistry] Registered 2 circles
+
+stderr | dist/app.test.js
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+[90mstdout[2m | dist/app.test.js
+[22m[39m[Orchestrator] Watching for agent changes in D:\projects\homelab\sera\agents
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.666ms
+[Orchestrator] Loaded 5 agent templates
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 1.972ms
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[CircleRegistry] Registered 2 circles
+
+stderr | src/__tests__/integration.test.ts
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[Orchestrator] Watching for agent changes in D:\projects\homelab\sera\agents
+
+[90mstdout[2m | dist/__tests__/integration.test.js
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 4.21ms
+[Orchestrator] Loaded 5 agent templates
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant.agent.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer-prime (writer.agent.yaml)
+[AgentManifestLoader] loadAllManifests: 1.842ms
+
+ [32mÔ£ô[39m dist/app.test.js [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+[90mstdout[2m | dist/__tests__/integration.test.js
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | dist/__tests__/integration.test.js
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | dist/__tests__/integration.test.js
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | dist/__tests__/integration.test.js
+[22m[39m[CircleRegistry] Registered 2 circles
+
+stderr | dist/__tests__/integration.test.js
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+[90mstdout[2m | dist/__tests__/integration.test.js
+[22m[39m[Orchestrator] Watching for agent changes in D:\projects\homelab\sera\agents
+
+ [31mÔØ»[39m src/__tests__/integration.test.ts [2m([22m[2m6 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 1458[2mms[22m[39m
+       [32mÔ£ô[39m should register agents from AGENT.yaml manifests[32m 12[2mms[22m[39m
+       [32mÔ£ô[39m should validate agent references against loaded manifests and load circles[32m 3[2mms[22m[39m
+[31m       [31m├ù[31m should hit the orchestrator and use the loaded agent mock[39m[32m 13[2mms[22m[39m
+       [32mÔ£ô[39m should create a memory entry via POST /api/memory/blocks/:type[32m 7[2mms[22m[39m
+       [32mÔ£ô[39m should retrieve the created memory entry via GET /api/memory/entries/:id[32m 6[2mms[22m[39m
+       [32mÔ£ô[39m should have builtin skills registered after server boot[32m 3[2mms[22m[39m
+ [31mÔØ»[39m dist/__tests__/integration.test.js [2m([22m[2m6 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 1429[2mms[22m[39m
+       [32mÔ£ô[39m should register agents from AGENT.yaml manifests[32m 12[2mms[22m[39m
+       [32mÔ£ô[39m should validate agent references against loaded manifests and load circles[32m 3[2mms[22m[39m
+[31m       [31m├ù[31m should hit the orchestrator and use the loaded agent mock[39m[32m 14[2mms[22m[39m
+       [32mÔ£ô[39m should create a memory entry via POST /api/memory/blocks/:type[32m 9[2mms[22m[39m
+       [32mÔ£ô[39m should retrieve the created memory entry via GET /api/memory/entries/:id[32m 5[2mms[22m[39m
+       [32mÔ£ô[39m should have builtin skills registered after server boot[32m 2[2mms[22m[39m
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 2 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  dist/__tests__/integration.test.js > SERA Integration Tests > c. Chat flow > should hit the orchestrator and use the loaded agent mock
+ FAIL  src/__tests__/integration.test.ts > SERA Integration Tests > c. Chat flow > should hit the orchestrator and use the loaded agent mock
+AssertionError: expected 500 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 500
+
+ ÔØ» src/__tests__/integration.test.ts:129:26
+    127|         .send({ message: 'Hello, world!' });
+    128|
+    129|       expect(res.status).toBe(200);
+       |                          ^
+    130|       expect(res.body).toHaveProperty('reply');
+    131|       // Our mock returns 'Mocked response' but PrimaryAgent wraps it ÔÇª
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/2]ÔÄ»
+
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m49 passed[39m[22m[90m (51)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m566 passed[39m[22m[90m (568)[39m
+[2m   Start at [22m 21:49:53
+[2m   Duration [22m 1.92s[2m (transform 10.45s, setup 0ms, import 17.48s, tests 6.81s, environment 7ms)[22m
+

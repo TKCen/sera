@@ -2,6 +2,36 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../index.js';
 
+vi.mock('../lib/llm/OpenAIProvider.js', () => ({
+  OpenAIProvider: class {
+    async chat() { return { content: 'Mocked response' }; }
+    async *chatStream() { yield { token: 'Mocked response', done: false }; yield { token: '', done: true }; }
+  }
+}));
+
+vi.mock('../services/embedding.service.js', () => ({
+  EmbeddingService: { getInstance: vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([]) }) },
+}));
+
+vi.mock('../services/vector.service.js', () => ({
+  VectorService: class {
+    async search() { return []; }
+    async upsertPoints() {}
+    async deletePoints() {}
+  }
+}));
+
+vi.mock('../intercom/IntercomService.js', () => {
+  class MockIntercomService {
+    publish = vi.fn().mockResolvedValue(undefined);
+    publishThought = vi.fn().mockResolvedValue(undefined);
+    publishStreamToken = vi.fn().mockResolvedValue(undefined);
+    publishMessage = vi.fn().mockResolvedValue({ id: 'mock', timestamp: new Date().toISOString() });
+    getAgentChannels = vi.fn().mockReturnValue({ thoughts: 'mock:thoughts' });
+  }
+  return { IntercomService: MockIntercomService };
+});
+
 describe('OpenAI-Compatible API', () => {
   it('POST /v1/chat/completions should return 404 for unknown model', async () => {
     const response = await request(app)

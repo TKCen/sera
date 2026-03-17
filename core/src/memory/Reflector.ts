@@ -96,7 +96,7 @@ export class Reflector {
 
     // Move the original entries to archive (preserves their IDs and refs)
     for (const entry of toCompact) {
-      await memoryManager.store.moveEntry(entry.id, 'archive');
+      await memoryManager.archiveEntry(entry.id);
     }
 
     logger.info(

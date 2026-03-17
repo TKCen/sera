@@ -1,5 +1,7 @@
 import path from 'path';
 import { MemoryBlockStore } from './blocks/MemoryBlockStore.js';
+import { VectorService } from '../services/vector.service.js';
+import { EmbeddingService } from '../services/embedding.service.js';
 import { Logger } from '../lib/logger.js';
 import { AuditService } from '../audit/AuditService.js';
 
@@ -22,6 +24,8 @@ export class MemoryManager {
   public readonly store: MemoryBlockStore;
   public readonly circleId?: string;
   public readonly agentId?: string;
+  private readonly vectorService: VectorService;
+  private readonly embeddingService = EmbeddingService.getInstance();
 
   // Simple in-memory rate limiting state
   private static readonly writeTimestamps = new Map<string, number[]>();
@@ -40,6 +44,7 @@ export class MemoryManager {
     }
 
     this.store = new MemoryBlockStore(memoryPath);
+    this.vectorService = new VectorService(`memory_${opts?.circleId || opts?.agentId || 'global'}`);
 
     if (opts?.circleId !== undefined) {
       this.circleId = opts.circleId;
@@ -77,6 +82,7 @@ export class MemoryManager {
 
     this.checkRateLimit();
     const entry = await this.store.addEntry(type, opts);
+    await this.indexEntry(entry);
 
     const auditId = this.agentId || this.circleId;
     if (auditId) {
@@ -92,7 +98,6 @@ export class MemoryManager {
         logger.error('Failed to record audit entry:', auditErr);
       }
     }
-
     return entry;
   }
 
@@ -107,6 +112,9 @@ export class MemoryManager {
 
     this.checkRateLimit();
     const entry = await this.store.updateEntry(id, content);
+    if (entry) {
+      await this.indexEntry(entry);
+    }
 
     const auditId = this.agentId || this.circleId;
     if (auditId && entry) {
@@ -121,15 +129,17 @@ export class MemoryManager {
         logger.error('Failed to record audit entry:', auditErr);
       }
     }
-
     return entry;
   }
 
   async deleteEntry(id: string): Promise<boolean> {
     if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
-
     const entry = await this.getEntry(id);
     const deleted = await this.store.deleteEntry(id);
+
+    if (deleted) {
+      await this.vectorService.deletePoints([id]);
+    }
 
     const auditId = this.agentId || this.circleId;
     if (auditId && deleted && entry) {
@@ -183,12 +193,28 @@ export class MemoryManager {
 
   // ── Search ──────────────────────────────────────────────────────────────────
 
-  async search(query: string, limit?: number): Promise<MemoryEntry[]> {
+  async search(query: string, limit: number = 5): Promise<MemoryEntry[]> {
     if (typeof query !== 'string') return [];
     if (!query.trim()) return [];
     if (limit !== undefined && (typeof limit !== 'number' || limit <= 0)) {
        throw new Error('Limit must be a positive number');
     }
+
+    try {
+      const vector = await this.embeddingService.generateEmbedding(query);
+      const vectorResults = await this.vectorService.search(vector, limit);
+
+      const entries: MemoryEntry[] = [];
+      for (const res of vectorResults) {
+        const entry = await this.getEntry(res.id as string);
+        if (entry) entries.push(entry);
+      }
+
+      if (entries.length > 0) return entries;
+    } catch (err) {
+      logger.error('Vector search failed, falling back to text search:', err);
+    }
+
     const results = await this.store.search(query, limit);
     return results || [];
   }
@@ -198,8 +224,9 @@ export class MemoryManager {
   /**
    * Assemble a working-memory context string from human, persona, and core blocks.
    * This is intended for injection into LLM system/user prompts.
+   * If a query is provided, it also performs a vector search for relevant archival memory.
    */
-  async assembleContext(): Promise<string> {
+  async assembleContext(query?: string): Promise<string> {
     const sections: string[] = [];
 
     const human = await this.store.loadBlock('human');
@@ -226,6 +253,25 @@ export class MemoryManager {
       }
     }
 
+    if (query) {
+      try {
+        const vector = await this.embeddingService.generateEmbedding(query);
+        // Search specifically in the 'archive' type if possible, or just general search
+        const vectorResults = await this.vectorService.search(vector, 3, {
+          must: [{ key: 'type', match: { value: 'archive' } }]
+        });
+
+        if (vectorResults.length > 0) {
+          sections.push('## Relevant Archival Memory');
+          for (const res of vectorResults) {
+            sections.push(`### ${res.payload?.title || 'Unknown'}\n${res.payload?.content || ''}`);
+          }
+        }
+      } catch (err) {
+        logger.error('Failed to fetch archival context:', err);
+      }
+    }
+
     return sections.join('\n\n');
   }
 
@@ -236,6 +282,31 @@ export class MemoryManager {
   async archiveEntry(entryId: string): Promise<MemoryEntry | null> {
     if (!entryId || typeof entryId !== 'string') throw new Error('Invalid entryId parameter');
     this.checkRateLimit();
-    return this.store.moveEntry(entryId, 'archive');
+    const entry = await this.store.moveEntry(entryId, 'archive');
+    if (entry) {
+      await this.indexEntry(entry);
+    }
+    return entry;
+  }
+
+  private async indexEntry(entry: MemoryEntry): Promise<void> {
+    try {
+      await this.vectorService.ensureCollection(384);
+      const embedding = await this.embeddingService.generateEmbedding(
+        `${entry.title}\n${entry.content}`
+      );
+      await this.vectorService.upsertPoints([{
+        id: entry.id,
+        vector: embedding,
+        payload: {
+          title: entry.title,
+          content: entry.content,
+          type: entry.type,
+          tags: entry.tags,
+        }
+      }]);
+    } catch (err) {
+      logger.error(`Failed to index entry ${entry.id}:`, err);
+    }
   }
 }

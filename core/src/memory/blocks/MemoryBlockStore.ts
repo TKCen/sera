@@ -36,11 +36,19 @@ export class MemoryBlockStore {
   private initWatcher(): void {
     const blocksDir = path.join(this.basePath, 'blocks');
     if (fsSync.existsSync(blocksDir)) {
-      this.watcher = fsSync.watch(blocksDir, { recursive: true }, (eventType, filename) => {
-        if (filename && filename.endsWith('.md')) {
-          this.invalidateCache();
-        }
-      });
+      try {
+        this.watcher = fsSync.watch(blocksDir, { recursive: true }, (eventType, filename) => {
+          if (filename && filename.endsWith('.md')) {
+            this.invalidateCache();
+          }
+        });
+        this.watcher.on('error', (err) => {
+          logger.error('Watcher error:', err);
+          this.destroy();
+        });
+      } catch (err) {
+        logger.error('Failed to initialize watcher:', err);
+      }
     }
   }
 

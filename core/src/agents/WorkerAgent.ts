@@ -3,6 +3,7 @@ import { AuditService } from '../audit/AuditService.js';
 import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
+import { IdentityService } from './identity/IdentityService.js';
 
 export class WorkerAgent extends BaseAgent {
   constructor(
@@ -10,18 +11,26 @@ export class WorkerAgent extends BaseAgent {
     llmProvider: LLMProvider,
     intercom?: import('../intercom/IntercomService.js').IntercomService,
     agentInstanceId?: string,
+    memoryManager?: import('../memory/manager.js').MemoryManager,
   ) {
-    super(manifest, llmProvider, intercom, agentInstanceId);
+    super(manifest, llmProvider, intercom, agentInstanceId, memoryManager);
   }
 
   async process(input: string, history: ChatMessage[] = []): Promise<AgentResponse> {
     await this.observe(input);
     await this.plan(input);
 
+    let dynamicContext = '';
+    if (this.memoryManager) {
+      dynamicContext = await this.memoryManager.assembleContext(input);
+    }
+
+    const systemPrompt = IdentityService.generateSystemPrompt(this.manifest, undefined, dynamicContext);
+
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
     const response = await this.llmProvider.chat([
-      { role: 'system', content: this.systemPrompt },
+      { role: 'system', content: systemPrompt },
       ...fullHistory
     ]);
 

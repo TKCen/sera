@@ -1,9 +1,10 @@
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
 import { IntercomService } from '../intercom/IntercomService.js';
-import { ChatMessage } from '../agents/types.js';
+import type { ChatMessage } from '../agents/types.js';
 
 class SSEIntercom extends IntercomService {
   constructor(private res: Response, private messageId: string, private model: string) {
@@ -88,7 +89,7 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
 
     const lastMsg = chatMessages[chatMessages.length - 1];
     const history = chatMessages.slice(0, -1);
-    const input = lastMsg.content;
+    const input = lastMsg?.content || '';
 
     if (stream) {
       const messageId = uuidv4();

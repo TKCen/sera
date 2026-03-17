@@ -109,8 +109,8 @@ export class AuditService {
 
         // 2. Recompute hash and verify
         const ts = typeof entry.timestamp === 'string' ? entry.timestamp : (entry.timestamp as any).toISOString();
-        const dataToHash = `${entry.previous_hash || ''}${entry.action}${stableStringify(entry.details)}${ts}`;
-        const computedHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+        const dataToHash: string = `${entry.previous_hash || ''}${entry.action}${stableStringify(entry.details)}${ts}`;
+        const computedHash: string = crypto.createHash('sha256').update(dataToHash).digest('hex');
 
         if (entry.hash !== computedHash) {
           return {

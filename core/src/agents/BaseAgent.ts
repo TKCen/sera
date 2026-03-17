@@ -4,6 +4,7 @@ import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
+import type { MemoryManager } from '../memory/manager.js';
 import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { LoopGuard } from './stability/LoopGuard.js';
@@ -26,6 +27,7 @@ export abstract class BaseAgent {
   protected manifest: AgentManifest;
   protected intercom: IntercomService | undefined;
   protected toolExecutor: ToolExecutor | undefined;
+  protected memoryManager: MemoryManager | undefined;
   protected logger: Logger;
   protected loopGuard: LoopGuard;
 
@@ -37,6 +39,7 @@ export abstract class BaseAgent {
     llmProvider: LLMProvider,
     intercom?: IntercomService,
     agentInstanceId?: string,
+    memoryManager?: MemoryManager,
   ) {
     this.manifest = manifest;
     this.name = manifest.metadata.displayName;
@@ -44,6 +47,7 @@ export abstract class BaseAgent {
     this.llmProvider = llmProvider;
     this.intercom = intercom;
     this.agentInstanceId = agentInstanceId;
+    this.memoryManager = memoryManager;
     this.systemPrompt = IdentityService.generateSystemPrompt(manifest);
     this.logger = new Logger(this.name);
     this.loopGuard = new LoopGuard();
@@ -69,6 +73,11 @@ export abstract class BaseAgent {
   /** Attach a ToolExecutor after construction. */
   public setToolExecutor(toolExecutor: ToolExecutor): void {
     this.toolExecutor = toolExecutor;
+  }
+
+  /** Attach a MemoryManager after construction. */
+  public setMemoryManager(memoryManager: MemoryManager): void {
+    this.memoryManager = memoryManager;
   }
 
   abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;
@@ -100,8 +109,13 @@ export abstract class BaseAgent {
       );
     }
 
+    let dynamicContext = '';
+    if (this.memoryManager) {
+      dynamicContext = await this.memoryManager.assembleContext(input);
+    }
+
     const messages: ChatMessage[] = [
-      { role: 'system', content: IdentityService.generateStreamingSystemPrompt(this.manifest) },
+      { role: 'system', content: IdentityService.generateStreamingSystemPrompt(this.manifest, undefined, dynamicContext) },
       ...cleanHistory,
       { role: 'user', content: input },
     ];
@@ -200,8 +214,8 @@ export abstract class BaseAgent {
             const auditService = AuditService.getInstance();
             const auditId = this.agentInstanceId || this.role;
             for (let i = 0; i < activeCalls.length; i++) {
-              const tc = activeCalls[i];
-              const tr = toolResults[i];
+              const tc = activeCalls[i]!;
+              const tr = toolResults[i]!;
               try {
                 await auditService.record(auditId, 'tool_call', {
                   tool: tc.function.name,

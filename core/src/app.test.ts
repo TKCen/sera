@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
+
+vi.mock('./services/vector.service.js', () => ({
+  VectorService: class {
+    async search() { return []; }
+    async upsertPoints() {}
+    async deletePoints() {}
+  }
+}));
+
 import { app } from './index.js';
 
 describe('SERA Core API', () => {

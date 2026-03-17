@@ -38,9 +38,11 @@ vi.mock('../services/embedding.service.js', () => ({
 }));
 
 vi.mock('../services/vector.service.js', () => ({
-  VectorService: vi.fn().mockImplementation(() => ({
-    search: vi.fn().mockResolvedValue([]),
-  })),
+  VectorService: class {
+    async search() { return []; }
+    async upsertPoints() {}
+    async deletePoints() {}
+  }
 }));
 
 // Mock IntercomService to avoid HTTP calls to Centrifugo

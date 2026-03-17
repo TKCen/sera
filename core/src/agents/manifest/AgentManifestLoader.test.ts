@@ -143,7 +143,7 @@ describe('AgentManifestLoader', () => {
 
       expect(manifests.length).toBe(5);
       const names = manifests.map(m => m.metadata.name).sort();
-      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer-prime']);
+      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer']);
     });
 
     it('should return empty array for non-existent directory', () => {

@@ -35,7 +35,8 @@ export class AgentManifestLoader {
   }
 
   /**
-   * Scan a directory for *.agent.yaml files and load all valid manifests.
+   * Scan a directory for *.agent.yaml files and AGENT.yaml files in subdirectories,
+   * then load all valid manifests.
    */
   static loadAllManifests(dirPath: string): AgentManifest[] {
     console.time('[AgentManifestLoader] loadAllManifests');
@@ -45,16 +46,29 @@ export class AgentManifestLoader {
       return [];
     }
 
-    const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.agent.yaml'));
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     const manifests: AgentManifest[] = [];
 
-    for (const file of files) {
-      try {
-        const manifest = AgentManifestLoader.loadManifest(path.join(dirPath, file));
-        manifests.push(manifest);
-        logger.info(`Loaded: ${manifest.metadata.name} (${file})`);
-      } catch (err) {
-        logger.error(`Failed to load ${file}:`, (err as Error).message);
+    for (const entry of entries) {
+      let filePath: string | undefined;
+
+      if (entry.isFile() && entry.name.endsWith('.agent.yaml')) {
+        filePath = path.join(dirPath, entry.name);
+      } else if (entry.isDirectory()) {
+        const subDirAgentFile = path.join(dirPath, entry.name, 'AGENT.yaml');
+        if (fs.existsSync(subDirAgentFile)) {
+          filePath = subDirAgentFile;
+        }
+      }
+
+      if (filePath) {
+        try {
+          const manifest = AgentManifestLoader.loadManifest(filePath);
+          manifests.push(manifest);
+          logger.info(`Loaded: ${manifest.metadata.name} (${path.relative(dirPath, filePath)})`);
+        } catch (err) {
+          logger.error(`Failed to load ${filePath}:`, (err as Error).message);
+        }
       }
     }
 
@@ -133,6 +147,19 @@ export class AgentManifestLoader {
     const model = obj['model'] as Record<string, unknown>;
     AgentManifestLoader.requireString(model, 'provider', `${ctx} model`);
     AgentManifestLoader.requireString(model, 'name', `${ctx} model`);
+
+    // ── resources ─────────────────────────────────────────────────────────────
+    if (obj['resources']) {
+      const res = obj['resources'] as Record<string, unknown>;
+      if (res['maxLlmTokensPerHour'] !== undefined) {
+        if (typeof res['maxLlmTokensPerHour'] !== 'number' || res['maxLlmTokensPerHour'] <= 0) {
+          throw new ManifestValidationError(
+            `"maxLlmTokensPerHour" must be a positive number${ctx}`,
+            'resources.maxLlmTokensPerHour',
+          );
+        }
+      }
+    }
 
     // ── Construct validated manifest ──────────────────────────────────────────
     return obj as unknown as AgentManifest;

@@ -9,9 +9,9 @@ import type { AgentManifest } from '../manifest/types.js';
 export class IdentityService {
   /**
    * Generate a complete system prompt from an agent manifest.
-   * Optionally injects circle project context into the prompt.
+   * Optionally injects circle project context and dynamic memory context into the prompt.
    */
-  static generateSystemPrompt(manifest: AgentManifest, circleContext?: string): string {
+  static generateSystemPrompt(manifest: AgentManifest, circleContext?: string, dynamicMemoryContext?: string): string {
     const sections: string[] = [];
 
     // ── Role & Persona ────────────────────────────────────────────────────────
@@ -79,6 +79,11 @@ export class IdentityService {
       `}`,
     );
 
+    // ── Memory Context ────────────────────────────────────────────────────────
+    if (dynamicMemoryContext) {
+      sections.push(dynamicMemoryContext);
+    }
+
     // ── Circle Context ────────────────────────────────────────────────────────
     sections.push(
       `## Context\nYou belong to the "${manifest.metadata.circle}" circle. ` +
@@ -93,8 +98,8 @@ export class IdentityService {
    * Same as the standard prompt but instructs the LLM to respond in natural
    * language (not JSON), since tokens stream to the UI in real-time.
    */
-  static generateStreamingSystemPrompt(manifest: AgentManifest, circleContext?: string): string {
-    const base = IdentityService.generateSystemPrompt(manifest, circleContext);
+  static generateStreamingSystemPrompt(manifest: AgentManifest, circleContext?: string, dynamicMemoryContext?: string): string {
+    const base = IdentityService.generateSystemPrompt(manifest, circleContext, dynamicMemoryContext);
 
     // Replace the JSON response format with a natural-language instruction
     const withFormat = base.replace(

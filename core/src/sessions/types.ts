@@ -48,6 +48,7 @@ export interface SessionMessage {
 // ── Create Options ──────────────────────────────────────────────────────────────
 
 export interface CreateSessionOptions {
+  id?: string;
   agentName: string;
   agentInstanceId?: string | undefined;
   title?: string;

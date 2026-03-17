@@ -7,6 +7,7 @@ import { WorkerAgent } from './WorkerAgent.js';
 import type { BaseAgent } from './BaseAgent.js';
 import type { AgentInstance } from './types.js';
 import { query } from '../lib/database.js';
+import { MemoryManager } from '../memory/manager.js';
 
 export class AgentFactory {
   /**
@@ -18,7 +19,11 @@ export class AgentFactory {
     intercom?: import('../intercom/IntercomService.js').IntercomService,
   ): BaseAgent {
     const provider = ProviderFactory.createFromManifest(manifest);
-    return new WorkerAgent(manifest, provider, intercom, agentInstanceId);
+    const memOpts: { circleId?: string; agentId?: string } = {};
+    if (manifest.metadata.circle) memOpts.circleId = manifest.metadata.circle;
+    if (agentInstanceId) memOpts.agentId = agentInstanceId;
+    const memoryManager = new MemoryManager(memOpts);
+    return new WorkerAgent(manifest, provider, intercom, agentInstanceId, memoryManager);
   }
 
   /**

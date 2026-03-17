@@ -117,6 +117,23 @@ export const config = {
     return cfg.providers[providerId];
   },
 
+  channels: {
+    telegram: {
+      token: process.env.TELEGRAM_BOT_TOKEN,
+    },
+    discord: {
+      token: process.env.DISCORD_BOT_TOKEN,
+    },
+    whatsapp: {
+      token: process.env.WHATSAPP_API_TOKEN,
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    },
+    rateLimit: {
+      windowMs: parseInt(process.env.CHANNEL_RATE_LIMIT_WINDOW_MS || '60000', 10),
+      maxMessages: parseInt(process.env.CHANNEL_RATE_LIMIT_MAX_MESSAGES || '20', 10),
+    }
+  },
+
   databaseUrl: process.env.DATABASE_URL,
   port: process.env.PORT || 3001,
 };

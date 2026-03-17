@@ -1,0 +1,8 @@
+src/agents/AgentFactory.ts(22,45): error TS2379: Argument of type '{ circleId: string; agentId: string | undefined; }' is not assignable to parameter of type '{ circleId?: string; agentId?: string; basePath?: string; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'agentId' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+src/agents/AgentFactory.ts(26,75): error TS2554: Expected 2-4 arguments, but got 5.
+src/agents/WorkerAgent.ts(25,26): error TS2304: Cannot find name 'IdentityService'.
+src/memory/manager.ts(220,34): error TS18049: 'res.payload' is possibly 'null' or 'undefined'.
+src/memory/manager.ts(220,56): error TS18049: 'res.payload' is possibly 'null' or 'undefined'.

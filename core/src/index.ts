@@ -30,15 +30,24 @@ import { registerBuiltinSkills } from './skills/builtins/index.js';
 import { ToolExecutor } from './tools/ToolExecutor.js';
 import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
+import { createAgentTemplatesRouter } from './routes/agent-templates.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
+import { createChatRouter } from './routes/chat.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { createSessionRouter } from './routes/sessions.js';
 import { IdentityService } from './auth/IdentityService.js';
 import { MeteringService } from './metering/MeteringService.js';
+import { MeteringEngine } from './metering/MeteringEngine.js';
+import { AgentScheduler } from './metering/AgentScheduler.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { TelegramAdapter } from './channels/adapters/TelegramAdapter.js';
+import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
+import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
+import { createAuditRouter } from './routes/audit.js';
+import { createOpenAICompatRouter } from './routes/openai-compat.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -47,39 +56,12 @@ const app = express();
 const workspaceRoot = process.env.WORKSPACE_DIR
   ?? path.resolve(import.meta.dirname, '..', '..');
 
-// ── Agent System ──────────────────────────────────────────────────────────────
-const orchestrator = new Orchestrator();
-const agentsDir = path.join(workspaceRoot, 'agents');
-orchestrator.loadTemplates(agentsDir);
-
-// ── Circle System ─────────────────────────────────────────────────────────────
-const circleRegistry = new CircleRegistry();
-const circlesDir = path.join(workspaceRoot, 'circles');
-const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
-await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
-
-// ── Sandbox Manager ──────────────────────────────────────────────────────────
-const sandboxManager = new SandboxManager();
-orchestrator.setSandboxManager(sandboxManager);
-const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
-  return agentManifests.find(m => m.metadata.name === agentName);
-});
-
 // ── Intercom Service ─────────────────────────────────────────────────────────
 const intercomService = new IntercomService();
 const bridgeService = new BridgeService();
-bridgeService.init(intercomService, circleRegistry);
-intercomService.setBridgeService(bridgeService);
 
-const intercomRouter = createIntercomRouter(
-  intercomService,
-  (agentName: string) => {
-    return agentManifests.find(m => m.metadata.name === agentName);
-  },
-  bridgeService,
-);
-
-orchestrator.setIntercom(intercomService);
+// ── Sandbox Manager ──────────────────────────────────────────────────────────
+const sandboxManager = new SandboxManager();
 
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
@@ -98,10 +80,53 @@ mcpRegistry.getAllTools().then(async () => {
 
 // ── Tool Executor ────────────────────────────────────────────────────────────
 const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
+
+// ── Agent System ──────────────────────────────────────────────────────────────
+const orchestrator = new Orchestrator();
+const agentsDir = path.join(workspaceRoot, 'agents');
+orchestrator.loadTemplates(agentsDir);
+
+orchestrator.setIntercom(intercomService);
 orchestrator.setToolExecutor(toolExecutor);
+orchestrator.setSandboxManager(sandboxManager);
+
+// Re-register agents from templates into orchestrator instance map for backward-compatible /api/chat
+const registerAgents = async () => {
+  const manifests = orchestrator.getAllManifests();
+  for (const manifest of manifests) {
+    const agent = (await import('./agents/AgentFactory.js')).AgentFactory.createAgent(manifest, undefined, intercomService);
+    agent.setIntercom(intercomService);
+    agent.setToolExecutor(toolExecutor);
+    orchestrator.registerAgent(agent);
+  }
+};
+await registerAgents();
+
+// ── Circle System ─────────────────────────────────────────────────────────────
+const circleRegistry = new CircleRegistry();
+const circlesDir = path.join(workspaceRoot, 'circles');
+const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
+await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+
+// Post-initialization of intercom system with circles
+bridgeService.init(intercomService, circleRegistry);
+intercomService.setBridgeService(bridgeService);
+
+const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
+
+const intercomRouter = createIntercomRouter(
+  intercomService,
+  (agentName: string) => {
+    return agentManifests.find(m => m.metadata.name === agentName);
+  },
+  bridgeService,
+);
 
 // ── Route Modules ────────────────────────────────────────────────────────────
 const agentRouter = createAgentRouter(orchestrator, agentsDir);
+const agentTemplatesRouter = createAgentTemplatesRouter(orchestrator, agentsDir);
 const circleRouter = createCircleRouter(
   circleRegistry,
   circlesDir,
@@ -110,19 +135,25 @@ const circleRouter = createCircleRouter(
 );
 const skillsRouter = createSkillsRouter(skillRegistry, orchestrator);
 
+// ── Session Store ────────────────────────────────────────────────────────────
+const sessionStore = new SessionStore();
+
+const chatRouter = createChatRouter(sessionStore, orchestrator);
+
 // ── Party Mode ───────────────────────────────────────────────────────────────
 const partySessionManager = new PartySessionManager();
 
-// ── Session Store ────────────────────────────────────────────────────────────
-const sessionStore = new SessionStore();
 const sessionRouter = createSessionRouter(sessionStore);
 
 // ── Security Gateway (v2) ────────────────────────────────────────────────────
 const identityService = new IdentityService();
 const meteringService = new MeteringService();
+const meteringEngine = new MeteringEngine();
+const agentScheduler = new AgentScheduler();
 const llmProxyRouter = createLlmProxyRouter(identityService, meteringService);
 
 // Wire identity into orchestrator for JWT issuance on container spawn
+orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
 
 // ── Agent File Watcher ───────────────────────────────────────────────────────
@@ -134,15 +165,60 @@ app.use('/api/lsp', lspRouter);
 app.use('/api/sandbox', sandboxRouter);
 app.use('/api/intercom', intercomRouter);
 app.use('/api/agents', agentRouter);
+app.use('/api/agent-templates', agentTemplatesRouter);
 app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
 app.use('/api/sessions', sessionRouter);
+app.use('/api', chatRouter);
 app.use('/v1/llm', llmProxyRouter);
 const heartbeatRouter = createHeartbeatRouter(orchestrator, identityService);
 app.use('/api/agents', heartbeatRouter);
 
 const budgetRouter = createBudgetRouter();
 app.use('/api/budget', budgetRouter);
+
+// ── External Channels ────────────────────────────────────────────────────────
+const channelOptions = {
+  rateLimitWindow: config.channels.rateLimit.windowMs,
+  maxMessagesPerWindow: config.channels.rateLimit.maxMessages,
+};
+
+if (config.channels.telegram.token) {
+  const telegramAdapter = new TelegramAdapter(
+    config.channels.telegram.token,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  telegramAdapter.start().catch(err => logger.error('Failed to start Telegram adapter:', err));
+}
+
+if (config.channels.discord.token) {
+  const discordAdapter = new DiscordAdapter(
+    config.channels.discord.token,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  discordAdapter.start().catch(err => logger.error('Failed to start Discord adapter:', err));
+}
+
+if (config.channels.whatsapp.token && config.channels.whatsapp.phoneNumberId) {
+  const whatsappAdapter = new WhatsAppAdapter(
+    config.channels.whatsapp.token,
+    config.channels.whatsapp.phoneNumberId,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  whatsappAdapter.start().catch(err => logger.error('Failed to start WhatsApp adapter:', err));
+}
+
+const auditRouter = createAuditRouter();
+app.use('/api/audit', auditRouter);
+
+const openAICompatRouter = createOpenAICompatRouter(orchestrator);
+app.use('/v1', openAICompatRouter);
 
 /**
  * Health check endpoint.
@@ -510,187 +586,6 @@ app.post('/api/execute', async (req, res) => {
   }
 });
 
-// ─── Chat API ─────────────────────────────────────────────────────────────────
-import type { ChatMessage } from './agents/types.js';
-
-/**
- * Helper: resolve or create a session and load its message history.
- */
-async function resolveSession(
-  sessionId: string | undefined,
-  agentName: string,
-  agentInstanceId?: string,
-): Promise<{ sessionId: string; history: ChatMessage[]; isNew: boolean }> {
-  if (sessionId) {
-    const existing = await sessionStore.getSession(sessionId);
-    if (existing) {
-      const msgs = await sessionStore.getMessages(sessionId);
-      const history: ChatMessage[] = msgs.map(m => ({
-        role: m.role as ChatMessage['role'],
-        content: m.content,
-      }));
-      return { sessionId, history, isNew: false };
-    }
-  }
-  // Create a new session
-  const session = await sessionStore.createSession({ agentName, agentInstanceId });
-  return { sessionId: session.id, history: [], isNew: true };
-}
-
-/**
- * Sends a chat message.
- * @param req Express request
- * @param res Express response
- * @returns {Promise<void>}
- */
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { message, sessionId: incomingSessionId, agentName: incomingAgent, agentInstanceId } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'message is required' });
-    }
-
-    // Resolve agent
-    let agent;
-    let agentName = incomingAgent || 'architect-prime';
-
-    if (agentInstanceId) {
-      // Look up instance-specific agent
-      agent = orchestrator.getAgent(agentInstanceId);
-      if (!agent) {
-        // Try starting it if it exists in DB but not active in memory
-        try {
-          agent = await orchestrator.startInstance(agentInstanceId);
-        } catch {
-          return res.status(404).json({ error: `Agent instance "${agentInstanceId}" not found.` });
-        }
-      }
-      agentName = agent.role;
-    } else if (incomingAgent) {
-      agent = orchestrator.getAgent(incomingAgent);
-      if (!agent) {
-        return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
-      }
-    } else {
-      agent = orchestrator.getPrimaryAgent();
-      if (!agent) {
-        return res.status(500).json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
-      }
-      agentName = agent.role;
-    }
-
-    // Resolve or create session
-    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName, agentInstanceId);
-
-    try {
-      const response = await agent.process(message, history);
-      const reply = response.finalAnswer || response.thought || 'No response generated.';
-
-      // Persist messages
-      await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-      await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
-
-      // Auto-title on first exchange
-      if (isNew) {
-        const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
-        await sessionStore.updateSessionTitle(sessionId, autoTitle);
-      }
-
-      // Best-effort JSONL mirror
-      sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
-
-      res.json({
-        sessionId,
-        reply,
-        thought: response.thought,
-      });
-    } catch (agentError: any) {
-      logger.error(`[${agent.name}] Error during processing:`, agentError);
-      if (agentError.name === 'AbortError' || agentError.message.includes('timeout')) {
-         return res.status(504).json({ error: `Agent "${agent.name}" timed out while processing.` });
-      }
-      return res.status(500).json({ error: `LLM error from "${agent.name}": ${agentError.message}` });
-    }
-  } catch (error: any) {
-    logger.error('Chat API error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * Streams a chat response via Centrifugo.
- * Returns immediately with { sessionId, messageId }.
- * Tokens are published to `internal:stream:{messageId}`.
- */
-app.post('/api/chat/stream', async (req, res) => {
-  try {
-    const { message, sessionId: incomingSessionId, agentName: incomingAgent, agentInstanceId } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'message is required' });
-    }
-
-    const messageId = uuidv4();
-
-    // Resolve agent
-    let agent;
-    let agentName = incomingAgent || 'architect-prime';
-
-    if (agentInstanceId) {
-      agent = orchestrator.getAgent(agentInstanceId);
-      if (!agent) {
-        try {
-          agent = await orchestrator.startInstance(agentInstanceId);
-        } catch {
-          return res.status(404).json({ error: `Agent instance "${agentInstanceId}" not found.` });
-        }
-      }
-      agentName = agent.role;
-    } else if (incomingAgent) {
-      agent = orchestrator.getAgent(incomingAgent);
-      if (!agent) {
-        return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
-      }
-    } else {
-      agent = orchestrator.getPrimaryAgent();
-      if (!agent) {
-        return res.status(500).json({ error: 'No primary agent configured.' });
-      }
-      agentName = agent.role;
-    }
-
-    // Resolve or create session
-    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName, agentInstanceId);
-
-    // Return immediately — streaming happens via Centrifugo
-    res.json({ sessionId, messageId });
-
-    // Process in background
-    try {
-      const response = await agent.processStream(message, history, messageId);
-      const reply = response.finalAnswer || response.thought || '';
-
-      // Persist messages
-      await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-      await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
-
-      // Auto-title on first exchange
-      if (isNew) {
-        const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
-        await sessionStore.updateSessionTitle(sessionId, autoTitle);
-      }
-
-      // Best-effort JSONL mirror
-      sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
-    } catch (err: any) {
-      logger.error(`[${agent.name}] Stream error:`, err);
-    }
-  } catch (error: any) {
-    logger.error('Chat Stream API error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
-    }
-  }
-});
 
 // ─── Config API ───────────────────────────────────────────────────────────────
 /**

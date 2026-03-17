@@ -4,11 +4,15 @@ import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
+import type { MemoryManager } from '../memory/manager.js';
 import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { LoopGuard } from './stability/LoopGuard.js';
 import { SessionRepair } from './stability/SessionRepair.js';
+import type { MeteringEngine } from '../metering/MeteringEngine.js';
+import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { Logger } from '../lib/logger.js';
+import { AuditService } from '../audit/AuditService.js';
 
 /** Maximum tool-call loop iterations before forcing a text response. */
 const MAX_TOOL_ITERATIONS = 10;
@@ -25,6 +29,9 @@ export abstract class BaseAgent {
   protected manifest: AgentManifest;
   protected intercom: IntercomService | undefined;
   protected toolExecutor: ToolExecutor | undefined;
+  protected meteringEngine: MeteringEngine | undefined;
+  protected agentScheduler: AgentScheduler | undefined;
+  protected memoryManager: MemoryManager | undefined;
   protected logger: Logger;
   protected loopGuard: LoopGuard;
 
@@ -36,6 +43,7 @@ export abstract class BaseAgent {
     llmProvider: LLMProvider,
     intercom?: IntercomService,
     agentInstanceId?: string,
+    memoryManager?: MemoryManager,
   ) {
     this.manifest = manifest;
     this.name = manifest.metadata.displayName;
@@ -43,6 +51,7 @@ export abstract class BaseAgent {
     this.llmProvider = llmProvider;
     this.intercom = intercom;
     this.agentInstanceId = agentInstanceId;
+    this.memoryManager = memoryManager;
     this.systemPrompt = IdentityService.generateSystemPrompt(manifest);
     this.logger = new Logger(this.name);
     this.loopGuard = new LoopGuard();
@@ -68,6 +77,17 @@ export abstract class BaseAgent {
   /** Attach a ToolExecutor after construction. */
   public setToolExecutor(toolExecutor: ToolExecutor): void {
     this.toolExecutor = toolExecutor;
+  }
+
+  /** Attach metering components after construction. */
+  public setMetering(engine: MeteringEngine, scheduler: AgentScheduler): void {
+    this.meteringEngine = engine;
+    this.agentScheduler = scheduler;
+  }
+
+  /** Attach a MemoryManager after construction. */
+  public setMemoryManager(memoryManager: MemoryManager): void {
+    this.memoryManager = memoryManager;
   }
 
   abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;
@@ -99,13 +119,32 @@ export abstract class BaseAgent {
       );
     }
 
+    let dynamicContext = '';
+    if (this.memoryManager) {
+      dynamicContext = await this.memoryManager.assembleContext(input);
+    }
+
     const messages: ChatMessage[] = [
-      { role: 'system', content: IdentityService.generateStreamingSystemPrompt(this.manifest) },
+      { role: 'system', content: IdentityService.generateStreamingSystemPrompt(this.manifest, undefined, dynamicContext) },
       ...cleanHistory,
       { role: 'user', content: input },
     ];
 
     const streamChannel = ChannelNamespace.stream(messageId);
+
+    // ── Quota Check ───────────────────────────────────────────────────
+    if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
+      const allowed = await this.agentScheduler.isWithinQuota(
+        this.agentInstanceId || this.role,
+        this.manifest.resources.maxLlmTokensPerHour,
+      );
+      if (!allowed) {
+        const errorMsg = '⚠️ Hourly token quota exceeded. Request denied.';
+        await this.publishThought('reflect', errorMsg);
+        await this.streamTextToChannel(errorMsg, streamChannel, messageId);
+        return { thought: 'Quota exceeded', finalAnswer: errorMsg };
+      }
+    }
 
     // Get tool definitions if ToolExecutor is available
     const tools = this.toolExecutor
@@ -123,6 +162,15 @@ export abstract class BaseAgent {
         if (hasTools) {
           // Non-streaming call that supports tools
           const response = await this.llmProvider.chat(messages, tools);
+
+          // Record usage for the tool-call prompt
+          if (response.usage && this.meteringEngine) {
+            await this.meteringEngine.record({
+              agentId: this.agentInstanceId || this.role,
+              model: this.manifest.model.name,
+              ...response.usage,
+            });
+          }
 
           if (response.toolCalls && response.toolCalls.length > 0) {
             // ── Tool Call Phase ────────────────────────────────────────
@@ -148,7 +196,7 @@ export abstract class BaseAgent {
 
               await this.publishThought(
                 'tool-call',
-                `Calling tool: **${tc.function.name}**(${tc.function.arguments})`,
+                `Tool: ${tc.function.name}\nParameters: ${tc.function.arguments}`,
               );
             }
 
@@ -164,6 +212,15 @@ export abstract class BaseAgent {
                 content: 'Your previous tool calls were blocked because you repeated the same calls too many times. Please provide your best answer using the information you already have, without calling more tools.',
               });
               const fallback = await this.llmProvider.chat(messages);
+
+              if (fallback.usage && this.meteringEngine) {
+                await this.meteringEngine.record({
+                  agentId: this.agentInstanceId || this.role,
+                  model: this.manifest.model.name,
+                  ...fallback.usage,
+                });
+              }
+
               const reply = fallback.content || 'I was unable to complete this task — my tool calls were repeating.';
               await this.streamTextToChannel(reply, streamChannel, messageId);
               this.history = [
@@ -195,12 +252,29 @@ export abstract class BaseAgent {
               this.containerId,
             );
 
+            // Record audit entries for tool calls
+            const auditService = AuditService.getInstance();
+            const auditId = this.agentInstanceId || this.role;
+            for (let i = 0; i < activeCalls.length; i++) {
+              const tc = activeCalls[i]!;
+              const tr = toolResults[i]!;
+              try {
+                await auditService.record(auditId, 'tool_call', {
+                  tool: tc.function.name,
+                  arguments: tc.function.arguments,
+                  result: tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content
+                });
+              } catch (auditErr) {
+                this.logger.error('Failed to record audit entry:', auditErr);
+              }
+            }
+
             // Publish results and add to conversation
             for (const result of toolResults) {
               const preview = result.content.length > 200
                 ? result.content.substring(0, 200) + '...'
                 : result.content;
-              await this.publishThought('tool-result', preview);
+              await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
             }
 
@@ -280,6 +354,14 @@ export abstract class BaseAgent {
     for await (const chunk of this.llmProvider.chatStream(messages)) {
       if (chunk.token) {
         accumulated += chunk.token;
+      }
+
+      if (chunk.usage && this.meteringEngine) {
+        await this.meteringEngine.record({
+          agentId: this.agentInstanceId || this.role,
+          model: this.manifest.model.name,
+          ...chunk.usage,
+        });
       }
 
       if (this.intercom) {
@@ -365,13 +447,14 @@ export abstract class BaseAgent {
   // ── Reasoning Steps (with thought streaming) ───────────────────────────────
 
   protected async observe(context: string): Promise<void> {
-    const observation = `Observing user request: "${context.substring(0, 100)}${context.length > 100 ? '...' : ''}"`;
+    const observation = `Goal: ${context.substring(0, 100)}${context.length > 100 ? '...' : ''}`;
     this.logger.debug(observation);
     await this.publishThought('observe', observation);
   }
 
   protected async plan(goal: string): Promise<string> {
-    const planDescription = `Developing strategy to address: "${goal.substring(0, 50)}..." using available tools: ${this.manifest.tools?.allowed?.join(', ') || 'none'}.`;
+    const tools = this.manifest.tools?.allowed?.join(', ') || 'none';
+    const planDescription = `Strategy: Using tools [${tools}] to address: ${goal.substring(0, 50)}...`;
     this.logger.debug(planDescription);
     await this.publishThought('plan', planDescription);
     return planDescription;

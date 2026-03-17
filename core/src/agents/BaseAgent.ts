@@ -148,7 +148,7 @@ export abstract class BaseAgent {
 
               await this.publishThought(
                 'tool-call',
-                `Calling tool: **${tc.function.name}**(${tc.function.arguments})`,
+                `Tool: ${tc.function.name}\nParameters: ${tc.function.arguments}`,
               );
             }
 
@@ -200,7 +200,7 @@ export abstract class BaseAgent {
               const preview = result.content.length > 200
                 ? result.content.substring(0, 200) + '...'
                 : result.content;
-              await this.publishThought('tool-result', preview);
+              await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
             }
 
@@ -365,13 +365,14 @@ export abstract class BaseAgent {
   // ── Reasoning Steps (with thought streaming) ───────────────────────────────
 
   protected async observe(context: string): Promise<void> {
-    const observation = `Observing user request: "${context.substring(0, 100)}${context.length > 100 ? '...' : ''}"`;
+    const observation = `Goal: ${context.substring(0, 100)}${context.length > 100 ? '...' : ''}`;
     this.logger.debug(observation);
     await this.publishThought('observe', observation);
   }
 
   protected async plan(goal: string): Promise<string> {
-    const planDescription = `Developing strategy to address: "${goal.substring(0, 50)}..." using available tools: ${this.manifest.tools?.allowed?.join(', ') || 'none'}.`;
+    const tools = this.manifest.tools?.allowed?.join(', ') || 'none';
+    const planDescription = `Strategy: Using tools [${tools}] to address: ${goal.substring(0, 50)}...`;
     this.logger.debug(planDescription);
     await this.publishThought('plan', planDescription);
     return planDescription;

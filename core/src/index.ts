@@ -38,6 +38,7 @@ import { MeteringService } from './metering/MeteringService.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { createOpenAICompatRouter } from './routes/openai-compat.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -134,6 +135,9 @@ app.use('/api/agents', heartbeatRouter);
 
 const budgetRouter = createBudgetRouter();
 app.use('/api/budget', budgetRouter);
+
+const openAICompatRouter = createOpenAICompatRouter(orchestrator);
+app.use('/v1', openAICompatRouter);
 
 /**
  * Health check endpoint.

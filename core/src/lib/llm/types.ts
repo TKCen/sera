@@ -9,6 +9,12 @@ export interface LLMResponse {
   };
 }
 
+export interface LLMStreamChunk {
+  token: string;
+  done: boolean;
+}
+
 export interface LLMProvider {
   chat(messages: ChatMessage[]): Promise<LLMResponse>;
+  chatStream(messages: ChatMessage[]): AsyncIterable<LLMStreamChunk>;
 }

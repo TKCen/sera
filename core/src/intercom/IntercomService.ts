@@ -16,6 +16,7 @@ import type {
   MessageMetadata,
   ThoughtEvent,
   ThoughtStepType,
+  StreamToken,
 } from './types.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
 
@@ -36,7 +37,7 @@ export class IntercomService {
       baseURL: apiUrl ?? CENTRIFUGO_API_URL,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `apikey ${apiKey ?? CENTRIFUGO_API_KEY}`,
+        'X-API-Key': apiKey ?? CENTRIFUGO_API_KEY,
       },
       timeout: 5000,
     });
@@ -177,6 +178,22 @@ export class IntercomService {
     };
 
     await this.publish(channel, event);
+  }
+
+  // ── Token Streaming ────────────────────────────────────────────────────────
+
+  /**
+   * Publish a stream token to a per-message channel.
+   * The frontend subscribes before triggering the backend so it catches every token.
+   */
+  async publishStreamToken(
+    channel: string,
+    token: string,
+    done: boolean,
+    messageId: string,
+  ): Promise<void> {
+    const data: StreamToken = { token, done, messageId };
+    await this.publish(channel, data);
   }
 
   // ── Circle Channel Publishing ──────────────────────────────────────────────

@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Loader2, Bot, User, Brain, Eye, Map, Zap, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import { Send, Loader2, Bot, User, Brain, Eye, Map, Zap, RotateCcw, ChevronDown, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { subscribeToThoughts, type ThoughtEvent, disconnectClient } from '../../lib/centrifugo';
+import { subscribeToThoughts, subscribeToStream, type ThoughtEvent } from '../../lib/centrifugo';
 
 interface AgentInfo {
   name: string;
@@ -12,26 +12,33 @@ interface AgentInfo {
   displayName: string;
 }
 
+interface MessageThought {
+  timestamp: string;
+  stepType: string;
+  content: string;
+}
+
 interface ChatMessage {
   id: string;
   sender: 'user' | 'sera';
   text: string;
-  thought?: string;
+  thoughts: MessageThought[];
+  isStreaming: boolean;
   timestamp: Date;
 }
 
 const STEP_ICONS: Record<string, React.ReactNode> = {
-  observe: <Eye size={12} />,
-  plan: <Map size={12} />,
-  act: <Zap size={12} />,
-  reflect: <RotateCcw size={12} />,
+  observe: <Eye size={11} />,
+  plan: <Map size={11} />,
+  act: <Zap size={11} />,
+  reflect: <RotateCcw size={11} />,
 };
 
 const STEP_COLORS: Record<string, string> = {
-  observe: 'text-blue-400 bg-blue-400/10 border-blue-400/20',
-  plan: 'text-amber-400 bg-amber-400/10 border-amber-400/20',
-  act: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
-  reflect: 'text-purple-400 bg-purple-400/10 border-purple-400/20',
+  observe: 'text-blue-400',
+  plan: 'text-amber-400',
+  act: 'text-emerald-400',
+  reflect: 'text-purple-400',
 };
 
 export default function ChatPage() {
@@ -39,21 +46,17 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [thoughts, setThoughts] = useState<ThoughtEvent[]>([]);
-  const [showThoughts, setShowThoughts] = useState(true);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentName, setSelectedAgentName] = useState<string>('architect-prime');
+  const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const thoughtsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const currentStreamRef = useRef<(() => void) | null>(null);
+  const currentThoughtsRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  useEffect(() => {
-    thoughtsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [thoughts]);
 
   // Fetch available agents
   useEffect(() => {
@@ -74,70 +77,140 @@ export default function ChatPage() {
     fetchAgents();
   }, [selectedAgentName]);
 
-  // Subscribe to agent thoughts via Centrifugo
-  useEffect(() => {
-    if (!selectedAgentName) return;
-
-    setThoughts([]); // Clear thoughts when switching agents
-    const unsubscribe = subscribeToThoughts(selectedAgentName, (event) => {
-      setThoughts(prev => [...prev.slice(-49), event]); // Keep last 50 thoughts
+  const toggleThoughts = useCallback((messageId: string) => {
+    setExpandedThoughts(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
     });
-
-    return () => {
-      unsubscribe();
-      disconnectClient();
-    };
-  }, [selectedAgentName]);
+  }, []);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
 
+    const userMsgId = crypto.randomUUID();
     const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: userMsgId,
       sender: 'user',
       text: trimmed,
+      thoughts: [],
+      isStreaming: false,
       timestamp: new Date(),
     };
-    setMessages(prev => [...prev, userMsg]);
+
+    // Create a placeholder for the streaming response
+    const seraMsgId = crypto.randomUUID();
+    const seraMsg: ChatMessage = {
+      id: seraMsgId,
+      sender: 'sera',
+      text: '',
+      thoughts: [],
+      isStreaming: true,
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, userMsg, seraMsg]);
     setInput('');
     setIsLoading(true);
-    // Clear thoughts for new message
-    setThoughts([]);
+    // Auto-expand thoughts while streaming
+    setExpandedThoughts(prev => new Set(prev).add(seraMsgId));
+
+    // Subscribe to thoughts for this agent
+    const unsubThoughts = subscribeToThoughts(selectedAgentName, (event: ThoughtEvent) => {
+      setMessages(prev => prev.map(msg =>
+        msg.id === seraMsgId
+          ? {
+              ...msg,
+              thoughts: [...msg.thoughts, {
+                timestamp: event.timestamp,
+                stepType: event.stepType,
+                content: event.content,
+              }],
+            }
+          : msg
+      ));
+    });
+    currentThoughtsRef.current = unsubThoughts;
 
     try {
-      const res = await fetch('/api/core/chat', {
+      // POST to the streaming endpoint — it returns immediately with the messageId
+      const res = await fetch('/api/core/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: trimmed, conversationId, agentName: selectedAgentName }),
+        body: JSON.stringify({
+          message: trimmed,
+          conversationId,
+          agentName: selectedAgentName,
+        }),
       });
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || 'Chat request failed');
+      if (!res.ok) throw new Error(data.error || 'Stream request failed');
 
       if (data.conversationId) setConversationId(data.conversationId);
+      const messageId = data.messageId;
 
-      const seraMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        sender: 'sera',
-        text: data.reply,
-        thought: data.thought,
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, seraMsg]);
+      // Subscribe to the streaming channel for token-by-token delivery
+      const unsubStream = subscribeToStream(
+        messageId,
+        // onToken: accumulate text
+        (token: string) => {
+          setMessages(prev => prev.map(msg =>
+            msg.id === seraMsgId
+              ? { ...msg, text: msg.text + token }
+              : msg
+          ));
+        },
+        // onDone: mark streaming complete
+        () => {
+          setMessages(prev => prev.map(msg =>
+            msg.id === seraMsgId
+              ? { ...msg, isStreaming: false }
+              : msg
+          ));
+          setIsLoading(false);
+          // Auto-collapse thoughts after streaming
+          setExpandedThoughts(prev => {
+            const next = new Set(prev);
+            next.delete(seraMsgId);
+            return next;
+          });
+          // Clean up subscriptions
+          unsubThoughts();
+          currentThoughtsRef.current = null;
+          inputRef.current?.focus();
+        },
+      );
+      currentStreamRef.current = unsubStream;
     } catch (err: any) {
-      const errorMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        sender: 'sera',
-        text: `Error: ${err.message}. Check your LLM configuration in Settings.`,
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, errorMsg]);
-    } finally {
+      setMessages(prev => prev.map(msg =>
+        msg.id === seraMsgId
+          ? {
+              ...msg,
+              text: `Error: ${err.message}. Check your LLM configuration in Settings.`,
+              isStreaming: false,
+            }
+          : msg
+      ));
       setIsLoading(false);
+      unsubThoughts();
+      currentThoughtsRef.current = null;
       inputRef.current?.focus();
     }
   }, [input, isLoading, conversationId, selectedAgentName]);
+
+  // Cleanup subscriptions on unmount
+  useEffect(() => {
+    return () => {
+      currentStreamRef.current?.();
+      currentThoughtsRef.current?.();
+    };
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -162,6 +235,76 @@ export default function ChatPage() {
       </select>
     </div>
   );
+
+  // Renders the inline collapsible thinking section for a message
+  const renderThinkingBlock = (msg: ChatMessage) => {
+    if (msg.sender !== 'sera') return null;
+    if (msg.thoughts.length === 0 && !msg.isStreaming) return null;
+
+    const isExpanded = expandedThoughts.has(msg.id);
+
+    return (
+      <div className="mb-2">
+        <button
+          onClick={() => toggleThoughts(msg.id)}
+          className={`
+            flex items-center gap-1.5 text-[12px] font-medium transition-colors duration-200 group
+            ${msg.isStreaming && msg.thoughts.length > 0
+              ? 'text-sera-accent'
+              : 'text-sera-text-dim hover:text-sera-text-muted'
+            }
+          `}
+        >
+          <Sparkles
+            size={13}
+            className={`${msg.isStreaming ? 'animate-pulse text-sera-accent' : ''}`}
+          />
+          <span>
+            {msg.isStreaming && msg.thoughts.length === 0
+              ? 'Thinking…'
+              : msg.isStreaming
+                ? 'Thinking…'
+                : 'Thought process'
+            }
+          </span>
+          <ChevronDown
+            size={12}
+            className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+          />
+        </button>
+
+        {/* Expandable thoughts container */}
+        <div
+          className={`
+            overflow-hidden transition-all duration-300 ease-in-out
+            ${isExpanded ? 'max-h-[500px] opacity-100 mt-2' : 'max-h-0 opacity-0'}
+          `}
+        >
+          <div className="pl-3 border-l-2 border-sera-border space-y-1.5">
+            {msg.thoughts.map((thought, i) => (
+              <div
+                key={`${thought.timestamp}-${i}`}
+                className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
+              >
+                <span className={`mt-0.5 flex-shrink-0 ${STEP_COLORS[thought.stepType] || 'text-sera-text-dim'}`}>
+                  {STEP_ICONS[thought.stepType] || <Brain size={11} />}
+                </span>
+                <span className="text-[11px] text-sera-text-muted leading-relaxed">
+                  {thought.content}
+                </span>
+              </div>
+            ))}
+            {msg.isStreaming && msg.thoughts.length === 0 && (
+              <div className="flex items-center gap-2">
+                <Loader2 size={11} className="animate-spin text-sera-accent" />
+                <span className="text-[11px] text-sera-text-dim">Waiting for agent thoughts…</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Empty state
   if (messages.length === 0 && !isLoading) {
@@ -208,123 +351,57 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col h-full relative">
       {agentSelector}
-      {/* Main content area */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-8 py-6 space-y-5">
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex gap-3 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {msg.sender === 'sera' && (
-                <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Bot size={16} className="text-sera-accent" />
-                </div>
-              )}
-              <div className={`max-w-[70%] rounded-xl px-4 py-3 ${
-                msg.sender === 'user'
-                  ? 'bg-sera-accent text-sera-bg'
-                  : 'bg-sera-surface border border-sera-border text-sera-text'
-              }`}>
-                <div className={`text-sm break-words leading-relaxed prose prose-sm max-w-none ${msg.sender === 'user' ? 'prose-invert text-sera-bg' : 'text-sera-text'}`}>
-                  {msg.sender === 'user' ? (
-                    <p className="whitespace-pre-wrap m-0">{msg.text}</p>
-                  ) : (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                  )}
-                </div>
-                {msg.thought && msg.thought !== msg.text && (
-                  <details className={`mt-2 border-t pt-2 ${msg.sender === 'user' ? 'border-sera-bg/20' : 'border-sera-border'}`}>
-                    <summary className={`text-[11px] cursor-pointer transition-colors ${msg.sender === 'user' ? 'text-sera-bg/70 hover:text-sera-bg' : 'text-sera-text-dim hover:text-sera-accent'}`}>
-                      Thought process
-                    </summary>
-                    <p className={`text-[11px] mt-1 italic ${msg.sender === 'user' ? 'text-sera-bg/80' : 'text-sera-text-muted'}`}>{msg.thought}</p>
-                  </details>
-                )}
-                <span className="text-[10px] opacity-50 mt-1.5 block">
-                  {msg.timestamp.toLocaleTimeString()}
-                </span>
-              </div>
-              {msg.sender === 'user' && (
-                <div className="w-8 h-8 rounded-lg bg-sera-surface border border-sera-border flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <User size={16} className="text-sera-text-muted" />
-                </div>
-              )}
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex gap-3 items-start">
-              <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-5">
+        {messages.map((msg) => (
+          <div key={msg.id} className={`flex gap-3 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+            {msg.sender === 'sera' && (
+              <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
                 <Bot size={16} className="text-sera-accent" />
               </div>
-              <div className="bg-sera-surface border border-sera-border rounded-xl px-4 py-3 flex items-center gap-2">
-                <Loader2 size={14} className="animate-spin text-sera-accent" />
-                <span className="text-xs text-sera-text-muted">Thinking…</span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
+            )}
+            <div className={`max-w-[70%] rounded-xl px-4 py-3 ${
+              msg.sender === 'user'
+                ? 'bg-sera-accent text-sera-bg'
+                : 'bg-sera-surface border border-sera-border text-sera-text'
+            }`}>
+              {/* Inline thinking block (Gemini-style) */}
+              {renderThinkingBlock(msg)}
 
-        {/* Thought Stream Panel */}
-        {showThoughts && (thoughts.length > 0 || isLoading) && (
-          <div className="w-80 border-l border-sera-border bg-sera-surface/50 flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-sera-border">
-              <div className="flex items-center gap-2">
-                <Brain size={14} className="text-sera-accent" />
-                <span className="text-xs font-medium text-sera-text">Agent Thoughts</span>
-              </div>
-              <button
-                onClick={() => setShowThoughts(false)}
-                className="text-sera-text-dim hover:text-sera-text transition-colors"
-              >
-                <ChevronDown size={14} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {thoughts.length === 0 && isLoading && (
-                <div className="flex flex-col items-center justify-center h-full text-center px-4">
-                  <Brain size={20} className="text-sera-accent/30 mb-2" />
-                  <p className="text-[11px] text-sera-text-dim">Waiting for agent thoughts…</p>
-                </div>
-              )}
-              {thoughts.map((thought, i) => (
-                <div
-                  key={`${thought.timestamp}-${i}`}
-                  className="animate-in fade-in slide-in-from-right-2 duration-300"
-                >
-                  <div className="flex items-start gap-2">
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${STEP_COLORS[thought.stepType] || 'text-sera-text-muted bg-sera-surface border-sera-border'}`}>
-                      {STEP_ICONS[thought.stepType]}
-                      {thought.stepType}
-                    </span>
-                    <span className="text-[10px] text-sera-text-dim mt-0.5">
-                      {new Date(thought.timestamp).toLocaleTimeString()}
-                    </span>
+              {/* Message content */}
+              <div className={`text-sm break-words leading-relaxed prose prose-sm max-w-none ${msg.sender === 'user' ? 'prose-invert text-sera-bg' : 'text-sera-text'}`}>
+                {msg.sender === 'user' ? (
+                  <p className="whitespace-pre-wrap m-0">{msg.text}</p>
+                ) : msg.isStreaming && !msg.text ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin text-sera-accent" />
+                    <span className="text-xs text-sera-text-muted">Generating…</span>
                   </div>
-                  <p className="text-[11px] text-sera-text-muted mt-1 leading-relaxed pl-0.5">
-                    {thought.content}
-                  </p>
-                </div>
-              ))}
-              <div ref={thoughtsEndRef} />
+                ) : (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                )}
+                {/* Streaming cursor */}
+                {msg.isStreaming && msg.text && (
+                  <span className="inline-block w-1.5 h-4 bg-sera-accent rounded-sm ml-0.5 animate-pulse align-text-bottom" />
+                )}
+              </div>
+              <span className="text-[10px] opacity-50 mt-1.5 block">
+                {msg.timestamp.toLocaleTimeString()}
+              </span>
             </div>
+            {msg.sender === 'user' && (
+              <div className="w-8 h-8 rounded-lg bg-sera-surface border border-sera-border flex items-center justify-center flex-shrink-0 mt-0.5">
+                <User size={16} className="text-sera-text-muted" />
+              </div>
+            )}
           </div>
-        )}
+        ))}
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Thought toggle + Input bar */}
+      {/* Input bar */}
       <div className="border-t border-sera-border p-4">
         <div className="max-w-3xl mx-auto">
-          {/* Toggle thoughts button (when panel is hidden) */}
-          {!showThoughts && (thoughts.length > 0 || isLoading) && (
-            <button
-              onClick={() => setShowThoughts(true)}
-              className="flex items-center gap-1.5 text-[11px] text-sera-text-dim hover:text-sera-accent transition-colors mb-2"
-            >
-              <Brain size={12} />
-              <span>Show thought stream ({thoughts.length})</span>
-              <ChevronUp size={12} />
-            </button>
-          )}
           <div className="sera-card-static p-1.5">
             <div className="flex items-end gap-2">
               <textarea

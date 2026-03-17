@@ -57,6 +57,14 @@ export interface ThoughtEvent {
   agentDisplayName: string;
 }
 
+// ── Stream Token (published to internal:stream:{messageId}) ─────────────────────
+
+export interface StreamToken {
+  token: string;
+  done: boolean;
+  messageId: string;
+}
+
 // ── Channel Namespace Prefixes ──────────────────────────────────────────────────
 
 export const CHANNEL_PREFIXES = [

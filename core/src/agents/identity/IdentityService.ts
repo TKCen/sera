@@ -87,4 +87,21 @@ export class IdentityService {
 
     return sections.join('\n\n');
   }
+
+  /**
+   * Generate a system prompt for streaming mode.
+   * Same as the standard prompt but instructs the LLM to respond in natural
+   * language (not JSON), since tokens stream to the UI in real-time.
+   */
+  static generateStreamingSystemPrompt(manifest: AgentManifest, circleContext?: string): string {
+    const base = IdentityService.generateSystemPrompt(manifest, circleContext);
+
+    // Replace the JSON response format with a natural-language instruction
+    return base.replace(
+      /## Response Format[\s\S]*?(?=## Context)/,
+      `## Response Format\n` +
+      `Respond directly and naturally in markdown. Do NOT wrap your response in JSON.\n` +
+      `Focus on providing a helpful, well-formatted answer to the user's question.\n\n`,
+    );
+  }
 }

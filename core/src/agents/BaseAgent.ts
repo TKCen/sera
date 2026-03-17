@@ -3,6 +3,7 @@ import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
+import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { Logger } from '../lib/logger.js';
 
@@ -44,6 +45,79 @@ export abstract class BaseAgent {
   }
 
   abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;
+
+  // ── Streaming Process ──────────────────────────────────────────────────────
+
+  /**
+   * Stream the LLM response token-by-token to a Centrifugo channel.
+   * Returns the full accumulated response for history storage.
+   */
+  async processStream(
+    input: string,
+    history: ChatMessage[],
+    messageId: string,
+  ): Promise<AgentResponse> {
+    await this.observe(input);
+    await this.plan(input);
+
+    const fullHistory: ChatMessage[] = [
+      ...history,
+      { role: 'user', content: input },
+    ];
+
+    const streamChannel = ChannelNamespace.stream(messageId);
+    const streamingPrompt = IdentityService.generateStreamingSystemPrompt(this.manifest);
+    let accumulated = '';
+
+    try {
+      for await (const chunk of this.llmProvider.chatStream([
+        { role: 'system', content: streamingPrompt },
+        ...fullHistory,
+      ])) {
+        if (chunk.token) {
+          accumulated += chunk.token;
+        }
+
+        if (this.intercom) {
+          await this.intercom.publishStreamToken(
+            streamChannel,
+            chunk.token,
+            chunk.done,
+            messageId,
+          );
+        }
+      }
+    } catch (error: any) {
+      this.logger.error('Stream processing error:', error);
+      // Send error as final token
+      if (this.intercom) {
+        await this.intercom.publishStreamToken(
+          streamChannel,
+          `⚠️ Error: ${error.message}`,
+          true,
+          messageId,
+        );
+      }
+      return {
+        thought: 'Error during streaming.',
+        finalAnswer: `Error: ${error.message}`,
+      };
+    }
+
+    const reply = accumulated || 'No response generated.';
+
+    this.history = [
+      ...fullHistory,
+      { role: 'assistant', content: reply } as ChatMessage,
+    ];
+
+    const result: AgentResponse = {
+      thought: `Completed task: ${input}`,
+      finalAnswer: reply,
+    };
+    await this.reflect(result);
+    return result;
+  }
 
   // ── Thought Streaming ──────────────────────────────────────────────────────
 

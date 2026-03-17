@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { LLMProvider, LLMResponse } from './types.js';
+import type { LLMProvider, LLMResponse, LLMStreamChunk } from './types.js';
 import type { ChatMessage } from '../../agents/types.js';
 import { config } from '../config.js';
 import { Logger } from '../logger.js';
@@ -48,6 +48,29 @@ export class OpenAIProvider implements LLMProvider {
     } catch (error: any) {
       logger.error('LLM Chat Error:', error);
       throw new Error(`LLM provider failed: ${error.message}`);
+    }
+  }
+
+  async *chatStream(messages: ChatMessage[]): AsyncIterable<LLMStreamChunk> {
+    try {
+      const stream = await this.client.chat.completions.create({
+        model: this.model,
+        messages: messages as any,
+        temperature: this.configOverride?.temperature ?? 0.7,
+        stream: true,
+      });
+
+      for await (const chunk of stream) {
+        const token = chunk.choices[0]?.delta?.content || '';
+        if (token) {
+          yield { token, done: false };
+        }
+      }
+
+      yield { token: '', done: true };
+    } catch (error: any) {
+      logger.error('LLM Stream Error:', error);
+      throw new Error(`LLM stream failed: ${error.message}`);
     }
   }
 }

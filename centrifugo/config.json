@@ -1,39 +1,46 @@
 {
-  "secret": "sera-secret-key",
-  "api_key": "sera-api-key",
-  "allowed_origins": ["*"],
-  "allow_subscribe_for_client": true,
-  "allow_anonymous_connect_without_token": true,
-  "namespaces": [
-    {
-      "name": "internal",
-      "history_size": 50,
-      "history_ttl": "300s",
-      "allow_subscribe_for_client": true
-    },
-    {
-      "name": "intercom",
-      "history_size": 100,
-      "history_ttl": "3600s",
-      "allow_subscribe_for_client": true
-    },
-    {
-      "name": "channel",
-      "history_size": 200,
-      "history_ttl": "86400s",
-      "allow_subscribe_for_client": true
-    },
-    {
-      "name": "bridge",
-      "history_size": 100,
-      "history_ttl": "3600s",
-      "allow_subscribe_for_client": true
-    },
-    {
-      "name": "public",
-      "history_size": 10,
-      "history_ttl": "60s",
-      "allow_subscribe_for_client": true
-    }
-  ]
+  "client": {
+    "allowed_origins": ["*"],
+    "insecure": true
+  },
+  "http_api": {
+    "key": "sera-api-key"
+  },
+  "token": {
+    "hmac_secret_key": "sera-secret-key"
+  },
+  "channel": {
+    "namespaces": [
+      {
+        "name": "internal",
+        "history_size": 50,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true
+      },
+      {
+        "name": "intercom",
+        "history_size": 100,
+        "history_ttl": "3600s",
+        "allow_subscribe_for_client": true
+      },
+      {
+        "name": "channel",
+        "history_size": 200,
+        "history_ttl": "86400s",
+        "allow_subscribe_for_client": true
+      },
+      {
+        "name": "bridge",
+        "history_size": 100,
+        "history_ttl": "3600s",
+        "allow_subscribe_for_client": true
+      },
+      {
+        "name": "public",
+        "history_size": 10,
+        "history_ttl": "60s",
+        "allow_subscribe_for_client": true
+      }
+    ]
+  }
 }

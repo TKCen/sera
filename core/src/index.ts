@@ -533,6 +533,59 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+/**
+ * Streams a chat response via Centrifugo.
+ * Returns immediately with { conversationId, messageId }.
+ * Tokens are published to `internal:stream:{messageId}`.
+ */
+app.post('/api/chat/stream', async (req, res) => {
+  try {
+    const { message, conversationId: incomingId, agentName } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const conversationId = incomingId || uuidv4();
+    const messageId = uuidv4();
+
+    if (!conversations.has(conversationId)) {
+      conversations.set(conversationId, []);
+    }
+    const history = conversations.get(conversationId)!;
+
+    let agent;
+    if (agentName) {
+      agent = orchestrator.getAgent(agentName);
+      if (!agent) {
+        return res.status(404).json({ error: `Agent "${agentName}" not found.` });
+      }
+    } else {
+      agent = orchestrator.getPrimaryAgent();
+      if (!agent) {
+        return res.status(500).json({ error: 'No primary agent configured.' });
+      }
+    }
+
+    // Return immediately — streaming happens via Centrifugo
+    res.json({ conversationId, messageId });
+
+    // Process in background
+    try {
+      const response = await agent.processStream(message, history, messageId);
+      const reply = response.finalAnswer || response.thought || '';
+      history.push({ role: 'user', content: message });
+      history.push({ role: 'assistant', content: reply });
+    } catch (err: any) {
+      logger.error(`[${agent.name}] Stream error:`, err);
+    }
+  } catch (error: any) {
+    logger.error('Chat Stream API error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
 // ─── Config API ───────────────────────────────────────────────────────────────
 /**
  * Gets legacy LLM config.

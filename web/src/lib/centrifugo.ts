@@ -51,6 +51,21 @@ export interface ThoughtEvent {
 }
 
 /**
+ * Safely get or create a subscription to a channel.
+ * centrifuge-js throws if newSubscription is called on an existing channel,
+ * so we must remove any previous subscription first.
+ */
+function safeNewSubscription(centrifuge: Centrifuge, channel: string): Subscription {
+  const existing = centrifuge.getSubscription(channel);
+  if (existing) {
+    existing.unsubscribe();
+    existing.removeAllListeners();
+    centrifuge.removeSubscription(existing);
+  }
+  return centrifuge.newSubscription(channel);
+}
+
+/**
  * Subscribe to an agent's thought stream.
  * Returns an unsubscribe function.
  */
@@ -61,7 +76,7 @@ export function subscribeToThoughts(
   const centrifuge = getClient();
   const channel = `internal:agent:${agentId}:thoughts`;
 
-  const sub: Subscription = centrifuge.newSubscription(channel);
+  const sub = safeNewSubscription(centrifuge, channel);
 
   sub.on('publication', (ctx: PublicationContext) => {
     onThought(ctx.data as ThoughtEvent);
@@ -72,6 +87,7 @@ export function subscribeToThoughts(
   return () => {
     sub.unsubscribe();
     sub.removeAllListeners();
+    centrifuge.removeSubscription(sub);
   };
 }
 
@@ -86,7 +102,7 @@ export function subscribeToTerminal(
   const centrifuge = getClient();
   const channel = `internal:agent:${agentId}:terminal`;
 
-  const sub: Subscription = centrifuge.newSubscription(channel);
+  const sub = safeNewSubscription(centrifuge, channel);
 
   sub.on('publication', (ctx: PublicationContext) => {
     onOutput(ctx.data);
@@ -97,5 +113,52 @@ export function subscribeToTerminal(
   return () => {
     sub.unsubscribe();
     sub.removeAllListeners();
+    centrifuge.removeSubscription(sub);
   };
 }
+
+// ── Stream Token Subscription ───────────────────────────────────────────────────
+
+export interface StreamToken {
+  token: string;
+  done: boolean;
+  messageId: string;
+}
+
+/**
+ * Subscribe to a per-message stream channel for real-time token delivery.
+ * Subscribe BEFORE triggering the backend to avoid missing tokens.
+ * Returns an unsubscribe function.
+ */
+export function subscribeToStream(
+  messageId: string,
+  onToken: (token: string) => void,
+  onDone: () => void,
+): () => void {
+  const centrifuge = getClient();
+  const channel = `internal:stream:${messageId}`;
+
+  const sub = safeNewSubscription(centrifuge, channel);
+
+  sub.on('publication', (ctx: PublicationContext) => {
+    const data = ctx.data as StreamToken;
+    if (data.token) {
+      onToken(data.token);
+    }
+    if (data.done) {
+      onDone();
+      sub.unsubscribe();
+      sub.removeAllListeners();
+      centrifuge.removeSubscription(sub);
+    }
+  });
+
+  sub.subscribe();
+
+  return () => {
+    sub.unsubscribe();
+    sub.removeAllListeners();
+    centrifuge.removeSubscription(sub);
+  };
+}
+

@@ -5,6 +5,7 @@
  * Channel patterns:
  *   internal:agent:{id}:thoughts
  *   internal:agent:{id}:terminal
+ *   internal:stream:{messageId}       (per-message token stream)
  *   intercom:{circle}:{from}:{to}    (DM — agent names sorted alphabetically)
  *   channel:{circle}:{name}          (circle pub/sub)
  *   bridge:{circleA}:{circleB}:{name}
@@ -55,6 +56,11 @@ export class ChannelNamespace {
     return `public:status:${agentId}`;
   }
 
+  /** Per-message streaming channel for token-by-token delivery to the UI. */
+  static stream(messageId: string): string {
+    return `internal:stream:${messageId}`;
+  }
+
   /** External subscriber inbox. */
   static externalInbox(subscriberId: string): string {
     return `external:${subscriberId}:inbox`;
@@ -82,10 +88,11 @@ export class ChannelNamespace {
     switch (prefix) {
       case 'internal':
         // internal:agent:{id}:thoughts | internal:agent:{id}:terminal
-        return parts.length === 4 && parts[1] === 'agent'
-          && (parts[3] === 'thoughts' || parts[3] === 'terminal')
-          ? prefix
-          : null;
+        if (parts.length === 4 && parts[1] === 'agent'
+          && (parts[3] === 'thoughts' || parts[3] === 'terminal')) return prefix;
+        // internal:stream:{messageId}
+        if (parts.length === 3 && parts[1] === 'stream') return prefix;
+        return null;
 
       case 'intercom':
         // intercom:{circle}:{from}:{to}

@@ -1,8 +1,10 @@
 import type { SkillRegistry } from '../SkillRegistry.js';
 import type { MemoryManager } from '../../memory/manager.js';
 import { webSearchSkill } from './web-search.js';
+import { webFetchSkill } from './web-fetch.js';
 import { fileReadSkill } from './file-read.js';
 import { fileWriteSkill } from './file-write.js';
+import { fileListSkill } from './file-list.js';
 import { createKnowledgeStoreSkill } from './knowledge-store.js';
 import { createKnowledgeQuerySkill } from './knowledge-query.js';
 
@@ -16,8 +18,10 @@ export function registerBuiltinSkills(
   memoryManager: MemoryManager,
 ): void {
   registry.register(webSearchSkill);
+  registry.register(webFetchSkill);
   registry.register(fileReadSkill);
   registry.register(fileWriteSkill);
+  registry.register(fileListSkill);
   registry.register(createKnowledgeStoreSkill(memoryManager));
   registry.register(createKnowledgeQuerySkill(memoryManager));
 }

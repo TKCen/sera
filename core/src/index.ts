@@ -26,6 +26,7 @@ import { IntercomService } from './intercom/IntercomService.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
 import { registerBuiltinSkills } from './skills/builtins/index.js';
+import { ToolExecutor } from './tools/ToolExecutor.js';
 import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
 import { createCircleRouter } from './routes/circles.js';
@@ -79,6 +80,10 @@ mcpRegistry.getAllTools().then(async () => {
     logger.info(`Bridged ${count} MCP tool(s) as skills`);
   }
 }).catch(() => { /* MCP servers may not be connected yet */ });
+
+// ── Tool Executor ────────────────────────────────────────────────────────────
+const toolExecutor = new ToolExecutor(skillRegistry);
+orchestrator.setToolExecutor(toolExecutor);
 
 // ── Route Modules ────────────────────────────────────────────────────────────
 const agentRouter = createAgentRouter(orchestrator, agentsDir);

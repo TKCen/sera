@@ -45,7 +45,7 @@
 
 | Component | Status | What's Missing |
 |---|---|---|
-| **BaseAgent** | Streaming + thoughts work | ❌ No tool call loop — agent can't call tools during reasoning, `observe/plan/act/reflect` are stubs |
+| **BaseAgent** | Streaming + thoughts + tool loop work | ❌ `observe/plan/act/reflect` are stubs — tool loop is the main reasoning path now |
 | **Orchestrator** | Process patterns work | ❌ Uses `ProcessManager` but agents themselves lack tool execution |
 | **MCP Registry** | Client registration works | ❌ No MCP server mode (exposing agents as MCP tools) |
 | **Vector Services** | Embedding + Qdrant search | ❌ Not connected to agent reasoning loop |
@@ -57,7 +57,6 @@
 
 | Component | Notes |
 |---|---|
-| **Tool Execution in Agent Loop** | Agent can't call `web_search`, `file_read` etc. during reasoning — this is THE critical gap |
 | **Thinking Mode UI** | No collapsible thinking panel, no tool call display in browser |
 | **Session Sidebar (Web UI)** | Sessions exist in backend but UI has no sidebar to browse/resume them |
 | **General Assistant Agent** | Only code-focused agents exist (architect, developer, researcher) — no personal assistant |
@@ -82,7 +81,7 @@ The following table maps OpenFang systems to existing SERA coverage and identifi
 | Skills Framework | ✅ **Done** — `SkillRegistry` + 6 builtins + MCP bridge | — | — |
 | Orchestrator (process patterns) | ✅ **Done** — `ProcessManager` (Sequential/Parallel/Hierarchical) | — | — |
 | MCP Client | ✅ **Done** — `MCPRegistry` + skill bridge | No server mode | Medium |
-| **Tool Execution in Agent Loop** | ❌ Critical gap | 🔴 Agent can't call tools during reasoning — **Story 0.3** | **Critical** |
+| **Tool Execution in Agent Loop** | ✅ **Done** — `ToolExecutor` + agentic loop | Implemented | — |
 | **Agent Loop Stability** | ❌ Not started | 🔴 **Epic 13** — loop guard, session repair, compaction | **High** |
 | **Metering & Budget** | ❌ Not started | 🔴 **Epic 14** — token quotas, cost tracking | **High** |
 | **Channel Adapters** | ❌ Not started | 🔴 **Epic 15** — Telegram, Discord, WhatsApp | **Medium** |
@@ -142,25 +141,25 @@ The following table maps OpenFang systems to existing SERA coverage and identifi
 
 ---
 
-### Story 0.3: Tool Execution in Agent Loop
+### Story 0.3: Tool Execution in Agent Loop — ✅ DONE
 
 > **As an** agent,
 > **I want** to call tools (web search, file read/write, knowledge queries) during my reasoning loop,
 > **so that** I can gather information and take actions to answer the user's question.
 
 **Acceptance Criteria:**
-- [ ] Agent loop supports LLM tool-call responses — parse tool calls, execute them, feed results back
-- [ ] Built-in tools available immediately: `web_search`, `web_fetch`, `file_read`, `file_write`, `file_list`, `memory_store`, `memory_recall`
-- [ ] Tool definitions sent to the LLM in the standard tool/function format for the provider
-- [ ] Tool results truncated at 50K chars with marker (prevent context overflow)
-- [ ] Tool execution timeout (default 60s) prevents hanging
-- [ ] Tool calls and results appear in the thinking stream (Story 0.2)
+- [x] Agent loop supports LLM tool-call responses — parse tool calls, execute them, feed results back
+- [x] Built-in tools available immediately: `web_search`, `web_fetch`, `file_read`, `file_write`, `file_list`, `knowledge_store`, `knowledge_query`
+- [x] Tool definitions sent to the LLM in the standard tool/function format for the provider
+- [x] Tool results truncated at 50K chars with marker (prevent context overflow)
+- [x] Tool execution timeout (default 60s) prevents hanging
+- [x] Tool calls and results appear in the thinking stream (Story 0.2)
 - [ ] Agents only have access to tools listed in their manifest's `tools.allowed`
 
 **Files:**
-- `[NEW]` `core/src/tools/ToolRunner.ts`
-- `[NEW]` `core/src/tools/builtins/` — web_search, web_fetch, file_read, file_write, file_list, memory_store, memory_recall
-- `[MODIFY]` `core/src/agents/BaseAgent.ts` — tool call loop
+- `[DONE]` `core/src/tools/ToolExecutor.ts`
+- `[DONE]` `core/src/skills/builtins/web-fetch.ts`, `core/src/skills/builtins/file-list.ts`
+- `[DONE]` `core/src/agents/BaseAgent.ts` — tool call loop
 
 ---
 

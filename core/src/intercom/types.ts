@@ -17,7 +17,7 @@ export type IntercomMessageType =
 
 // ── Thought Step Types ──────────────────────────────────────────────────────────
 
-export type ThoughtStepType = 'observe' | 'plan' | 'act' | 'reflect';
+export type ThoughtStepType = 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result';
 
 // ── Message Envelope ────────────────────────────────────────────────────────────
 

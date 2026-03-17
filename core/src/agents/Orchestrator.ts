@@ -8,6 +8,7 @@ import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 import { Logger } from '../lib/logger.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
+import type { ToolExecutor } from '../tools/ToolExecutor.js';
 
 const logger = new Logger('Orchestrator');
 
@@ -17,6 +18,7 @@ export class Orchestrator {
   private primaryAgentName: string | undefined;
   private processManager: ProcessManager = new ProcessManager();
   private intercom: IntercomService | undefined;
+  private toolExecutor: ToolExecutor | undefined;
 
   /** Active file watcher (if any). */
   private watcher: fs.FSWatcher | undefined;
@@ -33,6 +35,16 @@ export class Orchestrator {
   }
 
   /**
+   * Set the ToolExecutor and propagate to all loaded agents.
+   */
+  public setToolExecutor(toolExecutor: ToolExecutor): void {
+    this.toolExecutor = toolExecutor;
+    for (const agent of this.agents.values()) {
+      agent.setToolExecutor(toolExecutor);
+    }
+  }
+
+  /**
    * Load agents from AGENT.yaml manifests in a directory.
    * The first agent loaded becomes the primary agent (used for chat routing).
    */
@@ -42,6 +54,12 @@ export class Orchestrator {
 
     this.agents = agents;
     this.manifests = manifests;
+
+    // Propagate services to new agents
+    for (const agent of this.agents.values()) {
+      if (this.intercom) agent.setIntercom(this.intercom);
+      if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
+    }
 
     // Set primary to alphabetically first agent
     const sorted = Array.from(manifests.keys()).sort();
@@ -82,6 +100,7 @@ export class Orchestrator {
     for (const manifest of diff.added) {
       const agent = AgentFactory.createAgent(manifest);
       if (this.intercom) agent.setIntercom(this.intercom);
+      if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
       this.agents.set(manifest.metadata.name, agent);
       this.manifests.set(manifest.metadata.name, manifest);
       logger.info(`Added agent: ${manifest.metadata.name}`);
@@ -91,6 +110,7 @@ export class Orchestrator {
     for (const manifest of diff.updated) {
       const agent = AgentFactory.createAgent(manifest);
       if (this.intercom) agent.setIntercom(this.intercom);
+      if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
       this.agents.set(manifest.metadata.name, agent);
       this.manifests.set(manifest.metadata.name, manifest);
       logger.info(`Updated agent: ${manifest.metadata.name}`);
@@ -271,3 +291,4 @@ export class Orchestrator {
     return this.processManager.run(type, tasks, this.agents, managerAgent);
   }
 }
+

@@ -134,6 +134,19 @@ export class AgentManifestLoader {
     AgentManifestLoader.requireString(model, 'provider', `${ctx} model`);
     AgentManifestLoader.requireString(model, 'name', `${ctx} model`);
 
+    // ── resources ─────────────────────────────────────────────────────────────
+    if (obj['resources']) {
+      const res = obj['resources'] as Record<string, unknown>;
+      if (res['maxLlmTokensPerHour'] !== undefined) {
+        if (typeof res['maxLlmTokensPerHour'] !== 'number' || res['maxLlmTokensPerHour'] <= 0) {
+          throw new ManifestValidationError(
+            `"maxLlmTokensPerHour" must be a positive number${ctx}`,
+            'resources.maxLlmTokensPerHour',
+          );
+        }
+      }
+    }
+
     // ── Construct validated manifest ──────────────────────────────────────────
     return obj as unknown as AgentManifest;
   }

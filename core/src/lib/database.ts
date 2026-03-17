@@ -112,7 +112,25 @@ export const initDb = async () => {
       )
     `);
 
-    logger.info('Database initialized with pgvector, chat sessions, agent instances, and token metering');
+    // ── Usage Events (Epic 14) ────────────────────────────────────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id SERIAL PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_tokens INT NOT NULL DEFAULT 0,
+        completion_tokens INT NOT NULL DEFAULT 0,
+        total_tokens INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_usage_events_agent_time
+      ON usage_events(agent_id, created_at DESC)
+    `);
+
+    logger.info('Database initialized with pgvector, chat sessions, agent instances, token metering, and usage events');
   } catch (err) {
     logger.error('Database initialization failed:', err);
     throw err;

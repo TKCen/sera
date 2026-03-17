@@ -8,6 +8,8 @@ import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { LoopGuard } from './stability/LoopGuard.js';
 import { SessionRepair } from './stability/SessionRepair.js';
+import type { MeteringEngine } from '../metering/MeteringEngine.js';
+import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { Logger } from '../lib/logger.js';
 
 /** Maximum tool-call loop iterations before forcing a text response. */
@@ -25,6 +27,8 @@ export abstract class BaseAgent {
   protected manifest: AgentManifest;
   protected intercom: IntercomService | undefined;
   protected toolExecutor: ToolExecutor | undefined;
+  protected meteringEngine: MeteringEngine | undefined;
+  protected agentScheduler: AgentScheduler | undefined;
   protected logger: Logger;
   protected loopGuard: LoopGuard;
 
@@ -70,6 +74,12 @@ export abstract class BaseAgent {
     this.toolExecutor = toolExecutor;
   }
 
+  /** Attach metering components after construction. */
+  public setMetering(engine: MeteringEngine, scheduler: AgentScheduler): void {
+    this.meteringEngine = engine;
+    this.agentScheduler = scheduler;
+  }
+
   abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;
 
   // ── Streaming Process with Tool Loop ────────────────────────────────────────
@@ -107,6 +117,20 @@ export abstract class BaseAgent {
 
     const streamChannel = ChannelNamespace.stream(messageId);
 
+    // ── Quota Check ───────────────────────────────────────────────────
+    if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
+      const allowed = await this.agentScheduler.isWithinQuota(
+        this.agentInstanceId || this.role,
+        this.manifest.resources.maxLlmTokensPerHour,
+      );
+      if (!allowed) {
+        const errorMsg = '⚠️ Hourly token quota exceeded. Request denied.';
+        await this.publishThought('reflect', errorMsg);
+        await this.streamTextToChannel(errorMsg, streamChannel, messageId);
+        return { thought: 'Quota exceeded', finalAnswer: errorMsg };
+      }
+    }
+
     // Get tool definitions if ToolExecutor is available
     const tools = this.toolExecutor
       ? this.toolExecutor.getToolDefinitions(this.manifest)
@@ -123,6 +147,15 @@ export abstract class BaseAgent {
         if (hasTools) {
           // Non-streaming call that supports tools
           const response = await this.llmProvider.chat(messages, tools);
+
+          // Record usage for the tool-call prompt
+          if (response.usage && this.meteringEngine) {
+            await this.meteringEngine.record({
+              agentId: this.agentInstanceId || this.role,
+              model: this.manifest.model.name,
+              ...response.usage,
+            });
+          }
 
           if (response.toolCalls && response.toolCalls.length > 0) {
             // ── Tool Call Phase ────────────────────────────────────────
@@ -164,6 +197,15 @@ export abstract class BaseAgent {
                 content: 'Your previous tool calls were blocked because you repeated the same calls too many times. Please provide your best answer using the information you already have, without calling more tools.',
               });
               const fallback = await this.llmProvider.chat(messages);
+
+              if (fallback.usage && this.meteringEngine) {
+                await this.meteringEngine.record({
+                  agentId: this.agentInstanceId || this.role,
+                  model: this.manifest.model.name,
+                  ...fallback.usage,
+                });
+              }
+
               const reply = fallback.content || 'I was unable to complete this task — my tool calls were repeating.';
               await this.streamTextToChannel(reply, streamChannel, messageId);
               this.history = [
@@ -280,6 +322,14 @@ export abstract class BaseAgent {
     for await (const chunk of this.llmProvider.chatStream(messages)) {
       if (chunk.token) {
         accumulated += chunk.token;
+      }
+
+      if (chunk.usage && this.meteringEngine) {
+        await this.meteringEngine.record({
+          agentId: this.agentInstanceId || this.role,
+          model: this.manifest.model.name,
+          ...chunk.usage,
+        });
       }
 
       if (this.intercom) {

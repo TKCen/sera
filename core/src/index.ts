@@ -30,6 +30,8 @@ import { PartySessionManager } from './circles/PartyMode.js';
 import { createAgentRouter } from './routes/agents.js';
 import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
+import { SessionStore } from './sessions/SessionStore.js';
+import { createSessionRouter } from './routes/sessions.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -91,6 +93,10 @@ const skillsRouter = createSkillsRouter(skillRegistry, orchestrator);
 // ── Party Mode ───────────────────────────────────────────────────────────────
 const partySessionManager = new PartySessionManager();
 
+// ── Session Store ────────────────────────────────────────────────────────────
+const sessionStore = new SessionStore();
+const sessionRouter = createSessionRouter(sessionStore);
+
 // ── Agent File Watcher ───────────────────────────────────────────────────────
 orchestrator.watchAgentsDirectory(agentsDir);
 
@@ -102,6 +108,7 @@ app.use('/api/intercom', intercomRouter);
 app.use('/api/agents', agentRouter);
 app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
+app.use('/api/sessions', sessionRouter);
 
 /**
  * Health check endpoint.
@@ -471,7 +478,29 @@ app.post('/api/execute', async (req, res) => {
 
 // ─── Chat API ─────────────────────────────────────────────────────────────────
 import type { ChatMessage } from './agents/types.js';
-const conversations = new Map<string, ChatMessage[]>();
+
+/**
+ * Helper: resolve or create a session and load its message history.
+ */
+async function resolveSession(
+  sessionId: string | undefined,
+  agentName: string,
+): Promise<{ sessionId: string; history: ChatMessage[]; isNew: boolean }> {
+  if (sessionId) {
+    const existing = await sessionStore.getSession(sessionId);
+    if (existing) {
+      const msgs = await sessionStore.getMessages(sessionId);
+      const history: ChatMessage[] = msgs.map(m => ({
+        role: m.role as ChatMessage['role'],
+        content: m.content,
+      }));
+      return { sessionId, history, isNew: false };
+    }
+  }
+  // Create a new session
+  const session = await sessionStore.createSession({ agentName });
+  return { sessionId: session.id, history: [], isNew: true };
+}
 
 /**
  * Sends a chat message.
@@ -481,25 +510,18 @@ const conversations = new Map<string, ChatMessage[]>();
  */
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, conversationId: incomingId, agentName } = req.body;
+    const { message, sessionId: incomingSessionId, agentName: incomingAgent } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
     }
 
-    const conversationId = incomingId || uuidv4();
-
-    // Get or create conversation history
-    if (!conversations.has(conversationId)) {
-      conversations.set(conversationId, []);
-    }
-    const history = conversations.get(conversationId)!;
-
-    // Process through the specified agent or the primary agent
+    // Resolve agent
     let agent;
-    if (agentName) {
-      agent = orchestrator.getAgent(agentName);
+    const agentName = incomingAgent || 'architect-prime';
+    if (incomingAgent) {
+      agent = orchestrator.getAgent(incomingAgent);
       if (!agent) {
-        return res.status(404).json({ error: `Agent "${agentName}" not found.` });
+        return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
       }
     } else {
       agent = orchestrator.getPrimaryAgent();
@@ -508,15 +530,28 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // Resolve or create session
+    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName);
+
     try {
       const response = await agent.process(message, history);
       const reply = response.finalAnswer || response.thought || 'No response generated.';
 
-      history.push({ role: 'user', content: message });
-      history.push({ role: 'assistant', content: reply });
+      // Persist messages
+      await sessionStore.addMessage({ sessionId, role: 'user', content: message });
+      await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+
+      // Auto-title on first exchange
+      if (isNew) {
+        const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
+        await sessionStore.updateSessionTitle(sessionId, autoTitle);
+      }
+
+      // Best-effort JSONL mirror
+      sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
 
       res.json({
-        conversationId,
+        sessionId,
         reply,
         thought: response.thought,
       });
@@ -535,29 +570,25 @@ app.post('/api/chat', async (req, res) => {
 
 /**
  * Streams a chat response via Centrifugo.
- * Returns immediately with { conversationId, messageId }.
+ * Returns immediately with { sessionId, messageId }.
  * Tokens are published to `internal:stream:{messageId}`.
  */
 app.post('/api/chat/stream', async (req, res) => {
   try {
-    const { message, conversationId: incomingId, agentName } = req.body;
+    const { message, sessionId: incomingSessionId, agentName: incomingAgent } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
     }
 
-    const conversationId = incomingId || uuidv4();
+    const agentName = incomingAgent || 'architect-prime';
     const messageId = uuidv4();
 
-    if (!conversations.has(conversationId)) {
-      conversations.set(conversationId, []);
-    }
-    const history = conversations.get(conversationId)!;
-
+    // Resolve agent
     let agent;
-    if (agentName) {
-      agent = orchestrator.getAgent(agentName);
+    if (incomingAgent) {
+      agent = orchestrator.getAgent(incomingAgent);
       if (!agent) {
-        return res.status(404).json({ error: `Agent "${agentName}" not found.` });
+        return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
       }
     } else {
       agent = orchestrator.getPrimaryAgent();
@@ -566,15 +597,29 @@ app.post('/api/chat/stream', async (req, res) => {
       }
     }
 
+    // Resolve or create session
+    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName);
+
     // Return immediately — streaming happens via Centrifugo
-    res.json({ conversationId, messageId });
+    res.json({ sessionId, messageId });
 
     // Process in background
     try {
       const response = await agent.processStream(message, history, messageId);
       const reply = response.finalAnswer || response.thought || '';
-      history.push({ role: 'user', content: message });
-      history.push({ role: 'assistant', content: reply });
+
+      // Persist messages
+      await sessionStore.addMessage({ sessionId, role: 'user', content: message });
+      await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+
+      // Auto-title on first exchange
+      if (isNew) {
+        const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
+        await sessionStore.updateSessionTitle(sessionId, autoTitle);
+      }
+
+      // Best-effort JSONL mirror
+      sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
     } catch (err: any) {
       logger.error(`[${agent.name}] Stream error:`, err);
     }

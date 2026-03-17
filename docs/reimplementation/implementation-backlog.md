@@ -1,37 +1,199 @@
 # 📋 SERA Implementation Backlog
 
 > Comprehensive task list with user stories for implementing the SERA agent workspace architecture.
-> Based on the current project state as of 2026-03-16.
+> Updated 2026-03-17 — reprioritized around core chat experience + OpenFang gap analysis.
 >
-> **Reference**: [agent-workspace-architecture.md](./agent-workspace-architecture.md)
+> **References**: [agent-workspace-architecture.md](./agent-workspace-architecture.md) · [OpenFang Analysis](../../.gemini/antigravity/brain/4e4a23d8-c437-4703-8cda-6e057cc348ae/openfang_analysis.md)
+
+> [!IMPORTANT]
+> **Current Priority**: Get a fully working chat experience — persistent sessions, thinking mode,
+> tool usage, agent-to-agent comms, general assistant agent, and agent template creation from the UI.
+> SERA is primarily a **personal assistant platform**, not only a code-building tool.
 
 ---
 
-## 📊 Current State Summary
+## 📊 Current State Summary *(updated 2026-03-17)*
 
-| Component | Status | Notes |
+### ✅ Fully Implemented (Backend)
+
+| Component | Files | Notes |
 |---|---|---|
-| Express API Server | ✅ Working | Health, chat, config, memory, vector endpoints |
-| LLM Provider (OpenAI-compatible) | ✅ Working | Multi-provider config with persistence |
-| BaseAgent / PrimaryAgent | 🟡 POC | LLM-backed, JSON response parsing, no tools |
-| WorkerAgent | 🔴 Stub | Returns hardcoded response, no real processing |
-| Orchestrator | 🟡 POC | Simple delegation, no process patterns |
-| MCP Registry | 🟡 POC | Client registration works, no agent integration |
-| Memory Manager | 🟡 POC | Working memory (array) + archival (markdown files) |
-| Vector Services | 🟡 POC | Embedding + ingestion + Qdrant search |
-| LSP Router | 🟡 POC | Basic route, no symbol-level integration |
-| Web UI | 🟡 POC | Sidebar, chat page, settings, agents/insights/schedules pages |
-| Docker Compose | ✅ Working | sera-core, sera-web, centrifugo, postgres, qdrant |
-| Centrifugo | 🔴 Unused | Deployed but not integrated into agent system |
-| AGENT.yaml / Circle system | 🔴 Missing | Not yet implemented |
-| Sandbox Manager | 🔴 Missing | Not yet implemented |
-| Intercom | 🔴 Missing | Not yet implemented |
+| **Express API Server** | `index.ts` (839 LOC) | 20+ endpoints, all subsystems wired, CORS, error handling |
+| **LLM Provider** | `OpenAIProvider.ts`, `ProviderFactory.ts` | Multi-provider catalog with config persistence, test endpoint |
+| **Agent Manifest System** | `AgentManifestLoader.ts` (7.2KB) + types + tests | Loads/validates `AGENT.yaml`, 3 templates ship (architect, developer, researcher) |
+| **Identity Service** | `IdentityService.ts` (5.5KB) | System prompt generation from manifest, streaming prompt variant |
+| **Agent Factory + File Watcher** | `AgentFactory.ts` (2.6KB + tests) | Dynamic agent creation from manifests, hot-reload on file changes |
+| **Session Store** | `SessionStore.ts` (7.3KB + tests) | PostgreSQL + JSONL hybrid, CRUD + messages, integrated into chat API |
+| **Chat API (session-aware)** | `index.ts` lines 479-632 | `POST /api/chat` and `POST /api/chat/stream`, auto-creates/resumes sessions, auto-title |
+| **Intercom Service** | `IntercomService.ts` (9.9KB + tests) | Centrifugo integration, thought streaming, direct messages, stream tokens |
+| **Channel Namespaces** | `ChannelNamespace.ts` (4.6KB + tests) | `internal:`, `intercom:`, `stream:` namespace validation |
+| **Sandbox Manager** | `SandboxManager.ts` (10.2KB + tests) | Container lifecycle via dockerode, resource limits, network modes |
+| **Tier Policy** | `TierPolicy.ts` (6.9KB + tests) | Security tier enforcement (CPU, memory, network) |
+| **Sandbox Tool Runner** | `ToolRunner.ts` (5KB) | Execute tools in sandbox containers with timeout and output capture |
+| **Circle Registry** | `CircleRegistry.ts` (10.7KB + tests) | Load/validate CIRCLE.yaml, agent roster, project context injection |
+| **Party Mode** | `PartyMode.ts` (10.8KB + tests) | Multi-agent group discussion sessions, full API (create/message/end/list) |
+| **Skill Registry** | `SkillRegistry.ts` (7.8KB + tests) | Register/invoke skills, MCP tool bridge, dependency validation |
+| **Built-in Skills (6)** | `skills/builtins/` | `file-read`, `file-write`, `web-search`, `knowledge-store`, `knowledge-query`, index |
+| **Memory Block Store** | `MemoryBlockStore.ts` (13KB + tests) | Markdown+YAML frontmatter files, 4 block types, refs, wikilinks, graph API |
+| **Reflector** | `Reflector.ts` (4.2KB + tests) | Auto-compaction of old memory entries into archival summaries |
+| **Storage Providers** | `StorageProvider.ts` + Local + DockerVolume (all with tests) | Pluggable workspace storage abstraction |
+| **Subagent Runner** | `SubagentRunner.ts` (6.4KB) | Spawn child agents, workspace sharing, result collection |
+| **Process Manager** | `ProcessManager.ts` + Sequential + Parallel + Hierarchical (all + tests) | Three execution strategies with typed process definitions |
+| **Docker Compose** | `docker-compose.yaml` | sera-core, sera-web, centrifugo, postgres, qdrant — all healthy |
+
+### 🟡 Partially Implemented
+
+| Component | Status | What's Missing |
+|---|---|---|
+| **BaseAgent** | Streaming + thoughts work | ❌ No tool call loop — agent can't call tools during reasoning, `observe/plan/act/reflect` are stubs |
+| **Orchestrator** | Process patterns work | ❌ Uses `ProcessManager` but agents themselves lack tool execution |
+| **MCP Registry** | Client registration works | ❌ No MCP server mode (exposing agents as MCP tools) |
+| **Vector Services** | Embedding + Qdrant search | ❌ Not connected to agent reasoning loop |
+| **Web UI** | Pages exist: chat, agents, circles, insights, memory, schedules, settings, tools | ❌ No session sidebar, no thinking mode panel, no agent template creator, no streaming display |
+| **Centrifugo** | Wired into IntercomService | ❌ Web UI doesn't subscribe to channels yet — no live streaming in browser |
+| **LSP Router** | Basic route exists | ❌ No symbol-level integration (Serena-style) |
+
+### 🔴 Not Yet Started
+
+| Component | Notes |
+|---|---|
+| **Tool Execution in Agent Loop** | Agent can't call `web_search`, `file_read` etc. during reasoning — this is THE critical gap |
+| **Thinking Mode UI** | No collapsible thinking panel, no tool call display in browser |
+| **Session Sidebar (Web UI)** | Sessions exist in backend but UI has no sidebar to browse/resume them |
+| **General Assistant Agent** | Only code-focused agents exist (architect, developer, researcher) — no personal assistant |
+| **Agent Template Creator** | No UI to create new agent types from the dashboard |
+| **Agent Loop Stability** | No loop guard, session repair, compaction, tool timeout |
+| **Metering / Budget** | No token quotas, cost tracking, per-agent spend |
+| **Channel Adapters** | No Telegram, Discord, WhatsApp adapters |
+| **OpenAI-Compatible API** | No `/v1/chat/completions` endpoint |
+| **Audit Trail** | No Merkle hash-chain logging |
 
 ---
 
-## 🏗️ Epic 1: Agent Manifest System
+## 🔍 Gap Analysis vs OpenFang
+
+The following table maps OpenFang systems to existing SERA coverage and identifies gaps:
+
+| OpenFang System | SERA Coverage | Gap | Priority |
+|---|---|---|---|
+| Agent Manifests (`agent.toml`) | ✅ **Done** — `AgentManifestLoader` + 3 YAML templates | Implemented | — |
+| Capability-Based Security | ✅ **Done** — `TierPolicy` + `SandboxManager` RBAC | MCP server mode missing | Low |
+| Memory Substrate (6 layers) | ✅ **Done** — `MemoryBlockStore` + `Reflector` + graph API | Missing KG, task board, canonical sessions | Medium |
+| Skills Framework | ✅ **Done** — `SkillRegistry` + 6 builtins + MCP bridge | — | — |
+| Orchestrator (process patterns) | ✅ **Done** — `ProcessManager` (Sequential/Parallel/Hierarchical) | — | — |
+| MCP Client | ✅ **Done** — `MCPRegistry` + skill bridge | No server mode | Medium |
+| **Tool Execution in Agent Loop** | ❌ Critical gap | 🔴 Agent can't call tools during reasoning — **Story 0.3** | **Critical** |
+| **Agent Loop Stability** | ❌ Not started | 🔴 **Epic 13** — loop guard, session repair, compaction | **High** |
+| **Metering & Budget** | ❌ Not started | 🔴 **Epic 14** — token quotas, cost tracking | **High** |
+| **Channel Adapters** | ❌ Not started | 🔴 **Epic 15** — Telegram, Discord, WhatsApp | **Medium** |
+| **OpenAI-Compatible API** | ❌ Not started | 🔴 **Epic 17** — `/v1/chat/completions` endpoint | **Medium** |
+| **Audit Trail** | ❌ Not started | 🔴 **Epic 18** — Merkle hash-chain logging | **Low** |
+| Workflow Engine | ❌ Deferred | Deferred — not needed for personal assistant UX | Future |
+| Autonomous Hands | ❌ Deferred | Deferred — requires workflows + triggers | Future |
+
+---
+
+## 💬 Epic 0: Core Chat Experience *(TOP PRIORITY)*
+
+*Get the fundamental chat loop working end-to-end: persistent sessions, streaming thoughts, tool usage, and a general-purpose assistant.*
+
+### Story 0.1: Session Management (Persistent Chat Sessions) — ✅ BACKEND DONE
+
+> **As a** user,
+> **I want** my conversations with agents to persist across page reloads and restarts,
+> **so that** I can resume conversations, browse history, and maintain context over time.
+
+**Acceptance Criteria:**
+- [x] Create `Session` type: id, agentId, title (auto-generated from first message), messages array, createdAt, updatedAt
+- [x] PostgreSQL `sessions` table stores session metadata; JSONL files on disk for human-readable message logs
+- [x] `SessionManager` creates, loads, lists, and deletes sessions per agent
+- [x] Chat endpoint accepts optional `sessionId` — resumes existing session or creates a new one
+- [x] API: `GET /api/sessions` (list), `GET /api/sessions/:id` (load), `POST /api/sessions` (create), `DELETE /api/sessions/:id`
+- [ ] Web UI sidebar shows session history grouped by agent; clicking a session loads the conversation
+- [ ] New chat button creates a fresh session; agent retains memory context from previous sessions
+
+**Files:**
+- `[NEW]` `core/src/sessions/SessionManager.ts`
+- `[NEW]` `core/src/sessions/types.ts`
+- `[NEW]` `core/src/routes/sessions.ts`
+- `[MODIFY]` `core/src/routes/chat.ts` — session-aware chat endpoint
+- `[MODIFY]` `web/src/app/chat/page.tsx` — session sidebar + resume
+
+---
+
+### Story 0.2: Thinking Mode & Streaming — 🟡 BACKEND PARTIAL
+
+> **As a** user,
+> **I want** to see the agent's reasoning process in real-time as it thinks,
+> **so that** I understand what it's doing and can intervene if needed.
+
+**Acceptance Criteria:**
+- [/] Agent reasoning loop publishes "thinking" chunks via SSE or Centrifugo before the final response — *backend emits thoughts via `publishThought()` but reasoning steps are stubs*
+- [x] Thinking stream includes: step type (reasoning/planning/tool-call/tool-result), content, timestamp
+- [ ] Web UI renders thinking steps in a collapsible panel above the response (like Claude/ChatGPT thinking)
+- [ ] Tool calls show the tool name, parameters, and result inline in the thinking stream
+- [x] Final response is displayed separately from thinking content
+- [ ] Toggle to show/hide thinking in the UI; default on
+
+**Files:**
+- `[MODIFY]` `core/src/agents/BaseAgent.ts` — emit thinking events during reasoning loop
+- `[MODIFY]` `core/src/routes/chat.ts` — SSE streaming of thinking + response
+- `[MODIFY]` `web/src/app/chat/page.tsx` — thinking panel UI
+
+---
+
+### Story 0.3: Tool Execution in Agent Loop
+
+> **As an** agent,
+> **I want** to call tools (web search, file read/write, knowledge queries) during my reasoning loop,
+> **so that** I can gather information and take actions to answer the user's question.
+
+**Acceptance Criteria:**
+- [ ] Agent loop supports LLM tool-call responses — parse tool calls, execute them, feed results back
+- [ ] Built-in tools available immediately: `web_search`, `web_fetch`, `file_read`, `file_write`, `file_list`, `memory_store`, `memory_recall`
+- [ ] Tool definitions sent to the LLM in the standard tool/function format for the provider
+- [ ] Tool results truncated at 50K chars with marker (prevent context overflow)
+- [ ] Tool execution timeout (default 60s) prevents hanging
+- [ ] Tool calls and results appear in the thinking stream (Story 0.2)
+- [ ] Agents only have access to tools listed in their manifest's `tools.allowed`
+
+**Files:**
+- `[NEW]` `core/src/tools/ToolRunner.ts`
+- `[NEW]` `core/src/tools/builtins/` — web_search, web_fetch, file_read, file_write, file_list, memory_store, memory_recall
+- `[MODIFY]` `core/src/agents/BaseAgent.ts` — tool call loop
+
+---
+
+### Story 0.4: General Assistant Agent & Default Templates
+
+> **As a** user,
+> **I want** a pre-configured general-purpose assistant agent available out of the box,
+> **so that** I can use SERA as a personal assistant immediately without configuring agents.
+
+**Acceptance Criteria:**
+- [ ] Ship with a `general-assistant.agent.yaml` — friendly, helpful, broad knowledge, all safe tools enabled
+- [ ] General assistant is the default agent selected on first visit to the dashboard
+- [ ] Ship with 3-4 additional starter templates: `researcher`, `coder`, `writer`
+- [ ] Each template has a distinct persona, communication style, and tool set
+- [ ] Templates are stored in `sera/agents/` and loaded automatically on startup
+- [ ] Dashboard agent list shows all loaded agents with their persona avatars
+
+**Files:**
+- `[NEW]` `sera/agents/general-assistant.agent.yaml`
+- `[NEW]` `sera/agents/researcher.agent.yaml`
+- `[NEW]` `sera/agents/coder.agent.yaml`
+- `[NEW]` `sera/agents/writer.agent.yaml`
+- `[MODIFY]` `web/src/app/agents/page.tsx` — show loaded agents with persona info
+
+---
+
+## 🏗️ Epic 1: Agent Manifest System — ✅ DONE
 
 *Establish the declarative agent definition system that everything else builds on.*
+
+> [!TIP]
+> **Status**: Fully implemented. `AgentManifestLoader` (7.2KB + tests), `IdentityService` (5.5KB),
+> `ProviderFactory` (1.9KB), 3 agent YAML templates, `Orchestrator` creates agents from manifests.
 
 ### Story 1.1: AGENT.yaml Parser & Validator
 
@@ -94,9 +256,12 @@
 
 ---
 
-## 🔄 Epic 2: Circle System
+## 🔄 Epic 2: Circle System — ✅ DONE
 
 *Implement the organizational layer that groups agents and scopes knowledge.*
+
+> [!TIP]
+> **Status**: Fully implemented. `CircleRegistry` (10.7KB + tests), `PartyMode` (10.8KB + tests), circle routes, party mode API.
 
 ### Story 2.1: Circle Registry & CIRCLE.yaml
 
@@ -158,9 +323,12 @@
 
 ---
 
-## 🐳 Epic 3: Sandbox Manager
+## 🐳 Epic 3: Sandbox Manager — ✅ DONE
 
 *Implement the secure container management layer that agents use instead of direct Docker access.*
+
+> [!TIP]
+> **Status**: Fully implemented. `SandboxManager` (10.2KB + tests), `TierPolicy` (6.9KB + tests), `ToolRunner` (5KB), `SubagentRunner` (6.4KB), sandbox routes.
 
 ### Story 3.1: Sandbox Manager Core
 
@@ -224,9 +392,12 @@
 
 ---
 
-## 📡 Epic 4: Intercom System
+## 📡 Epic 4: Intercom System — ✅ DONE
 
 *Connect agents within and across circles using Centrifugo.*
+
+> [!TIP]
+> **Status**: Fully implemented. `IntercomService` (9.9KB + tests), `ChannelNamespace` (4.6KB + tests), intercom routes, thought streaming, direct messaging, all integrated into `BaseAgent`.
 
 ### Story 4.1: Centrifugo Integration
 
@@ -287,9 +458,13 @@
 
 ---
 
-## 🧠 Epic 5: Memory Blocks (Letta-style × Obsidian-style)
+## 🧠 Epic 5: Memory Blocks (Letta-style × Obsidian-style) — ✅ DONE
 
 *Upgrade the POC memory system to structured, graph-linked memory blocks stored as human-readable markdown files.*
+
+> [!TIP]
+> **Status**: Fully implemented. `MemoryBlockStore` (13KB + tests), `Reflector` (4.2KB + tests),
+> full API (blocks, entries, refs, graph, search). Memory entries are markdown files with YAML frontmatter.
 
 ### Storage Format
 
@@ -360,9 +535,13 @@ Graph edges come from: explicit `refs` in frontmatter + `[[Title]]` wikilinks in
 
 ---
 
-## ⚡ Epic 6: Skills Framework
+## ⚡ Epic 6: Skills Framework — ✅ DONE
 
 *Make agents composable through a skills registry.*
+
+> [!TIP]
+> **Status**: Fully implemented. `SkillRegistry` (7.8KB + tests), 6 builtins
+> (`file-read`, `file-write`, `web-search`, `knowledge-store`, `knowledge-query`), MCP tool bridge.
 
 ### Story 6.1: Skill Registry
 
@@ -402,9 +581,13 @@ Graph edges come from: explicit `refs` in frontmatter + `[[Title]]` wikilinks in
 
 ---
 
-## 🔐 Epic 7: Orchestrator V2
+## 🔐 Epic 7: Orchestrator V2 — ✅ DONE
 
 *Upgrade the orchestrator from POC to production-grade process management.*
+
+> [!TIP]
+> **Status**: Fully implemented. `ProcessManager` + `SequentialProcess` + `ParallelProcess` +
+> `HierarchicalProcess` (all with tests), `AgentFactory` (2.6KB + tests), file watcher for hot-reload.
 
 ### Story 7.1: Process Patterns (Sequential, Parallel, Hierarchical)
 
@@ -470,9 +653,12 @@ Graph edges come from: explicit `refs` in frontmatter + `[[Title]]` wikilinks in
 
 ---
 
-## 💾 Epic 8: Storage Abstraction
+## 💾 Epic 8: Storage Abstraction — ✅ DONE
 
 *Make the workspace storage layer pluggable for future multi-host scenarios.*
+
+> [!TIP]
+> **Status**: Fully implemented. `StorageProvider` interface + `LocalStorageProvider` + `DockerVolumeProvider` (all with tests).
 
 ### Story 8.1: Storage Provider Interface
 
@@ -601,6 +787,28 @@ Graph edges come from: explicit `refs` in frontmatter + `[[Title]]` wikilinks in
 
 ---
 
+### Story 9.6: Agent Template Creator *(HIGH PRIORITY)*
+
+> **As a** user,
+> **I want** to create new agent templates from the dashboard,
+> **so that** I can define custom assistants (personal finance advisor, meal planner, health coach, etc.) without editing YAML files.
+
+**Acceptance Criteria:**
+- [ ] "New Agent" button on the agents page opens a guided creation form
+- [ ] Form fields: name, description/persona, communication style, system prompt (with a rich text/markdown editor), model selection (from available providers), tool selection (checkbox list), avatar/icon picker
+- [ ] Advanced section: temperature, max tokens, principles, allowed sub-agents
+- [ ] Preview mode: test-chat with the agent before saving
+- [ ] Saving creates a new `AGENT.yaml` file and live-reloads the agent into the system
+- [ ] Template gallery: user can duplicate and customize existing agent templates as a starting point
+- [ ] API: `POST /api/agents/templates`, `GET /api/agents/templates`, `POST /api/agents/templates/:id/clone`
+
+**Files:**
+- `[NEW]` `web/src/app/agents/create/page.tsx`
+- `[NEW]` `core/src/routes/agent-templates.ts`
+- `[MODIFY]` `core/src/agents/manifest/AgentManifestLoader.ts` — write-back + template generation
+
+---
+
 ## 🌐 Epic 10: Expansion Preparation (Future)
 
 *These stories are documented for future work. They require no code now but influence design decisions above.*
@@ -662,29 +870,396 @@ Graph edges come from: explicit `refs` in frontmatter + `[[Title]]` wikilinks in
 
 ---
 
+## 🔀 Epic 11: Workflow Engine *(from OpenFang — DEFERRED)*
+
+> [!NOTE]
+> **Deferred to future work.** The workflow engine extends orchestration patterns but is not needed
+> for the core personal assistant experience. Revisit after the core chat UX is solid.
+
+*Multi-step agent pipelines with variable substitution, parallel fan-out, and iterative loops.*
+
+### Story 11.1: Workflow Definition & Engine Core
+
+> **As a** platform developer,
+> **I want** to define multi-step workflows that chain agents together,
+> **so that** complex tasks can be broken into orchestrated pipelines.
+
+**Acceptance Criteria:**
+- [ ] Create `Workflow` type with: id, name, description, steps array, created_at
+- [ ] Create `WorkflowStep` type with: name, agent reference (by name or ID), prompt template, mode, timeout, error mode, output variable
+- [ ] Implement `WorkflowEngine` that stores workflow definitions and manages runs
+- [ ] Support `{{input}}` (previous step output) and `{{variable_name}}` (named variables) in prompt templates
+- [ ] Workflow runs track state: `Pending` → `Running` → `Completed` / `Failed`
+- [ ] Each step records: agent info, output text, token counts, duration
+- [ ] API: `POST /api/workflows`, `GET /api/workflows`, `POST /api/workflows/:id/run`, `GET /api/workflows/:id/runs`
+
+**Files:**
+- `[NEW]` `core/src/workflows/WorkflowEngine.ts`
+- `[NEW]` `core/src/workflows/types.ts`
+- `[NEW]` `core/src/routes/workflows.ts`
+
+---
+
+### Story 11.2: Step Modes (Sequential, Fan-Out, Collect, Conditional, Loop)
+
+> **As a** workflow author,
+> **I want** multiple execution modes for steps,
+> **so that** I can model parallel work, conditional branching, and iterative refinement.
+
+**Acceptance Criteria:**
+- [ ] **Sequential** (default): Step runs after previous, chaining output as `{{input}}`
+- [ ] **Fan-Out**: Consecutive fan-out steps run in parallel via `Promise.all()`, all receiving the same input
+- [ ] **Collect**: Joins all fan-out outputs with `---` separator (data-only step, no agent execution)
+- [ ] **Conditional**: Step executes only if previous output contains a specified substring (case-insensitive)
+- [ ] **Loop**: Step repeats up to `maxIterations` times until output contains `until` substring
+- [ ] Step timeout (default 120s) enforced per-step; fan-out steps get independent timeouts
+
+**Files:**
+- `[MODIFY]` `core/src/workflows/WorkflowEngine.ts`
+
+---
+
+### Story 11.3: Workflow Error Handling
+
+> **As a** workflow author,
+> **I want** per-step error handling policies,
+> **so that** workflows can gracefully handle failures without always aborting.
+
+**Acceptance Criteria:**
+- [ ] **Fail** (default): Workflow aborts immediately on step failure
+- [ ] **Skip**: Step failure is logged, workflow continues, `{{input}}` unchanged
+- [ ] **Retry**: Step retries up to `maxRetries` times; each attempt gets its own timeout
+- [ ] Run eviction cap (200 retained runs, LRU eviction of completed/failed runs)
+
+**Files:**
+- `[MODIFY]` `core/src/workflows/WorkflowEngine.ts`
+- `[MODIFY]` `core/src/workflows/types.ts`
+
+---
+
+## ⚡ Epic 12: Trigger Engine *(from OpenFang)*
+
+*Event-driven automation — triggers watch the event bus and auto-dispatch messages to agents.*
+
+### Story 12.1: Trigger Registration & Matching
+
+> **As a** platform operator,
+> **I want** to register event triggers that auto-send messages to agents when patterns match,
+> **so that** agents can react automatically to system events without polling.
+
+**Acceptance Criteria:**
+- [ ] Create `Trigger` type with: id, agentId, pattern, promptTemplate, enabled, fireCount, maxFires
+- [ ] Implement `TriggerEngine` with pattern matching against Centrifugo/system events
+- [ ] Support patterns: `All`, `AgentSpawned(namePattern)`, `AgentTerminated`, `System`, `MemoryUpdate`, `ContentMatch(substring)`
+- [ ] `{{event}}` placeholder in prompt templates is replaced with human-readable event description
+- [ ] Triggers auto-disable when `fireCount >= maxFires` (0 = unlimited)
+- [ ] API: `POST /api/triggers`, `GET /api/triggers`, `PUT /api/triggers/:id`, `DELETE /api/triggers/:id`
+
+**Files:**
+- `[NEW]` `core/src/triggers/TriggerEngine.ts`
+- `[NEW]` `core/src/triggers/types.ts`
+- `[NEW]` `core/src/routes/triggers.ts`
+
+---
+
+## 🛡️ Epic 13: Agent Loop Stability *(from OpenFang)*
+
+*Hardening the agent reasoning loop to prevent runaway behavior.*
+
+### Story 13.1: Loop Guard & Tool Safety
+
+> **As a** platform developer,
+> **I want** the agent loop to detect and prevent degenerate patterns,
+> **so that** agents don't get stuck in infinite loops or exhaust resources.
+
+**Acceptance Criteria:**
+- [ ] **Loop Guard**: Hash `(toolName, params)` with SHA256; warn at 3 repeats, block at 5, circuit-break at 30
+- [ ] **Tool Timeout**: All tool executions wrapped in configurable timeout (default 60s)
+- [ ] **Tool Result Truncation**: Hard cap at 50K characters with truncation marker
+- [ ] **Max Continuations**: Cap "please continue" loops at 3 iterations
+- [ ] **Inter-Agent Depth Limit**: Max recursive agent-to-agent call depth of 5
+- [ ] **Stability Guidelines**: Anti-loop behavioral rules injected into system prompts
+
+**Files:**
+- `[NEW]` `core/src/agents/stability/LoopGuard.ts`
+- `[NEW]` `core/src/agents/stability/ToolTimeout.ts`
+- `[MODIFY]` `core/src/agents/BaseAgent.ts` — integrate stability systems
+
+---
+
+### Story 13.2: Session Repair & Auto-Compaction
+
+> **As an** agent,
+> **I want** my message history validated and auto-compacted,
+> **so that** corrupted sessions are self-healing and my context window stays within limits.
+
+**Acceptance Criteria:**
+- [ ] **Session Repair**: Before each agent loop, validate message history — drop orphaned tool results, remove empty messages, merge consecutive same-role messages
+- [ ] **Block-Aware Compaction**: Auto-compact when session exceeds 80% of context window, keeping the most recent N messages
+- [ ] Compaction produces a summary that preserves key context
+- [ ] Compaction events logged with before/after token counts
+
+**Files:**
+- `[NEW]` `core/src/agents/stability/SessionRepair.ts`
+- `[NEW]` `core/src/agents/stability/SessionCompactor.ts`
+- `[MODIFY]` `core/src/agents/BaseAgent.ts`
+
+---
+
+## 💰 Epic 14: Metering & Budget *(from OpenFang)*
+
+*Track token usage, costs, and enforce per-agent quotas.*
+
+### Story 14.1: Usage Tracking & Cost Estimation
+
+> **As a** platform operator,
+> **I want** to track token usage and estimated costs per agent,
+> **so that** I can monitor spending and identify expensive agents.
+
+**Acceptance Criteria:**
+- [ ] Create `UsageEvent` type: agentId, model, inputTokens, outputTokens, costUsd, timestamp
+- [ ] `MeteringEngine` records usage after every LLM call
+- [ ] Cost estimation based on a model pricing catalog (per-model input/output rates)
+- [ ] PostgreSQL `usage_events` table for persistence
+- [ ] API: `GET /api/budget` (global), `GET /api/budget/agents` (per-agent ranking), `GET /api/budget/agents/:id`
+- [ ] Dashboard widget showing daily/weekly/monthly spend
+
+**Files:**
+- `[NEW]` `core/src/metering/MeteringEngine.ts`
+- `[NEW]` `core/src/metering/ModelPricingCatalog.ts`
+- `[NEW]` `core/src/metering/types.ts`
+- `[NEW]` `core/src/routes/budget.ts`
+
+---
+
+### Story 14.2: Per-Agent Token Quotas
+
+> **As a** platform operator,
+> **I want** to set hourly token limits per agent,
+> **so that** a runaway agent can't burn through my entire API budget.
+
+**Acceptance Criteria:**
+- [ ] `AGENT.yaml` `resources.maxLlmTokensPerHour` field sets the quota
+- [ ] `AgentScheduler` tracks per-agent usage with rolling 1-hour window (auto-reset)
+- [ ] Quota exceeded → return `QuotaExceeded` error to the agent, do not send the LLM request
+- [ ] Quota warnings published to event bus at configurable thresholds (e.g., 80%, 90%)
+- [ ] API: `GET /api/agents/:id/quota` shows current usage vs limit
+
+**Files:**
+- `[NEW]` `core/src/metering/AgentScheduler.ts`
+- `[MODIFY]` `core/src/agents/BaseAgent.ts` — check quota before LLM calls
+- `[MODIFY]` `core/src/agents/manifest/types.ts` — add resources.maxLlmTokensPerHour
+
+---
+
+## 📡 Epic 15: Channel Adapters *(from OpenFang)*
+
+*Connect agents to external messaging platforms.*
+
+### Story 15.1: Channel Adapter Framework
+
+> **As a** platform developer,
+> **I want** a standard adapter interface for messaging platforms,
+> **so that** new channels can be added with minimal boilerplate.
+
+**Acceptance Criteria:**
+- [ ] Create `ChannelAdapter` interface with: `start()`, `stop()`, `sendMessage()`, `onMessage(callback)`
+- [ ] Create `ChannelRouter` that routes incoming messages to the correct agent
+- [ ] Per-channel config: default agent, allowed users, rate limiting, model override
+- [ ] Output formatter: Markdown → platform-specific format (HTML for Telegram, mrkdwn for Slack, plain text fallback)
+- [ ] Per-user rate limiting via in-memory tracking (prevent message flooding)
+- [ ] Channel config in `config.yaml` under `channels.*` sections
+
+**Files:**
+- `[NEW]` `core/src/channels/ChannelAdapter.ts`
+- `[NEW]` `core/src/channels/ChannelRouter.ts`
+- `[NEW]` `core/src/channels/Formatter.ts`
+- `[NEW]` `core/src/channels/RateLimiter.ts`
+- `[NEW]` `core/src/channels/types.ts`
+
+---
+
+### Story 15.2: Telegram, Discord & WhatsApp Adapters
+
+> **As a** user,
+> **I want** to interact with SERA agents via Telegram, Discord, and WhatsApp,
+> **so that** I can use agents from my preferred messaging platform.
+
+**Acceptance Criteria:**
+- [ ] **Telegram**: Long-polling adapter using Bot API, allowed user filtering, thread support
+- [ ] **Discord**: Gateway adapter via discord.js, guild/channel filtering, slash commands
+- [ ] **WhatsApp Web**: QR-code-based connection (like OpenFang's whatsapp-gateway), Node.js sidecar
+- [ ] Each adapter supports per-channel model and system prompt overrides
+- [ ] Incoming messages routed to the configured default agent; responses sent back formatted for the platform
+- [ ] Chat commands: `/models`, `/new` (new session), `/stop`, `/usage`
+
+**Files:**
+- `[NEW]` `core/src/channels/adapters/TelegramAdapter.ts`
+- `[NEW]` `core/src/channels/adapters/DiscordAdapter.ts`
+- `[NEW]` `packages/whatsapp-gateway/` — Node.js sidecar (port from OpenFang)
+
+---
+
+## 🤖 Epic 16: Autonomous Hands *(from OpenFang — DEFERRED)*
+
+> [!NOTE]
+> **Deferred to future work.** Hands require workflows, triggers, and metering to be in place first.
+> Focus on getting the core chat experience and agent creation working first.
+
+*Pre-built autonomous capability packages that run independently on schedules.*
+
+### Story 16.1: HAND.yaml Manifest & Lifecycle
+
+> **As a** platform operator,
+> **I want** to define autonomous Hands as declarative YAML manifests,
+> **so that** they can be activated, paused, and configured from the dashboard.
+
+**Acceptance Criteria:**
+- [ ] Create `HandManifest` type: id, name, description, category, icon, tools, settings, agent config, dashboard metrics
+- [ ] `HandRegistry` loads HAND.yaml files and manages lifecycle (activate/pause/resume/deactivate)
+- [ ] Hands run on configurable schedules (cron expressions or intervals) via `BackgroundExecutor`
+- [ ] Configurable settings (select, toggle, text) exposed in dashboard UI
+- [ ] Dashboard metrics pulled from agent memory keys (e.g., `researcher_hand_queries_solved`)
+- [ ] API: `GET /api/hands`, `POST /api/hands/:id/activate`, `POST /api/hands/:id/pause`, `GET /api/hands/:id/status`
+
+**Files:**
+- `[NEW]` `core/src/hands/HandRegistry.ts`
+- `[NEW]` `core/src/hands/BackgroundExecutor.ts`
+- `[NEW]` `core/src/hands/types.ts`
+- `[NEW]` `core/src/routes/hands.ts`
+
+---
+
+### Story 16.2: Researcher & Collector Hands
+
+> **As a** user,
+> **I want** pre-built Researcher and Collector Hands,
+> **so that** I can run autonomous deep research and OSINT monitoring out of the box.
+
+**Acceptance Criteria:**
+- [ ] **Researcher Hand**: Multi-phase playbook (question analysis → search strategy → information gathering → cross-reference → fact-check → report generation → stats), CRAAP evaluation, configurable depth/style/citation
+- [ ] **Collector Hand**: Continuous target monitoring, change detection, knowledge graph construction, critical alert publishing
+- [ ] Both Hands store their state in agent memory for persistence across restarts
+- [ ] Both Hands publish completion events to the intercom for UI notification
+- [ ] Example `HAND.yaml` files in `sera/hands/`
+
+**Files:**
+- `[NEW]` `sera/hands/researcher.hand.yaml`
+- `[NEW]` `sera/hands/collector.hand.yaml`
+
+---
+
+## 🔌 Epic 17: OpenAI-Compatible API *(from OpenFang)*
+
+*Drop-in replacement endpoint for OpenAI client libraries.*
+
+### Story 17.1: Chat Completions Endpoint
+
+> **As a** developer,
+> **I want** SERA to expose an OpenAI-compatible `/v1/chat/completions` endpoint,
+> **so that** I can use SERA agents from any tool that supports the OpenAI API format.
+
+**Acceptance Criteria:**
+- [ ] `POST /v1/chat/completions` accepts the standard OpenAI request format (model, messages, stream, tools)
+- [ ] The `model` field maps to a SERA agent name (e.g., `model: "researcher"` routes to the researcher agent)
+- [ ] Streaming support via SSE (server-sent events) with OpenAI-compatible delta format
+- [ ] Non-streaming returns a complete response object with usage stats
+- [ ] `GET /v1/models` returns all available agents in OpenAI model list format
+- [ ] Bearer token auth matches SERA's API key config
+
+**Files:**
+- `[NEW]` `core/src/routes/openai-compat.ts`
+- `[MODIFY]` `core/src/index.ts` — mount `/v1/*` routes
+
+---
+
+## 🔏 Epic 18: Audit Trail *(from OpenFang)*
+
+*Cryptographically linked action logging for tamper-evident audit.*
+
+### Story 18.1: Merkle Hash-Chain Audit Log
+
+> **As a** platform operator,
+> **I want** every agent action cryptographically linked in a hash chain,
+> **so that** the audit trail is tamper-evident and I can verify integrity at any time.
+
+**Acceptance Criteria:**
+- [ ] Create `AuditEntry` type: id, agentId, action, details, timestamp, previousHash, hash
+- [ ] Each entry's hash = SHA256(previousHash + action + details + timestamp)
+- [ ] All agent actions (tool calls, LLM requests, memory writes, intercom messages) generate audit entries
+- [ ] PostgreSQL `audit_trail` table with index on agentId and timestamp
+- [ ] `AuditService.verify()` validates the entire chain for a given agent
+- [ ] API: `GET /api/audit/:agentId` (paginated), `GET /api/audit/:agentId/verify`
+
+**Files:**
+- `[NEW]` `core/src/audit/AuditService.ts`
+- `[NEW]` `core/src/audit/types.ts`
+- `[NEW]` `core/src/routes/audit.ts`
+
+---
+
 ## 📅 Recommended Execution Order
 
-The epics are designed with clear dependencies:
+### Priority: Get the Chat Working First
+
+The new execution order puts the **core chat experience** front and center. Everything else builds on top of a working, polished conversational interface.
 
 ```
-Epic 1 (Agent Manifests) ──────┐
-                               ├──► Epic 3 (Sandbox Manager)
-Epic 2 (Circles) ─────────────┘        │
-                                        ├──► Epic 7 (Orchestrator V2)
-Epic 4 (Intercom) ─────────────────────┘        │
-                                                 ├──► Epic 9 (Dashboard)
-Epic 5 (Memory Blocks) ────────────────────────┘
-                                                
-Epic 6 (Skills) ─── can be done in parallel with Epics 3-5
-Epic 8 (Storage) ── can be done in parallel with Epics 3-5
-Epic 10 (Expansion) ── future work, no code required now
+┌──────────────────────────────────────────────────────┐
+│  PHASE 1: MAKE IT WORK (Core Chat UX)           │
+│                                                  │
+│  Epic 0 (Chat + Sessions + Thinking + Tools)     │
+│  Epic 1 (Agent Manifests + AGENT.yaml)            │
+│  Epic 13 (Loop Stability)                        │
+│  Story 9.6 (Agent Template Creator UI)           │
+└──────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────┐
+│  PHASE 2: MAKE IT SMART (Intelligence Layer)      │
+│                                                  │
+│  Epic 4 (Intercom / Agent-to-Agent)              │
+│  Epic 5 (Memory Blocks)                          │
+│  Epic 6 (Skills Framework)                       │
+│  Epic 14 (Metering & Budget)                     │
+└──────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────┐
+│  PHASE 3: MAKE IT SECURE (Isolation & Infra)      │
+│                                                  │
+│  Epic 2 (Circles) + Epic 3 (Sandbox)             │
+│  Epic 7 (Orchestrator V2)                        │
+│  Epic 8 (Storage Abstraction)                    │
+│  Epic 18 (Audit Trail)                           │
+└──────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────┐
+│  PHASE 4: MAKE IT CONNECTED (Expansion)           │
+│                                                  │
+│  Epic 9 (Dashboard polish)                       │
+│  Epic 12 (Triggers) + Epic 15 (Channels)         │
+│  Epic 17 (OpenAI-Compatible API)                 │
+└──────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────┐
+│  FUTURE: Automation & Autonomy                   │
+│                                                  │
+│  Epic 10 (Multi-Host / Federation)               │
+│  Epic 11 (Workflows) — deferred                  │
+│  Epic 16 (Autonomous Hands) — deferred            │
+└──────────────────────────────────────────────────────┘
 ```
 
 **Suggested sprint sequence:**
 
-1. **Sprint 1**: Epic 1 (Manifests) + Epic 2 (Circles) — the schema foundation
-2. **Sprint 2**: Epic 3 (Sandbox Manager) + Epic 8 (Storage) — the runtime layer
-3. **Sprint 3**: Epic 4 (Intercom) + Epic 6 (Skills) — the communication & capability layer
-4. **Sprint 4**: Epic 5 (Memory Blocks) + Epic 7 (Orchestrator V2) — the intelligence layer
-5. **Sprint 5**: Epic 9 (Dashboard) — the user-facing integration
-6. **Backlog**: Epic 10 (Expansion) — when the single-host system is proven
+1. **Sprint 1**: **Epic 0** (Chat + Sessions + Thinking + Tools) + Epic 1 (Manifests) — the core experience
+2. **Sprint 2**: **Epic 13 (Loop Stability)** + **Story 9.6 (Agent Template Creator)** — quality + creation UX
+3. **Sprint 3**: Epic 4 (Intercom) + Epic 6 (Skills) — agent-to-agent comms & capabilities
+4. **Sprint 4**: Epic 5 (Memory Blocks) + **Epic 14 (Metering)** — intelligence & budget
+5. **Sprint 5**: Epic 2 (Circles) + Epic 3 (Sandbox) + Epic 7 (Orchestrator V2) — isolation & process
+6. **Sprint 6**: Epic 12 (Triggers) + Epic 15 (Channels) + Epic 17 (OpenAI API) — connectivity
+7. **Sprint 7**: Epic 8 (Storage) + Epic 9 (Dashboard polish) + Epic 18 (Audit) — infrastructure
+8. **Future**: Epic 10 (Expansion) + Epic 11 (Workflows) + Epic 16 (Hands)

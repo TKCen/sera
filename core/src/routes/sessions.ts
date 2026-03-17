@@ -1,0 +1,96 @@
+/**
+ * Session API Router — CRUD endpoints for chat sessions.
+ */
+
+import { Router } from 'express';
+import type { SessionStore } from '../sessions/SessionStore.js';
+
+export function createSessionRouter(sessionStore: SessionStore): Router {
+  const router = Router();
+
+  /**
+   * List sessions, optionally filtered by agent.
+   * GET /api/sessions?agent=architect-prime
+   */
+  router.get('/', async (req, res) => {
+    try {
+      const agent = req.query.agent as string | undefined;
+      const sessions = await sessionStore.listSessions(agent);
+      res.json(sessions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * Create a new session.
+   * POST /api/sessions { agentName: string, title?: string }
+   */
+  router.post('/', async (req, res) => {
+    try {
+      const { agentName, title } = req.body;
+      if (!agentName) {
+        return res.status(400).json({ error: 'agentName is required' });
+      }
+      const session = await sessionStore.createSession({ agentName, title });
+      res.status(201).json(session);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * Get a session with its messages.
+   * GET /api/sessions/:id
+   */
+  router.get('/:id', async (req, res) => {
+    try {
+      const session = await sessionStore.getSession(req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      const messages = await sessionStore.getMessages(req.params.id);
+      res.json({ ...session, messages });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * Update session title.
+   * PUT /api/sessions/:id { title: string }
+   */
+  router.put('/:id', async (req, res) => {
+    try {
+      const { title } = req.body;
+      if (!title) {
+        return res.status(400).json({ error: 'title is required' });
+      }
+      const session = await sessionStore.updateSessionTitle(req.params.id, title);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      res.json(session);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * Delete a session and its messages.
+   * DELETE /api/sessions/:id
+   */
+  router.delete('/:id', async (req, res) => {
+    try {
+      const deleted = await sessionStore.deleteSession(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  return router;
+}

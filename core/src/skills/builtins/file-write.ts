@@ -46,7 +46,7 @@ export const fileWriteSkill: SkillDefinition = {
         const script = `mkdir -p "${dirPath}" && echo "${b64}" | base64 -d > "${containerPath}"`;
 
         const result = await context.sandboxManager.exec(
-          { metadata: { name: context.agentName, tier: context.tier } } as any,
+          context.manifest,
           {
             containerId: context.containerId,
             agentName: context.agentName,

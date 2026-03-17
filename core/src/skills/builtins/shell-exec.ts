@@ -1,22 +1,22 @@
 import { execSync } from 'child_process';
 import type { SkillDefinition } from '../types.js';
+import { TierPolicy } from '../../sandbox/TierPolicy.js';
 
 /**
  * Built-in skill: shell-exec
  *
  * Executes a shell command in the workspace directory.
- * Only available to agents with tier >= 2.
  */
 export const shellExecSkill: SkillDefinition = {
   id: 'shell-exec',
-  description: 'Execute a shell command in the workspace directory. Only available to tier 2 and above.',
+  description: 'Execute a shell command in the workspace directory.',
   source: 'builtin',
   parameters: [
     { name: 'command', type: 'string', description: 'The shell command to execute', required: true },
   ],
   handler: async (params, context) => {
-    if (context.tier < 2) {
-      return { success: false, error: 'Agent tier must be 2 or higher to execute shell commands' };
+    if (!TierPolicy.canExec(context.manifest)) {
+      return { success: false, error: 'Agent is not permitted to execute shell commands' };
     }
 
     const command = params['command'];

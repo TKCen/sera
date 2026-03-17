@@ -116,6 +116,15 @@ export class AgentManifestLoader {
     AgentManifestLoader.requireString(meta, 'displayName', `${ctx} metadata`);
     AgentManifestLoader.requireString(meta, 'circle', `${ctx} metadata`);
 
+    if (meta['additionalCircles'] !== undefined) {
+      if (!Array.isArray(meta['additionalCircles']) || !meta['additionalCircles'].every(c => typeof c === 'string')) {
+        throw new ManifestValidationError(
+          `"additionalCircles" must be an array of strings${ctx}`,
+          'metadata.additionalCircles',
+        );
+      }
+    }
+
     // Default icon
     if (meta['icon'] === undefined) {
       meta['icon'] = '🤖';
@@ -158,6 +167,23 @@ export class AgentManifestLoader {
             'resources.maxLlmTokensPerHour',
           );
         }
+      }
+    }
+
+    // ── permissions ───────────────────────────────────────────────────────────
+    if (obj['permissions']) {
+      const perms = obj['permissions'] as Record<string, unknown>;
+      if (perms['canExec'] !== undefined && typeof perms['canExec'] !== 'boolean') {
+        throw new ManifestValidationError(
+          `"canExec" must be a boolean${ctx}`,
+          'permissions.canExec',
+        );
+      }
+      if (perms['canSpawnSubagents'] !== undefined && typeof perms['canSpawnSubagents'] !== 'boolean') {
+        throw new ManifestValidationError(
+          `"canSpawnSubagents" must be a boolean${ctx}`,
+          'permissions.canSpawnSubagents',
+        );
       }
     }
 

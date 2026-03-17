@@ -65,6 +65,38 @@ export class TierPolicy {
   }
 
   /**
+   * Check if an agent is allowed to execute commands.
+   * Prioritizes explicit permissions over tier defaults.
+   */
+  static canExec(manifest: AgentManifest): boolean {
+    if (manifest.permissions?.canExec !== undefined) {
+      return manifest.permissions.canExec;
+    }
+    // Default: Tier 1 cannot exec
+    return manifest.metadata.tier !== 1;
+  }
+
+  /**
+   * Check if an agent is allowed to spawn subagents.
+   * Prioritizes explicit permissions over tier defaults.
+   */
+  static canSpawnSubagents(manifest: AgentManifest): boolean {
+    if (manifest.permissions?.canSpawnSubagents !== undefined) {
+      return manifest.permissions.canSpawnSubagents;
+    }
+    // Default: Tier 1 cannot spawn subagents
+    return manifest.metadata.tier !== 1;
+  }
+
+  /**
+   * Check if an agent is a member of a given circle.
+   */
+  static isMemberOfCircle(manifest: AgentManifest, circleId: string): boolean {
+    if (manifest.metadata.circle === circleId) return true;
+    return manifest.metadata.additionalCircles?.includes(circleId) ?? false;
+  }
+
+  /**
    * Apply manifest-level resource overrides (capped by tier maximums).
    * If the manifest specifies resources, they are used as long as they
    * don't exceed the tier ceiling.
@@ -101,6 +133,14 @@ export class TierPolicy {
 
     // Subagent validation
     if (request.type === 'subagent') {
+      if (!TierPolicy.canSpawnSubagents(manifest)) {
+        throw new PolicyViolationError(
+          `Agent "${agentName}" is not permitted to spawn subagents`,
+          agentName,
+          'spawn_not_permitted',
+        );
+      }
+
       if (!request.subagentRole) {
         throw new PolicyViolationError(
           `Subagent spawn request must specify a subagentRole`,

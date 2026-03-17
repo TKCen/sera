@@ -64,14 +64,6 @@ export function createSandboxRouter(
         return res.status(403).json({ error: 'Agent manifest must define a valid security tier' });
       }
 
-      if (manifest.metadata.tier === 1 && type === 'subagent') {
-        throw new PolicyViolationError(
-          `Agent "${manifest.metadata.name}" (Tier 1) cannot spawn subagents`,
-          manifest.metadata.name,
-          'spawn_tier_violation',
-        );
-      }
-
       const result = await sandboxManager.spawn(manifest, {
         agentName: manifest.metadata.name,
         type,

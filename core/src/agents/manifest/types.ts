@@ -12,6 +12,7 @@ export interface AgentMetadata {
   displayName: string;
   icon: string;
   circle: string;
+  additionalCircles?: string[];
   tier: SecurityTier;
 }
 
@@ -84,6 +85,12 @@ export interface MemoryConfig {
   sharedKnowledge?: string;
 }
 
+// ── Permissions ─────────────────────────────────────────────────────────────────
+export interface PermissionsConfig {
+  canExec?: boolean;
+  canSpawnSubagents?: boolean;
+}
+
 // ── Full Manifest ───────────────────────────────────────────────────────────────
 export interface AgentManifest {
   apiVersion: string;
@@ -98,13 +105,14 @@ export interface AgentManifest {
   resources?: ResourcesConfig;
   workspace?: WorkspaceConfig;
   memory?: MemoryConfig;
+  permissions?: PermissionsConfig;
 }
 
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'apiVersion', 'kind', 'metadata', 'identity', 'model',
   'tools', 'skills', 'subagents', 'intercom', 'resources',
-  'workspace', 'memory',
+  'workspace', 'memory', 'permissions',
 ]);
 
 export const VALID_TIERS: readonly SecurityTier[] = [1, 2, 3] as const;

@@ -56,6 +56,7 @@ export class ToolExecutor {
         agentName: manifest.metadata.name,
         workspacePath: manifest.workspace?.path || `workspaces/${manifest.metadata.name}`,
         tier: manifest.metadata.tier,
+        manifest,
         agentInstanceId,
         containerId,
         sandboxManager: this.sandboxManager,

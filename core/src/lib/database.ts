@@ -148,7 +148,27 @@ export const initDb = async () => {
       ON audit_trail(agent_id, timestamp ASC)
     `);
 
-    logger.info('Database initialized with pgvector, chat sessions, agent instances, token metering, usage events, and audit trail');
+    // ── Schedules (Epic 22 / Agent-centric) ──────────────────────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS schedules (
+        id UUID PRIMARY KEY,
+        agent_id UUID REFERENCES agent_instances(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        task JSONB NOT NULL,
+        status TEXT DEFAULT 'active',
+        last_run TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_schedules_agent
+      ON schedules(agent_id, status)
+    `);
+
+    logger.info('Database initialized with pgvector, chat sessions, agent instances, token metering, usage events, audit trail, and schedules');
   } catch (err) {
     logger.error('Database initialization failed:', err);
     throw err;

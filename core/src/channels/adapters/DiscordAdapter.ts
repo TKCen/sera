@@ -42,7 +42,7 @@ export class DiscordAdapter extends ChannelAdapter {
       this.logger.info('Discord Gateway connection opened');
     });
 
-    this.ws.on('message', (data) => {
+    this.ws.on('message', (data: any) => {
       try {
         const payload = JSON.parse(data.toString());
         this.handlePayload(payload);
@@ -58,7 +58,7 @@ export class DiscordAdapter extends ChannelAdapter {
       }
     });
 
-    this.ws.on('error', (err) => {
+    this.ws.on('error', (err: any) => {
       this.logger.error('Discord Gateway error:', err.message);
     });
   }

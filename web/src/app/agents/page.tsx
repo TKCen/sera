@@ -39,6 +39,9 @@ export default function AgentsPage() {
   const [isDeleting, setIsDeleting] = useState<AgentInstance | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const [isDeletingTemplate, setIsDeletingTemplate] = useState<AgentTemplate | null>(null);
+  const [deletingTemplateName, setDeletingTemplateName] = useState<string | null>(null);
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -119,6 +122,25 @@ export default function AgentsPage() {
       alert(err.message);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleDeleteTemplate = async () => {
+    if (!isDeletingTemplate) return;
+    setDeletingTemplateName(isDeletingTemplate.name);
+    try {
+      const res = await fetch(`/api/core/agent-templates/${isDeletingTemplate.name}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) throw new Error('Failed to delete template');
+
+      setIsDeletingTemplate(null);
+      fetchData();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setDeletingTemplateName(null);
     }
   };
 
@@ -252,13 +274,29 @@ export default function AgentsPage() {
                   
                   <div className="mt-4 pt-4 border-t border-sera-border flex items-center justify-between">
                     <span className="text-[10px] text-sera-text-dim font-mono">{template.name}</span>
-                    <button
-                      onClick={() => setIsInstantiating(template)}
-                      className="sera-badge-accent hover:scale-105 transition-transform cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus size={10} />
-                      Instantiate
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <Link
+                        href={`/agents/${template.name}/edit`}
+                        className="p-1.5 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors"
+                        title="Edit template"
+                      >
+                        <SettingsIcon size={14} />
+                      </Link>
+                      <button
+                        onClick={() => setIsDeletingTemplate(template)}
+                        className="p-1.5 text-sera-text-dim hover:text-sera-error hover:bg-sera-error/10 rounded-md transition-colors"
+                        title="Delete template"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <button
+                        onClick={() => setIsInstantiating(template)}
+                        className="sera-badge-accent hover:scale-105 transition-transform cursor-pointer flex items-center gap-1 ml-1"
+                      >
+                        <Plus size={10} />
+                        Instantiate
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -310,7 +348,7 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Confirmation Modal (Instance) */}
       {isDeleting && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-sera-bg/80 backdrop-blur-sm">
           <div className="sera-card-static w-full max-w-sm p-6 animate-in zoom-in-95 duration-200">
@@ -337,6 +375,46 @@ export default function AgentsPage() {
                 className="flex-1 sera-btn-primary bg-sera-error hover:bg-sera-error/90 border-sera-error"
               >
                 {deletingId ? (
+                  <div className="flex items-center justify-center gap-2">
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Deleting...</span>
+                  </div>
+                ) : (
+                  'Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (Template) */}
+      {isDeletingTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-sera-bg/80 backdrop-blur-sm">
+          <div className="sera-card-static w-full max-w-sm p-6 animate-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 rounded-full bg-sera-error/10 flex items-center justify-center text-sera-error mb-4 mx-auto">
+              <Trash2 size={24} />
+            </div>
+            <h3 className="text-lg font-semibold text-sera-text mb-2 text-center">Delete Agent Template?</h3>
+            <p className="text-sm text-sera-text-muted mb-6 text-center">
+              This will delete the <span className="text-sera-text font-medium">"AGENT.yaml"</span> manifest for <span className="text-sera-text font-medium">"{isDeletingTemplate.displayName}"</span> from disk. This action cannot be undone.
+            </p>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsDeletingTemplate(null)}
+                className="flex-1 sera-btn-ghost"
+                disabled={!!deletingTemplateName}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteTemplate}
+                disabled={!!deletingTemplateName}
+                className="flex-1 sera-btn-primary bg-sera-error hover:bg-sera-error/90 border-sera-error"
+              >
+                {deletingTemplateName ? (
                   <div className="flex items-center justify-center gap-2">
                     <RefreshCw size={14} className="animate-spin" />
                     <span>Deleting...</span>

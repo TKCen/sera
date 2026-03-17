@@ -167,14 +167,14 @@ export default function AgentEditPage() {
   // Fetch the agent manifest
   useEffect(() => {
     Promise.all([
-      fetch(`/api/core/agents/${agentName}`),
+      fetch(`/api/core/agent-templates/${agentName}`),
       fetch(`/api/core/skills`)
     ])
       .then(async ([agentRes, skillsRes]) => {
-        if (!agentRes.ok) throw new Error(`Agent not found`);
-        const agentData = await agentRes.json();
-        setManifest(agentData.manifest);
-        setRawYaml(yaml.dump(agentData.manifest, { lineWidth: 120, noRefs: true, sortKeys: false }));
+        if (!agentRes.ok) throw new Error(`Agent template not found`);
+        const manifest = await agentRes.json();
+        setManifest(manifest);
+        setRawYaml(yaml.dump(manifest, { lineWidth: 120, noRefs: true, sortKeys: false }));
 
         if (skillsRes.ok) {
           const skillsData = await skillsRes.json();
@@ -209,7 +209,7 @@ export default function AgentEditPage() {
     setSaving(true);
     try {
       // 1. Save manifest
-      const res = await fetch(`/api/core/agents/${agentName}/manifest`, {
+      const res = await fetch(`/api/core/agent-templates/${agentName}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -218,15 +218,6 @@ export default function AgentEditPage() {
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Failed to save manifest');
-      }
-
-      // 2. Trigger reload
-      const reloadRes = await fetch(`/api/core/agents/reload`, {
-        method: 'POST',
-      });
-
-      if (!reloadRes.ok) {
-        throw new Error('Manifest saved, but failed to trigger hot reload');
       }
 
       setSuccess('Manifest saved successfully.');

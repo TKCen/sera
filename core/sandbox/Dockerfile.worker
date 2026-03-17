@@ -1,0 +1,24 @@
+FROM alpine:3.19
+
+# Install standard tools for agents
+RUN apk update && apk add --no-cache \
+    bash \
+    curl \
+    git \
+    python3 \
+    nodejs \
+    npm \
+    findutils \
+    grep \
+    sed \
+    tar \
+    gzip \
+    ca-certificates \
+    openssh-client \
+    jq
+
+# Set up workspace directory
+WORKDIR /workspace
+
+# Keep the container alive
+CMD ["tail", "-f", "/dev/null"]

@@ -85,20 +85,27 @@ export class SkillRegistry {
   // ── Invocation ────────────────────────────────────────────────────────────
 
   /**
-   * Invoke a skill by ID with the given parameters.
+   * Invoke a skill by ID with the given parameters and agent context.
    * Passes a composition callback so the skill can call peer skills.
    */
-  async invoke(id: string, params: Record<string, unknown>): Promise<SkillResult> {
+  async invoke(
+    id: string,
+    params: Record<string, unknown>,
+    context: import('./types.js').AgentContext,
+  ): Promise<SkillResult> {
     const skill = this.skills.get(id);
     if (!skill) {
       return { success: false, error: `Skill "${id}" not found` };
     }
 
     try {
-      const compositionInvoke = (childId: string, childParams: Record<string, unknown>) =>
-        this.invoke(childId, childParams);
+      const compositionInvoke = (
+        childId: string,
+        childParams: Record<string, unknown>,
+        childContext: import('./types.js').AgentContext,
+      ) => this.invoke(childId, childParams, childContext);
 
-      return await skill.handler(params, compositionInvoke);
+      return await skill.handler(params, context, compositionInvoke);
     } catch (err) {
       return {
         success: false,
@@ -167,7 +174,7 @@ export class SkillRegistry {
           description: tool.description ?? `MCP tool: ${tool.name}`,
           parameters,
           source: 'mcp',
-          handler: async (params) => {
+          handler: async (params, _context) => {
             try {
               const result = await mcpClient.callTool(toolName, params);
               return { success: true, data: result };

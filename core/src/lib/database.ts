@@ -66,7 +66,53 @@ export const initDb = async () => {
       ON chat_sessions(agent_name, updated_at DESC)
     `);
 
-    logger.info('Database initialized with pgvector and chat sessions');
+    // ── Agent Instances ───────────────────────────────────────────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS agent_instances (
+        id UUID PRIMARY KEY,
+        template_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        container_id TEXT,
+        status TEXT DEFAULT 'active',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await query(`
+      ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS agent_instance_id UUID REFERENCES agent_instances(id) ON DELETE SET NULL
+    `);
+
+    // ── Token Usage & Quotas (v2 Security Gateway / Epic 14) ──────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS token_usage (
+        id SERIAL PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        circle_id TEXT,
+        model TEXT NOT NULL,
+        prompt_tokens INT NOT NULL DEFAULT 0,
+        completion_tokens INT NOT NULL DEFAULT 0,
+        total_tokens INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_token_usage_agent
+      ON token_usage(agent_id, created_at DESC)
+    `);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS token_quotas (
+        agent_id TEXT PRIMARY KEY,
+        max_tokens_per_hour INT NOT NULL DEFAULT 100000,
+        max_tokens_per_day INT NOT NULL DEFAULT 1000000,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    logger.info('Database initialized with pgvector, chat sessions, agent instances, and token metering');
   } catch (err) {
     logger.error('Database initialization failed:', err);
     throw err;

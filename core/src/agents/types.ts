@@ -22,3 +22,14 @@ export interface AgentResponse {
   };
   finalAnswer?: string;
 }
+
+export interface AgentInstance {
+  id: string;
+  templateName: string;
+  name: string;
+  workspacePath: string;
+  containerId?: string;
+  status: 'active' | 'inactive' | 'error';
+  createdAt: string;
+  updatedAt: string;
+}

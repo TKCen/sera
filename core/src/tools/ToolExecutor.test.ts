@@ -159,7 +159,7 @@ describe('ToolExecutor', () => {
       const executor = new ToolExecutor(registry);
 
       const toolCall = makeToolCall('test-skill', { input: 'world' });
-      const result = await executor.executeTool(toolCall);
+      const result = await executor.executeTool(toolCall, minimalManifest());
 
       expect(result.role).toBe('tool');
       expect(result.tool_call_id).toBe('tc-1');
@@ -171,7 +171,7 @@ describe('ToolExecutor', () => {
       const registry = createMockRegistry([], { success: true, data: 'plain string result' });
       const executor = new ToolExecutor(registry);
 
-      const result = await executor.executeTool(makeToolCall('test', {}));
+      const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());
       expect(result.content).toBe('plain string result');
     });
 
@@ -179,7 +179,7 @@ describe('ToolExecutor', () => {
       const registry = createMockRegistry([], { success: false, error: 'Skill failed' });
       const executor = new ToolExecutor(registry);
 
-      const result = await executor.executeTool(makeToolCall('test', {}));
+      const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());
       expect(result.content).toBe('Error: Skill failed');
     });
 
@@ -196,7 +196,7 @@ describe('ToolExecutor', () => {
         },
       };
 
-      const result = await executor.executeTool(toolCall);
+      const result = await executor.executeTool(toolCall, minimalManifest());
       expect(result.content).toContain('Failed to parse tool arguments');
     });
 
@@ -205,7 +205,7 @@ describe('ToolExecutor', () => {
       const registry = createMockRegistry([], { success: true, data: longData });
       const executor = new ToolExecutor(registry);
 
-      const result = await executor.executeTool(makeToolCall('test', {}));
+      const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());
       expect(result.content.length).toBeLessThan(60_000);
       expect(result.content).toContain('[TRUNCATED');
     });
@@ -215,7 +215,7 @@ describe('ToolExecutor', () => {
       (registry.invoke as any).mockRejectedValue(new Error('Unexpected crash'));
       const executor = new ToolExecutor(registry);
 
-      const result = await executor.executeTool(makeToolCall('test', {}));
+      const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());
       expect(result.role).toBe('tool');
       expect(result.content).toContain('Unexpected crash');
     });
@@ -233,7 +233,7 @@ describe('ToolExecutor', () => {
         makeToolCall('skill-b', { y: 2 }, 'tc-2'),
       ];
 
-      const results = await executor.executeToolCalls(calls);
+      const results = await executor.executeToolCalls(calls, minimalManifest());
 
       expect(results).toHaveLength(2);
       expect(results[0]!.tool_call_id).toBe('tc-1');

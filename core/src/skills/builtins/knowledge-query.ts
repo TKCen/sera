@@ -15,7 +15,7 @@ export function createKnowledgeQuerySkill(memoryManager: MemoryManager): SkillDe
       { name: 'query', type: 'string', description: 'Search query string', required: true },
       { name: 'limit', type: 'number', description: 'Maximum number of results to return', required: false },
     ],
-    handler: async (params) => {
+    handler: async (params, _context) => {
       const query = params['query'];
       if (!query || typeof query !== 'string') {
         return { success: false, error: 'Parameter "query" is required and must be a string' };

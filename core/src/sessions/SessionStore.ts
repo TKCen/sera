@@ -40,14 +40,15 @@ export class SessionStore {
     const now = new Date().toISOString();
 
     await query(
-      `INSERT INTO chat_sessions (id, agent_name, title, message_count, created_at, updated_at)
-       VALUES ($1, $2, $3, 0, $4, $4)`,
-      [id, opts.agentName, title, now],
+      `INSERT INTO chat_sessions (id, agent_name, agent_instance_id, title, message_count, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 0, $5, $5)`,
+      [id, opts.agentName, opts.agentInstanceId || null, title, now],
     );
 
     return {
       id,
       agentName: opts.agentName,
+      agentInstanceId: opts.agentInstanceId,
       title,
       messageCount: 0,
       createdAt: now,
@@ -57,7 +58,7 @@ export class SessionStore {
 
   async getSession(id: string): Promise<ChatSession | null> {
     const result = await query(
-      `SELECT id, agent_name, title, message_count, created_at, updated_at
+      `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
        FROM chat_sessions WHERE id = $1`,
       [id],
     );
@@ -65,18 +66,25 @@ export class SessionStore {
     return this.rowToSession(result.rows[0]);
   }
 
-  async listSessions(agentName?: string): Promise<ChatSession[]> {
+  async listSessions(agentName?: string, agentInstanceId?: string): Promise<ChatSession[]> {
     let result;
-    if (agentName) {
+    if (agentInstanceId) {
       result = await query(
-        `SELECT id, agent_name, title, message_count, created_at, updated_at
+        `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
+         FROM chat_sessions WHERE agent_instance_id = $1
+         ORDER BY updated_at DESC`,
+        [agentInstanceId],
+      );
+    } else if (agentName) {
+      result = await query(
+        `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
          FROM chat_sessions WHERE agent_name = $1
          ORDER BY updated_at DESC`,
         [agentName],
       );
     } else {
       result = await query(
-        `SELECT id, agent_name, title, message_count, created_at, updated_at
+        `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
          FROM chat_sessions ORDER BY updated_at DESC`,
       );
     }
@@ -199,6 +207,7 @@ export class SessionStore {
     return {
       id: row.id,
       agentName: row.agent_name,
+      agentInstanceId: row.agent_instance_id,
       title: row.title,
       messageCount: row.message_count,
       createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,

@@ -6,7 +6,7 @@ async function main() {
 
   const orchestrator = new Orchestrator();
   const agentsDir = path.resolve(import.meta.dirname, '..', '..', 'agents');
-  orchestrator.loadAgentsFromManifests(agentsDir);
+  orchestrator.loadTemplates(agentsDir);
 
   console.log('\n--- Loaded Agents ---');
   for (const agent of orchestrator.listAgents()) {

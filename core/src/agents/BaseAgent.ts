@@ -16,6 +16,8 @@ const MAX_TOOL_ITERATIONS = 10;
 export abstract class BaseAgent {
   public readonly name: string;
   public readonly role: string;
+  public readonly agentInstanceId: string | undefined;
+  public containerId: string | undefined;
 
   protected history: ChatMessage[] = [];
   protected systemPrompt: string;
@@ -33,15 +35,25 @@ export abstract class BaseAgent {
     manifest: AgentManifest,
     llmProvider: LLMProvider,
     intercom?: IntercomService,
+    agentInstanceId?: string,
   ) {
     this.manifest = manifest;
     this.name = manifest.metadata.displayName;
     this.role = manifest.metadata.name;
     this.llmProvider = llmProvider;
     this.intercom = intercom;
+    this.agentInstanceId = agentInstanceId;
     this.systemPrompt = IdentityService.generateSystemPrompt(manifest);
     this.logger = new Logger(this.name);
     this.loopGuard = new LoopGuard();
+  }
+
+  public getManifest(): AgentManifest {
+    return this.manifest;
+  }
+
+  public setContainerId(containerId: string | undefined): void {
+    this.containerId = containerId;
   }
 
   public updateLlmProvider(llmProvider: LLMProvider) {
@@ -176,7 +188,12 @@ export abstract class BaseAgent {
             messages.push(assistantMsg);
 
             // Execute non-blocked tool calls
-            const toolResults = await this.toolExecutor!.executeToolCalls(activeCalls);
+            const toolResults = await this.toolExecutor!.executeToolCalls(
+              activeCalls,
+              this.manifest,
+              this.agentInstanceId,
+              this.containerId,
+            );
 
             // Publish results and add to conversation
             for (const result of toolResults) {
@@ -193,21 +210,8 @@ export abstract class BaseAgent {
 
           // ── Text Response (no tool calls) ───────────────────────────
           // Stream the final text response to the channel
-          const reply = response.content || 'No response generated.';
-          await this.streamTextToChannel(reply, streamChannel, messageId);
-
-          // Update history
-          this.history = [
-            ...cleanHistory,
-            { role: 'user', content: input },
-            { role: 'assistant', content: reply } as ChatMessage,
-          ];
-
-          const result: AgentResponse = {
-            thought: `Completed task: ${input}`,
-            finalAnswer: reply,
-          };
-          await this.reflect(result);
+          // The streamSimple handles history update and returns AgentResponse
+          const result = await this.streamSimple(input, cleanHistory, messages, streamChannel, messageId);
           return result;
         } else {
           // ── No tools: simple streaming (original behavior) ──────────
@@ -219,22 +223,7 @@ export abstract class BaseAgent {
       this.logger.warn(`Tool loop hit max iterations (${MAX_TOOL_ITERATIONS}), forcing final response`);
       await this.publishThought('reflect', `Reached maximum tool iterations (${MAX_TOOL_ITERATIONS}). Generating final response.`);
 
-      const finalResponse = await this.llmProvider.chat(messages);
-      const reply = finalResponse.content || 'I was unable to complete this task within the allowed number of steps.';
-      await this.streamTextToChannel(reply, streamChannel, messageId);
-
-      this.history = [
-        ...cleanHistory,
-        { role: 'user', content: input },
-        { role: 'assistant', content: reply } as ChatMessage,
-      ];
-
-      const result: AgentResponse = {
-        thought: `Hit max tool iterations: ${input}`,
-        finalAnswer: reply,
-      };
-      await this.reflect(result);
-      return result;
+      return await this.streamSimple(input, cleanHistory, messages, streamChannel, messageId);
 
     } catch (error: any) {
       this.logger.error('Stream processing error:', error);
@@ -376,14 +365,16 @@ export abstract class BaseAgent {
   // ── Reasoning Steps (with thought streaming) ───────────────────────────────
 
   protected async observe(context: string): Promise<void> {
-    this.logger.debug(`Observing: ${context.substring(0, 50)}...`);
-    await this.publishThought('observe', context);
+    const observation = `Observing user request: "${context.substring(0, 100)}${context.length > 100 ? '...' : ''}"`;
+    this.logger.debug(observation);
+    await this.publishThought('observe', observation);
   }
 
   protected async plan(goal: string): Promise<string> {
-    this.logger.debug(`Planning for goal: ${goal}`);
-    await this.publishThought('plan', `Planning for: ${goal}`);
-    return `Plan for ${goal}`;
+    const planDescription = `Developing strategy to address: "${goal.substring(0, 50)}..." using available tools: ${this.manifest.tools?.allowed?.join(', ') || 'none'}.`;
+    this.logger.debug(planDescription);
+    await this.publishThought('plan', planDescription);
+    return planDescription;
   }
 
   protected async act(action: any): Promise<any> {

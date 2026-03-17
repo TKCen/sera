@@ -14,7 +14,7 @@ export const webSearchSkill: SkillDefinition = {
     { name: 'query', type: 'string', description: 'The search query', required: true },
     { name: 'limit', type: 'number', description: 'Max number of results to return', required: false },
   ],
-  handler: async (params) => {
+  handler: async (params, _context) => {
     const query = params['query'];
     if (!query || typeof query !== 'string') {
       return { success: false, error: 'Parameter "query" is required and must be a string' };

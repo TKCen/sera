@@ -15,7 +15,8 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
   router.get('/', async (req, res) => {
     try {
       const agent = req.query.agent as string | undefined;
-      const sessions = await sessionStore.listSessions(agent);
+      const agentInstanceId = req.query.agentInstanceId as string | undefined;
+      const sessions = await sessionStore.listSessions(agent, agentInstanceId);
       res.json(sessions);
     } catch (err: any) {
       res.status(500).json({ error: err.message });

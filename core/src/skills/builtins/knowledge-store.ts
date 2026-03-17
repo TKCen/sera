@@ -20,7 +20,7 @@ export function createKnowledgeStoreSkill(memoryManager: MemoryManager): SkillDe
       { name: 'tags', type: 'array', description: 'Array of tag strings', required: false },
       { name: 'refs', type: 'array', description: 'Array of referenced entry IDs', required: false },
     ],
-    handler: async (params) => {
+    handler: async (params, _context) => {
       const title = params['title'];
       const content = params['content'];
 

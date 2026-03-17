@@ -7,7 +7,7 @@ import type { SecurityTier } from '../agents/manifest/types.js';
 
 // ── Container Type ──────────────────────────────────────────────────────────────
 
-export type SandboxType = 'subagent' | 'tool';
+export type SandboxType = 'agent' | 'subagent' | 'tool';
 
 // ── Tier Limits ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +37,8 @@ export interface SpawnRequest {
   env?: Record<string, string>;
   /** Working directory inside the container */
   workDir?: string;
+  /** Custom host path for the workspace bind-mount */
+  hostWorkspacePath?: string;
   /** For subagents: the role of the subagent to spawn */
   subagentRole?: string;
   /** For subagents: the task description */

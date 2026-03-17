@@ -4,8 +4,13 @@ import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 
 export class WorkerAgent extends BaseAgent {
-  constructor(manifest: AgentManifest, llmProvider: LLMProvider) {
-    super(manifest, llmProvider);
+  constructor(
+    manifest: AgentManifest,
+    llmProvider: LLMProvider,
+    intercom?: import('../intercom/IntercomService.js').IntercomService,
+    agentInstanceId?: string,
+  ) {
+    super(manifest, llmProvider, intercom, agentInstanceId);
   }
 
   async process(input: string, history: ChatMessage[] = []): Promise<AgentResponse> {

@@ -8,8 +8,10 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import { v4 as uuidv4 } from 'uuid';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
+import { AgentFactory } from '../agents/AgentFactory.js';
 
 export function createAgentRouter(
   orchestrator: Orchestrator,
@@ -17,13 +19,91 @@ export function createAgentRouter(
 ) {
   const router = Router();
 
-  // ── List all agents ────────────────────────────────────────────────────────
+  // ── List all agent templates ───────────────────────────────────────────────
   /**
-   * Lists all loaded agents.
-   * @param req Express request
-   * @param res Express response
-   * @returns {void}
+   * Lists all loaded agent manifests (templates).
    */
+  router.get('/templates', (req, res) => {
+    res.json(orchestrator.listAgents());
+  });
+
+  // ── List all agent instances ───────────────────────────────────────────────
+  /**
+   * Lists all persistent agent instances from the database.
+   */
+  router.get('/instances', async (req, res) => {
+    try {
+      const templateName = req.query.template as string | undefined;
+      const instances = await AgentFactory.listInstances(templateName);
+      res.json(instances);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Create a new agent instance ────────────────────────────────────────────
+  /**
+   * Creates a new persistent agent instance from a template and starts it.
+   * POST /api/agents/instances { templateName: string, name: string, workspacePath?: string }
+   */
+  router.post('/instances', async (req, res) => {
+    try {
+      const { templateName, name, workspacePath } = req.body;
+      if (!templateName || !name) {
+        return res.status(400).json({ error: 'templateName and name are required' });
+      }
+
+      // 1. Create instance in DB
+      const instance = await AgentFactory.createInstance(templateName, name, workspacePath);
+
+      // 2. Start it in Orchestrator (this will handle Docker instantiation if configured)
+      await orchestrator.startInstance(instance.id);
+
+      res.status(201).json(instance);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Get agent instance detail ──────────────────────────────────────────────
+  /**
+   * Gets detailed information for a specific agent instance.
+   */
+  router.get('/instances/:id', async (req, res) => {
+    try {
+      const instance = await AgentFactory.getInstance(req.params.id);
+      if (!instance) {
+        return res.status(404).json({ error: `Agent instance "${req.params.id}" not found` });
+      }
+      res.json(instance);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Delete an agent instance ──────────────────────────────────────────────
+  /**
+   * Stops the agent container and deletes the instance from the database.
+   * DELETE /api/agents/instances/:id
+   */
+  router.delete('/instances/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id) return res.status(400).json({ error: 'Instance ID is required' });
+
+      // 1. Stop the instance (cleans up Docker)
+      await orchestrator.stopInstance(id);
+
+      // 2. Delete from DB
+      await AgentFactory.deleteInstance(id);
+
+      res.status(204).send();
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Legacy / Compatibility ──────────────────────────────────────────────────
   router.get('/', (req, res) => {
     res.json(orchestrator.listAgents());
   });
@@ -97,7 +177,7 @@ export function createAgentRouter(
       fs.writeFileSync(filePath, yamlStr, 'utf-8');
 
       // Trigger live reload
-      const result = orchestrator.reloadAgents();
+      const result = orchestrator.reloadTemplates();
 
       res.json({ success: true, ...result });
     } catch (err: any) {
@@ -117,7 +197,7 @@ export function createAgentRouter(
    */
   router.post('/reload', (req, res) => {
     try {
-      const result = orchestrator.reloadAgents();
+      const result = orchestrator.reloadTemplates();
       res.json({ success: true, ...result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

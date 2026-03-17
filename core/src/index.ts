@@ -33,6 +33,9 @@ import { createCircleRouter } from './routes/circles.js';
 import { createSkillsRouter } from './routes/skills.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { createSessionRouter } from './routes/sessions.js';
+import { IdentityService } from './auth/IdentityService.js';
+import { MeteringService } from './metering/MeteringService.js';
+import { createLlmProxyRouter } from './routes/llmProxy.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -44,7 +47,7 @@ const workspaceRoot = process.env.WORKSPACE_DIR
 // ── Agent System ──────────────────────────────────────────────────────────────
 const orchestrator = new Orchestrator();
 const agentsDir = path.join(workspaceRoot, 'agents');
-orchestrator.loadAgentsFromManifests(agentsDir);
+orchestrator.loadTemplates(agentsDir);
 
 // ── Circle System ─────────────────────────────────────────────────────────────
 const circleRegistry = new CircleRegistry();
@@ -54,6 +57,7 @@ await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
 
 // ── Sandbox Manager ──────────────────────────────────────────────────────────
 const sandboxManager = new SandboxManager();
+orchestrator.setSandboxManager(sandboxManager);
 const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
   return agentManifests.find(m => m.metadata.name === agentName);
 });
@@ -82,7 +86,7 @@ mcpRegistry.getAllTools().then(async () => {
 }).catch(() => { /* MCP servers may not be connected yet */ });
 
 // ── Tool Executor ────────────────────────────────────────────────────────────
-const toolExecutor = new ToolExecutor(skillRegistry);
+const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
 orchestrator.setToolExecutor(toolExecutor);
 
 // ── Route Modules ────────────────────────────────────────────────────────────
@@ -102,6 +106,11 @@ const partySessionManager = new PartySessionManager();
 const sessionStore = new SessionStore();
 const sessionRouter = createSessionRouter(sessionStore);
 
+// ── Security Gateway (v2) ────────────────────────────────────────────────────
+const identityService = new IdentityService();
+const meteringService = new MeteringService();
+const llmProxyRouter = createLlmProxyRouter(identityService, meteringService);
+
 // ── Agent File Watcher ───────────────────────────────────────────────────────
 orchestrator.watchAgentsDirectory(agentsDir);
 
@@ -114,6 +123,7 @@ app.use('/api/agents', agentRouter);
 app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
 app.use('/api/sessions', sessionRouter);
+app.use('/v1/llm', llmProxyRouter);
 
 /**
  * Health check endpoint.
@@ -490,6 +500,7 @@ import type { ChatMessage } from './agents/types.js';
 async function resolveSession(
   sessionId: string | undefined,
   agentName: string,
+  agentInstanceId?: string,
 ): Promise<{ sessionId: string; history: ChatMessage[]; isNew: boolean }> {
   if (sessionId) {
     const existing = await sessionStore.getSession(sessionId);
@@ -503,7 +514,7 @@ async function resolveSession(
     }
   }
   // Create a new session
-  const session = await sessionStore.createSession({ agentName });
+  const session = await sessionStore.createSession({ agentName, agentInstanceId });
   return { sessionId: session.id, history: [], isNew: true };
 }
 
@@ -515,15 +526,28 @@ async function resolveSession(
  */
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, sessionId: incomingSessionId, agentName: incomingAgent } = req.body;
+    const { message, sessionId: incomingSessionId, agentName: incomingAgent, agentInstanceId } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
     }
 
     // Resolve agent
     let agent;
-    const agentName = incomingAgent || 'architect-prime';
-    if (incomingAgent) {
+    let agentName = incomingAgent || 'architect-prime';
+
+    if (agentInstanceId) {
+      // Look up instance-specific agent
+      agent = orchestrator.getAgent(agentInstanceId);
+      if (!agent) {
+        // Try starting it if it exists in DB but not active in memory
+        try {
+          agent = await orchestrator.startInstance(agentInstanceId);
+        } catch {
+          return res.status(404).json({ error: `Agent instance "${agentInstanceId}" not found.` });
+        }
+      }
+      agentName = agent.role;
+    } else if (incomingAgent) {
       agent = orchestrator.getAgent(incomingAgent);
       if (!agent) {
         return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
@@ -533,10 +557,11 @@ app.post('/api/chat', async (req, res) => {
       if (!agent) {
         return res.status(500).json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
       }
+      agentName = agent.role;
     }
 
     // Resolve or create session
-    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName);
+    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName, agentInstanceId);
 
     try {
       const response = await agent.process(message, history);
@@ -580,17 +605,28 @@ app.post('/api/chat', async (req, res) => {
  */
 app.post('/api/chat/stream', async (req, res) => {
   try {
-    const { message, sessionId: incomingSessionId, agentName: incomingAgent } = req.body;
+    const { message, sessionId: incomingSessionId, agentName: incomingAgent, agentInstanceId } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
     }
 
-    const agentName = incomingAgent || 'architect-prime';
     const messageId = uuidv4();
 
     // Resolve agent
     let agent;
-    if (incomingAgent) {
+    let agentName = incomingAgent || 'architect-prime';
+
+    if (agentInstanceId) {
+      agent = orchestrator.getAgent(agentInstanceId);
+      if (!agent) {
+        try {
+          agent = await orchestrator.startInstance(agentInstanceId);
+        } catch {
+          return res.status(404).json({ error: `Agent instance "${agentInstanceId}" not found.` });
+        }
+      }
+      agentName = agent.role;
+    } else if (incomingAgent) {
       agent = orchestrator.getAgent(incomingAgent);
       if (!agent) {
         return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
@@ -600,10 +636,11 @@ app.post('/api/chat/stream', async (req, res) => {
       if (!agent) {
         return res.status(500).json({ error: 'No primary agent configured.' });
       }
+      agentName = agent.role;
     }
 
     // Resolve or create session
-    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName);
+    const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName, agentInstanceId);
 
     // Return immediately — streaming happens via Centrifugo
     res.json({ sessionId, messageId });

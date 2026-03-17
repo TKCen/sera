@@ -15,7 +15,7 @@ export const fileWriteSkill: SkillDefinition = {
     { name: 'path', type: 'string', description: 'Absolute or relative path to the file', required: true },
     { name: 'content', type: 'string', description: 'Content to write to the file', required: true },
   ],
-  handler: async (params) => {
+  handler: async (params, context) => {
     const rawPath = params['path'];
     const content = params['content'];
 
@@ -27,7 +27,7 @@ export const fileWriteSkill: SkillDefinition = {
     }
 
     try {
-      const workspaceDir = process.env.WORKSPACE_DIR || process.cwd();
+      const workspaceDir = context.workspacePath;
       const resolvedPath = path.resolve(workspaceDir, rawPath);
       const rootPath = path.resolve(workspaceDir);
 
@@ -35,6 +35,32 @@ export const fileWriteSkill: SkillDefinition = {
         return { success: false, error: 'Path traversal detected' };
       }
 
+      // ── Container Isolation ─────────────────────────────────────────────
+      if (context.containerId && context.sandboxManager) {
+        const relativePath = path.relative(rootPath, resolvedPath);
+        const containerPath = path.posix.join('/workspace', relativePath.replace(/\\/g, '/'));
+        const dirPath = path.posix.dirname(containerPath);
+
+        // We use base64 to safely transfer content without escaping issues
+        const b64 = Buffer.from(content).toString('base64');
+        const script = `mkdir -p "${dirPath}" && echo "${b64}" | base64 -d > "${containerPath}"`;
+
+        const result = await context.sandboxManager.exec(
+          { metadata: { name: context.agentName, tier: context.tier } } as any,
+          {
+            containerId: context.containerId,
+            agentName: context.agentName,
+            command: ['sh', '-c', script],
+          },
+        );
+
+        if (result.exitCode !== 0) {
+          return { success: false, error: `Container exec failed (exit ${result.exitCode}): ${result.output}` };
+        }
+        return { success: true, data: { path: containerPath, bytesWritten: content.length } };
+      }
+
+      // ── Local Execution (Fallback) ──────────────────────────────────────
       await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
       await fs.writeFile(resolvedPath, content, 'utf-8');
       return { success: true, data: { path: resolvedPath, bytesWritten: content.length } };

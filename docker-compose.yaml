@@ -10,6 +10,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./memory:/app/memory
       - ./core/config:/app/config
+      - ./workspaces:/workspaces
     environment:
       - NODE_ENV=development
       - WORKSPACE_DIR=/app/workspace
@@ -19,6 +20,7 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
       - LLM_API_KEY=${LLM_API_KEY:-lm-studio}
       - LLM_MODEL=${LLM_MODEL:-model-identifier}
+      - HOST_WORKSPACES_DIR=${PWD}/workspaces
     ports:
       - "3001:3001"
     networks:
@@ -119,6 +121,16 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
+
+  sera-agent-worker:
+    build:
+      context: ./core
+      dockerfile: sandbox/Dockerfile.worker
+    image: sera-agent-worker:latest
+    profiles:
+      - build-only
+    networks:
+      - agent_net
 
 networks:
   sera_net:

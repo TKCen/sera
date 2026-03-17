@@ -21,7 +21,10 @@ const MAX_RESULT_LENGTH = 50_000;
 const DEFAULT_TOOL_TIMEOUT_MS = 60_000;
 
 export class ToolExecutor {
-  constructor(private readonly skillRegistry: SkillRegistry) {}
+  constructor(
+    private readonly skillRegistry: SkillRegistry,
+    private readonly sandboxManager?: import('../sandbox/SandboxManager.js').SandboxManager,
+  ) {}
 
   // ── Tool Definitions ──────────────────────────────────────────────────────
 
@@ -38,17 +41,26 @@ export class ToolExecutor {
 
   /**
    * Execute a single tool call. Returns a tool-role ChatMessage with the result.
-   *
-   * - Parses function arguments from JSON
-   * - Invokes the skill via SkillRegistry with a timeout
-   * - Truncates the result to MAX_RESULT_LENGTH characters
-   * - Catches all errors and returns them as error messages (never throws)
    */
-  async executeTool(toolCall: ToolCall): Promise<ChatMessage> {
+  async executeTool(
+    toolCall: ToolCall,
+    manifest: AgentManifest,
+    agentInstanceId?: string,
+    containerId?: string,
+  ): Promise<ChatMessage> {
     const { id, function: fn } = toolCall;
     const skillId = fn.name;
-
     try {
+      // Build AgentContext from Manifest
+      const context: import('../skills/types.js').AgentContext = {
+        agentName: manifest.metadata.name,
+        workspacePath: manifest.workspace?.path || `workspaces/${manifest.metadata.name}`,
+        tier: manifest.metadata.tier,
+        agentInstanceId,
+        containerId,
+        sandboxManager: this.sandboxManager,
+      };
+
       // Parse arguments
       let params: Record<string, unknown>;
       try {
@@ -63,7 +75,7 @@ export class ToolExecutor {
 
       // Execute with timeout
       const result = await Promise.race([
-        this.skillRegistry.invoke(skillId, params),
+        this.skillRegistry.invoke(skillId, params, context),
         ToolExecutor.timeout(DEFAULT_TOOL_TIMEOUT_MS, skillId),
       ]);
 
@@ -100,8 +112,13 @@ export class ToolExecutor {
    * Execute multiple tool calls in parallel.
    * Returns an array of tool-role ChatMessages in the same order.
    */
-  async executeToolCalls(toolCalls: ToolCall[]): Promise<ChatMessage[]> {
-    return Promise.all(toolCalls.map((tc) => this.executeTool(tc)));
+  async executeToolCalls(
+    toolCalls: ToolCall[],
+    manifest: AgentManifest,
+    agentInstanceId?: string,
+    containerId?: string,
+  ): Promise<ChatMessage[]> {
+    return Promise.all(toolCalls.map((tc) => this.executeTool(tc, manifest, agentInstanceId, containerId)));
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

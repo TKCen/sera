@@ -19,6 +19,7 @@ export class Orchestrator {
   private processManager: ProcessManager = new ProcessManager();
   private intercom: IntercomService | undefined;
   private toolExecutor: ToolExecutor | undefined;
+  private sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
 
   /** Active file watcher (if any). */
   private watcher: fs.FSWatcher | undefined;
@@ -44,90 +45,126 @@ export class Orchestrator {
     }
   }
 
+  /** Attach a SandboxManager after construction. */
+  public setSandboxManager(sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager): void {
+    this.sandboxManager = sandboxManager;
+  }
+
   /**
-   * Load agents from AGENT.yaml manifests in a directory.
-   * The first agent loaded becomes the primary agent (used for chat routing).
+   * Load agent templates from AGENT.yaml manifests in a directory.
    */
-  loadAgentsFromManifests(dirPath: string): void {
+  loadTemplates(dirPath: string): void {
     this.agentsDir = dirPath;
-    const { agents, manifests } = AgentFactory.createAllFromDirectory(dirPath);
+    this.manifests = AgentFactory.loadTemplates(dirPath);
 
-    this.agents = agents;
-    this.manifests = manifests;
-
-    // Propagate services to new agents
-    for (const agent of this.agents.values()) {
-      if (this.intercom) agent.setIntercom(this.intercom);
-      if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
-    }
-
-    // Set primary to alphabetically first agent
-    const sorted = Array.from(manifests.keys()).sort();
+    // Set primary to alphabetically first template
+    const sorted = Array.from(this.manifests.keys()).sort();
     if (sorted.length > 0) {
       this.primaryAgentName = sorted[0];
     }
 
-    logger.info(`Loaded ${manifests.size} agents from manifests`);
-    if (this.primaryAgentName) {
-      logger.info(`Primary agent: ${this.primaryAgentName}`);
-    }
+    logger.info(`Loaded ${this.manifests.size} agent templates`);
   }
 
   /**
-   * Re-scan the agents directory and reload manifests.
-   * Adds new agents, removes deleted ones, and updates changed ones.
+   * Instantiate an agent from a template and start it.
    */
-  reloadAgents(dirPath?: string): {
-    added: string[];
-    removed: string[];
-    updated: string[];
-  } {
+  async startInstance(instanceId: string): Promise<BaseAgent> {
+    const instance = await AgentFactory.getInstance(instanceId);
+    if (!instance) throw new Error(`Agent instance "${instanceId}" not found`);
+
+    const manifest = this.manifests.get(instance.templateName);
+    if (!manifest) throw new Error(`Template "${instance.templateName}" not found`);
+
+    const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
+    if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
+    
+    // ── Spawn Container if necessary ────────────────────────────────────────
+    if (this.sandboxManager) {
+      try {
+        const sandbox = await this.sandboxManager.spawn(manifest, {
+          type: 'agent',
+          agentName: manifest.metadata.name,
+          image: 'sera-agent-worker:latest',
+          hostWorkspacePath: instance.workspacePath,
+          env: {
+            AGENT_NAME: instance.name,
+            AGENT_INSTANCE_ID: instance.id,
+            SERA_API_URL: process.env.SERA_API_URL || 'http://sera-core:3001',
+          }
+        });
+        
+        agent.setContainerId(sandbox.containerId);
+        await AgentFactory.updateContainerId(instance.id, sandbox.containerId);
+        logger.info(`Spawned container ${sandbox.containerId} for agent ${instance.name}`);
+      } catch (err) {
+        logger.error(`Failed to spawn container for agent ${instance.name}:`, err);
+        // Fallback or rethrow based on policy
+      }
+    } else if (instance.containerId) {
+      // If containerId is already set in DB, restore it
+      agent.setContainerId(instance.containerId);
+    }
+
+    this.agents.set(instance.id, agent);
+    logger.info(`Started agent instance: ${instance.name} (${instance.id})`);
+    return agent;
+  }
+
+  /**
+   * Stop an agent instance, removing it from memory and cleaning up its container.
+   */
+  async stopInstance(instanceId: string): Promise<void> {
+    const agent = this.agents.get(instanceId);
+    if (!agent) {
+      logger.warn(`Agent instance "${instanceId}" not running in memory.`);
+      // Even if not in memory, we might need to cleanup the container if it's in DB
+      const instance = await AgentFactory.getInstance(instanceId);
+      if (instance?.containerId && this.sandboxManager) {
+        const manifest = this.manifests.get(instance.templateName);
+        if (manifest) {
+          try {
+            await this.sandboxManager.remove(manifest, instance.containerId);
+            logger.info(`Cleaned up orphaned container ${instance.containerId} for ${instanceId}`);
+          } catch (err) {
+            logger.error(`Failed to cleanup orphaned container ${instance.containerId}:`, err);
+          }
+        }
+      }
+      return;
+    }
+
+    // Stop container
+    if (this.sandboxManager && agent.containerId) {
+      try {
+        await this.sandboxManager.remove(agent.getManifest(), agent.containerId);
+        logger.info(`Stopped container ${agent.containerId} for agent ${instanceId}`);
+      } catch (err) {
+        logger.error(`Failed to stop container ${agent.containerId} for agent ${instanceId}:`, err);
+      }
+    }
+
+    this.agents.delete(instanceId);
+    logger.info(`Stopped agent instance: ${instanceId}`);
+  }
+
+  /**
+   * Re-scan the templates directory.
+   */
+  reloadTemplates(dirPath?: string): { count: number } {
     const dir = dirPath ?? this.agentsDir;
-    if (!dir) {
-      throw new Error('No agents directory configured. Call loadAgentsFromManifests first.');
-    }
+    if (!dir) throw new Error('No agents directory configured');
 
-    const diff = AgentFactory.diffAgents(this.manifests, dir);
+    this.manifests = AgentFactory.loadTemplates(dir);
+    logger.info(`Reloaded ${this.manifests.size} agent templates`);
+    return { count: this.manifests.size };
+  }
 
-    // Remove deleted agents
-    for (const name of diff.removed) {
-      this.agents.delete(name);
-      this.manifests.delete(name);
-      logger.info(`Removed agent: ${name}`);
-    }
-
-    // Add new agents
-    for (const manifest of diff.added) {
-      const agent = AgentFactory.createAgent(manifest);
-      if (this.intercom) agent.setIntercom(this.intercom);
-      if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
-      this.agents.set(manifest.metadata.name, agent);
-      this.manifests.set(manifest.metadata.name, manifest);
-      logger.info(`Added agent: ${manifest.metadata.name}`);
-    }
-
-    // Update changed agents
-    for (const manifest of diff.updated) {
-      const agent = AgentFactory.createAgent(manifest);
-      if (this.intercom) agent.setIntercom(this.intercom);
-      if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
-      this.agents.set(manifest.metadata.name, agent);
-      this.manifests.set(manifest.metadata.name, manifest);
-      logger.info(`Updated agent: ${manifest.metadata.name}`);
-    }
-
-    // Reset primary if it was removed
-    if (this.primaryAgentName && !this.agents.has(this.primaryAgentName)) {
-      const sorted = Array.from(this.manifests.keys()).sort();
-      this.primaryAgentName = sorted[0];
-      logger.info(`Primary agent reassigned: ${this.primaryAgentName}`);
-    }
-
-    return {
-      added: diff.added.map(m => m.metadata.name),
-      removed: diff.removed,
-      updated: diff.updated.map(m => m.metadata.name),
-    };
+  /**
+   * Get all loaded agent templates.
+   */
+  getAllTemplates(): AgentManifest[] {
+    return Array.from(this.manifests.values());
   }
 
   /**
@@ -152,11 +189,11 @@ export class Orchestrator {
       // Debounce rapid changes (e.g., editor save)
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        logger.info(`Detected change in ${filename}, reloading agents...`);
+        logger.info(`Detected change in ${filename}, reloading templates...`);
         try {
-          this.reloadAgents(dir);
+          this.reloadTemplates(dir);
         } catch (err) {
-          logger.error(`Failed to reload agents:`, err);
+          logger.error(`Failed to reload templates:`, err);
         }
       }, 500);
     });

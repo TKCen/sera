@@ -13,7 +13,7 @@ export const webFetchSkill: SkillDefinition = {
   parameters: [
     { name: 'url', type: 'string', description: 'The URL to fetch', required: true },
   ],
-  handler: async (params) => {
+  handler: async (params, _context) => {
     const url = params['url'];
     if (!url || typeof url !== 'string') {
       return { success: false, error: 'Parameter "url" is required and must be a string' };

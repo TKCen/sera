@@ -32,14 +32,21 @@ export class SandboxManager {
   private storageFactory: StorageProviderFactory;
 
   constructor(docker?: Docker, storageFactory?: StorageProviderFactory) {
-    this.docker = docker ?? new Docker({ socketPath: '/var/run/docker.sock' });
+    this.docker = docker ?? new Docker(
+      process.platform === 'win32'
+        ? { socketPath: '//./pipe/docker_engine' }
+        : { socketPath: '/var/run/docker.sock' }
+    );
 
     // Default: register local (bind-mount) provider
     if (storageFactory) {
       this.storageFactory = storageFactory;
     } else {
       this.storageFactory = new StorageProviderFactory('local');
-      this.storageFactory.register(new LocalStorageProvider());
+      this.storageFactory.register(new LocalStorageProvider(
+        '/workspaces',
+        process.env.HOST_WORKSPACES_DIR
+      ));
     }
   }
 
@@ -61,7 +68,9 @@ export class SandboxManager {
 
     // ── Build container config ──────────────────────────────────────────────
     const limits = TierPolicy.getEffectiveLimits(manifest);
-    const containerName = `sera-sandbox-${request.type}-${uuidv4().substring(0, 8)}`;
+    const containerName = request.type === 'agent' 
+      ? `sera-agent-${agentName.toLowerCase()}-${uuidv4().substring(0, 8)}`
+      : `sera-sandbox-${request.type}-${uuidv4().substring(0, 8)}`;
 
     const env = Object.entries(request.env ?? {}).map(
       ([k, v]) => `${k}=${v}`,
@@ -73,14 +82,14 @@ export class SandboxManager {
       agentName,
       request.workDir ?? '/workspace',
       limits.filesystemMode,
-      manifest.workspace?.path,
+      request.hostWorkspacePath ?? manifest.workspace?.path,
     );
     const binds = [bindMount];
 
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,
       Image: request.image,
-      Cmd: request.command,
+      Cmd: request.command || ['tail', '-f', '/dev/null'], // Keep agent containers alive
       Env: env,
       WorkingDir: request.workDir ?? '/workspace',
       Labels: {

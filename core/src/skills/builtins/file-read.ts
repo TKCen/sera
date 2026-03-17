@@ -14,14 +14,14 @@ export const fileReadSkill: SkillDefinition = {
   parameters: [
     { name: 'path', type: 'string', description: 'Absolute or relative path to the file', required: true },
   ],
-  handler: async (params) => {
+  handler: async (params, context) => {
     const rawPath = params['path'];
     if (!rawPath || typeof rawPath !== 'string') {
       return { success: false, error: 'Parameter "path" is required and must be a string' };
     }
 
     try {
-      const workspaceDir = process.env.WORKSPACE_DIR || process.cwd();
+      const workspaceDir = context.workspacePath;
       const resolvedPath = path.resolve(workspaceDir, rawPath);
       const rootPath = path.resolve(workspaceDir);
 
@@ -29,6 +29,28 @@ export const fileReadSkill: SkillDefinition = {
         return { success: false, error: 'Path traversal detected' };
       }
 
+      // ── Container Isolation ─────────────────────────────────────────────
+      if (context.containerId && context.sandboxManager) {
+        // Map host path to container path
+        const relativePath = path.relative(rootPath, resolvedPath);
+        const containerPath = path.posix.join('/workspace', relativePath.replace(/\\/g, '/'));
+
+        const result = await context.sandboxManager.exec(
+          { metadata: { name: context.agentName, tier: context.tier } } as any,
+          {
+            containerId: context.containerId,
+            agentName: context.agentName,
+            command: ['cat', containerPath],
+          },
+        );
+
+        if (result.exitCode !== 0) {
+          return { success: false, error: `Container exec failed (exit ${result.exitCode}): ${result.output}` };
+        }
+        return { success: true, data: { path: containerPath, content: result.output } };
+      }
+
+      // ── Local Execution (Fallback) ──────────────────────────────────────
       const content = await fs.readFile(resolvedPath, 'utf-8');
       return { success: true, data: { path: resolvedPath, content } };
     } catch (err) {

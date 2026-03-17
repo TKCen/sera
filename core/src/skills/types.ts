@@ -27,6 +27,17 @@ export interface SkillResult {
 
 export type SkillSource = 'builtin' | 'mcp' | 'custom';
 
+// ── Agent Context ───────────────────────────────────────────────────────────────
+
+export interface AgentContext {
+  agentName: string;
+  workspacePath: string;
+  tier: number;
+  agentInstanceId: string | undefined;
+  containerId: string | undefined;
+  sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
+}
+
 // ── Skill Handler ───────────────────────────────────────────────────────────────
 
 /**
@@ -36,7 +47,8 @@ export type SkillSource = 'builtin' | 'mcp' | 'custom';
  */
 export type SkillHandler = (
   params: Record<string, unknown>,
-  invoke?: (skillId: string, params: Record<string, unknown>) => Promise<SkillResult>,
+  context: AgentContext,
+  invoke?: (skillId: string, params: Record<string, unknown>, context: AgentContext) => Promise<SkillResult>,
 ) => Promise<SkillResult>;
 
 // ── Skill Definition ────────────────────────────────────────────────────────────

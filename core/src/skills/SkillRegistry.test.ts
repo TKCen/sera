@@ -145,13 +145,13 @@ describe('SkillRegistry', () => {
   describe('invoke', () => {
     it('should invoke a registered skill and return its result', async () => {
       registry.register(dummySkill('echo'));
-      const result = await registry.invoke('echo', { input: 'hello' });
+      const result = await registry.invoke('echo', { input: 'hello' }, {} as any);
       expect(result.success).toBe(true);
       expect(result.data).toBe('echo:hello');
     });
 
     it('should return error for unknown skill', async () => {
-      const result = await registry.invoke('unknown', {});
+      const result = await registry.invoke('unknown', {}, {} as any);
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
     });
@@ -161,7 +161,7 @@ describe('SkillRegistry', () => {
         ...dummySkill('broken'),
         handler: async () => { throw new Error('boom'); },
       });
-      const result = await registry.invoke('broken', {});
+      const result = await registry.invoke('broken', {}, {} as any);
       expect(result.success).toBe(false);
       expect(result.error).toBe('boom');
     });
@@ -177,13 +177,13 @@ describe('SkillRegistry', () => {
         description: 'Calls inner skill',
         source: 'builtin',
         parameters: [],
-        handler: async (_params, invoke) => {
-          const inner = await invoke!('inner', { input: 'composed' });
+        handler: async (_params, context, invoke) => {
+          const inner = await invoke!('inner', { input: 'composed' }, context);
           return { success: true, data: `outer(${String(inner.data)})` };
         },
       });
 
-      const result = await registry.invoke('outer', {});
+      const result = await registry.invoke('outer', {}, {} as any);
       expect(result.success).toBe(true);
       expect(result.data).toBe('outer(echo:composed)');
     });
@@ -272,7 +272,7 @@ describe('SkillRegistry', () => {
       });
 
       // Invoke the bridged skill
-      const result = await registry.invoke('mcp-tool-a', { query: 'test' });
+      const result = await registry.invoke('mcp-tool-a', { query: 'test' }, {} as any);
       expect(result.success).toBe(true);
       expect(mockCallTool).toHaveBeenCalledWith('mcp-tool-a', { query: 'test' });
     });
@@ -291,7 +291,7 @@ describe('SkillRegistry', () => {
       };
 
       await registry.bridgeMCPTools(mockMCPRegistry as any);
-      const result = await registry.invoke('fail-tool', {});
+      const result = await registry.invoke('fail-tool', {}, {} as any);
       expect(result.success).toBe(false);
       expect(result.error).toBe('connection lost');
     });

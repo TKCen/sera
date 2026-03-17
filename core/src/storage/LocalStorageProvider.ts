@@ -16,15 +16,18 @@ import type { StorageProvider, MountResult } from './StorageProvider.js';
 export class LocalStorageProvider implements StorageProvider {
   readonly name = 'local';
 
-  /** Base directory for agent workspaces (default: /workspaces) */
-  private basePath: string;
+  /** Base directory for agent workspaces (internal to this container) */
+  private internalBasePath: string;
+  /** Base directory for agent workspaces (on the host system) */
+  private hostBasePath: string;
 
-  constructor(basePath: string = '/workspaces') {
-    this.basePath = basePath;
+  constructor(internalBasePath: string = '/workspaces', hostBasePath?: string) {
+    this.internalBasePath = internalBasePath;
+    this.hostBasePath = hostBasePath ?? internalBasePath;
   }
 
   async mount(agentId: string, workspacePath?: string): Promise<MountResult> {
-    const hostPath = workspacePath ?? `${this.basePath}/${agentId}`;
+    const hostPath = workspacePath ?? `${this.hostBasePath}/${agentId}`;
     return { hostPathOrVolume: hostPath, isVolume: false };
   }
 
@@ -33,7 +36,18 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   getPath(agentId: string, workspacePath?: string): string {
-    return workspacePath ?? `${this.basePath}/${agentId}`;
+    return workspacePath ?? `${this.internalBasePath}/${agentId}`;
+  }
+
+  getHostPath(agentId: string, workspacePath?: string): string {
+    if (workspacePath) {
+      if (workspacePath.startsWith(this.internalBasePath)) {
+        const relative = workspacePath.slice(this.internalBasePath.length).replace(/^[/\\]+/, '');
+        return `${this.hostBasePath}/${relative}`;
+      }
+      return workspacePath;
+    }
+    return `${this.hostBasePath}/${agentId}`;
   }
 
   getBindMount(
@@ -42,7 +56,11 @@ export class LocalStorageProvider implements StorageProvider {
     mode: FilesystemMode,
     workspacePath?: string,
   ): string {
-    const hostPath = this.getPath(agentId, workspacePath);
+    let hostPath = this.getHostPath(agentId, workspacePath);
+    // On Windows, Docker Desktop prefers /c/path format for bind mounts to avoid colon confusion
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(hostPath)) {
+      hostPath = `/${hostPath[0]!.toLowerCase()}${hostPath.slice(2).replace(/\\/g, '/')}`;
+    }
     return `${hostPath}:${containerPath}:${mode}`;
   }
 }

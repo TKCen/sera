@@ -15,9 +15,9 @@ export const fileListSkill: SkillDefinition = {
     { name: 'path', type: 'string', description: 'Relative path within the workspace to list (default: root)', required: false },
     { name: 'recursive', type: 'boolean', description: 'Whether to list files recursively (default: false)', required: false },
   ],
-  handler: async (params) => {
+  handler: async (params, context) => {
     try {
-      const workspaceDir = process.env.WORKSPACE_DIR || process.cwd();
+      const workspaceDir = context.workspacePath;
       const rawPath = typeof params['path'] === 'string' ? params['path'] : '.';
       const recursive = params['recursive'] === true;
 
@@ -29,7 +29,60 @@ export const fileListSkill: SkillDefinition = {
         return { success: false, error: 'Path traversal detected' };
       }
 
-      const entries = await listDir(resolvedPath, rootPath, recursive, 0);
+      const entries = await (async () => {
+        if (context.containerId && context.sandboxManager) {
+          const relativePathToRoot = path.relative(rootPath, resolvedPath);
+          const containerPath = path.posix.join('/workspace', relativePathToRoot.replace(/\\/g, '/'));
+
+          const findCmd = recursive
+            ? ['find', containerPath, '-maxdepth', String(MAX_DEPTH), '-not', '-path', '*/.*', '-not', '-path', '*node_modules*', '-printf', '%y %p %s\\n']
+            : ['ls', '-F', '--color=never', containerPath];
+
+          const result = await context.sandboxManager.exec(
+            { metadata: { name: context.agentName, tier: context.tier } } as any,
+            {
+              containerId: context.containerId,
+              agentName: context.agentName,
+              command: findCmd,
+            },
+          );
+
+          if (result.exitCode !== 0) {
+            throw new Error(`Container exec failed (exit ${result.exitCode}): ${result.output}`);
+          }
+
+          if (recursive) {
+            // Parse find output: "f /workspace/path 123"
+            return result.output.split('\n')
+              .filter(line => line.trim())
+              .map(line => {
+                const [typeChar, fullPath, size] = line.split(' ');
+                const rel = path.posix.relative('/workspace', fullPath!);
+                return {
+                  name: rel,
+                  type: typeChar === 'd' ? 'directory' : 'file',
+                  size: size ? parseInt(size) : undefined,
+                } as FileEntry;
+              })
+              .filter(e => e.name && e.name !== '.');
+          } else {
+            // Parse ls -F output
+            return result.output.split('\n')
+              .filter(line => line.trim())
+              .map(line => {
+                const isDir = line.endsWith('/');
+                const name = isDir ? line.slice(0, -1) : line;
+                const rel = path.posix.join(relativePathToRoot, name);
+                return {
+                  name: rel,
+                  type: isDir ? 'directory' : 'file',
+                } as FileEntry;
+              });
+          }
+        }
+        return listDir(resolvedPath, rootPath, recursive, 0);
+      })();
+
       return {
         success: true,
         data: {

@@ -13,6 +13,8 @@ export interface ChatSession {
   id: string;
   /** Which agent this session belongs to. */
   agentName: string;
+  /** Optional agent instance ID. */
+  agentInstanceId: string | undefined;
   /** Human-readable title (auto-generated from first message, editable). */
   title: string;
   /** Denormalized message count for list views. */
@@ -47,6 +49,7 @@ export interface SessionMessage {
 
 export interface CreateSessionOptions {
   agentName: string;
+  agentInstanceId?: string | undefined;
   title?: string;
 }
 

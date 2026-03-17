@@ -6,10 +6,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { subscribeToThoughts, subscribeToStream, type ThoughtEvent } from '../../lib/centrifugo';
 
-interface AgentInfo {
+interface AgentInstance {
+  id: string;
   name: string;
-  role: string;
-  displayName: string;
+  templateName: string;
+  status: string;
 }
 
 interface SessionInfo {
@@ -59,8 +60,8 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [selectedAgentName, setSelectedAgentName] = useState<string>('general-assistant');
+  const [instances, setInstances] = useState<AgentInstance[]>([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -73,33 +74,43 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Fetch available agents
+  // Fetch available agent instances
   useEffect(() => {
-    const fetchAgents = async () => {
+    const fetchInstances = async () => {
       try {
-        const res = await fetch('/api/core/agents');
+        const res = await fetch('/api/core/agents/instances');
         if (res.ok) {
           const data = await res.json();
-          setAgents(data);
-          if (data.length > 0 && !data.find((a: AgentInfo) => a.name === selectedAgentName)) {
-            setSelectedAgentName(data[0].name);
+          setInstances(data);
+          
+          // Check URL query for instance ID first
+          const urlParams = new URLSearchParams(window.location.search);
+          const queryId = urlParams.get('instance');
+          
+          if (queryId && data.find((i: AgentInstance) => i.id === queryId)) {
+            setSelectedInstanceId(queryId);
+          } else if (data.length > 0 && !selectedInstanceId) {
+            setSelectedInstanceId(data[0].id);
           }
         }
       } catch (err) {
-        console.error('Failed to fetch agents:', err);
+        console.error('Failed to fetch instances:', err);
       }
     };
-    fetchAgents();
-  }, [selectedAgentName]);
+    fetchInstances();
+  }, [selectedInstanceId]);
 
-  // Fetch sessions when agent changes
+  // Fetch sessions when instance changes
   useEffect(() => {
-    fetchSessions();
-  }, [selectedAgentName]);
+    if (selectedInstanceId) {
+      fetchSessions();
+    }
+  }, [selectedInstanceId]);
 
   const fetchSessions = async () => {
     try {
-      const res = await fetch(`/api/core/sessions?agent=${selectedAgentName}`);
+      if (!selectedInstanceId) return;
+      const res = await fetch(`/api/core/sessions?agentInstanceId=${selectedInstanceId}`);
       if (res.ok) {
         const data = await res.json();
         setSessions(data);
@@ -193,8 +204,8 @@ export default function ChatPage() {
     // Auto-expand thoughts while streaming
     setExpandedThoughts(prev => new Set(prev).add(seraMsgId));
 
-    // Subscribe to thoughts for this agent
-    const unsubThoughts = subscribeToThoughts(selectedAgentName, (event: ThoughtEvent) => {
+    // Subscribe to thoughts for this instance
+    const unsubThoughts = subscribeToThoughts(selectedInstanceId || 'unknown', (event: ThoughtEvent) => {
       setMessages(prev => prev.map(msg =>
         msg.id === seraMsgId
           ? {
@@ -218,7 +229,7 @@ export default function ChatPage() {
         body: JSON.stringify({
           message: trimmed,
           sessionId,
-          agentName: selectedAgentName,
+          agentInstanceId: selectedInstanceId,
         }),
       });
       const data = await res.json();
@@ -277,7 +288,7 @@ export default function ChatPage() {
       currentThoughtsRef.current = null;
       inputRef.current?.focus();
     }
-  }, [input, isLoading, sessionId, selectedAgentName]);
+  }, [input, isLoading, sessionId, selectedInstanceId]);
 
   // Cleanup subscriptions on unmount
   useEffect(() => {
@@ -298,16 +309,16 @@ export default function ChatPage() {
     <div className="flex items-center gap-2">
       <label className="text-xs text-sera-text-muted">Agent:</label>
       <select
-        value={selectedAgentName}
+        value={selectedInstanceId || ''}
         onChange={(e) => {
-          setSelectedAgentName(e.target.value);
+          setSelectedInstanceId(e.target.value);
           startNewSession();
         }}
         className="bg-sera-surface border border-sera-border rounded px-2 py-1 text-xs text-sera-text focus:outline-none focus:border-sera-accent"
       >
-        {agents.map((agent) => (
-          <option key={agent.name} value={agent.name}>
-            {agent.displayName || agent.name}
+        {instances.map((instance) => (
+          <option key={instance.id} value={instance.id}>
+            {instance.name} ({instance.templateName})
           </option>
         ))}
       </select>

@@ -35,7 +35,7 @@ export class SessionStore {
   // ── Session CRUD ──────────────────────────────────────────────────────────
 
   async createSession(opts: CreateSessionOptions): Promise<ChatSession> {
-    const id = uuidv4();
+    const id = opts.id || uuidv4();
     const title = opts.title || 'New Chat';
     const now = new Date().toISOString();
 

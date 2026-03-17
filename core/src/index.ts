@@ -38,6 +38,9 @@ import { MeteringService } from './metering/MeteringService.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { TelegramAdapter } from './channels/adapters/TelegramAdapter.js';
+import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
+import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -134,6 +137,43 @@ app.use('/api/agents', heartbeatRouter);
 
 const budgetRouter = createBudgetRouter();
 app.use('/api/budget', budgetRouter);
+
+// ── External Channels ────────────────────────────────────────────────────────
+const channelOptions = {
+  rateLimitWindow: config.channels.rateLimit.windowMs,
+  maxMessagesPerWindow: config.channels.rateLimit.maxMessages,
+};
+
+if (config.channels.telegram.token) {
+  const telegramAdapter = new TelegramAdapter(
+    config.channels.telegram.token,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  telegramAdapter.start().catch(err => logger.error('Failed to start Telegram adapter:', err));
+}
+
+if (config.channels.discord.token) {
+  const discordAdapter = new DiscordAdapter(
+    config.channels.discord.token,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  discordAdapter.start().catch(err => logger.error('Failed to start Discord adapter:', err));
+}
+
+if (config.channels.whatsapp.token && config.channels.whatsapp.phoneNumberId) {
+  const whatsappAdapter = new WhatsAppAdapter(
+    config.channels.whatsapp.token,
+    config.channels.whatsapp.phoneNumberId,
+    orchestrator,
+    sessionStore,
+    channelOptions
+  );
+  whatsappAdapter.start().catch(err => logger.error('Failed to start WhatsApp adapter:', err));
+}
 
 /**
  * Health check endpoint.

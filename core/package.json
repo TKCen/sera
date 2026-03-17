@@ -23,6 +23,7 @@
     "@types/pg": "^8.11.11",
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "nodemon": "^3.1.14",
     "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
@@ -45,6 +46,7 @@
     "uuid": "^13.0.0",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.17.5",
-    "vscode-uri": "^3.1.0"
+    "vscode-uri": "^3.1.0",
+    "ws": "^8.19.0"
   }
 }

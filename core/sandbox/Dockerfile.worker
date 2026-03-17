@@ -1,3 +1,13 @@
+# ── Stage 1: Build the Agent Runtime ──────────────────────────────────────────
+FROM node:20-alpine AS runtime-builder
+
+WORKDIR /build
+COPY agent-runtime/package.json agent-runtime/package-lock.json* ./
+RUN npm install --production=false
+COPY agent-runtime/ ./
+RUN npx tsc
+
+# ── Stage 2: Final Worker Image ──────────────────────────────────────────────
 FROM alpine:3.19
 
 # Install standard tools for agents
@@ -17,8 +27,13 @@ RUN apk update && apk add --no-cache \
     openssh-client \
     jq
 
+# Install the Agent Runtime
+COPY --from=runtime-builder /build/dist /opt/agent-runtime/dist
+COPY --from=runtime-builder /build/node_modules /opt/agent-runtime/node_modules
+COPY --from=runtime-builder /build/package.json /opt/agent-runtime/package.json
+
 # Set up workspace directory
 WORKDIR /workspace
 
-# Keep the container alive
-CMD ["tail", "-f", "/dev/null"]
+# The reasoning loop runs as the container's main process
+CMD ["node", "/opt/agent-runtime/dist/index.js"]

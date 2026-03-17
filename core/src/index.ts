@@ -36,6 +36,7 @@ import { createSessionRouter } from './routes/sessions.js';
 import { IdentityService } from './auth/IdentityService.js';
 import { MeteringService } from './metering/MeteringService.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
+import { createHeartbeatRouter } from './routes/heartbeat.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -111,6 +112,9 @@ const identityService = new IdentityService();
 const meteringService = new MeteringService();
 const llmProxyRouter = createLlmProxyRouter(identityService, meteringService);
 
+// Wire identity into orchestrator for JWT issuance on container spawn
+orchestrator.setIdentityService(identityService);
+
 // ── Agent File Watcher ───────────────────────────────────────────────────────
 orchestrator.watchAgentsDirectory(agentsDir);
 
@@ -124,6 +128,8 @@ app.use('/api/circles', circleRouter);
 app.use('/api/skills', skillsRouter);
 app.use('/api/sessions', sessionRouter);
 app.use('/v1/llm', llmProxyRouter);
+const heartbeatRouter = createHeartbeatRouter(orchestrator, identityService);
+app.use('/api/agents', heartbeatRouter);
 
 /**
  * Health check endpoint.

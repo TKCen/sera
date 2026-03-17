@@ -9,6 +9,7 @@ import type { AgentManifest } from './manifest/types.js';
 import { Logger } from '../lib/logger.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
+import type { IdentityService } from '../auth/IdentityService.js';
 
 const logger = new Logger('Orchestrator');
 
@@ -20,6 +21,10 @@ export class Orchestrator {
   private intercom: IntercomService | undefined;
   private toolExecutor: ToolExecutor | undefined;
   private sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
+  private identityService: IdentityService | undefined;
+
+  /** Last heartbeat timestamp per agent instance ID. */
+  private heartbeats: Map<string, Date> = new Map();
 
   /** Active file watcher (if any). */
   private watcher: fs.FSWatcher | undefined;
@@ -48,6 +53,11 @@ export class Orchestrator {
   /** Attach a SandboxManager after construction. */
   public setSandboxManager(sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager): void {
     this.sandboxManager = sandboxManager;
+  }
+
+  /** Attach an IdentityService for JWT issuance. */
+  public setIdentityService(identityService: IdentityService): void {
+    this.identityService = identityService;
   }
 
   /**
@@ -82,6 +92,17 @@ export class Orchestrator {
     // ── Spawn Container if necessary ────────────────────────────────────────
     if (this.sandboxManager) {
       try {
+        // Issue a JWT for the agent container
+        let identityToken: string | undefined;
+        if (this.identityService) {
+          identityToken = this.identityService.signToken({
+            agentId: instance.id,
+            circleId: manifest.metadata.circle,
+            capabilities: manifest.tools?.allowed ?? [],
+          });
+          logger.info(`Issued JWT for agent ${instance.name} (${instance.id})`);
+        }
+
         const sandbox = await this.sandboxManager.spawn(manifest, {
           type: 'agent',
           agentName: manifest.metadata.name,
@@ -90,7 +111,10 @@ export class Orchestrator {
           env: {
             AGENT_NAME: instance.name,
             AGENT_INSTANCE_ID: instance.id,
-            SERA_API_URL: process.env.SERA_API_URL || 'http://sera-core:3001',
+            SERA_CORE_URL: process.env.SERA_API_URL || 'http://sera-core:3001',
+            ...(identityToken ? { SERA_IDENTITY_TOKEN: identityToken } : {}),
+            CENTRIFUGO_API_URL: process.env.CENTRIFUGO_API_URL || 'http://centrifugo:8000/api',
+            CENTRIFUGO_API_KEY: process.env.CENTRIFUGO_API_KEY || 'sera-api-key',
           }
         });
         
@@ -295,6 +319,35 @@ export class Orchestrator {
     for (const agent of this.agents.values()) {
       agent.updateLlmProvider(llmProvider);
     }
+  }
+
+  // ── Heartbeat Lifecycle ─────────────────────────────────────────────────────
+
+  /** Record a heartbeat for an agent instance. */
+  recordHeartbeat(instanceId: string): void {
+    this.heartbeats.set(instanceId, new Date());
+  }
+
+  /** Get the last heartbeat time for an agent instance. */
+  getLastHeartbeat(instanceId: string): Date | undefined {
+    return this.heartbeats.get(instanceId);
+  }
+
+  /**
+   * Get instances that haven't sent a heartbeat within the timeout.
+   * Only considers instances that have sent at least one heartbeat.
+   */
+  getUnhealthyInstances(timeoutMs: number = 30_000): Array<{ instanceId: string; lastSeen: Date }> {
+    const now = Date.now();
+    const unhealthy: Array<{ instanceId: string; lastSeen: Date }> = [];
+
+    for (const [instanceId, lastSeen] of this.heartbeats.entries()) {
+      if (now - lastSeen.getTime() > timeoutMs) {
+        unhealthy.push({ instanceId, lastSeen });
+      }
+    }
+
+    return unhealthy;
   }
 
   // ── Process-Managed Execution ──────────────────────────────────────────────

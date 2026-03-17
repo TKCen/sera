@@ -43,5 +43,6 @@
     "moduleResolution": "nodenext",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-  }
+  },
+  "exclude": ["agent-runtime", "node_modules"]
 }

@@ -37,6 +37,7 @@ import { IdentityService } from './auth/IdentityService.js';
 import { MeteringService } from './metering/MeteringService.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
+import { createBudgetRouter } from './routes/budget.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -130,6 +131,9 @@ app.use('/api/sessions', sessionRouter);
 app.use('/v1/llm', llmProxyRouter);
 const heartbeatRouter = createHeartbeatRouter(orchestrator, identityService);
 app.use('/api/agents', heartbeatRouter);
+
+const budgetRouter = createBudgetRouter();
+app.use('/api/budget', budgetRouter);
 
 /**
  * Health check endpoint.

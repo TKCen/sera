@@ -19,10 +19,10 @@ export class AgentFactory {
     intercom?: import('../intercom/IntercomService.js').IntercomService,
   ): BaseAgent {
     const provider = ProviderFactory.createFromManifest(manifest);
-    const memoryManager = new MemoryManager({
-      circleId: manifest.metadata.circle,
-      agentId: agentInstanceId,
-    });
+    const memOpts: { circleId?: string; agentId?: string } = {};
+    if (manifest.metadata.circle) memOpts.circleId = manifest.metadata.circle;
+    if (agentInstanceId) memOpts.agentId = agentInstanceId;
+    const memoryManager = new MemoryManager(memOpts);
     return new WorkerAgent(manifest, provider, intercom, agentInstanceId, memoryManager);
   }
 

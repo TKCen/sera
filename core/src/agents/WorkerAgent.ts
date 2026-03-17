@@ -2,6 +2,7 @@ import { BaseAgent } from './BaseAgent.js';
 import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
+import { IdentityService } from './identity/IdentityService.js';
 
 export class WorkerAgent extends BaseAgent {
   constructor(
@@ -9,8 +10,9 @@ export class WorkerAgent extends BaseAgent {
     llmProvider: LLMProvider,
     intercom?: import('../intercom/IntercomService.js').IntercomService,
     agentInstanceId?: string,
+    memoryManager?: import('../memory/manager.js').MemoryManager,
   ) {
-    super(manifest, llmProvider, intercom, agentInstanceId);
+    super(manifest, llmProvider, intercom, agentInstanceId, memoryManager);
   }
 
   async process(input: string, history: ChatMessage[] = []): Promise<AgentResponse> {

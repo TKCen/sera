@@ -217,7 +217,7 @@ export class MemoryManager {
         if (vectorResults.length > 0) {
           sections.push('## Relevant Archival Memory');
           for (const res of vectorResults) {
-            sections.push(`### ${res.payload.title}\n${res.payload.content}`);
+            sections.push(`### ${res.payload?.title || 'Unknown'}\n${res.payload?.content || ''}`);
           }
         }
       } catch (err) {

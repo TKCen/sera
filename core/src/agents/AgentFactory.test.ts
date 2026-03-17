@@ -11,11 +11,11 @@ describe('AgentFactory', () => {
     it('should create agents for all manifests in the agents directory', () => {
       const { agents, manifests } = AgentFactory.createAllFromDirectory(agentsDir);
 
-      expect(agents.size).toBe(3);
-      expect(manifests.size).toBe(3);
+      expect(agents.size).toBe(5);
+      expect(manifests.size).toBe(5);
 
       const names = Array.from(agents.keys()).sort();
-      expect(names).toEqual(['architect-prime', 'developer-prime', 'researcher-prime']);
+      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer-prime']);
     });
 
     it('should return empty maps for a non-existent directory', () => {
@@ -50,7 +50,7 @@ describe('AgentFactory', () => {
       const empty = new Map();
       const diff = AgentFactory.diffAgents(empty, agentsDir);
 
-      expect(diff.added.length).toBe(3);
+      expect(diff.added.length).toBe(5);
       expect(diff.removed).toHaveLength(0);
     });
 

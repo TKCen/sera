@@ -97,11 +97,23 @@ export class IdentityService {
     const base = IdentityService.generateSystemPrompt(manifest, circleContext);
 
     // Replace the JSON response format with a natural-language instruction
-    return base.replace(
+    const withFormat = base.replace(
       /## Response Format[\s\S]*?(?=## Context)/,
       `## Response Format\n` +
       `Respond directly and naturally in markdown. Do NOT wrap your response in JSON.\n` +
       `Focus on providing a helpful, well-formatted answer to the user's question.\n\n`,
     );
+
+    // Append stability guidelines
+    const stabilityGuidelines =
+      `\n\n## Stability Guidelines\n` +
+      `- Do NOT call the same tool with the same arguments repeatedly. If a call returned ` +
+      `insufficient results, try different parameters or a different tool.\n` +
+      `- If a tool fails, try an alternative approach instead of retrying the same call.\n` +
+      `- Summarize your findings when you have enough information rather than making unlimited ` +
+      `additional calls.\n` +
+      `- Limit yourself to the minimum number of tool calls necessary to answer the question.\n`;
+
+    return withFormat + stabilityGuidelines;
   }
 }

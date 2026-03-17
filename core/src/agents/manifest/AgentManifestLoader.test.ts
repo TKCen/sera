@@ -141,9 +141,9 @@ describe('AgentManifestLoader', () => {
       const agentsDir = path.resolve(import.meta.dirname, '..', '..', '..', '..', 'agents');
       const manifests = AgentManifestLoader.loadAllManifests(agentsDir);
 
-      expect(manifests.length).toBe(3);
+      expect(manifests.length).toBe(5);
       const names = manifests.map(m => m.metadata.name).sort();
-      expect(names).toEqual(['architect-prime', 'developer-prime', 'researcher-prime']);
+      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer-prime']);
     });
 
     it('should return empty array for non-existent directory', () => {

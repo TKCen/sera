@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Loader2, Bot, User, Brain, Eye, Map, Zap, RotateCcw, ChevronDown, Sparkles, Plus, MessageSquare, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Send, Loader2, Bot, User, Brain, Eye, Map, Zap, RotateCcw, ChevronDown, Sparkles, Plus, MessageSquare, Trash2, PanelLeftClose, PanelLeftOpen, Wrench, CheckCircle2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { subscribeToThoughts, subscribeToStream, type ThoughtEvent } from '../../lib/centrifugo';
@@ -41,6 +41,8 @@ const STEP_ICONS: Record<string, React.ReactNode> = {
   plan: <Map size={11} />,
   act: <Zap size={11} />,
   reflect: <RotateCcw size={11} />,
+  'tool-call': <Wrench size={11} />,
+  'tool-result': <CheckCircle2 size={11} />,
 };
 
 const STEP_COLORS: Record<string, string> = {
@@ -48,6 +50,8 @@ const STEP_COLORS: Record<string, string> = {
   plan: 'text-amber-400',
   act: 'text-emerald-400',
   reflect: 'text-purple-400',
+  'tool-call': 'text-cyan-400',
+  'tool-result': 'text-teal-400',
 };
 
 export default function ChatPage() {
@@ -56,7 +60,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [selectedAgentName, setSelectedAgentName] = useState<string>('architect-prime');
+  const [selectedAgentName, setSelectedAgentName] = useState<string>('general-assistant');
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);

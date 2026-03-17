@@ -6,6 +6,8 @@ import type { ThoughtStepType } from '../intercom/types.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
 import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
+import { LoopGuard } from './stability/LoopGuard.js';
+import { SessionRepair } from './stability/SessionRepair.js';
 import { Logger } from '../lib/logger.js';
 
 /** Maximum tool-call loop iterations before forcing a text response. */
@@ -22,6 +24,7 @@ export abstract class BaseAgent {
   protected intercom: IntercomService | undefined;
   protected toolExecutor: ToolExecutor | undefined;
   protected logger: Logger;
+  protected loopGuard: LoopGuard;
 
   /** Queue of incoming intercom messages for the reasoning loop. */
   protected messageQueue: Array<{ from: string; payload: Record<string, unknown> }> = [];
@@ -38,6 +41,7 @@ export abstract class BaseAgent {
     this.intercom = intercom;
     this.systemPrompt = IdentityService.generateSystemPrompt(manifest);
     this.logger = new Logger(this.name);
+    this.loopGuard = new LoopGuard();
   }
 
   public updateLlmProvider(llmProvider: LLMProvider) {
@@ -68,12 +72,24 @@ export abstract class BaseAgent {
     history: ChatMessage[],
     messageId: string,
   ): Promise<AgentResponse> {
+    // Reset loop guard for each new request
+    this.loopGuard.reset();
+
     await this.observe(input);
     await this.plan(input);
 
+    // Repair message history before building the conversation
+    const { messages: cleanHistory, report } = SessionRepair.repair(history);
+    if (report.repaired) {
+      await this.publishThought('reflect',
+        `Session repaired: ${report.orphanedToolMessages} orphaned tool msgs, ` +
+        `${report.emptyMessages} empty msgs, ${report.mergedMessages} merged msgs`,
+      );
+    }
+
     const messages: ChatMessage[] = [
       { role: 'system', content: IdentityService.generateStreamingSystemPrompt(this.manifest) },
-      ...history,
+      ...cleanHistory,
       { role: 'user', content: input },
     ];
 
@@ -98,24 +114,69 @@ export abstract class BaseAgent {
 
           if (response.toolCalls && response.toolCalls.length > 0) {
             // ── Tool Call Phase ────────────────────────────────────────
-            // Publish what the agent wants to do
+            // Check loop guard for each tool call
+            const blockedCalls: string[] = [];
             for (const tc of response.toolCalls) {
+              let parsedArgs: unknown;
+              try { parsedArgs = JSON.parse(tc.function.arguments || '{}'); } catch { parsedArgs = tc.function.arguments; }
+              const guard = this.loopGuard.recordCall(tc.function.name, parsedArgs);
+
+              if (guard.status === 'block') {
+                blockedCalls.push(tc.function.name);
+                await this.publishThought(
+                  'reflect',
+                  `⛔ Blocked duplicate call: **${tc.function.name}** (${guard.count} identical calls)`,
+                );
+              } else if (guard.status === 'warn') {
+                await this.publishThought(
+                  'reflect',
+                  `⚠️ Repeated call: **${tc.function.name}** (${guard.count} times) — try a different approach`,
+                );
+              }
+
               await this.publishThought(
                 'tool-call',
                 `Calling tool: **${tc.function.name}**(${tc.function.arguments})`,
               );
             }
 
+            // If ALL calls are blocked, force a text response without tools
+            if (blockedCalls.length === response.toolCalls.length) {
+              await this.publishThought('reflect', 'All tool calls blocked by loop guard. Generating final response.');
+              messages.push({
+                role: 'assistant',
+                content: response.content || '',
+              } as ChatMessage);
+              messages.push({
+                role: 'user',
+                content: 'Your previous tool calls were blocked because you repeated the same calls too many times. Please provide your best answer using the information you already have, without calling more tools.',
+              });
+              const fallback = await this.llmProvider.chat(messages);
+              const reply = fallback.content || 'I was unable to complete this task — my tool calls were repeating.';
+              await this.streamTextToChannel(reply, streamChannel, messageId);
+              this.history = [
+                ...cleanHistory,
+                { role: 'user', content: input },
+                { role: 'assistant', content: reply } as ChatMessage,
+              ];
+              return { thought: 'Loop guard blocked all tool calls', finalAnswer: reply };
+            }
+
+            // Filter out blocked calls
+            const activeCalls = response.toolCalls.filter(
+              tc => !blockedCalls.includes(tc.function.name),
+            );
+
             // Add assistant message with tool_calls to the conversation
             const assistantMsg: ChatMessage = {
               role: 'assistant',
               content: response.content || '',
-              tool_calls: response.toolCalls,
+              tool_calls: activeCalls,
             };
             messages.push(assistantMsg);
 
-            // Execute all tool calls
-            const toolResults = await this.toolExecutor!.executeToolCalls(response.toolCalls);
+            // Execute non-blocked tool calls
+            const toolResults = await this.toolExecutor!.executeToolCalls(activeCalls);
 
             // Publish results and add to conversation
             for (const result of toolResults) {
@@ -137,7 +198,7 @@ export abstract class BaseAgent {
 
           // Update history
           this.history = [
-            ...history,
+            ...cleanHistory,
             { role: 'user', content: input },
             { role: 'assistant', content: reply } as ChatMessage,
           ];
@@ -163,7 +224,7 @@ export abstract class BaseAgent {
       await this.streamTextToChannel(reply, streamChannel, messageId);
 
       this.history = [
-        ...history,
+        ...cleanHistory,
         { role: 'user', content: input },
         { role: 'assistant', content: reply } as ChatMessage,
       ];

@@ -45,7 +45,7 @@
 
 | Component | Status | What's Missing |
 |---|---|---|
-| **BaseAgent** | Streaming + thoughts + tool loop work | ❌ `observe/plan/act/reflect` are stubs — tool loop is the main reasoning path now |
+| **BaseAgent** | Streaming + thoughts + tool loop + loop guard + session repair | Agents use tools in reasoning loop with stability protections |
 | **Orchestrator** | Process patterns work | ❌ Uses `ProcessManager` but agents themselves lack tool execution |
 | **MCP Registry** | Client registration works | ❌ No MCP server mode (exposing agents as MCP tools) |
 | **Vector Services** | Embedding + Qdrant search | ❌ Not connected to agent reasoning loop |
@@ -57,15 +57,16 @@
 
 | Component | Notes |
 |---|---|
-| **Thinking Mode UI** | No collapsible thinking panel, no tool call display in browser |
-| **Session Sidebar (Web UI)** | Sessions exist in backend but UI has no sidebar to browse/resume them |
-| **General Assistant Agent** | Only code-focused agents exist (architect, developer, researcher) — no personal assistant |
-| **Agent Template Creator** | No UI to create new agent types from the dashboard |
-| **Agent Loop Stability** | No loop guard, session repair, compaction, tool timeout |
-| **Metering / Budget** | No token quotas, cost tracking, per-agent spend |
-| **Channel Adapters** | No Telegram, Discord, WhatsApp adapters |
-| **OpenAI-Compatible API** | No `/v1/chat/completions` endpoint |
-| **Audit Trail** | No Merkle hash-chain logging |
+| **General Assistant Agent** | `general-assistant.agent.yaml` + `writer.agent.yaml` added | Default agent in chat UI; 5 total templates ship |
+| **Agent Loop Stability — LoopGuard** | `LoopGuard.ts` (DJB2 hash, warn@3/block@5) | Integrated into `BaseAgent` tool loop |
+| **Agent Loop Stability — SessionRepair** | `SessionRepair.ts` (orphan/empty/merge) | Integrated into `BaseAgent.processStream` |
+| **Thinking Mode UI** | Tool-call/tool-result icons + colors in chat page | 🟡 Still need collapsible thinking panel polish |
+| **Session Sidebar (Web UI)** | Sessions exist in backend + sidebar in UI | Functional; may need UX polish |
+| **Agent Template Creator** | No UI to create new agent types from the dashboard | ❌ Story 9.6 |
+| **Metering / Budget** | No token quotas, cost tracking, per-agent spend | ❌ Epic 14 |
+| **Channel Adapters** | No Telegram, Discord, WhatsApp adapters | ❌ Epic 15 |
+| **OpenAI-Compatible API** | No `/v1/chat/completions` endpoint | ❌ Epic 17 |
+| **Audit Trail** | No Merkle hash-chain logging | ❌ Epic 18 |
 
 ---
 
@@ -82,7 +83,7 @@ The following table maps OpenFang systems to existing SERA coverage and identifi
 | Orchestrator (process patterns) | ✅ **Done** — `ProcessManager` (Sequential/Parallel/Hierarchical) | — | — |
 | MCP Client | ✅ **Done** — `MCPRegistry` + skill bridge | No server mode | Medium |
 | **Tool Execution in Agent Loop** | ✅ **Done** — `ToolExecutor` + agentic loop | Implemented | — |
-| **Agent Loop Stability** | ❌ Not started | 🔴 **Epic 13** — loop guard, session repair, compaction | **High** |
+| **Agent Loop Stability** | ✅ **Done** — `LoopGuard` + `SessionRepair` + stability prompts | Session compaction still needed | **Low** |
 | **Metering & Budget** | ❌ Not started | 🔴 **Epic 14** — token quotas, cost tracking | **High** |
 | **Channel Adapters** | ❌ Not started | 🔴 **Epic 15** — Telegram, Discord, WhatsApp | **Medium** |
 | **OpenAI-Compatible API** | ❌ Not started | 🔴 **Epic 17** — `/v1/chat/completions` endpoint | **Medium** |

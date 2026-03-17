@@ -3,6 +3,7 @@ import { MemoryBlockStore } from './blocks/MemoryBlockStore.js';
 import { VectorService } from '../services/vector.service.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { Logger } from '../lib/logger.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('MemoryManager');
 import type {
@@ -82,6 +83,21 @@ export class MemoryManager {
     this.checkRateLimit();
     const entry = await this.store.addEntry(type, opts);
     await this.indexEntry(entry);
+
+    const auditId = this.agentId || this.circleId;
+    if (auditId) {
+      const auditService = AuditService.getInstance();
+      try {
+        await auditService.record(auditId, 'memory_add', {
+          type,
+          id: entry.id,
+          title: entry.title,
+          source: entry.source
+        });
+      } catch (auditErr) {
+        logger.error('Failed to record audit entry:', auditErr);
+      }
+    }
     return entry;
   }
 
@@ -99,16 +115,47 @@ export class MemoryManager {
     if (entry) {
       await this.indexEntry(entry);
     }
+
+    const auditId = this.agentId || this.circleId;
+    if (auditId && entry) {
+      const auditService = AuditService.getInstance();
+      try {
+        await auditService.record(auditId, 'memory_update', {
+          id: entry.id,
+          title: entry.title,
+          type: entry.type
+        });
+      } catch (auditErr) {
+        logger.error('Failed to record audit entry:', auditErr);
+      }
+    }
     return entry;
   }
 
   async deleteEntry(id: string): Promise<boolean> {
     if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
-    const ok = await this.store.deleteEntry(id);
-    if (ok) {
+    const entry = await this.getEntry(id);
+    const deleted = await this.store.deleteEntry(id);
+
+    if (deleted) {
       await this.vectorService.deletePoints([id]);
     }
-    return ok;
+
+    const auditId = this.agentId || this.circleId;
+    if (auditId && deleted && entry) {
+      const auditService = AuditService.getInstance();
+      try {
+        await auditService.record(auditId, 'memory_delete', {
+          id: entry.id,
+          title: entry.title,
+          type: entry.type
+        });
+      } catch (auditErr) {
+        logger.error('Failed to record audit entry:', auditErr);
+      }
+    }
+
+    return deleted;
   }
 
   // ── Block Operations ────────────────────────────────────────────────────────

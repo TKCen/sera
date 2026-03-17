@@ -38,6 +38,8 @@ import { MeteringService } from './metering/MeteringService.js';
 import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { createAuditRouter } from './routes/audit.js';
+import { createOpenAICompatRouter } from './routes/openai-compat.js';
 const app = express();
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -46,31 +48,11 @@ const app = express();
 const workspaceRoot = process.env.WORKSPACE_DIR
   ?? path.resolve(import.meta.dirname, '..', '..');
 
-// ── Agent System ──────────────────────────────────────────────────────────────
-const orchestrator = new Orchestrator();
-const agentsDir = path.join(workspaceRoot, 'agents');
-orchestrator.loadTemplates(agentsDir);
-
-// ── Circle System ─────────────────────────────────────────────────────────────
-const circleRegistry = new CircleRegistry();
-const circlesDir = path.join(workspaceRoot, 'circles');
-const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
-await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+// ── Intercom Service ─────────────────────────────────────────────────────────
+const intercomService = new IntercomService();
 
 // ── Sandbox Manager ──────────────────────────────────────────────────────────
 const sandboxManager = new SandboxManager();
-orchestrator.setSandboxManager(sandboxManager);
-const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
-  return agentManifests.find(m => m.metadata.name === agentName);
-});
-
-// ── Intercom Service ─────────────────────────────────────────────────────────
-const intercomService = new IntercomService();
-const intercomRouter = createIntercomRouter(intercomService, (agentName: string) => {
-  return agentManifests.find(m => m.metadata.name === agentName);
-});
-
-orchestrator.setIntercom(intercomService);
 
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
@@ -89,7 +71,41 @@ mcpRegistry.getAllTools().then(async () => {
 
 // ── Tool Executor ────────────────────────────────────────────────────────────
 const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
+
+// ── Agent System ──────────────────────────────────────────────────────────────
+const orchestrator = new Orchestrator();
+const agentsDir = path.join(workspaceRoot, 'agents');
+orchestrator.loadTemplates(agentsDir);
+
+orchestrator.setIntercom(intercomService);
 orchestrator.setToolExecutor(toolExecutor);
+orchestrator.setSandboxManager(sandboxManager);
+
+// Re-register agents from templates into orchestrator instance map for backward-compatible /api/chat
+const registerAgents = async () => {
+  const manifests = orchestrator.getAllManifests();
+  for (const manifest of manifests) {
+    const agent = (await import('./agents/AgentFactory.js')).AgentFactory.createAgent(manifest, undefined, intercomService);
+    agent.setIntercom(intercomService);
+    agent.setToolExecutor(toolExecutor);
+    orchestrator.registerAgent(agent);
+  }
+};
+await registerAgents();
+
+// ── Circle System ─────────────────────────────────────────────────────────────
+const circleRegistry = new CircleRegistry();
+const circlesDir = path.join(workspaceRoot, 'circles');
+const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
+await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
+
+const sandboxRouter = createSandboxRouter(sandboxManager, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
+
+const intercomRouter = createIntercomRouter(intercomService, (agentName: string) => {
+  return agentManifests.find(m => m.metadata.name === agentName);
+});
 
 // ── Route Modules ────────────────────────────────────────────────────────────
 const agentRouter = createAgentRouter(orchestrator, agentsDir);
@@ -134,6 +150,11 @@ app.use('/api/agents', heartbeatRouter);
 
 const budgetRouter = createBudgetRouter();
 app.use('/api/budget', budgetRouter);
+
+const auditRouter = createAuditRouter();
+app.use('/api/audit', auditRouter);
+const openAICompatRouter = createOpenAICompatRouter(orchestrator);
+app.use('/v1', openAICompatRouter);
 
 /**
  * Health check endpoint.

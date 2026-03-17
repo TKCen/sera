@@ -10,6 +10,7 @@ import { IdentityService } from './identity/IdentityService.js';
 import { LoopGuard } from './stability/LoopGuard.js';
 import { SessionRepair } from './stability/SessionRepair.js';
 import { Logger } from '../lib/logger.js';
+import { AuditService } from '../audit/AuditService.js';
 
 /** Maximum tool-call loop iterations before forcing a text response. */
 const MAX_TOOL_ITERATIONS = 10;
@@ -208,6 +209,23 @@ export abstract class BaseAgent {
               this.agentInstanceId,
               this.containerId,
             );
+
+            // Record audit entries for tool calls
+            const auditService = AuditService.getInstance();
+            const auditId = this.agentInstanceId || this.role;
+            for (let i = 0; i < activeCalls.length; i++) {
+              const tc = activeCalls[i]!;
+              const tr = toolResults[i]!;
+              try {
+                await auditService.record(auditId, 'tool_call', {
+                  tool: tc.function.name,
+                  arguments: tc.function.arguments,
+                  result: tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content
+                });
+              } catch (auditErr) {
+                this.logger.error('Failed to record audit entry:', auditErr);
+              }
+            }
 
             // Publish results and add to conversation
             for (const result of toolResults) {

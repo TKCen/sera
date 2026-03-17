@@ -44,7 +44,7 @@ export function disconnectClient(): void {
 
 export interface ThoughtEvent {
   timestamp: string;
-  stepType: 'observe' | 'plan' | 'act' | 'reflect';
+  stepType: 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result';
   content: string;
   agentId: string;
   agentDisplayName: string;

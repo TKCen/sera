@@ -403,7 +403,7 @@ export abstract class BaseAgent {
     if (!this.intercom) return;
     try {
       await this.intercom.publishThought(
-        this.role,
+        this.agentInstanceId || this.role,
         this.name,
         stepType,
         content,

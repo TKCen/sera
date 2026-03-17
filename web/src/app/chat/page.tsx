@@ -16,6 +16,7 @@ interface AgentInstance {
 interface SessionInfo {
   id: string;
   agentName: string;
+  agentInstanceId?: string | null;
   title: string;
   messageCount: number;
   createdAt: string;
@@ -100,17 +101,14 @@ export default function ChatPage() {
     fetchInstances();
   }, [selectedInstanceId]);
 
-  // Fetch sessions when instance changes
+  // Fetch sessions on mount
   useEffect(() => {
-    if (selectedInstanceId) {
-      fetchSessions();
-    }
-  }, [selectedInstanceId]);
+    fetchSessions();
+  }, []);
 
   const fetchSessions = async () => {
     try {
-      if (!selectedInstanceId) return;
-      const res = await fetch(`/api/core/sessions?agentInstanceId=${selectedInstanceId}`);
+      const res = await fetch('/api/core/sessions');
       if (res.ok) {
         const data = await res.json();
         setSessions(data);
@@ -126,6 +124,9 @@ export default function ChatPage() {
       if (!res.ok) return;
       const data = await res.json();
       setSessionId(data.id);
+      if (data.agentInstanceId) {
+        setSelectedInstanceId(data.agentInstanceId);
+      }
 
       // Convert server messages to UI messages
       const uiMessages: ChatMessage[] = (data.messages || []).map((m: any, i: number) => ({
@@ -325,6 +326,14 @@ export default function ChatPage() {
     </div>
   );
 
+  // Group sessions by agentName
+  const groupedSessions = sessions.reduce((acc, s) => {
+    const key = s.agentName || 'Unknown Agent';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(s);
+    return acc;
+  }, {} as Record<string, SessionInfo[]>);
+
   // Session sidebar
   const sessionSidebar = (
     <div className={`
@@ -356,34 +365,46 @@ export default function ChatPage() {
             <p className="text-[11px] text-sera-text-dim">No sessions yet</p>
           </div>
         ) : (
-          <div className="py-1">
-            {sessions.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => loadSession(s.id)}
-                className={`
-                  w-full text-left px-3 py-2.5 flex items-start gap-2 group transition-colors
-                  ${sessionId === s.id
-                    ? 'bg-sera-accent-soft border-l-2 border-sera-accent'
-                    : 'hover:bg-sera-surface border-l-2 border-transparent'
-                  }
-                `}
-              >
-                <MessageSquare size={14} className="text-sera-text-dim mt-0.5 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-sera-text truncate">{s.title}</p>
-                  <p className="text-[10px] text-sera-text-dim mt-0.5">
-                    {s.messageCount} messages · {new Date(s.updatedAt).toLocaleDateString()}
-                  </p>
+          <div className="py-2">
+            {Object.entries(groupedSessions).map(([agentName, agentSessions]) => (
+              <div key={agentName} className="mb-4">
+                <div className="px-3 py-1 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-sera-text-dim flex items-center gap-1.5">
+                    <Bot size={10} />
+                    {agentName}
+                  </span>
                 </div>
-                <button
-                  onClick={(e) => deleteSession(s.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sera-error/20 text-sera-text-dim hover:text-sera-error transition-all"
-                  title="Delete session"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </button>
+                <div className="space-y-0.5">
+                  {agentSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => loadSession(s.id)}
+                      className={`
+                        w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors
+                        ${sessionId === s.id
+                          ? 'bg-sera-accent-soft border-l-2 border-sera-accent'
+                          : 'hover:bg-sera-surface border-l-2 border-transparent'
+                        }
+                      `}
+                    >
+                      <MessageSquare size={13} className="text-sera-text-dim mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-sera-text truncate">{s.title}</p>
+                        <p className="text-[10px] text-sera-text-dim mt-0.5">
+                          {s.messageCount} messages · {new Date(s.updatedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => deleteSession(s.id, e)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sera-error/20 text-sera-text-dim hover:text-sera-error transition-all"
+                        title="Delete session"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         )}

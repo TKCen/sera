@@ -164,7 +164,14 @@ describe('ToolExecutor', () => {
       expect(result.role).toBe('tool');
       expect(result.tool_call_id).toBe('tc-1');
       expect(result.content).toContain('hello');
-      expect(registry.invoke).toHaveBeenCalledWith('test-skill', { input: 'world' });
+      expect(registry.invoke).toHaveBeenCalledWith('test-skill', { input: 'world' }, {
+        agentName: 'test-agent',
+        workspacePath: 'workspaces/test-agent',
+        tier: 2,
+        agentInstanceId: undefined,
+        containerId: undefined,
+        sandboxManager: undefined,
+      });
     });
 
     it('should return string data as-is', async () => {

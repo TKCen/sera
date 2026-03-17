@@ -69,6 +69,7 @@ export interface IntercomConfig {
 export interface ResourcesConfig {
   memory?: string;
   cpu?: string;
+  maxLlmTokensPerHour?: number;
 }
 
 // ── Workspace ───────────────────────────────────────────────────────────────────

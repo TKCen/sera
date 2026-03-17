@@ -10,6 +10,8 @@ import { Logger } from '../lib/logger.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
 import type { IdentityService } from '../auth/IdentityService.js';
+import type { MeteringEngine } from '../metering/MeteringEngine.js';
+import type { AgentScheduler } from '../metering/AgentScheduler.js';
 
 const logger = new Logger('Orchestrator');
 
@@ -22,6 +24,8 @@ export class Orchestrator {
   private toolExecutor: ToolExecutor | undefined;
   private sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
   private identityService: IdentityService | undefined;
+  private meteringEngine: MeteringEngine | undefined;
+  private agentScheduler: AgentScheduler | undefined;
 
   /** Last heartbeat timestamp per agent instance ID. */
   private heartbeats: Map<string, Date> = new Map();
@@ -60,9 +64,19 @@ export class Orchestrator {
     this.identityService = identityService;
   }
 
+<<<<<<< HEAD
+  /** Attach metering components and propagate to active agents. */
+  public setMetering(engine: MeteringEngine, scheduler: AgentScheduler): void {
+    this.meteringEngine = engine;
+    this.agentScheduler = scheduler;
+    for (const agent of this.agents.values()) {
+      agent.setMetering(engine, scheduler);
+    }
+=======
   /** Get the tool executor. */
   public getToolExecutor(): ToolExecutor | undefined {
     return this.toolExecutor;
+>>>>>>> main
   }
 
   /**
@@ -93,6 +107,9 @@ export class Orchestrator {
 
     const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
+    if (this.meteringEngine && this.agentScheduler) {
+      agent.setMetering(this.meteringEngine, this.agentScheduler);
+    }
     
     // ── Spawn Container if necessary ────────────────────────────────────────
     if (this.sandboxManager) {

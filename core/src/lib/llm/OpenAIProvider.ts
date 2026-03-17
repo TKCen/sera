@@ -134,12 +134,25 @@ export class OpenAIProvider implements LLMProvider {
         messages: OpenAIProvider.toOpenAIMessages(messages),
         temperature: this.configOverride?.temperature ?? 0.7,
         stream: true,
+        stream_options: { include_usage: true },
       });
 
       for await (const chunk of stream) {
         const token = chunk.choices[0]?.delta?.content || '';
         if (token) {
           yield { token, done: false };
+        }
+        if (chunk.usage) {
+          yield {
+            token: '',
+            done: true,
+            usage: {
+              promptTokens: chunk.usage.prompt_tokens,
+              completionTokens: chunk.usage.completion_tokens,
+              totalTokens: chunk.usage.total_tokens,
+            },
+          };
+          return;
         }
       }
 

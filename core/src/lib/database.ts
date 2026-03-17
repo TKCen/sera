@@ -112,6 +112,19 @@ export const initDb = async () => {
       )
     `);
 
+    // ── Usage Events (Epic 14) ────────────────────────────────────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id SERIAL PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_tokens INT NOT NULL DEFAULT 0,
+        completion_tokens INT NOT NULL DEFAULT 0,
+        total_tokens INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // ── Audit Trail (Epic 18) ─────────────────────────────────────────────
     await query(`
       CREATE TABLE IF NOT EXISTS audit_trail (
@@ -126,11 +139,16 @@ export const initDb = async () => {
     `);
 
     await query(`
+      CREATE INDEX IF NOT EXISTS idx_usage_events_agent_time
+      ON usage_events(agent_id, created_at DESC)
+    `);
+
+    await query(`
       CREATE INDEX IF NOT EXISTS idx_audit_agent
       ON audit_trail(agent_id, timestamp ASC)
     `);
 
-    logger.info('Database initialized with pgvector, chat sessions, agent instances, token metering, and audit trail');
+    logger.info('Database initialized with pgvector, chat sessions, agent instances, token metering, usage events, and audit trail');
   } catch (err) {
     logger.error('Database initialization failed:', err);
     throw err;

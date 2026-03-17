@@ -20,6 +20,19 @@ export class WorkerAgent extends BaseAgent {
     await this.observe(input);
     await this.plan(input);
 
+    // ── Quota Check (Epic 14) ──────────────────────────────────────────
+    if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
+      const allowed = await this.agentScheduler.isWithinQuota(
+        this.agentInstanceId || this.role,
+        this.manifest.resources.maxLlmTokensPerHour,
+      );
+      if (!allowed) {
+        const errorMsg = '⚠️ Hourly token quota exceeded. Request denied.';
+        await this.publishThought('reflect', errorMsg);
+        return { thought: 'Quota exceeded', finalAnswer: errorMsg };
+      }
+    }
+
     let dynamicContext = '';
     if (this.memoryManager) {
       dynamicContext = await this.memoryManager.assembleContext(input);
@@ -33,6 +46,15 @@ export class WorkerAgent extends BaseAgent {
       { role: 'system', content: systemPrompt },
       ...fullHistory
     ]);
+
+    // Record usage
+    if (response.usage && this.meteringEngine) {
+      await this.meteringEngine.record({
+        agentId: this.agentInstanceId || this.role,
+        model: this.manifest.model.name,
+        ...response.usage,
+      });
+    }
 
     this.history = [...fullHistory, { role: 'assistant', content: response.content } as ChatMessage];
 

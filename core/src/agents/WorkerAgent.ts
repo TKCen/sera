@@ -17,10 +17,17 @@ export class WorkerAgent extends BaseAgent {
     await this.observe(input);
     await this.plan(input);
 
+    let dynamicContext = '';
+    if (this.memoryManager) {
+      dynamicContext = await this.memoryManager.assembleContext(input);
+    }
+
+    const systemPrompt = IdentityService.generateSystemPrompt(this.manifest, undefined, dynamicContext);
+
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
     const response = await this.llmProvider.chat([
-      { role: 'system', content: this.systemPrompt },
+      { role: 'system', content: systemPrompt },
       ...fullHistory
     ]);
 

@@ -46,11 +46,19 @@ export class VectorService {
     });
   }
 
-  public async search(vector: number[], limit: number = 5) {
+  public async search(vector: number[], limit: number = 5, filter?: any) {
     return await this.client.search(this.collectionName, {
       vector,
       limit,
+      filter,
       with_payload: true,
+    });
+  }
+
+  public async deletePoints(ids: (string | number)[]) {
+    await this.client.delete(this.collectionName, {
+      wait: true,
+      points: ids,
     });
   }
 }

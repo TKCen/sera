@@ -19,6 +19,7 @@ import type {
   StreamToken,
 } from './types.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
+import type { BridgeService } from './BridgeService.js';
 
 // ── Configuration ───────────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ const logger = new Logger('Intercom');
 
 export class IntercomService {
   private readonly http: AxiosInstance;
+  private bridgeService?: BridgeService;
 
   constructor(apiUrl?: string, apiKey?: string) {
     this.http = axios.create({
@@ -46,6 +48,13 @@ export class IntercomService {
   // ── Low-level Centrifugo API ────────────────────────────────────────────────
 
   /**
+   * Hook up the bridge service for federation.
+   */
+  setBridgeService(bridgeService: BridgeService): void {
+    this.bridgeService = bridgeService;
+  }
+
+  /**
    * Publish data to a Centrifugo channel.
    */
   async publish(channel: string, data: unknown): Promise<void> {
@@ -54,6 +63,14 @@ export class IntercomService {
         method: 'publish',
         params: { channel, data },
       });
+
+      // If it's a bridge channel, forward it via the bridge service
+      if (this.bridgeService && typeof data === 'object' && data !== null) {
+        const msg = data as IntercomMessage;
+        if (msg.id && msg.source && msg.target) {
+          await this.bridgeService.handleLocalPublish(channel, msg);
+        }
+      }
     } catch (err) {
       const message = err instanceof AxiosError ? err.message : String(err);
       logger.error(`Failed to publish to ${channel}: ${message}`);
@@ -143,7 +160,23 @@ export class IntercomService {
     const fromAgent = fromManifest.metadata.name;
     const circle = fromManifest.metadata.circle;
 
-    // Validate permission
+    // Support remote addressing: agent@circle@instance or agent@circle
+    if (toAgent.includes('@')) {
+      const parts = toAgent.split('@');
+      const remoteAgent = parts[0];
+      const remoteCircle = parts[1];
+      
+      if (!remoteAgent || !remoteCircle) {
+        throw new Error(`Invalid remote agent address: ${toAgent}. Expected agent@circle`);
+      }
+
+      const channel = ChannelNamespace.bridgeDm(circle, remoteCircle, fromAgent, remoteAgent);
+      return this.publishMessage(fromAgent, circle, channel, 'message', payload, {
+        securityTier: fromManifest.metadata.tier,
+      });
+    }
+
+    // Validate permission for local DMs
     const canMessage = fromManifest.intercom?.canMessage ?? [];
     if (!canMessage.includes(toAgent)) {
       throw new IntercomPermissionError(fromAgent, toAgent);
@@ -240,6 +273,16 @@ export class IntercomService {
     const agentId = manifest.metadata.name;
     const circle = manifest.metadata.circle;
 
+    const dmPeers = (manifest.intercom?.canMessage ?? []).map(peer => {
+      if (peer.includes('@')) {
+        const parts = peer.split('@');
+        if (parts[0] && parts[1]) {
+          return ChannelNamespace.bridgeDm(circle, parts[1], agentId, parts[0]);
+        }
+      }
+      return ChannelNamespace.dm(circle, agentId, peer);
+    });
+
     return {
       thoughts: ChannelNamespace.thoughts(agentId),
       terminal: ChannelNamespace.terminal(agentId),
@@ -249,9 +292,7 @@ export class IntercomService {
       subscribeChannels: (manifest.intercom?.channels?.subscribe ?? []).map(
         name => ChannelNamespace.circleChannel(circle, name),
       ),
-      dmPeers: (manifest.intercom?.canMessage ?? []).map(
-        peer => ChannelNamespace.dm(circle, agentId, peer),
-      ),
+      dmPeers,
     };
   }
 }

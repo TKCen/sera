@@ -64,7 +64,6 @@ export class Orchestrator {
     this.identityService = identityService;
   }
 
-<<<<<<< HEAD
   /** Attach metering components and propagate to active agents. */
   public setMetering(engine: MeteringEngine, scheduler: AgentScheduler): void {
     this.meteringEngine = engine;
@@ -72,11 +71,11 @@ export class Orchestrator {
     for (const agent of this.agents.values()) {
       agent.setMetering(engine, scheduler);
     }
-=======
+  }
+
   /** Get the tool executor. */
   public getToolExecutor(): ToolExecutor | undefined {
     return this.toolExecutor;
->>>>>>> main
   }
 
   /**

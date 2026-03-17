@@ -41,14 +41,18 @@ export interface PartyModeConfig {
 
 // ── Circle Connections (Federation) ─────────────────────────────────────────────
 export interface CircleConnectionAuth {
-  type: string;
+  type: 'internal' | 'mtls' | 'token';
   certPath?: string;
+  keyPath?: string;
+  caPath?: string;
+  endpoint?: string; // URL of the remote SERA instance
+  token?: string;
 }
 
 export interface CircleConnection {
-  circle: string;
+  circle: string; // Remote circle name or agent@circle@instance
   bridgeChannels?: string[];
-  auth?: string | CircleConnectionAuth;
+  auth?: 'internal' | CircleConnectionAuth;
 }
 
 // ── Full Circle Manifest ────────────────────────────────────────────────────────

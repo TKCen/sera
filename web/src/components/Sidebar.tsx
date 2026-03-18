@@ -12,6 +12,7 @@ import {
   Circle,
   Users,
   Wrench,
+  Box,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -51,6 +52,7 @@ const navGroups: NavGroup[] = [
   {
     title: 'System',
     items: [
+      { label: 'Sandbox', href: '/sandbox', icon: <Box size={16} /> },
       { label: 'Settings', href: '/settings', icon: <Settings size={16} /> },
     ],
   },

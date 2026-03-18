@@ -8,6 +8,7 @@ import { fileListSkill } from './file-list.js';
 import { createKnowledgeStoreSkill } from './knowledge-store.js';
 import { createKnowledgeQuerySkill } from './knowledge-query.js';
 import { shellExecSkill } from './shell-exec.js';
+import { scheduleTaskSkill } from './schedule-task.js';
 
 /**
  * Register all built-in skills with a SkillRegistry instance.
@@ -24,6 +25,7 @@ export function registerBuiltinSkills(
   registry.register(fileWriteSkill);
   registry.register(fileListSkill);
   registry.register(shellExecSkill);
+  registry.register(scheduleTaskSkill);
   registry.register(createKnowledgeStoreSkill(memoryManager));
   registry.register(createKnowledgeQuerySkill(memoryManager));
 }

@@ -25,6 +25,7 @@ import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
 import { createAuditRouter } from './routes/audit.js';
 import { createConfigRouter } from './routes/config.js';
+import { createSchedulesRouter } from './routes/schedules.js';
 import { createOpenAICompatRouter } from './routes/openai-compat.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SessionStore } from './sessions/SessionStore.js';
@@ -125,6 +126,7 @@ const startServer = async () => {
   app.use('/api/budget', createBudgetRouter());
   app.use('/api/audit', createAuditRouter());
   app.use('/api', createConfigRouter());
+  app.use('/api/schedules', createSchedulesRouter());
   app.use('/v1', createOpenAICompatRouter(orchestrator));
   app.use('/api/lsp', lspRouter);
 

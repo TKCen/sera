@@ -43,3 +43,6 @@ tui/*.dylib
 tui/*.test
 tui/*.out
 tui/debug.log
+
+# Agents
+.claude/

@@ -11,6 +11,7 @@ import type {
   ProcessTask,
   ProcessResult,
   ProcessRunResult,
+  FlowState,
 } from './types.js';
 
 export class SequentialProcess implements ProcessStrategy {
@@ -23,6 +24,7 @@ export class SequentialProcess implements ProcessStrategy {
     const startTime = Date.now();
     const results: ProcessResult[] = [];
     let previousOutput = '';
+    const state: FlowState = {};
 
     for (const task of tasks) {
       const agent = this.resolveAgent(task, agents);
@@ -39,6 +41,8 @@ export class SequentialProcess implements ProcessStrategy {
       }
 
       const taskStart = Date.now();
+
+      // Build context from previous steps in the chain
       const contextualInput = previousOutput
         ? `Previous context:\n${previousOutput}\n\nCurrent task:\n${task.description}`
         : task.description;
@@ -56,6 +60,7 @@ export class SequentialProcess implements ProcessStrategy {
         });
 
         previousOutput = output;
+        state[task.id] = output;
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         results.push({

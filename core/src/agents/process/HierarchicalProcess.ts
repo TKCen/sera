@@ -11,6 +11,7 @@ import type {
   ProcessTask,
   ProcessResult,
   ProcessRunResult,
+  FlowState,
 } from './types.js';
 import { Logger } from '../../lib/logger.js';
 
@@ -32,6 +33,7 @@ export class HierarchicalProcess implements ProcessStrategy {
     managerAgent?: BaseAgent,
   ): Promise<ProcessRunResult> {
     const startTime = Date.now();
+    const state: FlowState = {};
 
     if (!managerAgent) {
       throw new Error(
@@ -64,6 +66,9 @@ export class HierarchicalProcess implements ProcessStrategy {
         managerAgent,
       );
       results.push(result);
+      if (result.status === 'completed') {
+        state[task.id] = result.output;
+      }
     }
 
     // Manager produces final consolidated answer

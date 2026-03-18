@@ -9,7 +9,12 @@ import type { BaseAgent } from '../BaseAgent.js';
 
 // ── Process Types ───────────────────────────────────────────────────────────────
 
-export type ProcessType = 'sequential' | 'parallel' | 'hierarchical';
+export type ProcessType = 'sequential' | 'parallel' | 'hierarchical' | 'flow';
+
+// ── Flow State ──────────────────────────────────────────────────────────────────
+
+/** Shared state/memory for Flow-based orchestration. */
+export type FlowState = Record<string, any>;
 
 // ── Task & Result ───────────────────────────────────────────────────────────────
 
@@ -20,6 +25,10 @@ export interface ProcessTask {
   assignedAgent?: string;
   /** IDs of tasks that must complete before this one (sequential/hierarchical). */
   dependsOn?: string[];
+  /** Routing type for multiple dependencies (Flow only). */
+  routingType?: 'and' | 'or';
+  /** Conditional routing based on output content (Flow only). */
+  condition?: string;
 }
 
 export interface ProcessResult {

@@ -15,6 +15,7 @@ import type {
 import { SequentialProcess } from './SequentialProcess.js';
 import { ParallelProcess } from './ParallelProcess.js';
 import { HierarchicalProcess } from './HierarchicalProcess.js';
+import { FlowProcess } from './FlowProcess.js';
 import { Logger } from '../../lib/logger.js';
 
 const logger = new Logger('ProcessManager');
@@ -26,6 +27,7 @@ export class ProcessManager {
     this.strategies.set('sequential', new SequentialProcess());
     this.strategies.set('parallel', new ParallelProcess());
     this.strategies.set('hierarchical', new HierarchicalProcess());
+    this.strategies.set('flow', new FlowProcess());
   }
 
   /**

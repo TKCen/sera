@@ -18,6 +18,7 @@ import { config } from '../lib/config.js';
 import { PROVIDER_CATALOG } from '../lib/providers.js';
 import type { IdentityService } from '../auth/IdentityService.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
+import type { AuthService } from '../auth/auth-service.js';
 import type { MeteringService } from '../metering/MeteringService.js';
 import type { ChatMessage } from '../agents/types.js';
 import type { ToolDefinition } from '../lib/llm/types.js';
@@ -27,10 +28,11 @@ const logger = new Logger('LLMProxy');
 
 export function createLlmProxyRouter(
   identityService: IdentityService,
+  authService: AuthService,
   meteringService: MeteringService,
 ): Router {
   const router = Router();
-  const authMiddleware = createAuthMiddleware(identityService);
+  const authMiddleware = createAuthMiddleware(identityService, authService);
 
   // ── POST /chat/completions ─────────────────────────────────────────────────
 

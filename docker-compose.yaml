@@ -37,7 +37,6 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
-    command: node dist/index.js
 
   sera-web:
     build:

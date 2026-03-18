@@ -13,6 +13,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { IdentityService } from '../auth/IdentityService.js';
+import type { AuthService } from '../auth/auth-service.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 import { Logger } from '../lib/logger.js';
 
@@ -21,9 +22,10 @@ const logger = new Logger('Heartbeat');
 export function createHeartbeatRouter(
   orchestrator: Orchestrator,
   identityService: IdentityService,
+  authService: AuthService,
 ): Router {
   const router = Router();
-  const authMiddleware = createAuthMiddleware(identityService);
+  const authMiddleware = createAuthMiddleware(identityService, authService);
 
   /**
    * POST /:id/heartbeat — agent container reports it's alive

@@ -18,6 +18,10 @@ services:
     command: npm run dev
     environment:
       - NODE_ENV=development
+      - PORT=3001
+      - SERA_BOOTSTRAP_API_KEY=sera_bootstrap_dev_123
+      - SECRETS_MASTER_KEY=f6e5d4c3b2a1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7
+      - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
 
   sera-web:
     image: sera-web:dev

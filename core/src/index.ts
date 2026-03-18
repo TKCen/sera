@@ -39,6 +39,12 @@ import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
 import { initDb } from './lib/database.js';
 import { config } from './lib/config.js';
 import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
+import { AuthService } from './auth/auth-service.js';
+import { ApiKeyProvider } from './auth/api-key-provider.js';
+import { createAuthMiddleware } from './auth/authMiddleware.js';
+import { createAuthRouter } from './routes/auth.js';
+import { createSecretsRouter } from './routes/secrets.js';
+import { SecretsManager } from './secrets/secrets-manager.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -60,6 +66,7 @@ const memoryManager = new MemoryManager();
 const startServer = async () => {
   const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
 
+  // 1. Initialize Orchestrator & Skills
   orchestrator.loadTemplates(agentsDir);
   orchestrator.setIntercom(intercomService);
   orchestrator.setToolExecutor(toolExecutor);
@@ -88,50 +95,67 @@ const startServer = async () => {
   bridgeService.init(intercomService, circleRegistry);
   intercomService.setBridgeService(bridgeService);
 
+  // 2. Initialize Identity & Auth
+  const identityService = new IdentityService();
+  const authService = new AuthService();
+  authService.registerPlugin(new ApiKeyProvider());
+  const authMiddleware = createAuthMiddleware(identityService, authService);
+
+  // 3. Initialize Shared State
+  const sessionStore = new SessionStore();
+  const meteringService = new MeteringService();
+  const meteringEngine = new MeteringEngine();
+  const agentScheduler = new AgentScheduler();
+  
+  orchestrator.setMetering(meteringEngine, agentScheduler);
+  orchestrator.setIdentityService(identityService);
+  orchestrator.watchAgentsDirectory(agentsDir);
+
+  // 4. Initialize Secrets Manager
+  try {
+    SecretsManager.getInstance();
+  } catch (err) {
+    logger.warn('Failed to initialize SecretsManager:', err);
+  }
+
+  // 5. Setup Express App
+  app.use(cors());
+  app.use(express.json());
+
+  app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
+
+  // Mount Routers (Auth FIRST to avoid prefix interception)
+  app.use('/api/auth', authMiddleware, createAuthRouter());
+  app.use('/api/secrets', authMiddleware, createSecretsRouter());
+
   const sandboxRouter = createSandboxRouter(sandboxManager, (name) => 
     agentManifests.find(m => m.metadata.name === name));
+  app.use('/api/sandbox', sandboxRouter);
 
   const intercomRouter = createIntercomRouter(
     intercomService, 
     (name) => agentManifests.find(m => m.metadata.name === name), 
     bridgeService
   );
-
-  app.use(cors());
-  app.use(express.json());
-
-  app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
-
-  app.use('/api/sandbox', sandboxRouter);
   app.use('/api/intercom', intercomRouter);
+
   app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
   app.use('/api/circles', createCircleRouter(circleRegistry, circlesDir, () => AgentManifestLoader.loadAllManifests(agentsDir), orchestrator));
   app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator));
-  
-  const sessionStore = new SessionStore();
   app.use('/api/sessions', createSessionRouter(sessionStore));
   app.use('/api', createChatRouter(sessionStore, orchestrator));
   
-  const identityService = new IdentityService();
-  const meteringService = new MeteringService();
-  const meteringEngine = new MeteringEngine();
-  const agentScheduler = new AgentScheduler();
-  app.use('/v1/llm', createLlmProxyRouter(identityService, meteringService));
-  
-  orchestrator.setMetering(meteringEngine, agentScheduler);
-  orchestrator.setIdentityService(identityService);
-  orchestrator.watchAgentsDirectory(agentsDir);
-
-  app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService));
-  app.use('/api/budget', createBudgetRouter());
-  app.use('/api/audit', createAuditRouter());
-  app.use('/api', createConfigRouter());
-  app.use('/api/schedules', createSchedulesRouter());
+  app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService));
+  app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
+  app.use('/api/budget', authMiddleware, createBudgetRouter());
+  app.use('/api/audit', authMiddleware, createAuditRouter());
+  app.use('/api', authMiddleware, createConfigRouter());
+  app.use('/api/schedules', authMiddleware, createSchedulesRouter());
   app.use('/v1', createOpenAICompatRouter(orchestrator));
   app.use('/api/lsp', lspRouter);
 
+  // 6. External Adapters
   const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };
-  
   if (config.channels.telegram.token) {
     new TelegramAdapter(config.channels.telegram.token, orchestrator, sessionStore, channelOptions).start().catch(err => logger.error('Failed to start Telegram adapter:', err));
   }

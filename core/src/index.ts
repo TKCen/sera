@@ -26,6 +26,7 @@ import { createBudgetRouter } from './routes/budget.js';
 import { createAuditRouter } from './routes/audit.js';
 import { createConfigRouter } from './routes/config.js';
 import { createSchedulesRouter } from './routes/schedules.js';
+import { createMemoryRouter } from './routes/memory.js';
 import { createOpenAICompatRouter } from './routes/openai-compat.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SessionStore } from './sessions/SessionStore.js';
@@ -111,6 +112,7 @@ const startServer = async () => {
   const sessionStore = new SessionStore();
   app.use('/api/sessions', createSessionRouter(sessionStore));
   app.use('/api', createChatRouter(sessionStore, orchestrator));
+  app.use('/api/memory', createMemoryRouter(memoryManager));
   
   const identityService = new IdentityService();
   const meteringService = new MeteringService();

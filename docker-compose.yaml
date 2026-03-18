@@ -6,36 +6,36 @@ services:
     container_name: sera-core
     restart: unless-stopped
     volumes:
-      - .:/app/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./memory:/app/memory
       - ./core/config:/app/config
       - ./workspaces:/workspaces
+      - ./agents:/agents:ro
+      - ./circles:/circles:ro
     environment:
       - NODE_ENV=development
-      - WORKSPACE_DIR=/app/workspace
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api
       - QDRANT_URL=http://qdrant:6333
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
-      - LLM_API_KEY=${LLM_API_KEY:-lm-studio}
-      - LLM_MODEL=${LLM_MODEL:-model-identifier}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://litellm:4000/v1}
+      - LLM_API_KEY=${LITELLM_MASTER_KEY:-lm-studio}
       - HOST_WORKSPACES_DIR=${PWD}/workspaces
     ports:
       - "3001:3001"
     networks:
       - sera_net
-      - agent_net
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       sera-db:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      litellm:
         condition: service_healthy
     command: node dist/index.js
 
@@ -45,28 +45,18 @@ services:
       dockerfile: Dockerfile
     container_name: sera-web
     restart: unless-stopped
-    # Port 3000 is internal, NPM will proxy to it.
     environment:
       - HOSTNAME=0.0.0.0
       - NEXT_PUBLIC_CENTRIFUGO_URL=ws://localhost:10001/connection/websocket
       - CORE_API_URL=http://sera-core:3001
-    labels:
-      - "homepage.group=AI Agents"
-      - "homepage.name=SERA"
-      - "homepage.icon=devicon-robot"
-      - "homepage.description=Sandboxed Extensible Reasoning Agent"
-      - "homepage.href=http://sera.localhost"
-      - "homepage.widget.type=custom"
-      - "homepage.widget.url=http://sera-web:3000/api/health"
     networks:
       - sera_net
-      - agent_net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 5s
+      retries: 5
+      start_period: 40s
     depends_on:
       sera-core:
         condition: service_healthy
@@ -78,10 +68,14 @@ services:
     ports:
       - "10001:8000"
     volumes:
-      - ./centrifugo/config.json:/centrifugo/config.json
+      - ./centrifugo/config.json:/centrifugo/config.json:ro
     networks:
       - sera_net
-      - agent_net
+    healthcheck:
+      test: ["CMD", "centrifugo", "check", "--config", "/centrifugo/config.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   sera-db:
     image: pgvector/pgvector:pg15
@@ -95,7 +89,6 @@ services:
       - sera_db_data:/var/lib/postgresql/data
     networks:
       - sera_net
-      - agent_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sera_user -d sera_db"]
       interval: 30s
@@ -109,12 +102,10 @@ services:
     restart: unless-stopped
     ports:
       - "6333:6333"
-      - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
       - sera_net
-      - agent_net
     healthcheck:
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 30s
@@ -122,21 +113,30 @@ services:
       retries: 3
       start_period: 5s
 
-  sera-agent-worker:
-    build:
-      context: ./core
-      dockerfile: sandbox/Dockerfile.worker
-    image: sera-agent-worker:latest
-    profiles:
-      - build-only
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: sera-litellm
+    restart: unless-stopped
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
     networks:
-      - agent_net
+      - sera_net
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(5); s.connect((\"127.0.0.1\", 4000))' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 networks:
   sera_net:
     name: sera_net
     driver: bridge
   agent_net:
+    name: agent_net
     external: true
 
 volumes:

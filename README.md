@@ -75,21 +75,53 @@ We are currently in **Phase 1: Foundation**. Upcoming work items include:
 
 ### Prerequisites
 - Docker & Docker Compose
-- Nginx Proxy Manager (optional, for `sera.localhost`)
+- `agent_net` Docker network: `docker network create agent_net`
+- LLM Provider (LM Studio, Ollama, OpenAI, or Anthropic)
 
-### Deployment
-```bash
-# Clone the repository
-git clone https://github.com/TKCen/sera.git
-cd sera
-
-# Launch the resident
-docker compose up -d
-```
+### Quick Start
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/TKCen/sera.git
+    cd sera
+    ```
+2.  **Initialize environment:**
+    ```bash
+    cp .env.example .env
+    # Edit .env to add your API keys or adjust URLs
+    ```
+3.  **Launch the stack:**
+    ```bash
+    docker compose up -d
+    ```
 
 ### Access Points
-- **UI**: [http://sera.localhost](http://sera.localhost)
-- **Monitoring**: [https://kuma.localhost](https://kuma.localhost)
+- **UI**: [http://localhost:3000](http://localhost:3000)
+- **Core API**: [http://localhost:3001](http://localhost:3001)
+- **LiteLLM**: [http://localhost:4000](http://localhost:4000)
+
+---
+
+## 🛠️ Development
+
+### Local Development Loop
+To run with hot-reloading for `sera-core` and `sera-web`:
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up
+```
+
+### Database Migrations
+Migrations run automatically on `sera-core` startup. To manage migrations manually:
+```bash
+cd core
+npm run migrate -- up
+npm run migrate -- create my_migration_name
+```
+
+### Running Tests
+```bash
+cd core
+npm test
+```
 
 ---
 

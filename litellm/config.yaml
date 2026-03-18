@@ -1,0 +1,35 @@
+model_list:
+  # Local providers (homelab-first defaults)
+  - model_name: lmstudio-default
+    litellm_params:
+      model: openai/local
+      api_base: http://host.docker.internal:1234/v1
+      api_key: lm-studio
+
+  - model_name: ollama-llama3
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: http://host.docker.internal:11434
+
+  # Cloud fallbacks (opt-in via env vars)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  routing_strategy: latency-based-routing
+  num_retries: 2
+  timeout: 120
+  fallbacks:
+    - lmstudio-default: [ollama-llama3, gpt-4o-mini]
+
+litellm_settings:
+  drop_params: true        # silently drop unsupported params per model
+  request_timeout: 120
+  num_retries: 2

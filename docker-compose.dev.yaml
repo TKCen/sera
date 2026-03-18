@@ -1,0 +1,39 @@
+services:
+  sera-core:
+    image: sera-core:dev
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+      target: base
+    container_name: sera-core
+    volumes:
+      - ./core:/app
+      - node_modules_core:/app/node_modules
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./memory:/app/memory
+      - ./core/config:/app/config
+      - ./workspaces:/workspaces
+      - ./agents:/agents:ro
+      - ./circles:/circles:ro
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+
+  sera-web:
+    image: sera-web:dev
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      target: base
+    container_name: sera-web
+    volumes:
+      - ./web:/app
+      - node_modules_web:/app/node_modules
+      - /app/.next
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+
+volumes:
+  node_modules_core:
+  node_modules_web:

@@ -38,12 +38,19 @@ Endpoints for managing agent configurations and manifests.
 ### Update Agent Manifest
 - **Method**: `PUT`
 - **Path**: `/agents/:name/manifest`
-- **Description**: Updates the agent's manifest and triggers a live reload.
+- **Description**: Updates the agent's manifest (or creates it) and triggers a live reload.
 - **Request Body**: `AgentManifest` (JSON object)
 - **Response** (200): `{ success: true, ...reloadResult }`
 - **Errors**:
   - (400): Request body missing or invalid metadata.
   - (500): Internal server error writing manifest.
+
+### Test Agent Persona
+- **Method**: `POST`
+- **Path**: `/agents/test-chat`
+- **Description**: Simulates a chat session with a non-persisted agent manifest.
+- **Request Body**: `{ manifest: AgentManifest, message: string, history?: Array<ChatMessage> }`
+- **Response** (200): `{ reply: string, thought: string }`
 
 ### Reload All Agents
 - **Method**: `POST`

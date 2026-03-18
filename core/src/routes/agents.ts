@@ -12,6 +12,9 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('AgentRouter');
 
 export function createAgentRouter(
   orchestrator: Orchestrator,
@@ -103,6 +106,42 @@ export function createAgentRouter(
     }
   });
 
+  // ── POST /api/agents/test-chat ───────────────────────────────────────────
+  /**
+   * Temporary "preview" chat with a non-persisted manifest.
+   */
+  router.post('/test-chat', async (req, res) => {
+    try {
+      const { manifest, message, history = [] } = req.body;
+
+      if (!manifest || !message) {
+        return res.status(400).json({ error: 'manifest and message are required' });
+      }
+
+      // Validate manifest
+      AgentManifestLoader.validateManifest(manifest, 'POST /api/agents/test-chat');
+
+      // Create a transient agent instance (not registered in Orchestrator's main map)
+      const agent = AgentFactory.createAgent(manifest);
+
+      // If orchestrator has a tool executor, attach it
+      const toolExecutor = orchestrator.getToolExecutor();
+      if (toolExecutor) {
+        agent.setToolExecutor(toolExecutor);
+      }
+
+      const response = await agent.process(message, history);
+
+      res.json({
+        reply: response.finalAnswer || response.thought || 'No response.',
+        thought: response.thought
+      });
+    } catch (err: any) {
+      logger.error('Preview chat error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Legacy / Compatibility ──────────────────────────────────────────────────
   router.get('/', (req, res) => {
     res.json(orchestrator.listAgents());
@@ -116,9 +155,10 @@ export function createAgentRouter(
    * @returns {void}
    */
   router.get('/:name', (req, res) => {
-    const info = orchestrator.getAgentInfo(req.params.name);
+    const name = sanitizeAgentName(req.params.name);
+    const info = orchestrator.getAgentInfo(name);
     if (!info) {
-      return res.status(404).json({ error: `Agent "${req.params.name}" not found` });
+      return res.status(404).json({ error: `Agent "${name}" not found` });
     }
     res.json(info);
   });
@@ -131,7 +171,7 @@ export function createAgentRouter(
    * @returns {void}
    */
   router.get('/:name/manifest/raw', (req, res) => {
-    const name = req.params.name;
+    const name = sanitizeAgentName(req.params.name);
     const filePath = findManifestFile(agentsDir, name);
     if (!filePath) {
       return res.status(404).json({ error: `Manifest file for "${name}" not found` });
@@ -147,13 +187,13 @@ export function createAgentRouter(
 
   // ── Update agent manifest ─────────────────────────────────────────────────
   /**
-   * Updates the agent's manifest and triggers a live reload.
+   * Updates the agent's manifest (or creates it) and triggers a live reload.
    * @param req Express request containing agent name in params and updated manifest in body
    * @param res Express response
    * @returns {void}
    */
   router.put('/:name/manifest', (req, res) => {
-    const name = req.params.name;
+    const name = sanitizeAgentName(req.params.name);
     const body = req.body;
 
     if (!body || typeof body !== 'object') {
@@ -173,7 +213,17 @@ export function createAgentRouter(
 
       // Serialize to YAML and write
       const yamlStr = yaml.dump(body, { lineWidth: 120, noRefs: true, sortKeys: false });
-      const filePath = findManifestFile(agentsDir, name) ?? path.join(agentsDir, `${name}.agent.yaml`);
+      let filePath = findManifestFile(agentsDir, name);
+
+      if (!filePath) {
+        // Create new directory for agent if it doesn't exist
+        const agentDir = path.join(agentsDir, name);
+        if (!fs.existsSync(agentDir)) {
+          fs.mkdirSync(agentDir, { recursive: true });
+        }
+        filePath = path.join(agentDir, 'AGENT.yaml');
+      }
+
       fs.writeFileSync(filePath, yamlStr, 'utf-8');
 
       // Trigger live reload
@@ -208,6 +258,13 @@ export function createAgentRouter(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Basic agent name sanitization to prevent directory traversal.
+ */
+function sanitizeAgentName(name: string): string {
+  return name.replace(/[..\\/]/g, '').toLowerCase();
+}
 
 /**
  * Find the YAML manifest file for a given agent name.

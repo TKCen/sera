@@ -3,6 +3,7 @@ import request from 'supertest';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { Orchestrator } from '../agents/Orchestrator.js';
 
 // Mock database initialization to avoid connecting to actual PostgreSQL
 vi.mock('../lib/database.js', () => ({
@@ -81,6 +82,12 @@ beforeAll(async () => {
   tempMemoryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'sera-memory-'));
   process.env.MEMORY_PATH = tempMemoryPath;
 
+  vi.spyOn(Orchestrator.prototype, 'getPrimaryAgent').mockReturnValue({
+    role: 'architect-prime',
+    name: 'Architect',
+    process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' })
+  } as any);
+
   // Dynamically import the Express app after mocks and env vars are in place
   const appModule = await import('../index.js');
   app = appModule.app;
@@ -125,6 +132,10 @@ describe('SERA Integration Tests', () => {
       const res = await request(app)
         .post('/api/chat')
         .send({ message: 'Hello, world!' });
+
+      if (res.status === 500) {
+        console.error('500 ERROR BODY:', res.body);
+      }
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('reply');

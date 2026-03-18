@@ -30,7 +30,7 @@ export default function MemoryEntryPage() {
       if (!id) return;
       try {
         setLoading(true);
-        const res = await fetch(`/api/memory/entries/${id}`);
+        const res = await fetch(`/api/core/memory/entries/${id}`);
         if (!res.ok) {
           throw new Error("Failed to load memory entry");
         }

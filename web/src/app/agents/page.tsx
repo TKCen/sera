@@ -186,15 +186,17 @@ export default function AgentsPage() {
                         {instance.status}
                       </span>
                     </div>
-                    <Link href={`/chat?instance=${instance.id}`} className="block">
-                      <h3 className="text-sm font-semibold text-sera-text group-hover:text-sera-accent transition-colors">
-                        {instance.name}
-                      </h3>
-                    </Link>
+                    <div className="block">
+                      <Link href={`/chat?instance=${instance.id}`}>
+                        <h3 className="text-sm font-semibold text-sera-text hover:text-sera-accent transition-colors">
+                          {instance.name}
+                        </h3>
+                      </Link>
+                    </div>
                     <p className="text-[10px] text-sera-text-muted mt-1 font-mono truncate">{instance.id}</p>
                     <div className="mt-3 flex items-center gap-2">
                       <span className="text-[11px] text-sera-text-dim">
-                        Template: {instance.templateName}
+                        Template: <Link href={`/agents/${instance.templateName}`} className="hover:text-sera-accent transition-colors font-medium">{instance.templateName}</Link>
                       </span>
                     </div>
                   </div>
@@ -245,9 +247,11 @@ export default function AgentsPage() {
                       {tierInfo.label}
                     </span>
                   </div>
-                  <h3 className="text-sm font-semibold text-sera-text">
-                    {template.displayName}
-                  </h3>
+                  <Link href={`/agents/${template.name}`}>
+                    <h3 className="text-sm font-semibold text-sera-text hover:text-sera-accent transition-colors">
+                      {template.displayName}
+                    </h3>
+                  </Link>
                   <p className="text-xs text-sera-text-muted mt-1 line-clamp-2 flex-1">{template.role}</p>
                   
                   <div className="mt-4 pt-4 border-t border-sera-border flex items-center justify-between">
@@ -319,7 +323,7 @@ export default function AgentsPage() {
             </div>
             <h3 className="text-lg font-semibold text-sera-text mb-2 text-center">Delete Agent Instance?</h3>
             <p className="text-sm text-sera-text-muted mb-6 text-center">
-              This will stop the container for <span className="text-sera-text font-medium">"{isDeleting.name}"</span> and remove it from the database. This action cannot be undone.
+              This will stop the container for <span className="text-sera-text font-medium">&quot;{isDeleting.name}&quot;</span> and remove it from the database. This action cannot be undone.
             </p>
             
             <div className="flex items-center gap-3">

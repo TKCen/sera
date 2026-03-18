@@ -4,6 +4,7 @@ import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 import { IdentityService } from './identity/IdentityService.js';
+import { parseJson } from '../lib/json.js';
 
 export class WorkerAgent extends BaseAgent {
   constructor(
@@ -77,9 +78,8 @@ export class WorkerAgent extends BaseAgent {
     }
 
     try {
-      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = parseJson(response.content);
+      if (parsed && typeof parsed === 'object') {
         await this.reflect({ thought: parsed.thought, finalAnswer: parsed.finalAnswer });
         return parsed;
       }

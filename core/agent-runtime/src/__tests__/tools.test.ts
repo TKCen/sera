@@ -84,6 +84,24 @@ describe('RuntimeToolExecutor', () => {
       expect(result.role).toBe('tool');
       expect(result.content.trim()).toBe('hello');
     });
+
+    it('handles arguments wrapped in markdown', () => {
+      const filePath = path.join(tempDir, 'md-test.txt');
+      fs.writeFileSync(filePath, 'markdown content', 'utf-8');
+
+      const toolCall: ToolCall = {
+        id: 'call_md',
+        type: 'function',
+        function: {
+          name: 'file-read',
+          arguments: '```json\n{"path": "md-test.txt"}\n```',
+        },
+      };
+
+      const result = executor.executeTool(toolCall);
+      expect(result.role).toBe('tool');
+      expect(result.content).toBe('markdown content');
+    });
   });
 
   describe('getToolDefinitions()', () => {

@@ -11,6 +11,7 @@ import type { SkillInfo, SkillParameter } from '../skills/types.js';
 import type { ToolDefinition, ToolCall } from '../lib/llm/types.js';
 import type { ChatMessage } from '../agents/types.js';
 import { Logger } from '../lib/logger.js';
+import { parseJson } from '../lib/json.js';
 
 const logger = new Logger('ToolExecutor');
 
@@ -65,7 +66,7 @@ export class ToolExecutor {
       // Parse arguments
       let params: Record<string, unknown>;
       try {
-        params = fn.arguments ? JSON.parse(fn.arguments) as Record<string, unknown> : {};
+        params = fn.arguments ? parseJson(fn.arguments) as Record<string, unknown> : {};
       } catch {
         return {
           role: 'tool',

@@ -11,6 +11,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import type { ChatMessage, ToolCall, ToolDefinition } from './llmClient.js';
 import { log } from './logger.js';
+import { parseJson } from './json.js';
 
 /** Max output length for tool results. */
 const MAX_RESULT_LENGTH = 50_000;
@@ -111,7 +112,7 @@ export class RuntimeToolExecutor {
     try {
       let params: Record<string, unknown>;
       try {
-        params = JSON.parse(fn.arguments || '{}');
+        params = parseJson(fn.arguments || '{}');
       } catch {
         return {
           role: 'tool',

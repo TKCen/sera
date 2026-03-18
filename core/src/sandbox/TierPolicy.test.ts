@@ -25,7 +25,7 @@ function makeManifest(overrides?: Partial<AgentManifest>): AgentManifest {
       name: 'test-model',
     },
     ...overrides,
-  };
+  } as AgentManifest;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
@@ -48,6 +48,73 @@ describe('TierPolicy', () => {
       const limits = TierPolicy.getTierLimits(3);
       expect(limits.networkMode).toBe('bridge');
       expect(limits.filesystemMode).toBe('rw');
+    });
+  });
+
+  describe('canExec', () => {
+    it('should return true for Tier 2 by default', () => {
+      const manifest = makeManifest({ metadata: { name: 't2', displayName: 'T2', icon: '🤖', circle: 'c', tier: 2 } });
+      expect(TierPolicy.canExec(manifest)).toBe(true);
+    });
+
+    it('should return false for Tier 1 by default', () => {
+      const manifest = makeManifest({ metadata: { name: 't1', displayName: 'T1', icon: '🤖', circle: 'c', tier: 1 } });
+      expect(TierPolicy.canExec(manifest)).toBe(false);
+    });
+
+    it('should honor explicit permission override for Tier 1', () => {
+      const manifest = makeManifest({
+        metadata: { name: 't1', displayName: 'T1', icon: '🤖', circle: 'c', tier: 1 },
+        permissions: { canExec: true }
+      });
+      expect(TierPolicy.canExec(manifest)).toBe(true);
+    });
+
+    it('should honor explicit permission override for Tier 2', () => {
+      const manifest = makeManifest({
+        metadata: { name: 't2', displayName: 'T2', icon: '🤖', circle: 'c', tier: 2 },
+        permissions: { canExec: false }
+      });
+      expect(TierPolicy.canExec(manifest)).toBe(false);
+    });
+  });
+
+  describe('canSpawnSubagents', () => {
+    it('should return true for Tier 2 by default', () => {
+      const manifest = makeManifest({ metadata: { name: 't2', displayName: 'T2', icon: '🤖', circle: 'c', tier: 2 } });
+      expect(TierPolicy.canSpawnSubagents(manifest)).toBe(true);
+    });
+
+    it('should return false for Tier 1 by default', () => {
+      const manifest = makeManifest({ metadata: { name: 't1', displayName: 'T1', icon: '🤖', circle: 'c', tier: 1 } });
+      expect(TierPolicy.canSpawnSubagents(manifest)).toBe(false);
+    });
+
+    it('should honor explicit permission override for Tier 1', () => {
+      const manifest = makeManifest({
+        metadata: { name: 't1', displayName: 'T1', icon: '🤖', circle: 'c', tier: 1 },
+        permissions: { canSpawnSubagents: true }
+      });
+      expect(TierPolicy.canSpawnSubagents(manifest)).toBe(true);
+    });
+  });
+
+  describe('isMemberOfCircle', () => {
+    it('should return true for primary circle', () => {
+      const manifest = makeManifest({ metadata: { name: 'a', displayName: 'A', icon: '🤖', circle: 'circle-a', tier: 2 } });
+      expect(TierPolicy.isMemberOfCircle(manifest, 'circle-a')).toBe(true);
+    });
+
+    it('should return true for additional circles', () => {
+      const manifest = makeManifest({
+        metadata: { name: 'a', displayName: 'A', icon: '🤖', circle: 'circle-a', additionalCircles: ['circle-b'], tier: 2 }
+      });
+      expect(TierPolicy.isMemberOfCircle(manifest, 'circle-b')).toBe(true);
+    });
+
+    it('should return false for unknown circles', () => {
+      const manifest = makeManifest({ metadata: { name: 'a', displayName: 'A', icon: '🤖', circle: 'circle-a', tier: 2 } });
+      expect(TierPolicy.isMemberOfCircle(manifest, 'circle-c')).toBe(false);
     });
   });
 
@@ -168,6 +235,17 @@ describe('TierPolicy', () => {
       };
 
       expect(() => TierPolicy.validateSpawnPermission(manifest, request)).not.toThrow();
+    });
+
+    it('should reject subagent spawn for Tier 1 by default', () => {
+      const manifest = makeManifest({ metadata: { name: 't1', displayName: 'T1', icon: '🤖', circle: 'c', tier: 1 } });
+      const request: SpawnRequest = {
+        agentName: 't1',
+        type: 'subagent',
+        image: 'node:20',
+        subagentRole: 'researcher',
+      };
+      expect(() => TierPolicy.validateSpawnPermission(manifest, request)).toThrow(PolicyViolationError);
     });
   });
 

@@ -36,7 +36,7 @@ export const fileReadSkill: SkillDefinition = {
         const containerPath = path.posix.join('/workspace', relativePath.replace(/\\/g, '/'));
 
         const result = await context.sandboxManager.exec(
-          { metadata: { name: context.agentName, tier: context.tier } } as any,
+          context.manifest,
           {
             containerId: context.containerId,
             agentName: context.agentName,

@@ -33,6 +33,7 @@ export interface AgentContext {
   agentName: string;
   workspacePath: string;
   tier: number;
+  manifest: import('../agents/manifest/types.js').AgentManifest;
   agentInstanceId: string | undefined;
   containerId: string | undefined;
   sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;

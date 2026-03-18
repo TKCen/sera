@@ -131,6 +131,10 @@ export default function AgentsPage() {
           <p className="text-sm text-sera-text-muted mt-1">Manage and monitor your autonomous agents</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/agents/create" className="sera-btn-primary flex items-center gap-2 px-4 py-2 text-sm">
+            <Plus size={16} />
+            New Agent
+          </Link>
           <button
             onClick={handleReload}
             disabled={reloading}

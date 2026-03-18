@@ -16,6 +16,7 @@ interface AgentInstance {
 interface SessionInfo {
   id: string;
   agentName: string;
+  agentInstanceId?: string | null;
   title: string;
   messageCount: number;
   createdAt: string;
@@ -62,6 +63,7 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [instances, setInstances] = useState<AgentInstance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
+  const [showThinking, setShowThinking] = useState(true);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -100,17 +102,14 @@ export default function ChatPage() {
     fetchInstances();
   }, [selectedInstanceId]);
 
-  // Fetch sessions when instance changes
+  // Fetch sessions on mount
   useEffect(() => {
-    if (selectedInstanceId) {
-      fetchSessions();
-    }
-  }, [selectedInstanceId]);
+    fetchSessions();
+  }, []);
 
   const fetchSessions = async () => {
     try {
-      if (!selectedInstanceId) return;
-      const res = await fetch(`/api/core/sessions?agentInstanceId=${selectedInstanceId}`);
+      const res = await fetch('/api/core/sessions');
       if (res.ok) {
         const data = await res.json();
         setSessions(data);
@@ -126,6 +125,9 @@ export default function ChatPage() {
       if (!res.ok) return;
       const data = await res.json();
       setSessionId(data.id);
+      if (data.agentInstanceId) {
+        setSelectedInstanceId(data.agentInstanceId);
+      }
 
       // Convert server messages to UI messages
       const uiMessages: ChatMessage[] = (data.messages || []).map((m: any, i: number) => ({
@@ -325,6 +327,14 @@ export default function ChatPage() {
     </div>
   );
 
+  // Group sessions by agentName
+  const groupedSessions = sessions.reduce((acc, s) => {
+    const key = s.agentName || 'Unknown Agent';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(s);
+    return acc;
+  }, {} as Record<string, SessionInfo[]>);
+
   // Session sidebar
   const sessionSidebar = (
     <div className={`
@@ -356,34 +366,46 @@ export default function ChatPage() {
             <p className="text-[11px] text-sera-text-dim">No sessions yet</p>
           </div>
         ) : (
-          <div className="py-1">
-            {sessions.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => loadSession(s.id)}
-                className={`
-                  w-full text-left px-3 py-2.5 flex items-start gap-2 group transition-colors
-                  ${sessionId === s.id
-                    ? 'bg-sera-accent-soft border-l-2 border-sera-accent'
-                    : 'hover:bg-sera-surface border-l-2 border-transparent'
-                  }
-                `}
-              >
-                <MessageSquare size={14} className="text-sera-text-dim mt-0.5 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-sera-text truncate">{s.title}</p>
-                  <p className="text-[10px] text-sera-text-dim mt-0.5">
-                    {s.messageCount} messages · {new Date(s.updatedAt).toLocaleDateString()}
-                  </p>
+          <div className="py-2">
+            {Object.entries(groupedSessions).map(([agentName, agentSessions]) => (
+              <div key={agentName} className="mb-4">
+                <div className="px-3 py-1 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-sera-text-dim flex items-center gap-1.5">
+                    <Bot size={10} />
+                    {agentName}
+                  </span>
                 </div>
-                <button
-                  onClick={(e) => deleteSession(s.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sera-error/20 text-sera-text-dim hover:text-sera-error transition-all"
-                  title="Delete session"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </button>
+                <div className="space-y-0.5">
+                  {agentSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => loadSession(s.id)}
+                      className={`
+                        w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors
+                        ${sessionId === s.id
+                          ? 'bg-sera-accent-soft border-l-2 border-sera-accent'
+                          : 'hover:bg-sera-surface border-l-2 border-transparent'
+                        }
+                      `}
+                    >
+                      <MessageSquare size={13} className="text-sera-text-dim mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-sera-text truncate">{s.title}</p>
+                        <p className="text-[10px] text-sera-text-dim mt-0.5">
+                          {s.messageCount} messages · {new Date(s.updatedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => deleteSession(s.id, e)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sera-error/20 text-sera-text-dim hover:text-sera-error transition-all"
+                        title="Delete session"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -394,6 +416,7 @@ export default function ChatPage() {
   // Renders the inline collapsible thinking section for a message
   const renderThinkingBlock = (msg: ChatMessage) => {
     if (msg.sender !== 'sera') return null;
+    if (!showThinking) return null;
     if (msg.thoughts.length === 0 && !msg.isStreaming) return null;
 
     const isExpanded = expandedThoughts.has(msg.id);
@@ -432,23 +455,64 @@ export default function ChatPage() {
         <div
           className={`
             overflow-hidden transition-all duration-300 ease-in-out
-            ${isExpanded ? 'max-h-[500px] opacity-100 mt-2' : 'max-h-0 opacity-0'}
+            ${isExpanded ? 'max-h-[800px] opacity-100 mt-2' : 'max-h-0 opacity-0'}
           `}
         >
-          <div className="pl-3 border-l-2 border-sera-border space-y-1.5">
-            {msg.thoughts.map((thought, i) => (
-              <div
-                key={`${thought.timestamp}-${i}`}
-                className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
-              >
-                <span className={`mt-0.5 flex-shrink-0 ${STEP_COLORS[thought.stepType] || 'text-sera-text-dim'}`}>
-                  {STEP_ICONS[thought.stepType] || <Brain size={11} />}
-                </span>
-                <span className="text-[11px] text-sera-text-muted leading-relaxed">
-                  {thought.content}
-                </span>
-              </div>
-            ))}
+          <div className="pl-3 border-l-2 border-sera-border space-y-2 py-1">
+            {msg.thoughts.map((thought, i) => {
+              // Enhanced formatting for tool calls/results
+              let displayContent = thought.content;
+              if (thought.stepType === 'tool-call') {
+                const parts = thought.content.split('\n');
+                return (
+                  <div key={`${thought.timestamp}-${i}`} className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+                    <span className={`mt-1 flex-shrink-0 ${STEP_COLORS[thought.stepType]}`}>
+                      {STEP_ICONS[thought.stepType]}
+                    </span>
+                    <div className="text-[11px] space-y-0.5">
+                      {parts.map((p, pi) => {
+                        const [label, ...val] = p.split(': ');
+                        return (
+                          <div key={pi} className="leading-relaxed">
+                            <span className="font-bold text-sera-text-dim">{label}:</span>
+                            <span className="text-sera-text-muted ml-1 font-mono break-all">{val.join(': ')}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (thought.stepType === 'tool-result') {
+                const content = thought.content.startsWith('Result: ') ? thought.content.substring(8) : thought.content;
+                return (
+                  <div key={`${thought.timestamp}-${i}`} className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+                    <span className={`mt-1 flex-shrink-0 ${STEP_COLORS[thought.stepType]}`}>
+                      {STEP_ICONS[thought.stepType]}
+                    </span>
+                    <div className="text-[11px] leading-relaxed">
+                      <span className="font-bold text-sera-text-dim">Result:</span>
+                      <span className="text-sera-text-muted ml-1 italic">{content}</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={`${thought.timestamp}-${i}`}
+                  className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
+                >
+                  <span className={`mt-0.5 flex-shrink-0 ${STEP_COLORS[thought.stepType] || 'text-sera-text-dim'}`}>
+                    {STEP_ICONS[thought.stepType] || <Brain size={11} />}
+                  </span>
+                  <span className="text-[11px] text-sera-text-muted leading-relaxed">
+                    {displayContent}
+                  </span>
+                </div>
+              );
+            })}
             {msg.isStreaming && msg.thoughts.length === 0 && (
               <div className="flex items-center gap-2">
                 <Loader2 size={11} className="animate-spin text-sera-accent" />
@@ -528,13 +592,29 @@ export default function ChatPage() {
       {sessionSidebar}
       <div className="flex-1 flex flex-col relative">
         {/* Top bar */}
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-sera-border">
-          {sidebarToggle}
-          {sessionId && (
-            <span className="text-xs text-sera-text-dim font-mono truncate">
-              {sessions.find(s => s.id === sessionId)?.title || 'New Chat'}
-            </span>
-          )}
+        <div className="flex items-center justify-between px-4 py-2 border-b border-sera-border">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {sidebarToggle}
+            {sessionId && (
+              <span className="text-xs text-sera-text-dim font-mono truncate">
+                {sessions.find(s => s.id === sessionId)?.title || 'New Chat'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowThinking(!showThinking)}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                showThinking
+                  ? 'bg-sera-accent/10 text-sera-accent border border-sera-accent/20'
+                  : 'bg-sera-surface text-sera-text-dim border border-sera-border hover:text-sera-text'
+              }`}
+              title={showThinking ? 'Hide thinking' : 'Show thinking'}
+            >
+              <Brain size={12} className={showThinking ? 'animate-pulse' : ''} />
+              <span>THINKING: {showThinking ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Messages */}

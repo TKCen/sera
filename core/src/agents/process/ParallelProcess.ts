@@ -10,6 +10,7 @@ import type {
   ProcessTask,
   ProcessResult,
   ProcessRunResult,
+  FlowState,
 } from './types.js';
 
 export class ParallelProcess implements ProcessStrategy {
@@ -20,11 +21,19 @@ export class ParallelProcess implements ProcessStrategy {
     agents: Map<string, BaseAgent>,
   ): Promise<ProcessRunResult> {
     const startTime = Date.now();
+    const state: FlowState = {};
 
     const promises = tasks.map(task => this.executeOne(task, agents));
     const results = await Promise.all(promises);
 
-    // Aggregate all completed outputs
+    // Aggregate into state
+    for (const res of results) {
+      if (res.status === 'completed') {
+        state[res.taskId] = res.output;
+      }
+    }
+
+    // Aggregate all completed outputs for final summary
     const completedOutputs = results
       .filter(r => r.status === 'completed' && r.output)
       .map(r => `[${r.agentName}]: ${r.output}`);

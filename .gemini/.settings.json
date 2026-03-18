@@ -1,0 +1,7 @@
+{
+  "telemetry": { "enabled": false },
+  "usageStatisticsEnabled": false,
+  "sandbox": "docker",
+  "checkpointing": { "enabled": true },
+  "yolo": true
+}

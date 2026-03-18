@@ -51,6 +51,18 @@ export class ChannelNamespace {
     return `bridge:${sorted[0]}:${sorted[1]}:${channelName}`;
   }
 
+  /**
+   * Cross-instance bridge DM channel.
+   * Format: bridge:{instanceA}:{instanceB}:dm:{circleA}:{circleB}:{agentA}:{agentB}
+   * For simplicity in this federation model, we use: bridge:dm:{circleA}:{circleB}:{agentA}:{agentB}
+   * and let the BridgeService handle routing.
+   */
+  static bridgeDm(circleA: string, circleB: string, agentA: string, agentB: string): string {
+    const sortedCircles = [circleA, circleB].sort();
+    const sortedAgents = [agentA, agentB].sort();
+    return `bridge:dm:${sortedCircles[0]}:${sortedCircles[1]}:${sortedAgents[0]}:${sortedAgents[1]}`;
+  }
+
   /** Public status channel for external subscribers. */
   static status(agentId: string): string {
     return `public:status:${agentId}`;
@@ -104,7 +116,10 @@ export class ChannelNamespace {
 
       case 'bridge':
         // bridge:{circleA}:{circleB}:{name}
-        return parts.length === 4 ? prefix : null;
+        // bridge:dm:{circleA}:{circleB}:{agentA}:{agentB}
+        if (parts.length === 4) return prefix;
+        if (parts.length === 7 && parts[1] === 'dm') return prefix;
+        return null;
 
       case 'public':
         // public:status:{id}

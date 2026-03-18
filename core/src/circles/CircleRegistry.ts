@@ -132,6 +132,33 @@ export class CircleRegistry {
       CircleRegistry.requireString(pc, 'path', `${ctx} projectContext`);
     }
 
+    // ── connections (optional array) ────────────────────────────────────────
+    if (obj['connections'] !== undefined) {
+      if (!Array.isArray(obj['connections'])) {
+        throw new ManifestValidationError(
+          `"connections" must be an array${ctx}`,
+          'connections',
+        );
+      }
+      for (const conn of obj['connections'] as unknown[]) {
+        if (!conn || typeof conn !== 'object') {
+          throw new ManifestValidationError(
+            `Each connection must be an object${ctx}`,
+            'connections',
+          );
+        }
+        const connObj = conn as Record<string, unknown>;
+        CircleRegistry.requireString(connObj, 'circle', `${ctx} connections`);
+
+        if (connObj['bridgeChannels'] !== undefined && !Array.isArray(connObj['bridgeChannels'])) {
+          throw new ManifestValidationError(
+            `"bridgeChannels" in connection must be an array${ctx}`,
+            'connections',
+          );
+        }
+      }
+    }
+
     return obj as unknown as CircleManifest;
   }
 

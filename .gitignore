@@ -32,3 +32,14 @@ references/
 tmp/
 brain/
 /workspaces
+/.worktrees
+
+# Go (TUI)
+tui/*.exe
+tui/*.exe~
+tui/*.dll
+tui/*.so
+tui/*.dylib
+tui/*.test
+tui/*.out
+tui/debug.log

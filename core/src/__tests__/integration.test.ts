@@ -5,78 +5,38 @@ import os from 'os';
 import path from 'path';
 import { Orchestrator } from '../agents/Orchestrator.js';
 
-// Mock database initialization to avoid connecting to actual PostgreSQL
+// Include all mocks that index.ts depends on
 vi.mock('../lib/database.js', () => ({
   initDb: vi.fn().mockResolvedValue(undefined),
   query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
 }));
 
-// Mock the LLM provider to avoid real API calls in /api/chat
-vi.mock('../lib/llm/OpenAIProvider.js', () => {
-  return {
-    OpenAIProvider: class {
-      async chat() {
-        return {
-          content: 'Mocked response',
-          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-        };
-      }
-      async *chatStream() {
-        yield { token: 'Mocked response', done: false };
-        yield { token: '', done: true };
-      }
-    }
-  };
-});
+vi.mock('../lib/llm/OpenAIProvider.js', () => ({
+  OpenAIProvider: class {
+    async chat() { return { content: 'Mock' }; }
+    async *chatStream() { yield { token: 'Mock', done: true }; }
+  }
+}));
 
-// Mock Qdrant/vector dependencies
-vi.mock('../services/embedding.service.js', () => ({
-  EmbeddingService: {
-    getInstance: vi.fn().mockReturnValue({
-      generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
-    }),
+vi.mock('../intercom/IntercomService.js', () => ({
+  IntercomService: class {
+    setBridgeService() {}
+    publishThought() {}
   },
+  IntercomError: class extends Error {},
+  IntercomPermissionError: class extends Error {},
+}));
+
+vi.mock('../services/embedding.service.js', () => ({
+  EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) }
 }));
 
 vi.mock('../services/vector.service.js', () => ({
-  VectorService: vi.fn().mockImplementation(() => ({
-    search: vi.fn().mockResolvedValue([]),
-  })),
+  VectorService: class { async search() { return []; } }
 }));
 
-// Mock IntercomService to avoid HTTP calls to Centrifugo
-vi.mock('../intercom/IntercomService.js', () => {
-  class MockIntercomService {
-    publish = vi.fn().mockResolvedValue(undefined);
-    publishThought = vi.fn().mockResolvedValue(undefined);
-    publishStreamToken = vi.fn().mockResolvedValue(undefined);
-    publishMessage = vi.fn().mockResolvedValue({ id: 'mock', timestamp: new Date().toISOString() });
-    sendDirectMessage = vi.fn().mockResolvedValue({ id: 'mock', timestamp: new Date().toISOString() });
-    presence = vi.fn().mockResolvedValue({});
-    getHistory = vi.fn().mockResolvedValue([]);
-    getAgentChannels = vi.fn().mockReturnValue({
-      thoughts: 'mock:thoughts', terminal: 'mock:terminal',
-      publishChannels: [], subscribeChannels: [], dmPeers: [],
-    });
-    publishToCircleChannel = vi.fn().mockResolvedValue({ id: 'mock' });
-  }
-  class MockIntercomError extends Error {
-    channel: string;
-    constructor(msg: string, channel: string) { super(msg); this.channel = channel; }
-  }
-  class MockIntercomPermissionError extends MockIntercomError {
-    constructor(from: string, to: string) { super(`${from} -> ${to}`, `dm:${from}:${to}`); }
-  }
-  return {
-    IntercomService: MockIntercomService,
-    IntercomError: MockIntercomError,
-    IntercomPermissionError: MockIntercomPermissionError,
-  };
-});
-
-// Set up a temporary directory for memory storage before importing the app
-let tempMemoryPath: string;
 let app: any;
+let tempMemoryPath: string;
 
 beforeAll(async () => {
   tempMemoryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'sera-memory-'));

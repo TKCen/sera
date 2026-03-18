@@ -35,7 +35,8 @@ export class AgentManifestLoader {
   }
 
   /**
-   * Scan a directory for *.agent.yaml files and load all valid manifests.
+   * Scan a directory for *.agent.yaml files and AGENT.yaml files in subdirectories,
+   * then load all valid manifests.
    */
   static loadAllManifests(dirPath: string): AgentManifest[] {
     console.time('[AgentManifestLoader] loadAllManifests');
@@ -45,16 +46,29 @@ export class AgentManifestLoader {
       return [];
     }
 
-    const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.agent.yaml'));
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     const manifests: AgentManifest[] = [];
 
-    for (const file of files) {
-      try {
-        const manifest = AgentManifestLoader.loadManifest(path.join(dirPath, file));
-        manifests.push(manifest);
-        logger.info(`Loaded: ${manifest.metadata.name} (${file})`);
-      } catch (err) {
-        logger.error(`Failed to load ${file}:`, (err as Error).message);
+    for (const entry of entries) {
+      let filePath: string | undefined;
+
+      if (entry.isFile() && entry.name.endsWith('.agent.yaml')) {
+        filePath = path.join(dirPath, entry.name);
+      } else if (entry.isDirectory()) {
+        const subDirAgentFile = path.join(dirPath, entry.name, 'AGENT.yaml');
+        if (fs.existsSync(subDirAgentFile)) {
+          filePath = subDirAgentFile;
+        }
+      }
+
+      if (filePath) {
+        try {
+          const manifest = AgentManifestLoader.loadManifest(filePath);
+          manifests.push(manifest);
+          logger.info(`Loaded: ${manifest.metadata.name} (${path.relative(dirPath, filePath)})`);
+        } catch (err) {
+          logger.error(`Failed to load ${filePath}:`, (err as Error).message);
+        }
       }
     }
 
@@ -102,6 +116,15 @@ export class AgentManifestLoader {
     AgentManifestLoader.requireString(meta, 'displayName', `${ctx} metadata`);
     AgentManifestLoader.requireString(meta, 'circle', `${ctx} metadata`);
 
+    if (meta['additionalCircles'] !== undefined) {
+      if (!Array.isArray(meta['additionalCircles']) || !meta['additionalCircles'].every(c => typeof c === 'string')) {
+        throw new ManifestValidationError(
+          `"additionalCircles" must be an array of strings${ctx}`,
+          'metadata.additionalCircles',
+        );
+      }
+    }
+
     // Default icon
     if (meta['icon'] === undefined) {
       meta['icon'] = '🤖';
@@ -146,6 +169,24 @@ export class AgentManifestLoader {
         }
       }
     }
+
+    // ── permissions ───────────────────────────────────────────────────────────
+    if (obj['permissions']) {
+      const perms = obj['permissions'] as Record<string, unknown>;
+      if (perms['canExec'] !== undefined && typeof perms['canExec'] !== 'boolean') {
+        throw new ManifestValidationError(
+          `"canExec" must be a boolean${ctx}`,
+          'permissions.canExec',
+        );
+      }
+      if (perms['canSpawnSubagents'] !== undefined && typeof perms['canSpawnSubagents'] !== 'boolean') {
+        throw new ManifestValidationError(
+          `"canSpawnSubagents" must be a boolean${ctx}`,
+          'permissions.canSpawnSubagents',
+        );
+      }
+    }
+
 
     // ── Construct validated manifest ──────────────────────────────────────────
     return obj as unknown as AgentManifest;

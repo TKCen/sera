@@ -73,6 +73,12 @@ export class Orchestrator {
     }
   }
 
+  /** Get the tool executor. */
+  public getToolExecutor(): ToolExecutor | undefined {
+    return this.toolExecutor;
+  }
+
+
   /**
    * Load agent templates from AGENT.yaml manifests in a directory.
    */
@@ -280,9 +286,15 @@ export class Orchestrator {
 
   getPrimaryAgent(): BaseAgent | undefined {
     if (this.primaryAgentName) {
-      return this.agents.get(this.primaryAgentName);
+      const found = Array.from(this.agents.values()).find(
+        a => a.getManifest().metadata.name === this.primaryAgentName || a.role === this.primaryAgentName
+      );
+      if (found) return found;
     }
-    return undefined;
+    // Fallback: return first tier 3
+    return Array.from(this.agents.values()).find(
+      a => a.getManifest().metadata.tier === 3
+    ) || Array.from(this.agents.values())[0];
   }
 
   /**

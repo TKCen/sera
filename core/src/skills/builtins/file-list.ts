@@ -39,7 +39,7 @@ export const fileListSkill: SkillDefinition = {
             : ['ls', '-F', '--color=never', containerPath];
 
           const result = await context.sandboxManager.exec(
-            { metadata: { name: context.agentName, tier: context.tier } } as any,
+            context.manifest,
             {
               containerId: context.containerId,
               agentName: context.agentName,

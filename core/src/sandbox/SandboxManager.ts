@@ -154,12 +154,12 @@ export class SandboxManager {
       );
     }
 
-    // Tier 1 agents cannot exec shell commands
-    if (manifest.metadata.tier === 1) {
+    // Check if agent is permitted to exec
+    if (!TierPolicy.canExec(manifest)) {
       throw new PolicyViolationError(
-        `Agent "${manifest.metadata.name}" (Tier 1) cannot exec commands`,
+        `Agent "${manifest.metadata.name}" is not permitted to exec commands`,
         manifest.metadata.name,
-        'exec_tier_violation',
+        'exec_not_permitted',
       );
     }
 

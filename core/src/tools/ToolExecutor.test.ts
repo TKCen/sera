@@ -207,6 +207,44 @@ describe('ToolExecutor', () => {
       expect(result.content).toContain('Failed to parse tool arguments');
     });
 
+    it('should handle tool arguments wrapped in markdown', async () => {
+      const registry = createMockRegistry([], { success: true, data: 'parsed' });
+      const executor = new ToolExecutor(registry);
+
+      const toolCall: ToolCall = {
+        id: 'tc-md',
+        type: 'function',
+        function: {
+          name: 'test',
+          arguments: '```json\n{"foo": "bar"}\n```',
+        },
+      };
+
+      const result = await executor.executeTool(toolCall, minimalManifest());
+      expect(result.role).toBe('tool');
+      expect(result.content).toBe('parsed');
+      expect(registry.invoke).toHaveBeenCalledWith('test', { foo: 'bar' }, expect.any(Object));
+    });
+
+    it('should handle tool arguments with extra text', async () => {
+      const registry = createMockRegistry([], { success: true, data: 'parsed' });
+      const executor = new ToolExecutor(registry);
+
+      const toolCall: ToolCall = {
+        id: 'tc-text',
+        type: 'function',
+        function: {
+          name: 'test',
+          arguments: 'The arguments are: {"foo": "bar"}',
+        },
+      };
+
+      const result = await executor.executeTool(toolCall, minimalManifest());
+      expect(result.role).toBe('tool');
+      expect(result.content).toBe('parsed');
+      expect(registry.invoke).toHaveBeenCalledWith('test', { foo: 'bar' }, expect.any(Object));
+    });
+
     it('should truncate results exceeding 50K characters', async () => {
       const longData = 'x'.repeat(60_000);
       const registry = createMockRegistry([], { success: true, data: longData });

@@ -55,11 +55,14 @@ export class SandboxManager {
   /**
    * Build a custom image for an agent based on a Dockerfile.
    * Implements caching by tagging the image with a hash of the content.
+   * Caching is partitioned by agent name and optionally by workspace ID.
    */
-  async buildImage(manifest: AgentManifest, dockerfile: string): Promise<string> {
+  async buildImage(manifest: AgentManifest, dockerfile: string, workspaceId?: string): Promise<string> {
     const agentName = manifest.metadata.name.toLowerCase();
+    // Normalize workspaceId for use in tag (only alphanumeric and hyphens)
+    const normalizedWorkspace = workspaceId?.replace(/[^a-z0-9]/gi, '-').toLowerCase() ?? 'global';
     const hash = crypto.createHash('sha256').update(dockerfile).digest('hex').substring(0, 12);
-    const tagName = `sera-agent-${agentName}:${hash}`;
+    const tagName = `sera-env-${normalizedWorkspace}-${agentName}:${hash}`;
 
     // ── Check if image already exists ───────────────────────────────────────
     try {

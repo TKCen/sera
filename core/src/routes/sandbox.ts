@@ -61,12 +61,12 @@ export function createSandboxRouter(
       const manifest = getManifestOrFail(req.body.agentName, res);
       if (!manifest) return;
 
-      const { dockerfile } = req.body;
+      const { dockerfile, workspaceId } = req.body;
       if (!dockerfile || typeof dockerfile !== 'string') {
         return res.status(400).json({ error: 'dockerfile is required' });
       }
 
-      const tagName = await sandboxManager.buildImage(manifest, dockerfile);
+      const tagName = await sandboxManager.buildImage(manifest, dockerfile, workspaceId);
       res.json({ success: true, image: tagName });
     } catch (err: unknown) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

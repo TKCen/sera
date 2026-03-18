@@ -33,7 +33,8 @@ export const updateEnvironmentSkill: SkillDefinition = {
     }
 
     try {
-      const tagName = await context.sandboxManager.buildImage(context.manifest, dockerfile);
+      // Use agentInstanceId as workspaceId for isolation if available
+      const tagName = await context.sandboxManager.buildImage(context.manifest, dockerfile, context.agentInstanceId);
 
       return {
         success: true,

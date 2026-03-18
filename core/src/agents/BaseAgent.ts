@@ -254,7 +254,7 @@ export abstract class BaseAgent {
 
             // Check if any tool result indicates a relaunch requirement
             for (const result of toolResults) {
-              if (result.content.includes('"relaunchRequired":true')) {
+              if (result.content.includes('relaunchRequired')) {
                 try {
                   const data = JSON.parse(result.content);
                   if (data.relaunchRequired && data.image) {

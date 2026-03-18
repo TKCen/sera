@@ -12,6 +12,7 @@ import {
   Circle,
   Users,
   Wrench,
+  Activity,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -46,6 +47,7 @@ const navGroups: NavGroup[] = [
     title: 'Analytics',
     items: [
       { label: 'Insights', href: '/insights', icon: <BarChart3 size={16} /> },
+      { label: 'Intercom', href: '/intercom', icon: <Activity size={16} /> },
     ],
   },
   {

@@ -2,52 +2,48 @@
 description: Orchestrate work across jules and gemini agents using git worktrees
 ---
 
-This workflow orchestrates complex tasks by delegating subtasks to jules.google for larger PRs and the local gemini CLI for smaller tasks, utilizing git worktrees to keep the main development environment isolated and clean during integration.
+This workflow orchestrates complex tasks by delegating subtasks to jules.google for larger PRs and the local gemini CLI for smaller tasks. Utilizing git worktrees, it enables parallel agentic code development by running multiple LLM-driven development sessions concurrently. Each session operates in its own isolated sandboxed environment to ensure reproducible experiments and enforce privacy.
 
-1. Break down the overarching goal into chunks suitable for:
+1. Fetch all updates from the remote.
+// turbo
+```bash
+git fetch --all
+```
+
+2. Break down the overarching goal into concurrent chunks suitable for:
    - jules.google (larger architectural changes, full features)
    - gemini CLI (smaller scopes, local isolated tasks)
 
-2. Create a new git worktree for managing and testing these orchestrations without polluting your current working environment.
+3. Create a new git worktree for the orchestration environment.
 // turbo
 ```bash
-git branch orchestrator-integration
-git worktree add ../sera-orchestrator orchestrator-integration
-cd ../sera-orchestrator
+git worktree add -b <task-branch-name> .worktrees/<task-name> main
+cd .worktrees/<task-name>
 ```
 
-3. Delegate the smaller, scoped tasks to the local `gemini` CLI, following the `outsource-cli` workflow.
+4. Delegate the smaller, scoped tasks to the local `gemini` CLI in sandbox mode.
 // turbo
 ```bash
-gemini run --prompt "<subtask description>"
+gemini --sandbox -y -p "<subtask description>"
 ```
 
-4. Delegate the larger tasks to jules by creating GitHub issues, following the `outsource-jules` workflow.
+5. Delegate the larger tasks to jules by creating GitHub issues.
 // turbo
 ```bash
 gh issue create --title "<task title>" --body "<detailed task description>" --label "jules"
 ```
 
-5. Track progress and when jules completes the work and opens pull requests, check them out within the worktree to review as per the `integrate-pr` workflow.
+6. Track progress and when jules completes the work and opens pull requests, prepare a worktree for each PR and then delegate the integration to the gemini CLI.
 // turbo
 ```bash
-gh pr list --state open --label jules
-gh pr checkout <pr-number>
+git worktree add .worktrees/#prx<pr-number> <pr-branch-name>
+cd .worktrees/#prx<pr-number>
+gemini --sandbox -y -p "Integrate the changes from PR #<pr-number> into main. Resolve any merge conflicts with main, run local tests."
 ```
 
-6. Run local tests and verify the code within the isolated worktree environment.
-
-7. If the code looks good, approve and merge the pull request into the main branch.
-// turbo
-```bash
-gh pr review <pr-number> --approve
-gh pr merge <pr-number> --merge
-```
-
-8. Clean up the worktree once all orchestrations and integrations are merged successfully.
+7. Clean up the task-specific worktree once the overall orchestration is complete.
 // turbo
 ```bash
 cd -
-git worktree remove ../sera-orchestrator
-git branch -D orchestrator-integration
+git worktree remove .worktrees/<task-name> --force
 ```

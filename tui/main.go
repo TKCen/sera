@@ -83,10 +83,14 @@ func initialModel(api *APIClient, ws *WSClient) model {
 		glamour.WithWordWrap(50),
 	)
 
+	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	l.Title = "Select an Agent Instance"
+
 	return model{
 		state:        stateSelecting,
 		api:          api,
 		ws:           ws,
+		list:         l,
 		textarea:     ta,
 		viewport:     vp,
 		thoughtsView: tvp,
@@ -169,6 +173,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thoughtsView.Height = m.height - 4
 		m.textarea.SetWidth(m.viewport.Width)
 
+		m.list.SetSize(m.width, m.height)
+
 		// Re-initialize renderer with new width
 		m.renderer, _ = glamour.NewTermRenderer(
 			glamour.WithAutoStyle(),
@@ -180,9 +186,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, inst := range msg {
 			items[i] = agentItem(inst)
 		}
-		m.list = list.New(items, list.NewDefaultDelegate(), 0, 0)
-		m.list.Title = "Select an Agent Instance"
-		m.list.SetSize(m.width, m.height)
+		m.list.SetItems(items)
 
 	case tea.KeyMsg:
 		if m.state == stateSelecting {

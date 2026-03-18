@@ -92,6 +92,30 @@ export function subscribeToThoughts(
 }
 
 /**
+ * Subscribe to any Centrifugo channel.
+ * Returns an unsubscribe function.
+ */
+export function subscribeToChannel(
+  channel: string,
+  onData: (data: unknown) => void,
+): () => void {
+  const centrifuge = getClient();
+  const sub = safeNewSubscription(centrifuge, channel);
+
+  sub.on('publication', (ctx: PublicationContext) => {
+    onData(ctx.data);
+  });
+
+  sub.subscribe();
+
+  return () => {
+    sub.unsubscribe();
+    sub.removeAllListeners();
+    centrifuge.removeSubscription(sub);
+  };
+}
+
+/**
  * Subscribe to an agent's terminal output stream.
  * Returns an unsubscribe function.
  */

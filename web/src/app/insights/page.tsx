@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from 'react';
+import Link from 'next/link';
 import { Search, Filter, X, Tag } from 'lucide-react';
 import { GraphNode, MemoryGraphData } from "@/components/MemoryGraph";
 import MemoryGraphWrapper from "@/components/MemoryGraphWrapper";
@@ -42,8 +43,8 @@ export default function InsightsPage() {
         }
         const data = await res.json();
         setGraphData(data);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }
@@ -65,7 +66,7 @@ export default function InsightsPage() {
         }
         const data = await res.json();
         setSelectedEntry(data);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error(err);
         setSelectedEntry(null);
       } finally {
@@ -98,12 +99,20 @@ export default function InsightsPage() {
       nodes = nodes.filter(n => n.tags && n.tags.includes(tagFilter));
     }
 
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      nodes = nodes.filter(n =>
+        (n.title && n.title.toLowerCase().includes(query)) ||
+        (n.tags && n.tags.some(t => t.toLowerCase().includes(query)))
+      );
+    }
+
     // Edges are only kept if both from and to are in the filtered nodes
     const nodeIds = new Set(nodes.map(n => n.id));
     const edges = graphData.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
 
     return { nodes, edges };
-  }, [graphData, typeFilter, tagFilter]);
+  }, [graphData, typeFilter, tagFilter, searchQuery]);
 
   const handleNodeClick = (node: GraphNode) => {
     setSelectedNode(node);
@@ -118,7 +127,7 @@ export default function InsightsPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Knowledge Graph</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Interactive visualization of your agents' memories and their connections.</p>
+          <p className="text-sm text-sera-text-muted mt-1">Interactive visualization of your agents&apos; memories and their connections.</p>
         </div>
       </div>
 
@@ -257,12 +266,12 @@ export default function InsightsPage() {
                  <p className="text-xs text-sera-text-dim text-center mb-2">
                    Double-click node to open full details
                  </p>
-                 <a
+                 <Link
                    href={`/memory/${selectedNode.id}`}
                    className="w-full py-2 bg-sera-bg hover:bg-sera-surface border border-sera-border rounded-lg text-sm text-sera-text text-center transition-colors block"
                  >
                    Open Entry
-                 </a>
+                 </Link>
               </div>
             </div>
           </div>

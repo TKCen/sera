@@ -39,6 +39,8 @@ export interface ChatMessage {
 
 export interface LLMResponse {
   content: string;
+  /** Chain-of-thought text, e.g. Qwen / DeepSeek reasoning_content. */
+  reasoning?: string;
   toolCalls?: ToolCall[];
   usage?: {
     promptTokens: number;
@@ -108,6 +110,7 @@ export class LLMClient {
 
       const message = choice.message;
       const content = message.content || '';
+      const reasoning = (message as any).reasoning_content || undefined;
 
       let toolCalls: ToolCall[] | undefined;
       if (message.tool_calls && message.tool_calls.length > 0) {
@@ -129,7 +132,7 @@ export class LLMClient {
           }
         : undefined;
 
-      return { content, toolCalls, usage };
+      return { content, reasoning, toolCalls, usage };
     } catch (err) {
       if (err instanceof AxiosError) {
         const status = err.response?.status;

@@ -36,7 +36,8 @@ describe('ProviderFactory', () => {
     it('should create an OpenAIProvider using the found provider config', () => {
       const mockProviderConfig = {
         baseUrl: 'http://custom-provider:8000/v1',
-        apiKey: 'custom-key'
+        apiKey: 'custom-key',
+        model: 'custom-default-model'
       };
       vi.mocked(config.getProviderConfig).mockReturnValue(mockProviderConfig);
 
@@ -77,7 +78,9 @@ describe('ProviderFactory', () => {
 
     it('should use default apiKey if provider config exists but has no apiKey', () => {
       vi.mocked(config.getProviderConfig).mockReturnValue({
-        baseUrl: 'http://no-key-provider:1234/v1'
+        baseUrl: 'http://no-key-provider:1234/v1',
+        apiKey: '',
+        model: 'some-default-model'
       });
 
       const modelConfig = {

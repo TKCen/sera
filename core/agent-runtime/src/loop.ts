@@ -74,6 +74,10 @@ export class ReasoningLoop {
 
           if (response.toolCalls && response.toolCalls.length > 0) {
             // ── Tool Call Phase ────────────────────────────────────────────
+            // Publish reasoning/thinking before tool calls (e.g. Qwen / DeepSeek)
+            if (response.reasoning) {
+              await this.centrifugo.publishThought('reasoning', response.reasoning);
+            }
             for (const tc of response.toolCalls) {
               await this.centrifugo.publishThought('tool-call',
                 `Calling tool: **${tc.function.name}**(${tc.function.arguments})`);
@@ -104,6 +108,10 @@ export class ReasoningLoop {
           }
 
           // ── Text Response (no tool calls) ─────────────────────────────────
+          // Publish reasoning/thinking before the final answer
+          if (response.reasoning) {
+            await this.centrifugo.publishThought('reasoning', response.reasoning);
+          }
           const reply = response.content || 'No response generated.';
           await this.publishFinalResponse(reply, messageId);
           await this.centrifugo.publishThought('reflect', `Completed task: "${input.substring(0, 50)}..."`);
@@ -113,6 +121,10 @@ export class ReasoningLoop {
         } else {
           // No tools — single LLM call
           const response = await this.llm.chat(messages, undefined, this.manifest.model.temperature);
+          // Publish reasoning/thinking content before the final answer
+          if (response.reasoning) {
+            await this.centrifugo.publishThought('reasoning', response.reasoning);
+          }
           const reply = response.content || 'No response generated.';
           await this.publishFinalResponse(reply, messageId);
           await this.centrifugo.publishThought('reflect', `Completed task: "${input.substring(0, 50)}..."`);

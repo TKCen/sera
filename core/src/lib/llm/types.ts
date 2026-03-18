@@ -36,12 +36,16 @@ export interface LLMUsage {
 
 export interface LLMResponse {
   content: string;
+  /** Chain-of-thought text, e.g. DeepSeek / Qwen reasoning_content. */
+  reasoning?: string;
   toolCalls?: ToolCall[];
   usage?: LLMUsage;
 }
 
 export interface LLMStreamChunk {
   token: string;
+  /** Reasoning/thinking token from models that surface chain-of-thought. */
+  reasoning?: string;
   done: boolean;
   usage?: LLMUsage;
 }

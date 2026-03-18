@@ -161,9 +161,16 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
         const response = await agent.processStream(message, history, messageId);
         const reply = response.finalAnswer || response.thought || '';
 
-        // Persist messages
+        // Persist messages — include thoughts in assistant metadata for session restore
         await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-        await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+        await sessionStore.addMessage({
+          sessionId,
+          role: 'assistant',
+          content: reply,
+          ...(response.thoughts && response.thoughts.length > 0
+            ? { metadata: { thoughts: response.thoughts } }
+            : {}),
+        });
 
         // Auto-title on first exchange
         if (isNew) {

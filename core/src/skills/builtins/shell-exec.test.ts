@@ -8,6 +8,13 @@ describe('shellExecSkill', () => {
     agentName: 'TestAgent',
     workspacePath: process.cwd(),
     tier: 2,
+    manifest: {
+      apiVersion: 'v1',
+      kind: 'Agent',
+      metadata: { name: 'TestAgent', displayName: 'Test Agent', icon: '', circle: 'test', tier: 2 },
+      identity: { role: 'tester', description: 'Test agent' },
+      model: { provider: 'openai', name: 'gpt-4' },
+    },
     agentInstanceId: 'test-instance',
     containerId: undefined,
     sandboxManager: undefined,

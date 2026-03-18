@@ -197,6 +197,100 @@
   .sera-page-title {
     @apply text-2xl font-semibold text-sera-text tracking-tight;
   }
+
+  /* ── Chat Prose ──────────────────────────────────────────────────────────── */
+  /* Overrides @tailwindcss/typography defaults to follow the SERA design system
+     inside the dark AI message bubbles. Uses explicit selectors rather than
+     the prose-invert variant so colours work regardless of .dark class. */
+  .chat-prose {
+    @apply text-sera-text;
+
+    /* Headings */
+    & h1, & h2, & h3, & h4, & h5, & h6 {
+      @apply text-sera-text font-semibold mt-3 mb-1.5;
+    }
+
+    /* Paragraph spacing */
+    & p {
+      @apply my-1.5 leading-relaxed;
+    }
+
+    /* Bold / strong */
+    & strong {
+      @apply text-sera-text font-semibold;
+    }
+
+    /* Italic */
+    & em {
+      @apply text-sera-text-muted italic;
+    }
+
+    /* Inline code */
+    & :not(pre) > code {
+      @apply text-sera-accent bg-sera-surface-active rounded px-1 py-0.5
+             font-mono text-[0.82em] font-normal;
+    }
+    & :not(pre) > code::before,
+    & :not(pre) > code::after {
+      content: '';
+    }
+
+    /* Code blocks */
+    & pre {
+      @apply bg-sera-bg border border-sera-border rounded-lg px-4 py-3 my-3
+             overflow-x-auto text-[0.8em] leading-relaxed;
+    }
+    & pre code {
+      @apply text-sera-text bg-transparent p-0;
+    }
+
+    /* Links */
+    & a {
+      @apply text-sera-accent underline underline-offset-2 decoration-sera-accent/40
+             hover:decoration-sera-accent transition-all;
+    }
+
+    /* Blockquote */
+    & blockquote {
+      @apply border-l-2 border-sera-border-active pl-3 my-2
+             text-sera-text-muted italic;
+    }
+    & blockquote p {
+      @apply my-0;
+    }
+
+    /* Mark / highlight */
+    & mark {
+      @apply bg-sera-accent-soft text-sera-accent rounded px-0.5;
+    }
+
+    /* Lists */
+    & ul {
+      @apply list-disc list-outside ml-5 my-1.5 space-y-0.5;
+    }
+    & ol {
+      @apply list-decimal list-outside ml-5 my-1.5 space-y-0.5;
+    }
+    & li {
+      @apply leading-relaxed;
+    }
+
+    /* Table */
+    & table {
+      @apply w-full text-[0.85em] border-collapse my-3;
+    }
+    & th {
+      @apply text-left font-semibold text-sera-text border-b border-sera-border py-1.5 px-2;
+    }
+    & td {
+      @apply text-sera-text-muted border-b border-sera-border/50 py-1.5 px-2;
+    }
+
+    /* Horizontal rule */
+    & hr {
+      @apply border-sera-border my-3;
+    }
+  }
 }
 
 /* ─── Reduced Motion ──────────────────────────────────────────────────────── */

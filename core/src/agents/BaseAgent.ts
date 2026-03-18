@@ -1,4 +1,4 @@
-import type { AgentResponse, ChatMessage } from './types.js';
+import type { AgentResponse, CapturedThought, ChatMessage } from './types.js';
 import type { LLMProvider, ToolCall } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
@@ -37,6 +37,11 @@ export abstract class BaseAgent {
 
   /** Queue of incoming intercom messages for the reasoning loop. */
   protected messageQueue: Array<{ from: string; payload: Record<string, unknown> }> = [];
+
+  /** Thoughts collected during the current processStream call (cleared on each invocation). */
+  private _capturedThoughts: CapturedThought[] = [];
+  /** Optional per-request thought listener set during processStream. */
+  private _onThoughtCallback: ((t: CapturedThought) => void) | undefined;
 
   constructor(
     manifest: AgentManifest,
@@ -104,7 +109,11 @@ export abstract class BaseAgent {
     input: string,
     history: ChatMessage[],
     messageId: string,
+    onThought?: (thought: CapturedThought) => void,
   ): Promise<AgentResponse> {
+    // Clear captured thoughts for this request
+    this._capturedThoughts = [];
+    this._onThoughtCallback = onThought;
     // Reset loop guard for each new request
     this.loopGuard.reset();
 
@@ -272,8 +281,8 @@ export abstract class BaseAgent {
 
             // Publish results and add to conversation
             for (const result of toolResults) {
-              const preview = result.content.length > 200
-                ? result.content.substring(0, 200) + '...'
+              const preview = result.content.length > 2000
+                ? result.content.substring(0, 2000) + '...'
                 : result.content;
               await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
@@ -313,7 +322,10 @@ export abstract class BaseAgent {
       return {
         thought: 'Error during streaming.',
         finalAnswer: `Error: ${error.message}`,
+        thoughts: this._capturedThoughts.slice(),
       };
+    } finally {
+      this._onThoughtCallback = undefined;
     }
   }
 
@@ -351,10 +363,22 @@ export abstract class BaseAgent {
     messageId: string,
   ): Promise<AgentResponse> {
     let accumulated = '';
+    let accumulatedReasoning = '';
 
     for await (const chunk of this.llmProvider.chatStream(messages)) {
       if (chunk.token) {
         accumulated += chunk.token;
+
+        // First content token: flush any accumulated reasoning as one thought block
+        if (accumulatedReasoning) {
+          await this.publishThought('reasoning', accumulatedReasoning);
+          accumulatedReasoning = '';
+        }
+      }
+
+      // Accumulate reasoning/thinking tokens (e.g. Qwen / DeepSeek reasoning_content)
+      if (chunk.reasoning) {
+        accumulatedReasoning += chunk.reasoning;
       }
 
       if (chunk.usage && this.meteringEngine) {
@@ -375,6 +399,11 @@ export abstract class BaseAgent {
       }
     }
 
+    // Flush any remaining reasoning (e.g. model only reasoned, produced no content)
+    if (accumulatedReasoning) {
+      await this.publishThought('reasoning', accumulatedReasoning);
+    }
+
     const reply = accumulated || 'No response generated.';
 
     this.history = [
@@ -386,6 +415,7 @@ export abstract class BaseAgent {
     const result: AgentResponse = {
       thought: `Completed task: ${input}`,
       finalAnswer: reply,
+      thoughts: this._capturedThoughts.slice(),
     };
     await this.reflect(result);
     return result;
@@ -401,6 +431,10 @@ export abstract class BaseAgent {
     stepType: ThoughtStepType,
     content: string,
   ): Promise<void> {
+    const timestamp = new Date().toISOString();
+    // Capture for session persistence and notify external listener
+    this._capturedThoughts.push({ timestamp, stepType, content });
+    this._onThoughtCallback?.({ timestamp, stepType, content });
     if (!this.intercom) return;
     try {
       await this.intercom.publishThought(

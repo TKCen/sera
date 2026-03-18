@@ -45,6 +45,7 @@ const STEP_ICONS: Record<string, React.ReactNode> = {
   reflect: <RotateCcw size={11} />,
   'tool-call': <Wrench size={11} />,
   'tool-result': <CheckCircle2 size={11} />,
+  reasoning: <Brain size={11} />,
 };
 
 const STEP_COLORS: Record<string, string> = {
@@ -54,6 +55,7 @@ const STEP_COLORS: Record<string, string> = {
   reflect: 'text-purple-400',
   'tool-call': 'text-cyan-400',
   'tool-result': 'text-teal-400',
+  reasoning: 'text-violet-400',
 };
 
 export default function ChatPage() {
@@ -134,7 +136,7 @@ export default function ChatPage() {
         id: m.id || `msg-${i}`,
         sender: m.role === 'user' ? 'user' : 'sera',
         text: m.content,
-        thoughts: [],
+        thoughts: Array.isArray(m.metadata?.thoughts) ? m.metadata.thoughts : [],
         isStreaming: false,
         timestamp: new Date(m.createdAt || Date.now()),
       }));
@@ -455,50 +457,156 @@ export default function ChatPage() {
         <div
           className={`
             overflow-hidden transition-all duration-300 ease-in-out
-            ${isExpanded ? 'max-h-[800px] opacity-100 mt-2' : 'max-h-0 opacity-0'}
+            ${isExpanded ? 'max-h-[1200px] opacity-100 mt-2' : 'max-h-0 opacity-0'}
           `}
         >
-          <div className="pl-3 border-l-2 border-sera-border space-y-2 py-1">
+          <div className={`pl-3 border-l-2 py-1 space-y-2.5 ${
+            msg.isStreaming ? 'border-sera-accent/50' : 'border-sera-border'
+          } transition-colors duration-300`}>
             {msg.thoughts.map((thought, i) => {
-              // Enhanced formatting for tool calls/results
-              let displayContent = thought.content;
+              // ── Reasoning block ──────────────────────────────────────────────
+              if (thought.stepType === 'reasoning') {
+                const isLast = i === msg.thoughts.length - 1;
+                return (
+                  <details
+                    key={`${thought.timestamp}-${i}`}
+                    className="group animate-in fade-in duration-300"
+                    open
+                  >
+                    <summary className="flex items-center gap-1.5 cursor-pointer list-none select-none mb-2">
+                      <span className={`text-violet-400 flex-shrink-0 ${
+                        msg.isStreaming && isLast ? 'animate-pulse' : ''
+                      }`}>
+                        <Brain size={11} />
+                      </span>
+                      <span className="text-[11px] font-semibold text-violet-300">
+                        {msg.isStreaming && isLast ? 'Reasoning…' : 'Reasoning'}
+                      </span>
+                      <ChevronDown size={10} className="ml-auto text-violet-400/60 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="relative ml-3">
+                      <div className="
+                        pl-3 border-l border-violet-400/25
+                        text-[11.5px] text-sera-text-dim leading-relaxed
+                        whitespace-pre-wrap
+                        max-h-80 overflow-y-auto
+                        [scrollbar-width:thin]
+                      ">
+                        {thought.content}
+                      </div>
+                      {/* Bottom fade gradient when content may overflow */}
+                      <div className="absolute bottom-0 left-3 right-0 h-6 bg-gradient-to-t from-sera-surface to-transparent pointer-events-none" />
+                    </div>
+                  </details>
+                );
+              }
+
+              // ── Tool-call block ──────────────────────────────────────────────
               if (thought.stepType === 'tool-call') {
-                const parts = thought.content.split('\n');
+                // Parse "Tool: name\nParameters: {...}" format
+                const lines = thought.content.split('\n');
+                const toolLine = lines[0] ?? '';
+                const paramLine = lines.slice(1).join('\n');
+                const toolName = toolLine.replace(/^Tool:\s*/, '');
+                const rawParams = paramLine.replace(/^Parameters:\s*/, '');
+
+                // Try to pretty-print JSON params
+                let paramDisplay: string;
+                try {
+                  const parsed = JSON.parse(rawParams);
+                  paramDisplay = JSON.stringify(parsed, null, 2);
+                } catch {
+                  paramDisplay = rawParams;
+                }
+
                 return (
-                  <div key={`${thought.timestamp}-${i}`} className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
-                    <span className={`mt-1 flex-shrink-0 ${STEP_COLORS[thought.stepType]}`}>
-                      {STEP_ICONS[thought.stepType]}
-                    </span>
-                    <div className="text-[11px] space-y-0.5">
-                      {parts.map((p, pi) => {
-                        const [label, ...val] = p.split(': ');
-                        return (
-                          <div key={pi} className="leading-relaxed">
-                            <span className="font-bold text-sera-text-dim">{label}:</span>
-                            <span className="text-sera-text-muted ml-1 font-mono break-all">{val.join(': ')}</span>
-                          </div>
-                        );
-                      })}
+                  <div key={`${thought.timestamp}-${i}`} className="animate-in fade-in slide-in-from-left-2 duration-200">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`flex-shrink-0 ${STEP_COLORS['tool-call']}`}>
+                        {STEP_ICONS['tool-call']}
+                      </span>
+                      <span className="text-[11px] font-semibold text-cyan-300">{toolName}</span>
                     </div>
+                    {paramDisplay && (
+                      <pre className="
+                        ml-4 text-[10.5px] text-sera-text-muted leading-relaxed
+                        bg-sera-bg/60 border border-sera-border rounded px-2 py-1.5
+                        overflow-x-auto whitespace-pre-wrap break-all
+                        [scrollbar-width:thin]
+                      ">{paramDisplay}</pre>
+                    )}
                   </div>
                 );
               }
 
+              // ── Tool-result block ────────────────────────────────────────────
               if (thought.stepType === 'tool-result') {
-                const content = thought.content.startsWith('Result: ') ? thought.content.substring(8) : thought.content;
+                const raw = thought.content.startsWith('Result: ') ? thought.content.substring(8) : thought.content;
+                const wasTruncated = thought.content.endsWith('...');
+
+                // Try to parse as structured data (e.g. web-search returns JSON array)
+                let parsedResults: { title: string; url: string; text: string }[] | null = null;
+                try {
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed) && parsed.length > 0 && 'title' in parsed[0]) {
+                    parsedResults = parsed;
+                  }
+                } catch { /* not JSON */ }
+
+                if (parsedResults) {
+                  return (
+                    <div key={`${thought.timestamp}-${i}`} className="animate-in fade-in slide-in-from-left-2 duration-200">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span className={`flex-shrink-0 ${STEP_COLORS['tool-result']}`}>
+                          {STEP_ICONS['tool-result']}
+                        </span>
+                        <span className="text-[11px] font-semibold text-teal-300">
+                          {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''} fetched
+                        </span>
+                      </div>
+                      <div className="ml-4 space-y-1.5">
+                        {parsedResults.map((r, ri) => (
+                          <div key={ri} className="group">
+                            <a
+                              href={r.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-sera-accent hover:underline font-medium leading-tight block truncate"
+                              title={r.url}
+                            >
+                              {r.title}
+                            </a>
+                            {r.text && r.text !== r.title && (
+                              <p className="text-[10.5px] text-sera-text-dim leading-snug mt-0.5 line-clamp-2">
+                                {r.text}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Generic result fallback
                 return (
                   <div key={`${thought.timestamp}-${i}`} className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
-                    <span className={`mt-1 flex-shrink-0 ${STEP_COLORS[thought.stepType]}`}>
-                      {STEP_ICONS[thought.stepType]}
+                    <span className={`mt-0.5 flex-shrink-0 ${STEP_COLORS['tool-result']}`}>
+                      {STEP_ICONS['tool-result']}
                     </span>
-                    <div className="text-[11px] leading-relaxed">
-                      <span className="font-bold text-sera-text-dim">Result:</span>
-                      <span className="text-sera-text-muted ml-1 italic">{content}</span>
+                    <div className="text-[11px] leading-relaxed min-w-0">
+                      <span className="font-semibold text-teal-300">Result: </span>
+                      <span className="text-sera-text-muted break-all">{raw.length > 300 ? raw.substring(0, 300) + '…' : raw}</span>
+                      {(wasTruncated || raw.length > 300) && (
+                        <span className="text-sera-text-dim ml-1 italic text-[10px]">({raw.length} chars)</span>
+                      )}
                     </div>
                   </div>
                 );
               }
 
+              // ── Generic thought step ─────────────────────────────────────────
+              const displayContent = thought.content;
               return (
                 <div
                   key={`${thought.timestamp}-${i}`}
@@ -524,8 +632,6 @@ export default function ChatPage() {
       </div>
     );
   };
-
-  // Toggle sidebar button
   const sidebarToggle = (
     <button
       onClick={() => setSidebarOpen(prev => !prev)}
@@ -635,7 +741,9 @@ export default function ChatPage() {
                 {renderThinkingBlock(msg)}
 
                 {/* Message content */}
-                <div className={`text-sm break-words leading-relaxed prose prose-sm max-w-none ${msg.sender === 'user' ? 'prose-invert text-sera-bg' : 'text-sera-text'}`}>
+                <div className={`text-sm break-words leading-relaxed max-w-none ${
+                  msg.sender === 'user' ? 'text-sera-bg' : 'chat-prose'
+                }`}>
                   {msg.sender === 'user' ? (
                     <p className="whitespace-pre-wrap m-0">{msg.text}</p>
                   ) : msg.isStreaming && !msg.text ? (

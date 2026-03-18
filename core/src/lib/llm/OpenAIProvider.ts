@@ -111,6 +111,7 @@ export class OpenAIProvider implements LLMProvider {
 
       const result: LLMResponse = {
         content: choice?.message?.content || '',
+        reasoning: (choice?.message as any)?.reasoning_content || undefined,
         usage: {
           promptTokens: response.usage?.prompt_tokens || 0,
           completionTokens: response.usage?.completion_tokens || 0,
@@ -138,9 +139,12 @@ export class OpenAIProvider implements LLMProvider {
       });
 
       for await (const chunk of stream) {
-        const token = chunk.choices[0]?.delta?.content || '';
-        if (token) {
-          yield { token, done: false };
+        const delta = chunk.choices[0]?.delta as any;
+        const token = delta?.content || '';
+        const reasoning = delta?.reasoning_content || undefined;
+
+        if (token || reasoning) {
+          yield { token, reasoning, done: false };
         }
         if (chunk.usage) {
           yield {

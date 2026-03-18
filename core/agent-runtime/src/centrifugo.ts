@@ -10,7 +10,7 @@ import { log } from './logger.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type ThoughtStepType = 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result';
+export type ThoughtStepType = 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result' | 'reasoning';
 
 export interface ThoughtEvent {
   timestamp: string;

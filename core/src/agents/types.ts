@@ -10,6 +10,13 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
+/** A single captured thought event for session persistence. */
+export interface CapturedThought {
+  timestamp: string;
+  stepType: string;
+  content: string;
+}
+
 export interface AgentResponse {
   thought: string;
   action?: {
@@ -21,6 +28,8 @@ export interface AgentResponse {
     task: string;
   };
   finalAnswer?: string;
+  /** Thoughts captured during processing — populated by processStream for persistence. */
+  thoughts?: CapturedThought[];
 }
 
 export interface AgentInstance {

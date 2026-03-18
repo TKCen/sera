@@ -3,8 +3,9 @@ import type { SkillDefinition } from '../types.js';
 /**
  * Built-in skill: web-search
  *
- * Performs a web search using the DuckDuckGo Instant Answer API.
- * This is a lightweight stub — swap the provider for production use.
+ * Performs a web search using the DuckDuckGo HTML search endpoint.
+ * The DDG Instant Answer JSON API returns empty results for most queries;
+ * scraping the HTML endpoint is the reliable alternative (no API key required).
  */
 export const webSearchSkill: SkillDefinition = {
   id: 'web-search',
@@ -12,7 +13,7 @@ export const webSearchSkill: SkillDefinition = {
   source: 'builtin',
   parameters: [
     { name: 'query', type: 'string', description: 'The search query', required: true },
-    { name: 'limit', type: 'number', description: 'Max number of results to return', required: false },
+    { name: 'limit', type: 'number', description: 'Max number of results to return (default 5)', required: false },
   ],
   handler: async (params, _context) => {
     const query = params['query'];
@@ -25,43 +26,68 @@ export const webSearchSkill: SkillDefinition = {
       return { success: false, error: 'Direct URLs and IP addresses are not allowed in search queries' };
     }
 
+    const limit = typeof params['limit'] === 'number' ? Math.min(params['limit'], 20) : 5;
+
     try {
-      // Dynamic import to avoid top-level dependency
       const { default: axios } = await import('axios');
-      const response = await axios.get('https://api.duckduckgo.com/', {
-        params: { q: query, format: 'json', no_redirect: 1 },
-        timeout: 10_000,
+
+      // DDG HTML search endpoint — returns rich results even for queries that
+      // the Instant Answer API returns nothing for.
+      const response = await axios.get('https://html.duckduckgo.com/html/', {
+        params: { q: query },
+        timeout: 15_000,
+        headers: {
+          // DDG blocks requests without a user-agent
+          'User-Agent': 'Mozilla/5.0 (compatible; SERA-Agent/1.0)',
+          'Accept': 'text/html,application/xhtml+xml,*/*',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        responseType: 'text',
       });
 
-      const data = response.data as Record<string, unknown>;
-      const limit = typeof params['limit'] === 'number' ? params['limit'] : 5;
-
-      // Extract relevant results from the DDG instant answer response
+      const html: string = response.data as string;
       const results: { title: string; url: string; text: string }[] = [];
 
-      // Abstract
-      if (data['Abstract'] && typeof data['Abstract'] === 'string') {
+      // ── Parse result blocks ──────────────────────────────────────────────────
+      // Each organic result is wrapped in a <div class="result results_links ...">
+      // We extract title, URL, and snippet with lightweight regex — no cheerio needed.
+
+      // Split by result blocks
+      const blockPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+      const snippetPattern = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+
+      const titleMatches = [...html.matchAll(blockPattern)];
+      const snippetMatches = [...html.matchAll(snippetPattern)];
+
+      for (let i = 0; i < Math.min(titleMatches.length, limit); i++) {
+        const titleMatch = titleMatches[i];
+        if (!titleMatch) continue;
+
+        // DDG encodes the real URL in a redirect param — extract it
+        let url = titleMatch[1] ?? '';
+        const uddgMatch = url.match(/uddg=([^&]+)/);
+        if (uddgMatch?.[1]) {
+          url = decodeURIComponent(uddgMatch[1]);
+        }
+
+        const rawTitle = (titleMatch[2] ?? '').replace(/<[^>]+>/g, '').trim();
+        const rawSnippet = (snippetMatches[i]?.[1] ?? '').replace(/<[^>]+>/g, '').trim();
+
+        if (!rawTitle && !url) continue;
+
         results.push({
-          title: (data['Heading'] as string | undefined) ?? 'Abstract',
-          url: (data['AbstractURL'] as string | undefined) ?? '',
-          text: data['Abstract'],
+          title: rawTitle || url,
+          url,
+          text: rawSnippet || rawTitle,
         });
       }
 
-      // Related topics
-      const relatedTopics = data['RelatedTopics'];
-      if (Array.isArray(relatedTopics)) {
-        for (const topic of relatedTopics) {
-          if (results.length >= limit) break;
-          if (topic && typeof topic === 'object' && 'Text' in topic) {
-            const t = topic as Record<string, unknown>;
-            results.push({
-              title: (t['Text'] as string | undefined)?.slice(0, 80) ?? '',
-              url: (t['FirstURL'] as string | undefined) ?? '',
-              text: (t['Text'] as string | undefined) ?? '',
-            });
-          }
-        }
+      if (results.length === 0) {
+        return {
+          success: true,
+          data: [],
+          message: 'No results found for this query.',
+        };
       }
 
       return { success: true, data: results };

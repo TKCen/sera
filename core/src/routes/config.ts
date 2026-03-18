@@ -80,8 +80,8 @@ export function createConfigRouter(): Router {
 
   /** PUT /api/providers/:id — Updates settings for a specific provider. */
   router.put('/providers/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id);
     try {
-      const { id } = req.params;
       config.saveProviderConfig(id, req.body);
       logger.info(`Provider configuration updated: ${id}`);
       res.json({ success: true });
@@ -93,9 +93,11 @@ export function createConfigRouter(): Router {
 
   /** POST /api/providers/:id/test — Validates a specific provider connection. */
   router.post('/providers/:id/test', async (req: Request, res: Response) => {
+    const id = String(req.params.id);
     try {
-      const { id } = req.params;
-      const { baseUrl, apiKey, model } = req.body;
+      const baseUrl = req.body.baseUrl ? String(req.body.baseUrl) : undefined;
+      const apiKey = req.body.apiKey ? String(req.body.apiKey) : undefined;
+      const model = req.body.model ? String(req.body.model) : undefined;
 
       let provider;
       if (baseUrl) {
@@ -131,8 +133,8 @@ export function createConfigRouter(): Router {
 
   /** POST /api/providers/active — Sets a specific provider as the globally active LLM provider. */
   router.post('/providers/active', (req: Request, res: Response) => {
+    const providerId = req.body.providerId ? String(req.body.providerId) : undefined;
     try {
-      const { providerId } = req.body;
       if (!providerId) {
         return res.status(400).json({ error: 'providerId is required' });
       }

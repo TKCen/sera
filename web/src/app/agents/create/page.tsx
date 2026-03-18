@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Bot, Save, ArrowLeft, Play, RefreshCw, X, Shield, MessageSquare, Settings as SettingsIcon } from 'lucide-react';
 import Link from 'next/link';
@@ -8,6 +8,28 @@ import Link from 'next/link';
 interface PreviewMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+interface ProviderModel {
+  id: string;
+  name: string;
+  tier: string;
+  contextWindow: number;
+}
+
+interface Provider {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  configured: boolean;
+  isActive: boolean;
+  models: ProviderModel[];
+}
+
+interface ProvidersResponse {
+  activeProvider: string;
+  providers: Provider[];
 }
 
 export default function CreateAgentPage() {
@@ -22,9 +44,13 @@ export default function CreateAgentPage() {
   const [description, setDescription] = useState('');
   const [style, setStyle] = useState('');
   const [principles, setPrinciples] = useState('');
-  const [modelName, setModelName] = useState('default');
   const [tier, setTier] = useState<1 | 2 | 3>(2);
   const [tools, setTools] = useState<string[]>(['file-read', 'file-write']);
+
+  // Model selection state
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState('');
+  const [selectedModelName, setSelectedModelName] = useState('');
 
   // Preview State
   const [showPreview, setShowPreview] = useState(false);
@@ -36,6 +62,22 @@ export default function CreateAgentPage() {
     'file-read', 'file-write', 'file-list', 'web-search', 'web-fetch',
     'knowledge-store', 'knowledge-query', 'shell-exec', 'docker-exec'
   ];
+
+  useEffect(() => {
+    fetch('/api/core/providers')
+      .then(res => res.json())
+      .then((data: ProvidersResponse) => {
+        setProviders(data.providers);
+        const active = data.providers.find(p => p.id === data.activeProvider) || data.providers[0];
+        if (active) {
+          setSelectedProviderId(active.id);
+          if (active.models.length > 0) {
+            setSelectedModelName(active.models[0].id);
+          }
+        }
+      })
+      .catch(err => setError('Failed to fetch providers: ' + err.message));
+  }, []);
 
   const buildManifest = () => {
     const internalName = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
@@ -56,8 +98,8 @@ export default function CreateAgentPage() {
         principles: principles.split('\n').filter(p => p.trim() !== ''),
       },
       model: {
-        provider: 'lm-studio',
-        name: modelName,
+        provider: selectedProviderId,
+        name: selectedModelName,
       },
       tools: {
         allowed: tools,
@@ -84,8 +126,8 @@ export default function CreateAgentPage() {
       }
 
       router.push('/agents');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -112,11 +154,12 @@ export default function CreateAgentPage() {
       });
 
       if (!res.ok) throw new Error('Preview chat failed');
-      const data = await res.json();
+      const data = (await res.json()) as { reply: string };
 
       setPreviewHistory(prev => [...prev, { role: 'assistant', content: data.reply }]);
-    } catch (err: any) {
-      setPreviewHistory(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setPreviewHistory(prev => [...prev, { role: 'assistant', content: `Error: ${errorMessage}` }]);
     } finally {
       setIsPreviewLoading(false);
     }
@@ -259,16 +302,40 @@ export default function CreateAgentPage() {
               <SettingsIcon size={14} />
               Model Configuration
             </h2>
-            <div className="space-y-1.5">
-              <label htmlFor="model-name" className="text-[11px] font-semibold text-sera-text-dim uppercase">Model Name (LM-Studio)</label>
-              <input
-                id="model-name"
-                type="text"
-                value={modelName}
-                onChange={(e) => setModelName(e.target.value)}
-                placeholder="e.g. default"
-                className="w-full bg-sera-surface border border-sera-border rounded px-3 py-2 text-sm focus:border-sera-accent outline-none"
-              />
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label htmlFor="provider-select" className="text-[11px] font-semibold text-sera-text-dim uppercase">Provider</label>
+                <select
+                  id="provider-select"
+                  value={selectedProviderId}
+                  onChange={(e) => {
+                    const providerId = e.target.value;
+                    setSelectedProviderId(providerId);
+                    const provider = providers.find(p => p.id === providerId);
+                    if (provider && provider.models.length > 0) {
+                      setSelectedModelName(provider.models[0].id);
+                    }
+                  }}
+                  className="w-full bg-sera-surface border border-sera-border rounded px-3 py-2 text-sm focus:border-sera-accent outline-none"
+                >
+                  {providers.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="model-select" className="text-[11px] font-semibold text-sera-text-dim uppercase">Model</label>
+                <select
+                  id="model-select"
+                  value={selectedModelName}
+                  onChange={(e) => setSelectedModelName(e.target.value)}
+                  className="w-full bg-sera-surface border border-sera-border rounded px-3 py-2 text-sm focus:border-sera-accent outline-none"
+                >
+                  {providers.find(p => p.id === selectedProviderId)?.models.map((m: ProviderModel) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </section>
 
@@ -283,7 +350,7 @@ export default function CreateAgentPage() {
                 <button
                   key={t}
                   type="button"
-                  onClick={() => setTier(t as any)}
+                  onClick={() => setTier(t as 1 | 2 | 3)}
                   className={`flex-1 py-2 rounded border text-xs font-bold transition-all ${
                     tier === t
                     ? 'bg-sera-accent/10 border-sera-accent text-sera-accent'

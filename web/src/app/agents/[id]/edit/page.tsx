@@ -56,6 +56,7 @@ export default function AgentEditPage() {
 
   const [manifest, setManifest] = useState<AgentManifest | null>(null);
   const [availableSkills, setAvailableSkills] = useState<{ id: string, name: string }[]>([]);
+  const [providers, setProviders] = useState<{ id: string, name: string, models: { id: string, name: string }[] }[]>([]);
 
   const handleManifestChange = (path: string[], value: unknown) => {
     if (!manifest) return;
@@ -164,13 +165,14 @@ export default function AgentEditPage() {
     handleManifestChange(['tools', listType], newList);
   };
 
-  // Fetch the agent manifest
+  // Fetch the agent manifest and providers
   useEffect(() => {
     Promise.all([
       fetch(`/api/core/agents/${agentName}`),
-      fetch(`/api/core/skills`)
+      fetch(`/api/core/skills`),
+      fetch(`/api/core/providers`)
     ])
-      .then(async ([agentRes, skillsRes]) => {
+      .then(async ([agentRes, skillsRes, providersRes]) => {
         if (!agentRes.ok) throw new Error(`Agent not found`);
         const agentData = await agentRes.json();
         setManifest(agentData.manifest);
@@ -179,6 +181,11 @@ export default function AgentEditPage() {
         if (skillsRes.ok) {
           const skillsData = await skillsRes.json();
           setAvailableSkills(skillsData);
+        }
+
+        if (providersRes.ok) {
+          const providersData = await providersRes.json();
+          setProviders(providersData.providers);
         }
       })
       .catch((err) => setError(err.message))
@@ -410,25 +417,39 @@ export default function AgentEditPage() {
                   <select
                     className="sera-input"
                     value={manifest?.model?.provider || ''}
-                    onChange={(e) => handleManifestChange(['model', 'provider'], e.target.value)}
+                    onChange={(e) => {
+                      const providerId = e.target.value;
+                      handleManifestChange(['model', 'provider'], providerId);
+                      const provider = providers.find(p => p.id === providerId);
+                      if (provider && provider.models.length > 0) {
+                        handleManifestChange(['model', 'name'], provider.models[0].id);
+                      }
+                    }}
                     required
                   >
                     <option value="">Select a provider...</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="lm-studio">LM Studio</option>
-                    <option value="ollama">Ollama</option>
+                    {providers.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs text-sera-text-muted mb-1.5">Model Name <span className="text-sera-error">*</span></label>
-                  <input
-                    type="text"
+                  <select
                     className="sera-input"
                     value={manifest?.model?.name || ''}
                     onChange={(e) => handleManifestChange(['model', 'name'], e.target.value)}
                     required
-                  />
+                  >
+                    <option value="">Select a model...</option>
+                    {providers.find(p => p.id === manifest?.model?.provider)?.models.map((m: { id: string, name: string }) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                    {/* Allow free-text model if not in the list (e.g. from raw YAML) */}
+                    {manifest?.model?.name && !providers.find(p => p.id === manifest?.model?.provider)?.models.some((m: { id: string, name: string }) => m.id === manifest?.model?.name) && (
+                      <option value={manifest.model.name}>{manifest.model.name} (Custom)</option>
+                    )}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs text-sera-text-muted mb-1.5">Temperature</label>

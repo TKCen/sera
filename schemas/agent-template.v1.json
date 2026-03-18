@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentTemplate V1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "sera/v1"
+    },
+    "kind": {
+      "const": "AgentTemplate"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "displayName": { "type": "string" },
+        "icon": { "type": "string" },
+        "builtin": { "type": "boolean", "default": false },
+        "category": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["lifecycle", "tools", "resources"],
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "role": { "type": "string" },
+            "principles": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "model": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string" },
+            "name": { "type": "string" },
+            "temperature": { "type": "number" },
+            "fallback": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "provider": { "type": "string" },
+                  "name": { "type": "string" },
+                  "maxComplexity": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "sandboxBoundary": { "type": "string" },
+        "policyRef": { "type": "string" },
+        "capabilities": { "type": "object" },
+        "lifecycle": {
+          "type": "object",
+          "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["persistent", "ephemeral"] }
+          }
+        },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "skillPackages": { "type": "array", "items": { "type": "string" } },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "allowed": { "type": "array", "items": { "type": "string" } },
+            "denied": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "subagents": {
+          "type": "object",
+          "properties": {
+            "allowed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["templateRef"],
+                "properties": {
+                  "templateRef": { "type": "string" },
+                  "maxInstances": { "type": "integer" },
+                  "lifecycle": { "enum": ["persistent", "ephemeral"], "default": "ephemeral" },
+                  "requiresApproval": { "type": "boolean", "default": false }
+                }
+              }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" },
+            "maxLlmTokensPerHour": { "type": "integer" },
+            "maxLlmTokensPerDay": { "type": "integer" }
+          }
+        },
+        "workspace": { "type": "object" },
+        "memory": { "type": "object" }
+      }
+    }
+  }
+}

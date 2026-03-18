@@ -1,0 +1,11 @@
+apiVersion: sera/v1
+kind: SandboxBoundary
+metadata:
+  name: tier-3
+spec:
+  linux:
+    capabilities: []
+    readOnlyRootfs: true
+  capabilities:
+    network-allowlist: []
+    command-denylist: ["*"]

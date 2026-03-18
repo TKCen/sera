@@ -45,6 +45,11 @@ import { createAuthMiddleware } from './auth/authMiddleware.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createSecretsRouter } from './routes/secrets.js';
 import { SecretsManager } from './secrets/secrets-manager.js';
+import { AgentRegistry } from './agents/registry.service.js';
+import { ResourceImporter } from './agents/importer.service.js';
+import { BootstrapService } from './agents/bootstrap.service.js';
+import { createRegistryRouter } from './routes/registry.js';
+import { pool } from './lib/database.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -153,6 +158,10 @@ const startServer = async () => {
   app.use('/api/schedules', authMiddleware, createSchedulesRouter());
   app.use('/v1', createOpenAICompatRouter(orchestrator));
   app.use('/api/lsp', lspRouter);
+  
+  const agentRegistry = new AgentRegistry(pool);
+  const resourceImporter = new ResourceImporter(agentRegistry, workspaceRoot); // Base dir for resources
+  app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
 
   // 6. External Adapters
   const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };
@@ -169,6 +178,13 @@ const startServer = async () => {
   if (process.env.NODE_ENV !== 'test') {
     const port = process.env.PORT || 3001;
     await initDb();
+    
+    // Perform auto-bootstrap
+    const bootstrapService = new BootstrapService(agentRegistry, resourceImporter, workspaceRoot);
+    await bootstrapService.ensureSeraInstantiated().catch(err => {
+      logger.error('Sera auto-bootstrap failed:', err);
+    });
+
     app.listen(port, () => logger.info(`SERA Core running on port ${port}`));
   }
 };

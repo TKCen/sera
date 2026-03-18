@@ -117,29 +117,66 @@ export class SkillRegistry {
   // ── Validation ────────────────────────────────────────────────────────────
 
   /**
-   * Validate that all skill IDs referenced by a manifest are registered.
-   * Returns an array of unknown skill IDs (empty = valid).
+   * Validate that all skill IDs referenced by a manifest are registered
+   * and that there are no circular dependencies among required skills.
+   * Returns an array of error messages (empty = valid).
    */
   validateManifestSkills(manifest: AgentManifest): string[] {
-    const unknown: string[] = [];
+    const errors: string[] = [];
+    const ids = new Set<string>();
 
     if (manifest.skills) {
       for (const id of manifest.skills) {
         if (!this.skills.has(id)) {
-          unknown.push(id);
+          errors.push(`Unknown skill: ${id}`);
+        } else {
+          ids.add(id);
         }
       }
     }
 
     if (manifest.tools?.allowed) {
       for (const id of manifest.tools.allowed) {
-        if (!this.skills.has(id)) {
-          unknown.push(id);
+        if (this.skills.has(id)) {
+          ids.add(id);
         }
       }
     }
 
-    return unknown;
+    if (errors.length > 0) return errors;
+
+    // Cycle detection
+    const visited = new Set<string>();
+    const stack = new Set<string>();
+
+    const checkCycle = (id: string): string | null => {
+      if (stack.has(id)) return id;
+      if (visited.has(id)) return null;
+
+      visited.add(id);
+      stack.add(id);
+
+      const skill = this.skills.get(id);
+      if (skill?.requires) {
+        for (const reqId of skill.requires) {
+          const cycleId = checkCycle(reqId);
+          if (cycleId) return `${id} -> ${cycleId}`;
+        }
+      }
+
+      stack.delete(id);
+      return null;
+    };
+
+    for (const id of ids) {
+      const cycle = checkCycle(id);
+      if (cycle) {
+        errors.push(`Circular skill dependency detected: ${cycle}`);
+        break; // Stop after first cycle for now
+      }
+    }
+
+    return errors;
   }
 
   // ── MCP Bridge ────────────────────────────────────────────────────────────

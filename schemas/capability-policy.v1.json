@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CapabilityPolicy V1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "capabilities"],
+  "properties": {
+    "apiVersion": { "const": "sera/v1" },
+    "kind": { "const": "CapabilityPolicy" },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "capabilities": {
+      "type": "object"
+    }
+  }
+}

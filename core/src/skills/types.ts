@@ -60,6 +60,7 @@ export interface SkillDefinition {
   parameters: SkillParameter[];
   handler: SkillHandler;
   source: SkillSource;
+  requires?: string[];
 }
 
 // ── Serializable Skill Info (for API responses) ─────────────────────────────────
@@ -69,4 +70,5 @@ export interface SkillInfo {
   description: string;
   parameters: SkillParameter[];
   source: SkillSource;
+  requires?: string[];
 }

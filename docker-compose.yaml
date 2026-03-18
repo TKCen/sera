@@ -84,6 +84,8 @@ services:
       - POSTGRES_USER=sera_user
       - POSTGRES_PASSWORD=sera_pass
       - POSTGRES_DB=sera_db
+    ports:
+      - "5432:5432"
     volumes:
       - sera_db_data:/var/lib/postgresql/data
     networks:

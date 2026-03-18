@@ -1,0 +1,24 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: sera
+  displayName: Sera (Primary Agent)
+  builtin: true
+  category: orchestrator
+  description: The primary orchestration agent for the SERA platform.
+spec:
+  identity:
+    name: sera
+  model:
+    provider: openai
+    model: gpt-4o
+  sandboxBoundary: tier-1
+  lifecycle:
+    mode: persistent
+  capabilities:
+    seraManagement:
+      policies: ["global"]
+      templates: ["global"]
+      agents: ["global"]
+  workspace:
+    enabled: true

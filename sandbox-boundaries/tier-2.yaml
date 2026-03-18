@@ -1,0 +1,12 @@
+apiVersion: sera/v1
+kind: SandboxBoundary
+metadata:
+  name: tier-2
+spec:
+  linux:
+    capabilities: []
+    readOnlyRootfs: true
+  capabilities:
+    network-allowlist: ["github.com", "api.openai.com", "api.anthropic.com"]
+    network-denylist: ["169.254.169.254"]
+    command-denylist: ["rm", "mv", "cp", "sh", "bash"]

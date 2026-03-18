@@ -1,0 +1,14 @@
+apiVersion: sera/v1
+kind: Agent
+metadata:
+  name: my-researcher
+  displayName: Research Assistant
+  templateRef: example-full
+  circle: research
+overrides:
+  model:
+    model: o1-preview
+  capabilities:
+    network-allowlist: ["arxiv.org"]
+  skills:
+    $append: ["web-search"]

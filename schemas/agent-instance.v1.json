@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Instance V1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "overrides"],
+  "properties": {
+    "apiVersion": { "const": "sera/v1" },
+    "kind": { "const": "Agent" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "templateRef"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "displayName": { "type": "string" },
+        "templateRef": { "type": "string" },
+        "circle": { "type": "string" }
+      }
+    },
+    "overrides": {
+      "type": "object",
+      "description": "Mirrors AgentTemplate spec but used for overrides"
+    }
+  }
+}

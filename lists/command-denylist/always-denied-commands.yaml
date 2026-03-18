@@ -1,0 +1,11 @@
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: always-denied-commands
+  type: command-denylist
+entries:
+  - "rm -rf /"
+  - "mkfs*"
+  - "dd if=*"
+  - "shutdown"
+  - "reboot"

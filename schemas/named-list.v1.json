@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NamedList V1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "entries"],
+  "properties": {
+    "apiVersion": { "const": "sera/v1" },
+    "kind": { "const": "NamedList" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "enum": [
+            "network-allowlist",
+            "network-denylist",
+            "command-allowlist",
+            "command-denylist",
+            "secret-list"
+          ]
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["$ref"],
+            "properties": {
+              "$ref": { "type": "string" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

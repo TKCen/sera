@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
 interface MemoryEntry {
@@ -36,8 +37,8 @@ export default function MemoryEntryPage() {
         }
         const data = await res.json();
         setEntry(data);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }
@@ -123,7 +124,7 @@ export default function MemoryEntryPage() {
                   <ul className="list-disc list-inside text-sm text-sera-text-muted">
                     {entry.refs.map(ref => (
                       <li key={ref}>
-                        <a href={`/memory/${ref}`} className="hover:text-sera-text hover:underline transition-colors">{ref}</a>
+                        <Link href={`/memory/${ref}`} className="hover:text-sera-text hover:underline transition-colors">{ref}</Link>
                       </li>
                     ))}
                   </ul>

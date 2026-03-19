@@ -1,39 +1,41 @@
 # ── Stage 1: Build the Agent Runtime ──────────────────────────────────────────
-FROM node:20-alpine AS runtime-builder
+FROM node:22-slim AS builder
 
 WORKDIR /build
+
 COPY agent-runtime/package.json agent-runtime/package-lock.json* ./
-RUN npm install --production=false
+RUN npm install --include=dev
+
 COPY agent-runtime/ ./
-RUN npx tsc
+RUN node_modules/.bin/tsc --project tsconfig.json
 
-# ── Stage 2: Final Worker Image ──────────────────────────────────────────────
-FROM alpine:3.19
+# ── Stage 2: Runtime Image ────────────────────────────────────────────────────
+FROM node:22-slim
 
-# Install standard tools for agents
-RUN apk update && apk add --no-cache \
+# Install standard tools needed by agents (tier-appropriate; no Docker CLI)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
-    curl \
     git \
-    python3 \
-    nodejs \
-    npm \
-    findutils \
-    grep \
-    sed \
-    tar \
-    gzip \
+    curl \
     ca-certificates \
-    openssh-client \
-    jq
+    && rm -rf /var/lib/apt/lists/*
 
-# Install the Agent Runtime
-COPY --from=runtime-builder /build/dist /opt/agent-runtime/dist
-COPY --from=runtime-builder /build/node_modules /opt/agent-runtime/node_modules
-COPY --from=runtime-builder /build/package.json /opt/agent-runtime/package.json
+# Non-root user — uid 1001 is outside the default range used by node:22-slim
+RUN useradd -r -u 1001 -g users -m -s /bin/bash agent
 
-# Set up workspace directory
+# Install agent runtime
+WORKDIR /opt/agent-runtime
+COPY --from=builder /build/dist ./dist
+COPY --from=builder /build/node_modules ./node_modules
+COPY --from=builder /build/package.json ./package.json
+
+# Workspace directory — bind-mounted at container start by SandboxManager
+RUN mkdir -p /workspace && chown agent:users /workspace
 WORKDIR /workspace
 
-# The reasoning loop runs as the container's main process
+# Drop to non-root
+USER agent
+
+# DECISION: CMD uses node directly; no shell wrapper needed since the runtime
+# is the only process. SIGTERM is forwarded correctly this way.
 CMD ["node", "/opt/agent-runtime/dist/index.js"]

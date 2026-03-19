@@ -8,16 +8,27 @@
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { log } from './logger.js';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-export type ThoughtStepType = 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result' | 'reasoning';
+export type ThoughtType = 'observe' | 'plan' | 'act' | 'reflect';
+
+/** Extended set used internally (not emitted to the spec thought channel). */
+export type InternalStepType = ThoughtType | 'tool-call' | 'tool-result' | 'reasoning';
 
 export interface ThoughtEvent {
-  timestamp: string;
-  stepType: ThoughtStepType;
+  /** Canonical thought type per Story 5.5. */
+  step: ThoughtType;
   content: string;
+  timestamp: string;
+  iteration: number;
   agentId: string;
-  agentDisplayName: string;
+  agentName: string;
+  /** Present only for act thoughts. */
+  toolName?: string;
+  /** Present only for act thoughts. */
+  toolArgs?: Record<string, unknown>;
+  /** Anomaly flag per Story 5.10. */
+  anomaly?: boolean;
 }
 
 export interface StreamToken {
@@ -30,17 +41,19 @@ export interface StreamToken {
 
 export class CentrifugoPublisher {
   private http: AxiosInstance;
+  /** Agent instance UUID — used in channel names. */
   private agentId: string;
-  private agentDisplayName: string;
+  /** Agent display/template name — used in channel names. */
+  private agentName: string;
 
   constructor(
     centrifugoUrl: string,
     apiKey: string,
     agentId: string,
-    agentDisplayName: string,
+    agentName: string,
   ) {
     this.agentId = agentId;
-    this.agentDisplayName = agentDisplayName;
+    this.agentName = agentName;
     this.http = axios.create({
       baseURL: centrifugoUrl,
       headers: {
@@ -53,6 +66,7 @@ export class CentrifugoPublisher {
 
   /**
    * Publish raw data to a Centrifugo channel.
+   * Best-effort — failures are logged but do not propagate.
    */
   async publish(channel: string, data: unknown): Promise<void> {
     try {
@@ -63,36 +77,74 @@ export class CentrifugoPublisher {
     } catch (err) {
       const msg = err instanceof AxiosError ? err.message : String(err);
       log('warn', `Failed to publish to ${channel}: ${msg}`);
-      // Non-fatal — don't crash the runtime
     }
   }
 
   /**
-   * Publish a reasoning thought step.
+   * Publish a canonical reasoning thought step.
+   * Channel: `thoughts:{agentId}:{agentName}`
    */
-  async publishThought(stepType: ThoughtStepType, content: string): Promise<void> {
-    const channel = `internal:agent:${this.agentId}:thoughts`;
+  async publishThought(
+    step: ThoughtType | InternalStepType,
+    content: string,
+    iteration: number = 0,
+    opts?: {
+      toolName?: string;
+      toolArgs?: Record<string, unknown>;
+      anomaly?: boolean;
+    },
+  ): Promise<void> {
+    // Map internal step types to canonical thought types
+    const canonical = this.toCanonicalStep(step);
+    const channel = `thoughts:${this.agentId}:${this.agentName}`;
+
     const event: ThoughtEvent = {
-      timestamp: new Date().toISOString(),
-      stepType,
+      step: canonical,
       content,
+      timestamp: new Date().toISOString(),
+      iteration,
       agentId: this.agentId,
-      agentDisplayName: this.agentDisplayName,
+      agentName: this.agentName,
+      ...(opts?.toolName !== undefined ? { toolName: opts.toolName } : {}),
+      ...(opts?.toolArgs !== undefined ? { toolArgs: opts.toolArgs } : {}),
+      ...(opts?.anomaly !== undefined ? { anomaly: opts.anomaly } : {}),
     };
 
     await this.publish(channel, event);
   }
 
   /**
-   * Publish a stream token to a per-message channel.
+   * Publish an LLM stream token.
+   * Channel: `tokens:{agentId}`
    */
   async publishStreamToken(
     messageId: string,
     token: string,
     done: boolean,
   ): Promise<void> {
-    const channel = `internal:stream:${messageId}`;
+    const channel = `tokens:${this.agentId}`;
     const data: StreamToken = { token, done, messageId };
     await this.publish(channel, data);
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  private toCanonicalStep(step: ThoughtType | InternalStepType): ThoughtType {
+    switch (step) {
+      case 'observe':
+      case 'plan':
+      case 'act':
+      case 'reflect':
+        return step;
+      case 'tool-call':
+      case 'act':
+        return 'act';
+      case 'tool-result':
+        return 'reflect';
+      case 'reasoning':
+        return 'observe';
+      default:
+        return 'observe';
+    }
   }
 }

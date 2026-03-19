@@ -1,20 +1,48 @@
 /**
- * ReasoningLoop — the Observe → Think → Act cycle that runs inside the container.
+ * ReasoningLoop — the Observe → Plan → Act → Reflect cycle inside the container.
  *
- * This mirrors the behavior of BaseAgent.processStream() in Core, but
- * executes entirely within the container using the LLM Proxy and native tools.
+ * Accepts a structured task, runs the LLM + tool loop up to MAX_ITERATIONS,
+ * and returns a structured result with usage stats.
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import type { LLMClient, ChatMessage, ToolCall, ToolDefinition } from './llmClient.js';
+import type { LLMClient, ChatMessage, ToolCall, ToolDefinition, LLMResponse } from './llmClient.js';
+import { BudgetExceededError, ProviderUnavailableError } from './llmClient.js';
 import type { RuntimeToolExecutor } from './tools.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
+import { ContextManager } from './contextManager.js';
 import { log } from './logger.js';
 
-/** Maximum tool-call loop iterations before forcing a text response. */
-const MAX_TOOL_ITERATIONS = 10;
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface TaskInput {
+  taskId: string;
+  task: string;
+  context?: string;
+  history?: ChatMessage[];
+}
+
+export interface TaskOutput {
+  taskId: string;
+  result: string | null;
+  error?: string;
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  /** Ordered list of thought events for Story 5.9. */
+  thoughtStream: Array<{ step: string; content: string; iteration: number; timestamp: string }>;
+  exitReason: 'success' | 'max_iterations_exceeded' | 'budget_exceeded' | 'provider_unavailable' | 'error' | 'shutdown';
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const MAX_ITERATIONS = 10;
+
+// ── ReasoningLoop ─────────────────────────────────────────────────────────────
 
 export class ReasoningLoop {
   private llm: LLMClient;
@@ -23,6 +51,10 @@ export class ReasoningLoop {
   private manifest: RuntimeManifest;
   private systemPrompt: string;
   private toolDefs: ToolDefinition[];
+  private contextManager: ContextManager;
+
+  /** Set to true when SIGTERM received; loop exits after current step. */
+  shutdownRequested = false;
 
   constructor(
     llm: LLMClient,
@@ -36,127 +68,207 @@ export class ReasoningLoop {
     this.manifest = manifest;
     this.systemPrompt = generateSystemPrompt(manifest);
     this.toolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
+    this.contextManager = new ContextManager(manifest.model.name);
   }
 
   /**
-   * Run a single reasoning cycle for the given input.
-   * Returns the final text response from the agent.
+   * Run the reasoning loop for the given task.
    */
-  async run(input: string, history: ChatMessage[] = []): Promise<string> {
-    const messageId = uuidv4();
+  async run(input: TaskInput): Promise<TaskOutput> {
+    const { taskId, task, context, history = [] } = input;
     const hasTools = this.toolDefs.length > 0;
+    const thoughtStream: TaskOutput['thoughtStream'] = [];
 
-    // Observe
-    await this.centrifugo.publishThought('observe',
-      `Observing: "${input.substring(0, 100)}${input.length > 100 ? '...' : ''}"`);
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
 
-    // Plan
-    const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
-    await this.centrifugo.publishThought('plan',
-      `Planning approach using tools: ${toolNames}`);
+    // Helper to emit and record a thought
+    const think = async (
+      step: 'observe' | 'plan' | 'act' | 'reflect',
+      content: string,
+      iteration: number,
+      opts?: { toolName?: string; toolArgs?: Record<string, unknown>; anomaly?: boolean },
+    ) => {
+      thoughtStream.push({ step, content, iteration, timestamp: new Date().toISOString() });
+      await this.centrifugo.publishThought(step, content, iteration, opts);
+    };
 
-    // Build message array
+    // Build initial message array
     const messages: ChatMessage[] = [
       { role: 'system', content: this.systemPrompt },
       ...history,
-      { role: 'user', content: input },
+      {
+        role: 'user',
+        content: context ? `${context}\n\n${task}` : task,
+      },
     ];
 
+    const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
+    await think('observe', `Received task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`, 0);
+    await think('plan', `Planning approach. Available tools: ${toolNames}`, 0);
+
+    // Track last tool call to detect duplicate-call loops
+    let lastToolCallSignature: string | null = null;
+
     try {
-      let iterations = 0;
+      let iteration = 0;
 
-      // ── Agentic Loop ──────────────────────────────────────────────────────
-      while (iterations < MAX_TOOL_ITERATIONS) {
-        iterations++;
-
-        if (hasTools) {
-          const response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature);
-
-          if (response.toolCalls && response.toolCalls.length > 0) {
-            // ── Tool Call Phase ────────────────────────────────────────────
-            // Publish reasoning/thinking before tool calls (e.g. Qwen / DeepSeek)
-            if (response.reasoning) {
-              await this.centrifugo.publishThought('reasoning', response.reasoning);
-            }
-            for (const tc of response.toolCalls) {
-              await this.centrifugo.publishThought('tool-call',
-                `Calling tool: **${tc.function.name}**(${tc.function.arguments})`);
-            }
-
-            // Add assistant message with tool_calls to the conversation
-            const assistantMsg: ChatMessage = {
-              role: 'assistant',
-              content: response.content || '',
-              tool_calls: response.toolCalls,
-            };
-            messages.push(assistantMsg);
-
-            // Execute tools natively
-            const toolResults = this.tools.executeToolCalls(response.toolCalls);
-
-            // Publish results and add to conversation
-            for (const result of toolResults) {
-              const preview = result.content.length > 200
-                ? result.content.substring(0, 200) + '...'
-                : result.content;
-              await this.centrifugo.publishThought('tool-result', preview);
-              messages.push(result);
-            }
-
-            // Continue the loop — LLM will see the tool results
-            continue;
-          }
-
-          // ── Text Response (no tool calls) ─────────────────────────────────
-          // Publish reasoning/thinking before the final answer
-          if (response.reasoning) {
-            await this.centrifugo.publishThought('reasoning', response.reasoning);
-          }
-          const reply = response.content || 'No response generated.';
-          await this.publishFinalResponse(reply, messageId);
-          await this.centrifugo.publishThought('reflect', `Completed task: "${input.substring(0, 50)}..."`);
-
-          log('info', `Reasoning complete after ${iterations} iteration(s) — ${reply.length} chars`);
-          return reply;
-        } else {
-          // No tools — single LLM call
-          const response = await this.llm.chat(messages, undefined, this.manifest.model.temperature);
-          // Publish reasoning/thinking content before the final answer
-          if (response.reasoning) {
-            await this.centrifugo.publishThought('reasoning', response.reasoning);
-          }
-          const reply = response.content || 'No response generated.';
-          await this.publishFinalResponse(reply, messageId);
-          await this.centrifugo.publishThought('reflect', `Completed task: "${input.substring(0, 50)}..."`);
-
-          log('info', `Reasoning complete (no tools) — ${reply.length} chars`);
-          return reply;
+      while (iteration < MAX_ITERATIONS) {
+        if (this.shutdownRequested) {
+          await think('reflect', 'Shutdown requested — stopping reasoning loop', iteration, { anomaly: false });
+          return {
+            taskId,
+            result: null,
+            error: 'shutdown',
+            usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+            thoughtStream,
+            exitReason: 'shutdown',
+          };
         }
+
+        iteration++;
+
+        // Context window management — compact before each LLM call
+        if (this.contextManager.isNearLimit(messages)) {
+          const compaction = this.contextManager.compact(messages);
+          await think('reflect', compaction.reflectMessage, iteration);
+        }
+
+        log('debug', `Iteration ${iteration}/${MAX_ITERATIONS} — messages=${messages.length} approxTokens=${this.contextManager.countMessageTokens(messages)}`);
+
+        let response: LLMResponse;
+        if (hasTools) {
+          response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature);
+        } else {
+          response = await this.llm.chat(messages, undefined, this.manifest.model.temperature);
+        }
+
+        // Accumulate usage
+        if (response.usage) {
+          totalPromptTokens += response.usage.promptTokens;
+          totalCompletionTokens += response.usage.completionTokens;
+          log('debug', `Iteration ${iteration} usage: prompt=${response.usage.promptTokens} completion=${response.usage.completionTokens}`);
+        }
+
+        // Emit chain-of-thought reasoning if present (e.g. Qwen / DeepSeek)
+        if (response.reasoning) {
+          await this.centrifugo.publishThought('observe', response.reasoning, iteration);
+        }
+
+        if (response.toolCalls && response.toolCalls.length > 0) {
+          // ── Tool Call Phase ────────────────────────────────────────────────
+
+          // Duplicate-call loop guard
+          const sig = JSON.stringify(response.toolCalls.map((tc) => ({
+            name: tc.function.name,
+            args: tc.function.arguments,
+          })));
+          if (sig === lastToolCallSignature) {
+            log('warn', `Duplicate tool call detected — breaking loop to prevent infinite repetition`);
+            await think('reflect', 'Detected duplicate tool call — aborting loop to prevent infinite repetition', iteration);
+            return {
+              taskId,
+              result: null,
+              error: 'duplicate_tool_call',
+              usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+              thoughtStream,
+              exitReason: 'error',
+            };
+          }
+          lastToolCallSignature = sig;
+
+          // Emit act thoughts for each tool call (sanitized args)
+          for (const tc of response.toolCalls) {
+            let parsedArgs: Record<string, unknown> = {};
+            try { parsedArgs = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { /* ignore */ }
+            const sanitized = sanitizeArgs(parsedArgs);
+            await think('act', `Calling tool: ${tc.function.name}(${JSON.stringify(sanitized)})`, iteration, {
+              toolName: tc.function.name,
+              toolArgs: sanitized,
+            });
+          }
+
+          // Add assistant turn with tool_calls
+          messages.push({
+            role: 'assistant',
+            content: response.content || '',
+            tool_calls: response.toolCalls,
+          });
+
+          // Execute tools and add results
+          const toolResults = this.tools.executeToolCalls(response.toolCalls);
+          for (const result of toolResults) {
+            // Pre-truncate tool output before adding to history
+            result.content = this.contextManager.truncateToolOutput(result.content);
+            messages.push(result);
+
+            const preview = result.content.length > 200
+              ? result.content.substring(0, 200) + '...'
+              : result.content;
+            await think('reflect', `Tool result: ${preview}`, iteration);
+          }
+
+          continue;
+        }
+
+        // ── Text Response ──────────────────────────────────────────────────
+        const reply = response.content || 'No response generated.';
+        await think('reflect', `Completed task after ${iteration} iteration(s)`, iteration);
+
+        // Stream response tokens
+        const msgId = uuidv4();
+        await this.streamResponse(reply, msgId);
+
+        log('info', `ReasoningLoop complete after ${iteration} iteration(s) — ${reply.length} chars`);
+
+        return {
+          taskId,
+          result: reply,
+          usage: {
+            promptTokens: totalPromptTokens,
+            completionTokens: totalCompletionTokens,
+            totalTokens: totalPromptTokens + totalCompletionTokens,
+          },
+          thoughtStream,
+          exitReason: 'success',
+        };
       }
 
       // ── Max iterations reached ──────────────────────────────────────────────
-      log('warn', `Tool loop hit max iterations (${MAX_TOOL_ITERATIONS}), forcing final response`);
-      await this.centrifugo.publishThought('reflect',
-        `Reached maximum tool iterations (${MAX_TOOL_ITERATIONS}). Generating final response.`);
+      log('warn', `ReasoningLoop hit max iterations (${MAX_ITERATIONS})`);
+      await think('reflect', `Reached maximum iterations (${MAX_ITERATIONS}) — stopping`, MAX_ITERATIONS);
 
-      // Force a final response without tools
-      const fallback = await this.llm.chat(messages);
-      const reply = fallback.content || 'Max tool iterations reached. Unable to complete task.';
-      await this.publishFinalResponse(reply, messageId);
-      return reply;
+      return {
+        taskId,
+        result: null,
+        error: 'max_iterations_exceeded',
+        usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+        thoughtStream,
+        exitReason: 'max_iterations_exceeded',
+      };
 
-    } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      log('error', `Reasoning loop error: ${errMsg}`);
-      await this.centrifugo.publishThought('reflect', `⚠️ Error: ${errMsg}`);
-      return `Error during reasoning: ${errMsg}`;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log('error', `ReasoningLoop error: ${errMsg}`);
+      await think('reflect', `Error: ${errMsg}`, 0);
+
+      let exitReason: TaskOutput['exitReason'] = 'error';
+      if (err instanceof BudgetExceededError) exitReason = 'budget_exceeded';
+      else if (err instanceof ProviderUnavailableError) exitReason = 'provider_unavailable';
+
+      return {
+        taskId,
+        result: null,
+        error: errMsg,
+        usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+        thoughtStream,
+        exitReason,
+      };
     }
   }
 
-  /**
-   * Stream the final response text to Centrifugo in chunks.
-   */
-  private async publishFinalResponse(text: string, messageId: string): Promise<void> {
+  /** Stream the final response text to Centrifugo in chunks. */
+  private async streamResponse(text: string, messageId: string): Promise<void> {
     const chunkSize = 20;
     for (let i = 0; i < text.length; i += chunkSize) {
       const chunk = text.substring(i, i + chunkSize);
@@ -164,4 +276,21 @@ export class ReasoningLoop {
     }
     await this.centrifugo.publishStreamToken(messageId, '', true);
   }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const SECRET_ARG_KEYS = new Set(['token', 'key', 'secret', 'password', 'api_key', 'apikey', 'auth', 'credential']);
+
+/** Remove secret-looking values from tool arguments before publishing. */
+function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (SECRET_ARG_KEYS.has(k.toLowerCase())) {
+      out[k] = '[REDACTED]';
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }

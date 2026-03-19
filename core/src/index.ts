@@ -56,6 +56,7 @@ import { LiteLLMClient } from './llm/LiteLLMClient.js';
 import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
 import { createMeteringRouter } from './routes/metering.js';
+import { createTasksRouter, pruneOldTaskResults } from './routes/tasks.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -178,6 +179,7 @@ const startServer = async () => {
   app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
   app.use('/api/agents', createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService));
   app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permissionService));
+  app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
 
   // Story 3.5 — start Docker events listener after registry is ready
   await orchestrator.startDockerEventListener();
@@ -203,6 +205,12 @@ const startServer = async () => {
     await bootstrapService.ensureSeraInstantiated().catch(err => {
       logger.error('Sera auto-bootstrap failed:', err);
     });
+
+    // Story 5.9 — prune old task results on startup, then every hour
+    pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));
+    setInterval(() => {
+      pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));
+    }, 60 * 60 * 1_000);
 
     app.listen(port, () => logger.info(`SERA Core running on port ${port}`));
   }

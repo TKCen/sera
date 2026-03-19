@@ -1,4 +1,16 @@
 services:
+  # ── Agent Worker Image ──────────────────────────────────────────────────────
+  # Image used by SandboxManager when spawning agent containers.
+  # Not a running service — built here so `docker compose build` includes it.
+  sera-agent-worker:
+    build:
+      context: ./core
+      dockerfile: sandbox/Dockerfile.worker
+    image: sera-agent-worker:latest
+    # No ports, no restart — this image is spawned on-demand by SandboxManager.
+    profiles:
+      - build-only
+
   sera-core:
     build:
       context: ./core

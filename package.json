@@ -1,8 +1,4 @@
 {
   "name": "sera-orchestration",
-  "private": true,
-  "workspaces": [
-    "core",
-    "web"
-  ]
+  "private": true
 }

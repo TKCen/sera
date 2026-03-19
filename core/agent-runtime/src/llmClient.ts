@@ -8,7 +8,23 @@
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { log } from './logger.js';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Error Types ───────────────────────────────────────────────────────────────
+
+export class BudgetExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BudgetExceededError';
+  }
+}
+
+export class ProviderUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderUnavailableError';
+  }
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface ToolCallFunction {
   name: string;
@@ -49,7 +65,7 @@ export interface LLMResponse {
   };
 }
 
-// ── Client ───────────────────────────────────────────────────────────────────
+// ── Client ────────────────────────────────────────────────────────────────────
 
 export class LLMClient {
   private http: AxiosInstance;
@@ -60,6 +76,10 @@ export class LLMClient {
     identityToken: string,
     model: string,
   ) {
+    const timeoutMs = process.env['LLM_TIMEOUT_MS']
+      ? parseInt(process.env['LLM_TIMEOUT_MS'], 10)
+      : 120_000;
+
     this.model = model;
     this.http = axios.create({
       baseURL: `${coreUrl}/v1/llm`,
@@ -67,13 +87,16 @@ export class LLMClient {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${identityToken}`,
       },
-      timeout: 120_000, // 2 minutes for LLM calls
+      timeout: timeoutMs,
     });
   }
 
   /**
    * Send a chat completion request through the Core LLM proxy.
    * Returns parsed content + optional tool calls.
+   *
+   * @throws BudgetExceededError on HTTP 429
+   * @throws ProviderUnavailableError on HTTP 503
    */
   async chat(
     messages: ChatMessage[],
@@ -91,44 +114,49 @@ export class LLMClient {
     };
 
     if (tools && tools.length > 0) {
-      body.tools = tools;
+      body['tools'] = tools;
     }
 
     if (temperature !== undefined) {
-      body.temperature = temperature;
+      body['temperature'] = temperature;
     }
 
     try {
       const res = await this.http.post('/chat/completions', body);
-      const data = res.data;
+      const data = res.data as Record<string, unknown>;
 
-      // Parse OpenAI-compatible response
-      const choice = data.choices?.[0];
+      const choices = data['choices'] as Array<Record<string, unknown>> | undefined;
+      const choice = choices?.[0];
       if (!choice) {
         return { content: '' };
       }
 
-      const message = choice.message;
-      const content = message.content || '';
-      const reasoning = (message as any).reasoning_content || undefined;
+      const message = choice['message'] as Record<string, unknown>;
+      const content = (message['content'] as string | null) || '';
+      const reasoning = (message as Record<string, unknown>)['reasoning_content'] as string | undefined;
 
       let toolCalls: ToolCall[] | undefined;
-      if (message.tool_calls && message.tool_calls.length > 0) {
-        toolCalls = message.tool_calls.map((tc: any) => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: {
-            name: tc.function.name,
-            arguments: tc.function.arguments,
-          },
-        }));
+      const rawToolCalls = message['tool_calls'] as Array<Record<string, unknown>> | undefined;
+      if (rawToolCalls && rawToolCalls.length > 0) {
+        toolCalls = rawToolCalls.map((tc) => {
+          const fn = tc['function'] as Record<string, unknown>;
+          return {
+            id: tc['id'] as string,
+            type: 'function' as const,
+            function: {
+              name: fn['name'] as string,
+              arguments: fn['arguments'] as string,
+            },
+          };
+        });
       }
 
-      const usage = data.usage
+      const rawUsage = data['usage'] as Record<string, number> | undefined;
+      const usage = rawUsage
         ? {
-            promptTokens: data.usage.prompt_tokens,
-            completionTokens: data.usage.completion_tokens,
-            totalTokens: data.usage.total_tokens,
+            promptTokens: rawUsage['prompt_tokens'] ?? 0,
+            completionTokens: rawUsage['completion_tokens'] ?? 0,
+            totalTokens: rawUsage['total_tokens'] ?? 0,
           }
         : undefined;
 
@@ -136,14 +164,20 @@ export class LLMClient {
     } catch (err) {
       if (err instanceof AxiosError) {
         const status = err.response?.status;
-        const body = err.response?.data;
+        const body = err.response?.data as Record<string, unknown> | undefined;
+        const errorMsg = (body?.['error'] as Record<string, unknown>)?.['message'] as string | undefined;
+
         log('error', `LLM proxy error: ${status} — ${JSON.stringify(body)}`);
 
         if (status === 429) {
-          throw new Error(`Token budget exceeded: ${body?.error?.message || 'rate limited'}`);
+          throw new BudgetExceededError(`Token budget exceeded: ${errorMsg ?? 'rate limited'}`);
         }
 
-        throw new Error(`LLM proxy returned ${status}: ${body?.error?.message || err.message}`);
+        if (status === 503) {
+          throw new ProviderUnavailableError(`LLM provider unavailable (circuit open): ${errorMsg ?? err.message}`);
+        }
+
+        throw new Error(`LLM proxy returned ${status}: ${errorMsg ?? err.message}`);
       }
       throw err;
     }

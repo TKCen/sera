@@ -48,7 +48,7 @@ export function createIntercomRouter(
 
       const msg = await intercom.publishMessage(
         manifest.metadata.name,
-        manifest.metadata.circle,
+        manifest.metadata.circle ?? '',
         channel,
         type as any,
         payload,

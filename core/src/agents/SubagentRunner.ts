@@ -94,7 +94,7 @@ export class SubagentRunner {
         SERA_PARENT_AGENT: parentName,
         SERA_SUBAGENT_ROLE: childRole,
         SERA_TASK: task,
-        SERA_CIRCLE: parentManifest.metadata.circle,
+        SERA_CIRCLE: parentManifest.metadata.circle ?? '',
       },
     });
 

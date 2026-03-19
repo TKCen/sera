@@ -49,4 +49,5 @@ export interface AgentInstance {
   resolved_capabilities?: any;
   workspace_path?: string;
   container_id?: string;
+  circle_id?: string | null | undefined;
 }

@@ -96,6 +96,20 @@ export class KnowledgeGitService {
     }
   }
 
+  /** Archive a circle knowledge repo (rename to .archived). */
+  async archiveCircleRepo(circleId: string): Promise<void> {
+    const repoDir = this.repoPath(circleId);
+    try {
+      await fs.access(repoDir);
+      const archivedPath = `${repoDir}.archived-${Date.now()}`;
+      await fs.rename(repoDir, archivedPath);
+      logger.info(`Archived knowledge repo for circle "${circleId}" to ${archivedPath}`);
+    } catch (err) {
+      // Directory doesn't exist, nothing to archive
+      logger.debug(`No knowledge repo to archive for circle "${circleId}" at ${repoDir}`);
+    }
+  }
+
   /** Ensure the system circle repo exists. Called at startup. */
   async initSystemRepo(): Promise<void> {
     await this.initCircleRepo(SYSTEM_CIRCLE_ID);

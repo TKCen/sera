@@ -5,6 +5,7 @@ metadata:
   displayName: Research Assistant
   templateRef: example-full
   circle: research
+  tier: 1
 overrides:
   model:
     model: o1-preview

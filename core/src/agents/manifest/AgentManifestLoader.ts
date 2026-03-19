@@ -113,8 +113,13 @@ export class AgentManifestLoader {
     AgentManifestLoader.requireObject(obj, 'metadata', ctx);
     const meta = obj['metadata'] as Record<string, unknown>;
     AgentManifestLoader.requireString(meta, 'name', `${ctx} metadata`);
-    AgentManifestLoader.requireString(meta, 'displayName', `${ctx} metadata`);
-    AgentManifestLoader.requireString(meta, 'circle', `${ctx} metadata`);
+    
+    if (meta['displayName'] !== undefined) {
+      AgentManifestLoader.requireString(meta, 'displayName', `${ctx} metadata`);
+    }
+    if (meta['circle'] !== undefined) {
+      AgentManifestLoader.requireString(meta, 'circle', `${ctx} metadata`);
+    }
 
     if (meta['additionalCircles'] !== undefined) {
       if (!Array.isArray(meta['additionalCircles']) || !meta['additionalCircles'].every(c => typeof c === 'string')) {

@@ -11,10 +11,11 @@ import { Logger } from '../lib/logger.js';
 import { CapabilityResolver } from '../capability/resolver.js';
 import type { AgentRegistry } from './registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
-import type { ToolExecutor } from '../tools/ToolExecutor.js';
+import { ToolExecutor } from '../tools/ToolExecutor.js';
 import { IdentityService } from '../auth/IdentityService.js';
-import type { MeteringEngine } from '../metering/MeteringEngine.js';
+import { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
+import { query } from '../lib/database.js';
 import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('Orchestrator');
@@ -158,8 +159,10 @@ export class Orchestrator {
     const templateLifecycle = (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
     const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle;
 
-    // ── Subagent spawn validation ─────────────────────────────────────────
+    // ── Subagent spawn validation & Circle Inheritance ───────────────────
     const effectiveParentId = parentInstanceId ?? instance.parent_instance_id;
+    let resolvedCircleId = instance.circle_id;
+
     if (effectiveParentId) {
       // Story 3.11: recursion depth guard
       const parentDepth = await this.registry.getLineageDepth(effectiveParentId);
@@ -178,6 +181,16 @@ export class Orchestrator {
         await this.registry.updateInstanceStatus(instanceId, 'error');
         throw new Error(
           `CapabilityEscalationError: ephemeral agent cannot spawn persistent subagent (Story 3.8)`,
+        );
+      }
+
+      // Story 10.4: circle inheritance
+      if (!resolvedCircleId && parentInstance?.circle_id) {
+        resolvedCircleId = parentInstance.circle_id;
+        // Persist the inherited circle ID
+        await query(
+          `UPDATE agent_instances SET circle_id = $1 WHERE id = $2`,
+          [resolvedCircleId, instanceId],
         );
       }
     }
@@ -204,7 +217,7 @@ export class Orchestrator {
             {
               agentId: instance.id,
               agentName: manifest.metadata.name,
-              circleId: (manifest.metadata as any).circle ?? '',
+              circleId: resolvedCircleId ?? (manifest.metadata as any).circle ?? '',
               capabilities: resolvedCapabilities,
               scope: 'agent',
             },

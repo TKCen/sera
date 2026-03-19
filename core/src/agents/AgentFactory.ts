@@ -33,6 +33,7 @@ export class AgentFactory {
     templateName: string,
     name: string,
     workspacePath: string,
+    circleId?: string,
   ): Promise<AgentInstance> {
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -42,9 +43,9 @@ export class AgentFactory {
     const finalWorkspacePath = workspacePath || path.join('/workspaces', sanitizedName);
 
     await query(
-      `INSERT INTO agent_instances (id, template_name, name, workspace_path, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'active', $5, $5)`,
-      [id, templateName, name, finalWorkspacePath, now],
+      `INSERT INTO agent_instances (id, template_name, name, workspace_path, status, created_at, updated_at, circle_id)
+       VALUES ($1, $2, $3, $4, 'active', $5, $5, $6)`,
+      [id, templateName, name, finalWorkspacePath, now, circleId],
     );
 
     return {
@@ -55,6 +56,7 @@ export class AgentFactory {
       status: 'active',
       createdAt: now,
       updatedAt: now,
+      circle_id: circleId,
     };
   }
 
@@ -63,7 +65,7 @@ export class AgentFactory {
    */
   static async getInstance(id: string): Promise<AgentInstance | null> {
     const result = await query(
-      `SELECT id, template_name, name, workspace_path, container_id, status, created_at, updated_at
+      `SELECT id, template_name, name, workspace_path, container_id, status, created_at, updated_at, circle_id, lifecycle_mode, parent_instance_id
        FROM agent_instances WHERE id = $1`,
       [id],
     );
@@ -80,6 +82,9 @@ export class AgentFactory {
       status: row.status as any,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
+      circle_id: row.circle_id,
+      lifecycle_mode: row.lifecycle_mode,
+      parent_instance_id: row.parent_instance_id,
     };
   }
 

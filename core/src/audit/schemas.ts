@@ -88,6 +88,22 @@ export const AuditExportedSchema = z.object({
   format: z.string(),
 });
 
+export const CircleCreatedSchema = z.object({
+  circleId: z.string().uuid(),
+  name: z.string(),
+  displayName: z.string(),
+});
+
+export const CircleDeletedSchema = z.object({
+  circleId: z.string().uuid(),
+});
+
+export const CircleMembershipChangedSchema = z.object({
+  circleId: z.string().uuid(),
+  agentId: z.string().uuid(),
+  action: z.enum(['added', 'removed']),
+});
+
 /** Registry of schemas by event type */
 export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
   'agent.spawned': AgentSpawnedSchema,
@@ -105,6 +121,9 @@ export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
   'api-key.created': ApiKeyCreatedSchema,
   'api-key.revoked': ApiKeyRevokedSchema,
   'audit.exported': AuditExportedSchema,
+  'circle.created': CircleCreatedSchema,
+  'circle.deleted': CircleDeletedSchema,
+  'circle.membership_changed': CircleMembershipChangedSchema,
 };
 
 /**

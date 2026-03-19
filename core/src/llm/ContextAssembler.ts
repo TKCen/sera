@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { SkillInjector } from '../skills/SkillInjector.js';
 import type { ChatMessage } from './LiteLLMClient.js';
 import { Orchestrator } from '../agents/Orchestrator.js';
+import { AgentFactory } from '../agents/AgentFactory.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace, SearchFilter } from '../services/vector.service.js';
@@ -43,12 +44,16 @@ export class ContextAssembler {
     const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
     const currentMessage = lastUserMessage?.content ?? '';
 
-    // 1. Inject skills
+    // Fetch instance for circle inheritance and metadata
+    const instance = await AgentFactory.getInstance(agentId);
+
+    // 1. Inject skills (and constitution)
     const skillsPrompt = await this.skillInjector.inject(
       systemMessage.content ?? '',
       manifest.skills ?? [],
       (manifest as any).skillPackages ?? [],
       currentMessage,
+      instance?.circle_id,
     );
 
     // 2. RAG memory retrieval

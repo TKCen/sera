@@ -153,7 +153,7 @@ export class IntercomService {
 
     const channel = ChannelNamespace.private(fromAgentId, toAgentId);
 
-    return this.publishMessage(fromAgentId, circle, channel, 'message', payload, {
+    return this.publishMessage(fromAgentId, circle ?? '', channel, 'message', payload, {
       securityTier: fromManifest.metadata.tier,
     });
   }
@@ -315,7 +315,7 @@ export class IntercomService {
     }
 
     const channel = ChannelNamespace.circle(circleId);
-    return this.publishMessage(fromAgentId, agentCircle, channel, 'message', payload, {
+    return this.publishMessage(fromAgentId, agentCircle ?? '', channel, 'message', payload, {
       securityTier: fromManifest.metadata.tier,
     });
   }
@@ -348,7 +348,7 @@ export class IntercomService {
       status: ChannelNamespace.status(agentId),
       tokens: ChannelNamespace.tokens(agentId),
       dmPeers,
-      circles: circles.map(c => ChannelNamespace.circle(c)),
+      circles: circles.filter((c): c is string => c !== undefined).map(c => ChannelNamespace.circle(c)),
     };
   }
 

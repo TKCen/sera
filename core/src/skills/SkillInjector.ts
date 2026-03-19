@@ -26,10 +26,25 @@ export class SkillInjector {
     declaredSkills: Array<string | SkillPin>,
     declaredPackages: string[] = [],
     messageContent: string,
+    circleId?: string | null,
     tokenBudget: number = 4000
   ): Promise<string> {
     const skillLibrary = SkillLibrary.getInstance(this.pool);
     
+    // 0. Inject Circle Constitution (Story 10.2)
+    let constitutionXml = '';
+    if (circleId) {
+      const res = await this.pool.query(
+        'SELECT constitution FROM circles WHERE id = $1',
+        [circleId]
+      );
+      if (res.rows.length > 0 && res.rows[0].constitution) {
+        const fullConstitution = res.rows[0].constitution;
+        const truncated = this.truncateConstitution(fullConstitution, 2048); // Target ~2000 tokens
+        constitutionXml = `<circle-constitution>\n${truncated}\n</circle-constitution>\n\n`;
+      }
+    }
+
     // 1. Identify skills to load (Map name -> version)
     const skillsToLoad = new Map<string, string | undefined>();
 
@@ -65,7 +80,9 @@ export class SkillInjector {
       }
     }
 
-    if (skillsToLoad.size === 0) return systemPrompt;
+    if (skillsToLoad.size === 0) {
+      return constitutionXml ? systemPrompt + '\n\n' + constitutionXml.trim() : systemPrompt;
+    }
 
     // 4. Fetch full documents and resolve dependencies
     const loadedSkills: any[] = [];
@@ -110,7 +127,9 @@ export class SkillInjector {
       logger.warn(`Skill budget exceeded: dropped ${droppedCount} skills. [thought:reflect: Skill budget exceeded, dropping context]`);
     }
 
-    if (finalSkills.length === 0) return systemPrompt;
+    if (finalSkills.length === 0) {
+      return constitutionXml ? systemPrompt + '\n\n' + constitutionXml : systemPrompt;
+    }
 
     // 6. Format as XML
     const skillsXml = [
@@ -122,6 +141,8 @@ export class SkillInjector {
       '</skills>'
     ].join('\n');
 
+    const totalInjection = (constitutionXml + skillsXml).trim();
+
     // 7. Append to system prompt
     const principlesMatch = systemPrompt.indexOf('## Guiding Principles');
     if (principlesMatch !== -1) {
@@ -130,11 +151,44 @@ export class SkillInjector {
       
       return (
         systemPrompt.slice(0, insertIdx).trim() +
-        '\n\n' + skillsXml + '\n\n' +
+        '\n\n' + totalInjection + '\n\n' +
         systemPrompt.slice(insertIdx).trim()
       ).trim();
     }
 
-    return systemPrompt + '\n\n' + skillsXml;
+    return systemPrompt + '\n\n' + totalInjection;
+  }
+
+  /**
+   * Truncates constitution to stay within token budget while preserving opening principles.
+   */
+  private truncateConstitution(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+
+    const lines = text.split('\n').filter(l => l.trim() !== '');
+    if (lines.length <= 1) return text.slice(0, maxChars) + '... [truncated]';
+
+    // Keep the first paragraph/line as it usually contains the "Core Purpose"
+    const head = lines[0] || '';
+    const tailBudget = maxChars - head.length - 50; // room for truncation notice
+
+    if (tailBudget <= 0) return head.slice(0, maxChars);
+
+    // Truncate from the bottom up (keep top lines)
+    let currentLength = head.length;
+    const keptLines = [head];
+    
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (line === undefined) continue;
+      if (currentLength + line.length + 1 > tailBudget) {
+        keptLines.push('... [truncated for token budget]');
+        break;
+      }
+      keptLines.push(line);
+      currentLength += line.length + 1;
+    }
+
+    return keptLines.join('\n');
   }
 }

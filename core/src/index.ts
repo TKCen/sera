@@ -19,6 +19,8 @@ import { createSandboxRouter } from './routes/sandbox.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { createAgentRouter } from './routes/agents.js';
 import { createCircleRouter } from './routes/circles.js';
+import { createCirclesDbRouter } from './routes/circles-db.js';
+import { createPipelinesRouter } from './routes/pipelines.js';
 import { createSkillsRouter } from './routes/skills.js';
 import { createSessionRouter } from './routes/sessions.js';
 import { createChatRouter } from './routes/chat.js';
@@ -156,6 +158,8 @@ app.use('/api/agents', createLifecycleRouter(agentRegistry, orchestrator, sandbo
 app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
 
 app.use('/api/circles', createCircleRouter(circleRegistry, circlesDir, () => AgentManifestLoader.loadAllManifests(agentsDir), orchestrator));
+app.use('/api/circles', createCirclesDbRouter(orchestrator));
+app.use('/api/pipelines', createPipelinesRouter(orchestrator));
 app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator, pool));
 app.use('/api/memory', createMemoryRouter(memoryManager));
 app.use('/api/sessions', createSessionRouter(sessionStore));

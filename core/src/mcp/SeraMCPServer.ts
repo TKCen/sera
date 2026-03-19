@@ -2,21 +2,16 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { type CallToolRequest, CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Orchestrator } from "../agents/Orchestrator.js";
 import { Logger } from "../lib/logger.js";
+import { CircleService } from "../circles/CircleService.js";
 
 const logger = new Logger('SeraMCPServer');
 
 /**
  * SeraMCPServer — an embedded MCP server that exposes platform management tools.
- *
- * Tools:
- *  - list_agents: List all active agents and their status
- *  - restart_agent: Restart an agent by ID
- *
- * These tools are bridged into the SkillRegistry and can be called by agents
- * that have the `seraManagement` capability.
  */
 export class SeraMCPServer {
   public readonly server: Server;
+  private circleService = CircleService.getInstance();
 
   constructor(private orchestrator: Orchestrator) {
     this.server = new Server(
@@ -54,6 +49,133 @@ export class SeraMCPServer {
               required: ["agentId"],
             },
           },
+          // ── Circle Management (Story 10.1) ──────────────────────────────────
+          {
+            name: "circles.create",
+            description: "Create a new circle.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "Slug name (e.g. 'security-council')" },
+                displayName: { type: "string" },
+                description: { type: "string" },
+                constitution: { type: "string", description: "Markdown constitution" },
+              },
+              required: ["name", "displayName"],
+            },
+          },
+          {
+            name: "circles.list",
+            description: "List all circles.",
+            inputSchema: { type: "object", properties: {} },
+          },
+          {
+            name: "circles.add_member",
+            description: "Add an agent instance to a circle.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                circleId: { type: "string" },
+                agentId: { type: "string" },
+              },
+              required: ["circleId", "agentId"],
+            },
+          },
+          // ── Coordination (Story 10.3) ───────────────────────────────────────
+          {
+            name: "orchestration.sequential",
+            description: "Run tasks in sequence across agents.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                tasks: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      description: { type: "string" },
+                      assignedAgent: { type: "string" },
+                    },
+                    required: ["id", "description"],
+                  },
+                },
+              },
+              required: ["tasks"],
+            },
+          },
+          {
+            name: "orchestration.parallel",
+            description: "Run multiple tasks in parallel across agents.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                tasks: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      description: { type: "string" },
+                      assignedAgent: { type: "string" },
+                    },
+                    required: ["id", "description"],
+                  },
+                },
+              },
+              required: ["tasks"],
+            },
+          },
+          {
+            name: "orchestration.hierarchical",
+            description: "Run tasks with a manager agent overseeing and validating results.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                managerAgent: { type: "string", description: "Name of the manager agent" },
+                tasks: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      description: { type: "string" },
+                      assignedAgent: { type: "string" },
+                    },
+                    required: ["id", "description"],
+                  },
+                },
+              },
+              required: ["managerAgent", "tasks"],
+            },
+          },
+          // ── Party Mode (Story 10.5) ─────────────────────────────────────────
+          {
+            name: "circle.broadcast",
+            description: "Broadcast a message to all members of a circle.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                circleId: { type: "string" },
+                payload: { type: "object" },
+              },
+              required: ["circleId", "payload"],
+            },
+          },
+          // ── Subagent Spawning (Story 10.5 / 10.4) ──────────────────────────
+          {
+            name: "agents.spawn_subagent",
+            description: "Spawn a subagent to handle a delegated subtask. Only available to agents with permissions.canSpawnSubagents.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                role: { type: "string", description: "Subagent role (must be in manifest subagents.allowed)" },
+                task: { type: "string", description: "Task description for the subagent" },
+                circle: { type: "string", description: "Circle to join. Pass 'none' to skip circle inheritance." },
+              },
+              required: ["role", "task"],
+            },
+          },
         ],
       };
     });
@@ -65,58 +187,140 @@ export class SeraMCPServer {
   }
 
   public async callTool(name: string, args: any) {
-    // Note: Capability-based gating is handled at the SkillRegistry level 
-    // by the bridged skill handler, which has access to the AgentContext.
-
-    switch (name) {
-      case "list_agents":
-        return this.handleListAgents();
-      case "restart_agent":
-        return this.handleRestartAgent(args?.agentId as string);
-      default:
-        throw new Error(`Tool not found: ${name}`);
+    try {
+      switch (name) {
+        case "list_agents":
+          return this.handleListAgents();
+        case "restart_agent":
+          return this.handleRestartAgent(args?.agentId as string);
+        case "circles.create":
+          return this.handleCreateCircle(args);
+        case "circles.list":
+          return this.handleListCircles();
+        case "circles.add_member":
+          return this.handleAddMember(args.circleId, args.agentId);
+        case "orchestration.sequential":
+          return this.handleSequentialOrchestration(args.tasks);
+        case "orchestration.parallel":
+          return this.handleParallelOrchestration(args.tasks);
+        case "orchestration.hierarchical":
+          return this.handleHierarchicalOrchestration(args.managerAgent, args.tasks);
+        case "circle.broadcast":
+          return this.handleCircleBroadcast(args.circleId, args.payload);
+        case "agents.spawn_subagent":
+          return this.handleSpawnSubagent(args.role, args.task, args.circle);
+        default:
+          throw new Error(`Tool not found: ${name}`);
+      }
+    } catch (err: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: err.message }],
+      };
     }
   }
 
   private handleListAgents() {
     const agents = this.orchestrator.listAgents().map(a => ({
       id: a.id,
-      name: a.manifest.metadata.name,
+      name: a.name,
       status: a.status,
       startTime: a.startTime,
     }));
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(agents, null, 2),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify(agents, null, 2) }],
     };
   }
 
   private async handleRestartAgent(agentId: string) {
-    if (!agentId) throw new Error("agentId is required");
-    try {
-      await this.orchestrator.restartAgent(agentId);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Agent "${agentId}" restarted successfully.`,
-          },
-        ],
-      };
-    } catch (err: any) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Failed to restart agent "${agentId}": ${err.message}`,
-          },
-        ],
-      };
+    await this.orchestrator.restartAgent(agentId);
+    return {
+      content: [{ type: "text", text: `Agent "${agentId}" restarted successfully.` }],
+    };
+  }
+
+  private async handleCreateCircle(args: any) {
+    const circle = await this.circleService.createCircle(args);
+    return {
+      content: [{ type: "text", text: `Circle "${circle.name}" created with ID: ${circle.id}` }],
+    };
+  }
+
+  private async handleListCircles() {
+    const circles = await this.circleService.listCircles();
+    return {
+      content: [{ type: "text", text: JSON.stringify(circles, null, 2) }],
+    };
+  }
+
+  private async handleAddMember(circleId: string, agentId: string) {
+    await this.circleService.addMember(circleId, agentId);
+    return {
+      content: [{ type: "text", text: `Agent "${agentId}" added to circle "${circleId}"` }],
+    };
+  }
+
+  private async handleSequentialOrchestration(tasks: any[]) {
+    const result = await this.orchestrator.executeWithProcess('sequential', tasks);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  private async handleParallelOrchestration(tasks: any[]) {
+    const result = await this.orchestrator.executeWithProcess('parallel', tasks);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  private async handleHierarchicalOrchestration(managerAgent: string, tasks: any[]) {
+    const result = await this.orchestrator.executeWithProcess('hierarchical', tasks, managerAgent);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  private async handleCircleBroadcast(circleId: string, payload: any) {
+    const intercom = this.orchestrator.getIntercom();
+    if (!intercom) throw new Error("Intercom service not available");
+    await intercom.publish(`circle:${circleId}`, payload);
+    return {
+      content: [{ type: "text", text: `Broadcast sent to circle "${circleId}"` }],
+    };
+  }
+
+  private async handleSpawnSubagent(role: string, task: string, circle?: string) {
+    if (!role || !task) throw new Error("role and task are required");
+
+    const { AgentFactory } = await import("../agents/AgentFactory.js");
+    const { v4: uuidv4 } = await import("uuid");
+
+    // Find a template matching the requested role
+    const manifests = this.orchestrator.getAllManifests();
+    const template = manifests.find(
+      m => m.identity.role === role || m.metadata.name === role,
+    );
+    if (!template) {
+      throw new Error(`No agent template found for role "${role}"`);
     }
+
+    // Determine circle for the subagent
+    const skipCircle = circle === 'none';
+    const circleId = skipCircle ? undefined : (circle ?? template.metadata.circle);
+
+    const instanceName = `subagent-${role}-${uuidv4().slice(0, 8)}`;
+    const instance = await AgentFactory.createInstance(
+      template.metadata.name,
+      instanceName,
+      '',
+      circleId,
+    );
+
+    await this.orchestrator.startInstance(instance.id, undefined, task);
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({ instanceId: instance.id, role, task }) }],
+    };
   }
 }

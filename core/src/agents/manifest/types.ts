@@ -107,13 +107,14 @@ export interface AgentManifest {
   workspace?: WorkspaceConfig;
   memory?: MemoryConfig;
   permissions?: PermissionsConfig;
+  capabilities?: string[];
 }
 
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'apiVersion', 'kind', 'metadata', 'identity', 'model',
   'tools', 'skills', 'skillPackages', 'subagents', 'intercom', 'resources',
-  'workspace', 'memory', 'permissions',
+  'workspace', 'memory', 'permissions', 'capabilities',
 ]);
 
 export const VALID_TIERS: readonly SecurityTier[] = [1, 2, 3] as const;

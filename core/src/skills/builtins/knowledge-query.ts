@@ -15,8 +15,14 @@ export function createKnowledgeQuerySkill(memoryManager: MemoryManager): SkillDe
       { name: 'query', type: 'string', description: 'Search query string', required: true },
       { name: 'limit', type: 'number', description: 'Maximum number of results to return', required: false },
     ],
-    handler: async (params, _context) => {
+    handler: async (params, context) => {
       const query = params['query'];
+
+      // Story 7.6: Use scoped manager for isolation
+      const scopedManager = new MemoryManager({
+        agentId: context.agentName,
+        circleId: context.manifest.metadata.circle,
+      });
       if (!query || typeof query !== 'string') {
         return { success: false, error: 'Parameter "query" is required and must be a string' };
       }
@@ -24,7 +30,7 @@ export function createKnowledgeQuerySkill(memoryManager: MemoryManager): SkillDe
       const limit = typeof params['limit'] === 'number' ? params['limit'] : undefined;
 
       try {
-        const results = await memoryManager.search(query, limit);
+        const results = await scopedManager.search(query, limit);
         return { success: true, data: results };
       } catch (err) {
         return {

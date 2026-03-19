@@ -30,6 +30,15 @@ export class SkillRegistry {
     return this.skills.delete(id);
   }
 
+  /** Remove all skills that start with a given prefix (e.g. "github/"). */
+  unregisterByPrefix(prefix: string): void {
+    for (const id of this.skills.keys()) {
+      if (id.startsWith(prefix)) {
+        this.skills.delete(id);
+      }
+    }
+  }
+
   // ── Lookup ────────────────────────────────────────────────────────────────
 
   /** Get a skill by ID, or undefined if not found. */
@@ -197,16 +206,31 @@ export class SkillRegistry {
     let count = 0;
 
     for (const serverEntry of allTools) {
-      const client = mcpRegistry.getClient(serverEntry.serverName);
-      if (!client) continue;
+      count += await this.bridgeMCPToolsForServer(serverEntry.serverName, mcpRegistry);
+    }
 
-      for (const tool of serverEntry.tools) {
-        const skillId = tool.name;
+    return count;
+  }
 
-        // Convert JSON Schema properties to SkillParameter[]
+  /**
+   * Bridge tools for a specific MCP server.
+   * Useful for hot-reloading individual servers.
+   */
+  async bridgeMCPToolsForServer(serverName: string, mcpRegistry: MCPRegistry): Promise<number> {
+    const clients = mcpRegistry.getClients();
+    const client = clients.get(serverName);
+    if (!client) return 0;
+
+    // Clear old tools for this server
+    this.unregisterByPrefix(`${serverName}/`);
+
+    try {
+      const tools = await client.listTools();
+      let count = 0;
+
+      for (const tool of tools.tools) {
+        const skillId = `${serverName}/${tool.name}`;
         const parameters = SkillRegistry.jsonSchemaToParams(tool.inputSchema);
-
-        // Capture client reference for the handler closure
         const mcpClient = client;
         const toolName = tool.name;
 
@@ -215,9 +239,28 @@ export class SkillRegistry {
           description: tool.description ?? `MCP tool: ${tool.name}`,
           parameters,
           source: 'mcp',
-          handler: async (params, _context) => {
+          handler: async (params, context) => {
+            // Story 7.7: Capability-based gating for management tools
+            if (serverName === 'sera-core' || skillId.startsWith('sera-core/')) {
+              const capabilities = context.manifest.capabilities ?? [];
+              if (!capabilities.includes('seraManagement')) {
+                return { success: false, error: `Access denied: tool "${skillId}" requires "seraManagement" capability.` };
+              }
+            }
+
             try {
-              const result = await mcpClient.callTool(toolName, params);
+              // Story 7.8: Inject SERA extension context and credentials
+              const meta = {
+                sera: {
+                  sessionId: context.sessionId || 'default',
+                  agentId: context.agentName,
+                  circleId: context.manifest.metadata.circle,
+                  // Simplified credential resolution for Story 7.8
+                  credentials: (context.manifest as any).secrets || {},
+                }
+              };
+
+              const result = await mcpClient.callTool(toolName, params, meta);
               return { success: true, data: result };
             } catch (err) {
               return {
@@ -227,13 +270,15 @@ export class SkillRegistry {
             }
           },
         });
-
         count++;
       }
+      return count;
+    } catch (err) {
+      // Don't log error here as SkillRegistry should be agnostic of MCP connection issues
+      return 0;
     }
-
-    return count;
   }
+
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 

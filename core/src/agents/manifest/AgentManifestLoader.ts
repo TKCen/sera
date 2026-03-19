@@ -187,7 +187,15 @@ export class AgentManifestLoader {
       }
     }
 
-
+    // ── capabilities ──────────────────────────────────────────────────────────
+    if (obj['capabilities']) {
+      if (!Array.isArray(obj['capabilities']) || !obj['capabilities'].every(c => typeof c === 'string')) {
+        throw new ManifestValidationError(
+          `"capabilities" must be an array of strings`,
+          'capabilities',
+        );
+      }
+    }
     // ── Construct validated manifest ──────────────────────────────────────────
     return obj as unknown as AgentManifest;
   }

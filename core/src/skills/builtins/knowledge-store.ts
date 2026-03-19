@@ -20,9 +20,15 @@ export function createKnowledgeStoreSkill(memoryManager: MemoryManager): SkillDe
       { name: 'tags', type: 'array', description: 'Array of tag strings', required: false },
       { name: 'refs', type: 'array', description: 'Array of referenced entry IDs', required: false },
     ],
-    handler: async (params, _context) => {
+    handler: async (params, context) => {
       const title = params['title'];
       const content = params['content'];
+
+      // Story 7.6: Use scoped manager for isolation
+      const scopedManager = new MemoryManager({
+        agentId: context.agentName,
+        circleId: context.manifest.metadata.circle,
+      });
 
       if (!title || typeof title !== 'string') {
         return { success: false, error: 'Parameter "title" is required and must be a string' };
@@ -45,7 +51,7 @@ export function createKnowledgeStoreSkill(memoryManager: MemoryManager): SkillDe
       }
 
       try {
-        const entry = await memoryManager.addEntry(type, opts);
+        const entry = await scopedManager.addEntry(type, opts);
         return { success: true, data: entry };
       } catch (err) {
         return {

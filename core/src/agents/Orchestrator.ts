@@ -429,18 +429,26 @@ export class Orchestrator {
       const { action, instanceId, exitCode } = event;
 
       if (action === 'start') {
+        const agent = this.agents.get(instanceId);
+        if (agent) agent.status = 'running';
         await this.registry.updateInstanceStatus(instanceId, 'running');
       } else if (action === 'die') {
         const status = exitCode !== undefined && exitCode !== 0 ? 'error' : 'stopped';
+        const agent = this.agents.get(instanceId);
+        if (agent) agent.status = status as any;
         await this.registry.updateInstanceStatus(instanceId, status);
         this.heartbeats.delete(instanceId);
         this.publishLifecycleEvent(status as any, instanceId, event.agentName);
       } else if (action === 'oom') {
+        const agent = this.agents.get(instanceId);
+        if (agent) agent.status = 'error';
         await this.registry.updateInstanceStatus(instanceId, 'error');
         this.heartbeats.delete(instanceId);
         logger.warn(`OOM kill: agent=${event.agentName} instance=${instanceId}`);
         this.publishLifecycleEvent('error', instanceId, event.agentName);
       } else if (action === 'stop') {
+        const agent = this.agents.get(instanceId);
+        if (agent) agent.status = 'stopped';
         await this.registry.updateInstanceStatus(instanceId, 'stopped');
         this.heartbeats.delete(instanceId);
       }
@@ -537,12 +545,19 @@ export class Orchestrator {
   }
 
   public listAgents(): any[] {
-    return Array.from(this.manifests.values()).map(m => ({
-      name: m.metadata.name,
-      displayName: m.metadata.displayName,
-      role: m.identity.role,
-      tier: (m.metadata as any).tier,
+    const active = Array.from(this.agents.values()).map(a => ({
+      id: a.agentInstanceId,
+      name: a.getManifest().metadata.name,
+      status: a.status,
+      startTime: a.startTime,
     }));
+    return active;
+  }
+
+  public async restartAgent(instanceId: string): Promise<void> {
+    logger.info(`Restarting agent instance: ${instanceId}`);
+    await this.stopInstance(instanceId);
+    await this.startInstance(instanceId);
   }
 
   public getAgentInfo(name: string): any {

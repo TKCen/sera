@@ -1,0 +1,113 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "image",
+        "transport"
+    ],
+    "properties": {
+        "apiVersion": {
+            "type": "string",
+            "enum": [
+                "sera/v1"
+            ]
+        },
+        "kind": {
+            "type": "string",
+            "enum": [
+                "SkillProvider"
+            ]
+        },
+        "metadata": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9-]+$"
+                },
+                "description": {
+                    "type": "string"
+                }
+            }
+        },
+        "image": {
+            "type": "string"
+        },
+        "transport": {
+            "type": "string",
+            "enum": [
+                "stdio",
+                "http"
+            ]
+        },
+        "network": {
+            "type": "object",
+            "properties": {
+                "allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "mounts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "hostPath",
+                    "containerPath"
+                ],
+                "properties": {
+                    "hostPath": {
+                        "type": "string"
+                    },
+                    "containerPath": {
+                        "type": "string"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "ro",
+                            "rw"
+                        ],
+                        "default": "ro"
+                    }
+                }
+            }
+        },
+        "secrets": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "healthCheck": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "interval": {
+                    "type": "string"
+                },
+                "timeout": {
+                    "type": "string"
+                },
+                "retries": {
+                    "type": "integer"
+                }
+            }
+        }
+    }
+}

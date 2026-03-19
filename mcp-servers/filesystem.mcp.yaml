@@ -1,0 +1,11 @@
+apiVersion: sera/v1
+kind: SkillProvider
+metadata:
+  name: filesystem
+  description: "Local filesystem tools for the agent."
+image: mcp/filesystem:latest
+transport: stdio
+mounts:
+  - hostPath: /path/to/data
+    containerPath: /data
+    mode: rw

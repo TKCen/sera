@@ -1,0 +1,12 @@
+apiVersion: sera/v1
+kind: SkillProvider
+metadata:
+  name: github
+  description: "GitHub MCP server for managing repositories, PRs, and issues."
+image: mcp/github:latest
+transport: stdio
+network:
+  allowlist:
+    - api.github.com
+secrets:
+  - GITHUB_PERSONAL_ACCESS_TOKEN

@@ -8,6 +8,7 @@ import { BridgeService } from './intercom/BridgeService.js';
 import { SandboxManager } from './sandbox/SandboxManager.js';
 import { Orchestrator } from './agents/Orchestrator.js';
 import { MCPRegistry } from './mcp/registry.js';
+import { MCPServerManager } from './mcp/MCPServerManager.js';
 import { MemoryManager } from './memory/manager.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
 import { registerBuiltinSkills } from './skills/builtins/index.js';
@@ -32,6 +33,7 @@ import { createOpenAICompatRouter } from './routes/openai-compat.js';
 import { WebhooksService } from './intercom/WebhooksService.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createMemoryRouter } from './routes/memory.js';
+import { createMCPRouter } from './routes/mcp.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { IdentityService } from './auth/IdentityService.js';
@@ -76,7 +78,12 @@ const sandboxManager = new SandboxManager();
 const orchestrator = new Orchestrator();
 const skillRegistry = new SkillRegistry();
 const agentsDir = path.join(workspaceRoot, 'agents');
+const mcpServersDir = path.join(workspaceRoot, 'mcp-servers');
 const mcpRegistry = MCPRegistry.getInstance();
+const mcpServerManager = new MCPServerManager(sandboxManager);
+mcpRegistry.setManager(mcpServerManager);
+mcpRegistry.setIntercom(intercomService);
+
 const memoryManager = new MemoryManager();
 const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
 const circleRegistry = new CircleRegistry();
@@ -162,13 +169,31 @@ app.use('/api/federation', createFederationRouter());
 app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
 
 app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
+app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRegistry));
 app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
 
 const startServer = async () => {
-  mcpRegistry.getAllTools().then(async () => {
-    const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
-    if (count > 0) logger.info(`Bridged ${count} MCP tool(s) as skills`);
-  }).catch(() => {});
+  mcpRegistry.setIntercom(intercomService);
+
+  const { SeraMCPServer } = await import('./mcp/SeraMCPServer.js');
+  const seraMcpServer = new SeraMCPServer(orchestrator);
+  // For simplicity in this story, we bridge it directly since it's in-process.
+  // In a full implementation, we'd use a local transport.
+  await mcpRegistry.registerSeraCoreTools(seraMcpServer);
+
+  mcpRegistry.onRegister((name) => {
+    skillRegistry.bridgeMCPToolsForServer(name, mcpRegistry).then(count => {
+      if (count > 0) logger.info(`Bridged ${count} new MCP tool(s) from "${name}"`);
+    }).catch(() => {});
+  });
+
+  mcpRegistry.onUnregister((name) => {
+    skillRegistry.unregisterByPrefix(`${name}/`);
+    logger.info(`Removed bridged skills for MCP server "${name}"`);
+  });
+
+  await mcpRegistry.loadFromDirectory(mcpServersDir).catch(err => logger.error('Failed to load MCP servers:', err));
+  mcpRegistry.watchDirectory(mcpServersDir);
 
   const manifests = orchestrator.getAllManifests();
   for (const manifest of manifests) {

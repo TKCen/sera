@@ -25,7 +25,7 @@ export class ToolExecutor {
   constructor(
     private readonly skillRegistry: SkillRegistry,
     private readonly sandboxManager?: import('../sandbox/SandboxManager.js').SandboxManager,
-  ) {}
+  ) { }
 
   // ── Tool Definitions ──────────────────────────────────────────────────────
 
@@ -35,7 +35,19 @@ export class ToolExecutor {
    */
   getToolDefinitions(manifest: AgentManifest): ToolDefinition[] {
     const skills = this.skillRegistry.listForAgent(manifest);
-    return skills.map((skill) => ToolExecutor.skillToToolDef(skill));
+
+    // Story 7.4: Filter tools based on allow/deny lists
+    const tools = manifest.tools || { allowed: ['*'], denied: [] };
+    const allowed = tools.allowed ?? ['*'];
+    const denied = tools.denied ?? [];
+
+    return skills
+      .filter(skill => {
+        const isDenied = denied.some(p => ToolExecutor.matches(p, skill.id));
+        const isAllowed = allowed.some(p => ToolExecutor.matches(p, skill.id));
+        return isAllowed && !isDenied;
+      })
+      .map((skill) => ToolExecutor.skillToToolDef(skill));
   }
 
   // ── Execution ─────────────────────────────────────────────────────────────
@@ -48,9 +60,34 @@ export class ToolExecutor {
     manifest: AgentManifest,
     agentInstanceId?: string,
     containerId?: string,
+    sessionId?: string,
   ): Promise<ChatMessage> {
     const { id, function: fn } = toolCall;
     const skillId = fn.name;
+
+    // Story 7.4: Access Control
+    const tools = manifest.tools || { allowed: ['*'], denied: [] };
+    const allowed = tools.allowed ?? ['*'];
+    const denied = tools.denied ?? [];
+
+    const isDenied = denied.some(p => ToolExecutor.matches(p, skillId));
+    const isAllowed = allowed.some(p => ToolExecutor.matches(p, skillId));
+
+    if (isDenied || !isAllowed) {
+      if (this.sandboxManager) {
+        (this.sandboxManager as any).audit?.('tool_denied', manifest.metadata.name, {
+          skillId,
+          agentInstanceId,
+          instanceId: agentInstanceId
+        });
+      }
+      return {
+        role: 'tool',
+        tool_call_id: id,
+        content: `Error: tool_not_permitted: Access to tool "${skillId}" is denied by agent manifest.`,
+      };
+    }
+
     try {
       // Build AgentContext from Manifest
       const context: import('../skills/types.js').AgentContext = {
@@ -60,6 +97,7 @@ export class ToolExecutor {
         manifest,
         agentInstanceId,
         containerId,
+        sessionId: sessionId || 'default',
         sandboxManager: this.sandboxManager,
       };
 
@@ -110,6 +148,7 @@ export class ToolExecutor {
     }
   }
 
+
   /**
    * Execute multiple tool calls in parallel.
    * Returns an array of tool-role ChatMessages in the same order.
@@ -119,8 +158,9 @@ export class ToolExecutor {
     manifest: AgentManifest,
     agentInstanceId?: string,
     containerId?: string,
+    sessionId?: string,
   ): Promise<ChatMessage[]> {
-    return Promise.all(toolCalls.map((tc) => this.executeTool(tc, manifest, agentInstanceId, containerId)));
+    return Promise.all(toolCalls.map((tc) => this.executeTool(tc, manifest, agentInstanceId, containerId, sessionId)));
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -158,6 +198,18 @@ export class ToolExecutor {
         parameters,
       },
     };
+  }
+
+  /**
+   * Check if a tool ID matches a pattern (supports * and prefix/*).
+   */
+  private static matches(pattern: string, toolId: string): boolean {
+    if (pattern === '*') return true;
+    if (pattern.endsWith('/*')) {
+      const prefix = pattern.slice(0, -2);
+      return toolId.startsWith(prefix + '/');
+    }
+    return pattern === toolId;
   }
 
   /**

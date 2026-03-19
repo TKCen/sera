@@ -123,6 +123,14 @@ export class SandboxManager {
     fs.mkdirSync(sharedPath, { recursive: true });
     binds.push(`${sharedPath}:/knowledge/shared:ro`);
 
+    // 4. MCP Custom Mounts (Story 7.3)
+    if (request.type === 'mcp-server' && (manifest as any).mounts) {
+      for (const m of (manifest as any).mounts) {
+        const mode = m.mode === 'rw' ? 'rw' : 'ro';
+        binds.push(`${m.hostPath}:${m.containerPath}:${mode}`);
+      }
+    }
+
     // ── Resource Limits ─────────────────────────────────────────────────────
     const cpuShares = caps.linux?.cpu_shares ?? 512;
     const memoryBytes = caps.linux?.memory_limit ?? 512 * 1024 * 1024;
@@ -149,12 +157,12 @@ export class SandboxManager {
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,
       Image: request.image ?? 'sera-agent-worker:latest',
-      Cmd: request.command ?? ['npm', 'start'],
+      Cmd: request.command ?? (request.type === 'mcp-server' ? undefined : ['npm', 'start']),
       Env: env,
-      WorkingDir: '/workspace',
+      WorkingDir: request.type === 'mcp-server' ? undefined : '/workspace',
       Labels: {
         'sera.sandbox': 'true',
-        'sera.agent': agentName,
+        ...(request.type === 'mcp-server' ? { 'sera.mcp-server': agentName } : { 'sera.agent': agentName }),
         'sera.instance': finalInstanceId,
         'sera.type': request.type,
         'sera.tier': String(tier),
@@ -171,6 +179,7 @@ export class SandboxManager {
         ReadonlyRootfs: caps.linux?.readonlyRootfs ?? false,
       },
     };
+
 
     this.audit('spawn', agentName, { instanceId: finalInstanceId, type: request.type, image: request.image });
 

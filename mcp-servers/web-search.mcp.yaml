@@ -1,0 +1,13 @@
+apiVersion: sera/v1
+kind: SkillProvider
+metadata:
+  name: google-search
+  description: "Web search via Google MCP server."
+image: mcp/google-search:latest
+transport: stdio
+network:
+  allowlist:
+    - www.googleapis.com
+secrets:
+  - GOOGLE_SEARCH_API_KEY
+  - GOOGLE_SEARCH_ENGINE_ID

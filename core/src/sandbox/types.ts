@@ -6,7 +6,7 @@ import type { SecurityTier } from '../agents/manifest/types.js';
 
 // ── Container Type ──────────────────────────────────────────────────────────────
 
-export type SandboxType = 'agent' | 'subagent' | 'tool';
+export type SandboxType = 'agent' | 'subagent' | 'tool' | 'mcp-server';
 
 // ── Tier Limits ─────────────────────────────────────────────────────────────────
 

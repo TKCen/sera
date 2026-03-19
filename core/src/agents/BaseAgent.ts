@@ -22,6 +22,8 @@ export abstract class BaseAgent {
   public readonly role: string;
   public readonly agentInstanceId: string | undefined;
   public containerId: string | undefined;
+  public readonly startTime: Date = new Date();
+  public status: 'running' | 'stopped' | 'error' | 'unresponsive' | 'throttled' = 'running';
 
   protected history: ChatMessage[] = [];
   protected systemPrompt: string;
@@ -266,6 +268,7 @@ export abstract class BaseAgent {
               this.manifest,
               this.agentInstanceId,
               this.containerId,
+              messageId,
             );
 
             // Record audit entries for tool calls

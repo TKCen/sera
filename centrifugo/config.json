@@ -12,33 +12,40 @@
   "channel": {
     "namespaces": [
       {
-        "name": "internal",
-        "history_size": 50,
-        "history_ttl": "300s",
-        "allow_subscribe_for_client": true
-      },
-      {
-        "name": "intercom",
+        "name": "thoughts",
         "history_size": 100,
         "history_ttl": "3600s",
         "allow_subscribe_for_client": true
       },
       {
-        "name": "channel",
-        "history_size": 200,
-        "history_ttl": "86400s",
+        "name": "tokens",
+        "history_size": 0,
+        "history_ttl": "0s",
+        "presence": false,
         "allow_subscribe_for_client": true
       },
       {
-        "name": "bridge",
-        "history_size": 100,
-        "history_ttl": "3600s",
-        "allow_subscribe_for_client": true
-      },
-      {
-        "name": "public",
+        "name": "agent",
         "history_size": 10,
-        "history_ttl": "60s",
+        "history_ttl": "600s",
+        "allow_subscribe_for_client": true
+      },
+      {
+        "name": "private",
+        "history_size": 100,
+        "history_ttl": "3600s",
+        "allow_subscribe_for_client": false
+      },
+      {
+        "name": "circle",
+        "history_size": 50,
+        "history_ttl": "14400s",
+        "allow_subscribe_for_client": false
+      },
+      {
+        "name": "system",
+        "history_size": 20,
+        "history_ttl": "1800s",
         "allow_subscribe_for_client": true
       }
     ]

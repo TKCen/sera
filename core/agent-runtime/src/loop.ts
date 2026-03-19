@@ -72,6 +72,19 @@ export class ReasoningLoop {
   }
 
   /**
+   * Queue of incoming intercom messages to be injected into the loop.
+   */
+  private incomingMessages: Array<{ source: string; content: string; channel?: string }> = [];
+
+  /**
+   * Inject a message from another agent into the next reasoning step.
+   */
+  public receiveIncomingMessage(from: string, content: string, channel?: string): void {
+    log('info', `Received message from ${from}${channel ? ` on ${channel}` : ''}: ${content.substring(0, 50)}...`);
+    this.incomingMessages.push({ source: from, content, channel });
+  }
+
+  /**
    * Run the reasoning loop for the given task.
    */
   async run(input: TaskInput): Promise<TaskOutput> {
@@ -127,6 +140,15 @@ export class ReasoningLoop {
         }
 
         iteration++;
+
+        // Inject incoming messages as 'user' observations
+        while (this.incomingMessages.length > 0) {
+          const msg = this.incomingMessages.shift()!;
+          const chanSuffix = msg.channel ? ` (on ${msg.channel})` : '';
+          const content = `[INTERCOM] Message from ${msg.source}${chanSuffix}: ${msg.content}`;
+          messages.push({ role: 'user', content });
+          await think('observe', `Received intercom message from ${msg.source}${chanSuffix}`, iteration);
+        }
 
         // Context window management — compact before each LLM call
         if (this.contextManager.isNearLimit(messages)) {

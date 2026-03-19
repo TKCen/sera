@@ -7,81 +7,69 @@ describe('ChannelNamespace', () => {
   describe('builders', () => {
     it('builds a thoughts channel', () => {
       expect(ChannelNamespace.thoughts('architect-prime'))
-        .toBe('internal:agent:architect-prime:thoughts');
+        .toBe('thoughts:architect-prime');
     });
 
-    it('builds a terminal channel', () => {
-      expect(ChannelNamespace.terminal('developer-prime'))
-        .toBe('internal:agent:developer-prime:terminal');
+    it('builds a tokens channel', () => {
+      expect(ChannelNamespace.tokens('developer-prime'))
+        .toBe('tokens:developer-prime');
     });
 
-    it('builds a DM channel with sorted agent names', () => {
+    it('builds a DM channel with sorted agent IDs', () => {
       // Alphabetical order should be consistent regardless of argument order
-      expect(ChannelNamespace.dm('development', 'developer-prime', 'architect-prime'))
-        .toBe('intercom:development:architect-prime:developer-prime');
-      expect(ChannelNamespace.dm('development', 'architect-prime', 'developer-prime'))
-        .toBe('intercom:development:architect-prime:developer-prime');
+      expect(ChannelNamespace.private('developer-prime', 'architect-prime'))
+        .toBe('private:architect-prime:developer-prime');
+      expect(ChannelNamespace.private('architect-prime', 'developer-prime'))
+        .toBe('private:architect-prime:developer-prime');
     });
 
     it('builds a circle channel', () => {
-      expect(ChannelNamespace.circleChannel('development', 'architecture-decisions'))
-        .toBe('channel:development:architecture-decisions');
-    });
-
-    it('builds a bridge channel with sorted circle names', () => {
-      expect(ChannelNamespace.bridge('operations', 'development', 'deployment-requests'))
-        .toBe('bridge:development:operations:deployment-requests');
-      expect(ChannelNamespace.bridge('development', 'operations', 'deployment-requests'))
-        .toBe('bridge:development:operations:deployment-requests');
+      expect(ChannelNamespace.circle('development'))
+        .toBe('circle:development');
     });
 
     it('builds a status channel', () => {
       expect(ChannelNamespace.status('architect-prime'))
-        .toBe('public:status:architect-prime');
+        .toBe('agent:architect-prime:status');
     });
 
-    it('builds an external inbox channel', () => {
-      expect(ChannelNamespace.externalInbox('mobile-app-123'))
-        .toBe('external:mobile-app-123:inbox');
+    it('builds a system channel', () => {
+      expect(ChannelNamespace.system('agents'))
+        .toBe('system.agents');
     });
   });
 
   // ── Validation Tests ────────────────────────────────────────────────────────
 
   describe('validate', () => {
-    it('validates internal thoughts channel', () => {
-      expect(ChannelNamespace.validate('internal:agent:architect-prime:thoughts'))
-        .toBe('internal');
+    it('validates thoughts channel', () => {
+      expect(ChannelNamespace.validate('thoughts:architect-prime'))
+        .toBe('thoughts');
     });
 
-    it('validates internal terminal channel', () => {
-      expect(ChannelNamespace.validate('internal:agent:developer-prime:terminal'))
-        .toBe('internal');
+    it('validates tokens channel', () => {
+      expect(ChannelNamespace.validate('tokens:developer-prime'))
+        .toBe('tokens');
     });
 
-    it('validates intercom DM channel', () => {
-      expect(ChannelNamespace.validate('intercom:development:architect-prime:developer-prime'))
-        .toBe('intercom');
+    it('validates private DM channel', () => {
+      expect(ChannelNamespace.validate('private:architect-prime:developer-prime'))
+        .toBe('private');
     });
 
     it('validates circle channel', () => {
-      expect(ChannelNamespace.validate('channel:development:architecture-decisions'))
-        .toBe('channel');
+      expect(ChannelNamespace.validate('circle:development'))
+        .toBe('circle');
     });
 
-    it('validates bridge channel', () => {
-      expect(ChannelNamespace.validate('bridge:development:operations:deployment-requests'))
-        .toBe('bridge');
+    it('validates status channel', () => {
+      expect(ChannelNamespace.validate('agent:architect-prime:status'))
+        .toBe('agent');
     });
 
-    it('validates public status channel', () => {
-      expect(ChannelNamespace.validate('public:status:architect-prime'))
-        .toBe('public');
-    });
-
-    it('validates external inbox channel', () => {
-      expect(ChannelNamespace.validate('external:mobile-app-123:inbox'))
-        .toBe('external');
+    it('validates system channel', () => {
+      expect(ChannelNamespace.validate('system.agents'))
+        .toBe('system');
     });
 
     it('rejects empty string', () => {
@@ -92,32 +80,24 @@ describe('ChannelNamespace', () => {
       expect(ChannelNamespace.validate('foobar:something:else')).toBeNull();
     });
 
-    it('rejects internal channel with wrong subtype', () => {
-      expect(ChannelNamespace.validate('internal:agent:architect-prime:logs')).toBeNull();
+    it('rejects status channel with wrong suffix', () => {
+      expect(ChannelNamespace.validate('agent:architect-prime:logs')).toBeNull();
     });
 
-    it('rejects internal channel with wrong structure', () => {
-      expect(ChannelNamespace.validate('internal:agent:thoughts')).toBeNull();
+    it('rejects thoughts channel with wrong structure', () => {
+      expect(ChannelNamespace.validate('thoughts:agent:architect-prime')).toBeNull();
     });
 
-    it('rejects intercom channel with too few segments', () => {
-      expect(ChannelNamespace.validate('intercom:development:architect-prime')).toBeNull();
+    it('rejects private channel with too few segments', () => {
+      expect(ChannelNamespace.validate('private:architect-prime')).toBeNull();
     });
 
     it('rejects channel with uppercase characters', () => {
-      expect(ChannelNamespace.validate('internal:agent:ArchitectPrime:thoughts')).toBeNull();
+      expect(ChannelNamespace.validate('thoughts:ArchitectPrime')).toBeNull();
     });
 
     it('rejects channel with spaces', () => {
-      expect(ChannelNamespace.validate('internal:agent:architect prime:thoughts')).toBeNull();
-    });
-
-    it('rejects public channel without status subtype', () => {
-      expect(ChannelNamespace.validate('public:health:architect-prime')).toBeNull();
-    });
-
-    it('rejects external channel without inbox suffix', () => {
-      expect(ChannelNamespace.validate('external:sub-123:messages')).toBeNull();
+      expect(ChannelNamespace.validate('thoughts:architect prime')).toBeNull();
     });
   });
 
@@ -125,7 +105,7 @@ describe('ChannelNamespace', () => {
 
   describe('isValid', () => {
     it('returns true for valid channels', () => {
-      expect(ChannelNamespace.isValid('internal:agent:test-agent:thoughts')).toBe(true);
+      expect(ChannelNamespace.isValid('thoughts:test-agent')).toBe(true);
     });
 
     it('returns false for invalid channels', () => {
@@ -137,11 +117,11 @@ describe('ChannelNamespace', () => {
 
   describe('getPrefix', () => {
     it('extracts the prefix', () => {
-      expect(ChannelNamespace.getPrefix('internal:agent:test:thoughts')).toBe('internal');
+      expect(ChannelNamespace.getPrefix('thoughts:test')).toBe('thoughts');
     });
 
-    it('returns the full string when no colon exists', () => {
-      expect(ChannelNamespace.getPrefix('nocolon')).toBe('nocolon');
+    it('extracts system prefix', () => {
+      expect(ChannelNamespace.getPrefix('system.agents')).toBe('system');
     });
   });
 });

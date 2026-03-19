@@ -19,6 +19,7 @@ export interface RuntimeManifest {
     icon: string;
     circle: string;
     tier: number;
+    additionalCircles?: string[];
   };
   identity: {
     role: string;

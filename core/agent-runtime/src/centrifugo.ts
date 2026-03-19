@@ -1,12 +1,26 @@
 /**
- * CentrifugoPublisher — lightweight HTTP client for publishing
- * agent thoughts and stream tokens to Centrifugo.
- *
- * Uses the same channel namespace conventions as Core's ChannelNamespace.
+ * CentrifugoPublisher & CentrifugoSubscriber — lightweight clients for 
+ * real-time messaging in the agent runtime.
  */
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
+import { Centrifuge } from 'centrifuge';
 import { log } from './logger.js';
+
+export interface IntercomMessage {
+  id: string;
+  version: '1';
+  timestamp: string;
+  source: { agent: string; circle: string };
+  target: { channel: string };
+  type: string;
+  payload: Record<string, unknown>;
+  metadata: {
+    replyTo?: string;
+    ttl?: number;
+    securityTier: number;
+  };
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -16,18 +30,14 @@ export type ThoughtType = 'observe' | 'plan' | 'act' | 'reflect';
 export type InternalStepType = ThoughtType | 'tool-call' | 'tool-result' | 'reasoning';
 
 export interface ThoughtEvent {
-  /** Canonical thought type per Story 5.5. */
-  step: ThoughtType;
+  stepType: ThoughtType;
   content: string;
   timestamp: string;
   iteration: number;
   agentId: string;
-  agentName: string;
-  /** Present only for act thoughts. */
+  agentDisplayName: string;
   toolName?: string;
-  /** Present only for act thoughts. */
   toolArgs?: Record<string, unknown>;
-  /** Anomaly flag per Story 5.10. */
   anomaly?: boolean;
 }
 
@@ -41,19 +51,17 @@ export interface StreamToken {
 
 export class CentrifugoPublisher {
   private http: AxiosInstance;
-  /** Agent instance UUID — used in channel names. */
   private agentId: string;
-  /** Agent display/template name — used in channel names. */
-  private agentName: string;
+  private agentDisplayName: string;
 
   constructor(
     centrifugoUrl: string,
     apiKey: string,
     agentId: string,
-    agentName: string,
+    agentDisplayName: string,
   ) {
     this.agentId = agentId;
-    this.agentName = agentName;
+    this.agentDisplayName = agentDisplayName;
     this.http = axios.create({
       baseURL: centrifugoUrl,
       headers: {
@@ -64,10 +72,6 @@ export class CentrifugoPublisher {
     });
   }
 
-  /**
-   * Publish raw data to a Centrifugo channel.
-   * Best-effort — failures are logged but do not propagate.
-   */
   async publish(channel: string, data: unknown): Promise<void> {
     try {
       await this.http.post('', {
@@ -80,10 +84,6 @@ export class CentrifugoPublisher {
     }
   }
 
-  /**
-   * Publish a canonical reasoning thought step.
-   * Channel: `thoughts:{agentId}:{agentName}`
-   */
   async publishThought(
     step: ThoughtType | InternalStepType,
     content: string,
@@ -94,17 +94,16 @@ export class CentrifugoPublisher {
       anomaly?: boolean;
     },
   ): Promise<void> {
-    // Map internal step types to canonical thought types
     const canonical = this.toCanonicalStep(step);
-    const channel = `thoughts:${this.agentId}:${this.agentName}`;
+    const channel = `thoughts:${this.agentId}`;
 
     const event: ThoughtEvent = {
-      step: canonical,
+      stepType: canonical,
       content,
       timestamp: new Date().toISOString(),
       iteration,
       agentId: this.agentId,
-      agentName: this.agentName,
+      agentDisplayName: this.agentDisplayName,
       ...(opts?.toolName !== undefined ? { toolName: opts.toolName } : {}),
       ...(opts?.toolArgs !== undefined ? { toolArgs: opts.toolArgs } : {}),
       ...(opts?.anomaly !== undefined ? { anomaly: opts.anomaly } : {}),
@@ -113,10 +112,6 @@ export class CentrifugoPublisher {
     await this.publish(channel, event);
   }
 
-  /**
-   * Publish an LLM stream token.
-   * Channel: `tokens:{agentId}`
-   */
   async publishStreamToken(
     messageId: string,
     token: string,
@@ -126,8 +121,6 @@ export class CentrifugoPublisher {
     const data: StreamToken = { token, done, messageId };
     await this.publish(channel, data);
   }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
 
   private toCanonicalStep(step: ThoughtType | InternalStepType): ThoughtType {
     switch (step) {
@@ -146,5 +139,53 @@ export class CentrifugoPublisher {
       default:
         return 'observe';
     }
+  }
+}
+
+// ── Subscriber ────────────────────────────────────────────────────────────────
+
+export class CentrifugoSubscriber {
+  private client: Centrifuge;
+  private agentId: string;
+
+  constructor(wsUrl: string, token: string, agentId: string) {
+    this.agentId = agentId;
+    this.client = new Centrifuge(wsUrl, {
+      token,
+      debug: process.env['NODE_ENV'] === 'development',
+    });
+
+    this.client.on('connected', () => log('info', `Subscriber connected to Centrifugo` ));
+    this.client.on('error', (ctx) => log('error', `Subscriber error: ${ctx.error.message}`));
+    this.client.on('disconnected', () => log('warn', `Subscriber disconnected`));
+  }
+
+  async connect(): Promise<void> {
+    this.client.connect();
+  }
+
+  async disconnect(): Promise<void> {
+    this.client.disconnect();
+  }
+
+  /**
+   * Subscribe to a channel and handle messages.
+   */
+  async subscribe(channel: string, onMessage: (msg: IntercomMessage) => void): Promise<void> {
+    const sub = this.client.newSubscription(channel);
+    
+    sub.on('publication', (ctx) => {
+      try {
+        const msg = ctx.data as IntercomMessage;
+        onMessage(msg);
+      } catch (err) {
+        log('error', `Failed to parse intercom message on ${channel}`);
+      }
+    });
+
+    sub.on('error', (ctx) => log('error', `Subscription error on ${channel}: ${ctx.error.message}`));
+    
+    sub.subscribe();
+    log('info', `Subscribed to ${channel}`);
   }
 }

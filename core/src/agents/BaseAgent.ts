@@ -146,7 +146,7 @@ export abstract class BaseAgent {
       { role: 'user', content: input },
     ];
 
-    const streamChannel = ChannelNamespace.stream(messageId);
+    const streamChannel = ChannelNamespace.tokens(this.agentInstanceId || this.role);
 
     // ── Quota Check ───────────────────────────────────────────────────
     if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
@@ -318,8 +318,8 @@ export abstract class BaseAgent {
     } catch (error: any) {
       this.logger.error('Stream processing error:', error);
       if (this.intercom) {
-        await this.intercom.publishStreamToken(
-          streamChannel,
+        await this.intercom.publishToken(
+          this.agentInstanceId || this.role,
           `⚠️ Error: ${error.message}`,
           true,
           messageId,
@@ -352,9 +352,9 @@ export abstract class BaseAgent {
     const chunkSize = 20;
     for (let i = 0; i < text.length; i += chunkSize) {
       const chunk = text.substring(i, i + chunkSize);
-      await this.intercom.publishStreamToken(channel, chunk, false, messageId);
+      await this.intercom.publishToken(this.agentInstanceId || this.role, chunk, false, messageId);
     }
-    await this.intercom.publishStreamToken(channel, '', true, messageId);
+    await this.intercom.publishToken(this.agentInstanceId || this.role, '', true, messageId);
   }
 
   /**
@@ -396,8 +396,8 @@ export abstract class BaseAgent {
       }
 
       if (this.intercom) {
-        await this.intercom.publishStreamToken(
-          streamChannel,
+        await this.intercom.publishToken(
+          this.agentInstanceId || this.role,
           chunk.token,
           chunk.done,
           messageId,
@@ -436,6 +436,8 @@ export abstract class BaseAgent {
   protected async publishThought(
     stepType: ThoughtStepType,
     content: string,
+    taskId?: string,
+    iteration?: number,
   ): Promise<void> {
     const timestamp = new Date().toISOString();
     // Capture for session persistence and notify external listener
@@ -448,6 +450,8 @@ export abstract class BaseAgent {
         this.name,
         stepType,
         content,
+        taskId,
+        iteration,
       );
     } catch (err) {
       this.logger.error(`Failed to publish thought:`, err);

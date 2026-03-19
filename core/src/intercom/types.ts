@@ -39,6 +39,7 @@ export interface MessageMetadata {
 
 export interface IntercomMessage {
   id: string;
+  version: string;
   timestamp: string;
   source: MessageSource;
   target: MessageTarget;
@@ -55,6 +56,8 @@ export interface ThoughtEvent {
   content: string;
   agentId: string;
   agentDisplayName: string;
+  taskId?: string | undefined;
+  iteration?: number | undefined;
 }
 
 // ── Stream Token (published to internal:stream:{messageId}) ─────────────────────
@@ -68,12 +71,13 @@ export interface StreamToken {
 // ── Channel Namespace Prefixes ──────────────────────────────────────────────────
 
 export const CHANNEL_PREFIXES = [
-  'internal',
-  'intercom',
-  'channel',
-  'bridge',
-  'public',
-  'external',
+  'thoughts',
+  'tokens',
+  'agent',
+  'private',
+  'circle',
+  'system',
+  'federation',
 ] as const;
 
 export type ChannelPrefix = typeof CHANNEL_PREFIXES[number];

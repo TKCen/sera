@@ -30,7 +30,7 @@ import axios from 'axios';
 import { loadManifest } from './manifest.js';
 import { LLMClient } from './llmClient.js';
 import { RuntimeToolExecutor } from './tools.js';
-import { CentrifugoPublisher } from './centrifugo.js';
+import { CentrifugoPublisher, CentrifugoSubscriber } from './centrifugo.js';
 import { ReasoningLoop } from './loop.js';
 import type { TaskInput, TaskOutput } from './loop.js';
 import { startHeartbeat } from './heartbeat.js';
@@ -98,6 +98,50 @@ async function main(): Promise<void> {
   );
 
   const loop = new ReasoningLoop(llmClient, toolExecutor, centrifugo, manifest);
+
+  // ── Initialize Subscriber (Story 9.3) ────────────────────────────────────
+  const CENTRIFUGO_WS_URL = CENTRIFUGO_API_URL.replace('/api', '/connection/websocket').replace('http', 'ws');
+  
+  try {
+    const tokenRes = await axios.get<{ token: string }>(`${SERA_CORE_URL}/api/intercom/centrifugo/token?agentId=${AGENT_INSTANCE_ID}`, {
+      headers: { Authorization: `Bearer ${SERA_IDENTITY_TOKEN}` }
+    });
+    
+    const subscriber = new CentrifugoSubscriber(CENTRIFUGO_WS_URL, tokenRes.data.token, AGENT_INSTANCE_ID);
+    await subscriber.connect();
+
+    // Subscribe to all permitted peer private channels
+    const channels = (manifest.intercom?.canMessage ?? []).map(peerId => {
+      // Sort IDs for canonical channel name
+      const pair = [manifest.metadata.name, peerId].sort();
+      return `private:${pair[0]}:${pair[1]}`;
+    });
+
+    for (const channel of channels) {
+      await subscriber.subscribe(channel, (msg) => {
+        if (msg.source.agent !== manifest.metadata.name) {
+          loop.receiveIncomingMessage(msg.source.agent, JSON.stringify(msg.payload));
+        }
+      });
+    }
+
+    // Subscribe to circle channels (Story 9.4)
+    const agentCircle = manifest.metadata.circle;
+    const additionalCircles = manifest.metadata.additionalCircles ?? [];
+    const circleIds = [agentCircle, ...additionalCircles].filter((c): c is string => !!c);
+
+    for (const cId of circleIds) {
+      const channel = `circle:${cId}`;
+      await subscriber.subscribe(channel, (msg) => {
+        // Don't inject our own broadcasts into the loop
+        if (msg.source.agent !== manifest.metadata.name) {
+          loop.receiveIncomingMessage(msg.source.agent, JSON.stringify(msg.payload), `circle:${cId}`);
+        }
+      });
+    }
+  } catch (err) {
+    log('warn', `Failed to initialize Centrifugo subscriber: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // ── Start Heartbeat ──────────────────────────────────────────────────────
   const stopHeartbeat = startHeartbeat(SERA_CORE_URL, AGENT_INSTANCE_ID, SERA_IDENTITY_TOKEN);

@@ -24,9 +24,12 @@ import { createLlmProxyRouter } from './routes/llmProxy.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createBudgetRouter } from './routes/budget.js';
 import { createAuditRouter } from './routes/audit.js';
+import { createFederationRouter } from './routes/federation.js';
 import { createConfigRouter } from './routes/config.js';
 import { createSchedulesRouter } from './routes/schedules.js';
 import { createOpenAICompatRouter } from './routes/openai-compat.js';
+import { WebhooksService } from './intercom/WebhooksService.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { IdentityService } from './auth/IdentityService.js';
@@ -134,7 +137,13 @@ const startServer = async () => {
 
   // 5. Setup Express App
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf;
+    }
+  }));
+
+  const webhooksService = new WebhooksService(intercomService);
 
   app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
 
@@ -170,6 +179,8 @@ const startServer = async () => {
   app.use('/api/schedules', authMiddleware, createSchedulesRouter());
   app.use('/v1', createOpenAICompatRouter(orchestrator));
   app.use('/api/lsp', lspRouter);
+  app.use('/api/federation', createFederationRouter());
+  app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
   
   const agentRegistry = new AgentRegistry(pool);
   orchestrator.setRegistry(agentRegistry);

@@ -82,6 +82,10 @@ export class Orchestrator {
     }
   }
 
+  public getIntercom(): IntercomService | undefined {
+    return this.intercom;
+  }
+
   public setToolExecutor(toolExecutor: ToolExecutor): void {
     this.toolExecutor = toolExecutor;
     for (const agent of this.agents.values()) {

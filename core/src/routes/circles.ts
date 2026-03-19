@@ -193,9 +193,47 @@ export function createCircleRouter(
     }
   });
 
-  // ── Party Mode routes (moved from index.ts) ───────────────────────────────
-  // Note: Party mode routes stay in index.ts for now since they need the
-  // PartySessionManager instance. We'll move them in a future refactor.
+  // ── Circle Broadcast ──────────────────────────────────────────────────────
+  /**
+   * Broadcast a message to all members of a circle via Centrifugo.
+   * Validates that the sender 'from' is a member of the circle.
+   */
+  router.post('/:name/broadcast', async (req, res) => {
+    const { name } = req.params;
+    const { from, payload } = req.body;
+
+    const circle = circleRegistry.getCircle(name);
+    if (!circle) {
+      return res.status(404).json({ error: `Circle "${name}" not found` });
+    }
+
+    if (!from || typeof from !== 'string') {
+      return res.status(400).json({ error: 'from (agent name) is required' });
+    }
+
+    // Membership check: only agents in the circle can broadcast
+    const isMember = circle.agents?.includes(from);
+    if (!isMember) {
+      return res.status(403).json({ error: `Agent "${from}" is not a member of circle "${name}"` });
+    }
+
+    const fromManifest = getAgentManifests().find(m => m.metadata.name === from);
+    if (!fromManifest) {
+      return res.status(404).json({ error: `Manifest for agent "${from}" not found` });
+    }
+
+    try {
+      const intercomService = orchestrator.getIntercom();
+      if (!intercomService) {
+        return res.status(500).json({ error: 'Intercom service not initialized' });
+      }
+
+      await intercomService.broadcastToCircle(fromManifest, name, payload || {});
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   return router;
 }

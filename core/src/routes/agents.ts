@@ -83,6 +83,33 @@ export function createAgentRouter(
       res.status(500).json({ error: err.message });
     }
   });
+  
+  // ── Get agent thoughts ───────────────────────────────────────────────────
+  /**
+   * Gets persisted thoughts for a specific agent instance.
+   * Story 9.7 persistence.
+   */
+  router.get('/instances/:id/thoughts', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { taskId, limit, offset } = req.query;
+      
+      const intercom = orchestrator.getIntercom();
+      if (!intercom) {
+        return res.status(503).json({ error: 'Intercom service not available' });
+      }
+
+      const thoughts = await intercom.getThoughts(id, {
+        taskId: taskId as string,
+        limit: limit ? parseInt(limit as string) : 50,
+        offset: offset ? parseInt(offset as string) : 0
+      });
+      
+      res.json(thoughts);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // ── Delete an agent instance ──────────────────────────────────────────────
   /**

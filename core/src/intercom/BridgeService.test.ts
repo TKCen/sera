@@ -29,6 +29,7 @@ describe('BridgeService', () => {
     const postSpy = vi.spyOn(axios, 'post');
     const message: IntercomMessage = {
       id: '1',
+      version: '1',
       timestamp: new Date().toISOString(),
       source: { agent: 'a', circle: 'local' },
       target: { channel: 'channel:local:updates' },
@@ -73,6 +74,7 @@ describe('BridgeService', () => {
 
     const message: IntercomMessage = {
       id: '2',
+      version: '1',
       timestamp: new Date().toISOString(),
       source: { agent: 'a', circle: 'local' },
       target: { channel: 'bridge:local:remote:updates' },
@@ -104,6 +106,7 @@ describe('BridgeService', () => {
     const publishSpy = vi.spyOn(intercom, 'publish').mockResolvedValue(undefined);
     const message: IntercomMessage = {
       id: '3',
+      version: '1',
       timestamp: new Date().toISOString(),
       source: { agent: 'r', circle: 'remote' },
       target: { channel: 'bridge:local:remote:updates' },

@@ -11,8 +11,8 @@ class SSEIntercom extends IntercomService {
     super();
   }
 
-  override async publishStreamToken(
-    channel: string,
+  override async publishToken(
+    agentId: string,
     token: string,
     done: boolean,
     messageId: string,

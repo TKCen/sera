@@ -8,8 +8,10 @@
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
+import jwt from 'jsonwebtoken';
 import { Logger } from '../lib/logger.js';
 import { ChannelNamespace } from './ChannelNamespace.js';
+import { pool } from '../lib/database.js';
 import type {
   IntercomMessage,
   IntercomMessageType,
@@ -19,12 +21,12 @@ import type {
   StreamToken,
 } from './types.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
-import type { BridgeService } from './BridgeService.js';
 
 // ── Configuration ───────────────────────────────────────────────────────────────
 
 const CENTRIFUGO_API_URL = process.env['CENTRIFUGO_API_URL'] || 'http://centrifugo:8000/api';
 const CENTRIFUGO_API_KEY = process.env['CENTRIFUGO_API_KEY'] || 'sera-api-key';
+const CENTRIFUGO_TOKEN_SECRET = process.env['CENTRIFUGO_TOKEN_SECRET'] || 'sera-token-secret';
 
 // ── Service ─────────────────────────────────────────────────────────────────────
 
@@ -32,7 +34,7 @@ const logger = new Logger('Intercom');
 
 export class IntercomService {
   private readonly http: AxiosInstance;
-  private bridgeService?: BridgeService;
+  private bridge?: any; // To avoid circular dependency issues, we use 'any' or import BridgeService later
 
   constructor(apiUrl?: string, apiKey?: string) {
     this.http = axios.create({
@@ -45,14 +47,14 @@ export class IntercomService {
     });
   }
 
-  // ── Low-level Centrifugo API ────────────────────────────────────────────────
-
   /**
-   * Hook up the bridge service for federation.
+   * Set the bridge service for cross-instance federation.
    */
-  setBridgeService(bridgeService: BridgeService): void {
-    this.bridgeService = bridgeService;
+  setBridgeService(bridge: any): void {
+    this.bridge = bridge;
   }
+
+  // ── Low-level Centrifugo API ────────────────────────────────────────────────
 
   /**
    * Publish data to a Centrifugo channel.
@@ -64,34 +66,15 @@ export class IntercomService {
         params: { channel, data },
       });
 
-      // If it's a bridge channel, forward it via the bridge service
-      if (this.bridgeService && typeof data === 'object' && data !== null) {
-        const msg = data as IntercomMessage;
-        if (msg.id && msg.source && msg.target) {
-          await this.bridgeService.handleLocalPublish(channel, msg);
-        }
+      // Forward to bridge for federation (Story 9.6)
+      if (this.bridge && data && typeof data === 'object') {
+        this.bridge.handleLocalPublish(channel, data).catch((err: any) => {
+          logger.warn(`Bridge failed to forward ${channel}: ${err.message}`);
+        });
       }
     } catch (err) {
       const message = err instanceof AxiosError ? err.message : String(err);
-      logger.error(`Failed to publish to ${channel}: ${message}`);
-      throw new IntercomError(`Publish failed: ${message}`, channel);
-    }
-  }
-
-  /**
-   * Check who is subscribed to a Centrifugo channel.
-   */
-  async presence(channel: string): Promise<Record<string, unknown>> {
-    try {
-      const res = await this.http.post('', {
-        method: 'presence',
-        params: { channel },
-      });
-      return res.data?.result?.presence || {};
-    } catch (err) {
-      const message = err instanceof AxiosError ? err.message : String(err);
-      logger.error(`Failed to get presence for ${channel}: ${message}`);
-      return {};
+      logger.warn(`Failed to publish to ${channel}: ${message}`);
     }
   }
 
@@ -119,8 +102,8 @@ export class IntercomService {
    * Build and publish a standard IntercomMessage envelope.
    */
   async publishMessage(
-    sourceAgent: string,
-    sourceCircle: string,
+    sourceAgentId: string,
+    sourceCircleId: string,
     channel: string,
     type: IntercomMessageType,
     payload: Record<string, unknown>,
@@ -134,8 +117,9 @@ export class IntercomService {
 
     const msg: IntercomMessage = {
       id: uuidv4(),
+      version: '1',
       timestamp: new Date().toISOString(),
-      source: { agent: sourceAgent, circle: sourceCircle },
+      source: { agent: sourceAgentId, circle: sourceCircleId },
       target: { channel },
       type,
       payload,
@@ -154,38 +138,39 @@ export class IntercomService {
    */
   async sendDirectMessage(
     fromManifest: AgentManifest,
-    toAgent: string,
+    toAgentId: string,
     payload: Record<string, unknown>,
   ): Promise<IntercomMessage> {
-    const fromAgent = fromManifest.metadata.name;
+    const fromAgentId = fromManifest.metadata.name;
     const circle = fromManifest.metadata.circle;
 
-    // Support remote addressing: agent@circle@instance or agent@circle
-    if (toAgent.includes('@')) {
-      const parts = toAgent.split('@');
-      const remoteAgent = parts[0];
-      const remoteCircle = parts[1];
-      
-      if (!remoteAgent || !remoteCircle) {
-        throw new Error(`Invalid remote agent address: ${toAgent}. Expected agent@circle`);
-      }
-
-      const channel = ChannelNamespace.bridgeDm(circle, remoteCircle, fromAgent, remoteAgent);
-      return this.publishMessage(fromAgent, circle, channel, 'message', payload, {
-        securityTier: fromManifest.metadata.tier,
-      });
-    }
-
-    // Validate permission for local DMs
+    // Validate permission
     const canMessage = fromManifest.intercom?.canMessage ?? [];
-    if (!canMessage.includes(toAgent)) {
-      throw new IntercomPermissionError(fromAgent, toAgent);
+    if (!canMessage.includes(toAgentId) && !canMessage.includes('*')) {
+      throw new IntercomPermissionError(fromAgentId, toAgentId);
     }
 
-    const channel = ChannelNamespace.dm(circle, fromAgent, toAgent);
+    const channel = ChannelNamespace.private(fromAgentId, toAgentId);
 
-    return this.publishMessage(fromAgent, circle, channel, 'message', payload, {
+    return this.publishMessage(fromAgentId, circle, channel, 'message', payload, {
       securityTier: fromManifest.metadata.tier,
+    });
+  }
+
+  /**
+   * Story 9.8: Publish a platform-level system event.
+   */
+  async publishSystem(event: string, payload: Record<string, unknown>): Promise<void> {
+    const channel = ChannelNamespace.system(event);
+    await this.publish(channel, {
+      id: uuidv4(),
+      version: '1',
+      timestamp: new Date().toISOString(),
+      source: { agent: 'sera-core', circle: 'system' },
+      target: { channel },
+      type: 'status', // Or a new 'system-event' type if preferred
+      payload,
+      metadata: { securityTier: 0 }
     });
   }
 
@@ -200,64 +185,151 @@ export class IntercomService {
     agentDisplayName: string,
     stepType: ThoughtStepType,
     content: string,
+    taskId?: string,
+    iteration?: number,
   ): Promise<void> {
     const channel = ChannelNamespace.thoughts(agentId);
+    const timestamp = new Date().toISOString();
     const event: ThoughtEvent = {
-      timestamp: new Date().toISOString(),
+      timestamp,
       stepType,
       content,
       agentId,
       agentDisplayName,
+      taskId,
+      iteration,
     };
 
+    // Story 9.7: Persist thought to database (non-blocking)
+    const persistThought = async () => {
+      try {
+        await pool.query(
+          `INSERT INTO thought_events (agent_instance_id, task_id, step, content, iteration, published_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            agentId, 
+            taskId || null,
+            stepType,
+            content,
+            iteration || 0,
+            timestamp
+          ]
+        );
+      } catch (err: any) {
+        logger.error(`Failed to persist thought for ${agentId}: ${err.message}`);
+      }
+    };
+
+    // Fire and forget
+    persistThought();
+
     await this.publish(channel, event);
+  }
+
+  /**
+   * Story 9.7: Get persisted thoughts for an agent.
+   */
+  async getThoughts(agentId: string, options: { taskId?: string, limit?: number, offset?: number } = {}): Promise<any[]> {
+    const { taskId, limit = 50, offset = 0 } = options;
+    let queryText = `SELECT * FROM thought_events WHERE agent_instance_id = $1`;
+    const params: any[] = [agentId];
+
+    if (taskId) {
+      params.push(taskId);
+      queryText += ` AND task_id = $${params.length}`;
+    }
+
+    queryText += ` ORDER BY published_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const res = await pool.query(queryText, params);
+    return res.rows.map(row => ({
+      timestamp: row.published_at,
+      stepType: row.step,
+      content: row.content,
+      agentId: row.agent_instance_id,
+      taskId: row.task_id,
+      iteration: row.iteration
+    }));
   }
 
   // ── Token Streaming ────────────────────────────────────────────────────────
 
   /**
-   * Publish a stream token to a per-message channel.
-   * The frontend subscribes before triggering the backend so it catches every token.
+   * Publish an LLM stream token delta.
    */
-  async publishStreamToken(
-    channel: string,
+  async publishToken(
+    agentId: string,
     token: string,
     done: boolean,
     messageId: string,
   ): Promise<void> {
+    const channel = ChannelNamespace.tokens(agentId);
     const data: StreamToken = { token, done, messageId };
     await this.publish(channel, data);
   }
 
-  // ── Circle Channel Publishing ──────────────────────────────────────────────
+  // ── Status Publishing ──────────────────────────────────────────────────────
 
   /**
-   * Publish to a circle-scoped channel.
-   * Validates the agent subscribes or publishes to this channel.
+   * Publish agent lifecycle status transition.
    */
-  async publishToCircleChannel(
-    manifest: AgentManifest,
-    channelName: string,
+  async publishAgentStatus(
+    agentId: string,
+    status: string,
+  ): Promise<void> {
+    const channel = ChannelNamespace.status(agentId);
+    await this.publish(channel, {
+      timestamp: new Date().toISOString(),
+      agentId,
+      status,
+    });
+  }
+
+  // ── System Events ──────────────────────────────────────────────────────────
+
+  /**
+   * Publish a platform event.
+   */
+  async publishSystemEvent(
+    event: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const channel = ChannelNamespace.system(event);
+    await this.publish(channel, {
+      version: '1',
+      timestamp: new Date().toISOString(),
+      source: 'sera-core',
+      event,
+      payload,
+    });
+  }
+
+  // ── Circle Broadcast ───────────────────────────────────────────────────────
+
+  /**
+   * Send a broadcast message to a circle.
+   */
+  async broadcastToCircle(
+    fromManifest: AgentManifest,
+    circleId: string,
     payload: Record<string, unknown>,
   ): Promise<IntercomMessage> {
-    const publishChannels = manifest.intercom?.channels?.publish ?? [];
-    if (!publishChannels.includes(channelName)) {
-      throw new IntercomError(
-        `Agent "${manifest.metadata.name}" is not permitted to publish to channel "${channelName}"`,
-        channelName,
-      );
+    const fromAgentId = fromManifest.metadata.name;
+    const agentCircle = fromManifest.metadata.circle;
+    const additionalCircles = fromManifest.metadata.additionalCircles ?? [];
+
+    if (agentCircle !== circleId && !additionalCircles.includes(circleId)) {
+      throw new IntercomError(`Agent "${fromAgentId}" is not a member of circle "${circleId}"`, `circle:${circleId}`);
     }
 
-    const channel = ChannelNamespace.circleChannel(manifest.metadata.circle, channelName);
-    return this.publishMessage(
-      manifest.metadata.name,
-      manifest.metadata.circle,
-      channel,
-      'message',
-      payload,
-      { securityTier: manifest.metadata.tier },
-    );
+    const channel = ChannelNamespace.circle(circleId);
+    return this.publishMessage(fromAgentId, agentCircle, channel, 'message', payload, {
+      securityTier: fromManifest.metadata.tier,
+    });
   }
+
+  // ── Config Retrieval ───────────────────────────────────────────────────────
 
   /**
    * Get the list of channels an agent is allowed to interact with,
@@ -265,35 +337,50 @@ export class IntercomService {
    */
   getAgentChannels(manifest: AgentManifest): {
     thoughts: string;
-    terminal: string;
-    publishChannels: string[];
-    subscribeChannels: string[];
+    status: string;
+    tokens: string;
     dmPeers: string[];
+    circles: string[];
   } {
     const agentId = manifest.metadata.name;
-    const circle = manifest.metadata.circle;
+    const circles = [
+      manifest.metadata.circle,
+      ...(manifest.metadata.additionalCircles ?? []),
+    ];
 
-    const dmPeers = (manifest.intercom?.canMessage ?? []).map(peer => {
-      if (peer.includes('@')) {
-        const parts = peer.split('@');
-        if (parts[0] && parts[1]) {
-          return ChannelNamespace.bridgeDm(circle, parts[1], agentId, parts[0]);
-        }
-      }
-      return ChannelNamespace.dm(circle, agentId, peer);
+    const dmPeers = (manifest.intercom?.canMessage ?? []).map(peerId => {
+      return ChannelNamespace.private(agentId, peerId);
     });
 
     return {
       thoughts: ChannelNamespace.thoughts(agentId),
-      terminal: ChannelNamespace.terminal(agentId),
-      publishChannels: (manifest.intercom?.channels?.publish ?? []).map(
-        name => ChannelNamespace.circleChannel(circle, name),
-      ),
-      subscribeChannels: (manifest.intercom?.channels?.subscribe ?? []).map(
-        name => ChannelNamespace.circleChannel(circle, name),
-      ),
+      status: ChannelNamespace.status(agentId),
+      tokens: ChannelNamespace.tokens(agentId),
       dmPeers,
+      circles: circles.map(c => ChannelNamespace.circle(c)),
     };
+  }
+
+  /**
+   * Generate a JWT for a user/agent to connect to Centrifugo.
+   */
+  generateConnectionToken(userId: string): string {
+    return jwt.sign(
+      { sub: userId },
+      CENTRIFUGO_TOKEN_SECRET,
+      { expiresIn: '24h' }
+    );
+  }
+
+  /**
+   * Generate a JWT for a user/agent to subscribe to a specific private channel.
+   */
+  generateSubscriptionToken(userId: string, channel: string): string {
+    return jwt.sign(
+      { sub: userId, channel },
+      CENTRIFUGO_TOKEN_SECRET,
+      { expiresIn: '1h' }
+    );
   }
 }
 
@@ -314,7 +401,7 @@ export class IntercomPermissionError extends IntercomError {
     super(
       `Agent "${fromAgent}" is not permitted to message "${toAgent}". ` +
       `Add "${toAgent}" to the intercom.canMessage list in ${fromAgent}'s AGENT.yaml.`,
-      `dm:${fromAgent}:${toAgent}`,
+      `private:${fromAgent}:${toAgent}`,
     );
     this.name = 'IntercomPermissionError';
   }

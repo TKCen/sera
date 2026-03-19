@@ -49,7 +49,7 @@ function createManifest(overrides: Partial<AgentManifest> = {}): AgentManifest {
       },
     },
     ...overrides,
-  };
+  } as AgentManifest;
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────────
@@ -74,8 +74,8 @@ describe('IntercomService', () => {
       expect(msg.source.circle).toBe('development');
       expect(msg.type).toBe('message');
       expect(msg.payload).toEqual({ text: 'Hello!' });
-      // DM channel should be sorted
-      expect(msg.target.channel).toBe('intercom:development:architect-prime:developer-prime');
+      // Private channel should be sorted architect-prime < developer-prime
+      expect(msg.target.channel).toBe('private:architect-prime:developer-prime');
     });
 
     it('throws IntercomPermissionError for unpermitted peer', async () => {
@@ -84,39 +84,30 @@ describe('IntercomService', () => {
         service.sendDirectMessage(manifest, 'unknown-agent', { text: 'Hi' }),
       ).rejects.toThrow(IntercomPermissionError);
     });
-
-    it('throws IntercomPermissionError when agent has no intercom config', async () => {
-      const manifest = createManifest();
-      delete (manifest as any).intercom;
-      await expect(
-        service.sendDirectMessage(manifest, 'developer-prime', { text: 'Hi' }),
-      ).rejects.toThrow(IntercomPermissionError);
-    });
   });
 
   describe('publishThought', () => {
     it('publishes to the correct thoughts channel', async () => {
-      // This should not throw
       await service.publishThought('architect-prime', 'Winston', 'observe', 'Looking at code...');
     });
   });
 
-  describe('publishToCircleChannel', () => {
-    it('publishes to a permitted channel', async () => {
+  describe('broadcastToCircle', () => {
+    it('publishes to a permitted circle', async () => {
       const manifest = createManifest();
-      const msg = await service.publishToCircleChannel(manifest, 'architecture-decisions', {
+      const msg = await service.broadcastToCircle(manifest, 'development', {
         decision: 'Use REST over gRPC',
       });
 
-      expect(msg.target.channel).toBe('channel:development:architecture-decisions');
+      expect(msg.target.channel).toBe('circle:development');
       expect(msg.type).toBe('message');
     });
 
-    it('throws when agent is not permitted to publish', async () => {
+    it('throws when agent is not a member of the circle', async () => {
       const manifest = createManifest();
       await expect(
-        service.publishToCircleChannel(manifest, 'unknown-channel', { data: 'test' }),
-      ).rejects.toThrow('not permitted to publish');
+        service.broadcastToCircle(manifest, 'operations', { data: 'test' }),
+      ).rejects.toThrow('is not a member of circle');
     });
   });
 
@@ -125,33 +116,17 @@ describe('IntercomService', () => {
       const manifest = createManifest();
       const channels = service.getAgentChannels(manifest);
 
-      expect(channels.thoughts).toBe('internal:agent:architect-prime:thoughts');
-      expect(channels.terminal).toBe('internal:agent:architect-prime:terminal');
-      expect(channels.publishChannels).toEqual([
-        'channel:development:architecture-decisions',
-      ]);
-      expect(channels.subscribeChannels).toEqual([
-        'channel:development:code-review-requests',
-      ]);
-      expect(channels.dmPeers).toHaveLength(2);
-    });
-
-    it('handles agent with no intercom config', () => {
-      const manifest = createManifest();
-      delete (manifest as any).intercom;
-      const channels = service.getAgentChannels(manifest);
-
-      expect(channels.thoughts).toBe('internal:agent:architect-prime:thoughts');
-      expect(channels.publishChannels).toEqual([]);
-      expect(channels.subscribeChannels).toEqual([]);
-      expect(channels.dmPeers).toEqual([]);
+      expect(channels.thoughts).toBe('thoughts:architect-prime');
+      expect(channels.status).toBe('agent:architect-prime:status');
+      expect(channels.tokens).toBe('tokens:architect-prime');
+      expect(channels.dmPeers).toContain('private:architect-prime:developer-prime');
+      expect(channels.circles).toEqual(['circle:development']);
     });
   });
 
   describe('getHistory', () => {
     it('returns an empty array on error', async () => {
       const result = await service.getHistory('test-channel');
-      // Default mock returns { result: {} } with no publications
       expect(result).toEqual([]);
     });
   });

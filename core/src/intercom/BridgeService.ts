@@ -30,6 +30,28 @@ export class BridgeService {
   }
 
   /**
+   * Connect to a remote SERA instance (Story 9.6 stub).
+   */
+  connect(remoteUrl: string, token: string): void {
+    logger.info(`Federation: Connecting to ${remoteUrl} (stub)`);
+  }
+
+  /**
+   * Disconnect from all remote instances (Story 9.6 stub).
+   */
+  disconnect(): void {
+    logger.info('Federation: Disconnecting all bridges (stub)');
+    this.remoteClients.clear();
+  }
+
+  /**
+   * Route a message through the federation bridge (Story 9.6 stub).
+   */
+  route(message: IntercomMessage): void {
+    logger.info(`Federation: Routing message via bridge (stub) — channel=${message.target.channel}`);
+  }
+
+  /**
    * Get or create an HTTP client for a remote circle connection.
    */
   private getClient(circleName: string): AxiosInstance | undefined {

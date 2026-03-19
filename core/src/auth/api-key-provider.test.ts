@@ -62,6 +62,9 @@ describe('ApiKeyProvider', () => {
       }]
     } as any);
 
+    // Mock the UPDATE last_used_at query
+    vi.mocked(db.query).mockResolvedValueOnce({ rowCount: 1, rows: [] } as any);
+
     vi.mocked(argon2.verify).mockResolvedValue(true);
 
     const identity = await provider.authenticate(req);

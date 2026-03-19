@@ -50,6 +50,8 @@ import { config } from './lib/config.js';
 import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { AuthService } from './auth/auth-service.js';
 import { ApiKeyProvider } from './auth/api-key-provider.js';
+import { OIDCAuthPlugin } from './auth/oidc-provider.js';
+import { WebSessionStore } from './auth/web-session-store.js';
 import { createAuthMiddleware } from './auth/authMiddleware.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createSecretsRouter } from './routes/secrets.js';
@@ -100,7 +102,17 @@ const agentRegistry = new AgentRegistry(pool);
 const identityService = new IdentityService();
 const authService = new AuthService();
 authService.registerPlugin(new ApiKeyProvider());
-const authMiddleware = createAuthMiddleware(identityService, authService);
+if (process.env.OIDC_ISSUER_URL) {
+  try {
+    authService.registerPlugin(new OIDCAuthPlugin());
+  } catch (err: any) {
+    logger.warn(`OIDC provider disabled: ${err.message}`);
+  }
+} else {
+  logger.warn('OIDC_ISSUER_URL not set — running in API-key-only mode');
+}
+const webSessionStore = new WebSessionStore();
+const authMiddleware = createAuthMiddleware(identityService, authService, webSessionStore);
 const sessionStore = new SessionStore();
 const meteringService = new MeteringService();
 const meteringEngine = new MeteringEngine();
@@ -139,7 +151,10 @@ app.use(express.json({
 app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
 
 // Mount Routers
-app.use('/api/auth', authMiddleware, createAuthRouter());
+// Auth: public endpoints first (no authMiddleware), then protected
+const { publicAuthRouter, protectedAuthRouter } = createAuthRouter(webSessionStore);
+app.use('/api/auth', publicAuthRouter);
+app.use('/api/auth', authMiddleware, protectedAuthRouter);
 app.use('/api/secrets', authMiddleware, createSecretsRouter());
 
 const sandboxRouter = createSandboxRouter(sandboxManager, (name) => 

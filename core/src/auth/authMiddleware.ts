@@ -1,8 +1,10 @@
 /**
- * Auth middleware — protects internal SERA routes with JWT verification.
+ * Auth middleware — protects internal SERA routes.
  *
- * Extracts the Bearer token from the Authorization header, verifies it
- * using the IdentityService, and attaches the decoded claims to the request.
+ * Authentication priority order:
+ *   1. Operator AuthService plugins (API key, OIDC JWT)
+ *   2. Web session token (sess_* prefix — opaque, validated against WebSessionStore)
+ *   3. Agent JWT (internal jose-signed token issued by IdentityService at spawn)
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -10,6 +12,7 @@ import type { IdentityService } from './IdentityService.js';
 import type { AgentTokenClaims } from './types.js';
 import type { OperatorIdentity, OperatorRole } from './interfaces.js';
 import type { AuthService } from './auth-service.js';
+import type { WebSessionStore } from './web-session-store.js';
 
 // ── Express type augmentation ───────────────────────────────────────────────
 
@@ -24,23 +27,38 @@ declare global {
 
 // ── Middleware Factory ──────────────────────────────────────────────────────
 
-/**
- * Creates an Express middleware that verifies SERA identity (agent JWTs or operator credentials).
- * Protected routes will have `req.agentIdentity` or `req.operator` populated on success.
- */
-export function createAuthMiddleware(identityService: IdentityService, authService: AuthService) {
+export function createAuthMiddleware(
+  identityService: IdentityService,
+  authService: AuthService,
+  sessionStore?: WebSessionStore,
+) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const authHeader = req.headers.authorization;
+
+    // Check session cookie (httpOnly, set after OIDC callback)
+    const cookieHeader = req.headers.cookie ?? '';
+    const sessionCookie = parseCookieValue(cookieHeader, 'sera_session');
+    const sessionToken = sessionCookie ?? (authHeader?.startsWith('Bearer sess_') ? authHeader.slice(7) : undefined);
+
+    // Try session token first (web UI sessions)
+    if (sessionToken && sessionStore) {
+      const session = sessionStore.get(sessionToken);
+      if (session) {
+        req.operator = session.identity;
+        next();
+        return;
+      }
+    }
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       res.status(401).json({ error: 'Missing or malformed Authorization header' });
       return;
     }
 
-    const token = authHeader.slice(7); // Remove "Bearer "
+    const token = authHeader.slice(7);
 
     try {
-      // 1. Try operator authentication (AuthService handles API keys and future OIDC)
+      // 1. Try operator authentication (API keys and OIDC JWTs)
       const operator = await authService.authenticate(req);
       if (operator) {
         req.operator = operator;
@@ -62,10 +80,8 @@ export function createAuthMiddleware(identityService: IdentityService, authServi
   };
 }
 
-/**
- * Middleware for Role-Based Access Control.
- * Requires createAuthMiddleware to have run previously.
- */
+// ── Role-Based Access Control ───────────────────────────────────────────────
+
 export function requireRole(roles: OperatorRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.operator) {
@@ -73,8 +89,8 @@ export function requireRole(roles: OperatorRole[]) {
       return;
     }
 
-    const hasRole = req.operator.roles.some((role: OperatorRole) =>
-      roles.includes(role) || role === 'admin'
+    const hasRole = req.operator.roles.some(
+      (role: OperatorRole) => roles.includes(role) || role === 'admin',
     );
 
     if (!hasRole) {
@@ -84,4 +100,17 @@ export function requireRole(roles: OperatorRole[]) {
 
     next();
   };
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function parseCookieValue(cookieHeader: string, name: string): string | undefined {
+  for (const pair of cookieHeader.split(';')) {
+    const trimmed = pair.trim();
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    if (key === name) return trimmed.slice(eqIdx + 1).trim();
+  }
+  return undefined;
 }

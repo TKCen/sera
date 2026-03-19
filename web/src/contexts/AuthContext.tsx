@@ -20,7 +20,6 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   user: User | null;
   roles: string[];
-  token: string | null;
   isLoading: boolean;
   login: () => void;
   logout: () => void;
@@ -30,13 +29,13 @@ const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   user: null,
   roles: [],
-  token: null,
   isLoading: true,
   login: () => undefined,
   logout: () => undefined,
 });
 
-const SESSION_KEY_TOKEN = 'sera_access_token';
+// Keys for temporary PKCE state (cleared immediately after callback)
+const SESSION_KEY_SESSION_TOKEN = 'sera_session_token';
 const SESSION_KEY_USER = 'sera_user';
 const SESSION_KEY_PKCE_VERIFIER = 'sera_pkce_verifier';
 
@@ -61,34 +60,25 @@ async function generatePKCEChallenge(verifier: string): Promise<string> {
     .replace(/=/g, '');
 }
 
-function parseToken(token: string): User | null {
-  try {
-    const payload = token.split('.')[1];
-    if (!payload) return null;
-    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as Record<string, unknown>;
-    return {
-      sub: decoded['sub'] as string,
-      name: decoded['name'] as string | undefined,
-      email: decoded['email'] as string | undefined,
-      roles: (decoded['roles'] ?? decoded['groups'] ?? []) as string[],
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [sessionToken, setSessionTokenState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Dev mode: API key bypass
   const isDevMode = Boolean(DEV_KEY);
 
-  const logout = useCallback(() => {
-    sessionStorage.removeItem(SESSION_KEY_TOKEN);
+  const logout = useCallback(async () => {
+    const token = sessionStorage.getItem(SESSION_KEY_SESSION_TOKEN);
+    if (token) {
+      // Best-effort revocation
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
+    sessionStorage.removeItem(SESSION_KEY_SESSION_TOKEN);
     sessionStorage.removeItem(SESSION_KEY_USER);
-    setToken(null);
+    setSessionTokenState(null);
     setUser(null);
     if (!isDevMode) {
       window.location.href = '/login';
@@ -111,37 +101,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       code_challenge_method: 'S256',
     });
 
-    const authEndpoint = import.meta.env.VITE_OIDC_AUTHORIZE_URL ?? '/api/auth/authorize';
-    window.location.href = `${authEndpoint}?${params.toString()}`;
+    const authEndpoint = import.meta.env.VITE_OIDC_AUTHORIZE_URL ?? '/api/auth/login';
+    if (authEndpoint === '/api/auth/login') {
+      // Let sera-core redirect to IdP
+      window.location.href = authEndpoint;
+    } else {
+      window.location.href = `${authEndpoint}?${params.toString()}`;
+    }
   }, [isDevMode]);
 
   useEffect(() => {
     if (isDevMode) {
-      setToken(DEV_KEY);
-      setUser({ sub: 'dev', name: 'Developer', roles: ['operator'] });
+      setUser({ sub: 'dev', name: 'Developer', roles: ['admin'] });
       setIsLoading(false);
       return;
     }
 
-    // Restore from sessionStorage
-    const stored = sessionStorage.getItem(SESSION_KEY_TOKEN);
-    if (stored) {
-      const parsed = parseToken(stored);
-      if (parsed) {
-        setToken(stored);
+    // Restore session from sessionStorage (session token is opaque — not the OIDC access token)
+    const storedToken = sessionStorage.getItem(SESSION_KEY_SESSION_TOKEN);
+    const storedUser = sessionStorage.getItem(SESSION_KEY_USER);
+    if (storedToken && storedUser) {
+      try {
+        const parsed = JSON.parse(storedUser) as User;
+        setSessionTokenState(storedToken);
         setUser(parsed);
-      } else {
-        sessionStorage.removeItem(SESSION_KEY_TOKEN);
+      } catch {
+        sessionStorage.removeItem(SESSION_KEY_SESSION_TOKEN);
+        sessionStorage.removeItem(SESSION_KEY_USER);
       }
     }
     setIsLoading(false);
   }, [isDevMode]);
 
-  // Wire auth header getter to client
+  // Wire auth header getter
   useEffect(() => {
     setAuthHeaderGetter(() => {
       if (isDevMode && DEV_KEY) return `Bearer ${DEV_KEY}`;
-      const t = sessionStorage.getItem(SESSION_KEY_TOKEN);
+      const t = sessionStorage.getItem(SESSION_KEY_SESSION_TOKEN);
       return t ? `Bearer ${t}` : null;
     });
   }, [isDevMode]);
@@ -151,14 +147,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return onUnauthorized(logout);
   }, [logout]);
 
-  const setTokenAndPersist = useCallback((newToken: string) => {
-    sessionStorage.setItem(SESSION_KEY_TOKEN, newToken);
-    const parsed = parseToken(newToken);
-    setToken(newToken);
-    setUser(parsed);
+  const setSessionAndUser = useCallback((token: string, userData: User) => {
+    sessionStorage.setItem(SESSION_KEY_SESSION_TOKEN, token);
+    sessionStorage.setItem(SESSION_KEY_USER, JSON.stringify(userData));
+    setSessionTokenState(token);
+    setUser(userData);
   }, []);
 
-  const isAuthenticated = isDevMode || token !== null;
+  const isAuthenticated = isDevMode || sessionToken !== null;
 
   return (
     <AuthContext.Provider
@@ -166,43 +162,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated,
         user,
         roles: user?.roles ?? [],
-        token,
         isLoading,
         login: () => { void login(); },
         logout,
       }}
     >
-      <AuthContextInternal setToken={setTokenAndPersist}>
+      <AuthContextInternal setSessionAndUser={setSessionAndUser}>
         {children}
       </AuthContextInternal>
     </AuthContext.Provider>
   );
 }
 
-// Internal context for token setter (used by AuthCallbackPage)
+// Internal context for callback page to wire session after OIDC exchange
 interface AuthInternalContextValue {
-  setToken: (token: string) => void;
+  setSessionAndUser: (token: string, user: User) => void;
   getPKCEVerifier: () => string | null;
   clearPKCEVerifier: () => void;
 }
 
 const AuthInternalContext = createContext<AuthInternalContextValue>({
-  setToken: () => undefined,
+  setSessionAndUser: () => undefined,
   getPKCEVerifier: () => null,
   clearPKCEVerifier: () => undefined,
 });
 
 function AuthContextInternal({
   children,
-  setToken,
+  setSessionAndUser,
 }: {
   children: ReactNode;
-  setToken: (token: string) => void;
+  setSessionAndUser: (token: string, user: User) => void;
 }) {
   return (
     <AuthInternalContext.Provider
       value={{
-        setToken,
+        setSessionAndUser,
         getPKCEVerifier: () => sessionStorage.getItem(SESSION_KEY_PKCE_VERIFIER),
         clearPKCEVerifier: () => sessionStorage.removeItem(SESSION_KEY_PKCE_VERIFIER),
       }}

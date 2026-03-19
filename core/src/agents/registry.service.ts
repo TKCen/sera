@@ -335,11 +335,14 @@ export class AgentRegistry {
     value: string;
     grantType: 'one-time' | 'session' | 'persistent';
     grantedBy?: string;
+    grantedByEmail?: string;
+    grantedByName?: string;
     expiresAt?: string;
   }) {
     const query = `
-      INSERT INTO capability_grants (agent_instance_id, dimension, value, grant_type, granted_by, expires_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO capability_grants
+        (agent_instance_id, dimension, value, grant_type, granted_by, granted_by_email, granted_by_name, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *;
     `;
     const res = await this.pool.query(query, [
@@ -348,6 +351,8 @@ export class AgentRegistry {
       data.value,
       data.grantType,
       data.grantedBy ?? null,
+      data.grantedByEmail ?? null,
+      data.grantedByName ?? null,
       data.expiresAt ?? null,
     ]);
     return res.rows[0];
@@ -355,7 +360,21 @@ export class AgentRegistry {
 
   async listCapabilityGrants(agentInstanceId: string, includeRevoked = false): Promise<any[]> {
     let query = `
-      SELECT * FROM capability_grants
+      SELECT
+        id, agent_instance_id, dimension, value, grant_type,
+        granted_by, granted_by_email, granted_by_name,
+        expires_at, revoked_at, created_at,
+        CASE
+          WHEN granted_by IS NOT NULL THEN
+            json_build_object(
+              'sub', granted_by,
+              'email', granted_by_email,
+              'name', granted_by_name
+            )
+          ELSE NULL
+        END AS "grantedBy",
+        created_at AS "grantedAt"
+      FROM capability_grants
       WHERE agent_instance_id = $1
         AND (expires_at IS NULL OR expires_at > NOW())
     `;

@@ -63,6 +63,7 @@ export class SandboxManager {
     request: SpawnRequest,
     resolvedCapabilities?: any,
     instanceId?: string,
+    agentEnvSecrets?: Record<string, string>,
   ): Promise<SandboxInfo> {
     const agentName = manifest.metadata.name;
     const finalInstanceId = instanceId ?? `${agentName}-${uuidv4().substring(0, 8)}`;
@@ -85,6 +86,13 @@ export class SandboxManager {
     // Story 3.1 — include identity JWT if provided
     if (request.token) {
       env.push(`SERA_IDENTITY_TOKEN=${request.token}`);
+    }
+
+    // Story 16.9 — inject agent-env secrets
+    if (agentEnvSecrets) {
+      for (const [name, value] of Object.entries(agentEnvSecrets)) {
+        env.push(`SERA_SECRET_${name.toUpperCase()}=${value}`);
+      }
     }
 
     // ── Bind Mounts ──────────────────────────────────────────────────────────

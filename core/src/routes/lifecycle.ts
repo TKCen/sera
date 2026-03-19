@@ -246,7 +246,7 @@ export function createPermissionRouter(
         return void res.status(400).json({ error: 'decision must be "grant" or "deny"' });
       }
 
-      const operatorId = (req as any).operator?.sub as string | undefined;
+      const operatorIdentity = (req as any).operator as { sub?: string; email?: string; name?: string } | undefined;
       const result = await permService.decide(
         requestId,
         {
@@ -254,7 +254,9 @@ export function createPermissionRouter(
           ...(grantType !== undefined ? { grantType } : {}),
           ...(expiresAt !== undefined ? { expiresAt } : {}),
         },
-        operatorId,
+        operatorIdentity?.sub,
+        operatorIdentity?.email,
+        operatorIdentity?.name,
       );
       res.json(result);
     } catch (err: any) {

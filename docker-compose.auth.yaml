@@ -1,0 +1,131 @@
+# ── SERA Authentication Overlay ─────────────────────────────────────────────
+#
+# This overlay adds Authentik to the SERA stack as a bundled OIDC provider.
+# Authentik is OPTIONAL — SERA works fine without it.
+#
+# STARTUP PATH GUIDE
+# ──────────────────
+# (1) Bring your own IdP (Keycloak, Google, GitHub, etc.)
+#     Set OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET in your .env
+#     Run: docker compose -f docker-compose.yaml up -d
+#     Do NOT use this overlay file.
+#
+# (2) Use the bundled Authentik setup (homelab / staging)
+#     Copy .env.example to .env and fill in AUTHENTIK_SECRET_KEY + AUTHENTIK_POSTGRESQL_PASSWORD
+#     Run: docker compose -f docker-compose.yaml -f docker-compose.auth.yaml up -d
+#     First-start: visit http://localhost:9000/if/flow/initial-setup/ to create the admin user
+#     Then configure an OAuth2/OpenID provider in Authentik for SERA.
+#
+# (3) API-key-only mode (single-user, no IdP required, not recommended for multi-user)
+#     Leave OIDC_ISSUER_URL unset in your .env
+#     Run: docker compose -f docker-compose.yaml up -d
+#     SERA will start with a prominent warning and accept only API keys.
+#
+# PINNING: Replace 'latest' with a specific tag (e.g. 2024.6.0) for reproducible deploys.
+#   ghcr.io/goauthentik/server:2024.6.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── Authentik PostgreSQL (separate from SERA's DB) ─────────────────────────
+  authentik-db:
+    image: postgres:16-alpine
+    container_name: authentik-db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d authentik -U authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: ${AUTHENTIK_POSTGRESQL_PASSWORD:?AUTHENTIK_POSTGRESQL_PASSWORD is required}
+    volumes:
+      - authentik_db:/var/lib/postgresql/data
+    networks:
+      - sera_net
+
+  # ── Authentik Redis ────────────────────────────────────────────────────────
+  authentik-redis:
+    image: redis:alpine
+    container_name: authentik-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sera_net
+
+  # ── Authentik Server (UI + API) ────────────────────────────────────────────
+  authentik-server:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: authentik-server
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRESQL_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?AUTHENTIK_SECRET_KEY is required}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+    networks:
+      - sera_net
+
+  # ── Authentik Worker ───────────────────────────────────────────────────────
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: authentik-worker
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRESQL_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+    networks:
+      - sera_net
+
+  # ── sera-core: inject Authentik OIDC env ──────────────────────────────────
+  sera-core:
+    environment:
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://authentik-server:9000/application/o/sera/}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-sera-web}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-sera-api}
+      OIDC_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM:-groups}
+      OIDC_ROLE_MAPPING: ${OIDC_ROLE_MAPPING:-{"sera-admins":"admin","sera-ops":"operator","sera-viewers":"viewer"}}
+    depends_on:
+      authentik-server:
+        condition: service_started
+
+volumes:
+  authentik_db:
+  authentik_media:
+  authentik_templates:

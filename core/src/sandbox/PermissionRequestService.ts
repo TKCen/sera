@@ -144,6 +144,8 @@ export class PermissionRequestService {
     requestId: string,
     decision: PermissionDecision,
     operatorId?: string,
+    operatorEmail?: string,
+    operatorName?: string,
   ): Promise<PermissionRequest> {
     const req = this.pending.get(requestId);
     if (!req) {
@@ -158,7 +160,15 @@ export class PermissionRequestService {
       actorId: operatorId || 'unknown',
       actingContext: null,
       eventType: decision.decision === 'grant' ? 'permission.granted' : 'permission.denied',
-      payload: { requestId, agentId: req.agentId, dimension: req.dimension, value: req.value, grantType: decision.grantType }
+      payload: {
+        requestId,
+        agentId: req.agentId,
+        dimension: req.dimension,
+        value: req.value,
+        grantType: decision.grantType,
+        actorEmail: operatorEmail,
+        actorName: operatorName,
+      },
     }).catch(err => logger.error('Audit record failed:', err));
 
     if (decision.decision === 'grant') {
@@ -185,6 +195,8 @@ export class PermissionRequestService {
           value: req.value,
           grantType: 'persistent',
           ...(operatorId !== undefined ? { grantedBy: operatorId } : {}),
+          ...(operatorEmail !== undefined ? { grantedByEmail: operatorEmail } : {}),
+          ...(operatorName !== undefined ? { grantedByName: operatorName } : {}),
           ...(decision.expiresAt !== undefined ? { expiresAt: decision.expiresAt } : {}),
         });
         logger.info(`Persistent grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`);

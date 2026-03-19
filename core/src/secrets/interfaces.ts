@@ -12,6 +12,7 @@ export interface SecretMetadata {
   name: string;
   description?: string;
   allowedAgents: string[];
+  allowedCircles: string[];
   tags: string[];
   exposure: 'per-call' | 'agent-env';
   createdAt: Date;

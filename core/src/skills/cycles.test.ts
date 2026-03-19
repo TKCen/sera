@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SkillRegistry } from './SkillRegistry.js';
-import { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/manifest/types.js';
 
 describe('SkillRegistry - Cycle Detection', () => {
   let registry: SkillRegistry;

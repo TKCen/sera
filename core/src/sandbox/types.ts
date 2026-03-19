@@ -1,6 +1,5 @@
 /**
  * Sandbox types — interfaces for the container management layer.
- * @see sera/docs/reimplementation/agent-workspace-architecture.md § Sandbox Manager API
  */
 
 import type { SecurityTier } from '../agents/manifest/types.js';
@@ -11,13 +10,13 @@ export type SandboxType = 'agent' | 'subagent' | 'tool';
 
 // ── Tier Limits ─────────────────────────────────────────────────────────────────
 
-export type NetworkMode = 'none' | 'sera_net' | 'bridge';
+export type NetworkMode = 'none' | 'agent_net' | 'bridge';
 export type FilesystemMode = 'ro' | 'rw';
 
 export interface TierLimits {
   tier: SecurityTier;
-  cpuShares: number;          // Docker CPU shares (relative weight)
-  memoryBytes: number;        // Memory limit in bytes
+  cpuShares: number;
+  memoryBytes: number;
   networkMode: NetworkMode;
   filesystemMode: FilesystemMode;
 }
@@ -25,49 +24,38 @@ export interface TierLimits {
 // ── Spawn Request ───────────────────────────────────────────────────────────────
 
 export interface SpawnRequest {
-  /** Name of the requesting agent (must match an AGENT.yaml) */
   agentName: string;
-  /** Container type */
   type: SandboxType;
-  /** Docker image to use */
   image: string;
-  /** Command to run inside the container */
   command?: string[];
-  /** Environment variables */
   env?: Record<string, string>;
-  /** Working directory inside the container */
   workDir?: string;
-  /** Custom host path for the workspace bind-mount */
   hostWorkspacePath?: string;
-  /** For subagents: the role of the subagent to spawn */
   subagentRole?: string;
-  /** For subagents: the task description */
   task?: string;
+  /** Pre-signed agent identity JWT — included as SERA_IDENTITY_TOKEN env var */
+  token?: string;
+  /** Lifecycle mode of the agent being spawned */
+  lifecycleMode?: 'persistent' | 'ephemeral';
+  /** Parent instance ID for lineage tracking */
+  parentInstanceId?: string;
 }
 
 // ── Exec Request ────────────────────────────────────────────────────────────────
 
 export interface ExecRequest {
-  /** Container ID to exec into */
   containerId: string;
-  /** Name of the requesting agent */
   agentName: string;
-  /** Command to execute */
   command: string[];
 }
 
 // ── Tool Run Request ────────────────────────────────────────────────────────────
 
 export interface ToolRunRequest {
-  /** Name of the requesting agent */
   agentName: string;
-  /** Tool name (must be in agent's tools.allowed) */
   toolName: string;
-  /** Command to execute in the tool container */
   command: string[];
-  /** Docker image to use (defaults to alpine) */
   image?: string;
-  /** Timeout in seconds (default 60, max 300) */
   timeoutSeconds?: number;
 }
 
@@ -88,11 +76,21 @@ export interface SandboxInfo {
   agentName: string;
   type: SandboxType;
   image: string;
-  status: 'running' | 'stopped' | 'removing';
+  status: 'running' | 'stopped' | 'removing' | 'error';
   createdAt: string;
-  tier: SecurityTier;
-  /** For subagents: the parent agent name */
+  tier: number;
+  instanceId: string;
   parentAgent?: string;
-  /** For subagents: the role */
   subagentRole?: string;
+  lifecycleMode?: 'persistent' | 'ephemeral';
+}
+
+// ── Docker Event ─────────────────────────────────────────────────────────────────
+
+export interface DockerLifecycleEvent {
+  action: 'start' | 'stop' | 'die' | 'oom';
+  containerId: string;
+  instanceId: string;
+  agentName: string;
+  exitCode?: number;
 }

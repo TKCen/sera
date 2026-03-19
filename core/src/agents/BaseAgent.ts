@@ -34,6 +34,7 @@ export abstract class BaseAgent {
   protected memoryManager: MemoryManager | undefined;
   protected logger: Logger;
   protected loopGuard: LoopGuard;
+  protected identityService: IdentityService | undefined;
 
   /** Queue of incoming intercom messages for the reasoning loop. */
   protected messageQueue: Array<{ from: string; payload: Record<string, unknown> }> = [];
@@ -93,6 +94,11 @@ export abstract class BaseAgent {
   /** Attach a MemoryManager after construction. */
   public setMemoryManager(memoryManager: MemoryManager): void {
     this.memoryManager = memoryManager;
+  }
+
+  /** Attach an IdentityService after construction. */
+  public setIdentityService(identityService: IdentityService): void {
+    this.identityService = identityService;
   }
 
 

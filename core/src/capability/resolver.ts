@@ -1,5 +1,14 @@
 import type { AgentRegistry } from '../agents/registry.service.js';
 
+export class CapabilityEscalationError extends Error {
+  constructor(dimension: string, expected: any, actual: any) {
+    const expectedStr = JSON.stringify(expected);
+    const actualStr = JSON.stringify(actual);
+    super(`Capability escalation detected in dimension: ${dimension}. Manifest broadening is not permitted. Expected: ${expectedStr}, Actual: ${actualStr}`);
+    this.name = 'CapabilityEscalationError';
+  }
+}
+
 export class CapabilityResolver {
   constructor(private registry: AgentRegistry) {}
 
@@ -18,17 +27,136 @@ export class CapabilityResolver {
 
     const policy = spec.policyRef ? await this.registry.getCapabilityPolicy(spec.policyRef) : null;
 
-    // Resolve effective capabilities: Boundary ∩ Policy ∩ ManifestInline
-    const effectiveCapabilities = await this.resolveEffectiveCapabilities(
+    // Resolve base allowed capabilities: Boundary ∩ Policy
+    const baseCapabilities = await this.resolveEffectiveCapabilities(
+      boundary.capabilities,
+      policy?.capabilities || {},
+      {} // No inline here yet, we'll check it after
+    );
+
+    // Resolve inline capabilities and check for escalation
+    const finalCapabilities = await this.resolveEffectiveCapabilities(
       boundary.capabilities,
       policy?.capabilities || {},
       spec.capabilities || {}
     );
 
+    // Resolve manifest capabilities fully expanded
+    const manifestCapabilities = await this.expandCapabilities(spec.capabilities || {});
+    
+    // Explicit escalation check: manifest overrides cannot be broader than base (Boundary ∩ Policy)
+    this.verifyNoEscalation(baseCapabilities, manifestCapabilities);
+
+    // Final pass: Always-denied enforcement
+    const effectiveCapabilities = await this.applyAlwaysDenied(finalCapabilities);
+
     return {
       spec,
       resolvedCapabilities: effectiveCapabilities,
     };
+  }
+
+  private verifyNoEscalation(base: any, actual: any, path: string = '') {
+    if (!actual) return;
+    
+    for (const key in actual) {
+      const b = base && typeof base === 'object' ? (base as any)[key] : undefined;
+      const a = actual[key];
+      const currentPath = path ? `${path}.${key}` : key;
+
+      if (b === undefined || b === false) {
+        if (a !== undefined && a !== false && a !== null) {
+          // Special case for empty arrays or objects - they are not an escalation if base was undefined
+          if (Array.isArray(a) && a.length === 0) continue;
+          if (typeof a === 'object' && Object.keys(a).length === 0) continue;
+          
+          throw new CapabilityEscalationError(currentPath, b, a);
+        }
+        continue;
+      }
+
+      if (b === true) continue; // Base allowed everything, no escalation possible here
+
+      if (Array.isArray(b)) {
+        if (!Array.isArray(a)) throw new CapabilityEscalationError(currentPath, b, a);
+        const setB = new Set(b);
+        for (const item of a) {
+          if (!setB.has(item)) throw new CapabilityEscalationError(currentPath, b, a);
+        }
+        continue;
+      }
+
+      if (typeof b === 'object') {
+        if (typeof a !== 'object') throw new CapabilityEscalationError(currentPath, b, a);
+        this.verifyNoEscalation(b, a, currentPath);
+        continue;
+      }
+
+      // Scalar values (should mostly be booleans or handled above)
+      if (a !== b) throw new CapabilityEscalationError(currentPath, b, a);
+    }
+  }
+
+  private async applyAlwaysDenied(capabilities: any) {
+    const lists = await this.registry.listAlwaysEnforcedNamedLists();
+    if (!lists || !lists.length) return capabilities;
+
+    const result = { ...capabilities };
+    
+    // Group by dimension (network-denylist -> network, command-denylist -> exec.commands)
+    const denylistsByDimension: Record<string, string[]> = {};
+    for (const list of lists) {
+      const type = list.type;
+      let dimension = '';
+      if (type === 'network-denylist') dimension = 'network.outbound';
+      if (type === 'command-denylist') dimension = 'exec.commands';
+      
+      if (dimension) {
+        if (!denylistsByDimension[dimension]) denylistsByDimension[dimension] = [];
+        const expanded = await this.expandList(list?.entries || [], type);
+        const dimensionList = denylistsByDimension[dimension];
+        if (dimensionList) {
+          dimensionList.push(...expanded);
+        }
+      }
+    }
+
+    // Apply denylists
+    for (const dimension in denylistsByDimension) {
+      const denyPatterns = denylistsByDimension[dimension];
+      if (!denyPatterns) continue;
+
+      const keys = dimension.split('.');
+      let target: any = result;
+      for (let i = 0; i < keys.length - 1; i++) {
+        const key = keys[i];
+        if (key) {
+          if (!target[key]) target[key] = {};
+          target = target[key];
+        }
+      }
+      const lastKey = keys[keys.length - 1];
+      
+      // If the target is an allowlist (array), filter out items that match ANY deny pattern
+      if (lastKey && Array.isArray(target[lastKey])) {
+        const allowed = target[lastKey] as string[];
+        target[lastKey] = allowed.filter(item => !denyPatterns.some(pattern => this.matches(item, pattern)));
+      } else if (lastKey && target[lastKey] === true) {
+        // If the target was 'true' (all allowed) but we have a denylist, we must convert to empty (most restrictive safely)
+        // or a specific structure. Decision: Always-denied on a 'true' permission means we restrict to 'true' minus those.
+        // But for now, if it's 'true', we don't have an allowlist to filter.
+        // This is a rare edge case in our current schema.
+      }
+    }
+
+    return result; 
+  }
+
+  private matches(value: string, pattern: string): boolean {
+    // Glob-style matching: git * matches git status
+    // Simple implementation for now: replace * with .* and use regex
+    const regex = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+    return regex.test(value);
   }
 
   private async resolveEffectiveCapabilities(boundary: any, policy: any, inline: any) {
@@ -75,15 +203,22 @@ export class CapabilityResolver {
     if (Array.isArray(b)) {
       // For lists (allow/deny), intersection = elements present in ALL layers (if present)
       let current = await this.expandList(b, key);
-      if (p !== undefined) {
+      if (p !== undefined && Array.isArray(p)) {
         const pExpanded = await this.expandList(p, key);
         const setP = new Set(pExpanded);
         current = current.filter(item => setP.has(item));
+      } else if (p !== undefined) {
+        // Policy mismatch, treat as empty (most restrictive)
+        current = [];
       }
-      if (i !== undefined) {
+
+      if (i !== undefined && Array.isArray(i)) {
         const iExpanded = await this.expandList(i, key);
         const setI = new Set(iExpanded);
         current = current.filter(item => setI.has(item));
+      } else if (i !== undefined) {
+        // Inline mismatch, treat as empty
+        current = [];
       }
       return current;
     }
@@ -98,7 +233,20 @@ export class CapabilityResolver {
     return overrides; // Simplified for now, most restrictive wins
   }
 
+  private async expandCapabilities(caps: any): Promise<any> {
+    if (!caps || typeof caps !== 'object') return caps;
+    if (Array.isArray(caps)) {
+      return this.expandList(caps, 'generic');
+    }
+    const result: any = {};
+    for (const key in caps) {
+      result[key] = await this.expandCapabilities(caps[key]);
+    }
+    return result;
+  }
+
   private async expandList(items: any[], type: string, visited = new Set<string>()): Promise<string[]> {
+    if (!Array.isArray(items)) return [];
     const result = new Set<string>();
     for (const item of items) {
       if (typeof item === 'string') {

@@ -1,13 +1,12 @@
 /**
  * SandboxManager — container lifecycle management for SERA agents.
  *
- * Agents never interact with Docker directly. All container operations
- * go through this manager, which validates AGENT.yaml permissions,
- * enforces security tier limits, and logs all operations.
- *
- * @see sera/docs/reimplementation/agent-workspace-architecture.md § Sandbox Manager API
+ * All Docker operations go through this class. No other module interacts
+ * with the Docker daemon directly.
  */
 
+import path from 'path';
+import fs from 'fs';
 import Docker from 'dockerode';
 import { v4 as uuidv4 } from 'uuid';
 import type { AgentManifest } from '../agents/manifest/types.js';
@@ -16,8 +15,9 @@ import type {
   SpawnRequest,
   ExecRequest,
   SandboxType,
+  DockerLifecycleEvent,
 } from './types.js';
-import { TierPolicy, PolicyViolationError } from './TierPolicy.js';
+import { PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 import { Logger } from '../lib/logger.js';
@@ -28,7 +28,10 @@ const logger = new Logger('SandboxManager');
 
 export class SandboxManager {
   private docker: Docker;
+  /** In-memory map: containerId → SandboxInfo */
   private containers: Map<string, SandboxInfo> = new Map();
+  /** Reverse map: instanceId → containerId (for fast teardown lookup) */
+  private instanceToContainer: Map<string, string> = new Map();
   private storageFactory: StorageProviderFactory;
 
   constructor(docker?: Docker, storageFactory?: StorageProviderFactory) {
@@ -38,83 +41,138 @@ export class SandboxManager {
         : { socketPath: '/var/run/docker.sock' }
     );
 
-    // Default: register local (bind-mount) provider
     if (storageFactory) {
       this.storageFactory = storageFactory;
     } else {
       this.storageFactory = new StorageProviderFactory('local');
       this.storageFactory.register(new LocalStorageProvider(
         '/workspaces',
-        process.env.HOST_WORKSPACES_DIR
+        process.env.HOST_WORKSPACES_DIR,
       ));
     }
   }
 
+  // ── Container Spawn ─────────────────────────────────────────────────────────
+
   /**
-   * Spawn a new sandbox container.
-   * Validates agent permissions and applies tier-based resource limits.
+   * Spawn a new sandbox container for an agent instance.
+   * Story 3.1, 3.3
    */
-  async spawn(manifest: AgentManifest, request: SpawnRequest): Promise<SandboxInfo> {
+  async spawn(
+    manifest: AgentManifest,
+    request: SpawnRequest,
+    resolvedCapabilities?: any,
+    instanceId?: string,
+  ): Promise<SandboxInfo> {
     const agentName = manifest.metadata.name;
+    const finalInstanceId = instanceId ?? `${agentName}-${uuidv4().substring(0, 8)}`;
+    const caps = resolvedCapabilities ?? {};
+    const tier = (manifest.metadata as any).tier ?? 1;
 
-    // ── Permission check ────────────────────────────────────────────────────
-    TierPolicy.validateSpawnPermission(manifest, request);
+    const containerName = `sera-agent-${agentName.toLowerCase()}-${finalInstanceId.substring(0, 8)}`;
 
-    // ── Subagent instance limit check ───────────────────────────────────────
-    if (request.type === 'subagent' && request.subagentRole) {
-      const currentCount = this.countSubagents(agentName, request.subagentRole);
-      TierPolicy.checkInstanceLimit(manifest, request.subagentRole, currentCount);
+    // ── Environment ─────────────────────────────────────────────────────────
+    const env: string[] = [
+      ...(Object.entries(request.env ?? {}).map(([k, v]) => `${k}=${v}`)),
+      `AGENT_NAME=${agentName}`,
+      `AGENT_INSTANCE_ID=${finalInstanceId}`,
+      `SERA_CORE_URL=${process.env.SERA_CORE_URL ?? 'http://sera-core:3001'}`,
+      `CENTRIFUGO_API_URL=${process.env.CENTRIFUGO_API_URL ?? 'http://centrifugo:8000/api'}`,
+      `CENTRIFUGO_API_KEY=${process.env.CENTRIFUGO_API_KEY ?? ''}`,
+      `AGENT_HEARTBEAT_INTERVAL_MS=${process.env.AGENT_HEARTBEAT_INTERVAL_MS ?? '30000'}`,
+    ];
+
+    // Story 3.1 — include identity JWT if provided
+    if (request.token) {
+      env.push(`SERA_IDENTITY_TOKEN=${request.token}`);
     }
 
-    // ── Build container config ──────────────────────────────────────────────
-    const limits = TierPolicy.getEffectiveLimits(manifest);
-    const containerName = request.type === 'agent' 
-      ? `sera-agent-${agentName.toLowerCase()}-${uuidv4().substring(0, 8)}`
-      : `sera-sandbox-${request.type}-${uuidv4().substring(0, 8)}`;
+    // ── Bind Mounts ──────────────────────────────────────────────────────────
+    const binds: string[] = [];
 
-    const env = Object.entries(request.env ?? {}).map(
-      ([k, v]) => `${k}=${v}`,
-    );
+    // 1. Workspace mount (Story 3.3)
+    const providerName = (manifest as any).workspace?.provider ?? 'local';
+    const provider = this.storageFactory.getProvider(providerName);
+    const workspacePath = request.hostWorkspacePath ?? (manifest as any).workspace?.path;
+    const writeAllowed = caps.filesystem?.write ?? caps.fs?.write ?? false;
+    const mode = writeAllowed ? 'rw' : 'ro';
+    binds.push(provider.getBindMount(finalInstanceId, '/workspace', mode, workspacePath));
 
-    // Workspace mount — delegate to the storage provider
-    const provider = this.storageFactory.getProvider(manifest.workspace?.provider);
-    const bindMount = provider.getBindMount(
-      agentName,
-      request.workDir ?? '/workspace',
-      limits.filesystemMode,
-      request.hostWorkspacePath ?? manifest.workspace?.path,
-    );
-    const binds = [bindMount];
+    // 2. Memory mount (Story 3.3)
+    const memoryHostDir = process.env.HOST_MEMORY_DIR ?? '/memory';
+    let memoryHostPath = `${memoryHostDir}/${finalInstanceId}`;
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(memoryHostPath)) {
+      memoryHostPath = `/${memoryHostPath[0]!.toLowerCase()}${memoryHostPath.slice(2).replace(/\\/g, '/')}`;
+    }
+    fs.mkdirSync(memoryHostPath, { recursive: true });
+    binds.push(`${memoryHostPath}:/memory:rw`);
+
+    // 3. Knowledge mounts (Story 3.3)
+    const knowledgeHostDir = process.env.HOST_KNOWLEDGE_DIR ?? '/knowledge';
+    let personalPath = `${knowledgeHostDir}/agents/${agentName}`;
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(personalPath)) {
+      personalPath = `/${personalPath[0]!.toLowerCase()}${personalPath.slice(2).replace(/\\/g, '/')}`;
+    }
+    fs.mkdirSync(personalPath, { recursive: true });
+    binds.push(`${personalPath}:/knowledge/personal:ro`);
+
+    let sharedPath = `${knowledgeHostDir}/shared`;
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(sharedPath)) {
+      sharedPath = `/${sharedPath[0]!.toLowerCase()}${sharedPath.slice(2).replace(/\\/g, '/')}`;
+    }
+    fs.mkdirSync(sharedPath, { recursive: true });
+    binds.push(`${sharedPath}:/knowledge/shared:ro`);
+
+    // ── Resource Limits ─────────────────────────────────────────────────────
+    const cpuShares = caps.linux?.cpu_shares ?? 512;
+    const memoryBytes = caps.linux?.memory_limit ?? 512 * 1024 * 1024;
+
+    // ── Network Mode (Story 3.2) ─────────────────────────────────────────────
+    // empty allow list → none; ["*"] → bridge; specific hosts → agent_net
+    const outbound: string[] | undefined = caps.network?.outbound;
+    let networkMode: string;
+    if (!outbound || (Array.isArray(outbound) && outbound.length === 0)) {
+      networkMode = 'none';
+    } else if (Array.isArray(outbound) && outbound.includes('*')) {
+      networkMode = 'bridge';
+    } else {
+      networkMode = 'agent_net';
+    }
+
+    // ── Linux Capabilities (Story 3.2) ──────────────────────────────────────
+    // Start from cap-drop ALL, then add only what the resolved set specifies
+    const linuxCaps: string[] = Array.isArray(caps.linux?.capabilities) ? caps.linux.capabilities : [];
+
+    // ── Ephemeral auto-remove (Story 3.7) ───────────────────────────────────
+    const isEphemeral = request.lifecycleMode === 'ephemeral' || request.type === 'tool';
 
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,
-      Image: request.image,
-      Cmd: request.command || ['tail', '-f', '/dev/null'], // Keep agent containers alive
+      Image: request.image ?? 'sera-agent-worker:latest',
+      Cmd: request.command ?? ['npm', 'start'],
       Env: env,
-      WorkingDir: request.workDir ?? '/workspace',
+      WorkingDir: '/workspace',
       Labels: {
         'sera.sandbox': 'true',
         'sera.agent': agentName,
+        'sera.instance': finalInstanceId,
         'sera.type': request.type,
-        'sera.tier': String(manifest.metadata.tier),
-        ...(request.subagentRole ? { 'sera.subagent.role': request.subagentRole } : {}),
-        ...(request.task ? { 'sera.task': request.task.substring(0, 200) } : {}),
+        'sera.tier': String(tier),
+        'sera.circle': (manifest.metadata as any).circle ?? 'default',
       },
       HostConfig: {
-        CpuShares: limits.cpuShares,
-        Memory: limits.memoryBytes,
-        NetworkMode: limits.networkMode,
+        CpuShares: cpuShares,
+        Memory: memoryBytes,
+        NetworkMode: networkMode,
         Binds: binds,
-        AutoRemove: request.type === 'tool',
+        AutoRemove: isEphemeral,
+        CapDrop: ['ALL'],
+        ...(linuxCaps.length > 0 ? { CapAdd: linuxCaps } : {}),
+        ReadonlyRootfs: caps.linux?.readonlyRootfs ?? false,
       },
     };
 
-    // ── Create and start ────────────────────────────────────────────────────
-    this.audit('spawn', agentName, { type: request.type, image: request.image });
-
-    if (manifest.metadata.tier === 3) {
-      this.audit('spawn', agentName, { warning: 'Tier 3 container spawned with full capabilities', type: request.type });
-    }
+    this.audit('spawn', agentName, { instanceId: finalInstanceId, type: request.type, image: request.image });
 
     const container = await this.docker.createContainer(createOptions);
     await container.start();
@@ -124,28 +182,62 @@ export class SandboxManager {
       containerId: info.Id,
       agentName,
       type: request.type,
-      image: request.image,
+      image: request.image ?? 'sera-agent-worker:latest',
       status: 'running',
       createdAt: new Date().toISOString(),
-      tier: manifest.metadata.tier,
-      ...(request.type === 'subagent' ? { parentAgent: agentName } : {}),
-      ...(request.subagentRole ? { subagentRole: request.subagentRole } : {}),
+      tier,
+      instanceId: finalInstanceId,
+      ...(request.lifecycleMode !== undefined ? { lifecycleMode: request.lifecycleMode } : {}),
     };
 
     this.containers.set(info.Id, sandboxInfo);
+    this.instanceToContainer.set(finalInstanceId, info.Id);
     return sandboxInfo;
   }
 
+  // ── Teardown (Story 3.7) ─────────────────────────────────────────────────────
+
   /**
-   * Execute a command in a running container.
+   * Stop the container for an agent instance without deleting workspace data.
+   * Called by the cleanup background job and the manual cleanup endpoint.
    */
+  async teardown(instanceId: string): Promise<void> {
+    const containerId = this.instanceToContainer.get(instanceId);
+    if (!containerId) {
+      // Try by containerId directly if not found by instanceId
+      logger.warn(`teardown: no container found for instanceId=${instanceId}`);
+      return;
+    }
+    const sandbox = this.containers.get(containerId);
+    if (sandbox) {
+      sandbox.status = 'removing';
+    }
+
+    const container = this.docker.getContainer(containerId);
+    try {
+      await container.stop({ t: 5 });
+    } catch {
+      // May already be stopped
+    }
+    try {
+      await container.remove({ force: false });
+    } catch {
+      // Auto-removed ephemeral containers will already be gone
+    }
+
+    this.containers.delete(containerId);
+    this.instanceToContainer.delete(instanceId);
+    this.audit('teardown', sandbox?.agentName ?? instanceId, { instanceId, containerId });
+  }
+
+  // ── Exec ────────────────────────────────────────────────────────────────────
+
   async exec(manifest: AgentManifest, request: ExecRequest): Promise<{ exitCode: number; output: string }> {
     const sandbox = this.containers.get(request.containerId);
     if (!sandbox) {
       throw new Error(`Container "${request.containerId}" not found in sandbox registry`);
     }
 
-    // Only the owning agent (or parent) can exec into a container
     if (sandbox.agentName !== manifest.metadata.name && sandbox.parentAgent !== manifest.metadata.name) {
       throw new PolicyViolationError(
         `Agent "${manifest.metadata.name}" cannot exec into container owned by "${sandbox.agentName}"`,
@@ -154,20 +246,7 @@ export class SandboxManager {
       );
     }
 
-    // Check if agent is permitted to exec
-    if (!TierPolicy.canExec(manifest)) {
-      throw new PolicyViolationError(
-        `Agent "${manifest.metadata.name}" is not permitted to exec commands`,
-        manifest.metadata.name,
-        'exec_not_permitted',
-      );
-    }
-
     this.audit('exec', manifest.metadata.name, { containerId: request.containerId, command: request.command });
-
-    if (manifest.metadata.tier === 3) {
-      this.audit('exec', manifest.metadata.name, { warning: 'Executing command in Tier 3 container with full capabilities' });
-    }
 
     const container = this.docker.getContainer(request.containerId);
     const exec = await container.exec({
@@ -178,7 +257,6 @@ export class SandboxManager {
 
     const stream = await exec.start({ hijack: true, stdin: false });
     const output = await SandboxManager.collectStream(stream);
-
     const inspectResult = await exec.inspect();
     return {
       exitCode: inspectResult.ExitCode ?? -1,
@@ -186,9 +264,8 @@ export class SandboxManager {
     };
   }
 
-  /**
-   * Remove (stop + delete) a sandbox container.
-   */
+  // ── Remove (admin / owner-controlled) ──────────────────────────────────────
+
   async remove(manifest: AgentManifest, containerId: string): Promise<void> {
     const sandbox = this.containers.get(containerId);
     if (!sandbox) {
@@ -204,63 +281,130 @@ export class SandboxManager {
     }
 
     this.audit('remove', manifest.metadata.name, { containerId });
-
     sandbox.status = 'removing';
 
     const container = this.docker.getContainer(containerId);
-    try {
-      await container.stop({ t: 5 });
-    } catch {
-      // Container may already be stopped
-    }
-    try {
-      await container.remove({ force: true });
-    } catch {
-      // Container may have been auto-removed
-    }
+    try { await container.stop({ t: 5 }); } catch { /* already stopped */ }
+    try { await container.remove({ force: true }); } catch { /* auto-removed */ }
 
     this.containers.delete(containerId);
+    this.instanceToContainer.delete(sandbox.instanceId);
   }
 
-  /**
-   * Get logs from a sandbox container.
-   */
+  // ── Logs (Story 3.5) ─────────────────────────────────────────────────────────
+
   async getLogs(containerId: string, tail?: number): Promise<string> {
     const container = this.docker.getContainer(containerId);
     const logs = await container.logs({
       stdout: true,
       stderr: true,
       tail: tail ?? 100,
-      follow: false,
     });
-
-    // Logs can be a Buffer or string depending on the TTY setting
-    return typeof logs === 'string' ? logs : logs.toString('utf-8');
+    return typeof logs === 'string' ? logs : (logs as Buffer).toString('utf-8');
   }
 
+  // ── Docker Events Listener (Story 3.5) ──────────────────────────────────────
+
   /**
-   * List all sandbox containers, optionally filtered by agent name.
+   * Attach to the Docker events stream filtered to SERA-managed containers.
+   * Calls onEvent for each relevant lifecycle event.
+   * Should be called once at startup.
    */
+  async startEventListener(onEvent: (event: DockerLifecycleEvent) => Promise<void>): Promise<void> {
+    try {
+      const eventStream = await this.docker.getEvents({
+        filters: JSON.stringify({ label: ['sera.sandbox=true'] }),
+      });
+
+      eventStream.on('data', (chunk: Buffer) => {
+        try {
+          const raw = JSON.parse(chunk.toString('utf-8')) as {
+            Type: string;
+            Action: string;
+            id: string;
+            Actor: { Attributes: Record<string, string> };
+          };
+
+          if (raw.Type !== 'container') return;
+
+          const action = raw.Action as DockerLifecycleEvent['action'];
+          if (!['start', 'stop', 'die', 'oom'].includes(action)) return;
+
+          const labels = raw.Actor.Attributes;
+          const instanceId = labels['sera.instance'];
+          const agentName = labels['sera.agent'];
+          if (!instanceId || !agentName) return;
+
+          const exitCodeStr = labels['exitCode'];
+          const exitCode = exitCodeStr !== undefined ? parseInt(exitCodeStr, 10) : undefined;
+
+          const ev: DockerLifecycleEvent = {
+            action,
+            containerId: raw.id,
+            instanceId,
+            agentName,
+            ...(exitCode !== undefined ? { exitCode } : {}),
+          };
+          onEvent(ev).catch(err => logger.error('Error handling Docker event:', err));
+        } catch {
+          // Non-JSON chunks (heartbeat from Docker daemon) — ignore
+        }
+      });
+
+      eventStream.on('error', (err: Error) => {
+        logger.error('Docker events stream error:', err);
+      });
+
+      logger.info('Docker lifecycle event listener started');
+    } catch (err) {
+      logger.warn('Failed to start Docker event listener (is Docker running?):', err);
+    }
+  }
+
+  // ── Query ────────────────────────────────────────────────────────────────────
+
   listContainers(agentName?: string): SandboxInfo[] {
     const all = Array.from(this.containers.values());
     if (!agentName) return all;
     return all.filter(c => c.agentName === agentName || c.parentAgent === agentName);
   }
 
-  /**
-   * Count active subagents of a given role for a parent agent.
-   */
+  getContainerByInstance(instanceId: string): SandboxInfo | undefined {
+    const containerId = this.instanceToContainer.get(instanceId);
+    return containerId ? this.containers.get(containerId) : undefined;
+  }
+
   countSubagents(parentAgent: string, role: string): number {
     return Array.from(this.containers.values()).filter(
       c => c.parentAgent === parentAgent && c.subagentRole === role && c.status === 'running',
     ).length;
   }
 
-  // ── Internal Helpers ───────────────────────────────────────────────────────
+  // ── Dangling Container Check (Story 3.5) ─────────────────────────────────────
 
   /**
-   * Collect a Docker stream into a string.
+   * Log a warning for any running containers labelled sera.sandbox=true
+   * that have no corresponding DB record.
+   * @param knownInstanceIds Set of instance IDs currently in the DB.
    */
+  async checkDanglingContainers(knownInstanceIds: Set<string>): Promise<void> {
+    try {
+      const containers = await this.docker.listContainers({
+        filters: JSON.stringify({ label: ['sera.sandbox=true'] }),
+      });
+      for (const c of containers) {
+        const instanceId = c.Labels['sera.instance'];
+        if (instanceId && !knownInstanceIds.has(instanceId)) {
+          logger.warn(`Dangling container detected: ${c.Id} (instance=${instanceId}, agent=${c.Labels['sera.agent']})`);
+        }
+      }
+    } catch (err) {
+      logger.warn('Could not list containers for dangling check:', err);
+    }
+  }
+
+  // ── Internal Helpers ─────────────────────────────────────────────────────────
+
   private static collectStream(stream: NodeJS.ReadableStream): Promise<string> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
@@ -270,12 +414,7 @@ export class SandboxManager {
     });
   }
 
-  /**
-   * Audit trail logging.
-   */
   private audit(operation: string, agentName: string, details: Record<string, unknown>): void {
-    logger.info(
-      `${operation.toUpperCase()} | agent=${agentName} | ${JSON.stringify(details)}`,
-    );
+    logger.info(`${operation.toUpperCase()} | agent=${agentName} | ${JSON.stringify(details)}`);
   }
 }

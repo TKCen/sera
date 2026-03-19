@@ -153,12 +153,13 @@ export class PostgresSecretsProvider implements SecretsProvider {
       name: row.name,
       description: row.description,
       allowedAgents: row.allowed_agents,
+      allowedCircles: row.allowed_circles ?? [],
       tags: row.tags,
       exposure: row.exposure,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       rotatedAt: row.rotated_at,
-      expiresAt: row.expires_at
+      expiresAt: row.expires_at,
     }));
   }
 

@@ -49,6 +49,8 @@ import { AgentRegistry } from './agents/registry.service.js';
 import { ResourceImporter } from './agents/importer.service.js';
 import { BootstrapService } from './agents/bootstrap.service.js';
 import { createRegistryRouter } from './routes/registry.js';
+import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
+import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { pool } from './lib/database.js';
 
 const app = express();
@@ -160,8 +162,16 @@ const startServer = async () => {
   app.use('/api/lsp', lspRouter);
   
   const agentRegistry = new AgentRegistry(pool);
-  const resourceImporter = new ResourceImporter(agentRegistry, workspaceRoot); // Base dir for resources
+  orchestrator.setRegistry(agentRegistry);
+  const resourceImporter = new ResourceImporter(agentRegistry, workspaceRoot);
+  const permissionService = new PermissionRequestService(agentRegistry);
+
   app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
+  app.use('/api/agents', createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService));
+  app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permissionService));
+
+  // Story 3.5 — start Docker events listener after registry is ready
+  await orchestrator.startDockerEventListener();
 
   // 6. External Adapters
   const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };

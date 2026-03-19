@@ -29,7 +29,7 @@ export function createSecretsRouter() {
    */
   router.get('/:key', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const secret = await secrets.get(req.params.key, {
+      const secret = await secrets.get(req.params.key as string, {
         operator: req.operator!,
       });
       if (!secret) {
@@ -59,9 +59,10 @@ export function createSecretsRouter() {
       }, {
         description,
         tags,
-        allowedAgents,
-        allowedCircles,
-      });
+        allowedAgents: allowedAgents || [],
+        allowedCircles: allowedCircles || [],
+        exposure: req.body.exposure || 'agent-env',
+      } as any);
 
       res.status(201).json({ message: 'Secret stored' });
     } catch (err: any) {
@@ -75,7 +76,7 @@ export function createSecretsRouter() {
    */
   router.delete('/:key', requireRole(['admin']), async (req, res) => {
     try {
-      const deleted = await secrets.delete(req.params.key, {
+      const deleted = await secrets.delete(req.params.key as string, {
         operator: req.operator!,
       });
       if (!deleted) {

@@ -7,7 +7,7 @@ export class AgentRegistry {
   // ── Agent Templates ──────────────────────────────────────────────────────
 
   async upsertTemplate(template: AgentTemplate) {
-    const { name, displayName, builtin, category, description } = template.metadata;
+    const { name, displayName, builtin, category } = template.metadata;
     const query = `
       INSERT INTO agent_templates (name, display_name, builtin, category, spec, updated_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
@@ -32,12 +32,13 @@ export class AgentRegistry {
     const res = await this.pool.query('SELECT * FROM agent_templates ORDER BY name ASC');
     return res.rows;
   }
+
   async updateTemplate(name: string, template: AgentTemplate) {
     const existing = await this.getTemplate(name);
     if (!existing) throw new Error(`Template ${name} not found`);
     if (existing.builtin) throw new Error(`Cannot update builtin template ${name}`);
 
-    const { displayName, builtin, category, description } = template.metadata;
+    const { displayName, category } = template.metadata;
     const query = `
       UPDATE agent_templates
       SET display_name = $2, category = $3, spec = $4, updated_at = NOW()
@@ -53,7 +54,6 @@ export class AgentRegistry {
     if (!existing) throw new Error(`Template ${name} not found`);
     if (existing.builtin) throw new Error(`Cannot delete builtin template ${name}`);
 
-    // Check for active instances
     const instances = await this.listInstances();
     const referenced = instances.some(i => i.template_ref === name);
     if (referenced) {
@@ -88,9 +88,9 @@ export class AgentRegistry {
       data.displayName,
       data.templateRef,
       data.circle,
-      data.lifecycleMode || 'persistent',
+      data.lifecycleMode ?? 'persistent',
       data.parentInstanceId,
-      data.overrides || {},
+      data.overrides ?? {},
     ]);
     return res.rows[0];
   }
@@ -119,18 +119,22 @@ export class AgentRegistry {
       wheres.push(`status = $${params.length}`);
     }
 
-    if (wheres.length > 0) {
-      query += ' WHERE ' + wheres.join(' AND ');
-    }
-
+    if (wheres.length > 0) query += ' WHERE ' + wheres.join(' AND ');
     query += ' ORDER BY created_at DESC';
     const res = await this.pool.query(query, params);
     return res.rows;
   }
 
+  async updateLastHeartbeat(id: string) {
+    await this.pool.query(
+      'UPDATE agent_instances SET last_heartbeat_at = NOW(), updated_at = NOW() WHERE id = $1',
+      [id],
+    );
+  }
+
   async updateInstanceStatus(id: string, status: string, containerId?: string) {
     const query = `
-      UPDATE agent_instances 
+      UPDATE agent_instances
       SET status = $2, container_id = COALESCE($3, container_id), updated_at = NOW()
       WHERE id = $1
       RETURNING *;
@@ -141,7 +145,7 @@ export class AgentRegistry {
 
   async updateInstanceConfig(id: string, overrides: any, resolvedConfig?: any, resolvedCapabilities?: any) {
     const query = `
-      UPDATE agent_instances 
+      UPDATE agent_instances
       SET overrides = $2, resolved_config = $3, resolved_capabilities = $4, updated_at = NOW()
       WHERE id = $1
       RETURNING *;
@@ -155,21 +159,68 @@ export class AgentRegistry {
     return res.rows[0];
   }
 
+  // ── Subagents & Lineage (Story 3.8, 3.11) ────────────────────────────────
+
+  /**
+   * List all direct and indirect subagents of a given instance.
+   * Returns instances in order from parent to leaf.
+   */
+  async listSubagents(parentInstanceId: string): Promise<any[]> {
+    // Recursive CTE traverses the full subagent tree
+    const query = `
+      WITH RECURSIVE subtree AS (
+        SELECT *, 0 AS lineage_depth
+        FROM agent_instances
+        WHERE parent_instance_id = $1
+        UNION ALL
+        SELECT ai.*, subtree.lineage_depth + 1
+        FROM agent_instances ai
+        INNER JOIN subtree ON ai.parent_instance_id = subtree.id
+      )
+      SELECT * FROM subtree ORDER BY lineage_depth, created_at;
+    `;
+    const res = await this.pool.query(query, [parentInstanceId]);
+    return res.rows;
+  }
+
+  /**
+   * Calculate the lineage depth of an instance by traversing parent_instance_id.
+   * Depth 0 = operator-spawned (no parent).
+   * Story 3.11
+   */
+  async getLineageDepth(instanceId: string): Promise<number> {
+    const query = `
+      WITH RECURSIVE lineage AS (
+        SELECT id, parent_instance_id, 0 AS depth
+        FROM agent_instances
+        WHERE id = $1
+        UNION ALL
+        SELECT ai.id, ai.parent_instance_id, l.depth + 1
+        FROM agent_instances ai
+        INNER JOIN lineage l ON ai.id = l.parent_instance_id
+      )
+      SELECT MAX(depth) AS depth FROM lineage;
+    `;
+    const res = await this.pool.query(query, [instanceId]);
+    return (res.rows[0]?.depth as number | null) ?? 0;
+  }
+
   // ── Resources (NamedLists, Policies, Boundaries) ──────────────────────────
 
   async upsertNamedList(list: NamedList, source: string = 'file') {
-    const { name, type } = list.metadata;
+    const { name, type, alwaysEnforced } = list.metadata;
     const query = `
-      INSERT INTO named_lists (name, type, source, entries, updated_at)
-      VALUES ($1, $2, $3, $4, NOW())
+      INSERT INTO named_lists (name, type, source, entries, always_enforced, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
       ON CONFLICT (name) DO UPDATE SET
         type = EXCLUDED.type,
         source = EXCLUDED.source,
         entries = EXCLUDED.entries,
+        always_enforced = EXCLUDED.always_enforced,
         updated_at = NOW()
       RETURNING *;
     `;
-    const res = await this.pool.query(query, [name, type, source, JSON.stringify(list.entries)]);
+    const res = await this.pool.query(query, [name, type, source, JSON.stringify(list.entries), alwaysEnforced ?? false]);
     return res.rows[0];
   }
 
@@ -204,9 +255,21 @@ export class AgentRegistry {
     return res.rows[0];
   }
 
-  async getNamedList(name: string) {
+  async getNamedList(name: string): Promise<NamedList | null> {
     const res = await this.pool.query('SELECT * FROM named_lists WHERE name = $1', [name]);
-    return res.rows[0];
+    if (!res.rows[0]) return null;
+    const row = res.rows[0];
+    return {
+      apiVersion: 'sera/v1',
+      kind: 'NamedList',
+      metadata: {
+        name: row.name,
+        type: row.type,
+        description: row.description,
+        alwaysEnforced: row.always_enforced,
+      },
+      entries: row.entries,
+    };
   }
 
   async getCapabilityPolicy(name: string) {
@@ -217,5 +280,67 @@ export class AgentRegistry {
   async getSandboxBoundary(name: string) {
     const res = await this.pool.query('SELECT * FROM sandbox_boundaries WHERE name = $1', [name]);
     return res.rows[0];
+  }
+
+  async listAlwaysEnforcedNamedLists() {
+    const res = await this.pool.query('SELECT * FROM named_lists WHERE always_enforced = true');
+    return res.rows;
+  }
+
+  // ── Capability Grants (Story 3.9, 3.10) ──────────────────────────────────
+
+  async createCapabilityGrant(data: {
+    agentInstanceId: string;
+    dimension: string;
+    value: string;
+    grantType: 'one-time' | 'session' | 'persistent';
+    grantedBy?: string;
+    expiresAt?: string;
+  }) {
+    const query = `
+      INSERT INTO capability_grants (agent_instance_id, dimension, value, grant_type, granted_by, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *;
+    `;
+    const res = await this.pool.query(query, [
+      data.agentInstanceId,
+      data.dimension,
+      data.value,
+      data.grantType,
+      data.grantedBy ?? null,
+      data.expiresAt ?? null,
+    ]);
+    return res.rows[0];
+  }
+
+  async listCapabilityGrants(agentInstanceId: string, includeRevoked = false): Promise<any[]> {
+    let query = `
+      SELECT * FROM capability_grants
+      WHERE agent_instance_id = $1
+        AND (expires_at IS NULL OR expires_at > NOW())
+    `;
+    if (!includeRevoked) {
+      query += ' AND revoked_at IS NULL';
+    }
+    query += ' ORDER BY created_at DESC';
+    const res = await this.pool.query(query, [agentInstanceId]);
+    return res.rows;
+  }
+
+  async revokeCapabilityGrant(grantId: string) {
+    const res = await this.pool.query(
+      'UPDATE capability_grants SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL RETURNING *',
+      [grantId],
+    );
+    return res.rows[0];
+  }
+
+  // ── Workspace Usage (Story 3.12) ─────────────────────────────────────────
+
+  async updateWorkspaceUsage(instanceId: string, usedGB: number) {
+    await this.pool.query(
+      'UPDATE agent_instances SET workspace_used_gb = $2, updated_at = NOW() WHERE id = $1',
+      [instanceId, usedGB],
+    );
   }
 }

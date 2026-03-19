@@ -92,6 +92,7 @@ export const NamedListSchema = z.object({
       'secret-list',
     ]),
     description: z.string().optional(),
+    alwaysEnforced: z.boolean().default(false),
   }),
   entries: z.array(z.union([
     z.string(),

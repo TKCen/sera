@@ -12,6 +12,7 @@ describe('CapabilityResolver - NamedList & $ref', () => {
       getSandboxBoundary: vi.fn(),
       getCapabilityPolicy: vi.fn(),
       getNamedList: vi.fn(),
+      listAlwaysEnforcedNamedLists: vi.fn().mockResolvedValue([]),
     };
     resolver = new CapabilityResolver(registryMock);
     
@@ -36,7 +37,8 @@ describe('CapabilityResolver - NamedList & $ref', () => {
       capabilities: { 'network-allowlist': [{ $ref: 'list-a' }] }
     });
     // list-a -> list-b -> list-a
-    registryMock.getNamedList.mockImplementation((name) => {
+    // list-a -> list-b -> list-a
+    registryMock.getNamedList.mockImplementation((name: string) => {
       if (name === 'list-a') return Promise.resolve({ entries: [{ $ref: 'list-b' }] });
       if (name === 'list-b') return Promise.resolve({ entries: [{ $ref: 'list-a' }] });
       return Promise.resolve(null);
@@ -57,7 +59,7 @@ describe('CapabilityResolver - NamedList & $ref', () => {
     });
     registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', policyRef: 'p1' } });
 
-    registryMock.getNamedList.mockImplementation((name) => {
+    registryMock.getNamedList.mockImplementation((name: string) => {
       if (name === 'boundary-list') return Promise.resolve({ entries: ['github.com', 'openai.com'] });
       if (name === 'policy-list') return Promise.resolve({ entries: ['github.com', 'anthropic.com'] });
       return Promise.resolve(null);

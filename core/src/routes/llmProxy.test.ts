@@ -38,6 +38,7 @@ vi.mock('../lib/llm/ProviderFactory.js', () => ({
 
 import { createLlmProxyRouter } from './llmProxy.js';
 import { IdentityService } from '../auth/IdentityService.js';
+import { AuthService } from '../auth/auth-service.js';
 import { MeteringService } from '../metering/MeteringService.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 
@@ -65,7 +66,8 @@ function createTestSetup(budgetOverride?: Partial<{
   });
   vi.spyOn(meteringService, 'recordUsage').mockResolvedValue(undefined);
 
-  const router = createLlmProxyRouter(identityService, meteringService);
+  const authService = new AuthService();
+  const router = createLlmProxyRouter(identityService, authService, meteringService);
 
   const validToken = identityService.signToken({
     agentId: 'test-agent',
@@ -130,7 +132,8 @@ describe('LLM Proxy Router', () => {
   describe('Auth Middleware', () => {
     it('should reject requests without Authorization header', () => {
       const { identityService } = createTestSetup();
-      const authMiddleware = createAuthMiddleware(identityService);
+      const authService = new AuthService();
+      const authMiddleware = createAuthMiddleware(identityService, authService);
 
       const { req, res, next } = createMockReqRes();
       authMiddleware(req, res, next);
@@ -142,27 +145,29 @@ describe('LLM Proxy Router', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
-    it('should reject requests with invalid token', () => {
+    it('should reject requests with invalid token', async () => {
       const { identityService } = createTestSetup();
-      const authMiddleware = createAuthMiddleware(identityService);
+      const authService = new AuthService();
+      const authMiddleware = createAuthMiddleware(identityService, authService);
 
       const { req, res, next } = createMockReqRes({
         headers: { authorization: 'Bearer bad-token' },
       });
-      authMiddleware(req, res, next);
+      await authMiddleware(req, res, next);
 
       expect(res.status).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
     });
 
-    it('should accept requests with valid token and populate identity', () => {
+    it('should accept requests with valid token and populate identity', async () => {
       const { identityService, validToken } = createTestSetup();
-      const authMiddleware = createAuthMiddleware(identityService);
+      const authService = new AuthService();
+      const authMiddleware = createAuthMiddleware(identityService, authService);
 
       const { req, res, next } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
       });
-      authMiddleware(req, res, next);
+      await authMiddleware(req, res, next);
 
       expect(next).toHaveBeenCalled();
       expect(req.agentIdentity).toBeDefined();

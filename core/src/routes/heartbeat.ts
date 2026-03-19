@@ -42,7 +42,7 @@ export function createHeartbeatRouter(
       return;
     }
 
-    orchestrator.recordHeartbeat(id);
+    orchestrator.registerHeartbeat(id);
     logger.debug(`Heartbeat received from ${id}`);
 
     res.json({ status: 'ok', timestamp: new Date().toISOString() });

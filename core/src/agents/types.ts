@@ -39,6 +39,14 @@ export interface AgentInstance {
   workspacePath: string;
   containerId?: string;
   status: 'active' | 'inactive' | 'error';
+  overrides?: any;
   createdAt: string;
   updatedAt: string;
+  // DB columns added in Epics 02/03
+  lifecycle_mode?: 'persistent' | 'ephemeral';
+  parent_instance_id?: string;
+  template_ref?: string;
+  resolved_capabilities?: any;
+  workspace_path?: string;
+  container_id?: string;
 }

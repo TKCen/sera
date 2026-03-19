@@ -44,5 +44,5 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
   },
-  "exclude": ["agent-runtime", "node_modules"]
+  "exclude": ["dist", "agent-runtime", "node_modules"]
 }

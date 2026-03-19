@@ -40,7 +40,7 @@ describe('TierPolicy', () => {
 
     it('should correctly enforce Tier 2 boundaries: sera_net network, rw filesystem', () => {
       const limits = TierPolicy.getTierLimits(2);
-      expect(limits.networkMode).toBe('sera_net');
+      expect(limits.networkMode).toBe('agent_net');
       expect(limits.filesystemMode).toBe('rw');
     });
 
@@ -131,7 +131,7 @@ describe('TierPolicy', () => {
     it('should return correct limits for tier 2 (Internal)', () => {
       const limits = TierPolicy.getTierLimits(2);
       expect(limits.tier).toBe(2);
-      expect(limits.networkMode).toBe('sera_net');
+      expect(limits.networkMode).toBe('agent_net');
       expect(limits.filesystemMode).toBe('rw');
       expect(limits.cpuShares).toBe(512);
       expect(limits.memoryBytes).toBe(512 * 1024 * 1024);

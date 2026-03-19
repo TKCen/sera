@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { BaseAgent } from './BaseAgent.js';
 import { AgentFactory } from './AgentFactory.js';
 import { ProcessManager } from './process/ProcessManager.js';
@@ -7,6 +8,8 @@ import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 import { Logger } from '../lib/logger.js';
+import { CapabilityResolver } from '../capability/resolver.js';
+import type { AgentRegistry } from './registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
 import type { IdentityService } from '../auth/IdentityService.js';
@@ -14,6 +17,19 @@ import type { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
 
 const logger = new Logger('Orchestrator');
+
+// Story 3.6 — agents that miss heartbeats for this long are marked unresponsive
+const HEARTBEAT_STALE_MS = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 10);
+
+// Story 3.11 — hard ceiling on subagent recursion depth
+const SUBAGENT_MAX_DEPTH = parseInt(process.env.SUBAGENT_MAX_DEPTH ?? '5', 10);
+
+export class RecursionLimitError extends Error {
+  constructor(public readonly currentDepth: number, public readonly maxDepth: number) {
+    super(`Recursion limit exceeded: depth ${currentDepth} >= max ${maxDepth}`);
+    this.name = 'RecursionLimitError';
+  }
+}
 
 export class Orchestrator {
   private agents: Map<string, BaseAgent> = new Map();
@@ -26,17 +42,39 @@ export class Orchestrator {
   private identityService: IdentityService | undefined;
   private meteringEngine: MeteringEngine | undefined;
   private agentScheduler: AgentScheduler | undefined;
+  private registry: AgentRegistry | undefined;
+  private heartbeatInterval: NodeJS.Timeout | undefined;
+  private cleanupInterval: NodeJS.Timeout | undefined;
+  private diskQuotaInterval: NodeJS.Timeout | undefined;
 
-  /** Last heartbeat timestamp per agent instance ID. */
+  /** Last heartbeat timestamp per agent instance ID */
   private heartbeats: Map<string, Date> = new Map();
 
-  /** Active file watcher (if any). */
+  /** Active file watcher */
   private watcher: fs.FSWatcher | undefined;
   private agentsDir: string | undefined;
 
-  /**
-   * Set the IntercomService and propagate to all loaded agents.
-   */
+  constructor() {
+    // Story 3.6 — periodic heartbeat staleness check
+    this.heartbeatInterval = setInterval(() => {
+      this.checkStaleInstances().catch(err => logger.error('Heartbeat check error:', err));
+    }, 30000);
+
+    // Story 3.7 — periodic cleanup of stopped/error containers
+    this.cleanupInterval = setInterval(() => {
+      this.runCleanupJob().catch(err => logger.error('Cleanup job error:', err));
+    }, 60000);
+
+    // Story 3.12 — periodic disk quota check (every 15 min)
+    this.diskQuotaInterval = setInterval(() => {
+      this.runDiskQuotaCheck().catch(err => logger.error('Disk quota check error:', err));
+    }, 15 * 60 * 1000);
+  }
+
+  public setRegistry(registry: AgentRegistry): void {
+    this.registry = registry;
+  }
+
   public setIntercom(intercom: IntercomService): void {
     this.intercom = intercom;
     for (const agent of this.agents.values()) {
@@ -44,9 +82,6 @@ export class Orchestrator {
     }
   }
 
-  /**
-   * Set the ToolExecutor and propagate to all loaded agents.
-   */
   public setToolExecutor(toolExecutor: ToolExecutor): void {
     this.toolExecutor = toolExecutor;
     for (const agent of this.agents.values()) {
@@ -54,17 +89,22 @@ export class Orchestrator {
     }
   }
 
-  /** Attach a SandboxManager after construction. */
+  public getToolExecutor(): ToolExecutor | undefined {
+    return this.toolExecutor;
+  }
+
+  public getManifest(name: string): AgentManifest | undefined {
+    return this.manifests.get(name);
+  }
+
   public setSandboxManager(sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager): void {
     this.sandboxManager = sandboxManager;
   }
 
-  /** Attach an IdentityService for JWT issuance. */
   public setIdentityService(identityService: IdentityService): void {
     this.identityService = identityService;
   }
 
-  /** Attach metering components and propagate to active agents. */
   public setMetering(engine: MeteringEngine, scheduler: AgentScheduler): void {
     this.meteringEngine = engine;
     this.agentScheduler = scheduler;
@@ -73,32 +113,24 @@ export class Orchestrator {
     }
   }
 
-  /** Get the tool executor. */
-  public getToolExecutor(): ToolExecutor | undefined {
-    return this.toolExecutor;
-  }
-
-
-  /**
-   * Load agent templates from AGENT.yaml manifests in a directory.
-   */
-  loadTemplates(dirPath: string): void {
+  public loadTemplates(dirPath: string): void {
     this.agentsDir = dirPath;
     this.manifests = AgentFactory.loadTemplates(dirPath);
-
-    // Set primary to alphabetically first template
-    const sorted = Array.from(this.manifests.keys()).sort();
-    if (sorted.length > 0) {
-      this.primaryAgentName = sorted[0];
+    if (!this.primaryAgentName) {
+      const sorted = Array.from(this.manifests.keys()).sort();
+      if (sorted.length > 0) this.primaryAgentName = sorted[0];
     }
-
     logger.info(`Loaded ${this.manifests.size} agent templates`);
   }
 
   /**
-   * Instantiate an agent from a template and start it.
+   * Spawn and register an agent instance from the DB.
+   * Enforces lifecycle rules and recursion depth before spawning.
+   * Stories 3.1–3.3, 3.5, 3.8, 3.11
    */
-  async startInstance(instanceId: string): Promise<BaseAgent> {
+  public async startInstance(instanceId: string, parentInstanceId?: string): Promise<BaseAgent> {
+    if (!this.registry) throw new Error('Registry not configured');
+
     const instance = await AgentFactory.getInstance(instanceId);
     if (!instance) throw new Error(`Agent instance "${instanceId}" not found`);
 
@@ -107,49 +139,97 @@ export class Orchestrator {
 
     const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
+    if (this.identityService) agent.setIdentityService(this.identityService);
     if (this.meteringEngine && this.agentScheduler) {
       agent.setMetering(this.meteringEngine, this.agentScheduler);
     }
-    
-    // ── Spawn Container if necessary ────────────────────────────────────────
+
+    // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────
+    const templateLifecycle = (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
+    const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle;
+
+    // ── Subagent spawn validation ─────────────────────────────────────────
+    const effectiveParentId = parentInstanceId ?? instance.parent_instance_id;
+    if (effectiveParentId) {
+      // Story 3.11: recursion depth guard
+      const parentDepth = await this.registry.getLineageDepth(effectiveParentId);
+      const childDepth = parentDepth + 1;
+
+      if (childDepth >= SUBAGENT_MAX_DEPTH) {
+        const err = new RecursionLimitError(childDepth, SUBAGENT_MAX_DEPTH);
+        await this.registry.updateInstanceStatus(instanceId, 'error');
+        throw err;
+      }
+
+      // Story 3.8: ephemeral parent cannot spawn persistent child
+      const parentInstance = await this.registry.getInstance(effectiveParentId);
+      if (parentInstance?.lifecycle_mode === 'ephemeral' && resolvedLifecycle === 'persistent') {
+        // DECISION: hard guard — force child to ephemeral if parent is ephemeral
+        await this.registry.updateInstanceStatus(instanceId, 'error');
+        throw new Error(
+          `CapabilityEscalationError: ephemeral agent cannot spawn persistent subagent (Story 3.8)`,
+        );
+      }
+    }
+
+    // ── Capability Resolution (Story 3.2) ────────────────────────────────
+    const resolver = new CapabilityResolver(this.registry);
+    const { resolvedCapabilities } = await resolver.resolve(instance.id);
+
+    // Store resolved capabilities as immutable audit record
+    await this.registry.updateInstanceConfig(
+      instance.id,
+      instance.overrides,
+      null,
+      resolvedCapabilities,
+    );
+
+    // ── Container Spawn (Story 3.1, 3.3) ─────────────────────────────────
     if (this.sandboxManager) {
       try {
-        // Issue a JWT for the agent container
+        // Issue a 24h JWT for the agent container (Story 3.1)
         let identityToken: string | undefined;
         if (this.identityService) {
-          identityToken = this.identityService.signToken({
-            agentId: instance.id,
-            circleId: manifest.metadata.circle,
-            capabilities: manifest.tools?.allowed ?? [],
-          });
-          logger.info(`Issued JWT for agent ${instance.name} (${instance.id})`);
+          identityToken = this.identityService.signToken(
+            {
+              agentId: instance.id,
+              circleId: (manifest.metadata as any).circle,
+              capabilities: resolvedCapabilities,
+            },
+            '24h',
+          );
         }
 
-        const sandbox = await this.sandboxManager.spawn(manifest, {
-          type: 'agent',
-          agentName: manifest.metadata.name,
-          image: 'sera-agent-worker:latest',
-          hostWorkspacePath: instance.workspacePath,
-          env: {
-            AGENT_NAME: instance.name,
-            AGENT_INSTANCE_ID: instance.id,
-            SERA_CORE_URL: process.env.SERA_API_URL || 'http://sera-core:3001',
-            ...(identityToken ? { SERA_IDENTITY_TOKEN: identityToken } : {}),
-            CENTRIFUGO_API_URL: process.env.CENTRIFUGO_API_URL || 'http://centrifugo:8000/api',
-            CENTRIFUGO_API_KEY: process.env.CENTRIFUGO_API_KEY || 'sera-api-key',
-          }
-        });
-        
+        const sandbox = await this.sandboxManager.spawn(
+          manifest,
+          {
+            type: 'agent',
+            agentName: manifest.metadata.name,
+            image: 'sera-agent-worker:latest',
+            hostWorkspacePath: instance.workspacePath,
+            lifecycleMode: resolvedLifecycle,
+            ...(identityToken !== undefined ? { token: identityToken } : {}),
+            ...(effectiveParentId !== undefined ? { parentInstanceId: effectiveParentId } : {}),
+          },
+          resolvedCapabilities,
+          instance.id,
+        );
+
         agent.setContainerId(sandbox.containerId);
         await AgentFactory.updateContainerId(instance.id, sandbox.containerId);
+        await this.registry.updateInstanceStatus(instance.id, 'running', sandbox.containerId);
+
+        // Story 3.5 — publish lifecycle event to Centrifugo
+        this.publishLifecycleEvent('started', instance.id, instance.name, sandbox.containerId);
+
         logger.info(`Spawned container ${sandbox.containerId} for agent ${instance.name}`);
       } catch (err) {
-        logger.error(`Failed to spawn container for agent ${instance.name}:`, err);
-        // Fallback or rethrow based on policy
+        await this.registry.updateInstanceStatus(instance.id, 'error');
+        // Story 3.5 — publish error event
+        this.publishLifecycleEvent('error', instance.id, instance.name);
+        logger.error(`Failed to start agent ${instance.name}:`, err);
+        throw err;
       }
-    } else if (instance.containerId) {
-      // If containerId is already set in DB, restore it
-      agent.setContainerId(instance.containerId);
     }
 
     this.agents.set(instance.id, agent);
@@ -158,255 +238,324 @@ export class Orchestrator {
   }
 
   /**
-   * Stop an agent instance, removing it from memory and cleaning up its container.
+   * Stop an agent instance and clean up its container.
    */
-  async stopInstance(instanceId: string): Promise<void> {
+  public async stopInstance(instanceId: string): Promise<void> {
     const agent = this.agents.get(instanceId);
-    if (!agent) {
-      logger.warn(`Agent instance "${instanceId}" not running in memory.`);
-      // Even if not in memory, we might need to cleanup the container if it's in DB
-      const instance = await AgentFactory.getInstance(instanceId);
-      if (instance?.containerId && this.sandboxManager) {
-        const manifest = this.manifests.get(instance.templateName);
-        if (manifest) {
-          try {
-            await this.sandboxManager.remove(manifest, instance.containerId);
-            logger.info(`Cleaned up orphaned container ${instance.containerId} for ${instanceId}`);
-          } catch (err) {
-            logger.error(`Failed to cleanup orphaned container ${instance.containerId}:`, err);
-          }
+
+    if (this.sandboxManager) {
+      let containerId: string | undefined = agent?.containerId;
+      let manifest: AgentManifest | undefined = agent?.getManifest();
+
+      if (!containerId || !manifest) {
+        const instance = await AgentFactory.getInstance(instanceId);
+        containerId = containerId ?? instance?.containerId;
+        manifest = manifest ?? (instance ? this.manifests.get(instance.templateName) : undefined);
+      }
+
+      if (containerId && manifest) {
+        try {
+          await this.sandboxManager.remove(manifest, containerId);
+          logger.info(`Stopped container ${containerId} for agent ${instanceId}`);
+        } catch (err) {
+          logger.error(`Failed to stop container ${containerId}:`, err);
         }
       }
-      return;
     }
 
-    // Stop container
-    if (this.sandboxManager && agent.containerId) {
-      try {
-        await this.sandboxManager.remove(agent.getManifest(), agent.containerId);
-        logger.info(`Stopped container ${agent.containerId} for agent ${instanceId}`);
-      } catch (err) {
-        logger.error(`Failed to stop container ${agent.containerId} for agent ${instanceId}:`, err);
-      }
+    if (this.registry) {
+      await this.registry.updateInstanceStatus(instanceId, 'stopped');
     }
 
     this.agents.delete(instanceId);
+    this.heartbeats.delete(instanceId);
+    this.publishLifecycleEvent('stopped', instanceId);
     logger.info(`Stopped agent instance: ${instanceId}`);
   }
 
-  /**
-   * Re-scan the templates directory.
-   */
-  reloadTemplates(dirPath?: string): { count: number } {
-    const dir = dirPath ?? this.agentsDir;
-    if (!dir) throw new Error('No agents directory configured');
+  // ── Story 3.7: Cleanup ───────────────────────────────────────────────────
 
-    this.manifests = AgentFactory.loadTemplates(dir);
+  /**
+   * Manually trigger cleanup for a specific agent instance.
+   * Removes the container but preserves workspace and DB record.
+   */
+  public async cleanupInstance(instanceId: string): Promise<void> {
+    if (this.sandboxManager) {
+      await this.sandboxManager.teardown(instanceId);
+    }
+    if (this.registry) {
+      await this.registry.updateInstanceStatus(instanceId, 'stopped');
+    }
+    this.agents.delete(instanceId);
+    this.heartbeats.delete(instanceId);
+    this.publishLifecycleEvent('stopped', instanceId);
+  }
+
+  /**
+   * Background cleanup job: remove containers for stopped/error instances
+   * older than the retention period.
+   * Story 3.7
+   */
+  private async runCleanupJob(): Promise<void> {
+    if (!this.registry || !this.sandboxManager) return;
+
+    const retentionMs = parseInt(process.env.CONTAINER_RETENTION_MS ?? String(60 * 60 * 1000), 10);
+    const cutoff = new Date(Date.now() - retentionMs);
+
+    try {
+      const stopped = await this.registry.listInstances({ status: 'stopped' });
+      const errored = await this.registry.listInstances({ status: 'error' });
+
+      for (const instance of [...stopped, ...errored]) {
+        const updatedAt = new Date(instance.updated_at);
+        if (updatedAt < cutoff) {
+          await this.sandboxManager.teardown(instance.id).catch(
+            err => logger.warn(`Cleanup: failed to teardown ${instance.id}:`, err),
+          );
+          logger.info(`Cleanup job: removed stale container for instance ${instance.id}`);
+        }
+      }
+    } catch (err) {
+      logger.error('Cleanup job error:', err);
+    }
+  }
+
+  // ── Story 3.6: Heartbeat ─────────────────────────────────────────────────
+
+  public async registerHeartbeat(instanceId: string): Promise<void> {
+    this.heartbeats.set(instanceId, new Date());
+    if (this.registry) {
+      await this.registry.updateLastHeartbeat(instanceId);
+    }
+  }
+
+  private async checkStaleInstances(): Promise<void> {
+    const now = new Date();
+    for (const [instanceId, lastHeartbeat] of this.heartbeats.entries()) {
+      if (now.getTime() - lastHeartbeat.getTime() > HEARTBEAT_STALE_MS) {
+        logger.warn(`Agent instance ${instanceId} has missed heartbeats — marking unresponsive`);
+        this.heartbeats.delete(instanceId);
+        if (this.registry) {
+          await this.registry.updateInstanceStatus(instanceId, 'unresponsive');
+        }
+        this.publishLifecycleEvent('unresponsive', instanceId);
+      }
+    }
+  }
+
+  public getUnhealthyInstances(timeoutMs: number = HEARTBEAT_STALE_MS): { instanceId: string; lastSeen: Date }[] {
+    const now = new Date();
+    const unhealthy: { instanceId: string; lastSeen: Date }[] = [];
+    for (const [instanceId, lastHeartbeat] of this.heartbeats.entries()) {
+      if (now.getTime() - lastHeartbeat.getTime() > timeoutMs) {
+        unhealthy.push({ instanceId, lastSeen: lastHeartbeat });
+      }
+    }
+    return unhealthy;
+  }
+
+  // ── Story 3.12: Disk Quota ───────────────────────────────────────────────
+
+  private async runDiskQuotaCheck(): Promise<void> {
+    if (!this.registry) return;
+
+    const running = await this.registry.listInstances({ status: 'running' });
+    const throttled = await this.registry.listInstances({ status: 'throttled' });
+
+    for (const instance of [...running, ...throttled]) {
+      const caps = instance.resolved_capabilities;
+      const limitGB: number | undefined = caps?.filesystem?.maxWorkspaceSizeGB;
+
+      const workspacePath = instance.workspace_path;
+      if (!workspacePath) continue;
+
+      // Log startup warning if no limit is set and agent has write access (Story 3.12)
+      if (!limitGB && caps?.filesystem?.write) {
+        logger.warn(`Agent ${instance.name} has filesystem.write but no maxWorkspaceSizeGB — no quota enforced`);
+        continue;
+      }
+
+      if (!limitGB) continue;
+
+      let usedGB = 0;
+      try {
+        const duOutput = execSync(`du -s --block-size=1G "${workspacePath}" 2>/dev/null || echo "0"`, {
+          encoding: 'utf-8',
+          shell: '/bin/sh',
+        });
+        usedGB = parseInt(duOutput.split('\t')[0] ?? '0', 10) || 0;
+      } catch {
+        // du not available (Windows dev env) — skip
+        continue;
+      }
+
+      await this.registry.updateWorkspaceUsage(instance.id, usedGB);
+
+      const isEphemeral = instance.lifecycle_mode === 'ephemeral';
+
+      if (usedGB >= limitGB) {
+        if (!isEphemeral || instance.status !== 'throttled') {
+          await this.registry.updateInstanceStatus(instance.id, 'throttled');
+          this.publishLifecycleEvent('throttled', instance.id, instance.name);
+          logger.warn(`Agent ${instance.name} exceeded disk quota: ${usedGB}GB / ${limitGB}GB`);
+        }
+      } else if (instance.status === 'throttled') {
+        // Usage dropped below limit — restore to running
+        await this.registry.updateInstanceStatus(instance.id, 'running');
+        this.publishLifecycleEvent('running', instance.id, instance.name);
+        logger.info(`Agent ${instance.name} usage back within quota: ${usedGB}GB / ${limitGB}GB`);
+      }
+    }
+  }
+
+  // ── Docker Events (Story 3.5) ────────────────────────────────────────────
+
+  public async startDockerEventListener(): Promise<void> {
+    if (!this.sandboxManager) return;
+
+    await this.sandboxManager.startEventListener(async (event) => {
+      if (!this.registry) return;
+
+      const { action, instanceId, exitCode } = event;
+
+      if (action === 'start') {
+        await this.registry.updateInstanceStatus(instanceId, 'running');
+      } else if (action === 'die') {
+        const status = exitCode !== undefined && exitCode !== 0 ? 'error' : 'stopped';
+        await this.registry.updateInstanceStatus(instanceId, status);
+        this.heartbeats.delete(instanceId);
+        this.publishLifecycleEvent(status as any, instanceId, event.agentName);
+      } else if (action === 'oom') {
+        await this.registry.updateInstanceStatus(instanceId, 'error');
+        this.heartbeats.delete(instanceId);
+        logger.warn(`OOM kill: agent=${event.agentName} instance=${instanceId}`);
+        this.publishLifecycleEvent('error', instanceId, event.agentName);
+      } else if (action === 'stop') {
+        await this.registry.updateInstanceStatus(instanceId, 'stopped');
+        this.heartbeats.delete(instanceId);
+      }
+    });
+
+    // Story 3.5 — warn about dangling containers on startup
+    if (this.registry) {
+      const instances = await this.registry.listInstances();
+      const knownIds = new Set(instances.map((i: any) => i.id as string));
+      await this.sandboxManager.checkDanglingContainers(knownIds);
+    }
+  }
+
+  // ── Centrifugo publish ───────────────────────────────────────────────────
+
+  private publishLifecycleEvent(
+    type: string,
+    instanceId: string,
+    agentName?: string,
+    containerId?: string,
+  ): void {
+    if (!this.intercom) return;
+    this.intercom.publish('system.agents', {
+      type,
+      agentId: instanceId,
+      agentName,
+      containerId,
+      timestamp: new Date().toISOString(),
+    }).catch(err => logger.error('Failed to publish lifecycle event:', err));
+  }
+
+  // ── Template / Agent Management ─────────────────────────────────────────
+
+  public watchAgentsDirectory(dirPath: string): void {
+    if (this.watcher) this.watcher.close();
+    this.agentsDir = dirPath;
+    this.watcher = fs.watch(dirPath, { recursive: true }, (eventType, filename) => {
+      if (filename?.endsWith('AGENT.yaml')) {
+        logger.info(`Agent template change detected: ${filename}`);
+        this.loadTemplates(dirPath);
+      }
+    });
+    logger.info(`Watching for agent changes in ${dirPath}`);
+  }
+
+  public registerAgent(agent: BaseAgent): void {
+    const id = agent.agentInstanceId ?? agent.name;
+    this.agents.set(id, agent);
+  }
+
+  public getAgent(id: string): BaseAgent | undefined {
+    return this.agents.get(id);
+  }
+
+  public getAllManifests(): AgentManifest[] {
+    return Array.from(this.manifests.values());
+  }
+
+  public reloadTemplates(): { count: number } {
+    if (!this.agentsDir) throw new Error('No agents directory configured');
+    this.manifests = AgentFactory.loadTemplates(this.agentsDir);
     logger.info(`Reloaded ${this.manifests.size} agent templates`);
     return { count: this.manifests.size };
   }
 
-  /**
-   * Get all loaded agent templates.
-   */
-  getAllTemplates(): AgentManifest[] {
-    return Array.from(this.manifests.values());
+  public stopWatching(): void {
+    this.stop().catch(err => logger.error('Error stopping orchestrator:', err));
   }
 
-  /**
-   * Watch the agents directory for .agent.yaml changes and auto-reload.
-   */
-  watchAgentsDirectory(dirPath?: string): void {
-    const dir = dirPath ?? this.agentsDir;
-    if (!dir) {
-      logger.warn('No agents directory to watch');
-      return;
-    }
-
-    if (this.watcher) {
-      this.watcher.close();
-    }
-
-    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-    this.watcher = fs.watch(dir, (eventType, filename) => {
-      if (!filename?.endsWith('.agent.yaml')) return;
-
-      // Debounce rapid changes (e.g., editor save)
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        logger.info(`Detected change in ${filename}, reloading templates...`);
-        try {
-          this.reloadTemplates(dir);
-        } catch (err) {
-          logger.error(`Failed to reload templates:`, err);
-        }
-      }, 500);
-    });
-
-    logger.info(`Watching for agent changes in ${dir}`);
-  }
-
-  /**
-   * Stop the file watcher.
-   */
-  stopWatching(): void {
+  public async stop(): Promise<void> {
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    if (this.cleanupInterval) clearInterval(this.cleanupInterval);
+    if (this.diskQuotaInterval) clearInterval(this.diskQuotaInterval);
     if (this.watcher) {
       this.watcher.close();
       this.watcher = undefined;
-      logger.info('Stopped watching agents directory');
     }
   }
 
-  /**
-   * Designate which agent acts as the primary conversational agent.
-   */
-  setPrimaryAgent(name: string): void {
-    if (!this.agents.has(name)) {
-      throw new Error(`Agent "${name}" not registered`);
-    }
+  public setPrimaryAgent(name: string): void {
     this.primaryAgentName = name;
   }
 
-  registerAgent(agent: BaseAgent) {
-    this.agents.set(agent.role, agent);
-  }
-
-  getAgent(name: string): BaseAgent | undefined {
-    return this.agents.get(name);
-  }
-
-  getManifest(name: string): AgentManifest | undefined {
-    return this.manifests.get(name);
-  }
-
-  getAllManifests(): AgentManifest[] {
-    return Array.from(this.manifests.values());
-  }
-
-  getPrimaryAgent(): BaseAgent | undefined {
+  public getPrimaryAgent(): BaseAgent | undefined {
     if (this.primaryAgentName) {
+      const agent = this.agents.get(this.primaryAgentName);
+      if (agent) return agent;
       const found = Array.from(this.agents.values()).find(
-        a => a.getManifest().metadata.name === this.primaryAgentName || a.role === this.primaryAgentName
+        a => a.getManifest().metadata.name === this.primaryAgentName,
       );
       if (found) return found;
     }
-    // Fallback: return first tier 3
-    return Array.from(this.agents.values()).find(
-      a => a.getManifest().metadata.tier === 3
-    ) || Array.from(this.agents.values())[0];
+    return Array.from(this.agents.values())[0];
   }
 
-  /**
-   * Returns basic info about all loaded agents.
-   */
-  listAgents(): Array<{
-    name: string;
-    displayName: string;
-    role: string;
-    tier: number;
-    circle: string;
-    icon: string;
-  }> {
+  public listAgents(): any[] {
     return Array.from(this.manifests.values()).map(m => ({
       name: m.metadata.name,
       displayName: m.metadata.displayName,
       role: m.identity.role,
-      tier: m.metadata.tier,
-      circle: m.metadata.circle,
-      icon: m.metadata.icon,
+      tier: (m.metadata as any).tier,
     }));
   }
 
-  /**
-   * Get detailed info for a single agent.
-   */
-  getAgentInfo(name: string): {
-    name: string;
-    displayName: string;
-    role: string;
-    tier: number;
-    circle: string;
-    icon: string;
-    manifest: AgentManifest;
-  } | undefined {
+  public getAgentInfo(name: string): any {
     const manifest = this.manifests.get(name);
     if (!manifest) return undefined;
-    return {
-      name: manifest.metadata.name,
-      displayName: manifest.metadata.displayName,
-      role: manifest.identity.role,
-      tier: manifest.metadata.tier,
-      circle: manifest.metadata.circle,
-      icon: manifest.metadata.icon,
-      manifest,
-    };
+    return { name: manifest.metadata.name, manifest };
   }
 
-  updateLlmProvider(llmProvider: LLMProvider) {
+  public updateLlmProvider(llmProvider: LLMProvider) {
     for (const agent of this.agents.values()) {
       agent.updateLlmProvider(llmProvider);
     }
   }
 
-  // ── Heartbeat Lifecycle ─────────────────────────────────────────────────────
-
-  /** Record a heartbeat for an agent instance. */
-  recordHeartbeat(instanceId: string): void {
-    this.heartbeats.set(instanceId, new Date());
-  }
-
-  /** Get the last heartbeat time for an agent instance. */
-  getLastHeartbeat(instanceId: string): Date | undefined {
-    return this.heartbeats.get(instanceId);
-  }
-
-  /**
-   * Get instances that haven't sent a heartbeat within the timeout.
-   * Only considers instances that have sent at least one heartbeat.
-   */
-  getUnhealthyInstances(timeoutMs: number = 30_000): Array<{ instanceId: string; lastSeen: Date }> {
-    const now = Date.now();
-    const unhealthy: Array<{ instanceId: string; lastSeen: Date }> = [];
-
-    for (const [instanceId, lastSeen] of this.heartbeats.entries()) {
-      if (now - lastSeen.getTime() > timeoutMs) {
-        unhealthy.push({ instanceId, lastSeen });
-      }
-    }
-
-    return unhealthy;
-  }
-
-  // ── Process-Managed Execution ──────────────────────────────────────────────
-
-  /**
-   * Execute a single task using the primary agent (backward-compatible).
-   * Uses the ProcessManager with sequential strategy internally.
-   */
   async executeTask(description: string) {
-    logger.info(`Starting task: ${description}`);
-
     const primaryAgent = this.getPrimaryAgent();
     if (!primaryAgent) throw new Error('No primary agent configured');
-
     const result = await this.processManager.runSingle(description, primaryAgent);
-    return result.finalOutput || 'No answer provided.';
+    return result.finalOutput ?? 'No answer provided.';
   }
 
-  /**
-   * Execute multiple tasks using a specified process pattern.
-   */
-  async executeWithProcess(
-    type: ProcessType,
-    tasks: ProcessTask[],
-    managerAgentName?: string,
-  ): Promise<ProcessRunResult> {
-    const managerAgent = managerAgentName
-      ? this.agents.get(managerAgentName)
-      : undefined;
-
+  async executeWithProcess(type: ProcessType, tasks: ProcessTask[], managerAgentName?: string): Promise<ProcessRunResult> {
+    const managerAgent = managerAgentName ? this.agents.get(managerAgentName) : undefined;
     return this.processManager.run(type, tasks, this.agents, managerAgent);
   }
 }
-

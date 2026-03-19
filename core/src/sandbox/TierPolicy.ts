@@ -29,7 +29,7 @@ const TIER_LIMITS: Record<SecurityTier, TierLimits> = {
     tier: 2,
     cpuShares: 512,                    // Medium priority
     memoryBytes: 512 * 1024 * 1024,    // 512 Mi
-    networkMode: 'sera_net',
+    networkMode: 'agent_net',
     filesystemMode: 'rw',
   },
   3: {

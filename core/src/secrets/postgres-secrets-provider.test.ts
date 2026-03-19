@@ -140,15 +140,17 @@ describe('PostgresSecretsProvider', () => {
       };
       vi.mocked(db.query).mockResolvedValue(mockResult as any);
 
-      const list = await provider.list({ tags: ['prod'] });
+      const context = { operator: { sub: 'admin', roles: ['admin'] } };
+      const list = await provider.list({ tags: ['prod'] }, context);
       expect(list).toHaveLength(1);
-      expect(list[0].name).toBe('secret1');
+      expect(list[0]!.name).toBe('secret1');
       expect(db.query).toHaveBeenCalledWith(expect.stringContaining('tags && $1'), [['prod']]);
     });
 
     it('should perform soft delete', async () => {
       const provider = new PostgresSecretsProvider();
-      await provider.delete('old-secret');
+      const context = { operator: { sub: 'admin', roles: ['admin'] } };
+      await provider.delete('old-secret', context);
       expect(db.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE secrets SET deleted_at = NOW()'), ['old-secret']);
     });
   });

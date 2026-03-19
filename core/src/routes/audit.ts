@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { AuditService } from '../audit/AuditService.js';
+import { requireRole } from '../auth/authMiddleware.js';
 
 /**
  * Creates the audit trail router.
@@ -9,26 +10,63 @@ export const createAuditRouter = () => {
   const auditService = AuditService.getInstance();
 
   /**
-   * Get audit trail for a specific agent.
+   * Story 11.5: GET /api/audit - List audit entries with filtering and pagination.
+   * Requires admin role.
    */
-  router.get('/:agentId', async (req, res) => {
+  router.get('/', requireRole(['admin']), async (req, res) => {
     try {
-      const trail = await auditService.getTrail(req.params.agentId);
-      res.json(trail);
+      const { actorId, eventType, from, to, limit, offset } = req.query;
+      
+      const result = await auditService.getEntries({
+        actorId: actorId as string,
+        eventType: eventType as string,
+        from: from as string,
+        to: to as string,
+        limit: limit ? parseInt(limit as string, 10) : 50,
+        offset: offset ? parseInt(offset as string, 10) : 0,
+      });
+      
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
   /**
-   * Verify integrity of an agent's audit trail.
+   * Story 11.5: GET /api/audit/export - Stream the full audit trail as JSONL.
+   * Requires admin role.
    */
-  router.get('/:agentId/verify', async (req, res) => {
+  router.get('/export', requireRole(['admin']), async (req, res) => {
     try {
-      const result = await auditService.verify(req.params.agentId);
-      res.json(result);
+      const format = req.query.format || 'jsonl';
+      if (format !== 'jsonl') {
+        return res.status(400).json({ error: 'Only jsonl format is supported for streaming export' });
+      }
+
+      res.setHeader('Content-Type', 'application/x-jsonlines');
+      res.setHeader('Content-Disposition', 'attachment; filename="audit-trail.jsonl"');
+
+      await auditService.streamEntries((row) => {
+        res.write(JSON.stringify(row) + '\n');
+      });
+
+      res.end();
+
+      // Record the export action itself
+      await auditService.record({
+        actorType: 'operator',
+        actorId: req.operator?.sub || 'unknown',
+        actingContext: null,
+        eventType: 'audit.exported',
+        payload: { format }
+      });
+
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      } else {
+        res.end();
+      }
     }
   });
 

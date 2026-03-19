@@ -278,11 +278,18 @@ export abstract class BaseAgent {
               const tc = activeCalls[i]!;
               const tr = toolResults[i]!;
               try {
-                await auditService.record(auditId, 'tool_call', {
-                  tool: tc.function.name,
-                  arguments: tc.function.arguments,
-                  result: tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content
+                await AuditService.getInstance().record({
+                  actorType: 'agent',
+                  actorId: this.agentInstanceId || this.name,
+                  actingContext: null,
+                  eventType: 'tool.called',
+                  payload: {
+                    tool: tc.function.name,
+                    args: tc.function.arguments,
+                    result: tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content
+                  }
                 });
+
               } catch (auditErr) {
                 this.logger.error('Failed to record audit entry:', auditErr);
               }

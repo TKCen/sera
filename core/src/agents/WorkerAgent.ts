@@ -69,9 +69,15 @@ export class WorkerAgent extends BaseAgent {
     const auditService = AuditService.getInstance();
     const auditId = this.agentInstanceId || this.role;
     try {
-      await auditService.record(auditId, 'chat', {
-        input,
-        response: response.content.length > 500 ? response.content.substring(0, 500) + '...' : response.content
+      await AuditService.getInstance().record({
+        actorType: 'agent',
+        actorId: this.agentInstanceId || this.name,
+        actingContext: null,
+        eventType: 'chat',
+        payload: {
+          input,
+          response: response.content.length > 500 ? response.content.substring(0, 500) + '...' : response.content
+        }
       });
     } catch (auditErr) {
       this.logger.error('Failed to record audit entry:', auditErr);

@@ -1,5 +1,10 @@
 import type { Pool } from 'pg';
 import type { AgentTemplate, AgentInstance, NamedList, CapabilityPolicy, SandboxBoundary } from './schemas.js';
+import { ScheduleService } from '../services/ScheduleService.js';
+
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('AgentRegistry');
 
 export class AgentRegistry {
   constructor(private pool: Pool) {}
@@ -92,7 +97,42 @@ export class AgentRegistry {
       data.parentInstanceId,
       data.overrides ?? {},
     ]);
-    return res.rows[0];
+    const instance = res.rows[0];
+
+    // Story 11.2: Import manifest schedules
+    await this.syncManifestSchedules(instance.id, data.templateRef);
+
+    return instance;
+  }
+
+  /**
+   * Syncs schedules declared in the agent manifest with the schedules table.
+   * Story 11.2
+   */
+  private async syncManifestSchedules(instanceId: string, templateRef: string) {
+    const template = await this.getTemplate(templateRef);
+    if (!template || !template.spec?.schedules) return;
+
+    const scheduleService = ScheduleService.getInstance();
+    const manifestSchedules = template.spec.schedules;
+
+    for (const s of manifestSchedules) {
+      await scheduleService.createSchedule({
+        agent_instance_id: instanceId,
+        agent_name: templateRef,
+        name: s.name,
+        description: s.description,
+        type: s.type,
+        expression: s.expression,
+        task: s.task,
+        source: 'manifest',
+      }).catch(err => {
+        // Ignore duplicates
+        if (!err.message.includes('unique constraint')) {
+          logger.error(`Failed to sync manifest schedule ${s.name}:`, err);
+        }
+      });
+    }
   }
 
   async getInstance(id: string) {

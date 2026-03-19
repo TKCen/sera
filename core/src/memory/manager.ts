@@ -86,13 +86,18 @@ export class MemoryManager {
 
     const auditId = this.agentId || this.circleId;
     if (auditId) {
-      const auditService = AuditService.getInstance();
       try {
-        await auditService.record(auditId, 'memory_add', {
-          type,
-          id: entry.id,
-          title: entry.title,
-          source: entry.source
+        await AuditService.getInstance().record({
+          actorType: this.agentId ? 'agent' : 'system',
+          actorId: auditId,
+          actingContext: null,
+          eventType: 'memory.add',
+          payload: {
+            type,
+            id: entry.id,
+            title: entry.title,
+            source: entry.source
+          }
         });
       } catch (auditErr) {
         logger.error('Failed to record audit entry:', auditErr);
@@ -118,12 +123,17 @@ export class MemoryManager {
 
     const auditId = this.agentId || this.circleId;
     if (auditId && entry) {
-      const auditService = AuditService.getInstance();
       try {
-        await auditService.record(auditId, 'memory_update', {
-          id: entry.id,
-          title: entry.title,
-          type: entry.type
+        await AuditService.getInstance().record({
+          actorType: this.agentId ? 'agent' : 'system',
+          actorId: auditId,
+          actingContext: null,
+          eventType: 'memory.update',
+          payload: {
+            id: entry.id,
+            title: entry.title,
+            type: entry.type
+          }
         });
       } catch (auditErr) {
         logger.error('Failed to record audit entry:', auditErr);
@@ -143,12 +153,17 @@ export class MemoryManager {
 
     const auditId = this.agentId || this.circleId;
     if (auditId && deleted && entry) {
-      const auditService = AuditService.getInstance();
       try {
-        await auditService.record(auditId, 'memory_delete', {
-          id: entry.id,
-          title: entry.title,
-          type: entry.type
+        await AuditService.getInstance().record({
+          actorType: this.agentId ? 'agent' : 'system',
+          actorId: auditId,
+          actingContext: null,
+          eventType: 'memory.delete',
+          payload: {
+            id: entry.id,
+            title: entry.title,
+            type: entry.type
+          }
         });
       } catch (auditErr) {
         logger.error('Failed to record audit entry:', auditErr);

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireRole } from '../auth/authMiddleware.js';
 import { ApiKeyService } from '../auth/api-key-service.js';
+import { AuditService } from '../audit/AuditService.js';
 
 export function createAuthRouter() {
   const router = Router();
@@ -46,6 +47,14 @@ export function createAuthRouter() {
         expiresInDays,
       });
 
+      await AuditService.getInstance().record({
+        actorType: 'operator',
+        actorId: req.operator!.sub,
+        actingContext: null,
+        eventType: 'api-key.created',
+        payload: { keyId: result.metadata.id, name, roles: keyRoles }
+      }).catch(() => {});
+
       res.status(201).json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -59,6 +68,15 @@ export function createAuthRouter() {
         res.status(404).json({ error: 'API key not found or already revoked' });
         return;
       }
+
+      await AuditService.getInstance().record({
+        actorType: 'operator',
+        actorId: req.operator!.sub,
+        actingContext: null,
+        eventType: 'api-key.revoked',
+        payload: { keyId: req.params.id }
+      }).catch(() => {});
+
       res.json({ message: 'API key revoked' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

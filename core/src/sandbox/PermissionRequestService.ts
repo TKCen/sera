@@ -17,6 +17,7 @@ import { Logger } from '../lib/logger.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('PermissionRequestService');
 
@@ -103,6 +104,14 @@ export class PermissionRequestService {
       requestedAt: permRequest.requestedAt,
     }).catch(err => logger.warn('Failed to publish permission request to Centrifugo:', err));
 
+    await AuditService.getInstance().record({
+      actorType: 'agent',
+      actorId: agentId,
+      actingContext: null,
+      eventType: 'permission.requested',
+      payload: { requestId, dimension, value, reason }
+    }).catch(err => logger.error('Audit record failed:', err));
+
     // Auto-expire after timeout
     const timeoutMs = parseInt(process.env.PERMISSION_REQUEST_TIMEOUT_MS ?? String(5 * 60 * 1000), 10);
     setTimeout(() => {
@@ -143,6 +152,14 @@ export class PermissionRequestService {
 
     req.status = decision.decision === 'grant' ? 'granted' : 'denied';
     this.pending.delete(requestId);
+
+    await AuditService.getInstance().record({
+      actorType: 'operator',
+      actorId: operatorId || 'unknown',
+      actingContext: null,
+      eventType: decision.decision === 'grant' ? 'permission.granted' : 'permission.denied',
+      payload: { requestId, agentId: req.agentId, dimension: req.dimension, value: req.value, grantType: decision.grantType }
+    }).catch(err => logger.error('Audit record failed:', err));
 
     if (decision.decision === 'grant') {
       const grantType = decision.grantType ?? 'one-time';

@@ -12,11 +12,13 @@ import { CapabilityResolver } from '../capability/resolver.js';
 import type { AgentRegistry } from './registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
-import type { IdentityService } from '../auth/IdentityService.js';
+import { IdentityService } from '../auth/IdentityService.js';
 import type { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('Orchestrator');
+
 
 // Story 3.6 — agents that miss heartbeats for this long are marked unresponsive
 const HEARTBEAT_STALE_MS = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 10);
@@ -136,7 +138,7 @@ export class Orchestrator {
    * Enforces lifecycle rules and recursion depth before spawning.
    * Stories 3.1–3.3, 3.5, 3.8, 3.11
    */
-  public async startInstance(instanceId: string, parentInstanceId?: string): Promise<BaseAgent> {
+  public async startInstance(instanceId: string, parentInstanceId?: string, task?: string): Promise<BaseAgent> {
     if (!this.registry) throw new Error('Registry not configured');
 
     const instance = await AgentFactory.getInstance(instanceId);
@@ -218,6 +220,7 @@ export class Orchestrator {
             image: 'sera-agent-worker:latest',
             hostWorkspacePath: instance.workspacePath,
             lifecycleMode: resolvedLifecycle,
+            ...(task !== undefined ? { task } : {}),
             ...(identityToken !== undefined ? { token: identityToken } : {}),
             ...(effectiveParentId !== undefined ? { parentInstanceId: effectiveParentId } : {}),
           },
@@ -232,11 +235,28 @@ export class Orchestrator {
         // Story 3.5 — publish lifecycle event to Centrifugo
         this.publishLifecycleEvent('started', instance.id, instance.name, sandbox.containerId);
 
+        await AuditService.getInstance().record({
+          actorType: 'system',
+          actorId: 'system',
+          actingContext: null,
+          eventType: 'agent.spawned',
+          payload: { agentId: instance.id, agentName: instance.name, containerId: sandbox.containerId }
+        });
+
         logger.info(`Spawned container ${sandbox.containerId} for agent ${instance.name}`);
       } catch (err) {
         await this.registry.updateInstanceStatus(instance.id, 'error');
         // Story 3.5 — publish error event
         this.publishLifecycleEvent('error', instance.id, instance.name);
+
+        await AuditService.getInstance().record({
+          actorType: 'system',
+          actorId: 'system',
+          actingContext: null,
+          eventType: 'agent.crashed',
+          payload: { agentId: instance.id, agentName: instance.name, error: (err as Error).message }
+        });
+
         logger.error(`Failed to start agent ${instance.name}:`, err);
         throw err;
       }
@@ -276,6 +296,14 @@ export class Orchestrator {
     if (this.registry) {
       await this.registry.updateInstanceStatus(instanceId, 'stopped');
     }
+
+    await AuditService.getInstance().record({
+      actorType: 'system',
+      actorId: 'system',
+      actingContext: null,
+      eventType: 'agent.stopped',
+      payload: { agentId: instanceId }
+    });
 
     this.agents.delete(instanceId);
     this.heartbeats.delete(instanceId);

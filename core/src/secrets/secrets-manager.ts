@@ -6,6 +6,7 @@ import type {
 } from './interfaces.js';
 import { PostgresSecretsProvider } from './postgres-secrets-provider.js';
 import { Logger } from '../lib/logger.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('SecretsManager');
 
@@ -29,7 +30,17 @@ export class SecretsManager {
   }
 
   async get(name: string, context: SecretAccessContext): Promise<string | null> {
-    return this.provider.get(name, context);
+    const val = await this.provider.get(name, context);
+    
+    await AuditService.getInstance().record({
+      actorType: context.agentId ? 'agent' : 'operator',
+      actorId: context.agentId || context.operator?.sub || 'unknown',
+      actingContext: null,
+      eventType: 'secret.accessed',
+      payload: { secretName: name }
+    }).catch(err => logger.error('Audit record failed:', err));
+
+    return val;
   }
 
   async set(name: string, value: string, context: SecretAccessContext, metadata?: Partial<SecretMetadata>): Promise<void> {

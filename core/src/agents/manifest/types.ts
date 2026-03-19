@@ -91,6 +91,15 @@ export interface PermissionsConfig {
   canSpawnSubagents?: boolean;
 }
 
+// ── Schedules ───────────────────────────────────────────────────────────────────
+export interface ScheduleManifest {
+  name: string;
+  description?: string;
+  type: 'cron' | 'once';
+  expression: string;
+  task: string;
+}
+
 // ── Full Manifest ───────────────────────────────────────────────────────────────
 export interface AgentManifest {
   apiVersion: string;
@@ -108,13 +117,14 @@ export interface AgentManifest {
   memory?: MemoryConfig;
   permissions?: PermissionsConfig;
   capabilities?: string[];
+  schedules?: ScheduleManifest[];
 }
 
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'apiVersion', 'kind', 'metadata', 'identity', 'model',
   'tools', 'skills', 'skillPackages', 'subagents', 'intercom', 'resources',
-  'workspace', 'memory', 'permissions', 'capabilities',
+  'workspace', 'memory', 'permissions', 'capabilities', 'schedules',
 ]);
 
 export const VALID_TIERS: readonly SecurityTier[] = [1, 2, 3] as const;

@@ -108,7 +108,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
           }
         }
 
-        await recordAudit(agentId, 'knowledge_store_personal', { blockId: block.id, type, scope });
+        await recordAudit(agentId, 'knowledge.committed', { blockId: block.id, type, scope });
         return { success: true, data: { id: block.id, scope, success: true } };
       }
 
@@ -151,7 +151,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
           pendingMerge = true;
         }
 
-        await recordAudit(agentId, 'knowledge_store_circle', { blockId: block.id, type, scope, circleId });
+        await recordAudit(agentId, 'knowledge.committed', { blockId: block.id, type, scope, circleId });
         return { success: true, data: { id: block.id, scope, success: true, pendingMerge } };
       }
 
@@ -186,7 +186,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
           pendingMerge = true;
         }
 
-        await recordAudit(agentId, 'knowledge_store_global', { blockId: block.id, type, scope });
+        await recordAudit(agentId, 'knowledge.committed', { blockId: block.id, type, scope });
         return { success: true, data: { id: block.id, scope, success: true, pendingMerge } };
       }
 
@@ -197,11 +197,17 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 
 async function recordAudit(
   agentId: string,
-  action: string,
-  details: Record<string, unknown>,
+  eventType: string,
+  payload: Record<string, unknown>,
 ): Promise<void> {
   try {
-    await AuditService.getInstance().record(agentId, action, details);
+    await AuditService.getInstance().record({
+      actorType: 'agent',
+      actorId: agentId,
+      actingContext: null,
+      eventType,
+      payload
+    });
   } catch (err) {
     logger.warn('Audit record failed:', err);
   }

@@ -67,6 +67,8 @@ import { createKnowledgeRouter } from './routes/knowledge.js';
 import { KnowledgeGitService } from './memory/KnowledgeGitService.js';
 import { MemoryCompactionService } from './memory/MemoryCompactionService.js';
 import { EmbeddingService } from './services/embedding.service.js';
+import { AuditService } from './audit/AuditService.js';
+import { ScheduleService } from './services/ScheduleService.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -219,6 +221,21 @@ const startServer = async () => {
 
   if (process.env.NODE_ENV !== 'test') {
     await initDb();
+  }
+
+  // Epic 11 — Initialize Audit Trail
+  const auditService = AuditService.getInstance();
+  await auditService.initialize().catch(err =>
+    logger.error('Failed to initialize AuditService:', err),
+  );
+
+  // Epic 11 — Initialize Schedule Service
+  if (process.env.DATABASE_URL) {
+    const scheduleService = ScheduleService.getInstance();
+    scheduleService.setOrchestrator(orchestrator);
+    await scheduleService.start(process.env.DATABASE_URL).catch(err =>
+      logger.error('Failed to start ScheduleService:', err),
+    );
   }
 
   // Story 6.2 — load skills from library

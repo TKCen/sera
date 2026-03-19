@@ -12,6 +12,7 @@ import type { ToolDefinition, ToolCall } from '../lib/llm/types.js';
 import type { ChatMessage } from '../agents/types.js';
 import { Logger } from '../lib/logger.js';
 import { parseJson } from '../lib/json.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('ToolExecutor');
 
@@ -74,6 +75,14 @@ export class ToolExecutor {
     const isAllowed = allowed.some(p => ToolExecutor.matches(p, skillId));
 
     if (isDenied || !isAllowed) {
+      await AuditService.getInstance().record({
+        actorType: 'agent',
+        actorId: agentInstanceId || manifest.metadata.name,
+        actingContext: null,
+        eventType: 'tool.denied',
+        payload: { skillId, agentInstanceId }
+      }).catch(err => logger.error('Audit record failed:', err));
+
       if (this.sandboxManager) {
         (this.sandboxManager as any).audit?.('tool_denied', manifest.metadata.name, {
           skillId,
@@ -118,6 +127,14 @@ export class ToolExecutor {
         this.skillRegistry.invoke(skillId, params, context),
         ToolExecutor.timeout(DEFAULT_TOOL_TIMEOUT_MS, skillId),
       ]);
+
+      await AuditService.getInstance().record({
+        actorType: 'agent',
+        actorId: agentInstanceId || manifest.metadata.name,
+        actingContext: null,
+        eventType: 'tool.called',
+        payload: { skillId, params, success: result.success, error: result.error }
+      }).catch(err => logger.error('Audit record failed:', err));
 
       // Format result
       let content: string;

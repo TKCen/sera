@@ -10,6 +10,7 @@
 
 import { query } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
+import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('MeteringService');
 
@@ -131,6 +132,16 @@ export class MeteringService {
     const dailyUsed = await this.getUsage(agentId, 24);
 
     const allowed = hourlyUsed < hourlyQuota && dailyUsed < dailyQuota;
+
+    if (!allowed) {
+      await AuditService.getInstance().record({
+        actorType: 'agent',
+        actorId: agentId,
+        actingContext: null,
+        eventType: 'budget.exceeded',
+        payload: { hourlyUsed, hourlyQuota, dailyUsed, dailyQuota }
+      }).catch(err => logger.error('Audit record failed:', err));
+    }
 
     return { allowed, hourlyUsed, hourlyQuota, dailyUsed, dailyQuota };
   }

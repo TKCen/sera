@@ -159,6 +159,9 @@ export class SandboxManager {
       Image: request.image ?? 'sera-agent-worker:latest',
       Cmd: request.command ?? (request.type === 'mcp-server' ? undefined : ['npm', 'start']),
       Env: env,
+      AttachStdin: !!request.task,
+      OpenStdin: !!request.task,
+      StdinOnce: !!request.task,
       WorkingDir: request.type === 'mcp-server' ? undefined : '/workspace',
       Labels: {
         'sera.sandbox': 'true',
@@ -184,7 +187,22 @@ export class SandboxManager {
     this.audit('spawn', agentName, { instanceId: finalInstanceId, type: request.type, image: request.image });
 
     const container = await this.docker.createContainer(createOptions);
-    await container.start();
+    
+    if (request.task) {
+      const stream = await container.attach({ stream: true, stdin: true, stdout: false, stderr: false });
+      await container.start();
+      
+      const taskInput = {
+        taskId: `scheduled-${Date.now()}`,
+        task: request.task,
+      };
+      
+      stream.write(JSON.stringify(taskInput) + '\n');
+      stream.end();
+    } else {
+      await container.start();
+    }
+
     const info = await container.inspect();
 
     const sandboxInfo: SandboxInfo = {

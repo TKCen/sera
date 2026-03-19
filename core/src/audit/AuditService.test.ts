@@ -1,79 +1,149 @@
-import crypto from 'crypto';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { AuditService } from '../audit/AuditService.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AuditService } from './AuditService.js';
+import { pool } from '../lib/database.js';
+import crypto from 'node:crypto';
 
-// Mock database to simulate different scenarios
-const mockRows: any[] = [];
+// Mock Database
 vi.mock('../lib/database.js', () => ({
-  query: vi.fn().mockImplementation(async (text, params) => {
-    if (text.startsWith('SELECT hash FROM audit_trail')) {
-      return { rows: mockRows.length > 0 ? [mockRows[mockRows.length - 1]] : [] };
-    }
-    if (text.startsWith('INSERT INTO audit_trail')) {
-      const [agent_id, action, details, timestamp, previous_hash, hash] = params;
-      const entry = { id: mockRows.length + 1, agent_id, action, details: JSON.parse(details), timestamp, previous_hash, hash };
-      mockRows.push(entry);
-      return { rowCount: 1 };
-    }
-    if (text.startsWith('SELECT * FROM audit_trail WHERE agent_id = $1 ORDER BY id ASC')) {
-      return { rows: [...mockRows] };
-    }
-    return { rows: [] };
-  }),
-  initDb: vi.fn().mockResolvedValue(undefined)
+  pool: {
+    query: vi.fn(),
+    connect: vi.fn().mockResolvedValue({
+      query: vi.fn(),
+      release: vi.fn(),
+    }),
+  },
 }));
 
-describe('AuditService Merkle Chain', () => {
+describe('AuditService', () => {
+  let service: AuditService;
+
   beforeEach(() => {
-    mockRows.length = 0;
+    vi.clearAllMocks();
+    service = AuditService.getInstance();
+    (service as any).initialized = false;
+    (service as any).lastHash = null;
   });
 
-  it('should maintain a valid hash chain', async () => {
-    const auditService = AuditService.getInstance();
-    const agentId = 'test-agent';
+  describe('record and Merkle chain', () => {
+    it('creates a genesis record if empty', async () => {
+      // Mock empty DB
+      (pool.connect as any).mockResolvedValueOnce({
+        query: vi.fn()
+          .mockResolvedValueOnce({ rows: [] }) // Check if any records exist
+          .mockResolvedValueOnce({ rows: [{ seq: '1' }] }) // nextval for genesis
+          .mockResolvedValueOnce({ rows: [] }), // INSERT
+        release: vi.fn(),
+      });
 
-    await auditService.record(agentId, 'action1', { key: 'val1' });
-    await auditService.record(agentId, 'action2', { key: 'val2' });
-    await auditService.record(agentId, 'action3', { key: 'val3' });
+      // Verification mock (called inside initialize)
+      (pool.query as any).mockResolvedValueOnce({ rows: [] });
 
-    expect(mockRows.length).toBe(3);
-    expect(mockRows[0].previous_hash).toBeNull();
-    expect(mockRows[1].previous_hash).toBe(mockRows[0].hash);
-    expect(mockRows[2].previous_hash).toBe(mockRows[1].hash);
+      await service.initialize();
+      
+      expect(pool.connect).toHaveBeenCalled();
+    });
 
-    const result = await auditService.verify(agentId);
-    expect(result.valid).toBe(true);
+    it('computes hashes correctly linking to previous records', async () => {
+      const clientMock = {
+        query: vi.fn(),
+        release: vi.fn(),
+      };
+      (pool.connect as any).mockResolvedValue(clientMock);
+
+      // Setup for record()
+      clientMock.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // LOCK
+        .mockResolvedValueOnce({ rows: [{ hash: 'prev-hash' }] }) // Get last record hash
+        .mockResolvedValueOnce({ rows: [{ seq: '10' }] }) // nextval
+        .mockResolvedValueOnce({ rows: [] }) // INSERT
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
+
+      await service.record({
+        actorType: 'agent',
+        actorId: 'agent-1',
+        actingContext: null,
+        eventType: 'test.event',
+        payload: { foo: 'bar' }
+      });
+
+      // Verify the insert call had a hash and prev_hash
+      const insertCall = clientMock.query.mock.calls.find(c => c[0].includes('INSERT INTO audit_trail'));
+      expect(insertCall).toBeDefined();
+      if (insertCall) {
+        expect(insertCall[1][7]).toBe('prev-hash'); // prev_hash
+        expect(insertCall[1][8]).toBeDefined(); // hash
+      }
+    });
   });
 
-  it('should detect tampering in details', async () => {
-    const auditService = AuditService.getInstance();
-    const agentId = 'tamper-agent';
+  describe('verifyIntegrity', () => {
+    it('returns valid: true for consistent chain', async () => {
+      const timestamp = new Date();
+      // Manual hash computation to match service
+      const computeHash = (seq: string, prev: string | null) => {
+        const canonical = [
+          seq,
+          timestamp.toISOString(),
+          'agent',
+          'agent-1',
+          'test.event',
+          JSON.stringify({ foo: 'bar' }),
+          prev || ''
+        ].join('|');
+        return crypto.createHash('sha256').update(canonical).digest('hex');
+      };
 
-    await auditService.record(agentId, 'action1', { data: 'safe' });
-    await auditService.record(agentId, 'action2', { data: 'safe' });
+      const hash1 = computeHash('1', null);
+      const hash2 = computeHash('2', hash1);
 
-    // Tamper with first entry's details
-    mockRows[0].details = { data: 'TAMPERED' };
+      (pool.query as any).mockResolvedValueOnce({
+        rows: [
+          { sequence: '2', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: hash1, hash: hash2 },
+          { sequence: '1', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: null, hash: hash1 },
+        ]
+      });
 
-    const result = await auditService.verify(agentId);
-    expect(result.valid).toBe(false);
-    expect(result.brokenAt).toBe(1);
-    expect(result.reason).toContain('Hash mismatch');
-  });
+      const result = await service.verifyIntegrity();
+      expect(result.valid).toBe(true);
+    });
 
-  it('should detect broken links in the chain', async () => {
-    const auditService = AuditService.getInstance();
-    const agentId = 'link-agent';
+    it('detects tampering when a record hash is invalid', async () => {
+      const timestamp = new Date();
+      (pool.query as any).mockResolvedValueOnce({
+        rows: [
+          { sequence: '1', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: null, hash: 'WRONG-HASH' },
+        ]
+      });
 
-    await auditService.record(agentId, 'action1', { data: 'safe' });
-    await auditService.record(agentId, 'action2', { data: 'safe' });
+      const result = await service.verifyIntegrity();
+      expect(result.valid).toBe(false);
+      expect(result.brokenAt).toBe('1');
+    });
 
-    // Tamper with second entry's previous_hash
-    mockRows[1].previous_hash = 'corrupted_hash';
+    it('detects tampering when the chain link is broken', async () => {
+      const timestamp = new Date();
+      const hash1 = 'real-hash-1';
+      const hash2 = 'real-hash-2'; // Assume these are correctly computed for the fields but the link is broken
 
-    const result = await auditService.verify(agentId);
-    expect(result.valid).toBe(false);
-    expect(result.brokenAt).toBe(2);
-    expect(result.reason).toContain('Previous hash mismatch');
+      // Mock computeHash to return consistent hashes but we'll break the prev_hash link
+      const originalComputeHash = (service as any).computeHash;
+      (service as any).computeHash = vi.fn()
+        .mockReturnValueOnce('hash-1')
+        .mockReturnValueOnce('hash-2');
+
+      (pool.query as any).mockResolvedValueOnce({
+        rows: [
+          { sequence: '2', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: 'WRONG-PREV-HASH', hash: 'hash-2' },
+          { sequence: '1', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: null, hash: 'hash-1' },
+        ]
+      });
+
+      const result = await service.verifyIntegrity();
+      expect(result.valid).toBe(false);
+      expect(result.brokenAt).toBe('2');
+      
+      (service as any).computeHash = originalComputeHash;
+    });
   });
 });

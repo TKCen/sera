@@ -195,8 +195,34 @@ export class AgentManifestLoader {
           'capabilities',
         );
       }
-    }
-    // ── Construct validated manifest ──────────────────────────────────────────
+      }
+
+      // ── schedules ─────────────────────────────────────────────────────────────
+      if (obj['schedules']) {
+      if (!Array.isArray(obj['schedules'])) {
+        throw new ManifestValidationError(
+          `"schedules" must be an array of objects${ctx}`,
+          'schedules',
+        );
+      }
+      for (let i = 0; i < obj['schedules'].length; i++) {
+        const s = obj['schedules'][i] as Record<string, unknown>;
+        const sCtx = `${ctx} schedules[${i}]`;
+        AgentManifestLoader.requireString(s, 'name', sCtx);
+        AgentManifestLoader.requireString(s, 'type', sCtx);
+        if (s['type'] !== 'cron' && s['type'] !== 'once') {
+          throw new ManifestValidationError(
+            `Schedule type must be "cron" or "once", got "${String(s['type'])}"${sCtx}`,
+            `schedules[${i}].type`,
+          );
+        }
+        AgentManifestLoader.requireString(s, 'expression', sCtx);
+        AgentManifestLoader.requireString(s, 'task', sCtx);
+      }
+      }
+
+      // ── Construct validated manifest ──────────────────────────────────────────
+
     return obj as unknown as AgentManifest;
   }
 

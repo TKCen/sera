@@ -202,7 +202,7 @@ export class MemoryManager {
 
     try {
       const vector = await this.embeddingService.generateEmbedding(query);
-      const vectorResults = await this.vectorService.search(vector, limit);
+      const vectorResults = await this.vectorService.searchLegacy(vector, limit);
 
       const entries: MemoryEntry[] = [];
       for (const res of vectorResults) {
@@ -257,14 +257,15 @@ export class MemoryManager {
       try {
         const vector = await this.embeddingService.generateEmbedding(query);
         // Search specifically in the 'archive' type if possible, or just general search
-        const vectorResults = await this.vectorService.search(vector, 3, {
+        const vectorResults = await this.vectorService.searchLegacy(vector, 3, {
           must: [{ key: 'type', match: { value: 'archive' } }]
         });
 
         if (vectorResults.length > 0) {
           sections.push('## Relevant Archival Memory');
           for (const res of vectorResults) {
-            sections.push(`### ${res.payload?.title || 'Unknown'}\n${res.payload?.content || ''}`);
+            const p = res.payload as Record<string, unknown> | undefined;
+          sections.push(`### ${p?.['title'] || 'Unknown'}\n${p?.['content'] || ''}`);
           }
         }
       } catch (err) {

@@ -67,6 +67,18 @@ Each phase produces a meaningful, runnable milestone — not just a collection o
 
 ---
 
+## Phase 4 — Consolidation: Technical debt, migrations, clean architecture
+
+**Target state:** All legacy shims removed, one coherent memory model, fully tested internals. Safe to hand off to community contributors.
+
+| Epic | Stories to implement | Notes |
+|---|---|---|
+| **19 Memory System Consolidation** | All (19.1–19.5) | Retire Letta-style memory; migrate BaseAgent/WorkerAgent to Epic 8 scoped model; remove MemoryManager, Reflector; on-disk migration for legacy files |
+
+**Phase 4 milestone:** Zero references to the old Letta memory system; all agents read the same scoped memory; memory graph UI reflects real data.
+
+---
+
 ## Dependency constraints
 
 These are hard prerequisites — do not start a story before its upstream is complete:
@@ -83,6 +95,9 @@ Epic 07 (MCP containers) → Epic 07 (sera-core as MCP server, Story 7.7)
 Epic 08 (git knowledge) → Epic 10 (circle knowledge sharing)
 Epic 09 (channels) → Epic 18
 Epic 15 (plugin SDK) → @sera/mcp-sdk (Story 15.8)
+Epic 08 (Memory & RAG) → Epic 19 (Memory Consolidation)
+Epic 05 (Agent Runtime) → Epic 19 (BaseAgent migration)
+Epic 13 (sera-web Agent UX) → Epic 19 (memory graph UI must be updated before old routes are removed)
 ```
 
 ---

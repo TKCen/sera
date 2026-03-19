@@ -2,41 +2,143 @@ import type { Pool } from 'pg';
 import { SkillInjector } from '../skills/SkillInjector.js';
 import type { ChatMessage } from './LiteLLMClient.js';
 import { Orchestrator } from '../agents/Orchestrator.js';
+import { EmbeddingService } from '../services/embedding.service.js';
+import { VectorService } from '../services/vector.service.js';
+import type { MemoryNamespace, SearchFilter } from '../services/vector.service.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('ContextAssembler');
+
+// Default token budget for injected memory (characters / 4 ≈ tokens)
+const DEFAULT_MEMORY_CHAR_BUDGET = 16_000; // ~4000 tokens
+const DEFAULT_TOP_K = 8;
 
 export class ContextAssembler {
   private skillInjector: SkillInjector;
+  private vectorService = new VectorService('_ctx_assembler_unused');
+  private embeddingService = EmbeddingService.getInstance();
 
   constructor(private pool: Pool, private orchestrator: Orchestrator) {
     this.skillInjector = new SkillInjector(pool);
   }
 
   /**
-   * Assembles the context for an LLM call.
-   * Currently handles skill injection. In the future, it will handle Memory RAG.
+   * Assembles the context for an LLM call:
+   * 1. Skill injection
+   * 2. RAG — embed current message, search all accessible namespaces,
+   *    inject top-K memory blocks into the system prompt.
    */
   async assemble(agentId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
     const systemMessage = messages.find(m => m.role === 'system');
     if (!systemMessage) return messages;
 
-    // 1. Get agent manifest to know declared skills
-    const manifest = this.orchestrator.getManifestByInstanceId(agentId) 
+    const manifest = this.orchestrator.getManifestByInstanceId(agentId)
                   || this.orchestrator.getManifest(agentId);
 
     if (!manifest) return messages;
 
-    // 2. Identify current user message for auto-triggering
-    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-    const content = lastUserMessage?.content || '';
+    // Skip assembly if agent has no memory configuration
+    if (!manifest.memory) return messages;
 
-    // 3. Inject skills
-    const newSystemPrompt = await this.skillInjector.inject(
-      systemMessage.content || '',
-      manifest.skills || [],
-      (manifest as any).skillPackages || [],
-      content
+    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+    const currentMessage = lastUserMessage?.content ?? '';
+
+    // 1. Inject skills
+    const skillsPrompt = await this.skillInjector.inject(
+      systemMessage.content ?? '',
+      manifest.skills ?? [],
+      (manifest as any).skillPackages ?? [],
+      currentMessage,
     );
 
-    // 4. Return updated messages
-    return messages.map(m => m.role === 'system' ? { ...m, content: newSystemPrompt } : m);
+    // 2. RAG memory retrieval
+    const memoryContext = await this.retrieveMemoryContext(
+      agentId,
+      manifest,
+      currentMessage,
+    );
+
+    const newSystemContent = memoryContext
+      ? `${skillsPrompt}\n\n${memoryContext}`
+      : skillsPrompt;
+
+    return messages.map(m =>
+      m.role === 'system' ? { ...m, content: newSystemContent } : m,
+    );
+  }
+
+  private async retrieveMemoryContext(
+    agentId: string,
+    manifest: import('../agents/manifest/types.js').AgentManifest,
+    currentMessage: string,
+  ): Promise<string | null> {
+    if (!this.embeddingService.isAvailable()) {
+      logger.debug(`ContextAssembler: embedding unavailable for agent ${agentId}, skipping RAG`);
+      return null;
+    }
+    if (!currentMessage.trim()) return null;
+
+    const start = Date.now();
+
+    // Build accessible namespaces
+    const namespaces: MemoryNamespace[] = [];
+
+    // Personal namespace — always included
+    namespaces.push(`personal:${agentId}`);
+
+    // Circle namespaces
+    const primaryCircle = manifest.metadata.circle;
+    if (primaryCircle) namespaces.push(`circle:${primaryCircle}`);
+    if (manifest.metadata.additionalCircles) {
+      for (const c of manifest.metadata.additionalCircles) {
+        namespaces.push(`circle:${c}`);
+      }
+    }
+
+    // Global — included unless manifest explicitly disables it
+    // DECISION: all agents have global read access by default
+    namespaces.push('global');
+
+    let queryVector: number[];
+    try {
+      queryVector = await this.embeddingService.embed(currentMessage);
+    } catch (err) {
+      logger.debug('ContextAssembler: failed to embed message, skipping RAG', err);
+      return null;
+    }
+
+    const filter: SearchFilter = {};
+    let results;
+    try {
+      results = await this.vectorService.search(namespaces, queryVector, DEFAULT_TOP_K, filter);
+    } catch (err) {
+      logger.debug('ContextAssembler: vector search failed, skipping RAG', err);
+      return null;
+    }
+
+    if (results.length === 0) return null;
+
+    // Build <memory> block, respect token budget (trim lowest-score blocks first)
+    const charBudget = DEFAULT_MEMORY_CHAR_BUDGET;
+    const blocks: string[] = [];
+    let charCount = 0;
+
+    for (const r of results) {
+      const content = (r.payload.content as string | undefined) ?? '';
+      const blockXml = `<block id="${r.id}" type="${r.payload.type ?? ''}" scope="${r.namespace}" author="${r.payload.agent_id ?? ''}" timestamp="${r.payload.created_at ?? ''}">${content}</block>`;
+      if (charCount + blockXml.length > charBudget) break;
+      blocks.push(blockXml);
+      charCount += blockXml.length;
+      logger.debug(`ContextAssembler: retrieved block ${r.id} from ${r.namespace} (score=${r.score.toFixed(3)})`);
+    }
+
+    if (blocks.length === 0) return null;
+
+    const elapsed = Date.now() - start;
+    if (elapsed > 200) {
+      logger.warn(`ContextAssembler: memory retrieval took ${elapsed}ms (>200ms budget)`);
+    }
+
+    return `<memory>\n${blocks.join('\n')}\n</memory>`;
   }
 }

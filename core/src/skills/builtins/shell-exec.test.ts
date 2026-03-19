@@ -18,6 +18,7 @@ describe('shellExecSkill', () => {
     agentInstanceId: 'test-instance',
     containerId: undefined,
     sandboxManager: undefined,
+    sessionId: 'test-session',
   };
 
   it('should successfully execute a basic shell command', async () => {

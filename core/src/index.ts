@@ -63,6 +63,10 @@ import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
 import { createMeteringRouter } from './routes/metering.js';
 import { createTasksRouter, pruneOldTaskResults } from './routes/tasks.js';
+import { createKnowledgeRouter } from './routes/knowledge.js';
+import { KnowledgeGitService } from './memory/KnowledgeGitService.js';
+import { MemoryCompactionService } from './memory/MemoryCompactionService.js';
+import { EmbeddingService } from './services/embedding.service.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -171,6 +175,7 @@ app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
 app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
 app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRegistry));
 app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
+app.use('/api/knowledge', authMiddleware, createKnowledgeRouter());
 
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
@@ -227,6 +232,17 @@ const startServer = async () => {
   logger.info(`Skill Library loaded: ${skillStats.updated} skills/packages, ${skillStats.skipped} skipped, ${skillStats.errors.length} errors`);
   
   skillLibrary.watchSkills();
+
+  // Epic 8 — warm up embedding service and init system knowledge repo
+  await EmbeddingService.getInstance().warmup();
+  await KnowledgeGitService.getInstance().initSystemRepo().catch(err =>
+    logger.warn('Failed to init system knowledge repo:', err),
+  );
+  if (process.env.DATABASE_URL) {
+    await MemoryCompactionService.getInstance().start(process.env.DATABASE_URL).catch(err =>
+      logger.warn('MemoryCompactionService failed to start:', err),
+    );
+  }
 
   await orchestrator.startDockerEventListener();
 

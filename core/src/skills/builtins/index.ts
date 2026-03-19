@@ -12,12 +12,12 @@ import { scheduleTaskSkill } from './schedule-task.js';
 
 /**
  * Register all built-in skills with a SkillRegistry instance.
- *
- * Knowledge skills require a MemoryManager, so it's passed as a dependency.
+ * The memoryManager parameter is kept for backward compat but no longer used
+ * by the knowledge skills (they operate on the scoped stores directly).
  */
 export function registerBuiltinSkills(
   registry: SkillRegistry,
-  memoryManager: MemoryManager,
+  _memoryManager: MemoryManager,
 ): void {
   registry.register(webSearchSkill);
   registry.register(webFetchSkill);
@@ -26,6 +26,6 @@ export function registerBuiltinSkills(
   registry.register(fileListSkill);
   registry.register(shellExecSkill);
   registry.register(scheduleTaskSkill);
-  registry.register(createKnowledgeStoreSkill(memoryManager));
-  registry.register(createKnowledgeQuerySkill(memoryManager));
+  registry.register(createKnowledgeStoreSkill());
+  registry.register(createKnowledgeQuerySkill());
 }

@@ -53,6 +53,8 @@
     "openai": "^4.0",
     "opossum": "^9.0.0",
     "pg": "^8.11",
+    "pg-boss": "^12.14.0",
+    "simple-git": "^3.33.0",
     "uuid": "^10.0",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.17.5",

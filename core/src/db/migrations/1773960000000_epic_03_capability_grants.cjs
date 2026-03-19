@@ -1,6 +1,7 @@
 /**
  * Epic 03 — capability_grants table and agent_instances workspace quota columns.
  * Story 3.9 (capability_grants), Story 3.12 (workspace_used_gb, workspace_limit_gb)
+ * See docs/MIGRATIONS.md — all DDL is idempotent.
  */
 
 exports.up = (pgm) => {
@@ -35,28 +36,18 @@ exports.up = (pgm) => {
       notNull: false,
       comment: 'Operator identity (JWT sub) who approved the grant',
     },
-    expires_at: {
-      type: 'timestamptz',
-      notNull: false,
-    },
-    revoked_at: {
-      type: 'timestamptz',
-      notNull: false,
-    },
-    created_at: {
-      type: 'timestamptz',
-      notNull: true,
-      default: pgm.func('NOW()'),
-    },
-  });
+    expires_at: { type: 'timestamptz', notNull: false },
+    revoked_at: { type: 'timestamptz', notNull: false },
+    created_at: { type: 'timestamptz', notNull: true, default: pgm.func('NOW()') },
+  }, { ifNotExists: true });
 
-  pgm.createIndex('capability_grants', ['agent_instance_id']);
-  pgm.createIndex('capability_grants', ['agent_instance_id', 'revoked_at']);
+  pgm.sql(`
+    CREATE INDEX IF NOT EXISTS capability_grants_agent_idx         ON capability_grants (agent_instance_id);
+    CREATE INDEX IF NOT EXISTS capability_grants_agent_revoked_idx ON capability_grants (agent_instance_id, revoked_at);
+  `);
 
   // Story 3.12 — workspace disk quota tracking on agent_instances
-  pgm.addColumn('agent_instances', {
-    workspace_used_gb: { type: 'numeric(10, 3)', notNull: false },
-  });
+  pgm.sql('ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS workspace_used_gb numeric(10,3)');
 };
 
 exports.down = (pgm) => {

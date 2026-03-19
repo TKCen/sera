@@ -32,6 +32,10 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://litellm:4000/v1}
       - LLM_API_KEY=${LITELLM_MASTER_KEY:-lm-studio}
       - HOST_WORKSPACES_DIR=${PWD}/workspaces
+      # Set OLLAMA_URL to enable local embeddings, e.g.:
+      # - OLLAMA_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3001:3001"
     networks:
@@ -56,14 +60,10 @@ services:
       dockerfile: Dockerfile
     container_name: sera-web
     restart: unless-stopped
-    environment:
-      - HOSTNAME=0.0.0.0
-      - NEXT_PUBLIC_CENTRIFUGO_URL=ws://localhost:10001/connection/websocket
-      - CORE_API_URL=http://sera-core:3001
     networks:
       - sera_net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

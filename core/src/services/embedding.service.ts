@@ -2,7 +2,7 @@ import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('EmbeddingService');
 
-const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+const OLLAMA_URL = process.env.OLLAMA_URL; // undefined → not configured
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? 'nomic-embed-text';
 const VECTOR_SIZE = 768; // nomic-embed-text produces 768-dim vectors
 
@@ -45,8 +45,14 @@ export class EmbeddingService {
     return EmbeddingService.instance;
   }
 
+  /** True only when OLLAMA_URL is configured AND connection succeeded. */
   isAvailable(): boolean {
     return this.available;
+  }
+
+  /** True when OLLAMA_URL env var is explicitly set. */
+  isConfigured(): boolean {
+    return !!OLLAMA_URL;
   }
 
   async embed(text: string): Promise<number[]> {
@@ -81,6 +87,7 @@ export class EmbeddingService {
   }
 
   private async callOllama(text: string, attempt = 0): Promise<number[]> {
+    if (!OLLAMA_URL) throw new Error('OLLAMA_URL not configured');
     const maxAttempts = 5;
     const start = Date.now();
     try {
@@ -115,13 +122,22 @@ export class EmbeddingService {
     }
   }
 
-  /** Warm up: verify Ollama is reachable at startup. Logs but does not throw. */
+  /**
+   * Warm up: verify Ollama is reachable at startup.
+   * Skipped entirely when OLLAMA_URL is not configured.
+   * Logs but does not throw.
+   */
   async warmup(): Promise<void> {
+    if (!OLLAMA_URL) {
+      logger.info('EmbeddingService: OLLAMA_URL not set — embeddings disabled. Set OLLAMA_URL to enable RAG.');
+      this.available = false;
+      return;
+    }
     try {
       await this.callOllama('warmup');
       logger.info(`EmbeddingService ready (model: ${EMBEDDING_MODEL}, url: ${OLLAMA_URL})`);
     } catch {
-      logger.error('EmbeddingService: Ollama not reachable at startup — RAG will be disabled until Ollama comes online');
+      logger.warn(`EmbeddingService: Ollama not reachable at ${OLLAMA_URL} — RAG disabled until Ollama comes online`);
       this.available = false;
     }
   }

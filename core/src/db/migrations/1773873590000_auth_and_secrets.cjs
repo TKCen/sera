@@ -1,3 +1,7 @@
+/**
+ * Migration: Auth & Secrets
+ * See docs/MIGRATIONS.md — all DDL is idempotent.
+ */
 exports.up = (pgm) => {
   // ── API Keys ────────────────────────────────────────────────────────────
   pgm.createTable('api_keys', {
@@ -10,9 +14,11 @@ exports.up = (pgm) => {
     expires_at: { type: 'timestamptz' },
     last_used_at: { type: 'timestamptz' },
     revoked_at: { type: 'timestamptz' },
-  });
-  pgm.createIndex('api_keys', ['owner_sub']);
-  pgm.createIndex('api_keys', ['key_hash']);
+  }, { ifNotExists: true });
+  pgm.sql(`
+    CREATE INDEX IF NOT EXISTS api_keys_owner_idx ON api_keys (owner_sub);
+    CREATE INDEX IF NOT EXISTS api_keys_hash_idx  ON api_keys (key_hash);
+  `);
 
   // ── Secrets ─────────────────────────────────────────────────────────────
   pgm.createTable('secrets', {
@@ -30,8 +36,8 @@ exports.up = (pgm) => {
     rotated_at: { type: 'timestamptz' },
     expires_at: { type: 'timestamptz' },
     deleted_at: { type: 'timestamptz' },
-  });
-  pgm.createIndex('secrets', ['name']);
+  }, { ifNotExists: true });
+  pgm.sql('CREATE INDEX IF NOT EXISTS secrets_name_idx ON secrets (name)');
 };
 
 exports.down = (pgm) => {

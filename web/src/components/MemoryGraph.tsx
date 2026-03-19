@@ -1,9 +1,6 @@
-"use client";
-
-import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import ForceGraph2D, { ForceGraphMethods } from "react-force-graph-2d";
-import { useRouter } from "next/navigation";
-import { X, Search } from "lucide-react";
+import { useNavigate } from "react-router";
 
 export interface GraphNode {
   id: string;
@@ -48,7 +45,7 @@ export default function MemoryGraph({
   className = ""
 }: MemoryGraphProps) {
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
-  const router = useRouter();
+  const navigate = useNavigate();
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -75,9 +72,9 @@ export default function MemoryGraph({
     if (onNodeDoubleClick) {
       onNodeDoubleClick(node as GraphNode);
     } else {
-      router.push(`/memory/${node.id}`);
+      void navigate(`/memory/${node.id as string}`);
     }
-  }, [onNodeDoubleClick, router]);
+  }, [onNodeDoubleClick, navigate]);
 
   const handleNodeClick = useCallback((node: any) => {
     const now = Date.now();

@@ -1,19 +1,19 @@
-'use client';
-
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { NavLink, useLocation } from 'react-router';
 import {
   MessageSquare,
   Bot,
   CalendarClock,
   BarChart3,
   Settings,
-  Plus,
-  Circle,
+  CircleIcon,
   Users,
   Wrench,
+  ChevronLeft,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { request } from '@/lib/api/client';
+import type { HealthResponse } from '@/lib/api/types';
+import { cn } from '@/lib/utils';
 
 interface NavItem {
   label: string;
@@ -30,7 +30,7 @@ const navGroups: NavGroup[] = [
   {
     title: 'Workspace',
     items: [
-      { label: 'New Chat', href: '/chat', icon: <Plus size={16} /> },
+      { label: 'Chat', href: '/chat', icon: <MessageSquare size={16} /> },
       { label: 'Agents', href: '/agents', icon: <Bot size={16} /> },
       { label: 'Circles', href: '/circles', icon: <Users size={16} /> },
       { label: 'Tools', href: '/tools', icon: <Wrench size={16} /> },
@@ -56,79 +56,83 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-export default function Sidebar() {
-  const pathname = usePathname();
+export function Sidebar() {
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState(false);
   const [coreStatus, setCoreStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
-    fetch('/api/core/health')
-      .then(res => res.ok ? setCoreStatus('online') : setCoreStatus('offline'))
-      .catch(() => setCoreStatus('offline'));
-
-    const interval = setInterval(() => {
-      fetch('/api/core/health')
-        .then(res => res.ok ? setCoreStatus('online') : setCoreStatus('offline'))
+    const check = () => {
+      request<HealthResponse>('/health')
+        .then(() => setCoreStatus('online'))
         .catch(() => setCoreStatus('offline'));
-    }, 30000);
-
+    };
+    check();
+    const interval = setInterval(check, 30_000);
     return () => clearInterval(interval);
   }, []);
 
-  const isActive = (href: string) => {
-    if (href === '/chat') return pathname === '/chat' || pathname.startsWith('/chat/');
-    if (href === '/agents') return pathname === '/agents' || pathname.startsWith('/agents/');
-    return pathname === href || pathname.startsWith(href + '/');
-  };
+  const isActive = (href: string) =>
+    location.pathname === href || location.pathname.startsWith(href + '/');
 
-  const statusColor = coreStatus === 'online'
-    ? 'text-sera-success'
-    : coreStatus === 'offline'
-      ? 'text-sera-error'
-      : 'text-sera-warning';
+  const statusColor =
+    coreStatus === 'online'
+      ? 'text-sera-success'
+      : coreStatus === 'offline'
+        ? 'text-sera-error'
+        : 'text-sera-warning';
 
-  const statusLabel = coreStatus === 'online'
-    ? 'Online'
-    : coreStatus === 'offline'
-      ? 'Offline'
-      : 'Checking…';
+  const statusLabel =
+    coreStatus === 'online' ? 'Online' : coreStatus === 'offline' ? 'Offline' : 'Checking…';
 
   return (
-    <aside className="w-60 h-screen flex flex-col bg-sera-surface border-r border-sera-border flex-shrink-0">
+    <aside
+      className={cn(
+        'flex h-screen flex-col bg-sera-surface border-r border-sera-border flex-shrink-0 transition-all duration-200',
+        collapsed ? 'w-14' : 'w-60',
+      )}
+    >
       {/* Brand */}
-      <div className="px-5 py-5 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-sera-accent flex items-center justify-center">
-          <span className="text-sera-bg font-bold text-sm">S</span>
-        </div>
-        <div>
-          <h1 className="text-sm font-semibold text-sera-text tracking-tight">SERA</h1>
-          <p className="text-[10px] text-sera-text-dim">v1.0 — Agentic Platform</p>
-        </div>
+      <div className={cn('flex items-center gap-3 px-4 py-5', collapsed && 'justify-center px-2')}>
+        <NavLink to="/chat" className="flex items-center gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-sera-accent flex items-center justify-center flex-shrink-0">
+            <span className="text-sera-bg font-bold text-sm">S</span>
+          </div>
+          {!collapsed && (
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold text-sera-text tracking-tight">SERA</h1>
+              <p className="text-[10px] text-sera-text-dim truncate">Agentic Platform</p>
+            </div>
+          )}
+        </NavLink>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-5">
+      <nav className="flex-1 overflow-y-auto px-2 py-2 space-y-4">
         {navGroups.map((group) => (
           <div key={group.title}>
-            <div className="sera-section-label">{group.title}</div>
+            {!collapsed && (
+              <div className="sera-section-label">{group.title}</div>
+            )}
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const active = isActive(item.href);
                 return (
-                  <Link
+                  <NavLink
                     key={item.href}
-                    href={item.href}
-                    className={`
-                      flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium
-                      transition-all duration-150 ease-out
-                      ${active
-                        ? 'bg-sera-accent-soft text-sera-accent border-l-[3px] border-sera-accent ml-0'
-                        : 'text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover'
-                      }
-                    `}
+                    to={item.href}
+                    title={collapsed ? item.label : undefined}
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150',
+                      collapsed && 'justify-center px-0',
+                      active
+                        ? 'bg-sera-accent-soft text-sera-accent border-l-[3px] border-sera-accent'
+                        : 'text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover border-l-[3px] border-transparent',
+                    )}
                   >
                     <span className={active ? 'text-sera-accent' : ''}>{item.icon}</span>
-                    {item.label}
-                  </Link>
+                    {!collapsed && item.label}
+                  </NavLink>
                 );
               })}
             </div>
@@ -136,13 +140,31 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer — Core Status */}
-      <div className="px-5 py-4 border-t border-sera-border">
-        <div className="flex items-center gap-2 text-xs">
-          <Circle size={8} className={`${statusColor} fill-current`} />
-          <span className="text-sera-text-dim">Core:</span>
-          <span className={statusColor}>{statusLabel}</span>
-        </div>
+      {/* Footer */}
+      <div className="border-t border-sera-border">
+        {/* Collapse toggle */}
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          className="w-full flex items-center justify-center px-4 py-3 text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover transition-colors duration-150"
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          <ChevronLeft
+            size={16}
+            className={cn('transition-transform duration-200', collapsed && 'rotate-180')}
+          />
+          {!collapsed && <span className="ml-2 text-xs">Collapse</span>}
+        </button>
+
+        {!collapsed && (
+          <div className="px-5 py-3">
+            <div className="flex items-center gap-2 text-xs">
+              <CircleIcon size={8} className={cn('fill-current', statusColor)} />
+              <span className="text-sera-text-dim">Core:</span>
+              <span className={statusColor}>{statusLabel}</span>
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

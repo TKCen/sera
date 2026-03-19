@@ -48,6 +48,9 @@ export class ScheduleService {
     this.boss = new PgBoss(databaseUrl);
     await this.boss.start();
 
+    // Ensure the queue exists before subscribing a worker (pg-boss v9+ requirement)
+    await this.boss.createQueue('agent-schedule');
+
     // Register worker for agent schedules
     await this.boss.work('agent-schedule', async (jobs) => {
       for (const job of jobs) {

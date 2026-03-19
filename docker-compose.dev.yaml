@@ -15,7 +15,8 @@ services:
       - ./workspaces:/workspaces
       - ./agents:/agents:ro
       - ./circles:/circles:ro
-    command: npm run dev
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
+    command: ["npm", "run", "dev"]
     environment:
       - NODE_ENV=development
       - PORT=3001
@@ -34,7 +35,8 @@ services:
       - ./web:/app
       - node_modules_web:/app/node_modules
       - /app/.next
-    command: npm run dev
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
+    command: ["npm", "run", "dev"]
     environment:
       - NODE_ENV=development
 

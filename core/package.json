@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "migrate": "node-pg-migrate up --dir /app/src/db/migrations"
+    "migrate": "node-pg-migrate up --migrations-dir src/db/migrations"
   },
   "keywords": [],
   "author": "",
@@ -32,7 +32,7 @@
     "ts-node": "^10.9",
     "tsx": "^4.0",
     "typescript": "^5.0",
-    "vitest": "^2.1"
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0",

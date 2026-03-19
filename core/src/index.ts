@@ -181,6 +181,11 @@ const startServer = async () => {
   app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permissionService));
   app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
 
+  // Run migrations before anything that touches the database
+  if (process.env.NODE_ENV !== 'test') {
+    await initDb();
+  }
+
   // Story 3.5 — start Docker events listener after registry is ready
   await orchestrator.startDockerEventListener();
 
@@ -198,8 +203,6 @@ const startServer = async () => {
 
   if (process.env.NODE_ENV !== 'test') {
     const port = process.env.PORT || 3001;
-    await initDb();
-    
     // Perform auto-bootstrap
     const bootstrapService = new BootstrapService(agentRegistry, resourceImporter, workspaceRoot);
     await bootstrapService.ensureSeraInstantiated().catch(err => {

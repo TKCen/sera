@@ -214,3 +214,52 @@ export interface ThoughtEvent {
   agentId: string;
   agentDisplayName?: string;
 }
+
+export interface AgentTemplate {
+  name: string;
+  displayName?: string;
+  description?: string;
+  spec?: Record<string, unknown>;
+  lockedFields?: string[];
+}
+
+export interface AgentTask {
+  id: string;
+  agentName: string;
+  type: 'chat' | 'cron' | 'event';
+  status: 'pending' | 'running' | 'done' | 'error';
+  input?: string;
+  output?: string;
+  messageId?: string;
+  createdAt?: string;
+  completedAt?: string;
+}
+
+export interface AgentSchedule {
+  id: string;
+  agentName: string;
+  cron: string;
+  description?: string;
+  lastRunAt?: string;
+  lastRunStatus?: 'success' | 'error';
+  nextRunAt?: string;
+  enabled: boolean;
+}
+
+export interface AgentMemoryBlock {
+  id: string;
+  agentName: string;
+  scope: 'personal' | 'circle' | 'global';
+  type: string;
+  title: string;
+  content?: string;
+  tags?: string[];
+  updatedAt?: string;
+}
+
+export interface ToolInfo {
+  id: string;
+  name?: string;
+  description?: string;
+  server?: string;
+}

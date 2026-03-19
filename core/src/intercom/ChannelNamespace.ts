@@ -31,11 +31,10 @@ export class ChannelNamespace {
 
   /**
    * Direct-message channel between two agents.
-   * Agent IDs are sorted so both sides derive the same channel.
+   * Format: private:{senderId}:{receiverId}
    */
-  static private(agentA: string, agentB: string): string {
-    const sorted = [agentA, agentB].sort();
-    return `private:${sorted[0]}:${sorted[1]}`;
+  static private(fromAgentId: string, toAgentId: string): string {
+    return `private:${fromAgentId}:${toAgentId}`;
   }
 
   /** Circle broadcast channel. */
@@ -51,11 +50,6 @@ export class ChannelNamespace {
   /** LLM token stream channel. */
   static tokens(agentId: string): string {
     return `tokens:${agentId}`;
-  }
-
-  /** Federation channel for cross-instance communication. */
-  static federation(remoteInstance: string): string {
-    return `federation:${remoteInstance}`;
   }
 
   // ── Validation ──────────────────────────────────────────────────────────────
@@ -106,6 +100,10 @@ export class ChannelNamespace {
       case 'circle':
         // circle:{circleId}
         return parts.length === 2 ? prefix : null;
+
+      case 'bridge':
+        // bridge:dm:{circleA}:{circleB}:{agentA}:{agentB}
+        return parts.length >= 2 ? prefix : null;
 
       case 'federation':
         // federation:{remoteInstance}

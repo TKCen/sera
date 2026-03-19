@@ -81,6 +81,7 @@ describe('Federation Verification', () => {
     appA.use('/api/intercom', createIntercomRouter(intercomA, (name) => {
       if (name === 'agent-a') return {
         metadata: { name: 'agent-a', circle: 'circle-a', tier: 1 },
+        intercom: { canMessage: ['*'] }
       } as AgentManifest;
       return undefined;
     }, bridgeA));

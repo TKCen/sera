@@ -102,35 +102,6 @@ export function createIntercomRouter(
   });
 
   /**
-   * Send a direct message to another agent (Story 9.3).
-   * POST /api/agents/:id/message
-   */
-  router.post('/agents/:id/message', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { from, payload } = req.body as { from?: string; payload?: Record<string, unknown> };
-
-      if (!from || !payload) {
-        return res.status(400).json({ error: 'Required fields: from, payload' });
-      }
-
-      const manifest = resolveManifest(from);
-      if (!manifest) {
-        return res.status(404).json({ error: `Agent "${from}" not found` });
-      }
-
-      const msg = await intercom.sendDirectMessage(manifest, id, payload);
-      res.json({ success: true, message: msg });
-    } catch (err) {
-      if (err instanceof IntercomPermissionError) {
-        return res.status(403).json({ error: err.message });
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
-    }
-  });
-
-  /**
    * Retrieve channel history.
    * @param req Express request containing channel and optional limit in query
    * @param res Express response
@@ -217,9 +188,35 @@ export function createIntercomRouter(
         return res.status(400).json({ error: 'agentId query param is required' });
       }
 
-      const token = intercom.generateConnectionToken(agentId);
+      const token = await intercom.generateConnectionToken(agentId);
       res.json({ token });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  /**
+   * Get a Centrifugo subscription token for a channel.
+   * Story 9.5: Role-based subscription token issuance.
+   */
+  router.get('/centrifugo/subscription', async (req, res) => {
+    try {
+      const { channel } = req.query as { channel?: string };
+      if (!channel) {
+        return res.status(400).json({ error: 'channel query param is required' });
+      }
+
+      // Role is extracted from req.operator (added by authMiddleware)
+      const role = req.operator?.roles[0] || 'viewer';
+      const userId = req.operator?.sub || 'anonymous';
+
+      const token = await intercom.generateSubscriptionToken(userId, channel, role);
+      res.json({ token });
+    } catch (err) {
+      if (err instanceof IntercomError) {
+        return res.status(403).json({ error: err.message });
+      }
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });
     }

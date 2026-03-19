@@ -172,7 +172,7 @@ export class MCPRegistry {
         action,
         serverName,
         timestamp: new Date().toISOString()
-      }).catch(err => logger.warn('Failed to broadcast MCP update:', err));
+      }).catch((err: any) => logger.warn('Failed to broadcast MCP update:', err));
     }
   }
 

@@ -8,7 +8,7 @@
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
-import jwt from 'jsonwebtoken';
+import * as jose from 'jose';
 import { Logger } from '../lib/logger.js';
 import { ChannelNamespace } from './ChannelNamespace.js';
 import { pool } from '../lib/database.js';
@@ -34,7 +34,8 @@ const logger = new Logger('Intercom');
 
 export class IntercomService {
   private readonly http: AxiosInstance;
-  private bridge?: any; // To avoid circular dependency issues, we use 'any' or import BridgeService later
+
+  private bridge?: any;
 
   constructor(apiUrl?: string, apiKey?: string) {
     this.http = axios.create({
@@ -66,7 +67,7 @@ export class IntercomService {
         params: { channel, data },
       });
 
-      // Forward to bridge for federation (Story 9.6)
+      // Forward to bridge for federation
       if (this.bridge && data && typeof data === 'object') {
         this.bridge.handleLocalPublish(channel, data).catch((err: any) => {
           logger.warn(`Bridge failed to forward ${channel}: ${err.message}`);
@@ -154,23 +155,6 @@ export class IntercomService {
 
     return this.publishMessage(fromAgentId, circle, channel, 'message', payload, {
       securityTier: fromManifest.metadata.tier,
-    });
-  }
-
-  /**
-   * Story 9.8: Publish a platform-level system event.
-   */
-  async publishSystem(event: string, payload: Record<string, unknown>): Promise<void> {
-    const channel = ChannelNamespace.system(event);
-    await this.publish(channel, {
-      id: uuidv4(),
-      version: '1',
-      timestamp: new Date().toISOString(),
-      source: { agent: 'sera-core', circle: 'system' },
-      target: { channel },
-      type: 'status', // Or a new 'system-event' type if preferred
-      payload,
-      metadata: { securityTier: 0 }
     });
   }
 
@@ -289,6 +273,13 @@ export class IntercomService {
   // ── System Events ──────────────────────────────────────────────────────────
 
   /**
+   * Publish a platform-level system event.
+   */
+  async publishSystem(event: string, payload: Record<string, unknown>): Promise<void> {
+    await this.publishSystemEvent(event, payload);
+  }
+
+  /**
    * Publish a platform event.
    */
   async publishSystemEvent(
@@ -361,26 +352,46 @@ export class IntercomService {
     };
   }
 
+  // ── Tokens (Story 9.5) ─────────────────────────────────────────────────────
+
   /**
    * Generate a JWT for a user/agent to connect to Centrifugo.
    */
-  generateConnectionToken(userId: string): string {
-    return jwt.sign(
-      { sub: userId },
-      CENTRIFUGO_TOKEN_SECRET,
-      { expiresIn: '24h' }
-    );
+  async generateConnectionToken(userId: string): Promise<string> {
+    const secret = new TextEncoder().encode(CENTRIFUGO_TOKEN_SECRET);
+    return new jose.SignJWT({ sub: userId })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('24h')
+      .sign(secret);
   }
 
   /**
-   * Generate a JWT for a user/agent to subscribe to a specific private channel.
+   * Generate a JWT for a user/agent to subscribe to a specific channel.
+   * Story 9.5: role-based channel access matrix.
    */
-  generateSubscriptionToken(userId: string, channel: string): string {
-    return jwt.sign(
-      { sub: userId, channel },
-      CENTRIFUGO_TOKEN_SECRET,
-      { expiresIn: '1h' }
-    );
+  async generateSubscriptionToken(userId: string, channel: string, role: string): Promise<string> {
+    const prefix = ChannelNamespace.getPrefix(channel);
+    
+    // Role-based access control
+    if (role === 'viewer') {
+      if (prefix !== 'thoughts') {
+        throw new IntercomError(`Role "viewer" is only permitted to subscribe to thought streams.`, channel);
+      }
+    } else if (role !== 'admin' && role !== 'operator') {
+      throw new IntercomError(`Unauthorized role: ${role}`, channel);
+    }
+
+    const secret = new TextEncoder().encode(CENTRIFUGO_TOKEN_SECRET);
+    return new jose.SignJWT({ 
+      sub: userId, 
+      channel,
+      role // Include the operator's role as a claim
+    })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('1h') // Expire in 1 hour
+      .sign(secret);
   }
 }
 

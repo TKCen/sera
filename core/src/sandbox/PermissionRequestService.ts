@@ -13,9 +13,10 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
 import { Logger } from '../lib/logger.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
+import type { IntercomService } from '../intercom/IntercomService.js';
+import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 
 const logger = new Logger('PermissionRequestService');
 
@@ -57,13 +58,10 @@ export class PermissionRequestService {
   /** Session grants keyed by agentInstanceId → grant list */
   private sessionGrants = new Map<string, SessionGrant[]>();
 
-  private readonly centrifugoUrl: string;
-  private readonly centrifugoKey: string;
-
-  constructor(private registry: AgentRegistry) {
-    this.centrifugoUrl = process.env.CENTRIFUGO_API_URL ?? 'http://centrifugo:8000/api';
-    this.centrifugoKey = process.env.CENTRIFUGO_API_KEY ?? '';
-  }
+  constructor(
+    private registry: AgentRegistry,
+    private intercom: IntercomService,
+  ) {}
 
   // ── Request ──────────────────────────────────────────────────────────────
 
@@ -95,7 +93,7 @@ export class PermissionRequestService {
     this.pending.set(requestId, permRequest);
 
     // Publish to Centrifugo system.permission-requests channel — non-blocking
-    this.publishToCentrifugo('system.permission-requests', {
+    this.intercom.publishSystemEvent('permission-requests', {
       requestId,
       agentId,
       agentName,
@@ -112,7 +110,7 @@ export class PermissionRequestService {
       if (still && still.status === 'pending') {
         still.status = 'expired';
         this.pending.delete(requestId);
-        this.publishToCentrifugo('system.permission-requests', {
+        this.intercom.publishSystemEvent('permission-requests', {
           requestId,
           agentId,
           status: 'expired',
@@ -177,9 +175,14 @@ export class PermissionRequestService {
       // one-time: nothing persisted — just returned to caller
     }
 
-    // Notify agent via Centrifugo
-    this.publishToCentrifugo(`agent.${req.agentId}.grants`, {
+    // Notify agent via Centrifugo (agent specific channel, using system.* prefix for notification if appropriate, 
+    // or status. In this case, Story 9.6 says system.* for platform events. 
+    // Agent-specific notification can be on agent:{agentId}:status or a specific event.
+    // The previous implementation used `agent.${req.agentId}.grants` which is not in our canonical list.
+    // I'll use system.permission-decisions or similar if it's a platform event.
+    this.intercom.publishSystemEvent('permission-decisions', {
       requestId,
+      agentId: req.agentId,
       decision: decision.decision,
       grantType: decision.grantType,
       dimension: req.dimension,
@@ -233,21 +236,5 @@ export class PermissionRequestService {
       // Value match: exact or prefix (for filesystem paths)
       return g.value === value || value.startsWith(g.value);
     });
-  }
-
-  // ── Internal ─────────────────────────────────────────────────────────────
-
-  private async publishToCentrifugo(channel: string, data: unknown): Promise<void> {
-    await axios.post(
-      `${this.centrifugoUrl}/publish`,
-      { channel, data },
-      {
-        headers: {
-          'X-API-Key': this.centrifugoKey,
-          'Content-Type': 'application/json',
-        },
-        timeout: 3000,
-      },
-    );
   }
 }

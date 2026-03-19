@@ -77,6 +77,7 @@ export const CHANNEL_PREFIXES = [
   'private',
   'circle',
   'system',
+  'bridge',
   'federation',
 ] as const;
 

@@ -103,7 +103,7 @@ const meteringEngine = new MeteringEngine();
 const liteLLMClient = new LiteLLMClient();
 const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
 const agentScheduler = new AgentScheduler();
-const permissionService = new PermissionRequestService(agentRegistry);
+const permissionService = new PermissionRequestService(agentRegistry, intercomService);
 const webhooksService = new WebhooksService(intercomService);
 const resourceImporter = new ResourceImporter(agentRegistry, workspaceRoot);
 

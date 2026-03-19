@@ -15,10 +15,10 @@ describe('ChannelNamespace', () => {
         .toBe('tokens:developer-prime');
     });
 
-    it('builds a DM channel with sorted agent IDs', () => {
-      // Alphabetical order should be consistent regardless of argument order
+    it('builds a DM channel with non-sorted agent IDs', () => {
+      // Order should be preserved per Story 9.1 template
       expect(ChannelNamespace.private('developer-prime', 'architect-prime'))
-        .toBe('private:architect-prime:developer-prime');
+        .toBe('private:developer-prime:architect-prime');
       expect(ChannelNamespace.private('architect-prime', 'developer-prime'))
         .toBe('private:architect-prime:developer-prime');
     });

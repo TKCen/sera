@@ -6,32 +6,78 @@ import type { IntercomService } from './IntercomService.js';
 const logger = new Logger('Webhooks');
 
 export class WebhooksService {
-  constructor(private readonly intercom: IntercomService) {}
+  /** Nonce cache for replay protection: nonce -> expiry timestamp */
+  private nonces = new Map<string, number>();
+  private nonceCleanupInterval: NodeJS.Timeout;
+
+  constructor(private readonly intercom: IntercomService) {
+    // Prune nonces every minute
+    this.nonceCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [nonce, expiry] of this.nonces.entries()) {
+        if (now > expiry) {
+          this.nonces.delete(nonce);
+        }
+      }
+    }, 60 * 1000);
+  }
 
   /**
    * Verify signature of an incoming webhook.
    * HMAC-SHA256(secret, timestamp + "." + body)
+   * Story 9.8: Timing-safe, timestamp range, and nonce check.
    */
-  verifySignature(secret: string, body: string, signature: string, timestamp: string): boolean {
+  verifySignature(
+    secret: string, 
+    body: string, 
+    signature: string, 
+    timestamp: string,
+    nonce?: string
+  ): boolean {
     const now = Date.now();
     const ts = parseInt(timestamp, 10);
 
-    // Replay protection: within 5 minutes
+    // 1. Timestamp validation (reject if absent or > 5 minutes old)
     if (isNaN(ts) || Math.abs(now - ts) > 5 * 60 * 1000) {
       logger.warn(`Webhook timestamp out of range: ${timestamp}`);
       return false;
     }
 
+    // 2. Replay protection (nonce)
+    if (nonce) {
+      if (this.nonces.has(nonce)) {
+        logger.warn(`Duplicate webhook nonce detected: ${nonce}`);
+        return false;
+      }
+      // Store nonce with 5-minute expiry
+      this.nonces.set(nonce, now + 5 * 60 * 1000);
+    }
+
+    // 3. HMAC Validation
     const hmac = crypto.createHmac('sha256', secret);
     const expected = hmac.update(`${timestamp}.${body}`).digest('hex');
 
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    // Use timing-safe comparison
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(signature, 'hex'), 
+        Buffer.from(expected, 'hex')
+      );
+    } catch {
+      return false;
+    }
   }
 
   /**
    * Process an incoming webhook trigger.
    */
-  async handleIncoming(slug: string, rawBody: string, signature: string, timestamp: string): Promise<void> {
+  async handleIncoming(
+    slug: string, 
+    rawBody: string, 
+    signature: string, 
+    timestamp: string,
+    nonce?: string
+  ): Promise<void> {
     const res = await pool.query('SELECT * FROM webhooks WHERE url_path = $1 AND enabled = true', [slug]);
     const webhook = res.rows[0];
 
@@ -39,13 +85,15 @@ export class WebhooksService {
       throw new Error(`Webhook not found or disabled: ${slug}`);
     }
 
-    if (!this.verifySignature(webhook.secret, rawBody, signature, timestamp)) {
+    if (!this.verifySignature(webhook.secret, rawBody, signature, timestamp, nonce)) {
       throw new Error('Invalid webhook signature');
     }
 
+    // Story 9.8: Treat as untrusted. Wrap in delimiters.
+    const wrappedPayload = `<webhook_payload source="${webhook.id}">\n${rawBody}\n</webhook_payload>`;
     const payload = JSON.parse(rawBody);
 
-    // Record delivery (Story 9.8)
+    // Record delivery
     const deliveryRes = await pool.query(
       'INSERT INTO webhook_deliveries (webhook_id, payload, status) VALUES ($1, $2, $3) RETURNING id',
       [webhook.id, payload, 'pending']
@@ -55,7 +103,13 @@ export class WebhooksService {
     // Asynchronous delivery to Intercom
     const publishAndLog = async () => {
       try {
-        await this.intercom.publishSystem(webhook.event_type, payload);
+        // Publish the wrapped payload as content
+        await this.intercom.publishSystemEvent(webhook.event_type, { 
+          raw: rawBody,
+          wrapped: wrappedPayload,
+          data: payload 
+        });
+
         await pool.query(
           'UPDATE webhook_deliveries SET status = $1, processed_at = $2 WHERE id = $3',
           ['success', new Date(), deliveryId]

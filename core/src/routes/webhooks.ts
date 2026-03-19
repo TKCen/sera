@@ -51,6 +51,7 @@ export function createWebhooksRouter(webhooksService: WebhooksService, authMiddl
       const { slug } = req.params;
       const signature = req.headers['x-sera-signature'];
       const timestamp = req.headers['x-sera-timestamp'];
+      const nonce = req.headers['x-sera-nonce'];
       
       const rawBody = (req as any).rawBody 
         ? (req as any).rawBody.toString('utf-8') 
@@ -58,10 +59,10 @@ export function createWebhooksRouter(webhooksService: WebhooksService, authMiddl
 
       const sig = Array.isArray(signature) ? signature[0] : signature;
       const ts = Array.isArray(timestamp) ? timestamp[0] : timestamp;
+      const nc = (Array.isArray(nonce) ? nonce[0] : nonce) || undefined;
 
       if (typeof sig === 'string' && typeof ts === 'string') {
-        // @ts-ignore - sig and ts are narrowed to string but compiler fails to recognize it here
-        await webhooksService.handleIncoming(slug, rawBody, sig, ts);
+        await webhooksService.handleIncoming(slug as string, rawBody, sig, ts, nc as string | undefined);
         return res.status(202).json({ status: 'accepted' });
       }
 

@@ -68,6 +68,73 @@ export function createAgentRouter(
     }
   });
 
+  // ── Get agent thoughts ───────────────────────────────────────────────────
+  /**
+   * Gets persisted thoughts for a specific agent instance.
+   * Story 9.7 persistence.
+   */
+  router.get('/:id/thoughts', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { taskId, limit, offset } = req.query;
+      
+      const intercom = orchestrator.getIntercom();
+      if (!intercom) {
+        return res.status(503).json({ error: 'Intercom service not available' });
+      }
+
+      const thoughts = await intercom.getThoughts(id, {
+        taskId: taskId as string,
+        limit: limit ? parseInt(limit as string) : 50,
+        offset: offset ? parseInt(offset as string) : 0
+      });
+      
+      res.json(thoughts);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * Send a direct message to an agent instance (Story 9.3).
+   * POST /api/agents/:id/message
+   */
+  router.post('/:id/message', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { from, payload } = req.body as { from?: string; payload?: Record<string, unknown> };
+
+      if (!from || !payload) {
+        return res.status(400).json({ error: 'Required fields: from, payload' });
+      }
+
+      const intercom = orchestrator.getIntercom();
+      if (!intercom) {
+        return res.status(503).json({ error: 'Intercom service not available' });
+      }
+
+      // 1. Resolve sender manifest
+      let fromManifest = orchestrator.getManifest(from);
+      if (!fromManifest) {
+        // Try to get manifest by instance ID
+        fromManifest = orchestrator.getManifestByInstanceId(from);
+      }
+
+      if (!fromManifest) {
+        return res.status(404).json({ error: `Sender agent "${from}" not found` });
+      }
+
+      // 2. Send message
+      const msg = await intercom.sendDirectMessage(fromManifest, id, payload);
+      res.json({ success: true, message: msg });
+    } catch (err: any) {
+      if (err.name === 'IntercomPermissionError') {
+        return res.status(403).json({ error: err.message });
+      }
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Get agent instance detail ──────────────────────────────────────────────
   /**
    * Gets detailed information for a specific agent instance.

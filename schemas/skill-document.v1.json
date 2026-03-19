@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SkillDocument V1",
+  "type": "object",
+  "required": ["name", "version", "description", "triggers"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63,
+      "description": "Unique kebab-case identifier for the skill"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name of the skill"
+    },
+    "version": {
+      "type": "string",
+      "description": "Semver version of the skill"
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of what the skill provides"
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of strings that trigger this skill during context assembly"
+    },
+    "category": {
+      "type": "string",
+      "description": "Slash-separated category (e.g. engineering/typescript)"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of skill IDs this skill depends on"
+    },
+    "conflicts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of skill IDs that cannot be loaded alongside this one"
+    },
+    "maxTokens": {
+      "type": "integer",
+      "description": "Hint for context assembly about the size of this skill"
+    },
+    "applies-to": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of tool IDs this skill is relevant for"
+    }
+  }
+}

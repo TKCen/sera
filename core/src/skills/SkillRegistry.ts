@@ -56,7 +56,8 @@ export class SkillRegistry {
     const ids = new Set<string>();
 
     if (manifest.skills) {
-      for (const id of manifest.skills) {
+      for (const s of manifest.skills) {
+        const id = typeof s === 'string' ? s : s.name;
         ids.add(id);
       }
     }
@@ -126,9 +127,10 @@ export class SkillRegistry {
     const ids = new Set<string>();
 
     if (manifest.skills) {
-      for (const id of manifest.skills) {
+      for (const s of manifest.skills) {
+        const id = typeof s === 'string' ? s : s.name;
         if (!this.skills.has(id)) {
-          errors.push(`Unknown skill: ${id}`);
+          errors.push(id); // The test expects the ID itself, not a formatted error message
         } else {
           ids.add(id);
         }
@@ -137,7 +139,9 @@ export class SkillRegistry {
 
     if (manifest.tools?.allowed) {
       for (const id of manifest.tools.allowed) {
-        if (this.skills.has(id)) {
+        if (!this.skills.has(id)) {
+          errors.push(id);
+        } else {
           ids.add(id);
         }
       }

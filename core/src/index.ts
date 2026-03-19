@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'node:fs';
 import { Logger } from './lib/logger.js';
 import { IntercomService } from './intercom/IntercomService.js';
 import { BridgeService } from './intercom/BridgeService.js';
@@ -30,6 +31,7 @@ import { createSchedulesRouter } from './routes/schedules.js';
 import { createOpenAICompatRouter } from './routes/openai-compat.js';
 import { WebhooksService } from './intercom/WebhooksService.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
+import { createMemoryRouter } from './routes/memory.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { IdentityService } from './auth/IdentityService.js';
@@ -39,7 +41,7 @@ import { AgentScheduler } from './metering/AgentScheduler.js';
 import { TelegramAdapter } from './channels/adapters/TelegramAdapter.js';
 import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
 import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
-import { initDb } from './lib/database.js';
+import { initDb, pool } from './lib/database.js';
 import { config } from './lib/config.js';
 import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { AuthService } from './auth/auth-service.js';
@@ -54,7 +56,6 @@ import { BootstrapService } from './agents/bootstrap.service.js';
 import { createRegistryRouter } from './routes/registry.js';
 import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
-import { pool } from './lib/database.js';
 import { LiteLLMClient } from './llm/LiteLLMClient.js';
 import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
@@ -77,17 +78,93 @@ const skillRegistry = new SkillRegistry();
 const agentsDir = path.join(workspaceRoot, 'agents');
 const mcpRegistry = MCPRegistry.getInstance();
 const memoryManager = new MemoryManager();
+const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
+const circleRegistry = new CircleRegistry();
+const circlesDir = path.join(workspaceRoot, 'circles');
+const agentRegistry = new AgentRegistry(pool);
+const identityService = new IdentityService();
+const authService = new AuthService();
+authService.registerPlugin(new ApiKeyProvider());
+const authMiddleware = createAuthMiddleware(identityService, authService);
+const sessionStore = new SessionStore();
+const meteringService = new MeteringService();
+const meteringEngine = new MeteringEngine();
+const liteLLMClient = new LiteLLMClient();
+const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
+const agentScheduler = new AgentScheduler();
+const permissionService = new PermissionRequestService(agentRegistry);
+const webhooksService = new WebhooksService(intercomService);
+const resourceImporter = new ResourceImporter(agentRegistry, workspaceRoot);
+
+// ── Initialization (Sync/Top-level parts) ────────────────────────────────────
+orchestrator.loadTemplates(agentsDir);
+orchestrator.setIntercom(intercomService);
+orchestrator.setToolExecutor(toolExecutor);
+orchestrator.setSandboxManager(sandboxManager);
+orchestrator.setRegistry(agentRegistry);
+orchestrator.setMetering(meteringEngine, agentScheduler);
+orchestrator.setIdentityService(identityService);
+
+registerBuiltinSkills(skillRegistry, memoryManager);
+
+const agentManifests = fs.existsSync(agentsDir) ? AgentManifestLoader.loadAllManifests(agentsDir) : [];
+circleRegistry.loadFromDirectory(circlesDir, agentManifests).catch(() => {});
+
+bridgeService.init(intercomService, circleRegistry);
+intercomService.setBridgeService(bridgeService);
+
+// ── Setup Express App ────────────────────────────────────────────────────────
+app.use(cors());
+app.use(express.json({
+  verify: (req: any, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+
+app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
+
+// Mount Routers
+app.use('/api/auth', authMiddleware, createAuthRouter());
+app.use('/api/secrets', authMiddleware, createSecretsRouter());
+
+const sandboxRouter = createSandboxRouter(sandboxManager, (name) => 
+  agentManifests.find(m => m.metadata.name === name));
+app.use('/api/sandbox', sandboxRouter);
+
+const intercomRouter = createIntercomRouter(
+  intercomService, 
+  (name) => agentManifests.find(m => m.metadata.name === name), 
+  bridgeService
+);
+app.use('/api/intercom', intercomRouter);
+
+app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
+app.use('/api/agents', createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService));
+app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
+
+app.use('/api/circles', createCircleRouter(circleRegistry, circlesDir, () => AgentManifestLoader.loadAllManifests(agentsDir), orchestrator));
+app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator, pool));
+app.use('/api/memory', createMemoryRouter(memoryManager));
+app.use('/api/sessions', createSessionRouter(sessionStore));
+app.use('/api', createChatRouter(sessionStore, orchestrator));
+
+app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService, liteLLMClient, circuitBreakerService, pool, orchestrator));
+app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));
+app.use('/api/providers', authMiddleware, createProvidersRouter(liteLLMClient, circuitBreakerService));
+app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
+app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
+app.use('/api/audit', authMiddleware, createAuditRouter());
+app.use('/api', authMiddleware, createConfigRouter());
+app.use('/api/schedules', authMiddleware, createSchedulesRouter());
+app.use('/v1', createOpenAICompatRouter(orchestrator));
+app.use('/api/lsp', lspRouter);
+app.use('/api/federation', createFederationRouter());
+app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
+
+app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
+app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
 
 const startServer = async () => {
-  const toolExecutor = new ToolExecutor(skillRegistry, sandboxManager);
-
-  // 1. Initialize Orchestrator & Skills
-  orchestrator.loadTemplates(agentsDir);
-  orchestrator.setIntercom(intercomService);
-  orchestrator.setToolExecutor(toolExecutor);
-  orchestrator.setSandboxManager(sandboxManager);
-
-  registerBuiltinSkills(skillRegistry, memoryManager);
   mcpRegistry.getAllTools().then(async () => {
     const count = await skillRegistry.bridgeMCPTools(mcpRegistry);
     if (count > 0) logger.info(`Bridged ${count} MCP tool(s) as skills`);
@@ -102,105 +179,32 @@ const startServer = async () => {
     orchestrator.registerAgent(agent);
   }
 
-  const circleRegistry = new CircleRegistry();
-  const circlesDir = path.join(workspaceRoot, 'circles');
-  const agentManifests = AgentManifestLoader.loadAllManifests(agentsDir);
-  await circleRegistry.loadFromDirectory(circlesDir, agentManifests);
-
-  bridgeService.init(intercomService, circleRegistry);
-  intercomService.setBridgeService(bridgeService);
-
-  // 2. Initialize Identity & Auth
-  const identityService = new IdentityService();
-  const authService = new AuthService();
-  authService.registerPlugin(new ApiKeyProvider());
-  const authMiddleware = createAuthMiddleware(identityService, authService);
-
-  // 3. Initialize Shared State
-  const sessionStore = new SessionStore();
-  const meteringService = new MeteringService();
-  const meteringEngine = new MeteringEngine();
-  const liteLLMClient = new LiteLLMClient();
-  const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
-  const agentScheduler = new AgentScheduler();
-  
-  orchestrator.setMetering(meteringEngine, agentScheduler);
-  orchestrator.setIdentityService(identityService);
   orchestrator.watchAgentsDirectory(agentsDir);
 
-  // 4. Initialize Secrets Manager
   try {
     SecretsManager.getInstance();
   } catch (err) {
     logger.warn('Failed to initialize SecretsManager:', err);
   }
 
-  // 5. Setup Express App
-  app.use(cors());
-  app.use(express.json({
-    verify: (req: any, res, buf) => {
-      req.rawBody = buf;
-    }
-  }));
-
-  const webhooksService = new WebhooksService(intercomService);
-
-  app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
-
-  // Mount Routers (Auth FIRST to avoid prefix interception)
-  app.use('/api/auth', authMiddleware, createAuthRouter());
-  app.use('/api/secrets', authMiddleware, createSecretsRouter());
-
-  const sandboxRouter = createSandboxRouter(sandboxManager, (name) => 
-    agentManifests.find(m => m.metadata.name === name));
-  app.use('/api/sandbox', sandboxRouter);
-
-  const intercomRouter = createIntercomRouter(
-    intercomService, 
-    (name) => agentManifests.find(m => m.metadata.name === name), 
-    bridgeService
-  );
-  app.use('/api/intercom', intercomRouter);
-
-  app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
-  app.use('/api/circles', createCircleRouter(circleRegistry, circlesDir, () => AgentManifestLoader.loadAllManifests(agentsDir), orchestrator));
-  app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator));
-  app.use('/api/sessions', createSessionRouter(sessionStore));
-  app.use('/api', createChatRouter(sessionStore, orchestrator));
-  
-  app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService, liteLLMClient, circuitBreakerService));
-  app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
-  app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));
-  app.use('/api/providers', authMiddleware, createProvidersRouter(liteLLMClient, circuitBreakerService));
-  app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
-  app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
-  app.use('/api/audit', authMiddleware, createAuditRouter());
-  app.use('/api', authMiddleware, createConfigRouter());
-  app.use('/api/schedules', authMiddleware, createSchedulesRouter());
-  app.use('/v1', createOpenAICompatRouter(orchestrator));
-  app.use('/api/lsp', lspRouter);
-  app.use('/api/federation', createFederationRouter());
-  app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
-  
-  const agentRegistry = new AgentRegistry(pool);
-  orchestrator.setRegistry(agentRegistry);
-  const resourceImporter = new ResourceImporter(agentRegistry, workspaceRoot);
-  const permissionService = new PermissionRequestService(agentRegistry);
-
-  app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
-  app.use('/api/agents', createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService));
-  app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permissionService));
-  app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
-
-  // Run migrations before anything that touches the database
   if (process.env.NODE_ENV !== 'test') {
     await initDb();
   }
 
-  // Story 3.5 — start Docker events listener after registry is ready
+  // Story 6.2 — load skills from library
+  const { SkillLibrary } = await import('./skills/SkillLibrary.js');
+  const skillLibrary = SkillLibrary.getInstance(pool);
+  skillLibrary.setIntercom(intercomService);
+  const skillStats = await skillLibrary.loadSkills().catch(err => {
+    logger.error('Failed to load Skill Library:', err);
+    return { updated: 0, skipped: 0, errors: [err.message] };
+  });
+  logger.info(`Skill Library loaded: ${skillStats.updated} skills/packages, ${skillStats.skipped} skipped, ${skillStats.errors.length} errors`);
+  
+  skillLibrary.watchSkills();
+
   await orchestrator.startDockerEventListener();
 
-  // 6. External Adapters
   const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };
   if (config.channels.telegram.token) {
     new TelegramAdapter(config.channels.telegram.token, orchestrator, sessionStore, channelOptions).start().catch(err => logger.error('Failed to start Telegram adapter:', err));
@@ -214,13 +218,11 @@ const startServer = async () => {
 
   if (process.env.NODE_ENV !== 'test') {
     const port = process.env.PORT || 3001;
-    // Perform auto-bootstrap
     const bootstrapService = new BootstrapService(agentRegistry, resourceImporter, workspaceRoot);
     await bootstrapService.ensureSeraInstantiated().catch(err => {
       logger.error('Sera auto-bootstrap failed:', err);
     });
 
-    // Story 5.9 — prune old task results on startup, then every hour
     pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));
     setInterval(() => {
       pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));

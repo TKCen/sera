@@ -99,7 +99,8 @@ export interface AgentManifest {
   identity: AgentIdentity;
   model: ModelConfig;
   tools?: ToolsConfig;
-  skills?: string[];
+  skills?: Array<string | { name: string; version: string }>;
+  skillPackages?: string[];
   subagents?: SubagentsConfig;
   intercom?: IntercomConfig;
   resources?: ResourcesConfig;
@@ -111,7 +112,7 @@ export interface AgentManifest {
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'apiVersion', 'kind', 'metadata', 'identity', 'model',
-  'tools', 'skills', 'subagents', 'intercom', 'resources',
+  'tools', 'skills', 'skillPackages', 'subagents', 'intercom', 'resources',
   'workspace', 'memory', 'permissions',
 ]);
 

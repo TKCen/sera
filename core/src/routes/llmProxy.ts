@@ -26,6 +26,9 @@ import { rateLimitStub } from '../middleware/rateLimitStub.js';
 import type { LiteLLMClient } from '../llm/LiteLLMClient.js';
 import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { Logger } from '../lib/logger.js';
+import type { Pool } from 'pg';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import { ContextAssembler } from '../llm/ContextAssembler.js';
 
 const logger = new Logger('LLMProxy');
 
@@ -65,9 +68,12 @@ export function createLlmProxyRouter(
   meteringService: MeteringService,
   liteLLMClient: LiteLLMClient,
   circuitBreakerService: CircuitBreakerService,
+  pool: Pool,
+  orchestrator: Orchestrator
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(identityService, authService);
+  const contextAssembler = new ContextAssembler(pool, orchestrator);
 
   // ── POST /chat/completions ─────────────────────────────────────────────────
 
@@ -110,11 +116,18 @@ export function createLlmProxyRouter(
       }
 
       // ── 2. Validate request body ───────────────────────────────────────────
-      const { model, messages, temperature, tools, stream } = req.body as Record<string, unknown>;
+      let { model, messages, temperature, tools, stream } = req.body as Record<string, unknown>;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         res.status(400).json({ error: { message: '`messages` array is required and must be non-empty' } });
         return;
+      }
+
+      // ── 2.1 Context Assembly (Story 6.3 / 8.4) ─────────────────────────────
+      try {
+        messages = await contextAssembler.assemble(agentId, messages as any[]);
+      } catch (err) {
+        logger.error('Context assembly failed (continuing without enrichment):', err);
       }
 
       const modelName = typeof model === 'string' ? model : (process.env.LLM_MODEL ?? 'lmstudio-default');
@@ -160,7 +173,7 @@ export function createLlmProxyRouter(
 
       // ── 4. Non-streaming path — call through circuit breaker ───────────────
       logger.info(
-        `Proxy request | agent=${agentId} model=${modelName} messages=${messages.length} ` +
+        `Proxy request | agent=${agentId} model=${modelName} messages=${(messages as any[]).length} ` +
         `tools=${Array.isArray(tools) ? tools.length : 0}`,
       );
 

@@ -101,6 +101,10 @@ export class Orchestrator {
     return this.manifests.get(name);
   }
 
+  public getManifestByInstanceId(instanceId: string): AgentManifest | undefined {
+    return this.agents.get(instanceId)?.getManifest();
+  }
+
   public setSandboxManager(sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager): void {
     this.sandboxManager = sandboxManager;
   }

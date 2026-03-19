@@ -1,14 +1,25 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Set WORKSPACE_DIR before importing app/index.ts
+process.env.WORKSPACE_DIR = path.resolve(__dirname, '..', '..', '..');
+
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import fs from 'fs/promises';
 import os from 'os';
-import path from 'path';
 import { Orchestrator } from '../agents/Orchestrator.js';
 
 // Include all mocks that index.ts depends on
 vi.mock('../lib/database.js', () => ({
   initDb: vi.fn().mockResolvedValue(undefined),
   query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+  pool: {
+    query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+  }
 }));
 
 vi.mock('../lib/llm/OpenAIProvider.js', () => ({
@@ -41,6 +52,7 @@ let tempMemoryPath: string;
 beforeAll(async () => {
   tempMemoryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'sera-memory-'));
   process.env.MEMORY_PATH = tempMemoryPath;
+  process.env.WORKSPACE_DIR = path.resolve(__dirname, '..', '..', '..');
 
   vi.spyOn(Orchestrator.prototype, 'getPrimaryAgent').mockReturnValue({
     role: 'architect-prime',

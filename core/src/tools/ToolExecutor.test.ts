@@ -168,6 +168,7 @@ describe('ToolExecutor', () => {
         agentName: 'test-agent',
         workspacePath: 'workspaces/test-agent',
         tier: 2,
+        manifest: minimalManifest(),
         agentInstanceId: undefined,
         containerId: undefined,
         sandboxManager: undefined,

@@ -92,12 +92,16 @@ async function createTestSetup(budgetOverride?: Partial<{
   vi.spyOn(meteringService, 'recordUsage').mockResolvedValue(undefined);
 
   const authService = new AuthService();
+  const pool = {} as any;
+  const orchestrator = { getManifest: vi.fn(), getManifestByInstanceId: vi.fn() } as any;
   const router = createLlmProxyRouter(
     identityService,
     authService,
     meteringService,
     liteLLMClient,
     circuitBreakerService,
+    pool,
+    orchestrator
   );
 
   const validToken = await identityService.signToken({

@@ -190,11 +190,13 @@ export class Orchestrator {
         // Issue a 24h JWT for the agent container (Story 3.1)
         let identityToken: string | undefined;
         if (this.identityService) {
-          identityToken = this.identityService.signToken(
+          identityToken = await this.identityService.signToken(
             {
               agentId: instance.id,
-              circleId: (manifest.metadata as any).circle,
+              agentName: manifest.metadata.name,
+              circleId: (manifest.metadata as any).circle ?? '',
               capabilities: resolvedCapabilities,
+              scope: 'agent',
             },
             '24h',
           );

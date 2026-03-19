@@ -52,6 +52,10 @@ import { createRegistryRouter } from './routes/registry.js';
 import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { pool } from './lib/database.js';
+import { LiteLLMClient } from './llm/LiteLLMClient.js';
+import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
+import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
+import { createMeteringRouter } from './routes/metering.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -112,6 +116,8 @@ const startServer = async () => {
   const sessionStore = new SessionStore();
   const meteringService = new MeteringService();
   const meteringEngine = new MeteringEngine();
+  const liteLLMClient = new LiteLLMClient();
+  const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
   const agentScheduler = new AgentScheduler();
   
   orchestrator.setMetering(meteringEngine, agentScheduler);
@@ -152,9 +158,12 @@ const startServer = async () => {
   app.use('/api/sessions', createSessionRouter(sessionStore));
   app.use('/api', createChatRouter(sessionStore, orchestrator));
   
-  app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService));
+  app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService, liteLLMClient, circuitBreakerService));
   app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
-  app.use('/api/budget', authMiddleware, createBudgetRouter());
+  app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));
+  app.use('/api/providers', authMiddleware, createProvidersRouter(liteLLMClient, circuitBreakerService));
+  app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
+  app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
   app.use('/api/audit', authMiddleware, createAuditRouter());
   app.use('/api', authMiddleware, createConfigRouter());
   app.use('/api/schedules', authMiddleware, createSchedulesRouter());

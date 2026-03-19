@@ -1,130 +1,167 @@
-# 💠 SERA: Sandboxed Extensible Reasoning Agent
+# SERA — Sandboxed Extensible Reasoning Agent
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/robot/robot-original.svg" width="120" alt="SERA Logo">
-  <h2 align="center">The AI Resident for the Modern Homelab</h2>
-</p>
+**A Docker-native multi-agent AI orchestration platform built for the homelab, designed to grow into an open source ecosystem.**
 
-<p align="center">
-  <a href="https://github.com/TKCen/sera/actions"><img src="https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge&logo=docker" alt="Build Status"></a>
-  <a href="https://github.com/TKCen/sera/issues"><img src="https://img.shields.io/badge/Roadmap-Active-blue?style=for-the-badge&logo=github" alt="Issues"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Aesthetic-Holographic_Glitch-crimson?style=for-the-badge" alt="Design"></a>
-</p>
+SERA gives you a governed, extensible environment where AI agents run in isolated Docker containers, earn their permissions through a fine-grained capability model, and collaborate through structured circles — while every action is metered, audited, and under your control.
 
 ---
 
-## 🚀 The Vision: Beyond the Chatbot
+## Why SERA
 
-**SERA** is not just an interface; it's a **Permanent Resident** of your digital ecosystem. Inspired by the autonomy of **OpenClaw** and the modularity of **OpenFang**, SERA is designed to be a proactive, state-aware collaborator that lives where your code lives.
+Most agentic frameworks treat the host system as a sandbox. SERA does not. Every agent is a container. Every tool call is governed. Every token is metered. You decide exactly what each agent can see, reach, and do — per agent, not per tier.
 
-### Why SERA?
-1.  **Ownership**: Local-first storage, local-first reasoning. Your data never leaves your network.
-2.  **Safety**: A "Sandholed Reality" where every execution is tiered and isolated within Docker containers.
-3.  **Presence**: Real-time "Thought Streaming" makes the agent's work-in-progress visible and interactive.
-4.  **Aesthetic**: Reclaiming the "digital cool" with a high-fidelity **Holographic Glitch** UI.
+**Local-first.** Your models, your keys, your data. Nothing leaves your network unless you explicitly configure it to. LiteLLM routes to any provider; Ollama runs everything locally.
+
+**Governance as a first-class concern.** A three-layer permission model (SandboxBoundary × CapabilityPolicy × ManifestInline) gives enterprise-grade access control without enterprise complexity. Shared reference lists, deny-always semantics, and human-in-the-loop permission grants for runtime escalation.
+
+**Built to be extended.** Skills are text documents injected into agent context. MCP servers are containerised tools that agents discover and use. Neither requires touching core. A community can publish agent templates, skill packs, and MCP tools independently.
+
+**Observable.** Agents stream their thoughts (observe → plan → act → reflect) in real time via Centrifugo. Every action is recorded in a Merkle hash-chain audit trail. Token usage, budgets, and circuit breaker state are all exposed.
 
 ---
 
-## 🧠 The Architecture: "The Decoupled Pulse"
+## Architecture
 
-SERA is built on a high-performance, event-driven architecture designed for zero-latency interaction:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      sera-web (UI)                          │
+│          Vite + React Router — operator dashboard           │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ REST + WebSocket
+┌───────────────────────────▼─────────────────────────────────┐
+│                     sera-core (Mind)                        │
+│  Orchestrator · LLM Proxy · Capability Engine · Scheduler   │
+│  Skill Registry · MCP Registry · Memory · Audit · Secrets   │
+└────┬──────────────┬────────────────┬────────────────────────┘
+     │ Docker API   │ Centrifugo API  │ PostgreSQL / Qdrant
+┌────▼────────┐  ┌──▼──────────┐  ┌──▼──────────────────────┐
+│    Agent    │  │  Centrifugo │  │  PostgreSQL + Qdrant     │
+│ Containers  │  │  (Pulse)    │  │  Tasks · Audit · Memory  │
+│ (sandboxed) │  └─────────────┘  └─────────────────────────┘
+└────┬────────┘
+     │  MCP tool containers (per-agent, sandboxed)
+     └──► LiteLLM → any LLM provider (Ollama, OpenAI, Anthropic, …)
+```
 
 | Component | Technology | Role |
-| :--- | :--- | :--- |
-| **Foundation** | Docker Compose | Multi-container orchestration & Homelab networking. |
-| **The Mind** | Node.js 20 (TS) | Core Reasoning, LSP Coordination, & Sandbox Management. |
-| **The Pulse** | Centrifugo | Ultra-low latency WebSocket streaming for thoughts & terminal. |
-| **The Interface** | Next.js 16 (Tailwind v4) | The "Aurora Cyber" dashboard with glitch-aware UI. |
-| **The Memory** | PostgreSQL / Vector | Persistent metadata and semantic codebase knowledge. |
-
-### 🛠️ Strategic Integration
-*   **Homepage**: Native discovery via labels (AI Agents / Infrastructure).
-*   **Nginx Proxy Manager**: Pre-configured WS-capable reverse proxying.
-*   **Uptime Kuma**: Integrated `/api/health` monitoring for 100% reliability.
+|---|---|---|
+| **sera-core** | Node.js 22 + TypeScript | Orchestrator, LLM proxy, governance, all API surfaces |
+| **sera-web** | Vite + React Router v7 + TanStack Query | Operator dashboard, real-time thought streams |
+| **Agent runtime** | TypeScript (containerised) | Lightweight reasoning loop running inside each agent container |
+| **LiteLLM** | `main-stable` | Provider gateway — dumb routing socket, all governance in sera-core |
+| **Centrifugo** | Latest stable | Real-time pub/sub for thoughts, tokens, agent status |
+| **PostgreSQL** | 16 | Primary store — agents, audit trail, secrets, tasks, metering |
+| **Qdrant** | Latest | Vector search for agent memory and knowledge retrieval |
 
 ---
 
-## 🛡️ Core Pillars
+## Key Concepts
 
-### 1. Sandholed Execution
-Unlike agents that run on your host, SERA's core holds a direct mount to the Docker socket. It spawns **ephemeral, isolated environments** for every shell command or file edit, ensuring your host remains pristine.
+**AgentTemplate / Agent** — Templates are reusable blueprints (community-publishable). Agents are named instances with their own configuration, lifecycle, and identity. Instances override templates selectively; the resolution is explicit and auditable.
 
-### 2. Semantic Mastery (LSP & RAG)
-SERA doesn't just "grep". It integrates with **Language Server Protocol (LSP)** for graph-aware code navigation and **Vector Databases** for semantic recall that understands the "why" behind your code, not just the "what".
+**Capability model** — Three independent layers intersect to produce the effective permission set: `SandboxBoundary` (hard ceiling — network, filesystem, shell, Docker access), `CapabilityPolicy` (operator-assigned grants, references shared NamedLists), and `ManifestInline` (agent-declared requirements). Deny wins at every layer.
 
-### 3. Real-Time Symbiosis
-By leveraging **Centrifugo**, SERA streams its internal reasoning state (Thoughts) directly to the dashboard. You can watch the agent narrow down a bug in real-time, just as if you were looking over a colleague's shoulder.
+**Persistent vs ephemeral agents** — First-class lifecycle modes. Ephemeral agents cannot create persistent agents. Lineage is tracked. Resource cleanup is automatic.
 
----
+**Circles** — Named groups of agents with a shared constitution, broadcast channels, and pooled budgets. Agents within a circle collaborate; a circle's shared knowledge base is git-backed with per-agent commit identity.
 
-## 📅 Roadmap: Build the Future
+**Skills vs MCP tools** — Skills are versioned Markdown documents injected into the agent's system prompt. MCP tools are containerised executables the agent calls at runtime. Skills guide; tools act.
 
-We are currently in **Phase 1: Foundation**. Upcoming work items include:
+**Sera** — The built-in primary agent, auto-instantiated on first boot. She orchestrates the instance, manages other agents, and is the natural entry point for natural-language interaction with the platform itself.
 
-*   **Phase 2: Knowledge & Context**
-    *   [ ] Vector Database Ingestion (Qdrant/pgvector).
-    *   [ ] LSP-Native Indexing for Python/TS/Rust.
-    *   [ ] Archival Markdown-based long-term memory.
-*   **Phase 3: Deep Autonomy**
-    *   [ ] MCP-native tool expansion.
-    *   [ ] Multi-agent "Swarm" mode for complex refactors.
+**Human-in-the-loop grants** — Agents can request elevated permissions at runtime (new filesystem path, new shell command, external network access). The operator approves once, for the session, or persistently. Approvals are recorded with full identity context.
 
 ---
 
-## 🚦 Getting Started
+## Getting Started
 
 ### Prerequisites
-- Docker & Docker Compose
-- `agent_net` Docker network: `docker network create agent_net`
-- LLM Provider (LM Studio, Ollama, OpenAI, or Anthropic)
 
-### Quick Start
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/TKCen/sera.git
-    cd sera
-    ```
-2.  **Initialize environment:**
-    ```bash
-    cp .env.example .env
-    # Edit .env to add your API keys or adjust URLs
-    ```
-3.  **Launch the stack:**
-    ```bash
-    docker compose up -d
-    ```
+- Docker and Docker Compose
+- An LLM provider: [Ollama](https://ollama.com) (local), LM Studio, OpenAI, Anthropic, or any OpenAI-compatible endpoint
 
-### Access Points
-- **UI**: [http://localhost:3000](http://localhost:3000)
-- **Core API**: [http://localhost:3001](http://localhost:3001)
-- **LiteLLM**: [http://localhost:4000](http://localhost:4000)
+### Quick start
 
----
-
-## 🛠️ Development
-
-### Local Development Loop
-To run with hot-reloading for `sera-core` and `sera-web`:
 ```bash
+git clone https://github.com/TKCen/sera.git
+cd sera
+
+# Create the agent network
+docker network create agent_net
+
+# Configure your environment
+cp .env.example .env
+# Edit .env — set your LLM provider URL and API keys
+
+# Start the stack
+docker compose up -d
+```
+
+**Access points:**
+
+| Service | URL |
+|---|---|
+| sera-web (dashboard) | http://localhost:3000 |
+| sera-core (API) | http://localhost:3001 |
+| LiteLLM (gateway) | http://localhost:4000 |
+
+On first start, sera-core prints a bootstrap API key to the log. Use it to configure your first operator account and connect your IdP (or leave it in API-key-only mode for local use).
+
+### Development
+
+```bash
+# Hot-reload mode (core + web)
 docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up
+
+# Run tests (from workspace root)
+D:/projects/homelab/sera/core/node_modules/.bin/vitest run
 ```
 
-### Database Migrations
-Migrations run automatically on `sera-core` startup. To manage migrations manually:
-```bash
-cd core
-npm run migrate -- up
-npm run migrate -- create my_migration_name
-```
-
-### Running Tests
-```bash
-cd core
-npm test
-```
+See [CLAUDE.md](CLAUDE.md) for the full development environment guide.
 
 ---
 
-<p align="center">
-  <em>"SERA: Your agent. Your network. Your reality."</em>
-</p>
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Full system architecture, all design decisions, tech stack rationale |
+| [`docs/IMPLEMENTATION-ORDER.md`](docs/IMPLEMENTATION-ORDER.md) | Epic dependency order and MVP phase definition |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test strategy, patterns, and coverage requirements |
+| [`docs/epics/`](docs/epics/) | 18 epics covering the full feature roadmap with story-level acceptance criteria |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | sera-core REST API specification |
+
+---
+
+## Roadmap
+
+SERA is in active development. The backlog is organised as 18 epics across three phases:
+
+**Phase 1 — Foundation** (MVP: a governed, sandboxed agent you can talk to)
+Infrastructure · Manifest & Registry · Docker Sandbox · LLM Proxy · Agent Runtime · Authentication
+
+**Phase 2 — Capability** (makes it genuinely useful)
+Skill Library · MCP Tool Registry · Memory & RAG · Real-Time Messaging · Scheduling & Audit · sera-web UX
+
+**Phase 3 — Ecosystem** (makes it extensible and open)
+Circles & Coordination · Plugin SDK · Agent Identity & Delegation · Integration Channels (Discord, Slack, webhooks)
+
+See [`docs/IMPLEMENTATION-ORDER.md`](docs/IMPLEMENTATION-ORDER.md) for the full sequencing.
+
+---
+
+## Contributing
+
+SERA is built to become a thriving open source ecosystem. If you want to contribute an agent template, a skill pack, or an MCP tool server, the plugin SDK (Epic 15) defines the community contract — including the SERA MCP Extension Protocol for credential-aware tool servers.
+
+Contribution guidelines, the community SDK (`@sera/mcp-sdk`), and the template registry format will be published as Phase 3 lands.
+
+---
+
+## Philosophy
+
+> Agents should be tenants, not residents. They earn access, operate within boundaries, and leave an auditable trail. The human stays in control — not by limiting what agents can do, but by making everything they do legible.
+
+---
+
+*SERA — your agents, your network, your rules.*

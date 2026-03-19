@@ -19,8 +19,11 @@ describe('MeteringService', () => {
   });
 
   describe('recordUsage', () => {
-    it('should insert a token_usage row', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] });
+    it('should insert into both token_usage and usage_events', async () => {
+      // Both parallel queries succeed
+      mockQuery
+        .mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] });
 
       await service.recordUsage({
         agentId: 'agent-001',
@@ -29,13 +32,47 @@ describe('MeteringService', () => {
         promptTokens: 100,
         completionTokens: 50,
         totalTokens: 150,
+        costUsd: 0.003,
+        latencyMs: 250,
+        status: 'success',
       });
 
-      expect(mockQuery).toHaveBeenCalledOnce();
-      expect(mockQuery.mock.calls[0]![0]).toContain('INSERT INTO token_usage');
-      expect(mockQuery.mock.calls[0]![1]).toEqual([
-        'agent-001', 'dev-circle', 'gpt-4', 100, 50, 150,
-      ]);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+
+      // Check token_usage insert
+      const tokenUsageCall = mockQuery.mock.calls.find(c =>
+        typeof c[0] === 'string' && c[0].includes('INSERT INTO token_usage'),
+      );
+      expect(tokenUsageCall).toBeDefined();
+      expect(tokenUsageCall![1]).toEqual(['agent-001', 'dev-circle', 'gpt-4', 100, 50, 150]);
+
+      // Check usage_events insert
+      const usageEventsCall = mockQuery.mock.calls.find(c =>
+        typeof c[0] === 'string' && c[0].includes('INSERT INTO usage_events'),
+      );
+      expect(usageEventsCall).toBeDefined();
+      expect(usageEventsCall![1]).toEqual(['agent-001', 'gpt-4', 100, 50, 150, 0.003, 250, 'success']);
+    });
+
+    it('should default status to success when not provided', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] });
+
+      await service.recordUsage({
+        agentId: 'agent-001',
+        circleId: null,
+        model: 'gpt-4',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
+
+      const usageEventsCall = mockQuery.mock.calls.find(c =>
+        typeof c[0] === 'string' && c[0].includes('INSERT INTO usage_events'),
+      )!;
+      // status (index 7) should be 'success'
+      expect(usageEventsCall[1]![7]).toBe('success');
     });
   });
 

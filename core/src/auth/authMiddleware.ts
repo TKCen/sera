@@ -49,12 +49,12 @@ export function createAuthMiddleware(identityService: IdentityService, authServi
       }
 
       // 2. Try agent authentication (internal JWTs)
-      const claims = identityService.verifyToken(token);
+      const claims = await identityService.verifyToken(token);
       req.agentIdentity = claims;
       next();
     } catch (err: any) {
       const message =
-        err.name === 'TokenExpiredError'
+        err.code === 'ERR_JWT_EXPIRED' || err.name === 'TokenExpiredError'
           ? 'Token expired'
           : err.message || 'Invalid credentials';
       res.status(401).json({ error: message });

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 
-// ── Mocks — all vi.mock factories must be self-contained (hoisted) ──────────
+// ── Mocks ─────────────────────────────────────────────────────────────────────
 
 vi.mock('../lib/database.js', () => ({
   query: vi.fn(),
@@ -9,44 +9,67 @@ vi.mock('../lib/database.js', () => ({
 
 vi.mock('../lib/config.js', () => ({
   config: {
-    llm: { baseUrl: 'http://localhost:1234/v1', apiKey: 'test-key', model: 'test-model' },
+    llm: { baseUrl: 'http://localhost:4000/v1', apiKey: 'test-key', model: 'test-model' },
     providers: { activeProvider: 'lmstudio', providers: {} },
-    getProviderConfig: () => ({ baseUrl: 'http://localhost:1234/v1', apiKey: 'test-key' }),
+    getProviderConfig: () => ({ baseUrl: 'http://localhost:4000/v1', apiKey: 'test-key' }),
   },
 }));
 
-vi.mock('../lib/providers.js', () => ({
-  PROVIDER_CATALOG: [
-    {
-      id: 'lmstudio',
-      name: 'LM Studio',
-      models: [{ id: 'test-model', name: 'Test Model' }],
-    },
-  ],
-}));
-
-vi.mock('../lib/llm/ProviderFactory.js', () => ({
-  ProviderFactory: {
-    createFromModelConfig: vi.fn().mockReturnValue({
-      chat: vi.fn().mockResolvedValue({
-        content: 'Hello from the LLM!',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-      }),
+// Mock the LiteLLMClient — default returns a successful response
+vi.mock('../llm/LiteLLMClient.js', () => ({
+  LiteLLMClient: vi.fn().mockImplementation(() => ({
+    chatCompletion: vi.fn().mockResolvedValue({
+      response: {
+        id: 'chatcmpl-test',
+        object: 'chat.completion',
+        created: 1234567890,
+        model: 'test-model',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Hello from the LLM!' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      },
+      latencyMs: 100,
     }),
-  },
+    chatCompletionStream: vi.fn(),
+    listModels: vi.fn().mockResolvedValue([
+      { id: 'test-model', object: 'model', owned_by: 'lmstudio' },
+    ]),
+  })),
+}));
+
+// Mock the CircuitBreakerService — default passes through to client.chatCompletion
+vi.mock('../llm/CircuitBreakerService.js', () => ({
+  CircuitBreakerService: vi.fn().mockImplementation((client: any) => ({
+    client,
+    call: vi.fn().mockImplementation((req: any, agentId: any, latencyStart: any) =>
+      client.chatCompletion(req, agentId, latencyStart)
+    ),
+    getState: vi.fn().mockReturnValue([]),
+    getProviderState: vi.fn().mockReturnValue(null),
+  })),
+  providerFromModel: vi.fn().mockReturnValue('lmstudio'),
+}));
+
+vi.mock('../middleware/rateLimitStub.js', () => ({
+  rateLimitStub: vi.fn().mockImplementation((_req: any, _res: any, next: any) => next()),
 }));
 
 import { createLlmProxyRouter } from './llmProxy.js';
 import { IdentityService } from '../auth/IdentityService.js';
 import { AuthService } from '../auth/auth-service.js';
 import { MeteringService } from '../metering/MeteringService.js';
+import { LiteLLMClient } from '../llm/LiteLLMClient.js';
+import { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const TEST_SECRET = 'test-secret-for-proxy-tests';
 
-function createTestSetup(budgetOverride?: Partial<{
+async function createTestSetup(budgetOverride?: Partial<{
   allowed: boolean;
   hourlyUsed: number;
   hourlyQuota: number;
@@ -55,6 +78,8 @@ function createTestSetup(budgetOverride?: Partial<{
 }>) {
   const identityService = new IdentityService(TEST_SECRET);
   const meteringService = new MeteringService();
+  const liteLLMClient = new LiteLLMClient();
+  const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
 
   vi.spyOn(meteringService, 'checkBudget').mockResolvedValue({
     allowed: true,
@@ -67,15 +92,22 @@ function createTestSetup(budgetOverride?: Partial<{
   vi.spyOn(meteringService, 'recordUsage').mockResolvedValue(undefined);
 
   const authService = new AuthService();
-  const router = createLlmProxyRouter(identityService, authService, meteringService);
+  const router = createLlmProxyRouter(
+    identityService,
+    authService,
+    meteringService,
+    liteLLMClient,
+    circuitBreakerService,
+  );
 
-  const validToken = identityService.signToken({
+  const validToken = await identityService.signToken({
     agentId: 'test-agent',
     circleId: 'test-circle',
     capabilities: ['internet-access'],
+    scope: 'agent',
   });
 
-  return { identityService, meteringService, router, validToken };
+  return { identityService, meteringService, liteLLMClient, circuitBreakerService, router, validToken };
 }
 
 function createMockReqRes(overrides: Record<string, unknown> = {}) {
@@ -89,6 +121,8 @@ function createMockReqRes(overrides: Record<string, unknown> = {}) {
   const res = {
     status: vi.fn().mockReturnThis(),
     json: vi.fn().mockReturnThis(),
+    setHeader: vi.fn(),
+    end: vi.fn(),
     headersSent: false,
   } as unknown as Response;
 
@@ -97,32 +131,25 @@ function createMockReqRes(overrides: Record<string, unknown> = {}) {
   return { req, res, next };
 }
 
-/**
- * Find the final handler in a router stack for a given method/path.
- */
 function getHandler(router: any, method: string, path: string) {
   for (const layer of router.stack) {
     if (layer.route?.path === path && layer.route.methods[method]) {
-      // Return all handlers in the route stack (middleware chain + final handler)
       return layer.route.stack.map((s: any) => s.handle);
     }
   }
   return null;
 }
 
-/**
- * Execute a sequence of Express handlers (simulates the middleware chain).
- */
 async function executeHandlers(handlers: Function[], req: Request, res: Response) {
   for (const handler of handlers) {
     let nextCalled = false;
     const next: NextFunction = () => { nextCalled = true; };
     await handler(req, res, next);
-    if (!nextCalled) break; // Handler sent a response or errored
+    if (!nextCalled) break;
   }
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('LLM Proxy Router', () => {
   beforeEach(() => {
@@ -130,13 +157,13 @@ describe('LLM Proxy Router', () => {
   });
 
   describe('Auth Middleware', () => {
-    it('should reject requests without Authorization header', () => {
-      const { identityService } = createTestSetup();
+    it('should reject requests without Authorization header', async () => {
+      const { identityService } = await createTestSetup();
       const authService = new AuthService();
       const authMiddleware = createAuthMiddleware(identityService, authService);
 
       const { req, res, next } = createMockReqRes();
-      authMiddleware(req, res, next);
+      await authMiddleware(req, res, next);
 
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith(
@@ -146,7 +173,7 @@ describe('LLM Proxy Router', () => {
     });
 
     it('should reject requests with invalid token', async () => {
-      const { identityService } = createTestSetup();
+      const { identityService } = await createTestSetup();
       const authService = new AuthService();
       const authMiddleware = createAuthMiddleware(identityService, authService);
 
@@ -160,7 +187,7 @@ describe('LLM Proxy Router', () => {
     });
 
     it('should accept requests with valid token and populate identity', async () => {
-      const { identityService, validToken } = createTestSetup();
+      const { identityService, validToken } = await createTestSetup();
       const authService = new AuthService();
       const authMiddleware = createAuthMiddleware(identityService, authService);
 
@@ -173,16 +200,18 @@ describe('LLM Proxy Router', () => {
       expect(req.agentIdentity).toBeDefined();
       expect(req.agentIdentity!.agentId).toBe('test-agent');
       expect(req.agentIdentity!.circleId).toBe('test-circle');
+      expect(req.agentIdentity!.scope).toBe('agent');
     });
   });
 
   describe('POST /chat/completions', () => {
     it('should proxy a chat request and return OpenAI-format response', async () => {
-      const { router, validToken } = createTestSetup();
+      const { router, validToken } = await createTestSetup();
       const handlers = getHandler(router, 'post', '/chat/completions')!;
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
+        agentIdentity: { agentId: 'test-agent', circleId: 'test-circle', scope: 'agent', capabilities: [], agentName: 'test-agent', iat: 0, exp: 9999999999 },
         body: {
           model: 'test-model',
           messages: [{ role: 'user', content: 'Hello' }],
@@ -212,11 +241,12 @@ describe('LLM Proxy Router', () => {
     });
 
     it('should record metering after successful call', async () => {
-      const { router, validToken, meteringService } = createTestSetup();
+      const { router, validToken, meteringService } = await createTestSetup();
       const handlers = getHandler(router, 'post', '/chat/completions')!;
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
+        agentIdentity: { agentId: 'test-agent', circleId: 'test-circle', scope: 'agent', capabilities: [], agentName: 'test-agent', iat: 0, exp: 9999999999 },
         body: {
           messages: [{ role: 'user', content: 'Hello' }],
         },
@@ -232,12 +262,14 @@ describe('LLM Proxy Router', () => {
           agentId: 'test-agent',
           promptTokens: 10,
           completionTokens: 5,
+          totalTokens: 15,
+          status: 'success',
         }),
       );
     });
 
     it('should reject requests without messages', async () => {
-      const { router, validToken } = createTestSetup();
+      const { router, validToken } = await createTestSetup();
       const handlers = getHandler(router, 'post', '/chat/completions')!;
 
       const { req, res } = createMockReqRes({
@@ -250,8 +282,8 @@ describe('LLM Proxy Router', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
-    it('should return 429 when budget is exceeded', async () => {
-      const { router, validToken } = createTestSetup({
+    it('should return 429 with budget_exceeded when budget is exceeded', async () => {
+      const { router, validToken } = await createTestSetup({
         allowed: false,
         hourlyUsed: 50000,
         hourlyQuota: 10000,
@@ -272,17 +304,63 @@ describe('LLM Proxy Router', () => {
       expect(res.status).toHaveBeenCalledWith(429);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: expect.objectContaining({
-            type: 'rate_limit_exceeded',
-          }),
+          error: 'budget_exceeded',
+          period: expect.stringMatching(/hourly|daily/),
         }),
+      );
+    });
+
+    it('INVARIANT: no upstream call is made when budget is exceeded', async () => {
+      // Story 4.3: budget must be checked BEFORE the upstream call — a failed
+      // budget check must never result in an upstream call being placed.
+      const { router, liteLLMClient, validToken } = await createTestSetup({
+        allowed: false,
+        hourlyUsed: 99999,
+        hourlyQuota: 100,
+        dailyUsed: 99999,
+        dailyQuota: 100,
+      });
+      const handlers = getHandler(router, 'post', '/chat/completions')!;
+
+      const { req, res } = createMockReqRes({
+        headers: { authorization: `Bearer ${validToken}` },
+        body: { messages: [{ role: 'user', content: 'Hello' }] },
+      });
+
+      await executeHandlers(handlers, req, res);
+
+      // Budget exceeded — upstream LiteLLM must NOT have been called
+      expect(res.status).toHaveBeenCalledWith(429);
+      expect((liteLLMClient as any).chatCompletion).not.toHaveBeenCalled();
+    });
+
+    it('should return 503 when circuit breaker is open', async () => {
+      const { router, circuitBreakerService, validToken } = await createTestSetup();
+      // Make circuit breaker throw CIRCUIT_OPEN error
+      const err = new Error('Provider lmstudio is currently unavailable (circuit open)');
+      (err as any).code = 'CIRCUIT_OPEN';
+      (err as any).provider = 'lmstudio';
+      vi.spyOn(circuitBreakerService, 'call').mockRejectedValue(err);
+
+      const handlers = getHandler(router, 'post', '/chat/completions')!;
+
+      const { req, res } = createMockReqRes({
+        headers: { authorization: `Bearer ${validToken}` },
+        body: { messages: [{ role: 'user', content: 'Hello' }] },
+      });
+
+      await executeHandlers(handlers, req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: 'provider_unavailable', provider: 'lmstudio' }),
       );
     });
   });
 
   describe('GET /models', () => {
-    it('should return the provider catalog as OpenAI model list', async () => {
-      const { router, validToken } = createTestSetup();
+    it('should return model list from LiteLLM', async () => {
+      const { router, validToken } = await createTestSetup();
       const handlers = getHandler(router, 'get', '/models')!;
 
       const { req, res } = createMockReqRes({

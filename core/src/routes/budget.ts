@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { query } from '../lib/database.js';
+import type { MeteringService } from '../metering/MeteringService.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('BudgetRoute');
 
-export function createBudgetRouter(): Router {
+export function createBudgetRouter(meteringService?: MeteringService): Router {
   const router = Router();
 
   /**
@@ -101,6 +102,26 @@ export function createBudgetRouter(): Router {
       res.json({ agentId, usage });
     } catch (err: any) {
       logger.error(`Error fetching budget for agent ${req.params.id}:`, err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/budget/agents/:id/budget
+   * Returns real-time hourly and daily budget status for a specific agent.
+   * Story 4.3: current usage vs limits for both hourly and daily windows.
+   */
+  router.get('/agents/:id/budget', async (req: Request, res: Response) => {
+    if (!meteringService) {
+      res.status(503).json({ error: 'MeteringService not available' });
+      return;
+    }
+    try {
+      const agentId = String(req.params['id']);
+      const status = await meteringService.checkBudget(agentId);
+      res.json({ agentId, ...status });
+    } catch (err: any) {
+      logger.error(`Error fetching budget for agent ${String(req.params['id'])}:`, err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });

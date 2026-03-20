@@ -17,8 +17,8 @@ vi.mock('../lib/config.js', () => ({
 
 // Mock LlmRouter — default returns a successful response
 vi.mock('../llm/LlmRouter.js', () => {
-  const LlmRouterMock = vi.fn().mockImplementation(() => ({
-    chatCompletion: vi.fn().mockResolvedValue({
+  class LlmRouterMock {
+    chatCompletion = vi.fn().mockResolvedValue({
       response: {
         id: 'chatcmpl-test',
         object: 'chat.completion',
@@ -34,17 +34,17 @@ vi.mock('../llm/LlmRouter.js', () => {
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       },
       latencyMs: 100,
-    }),
-    chatCompletionStream: vi.fn(),
-    listModels: vi
+    });
+    chatCompletionStream = vi.fn();
+    listModels = vi
       .fn()
-      .mockResolvedValue([{ id: 'test-model', object: 'model', owned_by: 'lmstudio' }]),
-    addModel: vi.fn(),
-    deleteModel: vi.fn(),
-    testModel: vi.fn(),
-  }));
+      .mockResolvedValue([{ id: 'test-model', object: 'model', owned_by: 'lmstudio' }]);
+    addModel = vi.fn();
+    deleteModel = vi.fn();
+    testModel = vi.fn();
+  }
 
-  const ProviderRegistryMock = vi.fn().mockImplementation(() => ({}));
+  class ProviderRegistryMock {}
 
   return {
     LlmRouter: LlmRouterMock,
@@ -54,16 +54,19 @@ vi.mock('../llm/LlmRouter.js', () => {
 
 // Mock the CircuitBreakerService — default passes through to client.chatCompletion
 vi.mock('../llm/CircuitBreakerService.js', () => {
-  const CircuitBreakerServiceMock = vi.fn().mockImplementation((client: any) => ({
-    client,
-    call: vi
+  class CircuitBreakerServiceMock {
+    client: any;
+    constructor(client: any) {
+      this.client = client;
+    }
+    call = vi
       .fn()
       .mockImplementation((req: any, agentId: any, latencyStart: any) =>
-        client.chatCompletion(req, agentId, latencyStart)
-      ),
-    getState: vi.fn().mockReturnValue([]),
-    getProviderState: vi.fn().mockReturnValue(null),
-  }));
+        this.client.chatCompletion(req, agentId, latencyStart)
+      );
+    getState = vi.fn().mockReturnValue([]);
+    getProviderState = vi.fn().mockReturnValue(null);
+  }
 
   return {
     CircuitBreakerService: CircuitBreakerServiceMock,

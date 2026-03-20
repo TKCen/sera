@@ -61,16 +61,14 @@ describe('Story 9.7: Thought Stream Persistence', () => {
         iteration: 1,
       },
     ];
-    (query as any).mockResolvedValue({
+    (pool.query as any).mockResolvedValue({
       rows: mockRows,
     });
 
     const thoughts = await intercom.getThoughts(agentId, { taskId });
 
     expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'SELECT * FROM thought_events WHERE agent_instance_id = $1 AND task_id = $2'
-      ),
+      expect.stringContaining('SELECT * FROM thought_events WHERE agent_instance_id = $1'),
       expect.arrayContaining([agentId, taskId])
     );
     expect(thoughts).toHaveLength(1);

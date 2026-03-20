@@ -6,7 +6,7 @@ export default defineConfig({
     environment: 'node',
     exclude: ['**/node_modules/**', '**/dist/**', '**/agent-runtime/dist/**'],
     env: {
-      SECRETS_MASTER_KEY: 'test-master-key-32-chars-long-exactly!!',
+      SECRETS_MASTER_KEY: '1111111111111111111111111111111111111111111111111111111111111111',
     },
   },
 });

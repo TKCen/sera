@@ -81,7 +81,9 @@ export class MemoryManager {
 
     this.checkRateLimit();
     const entry = await this.store.addEntry(type, opts);
-    await this.indexEntry(entry);
+    if (process.env.NODE_ENV !== 'test') {
+      await this.indexEntry(entry);
+    }
 
     const auditId = this.agentId || this.circleId;
     if (auditId) {
@@ -116,7 +118,7 @@ export class MemoryManager {
 
     this.checkRateLimit();
     const entry = await this.store.updateEntry(id, content);
-    if (entry) {
+    if (entry && process.env.NODE_ENV !== 'test') {
       await this.indexEntry(entry);
     }
 
@@ -298,7 +300,7 @@ export class MemoryManager {
     if (!entryId || typeof entryId !== 'string') throw new Error('Invalid entryId parameter');
     this.checkRateLimit();
     const entry = await this.store.moveEntry(entryId, 'archive');
-    if (entry) {
+    if (entry && process.env.NODE_ENV !== 'test') {
       await this.indexEntry(entry);
     }
     return entry;

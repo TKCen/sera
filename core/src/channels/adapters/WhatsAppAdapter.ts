@@ -16,8 +16,6 @@ export class WhatsAppAdapter extends ChannelAdapter {
 
   async start(): Promise<void> {
     this.logger.info('WhatsApp adapter started (Webhook mode).');
-    // In a real scenario, this would register a webhook or listen for incoming POST requests.
-    // For this task, we provide the skeleton implementation.
   }
 
   async stop(): Promise<void> {
@@ -28,20 +26,27 @@ export class WhatsAppAdapter extends ChannelAdapter {
   /**
    * Handle incoming message from WhatsApp Webhook.
    */
-  async handleWebhookPayload(payload: any) {
-    const entry = payload.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
-    const message = value?.messages?.[0];
+  async handleWebhookPayload(payload: unknown) {
+    const data = payload as Record<string, unknown>;
+    const entry = (data['entry'] as unknown[])?.[0] as Record<string, unknown>;
+    const change = (entry?.['changes'] as unknown[])?.[0] as Record<string, unknown>;
+    const value = change?.['value'] as Record<string, unknown>;
+    const message = (value?.['messages'] as unknown[])?.[0] as Record<string, unknown>;
 
-    if (!message || message.type !== 'text') return;
+    if (!message || message['type'] !== 'text') return;
+
+    const from = message['from'] as string;
+    const profileName = ((value?.['contacts'] as unknown[])?.[0] as Record<string, unknown>)?.[
+      'profile'
+    ] as Record<string, string>;
+    const textBody = (message['text'] as Record<string, string>)?.['body'] || '';
 
     const incoming: IncomingMessage = {
       platform: 'WhatsApp',
-      userId: message.from,
-      userName: value.contacts?.[0]?.profile?.name || message.from,
-      chatId: message.from,
-      text: message.text.body,
+      userId: from,
+      userName: profileName?.['name'] || from,
+      chatId: from,
+      text: textBody,
     };
 
     if (this.isRateLimited(incoming.userId)) {
@@ -64,8 +69,8 @@ export class WhatsAppAdapter extends ChannelAdapter {
       const reply = response.finalAnswer || response.thought || 'No response generated.';
 
       await this.sendMessage(incoming.chatId, reply);
-    } catch (err: any) {
-      this.logger.error('Error processing WhatsApp message:', err.message);
+    } catch (err: unknown) {
+      this.logger.error('Error processing WhatsApp message:', (err as Error).message);
     }
   }
 
@@ -85,8 +90,8 @@ export class WhatsAppAdapter extends ChannelAdapter {
           },
         }
       );
-    } catch (err: any) {
-      this.logger.error(`Failed to send WhatsApp message to ${chatId}:`, err.message);
+    } catch (err: unknown) {
+      this.logger.error(`Failed to send WhatsApp message to ${chatId}:`, (err as Error).message);
     }
   }
 }

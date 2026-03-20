@@ -1,9 +1,10 @@
 import { Suspense, lazy } from 'react';
+import type { MemoryGraphProps } from './MemoryGraph';
 
 // In Vite, we use React.lazy instead of next/dynamic
 const MemoryGraph = lazy(() => import('./MemoryGraph'));
 
-export default function MemoryGraphWrapper(props: Record<string, unknown>) {
+export default function MemoryGraphWrapper(props: MemoryGraphProps) {
   return (
     <Suspense
       fallback={
@@ -15,7 +16,7 @@ export default function MemoryGraphWrapper(props: Record<string, unknown>) {
         </div>
       }
     >
-      <MemoryGraph {...(props as any)} />
+      <MemoryGraph {...props} />
     </Suspense>
   );
 }

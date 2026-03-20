@@ -111,20 +111,21 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
           reply,
           thought: response.thought,
         });
-      } catch (agentError: any) {
+      } catch (agentError: unknown) {
+        const err = agentError as Error;
         logger.error(`[${agent.name}] Error during processing:`, agentError);
-        if (agentError.name === 'AbortError' || agentError.message.includes('timeout')) {
+        if (err.name === 'AbortError' || (err.message && err.message.includes('timeout'))) {
           return res
             .status(504)
             .json({ error: `Agent "${agent.name}" timed out while processing.` });
         }
         return res
           .status(500)
-          .json({ error: `LLM error from "${agent.name}": ${agentError.message}` });
+          .json({ error: `LLM error from "${agent.name}": ${err.message || String(agentError)}` });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Chat API error:', error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
@@ -208,13 +209,13 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
 
         // Best-effort JSONL mirror
         sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
-      } catch (err: any) {
+      } catch (err: unknown) {
         logger.error(`[${agent.name}] Stream error:`, err);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Chat Stream API error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
       }
     }
   });

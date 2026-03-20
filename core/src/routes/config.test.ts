@@ -19,7 +19,7 @@ vi.mock('../lib/config.js', () => ({
     saveLlmConfig: vi.fn(),
     saveProviderConfig: vi.fn(),
     setActiveProvider: vi.fn(),
-    getProviderConfig: vi.fn((id) => ({
+    getProviderConfig: vi.fn((_id) => ({
       baseUrl: 'https://api.openai.com/v1',
       apiKey: 'sk-test',
       model: 'gpt-4o',
@@ -40,7 +40,7 @@ vi.mock('../lib/llm/ProviderFactory.js', () => ({
 }));
 
 describe('Config Routes', () => {
-  let app: any;
+  let app: express.Express;
 
   beforeAll(async () => {
     const { createConfigRouter } = await import('./config.js');
@@ -67,7 +67,7 @@ describe('Config Routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.activeProvider).toBe('openai');
     expect(Array.isArray(res.body.providers)).toBe(true);
-    const openai = res.body.providers.find((p: any) => p.id === 'openai');
+    const openai = res.body.providers.find((p: { id: string }) => p.id === 'openai');
     expect(openai.configured).toBe(true);
     expect(openai.isActive).toBe(true);
   });

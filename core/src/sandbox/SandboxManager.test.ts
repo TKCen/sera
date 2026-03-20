@@ -1,19 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SandboxManager } from './SandboxManager.js';
-import { PolicyViolationError } from './TierPolicy.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
 import type { SpawnRequest } from './types.js';
-import fs from 'fs';
-import path from 'path';
 
 vi.mock('fs');
 vi.mock('path', async () => {
-  const actual = (await vi.importActual('path')) as any;
+  const actual = (await vi.importActual('path')) as Record<string, unknown>;
   return {
     ...actual,
-    join: vi.fn((...args) => args.join('/')), // Simplified for tests
-    resolve: vi.fn((...args) => args.join('/')),
-    dirname: vi.fn((p) => p.split('/').slice(0, -1).join('/')),
+    join: vi.fn((...args: string[]) => args.join('/')), // Simplified for tests
+    resolve: vi.fn((...args: string[]) => args.join('/')),
+    dirname: vi.fn((p: string) => p.split('/').slice(0, -1).join('/')),
   };
 });
 
@@ -21,7 +18,7 @@ vi.mock('path', async () => {
 
 function createMockDocker() {
   const mockStream = {
-    on: vi.fn((event: string, cb: (data?: any) => void) => {
+    on: vi.fn((event: string, cb: (data?: unknown) => void) => {
       if (event === 'end') cb();
       return mockStream;
     }),
@@ -71,7 +68,7 @@ function makeManifest(overrides?: Partial<AgentManifest>): AgentManifest {
       name: 'test-model',
     },
     ...overrides,
-  } as AgentManifest;
+  } as unknown as AgentManifest;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
@@ -82,7 +79,7 @@ describe('SandboxManager', () => {
 
   beforeEach(() => {
     mockDocker = createMockDocker();
-    manager = new SandboxManager(mockDocker as any);
+    manager = new SandboxManager(mockDocker as unknown as import('dockerode'));
   });
 
   describe('spawn', () => {
@@ -200,7 +197,7 @@ describe('SandboxManager', () => {
         manager.exec(otherManifest, {
           containerId: 'container-abc123',
           command: ['cat', '/etc/passwd'],
-        } as any)
+        } as unknown)
       ).rejects.toThrow(/cannot exec/);
     });
   });
@@ -275,7 +272,7 @@ describe('SandboxManager', () => {
     it('should count running subagents by role', async () => {
       const manifest = makeManifest({
         subagents: { allowed: [{ role: 'researcher', maxInstances: 5 }] },
-      } as any);
+      } as unknown as AgentManifest);
 
       await manager.spawn(
         manifest,

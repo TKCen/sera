@@ -5,18 +5,11 @@
  * with the Docker daemon directly.
  */
 
-import path from 'path';
 import fs from 'fs';
 import Docker from 'dockerode';
 import { v4 as uuidv4 } from 'uuid';
-import type { AgentManifest } from '../agents/manifest/types.js';
-import type {
-  SandboxInfo,
-  SpawnRequest,
-  ExecRequest,
-  SandboxType,
-  DockerLifecycleEvent,
-} from './types.js';
+import type { AgentManifest, ResolvedCapabilities } from '../agents/manifest/types.js';
+import type { SandboxInfo, SpawnRequest, ExecRequest, DockerLifecycleEvent } from './types.js';
 import { PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
@@ -62,14 +55,14 @@ export class SandboxManager {
   async spawn(
     manifest: AgentManifest,
     request: SpawnRequest,
-    resolvedCapabilities?: any,
+    resolvedCapabilities?: unknown,
     instanceId?: string,
     agentEnvSecrets?: Record<string, string>
   ): Promise<SandboxInfo> {
     const agentName = manifest.metadata.name;
     const finalInstanceId = instanceId ?? `${agentName}-${uuidv4().substring(0, 8)}`;
-    const caps = resolvedCapabilities ?? {};
-    const tier = (manifest.metadata as any).tier ?? 1;
+    const caps = (resolvedCapabilities ?? {}) as ResolvedCapabilities;
+    const tier = manifest.metadata.tier ?? 1;
 
     const containerName = `sera-agent-${agentName.toLowerCase()}-${finalInstanceId.substring(0, 8)}`;
 
@@ -100,9 +93,9 @@ export class SandboxManager {
     const binds: string[] = [];
 
     // 1. Workspace mount (Story 3.3)
-    const providerName = (manifest as any).workspace?.provider ?? 'local';
+    const providerName = manifest.workspace?.provider ?? 'local';
     const provider = this.storageFactory.getProvider(providerName);
-    const workspacePath = request.hostWorkspacePath ?? (manifest as any).workspace?.path;
+    const workspacePath = request.hostWorkspacePath ?? manifest.workspace?.path;
     const writeAllowed = caps.filesystem?.write ?? caps.fs?.write ?? false;
     const mode = writeAllowed ? 'rw' : 'ro';
     binds.push(provider.getBindMount(finalInstanceId, '/workspace', mode, workspacePath));
@@ -133,34 +126,30 @@ export class SandboxManager {
     binds.push(`${sharedPath}:/knowledge/shared:ro`);
 
     // 4. MCP Custom Mounts (Story 7.3)
-    if (request.type === 'mcp-server' && (manifest as any).mounts) {
-      for (const m of (manifest as any).mounts) {
+    if (request.type === 'mcp-server' && manifest.mounts) {
+      for (const m of manifest.mounts) {
         const mode = m.mode === 'rw' ? 'rw' : 'ro';
         binds.push(`${m.hostPath}:${m.containerPath}:${mode}`);
       }
     }
 
     // ── Resource Limits ─────────────────────────────────────────────────────
-    const cpuShares = caps.linux?.cpu_shares ?? 512;
-    const memoryBytes = caps.linux?.memory_limit ?? 512 * 1024 * 1024;
+    const cpuShares = caps.resources?.cpu_shares || 0;
+    const memoryBytes = (caps.resources?.memory_limit || 0) * 1024 * 1024;
 
     // ── Network Mode (Story 3.2) ─────────────────────────────────────────────
-    // empty allow list → none; ["*"] → bridge; specific hosts → agent_net
-    const outbound: string[] | undefined = caps.network?.outbound;
+    const outbound = caps.network?.outbound || [];
     let networkMode: string;
-    if (!outbound || (Array.isArray(outbound) && outbound.length === 0)) {
+    if (outbound.length === 0) {
       networkMode = 'none';
-    } else if (Array.isArray(outbound) && outbound.includes('*')) {
+    } else if (outbound.includes('*')) {
       networkMode = 'bridge';
     } else {
       networkMode = 'agent_net';
     }
 
     // ── Linux Capabilities (Story 3.2) ──────────────────────────────────────
-    // Start from cap-drop ALL, then add only what the resolved set specifies
-    const linuxCaps: string[] = Array.isArray(caps.linux?.capabilities)
-      ? caps.linux.capabilities
-      : [];
+    const linuxCaps: string[] = Array.isArray(caps.capabilities) ? caps.capabilities : [];
 
     // ── Ephemeral auto-remove (Story 3.7) ───────────────────────────────────
     const isEphemeral = request.lifecycleMode === 'ephemeral' || request.type === 'tool';
@@ -182,7 +171,7 @@ export class SandboxManager {
         'sera.instance': finalInstanceId,
         'sera.type': request.type,
         'sera.tier': String(tier),
-        'sera.circle': (manifest.metadata as any).circle ?? 'default',
+        'sera.circle': manifest.metadata.circle ?? 'default',
       },
       HostConfig: {
         CpuShares: cpuShares,
@@ -192,9 +181,14 @@ export class SandboxManager {
         AutoRemove: isEphemeral,
         CapDrop: ['ALL'],
         ...(linuxCaps.length > 0 ? { CapAdd: linuxCaps } : {}),
-        ReadonlyRootfs: caps.linux?.readonlyRootfs ?? false,
+        ReadonlyRootfs: caps.security?.readonlyRootfs ?? false,
       },
     };
+
+    if (caps.capabilities?.includes('CHOWN')) {
+      createOptions.HostConfig!.CapAdd = createOptions.HostConfig!.CapAdd || [];
+      createOptions.HostConfig!.CapAdd.push('CHOWN');
+    }
 
     this.audit('spawn', agentName, {
       instanceId: finalInstanceId,
@@ -413,7 +407,7 @@ export class SandboxManager {
             agentName,
             ...(exitCode !== undefined ? { exitCode } : {}),
           };
-          onEvent(ev).catch((err) => logger.error('Error handling Docker event:', err));
+          onEvent(ev).catch((err: unknown) => logger.error('Error handling Docker event:', err));
         } catch {
           // Non-JSON chunks (heartbeat from Docker daemon) — ignore
         }
@@ -424,7 +418,7 @@ export class SandboxManager {
       });
 
       logger.info('Docker lifecycle event listener started');
-    } catch (err) {
+    } catch (err: unknown) {
       logger.warn('Failed to start Docker event listener (is Docker running?):', err);
     }
   }
@@ -468,7 +462,7 @@ export class SandboxManager {
           );
         }
       }
-    } catch (err) {
+    } catch (err: unknown) {
       logger.warn('Could not list containers for dangling check:', err);
     }
   }
@@ -484,7 +478,7 @@ export class SandboxManager {
     });
   }
 
-  private audit(operation: string, agentName: string, details: Record<string, unknown>): void {
+  public audit(operation: string, agentName: string, details: Record<string, unknown>): void {
     logger.info(`${operation.toUpperCase()} | agent=${agentName} | ${JSON.stringify(details)}`);
   }
 }

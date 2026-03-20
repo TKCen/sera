@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import * as yaml from 'js-yaml';
 import { ChevronDown, ChevronRight, Lock, AlertCircle, CheckCircle } from 'lucide-react';
@@ -86,7 +86,10 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
   const syncingFromYaml = useRef(false);
   const syncingToYaml = useRef(false);
 
-  const lockedFields = templates.find((t) => t.name === selectedTemplate)?.lockedFields ?? [];
+  const lockedFields = useMemo(
+    () => templates.find((t) => t.name === selectedTemplate)?.lockedFields ?? [],
+    [templates, selectedTemplate]
+  );
 
   const isLocked = useCallback((field: string) => lockedFields.includes(field), [lockedFields]);
 

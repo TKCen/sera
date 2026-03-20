@@ -4,6 +4,8 @@ import { DiscordAdapter } from './adapters/DiscordAdapter.js';
 import { WhatsAppAdapter } from './adapters/WhatsAppAdapter.js';
 import axios from 'axios';
 import { v5 as uuidv5 } from 'uuid';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { SessionStore } from '../sessions/SessionStore.js';
 
 vi.mock('axios');
 vi.mock('ws');
@@ -11,9 +13,9 @@ vi.mock('ws');
 const SERA_SESSION_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 
 describe('Channel Adapters', () => {
-  let mockOrchestrator: any;
-  let mockSessionStore: any;
-  let mockAgent: any;
+  let mockOrchestrator: Record<string, import('vitest').Mock>;
+  let mockSessionStore: Record<string, import('vitest').Mock>;
+  let mockAgent: { role: string; process: import('vitest').Mock };
 
   beforeEach(() => {
     mockAgent = {
@@ -34,15 +36,19 @@ describe('Channel Adapters', () => {
 
   describe('TelegramAdapter', () => {
     it('should route messages to the primary agent and use deterministic session ID', async () => {
-      const adapter = new TelegramAdapter('fake-token', mockOrchestrator, mockSessionStore);
+      const adapter = new TelegramAdapter(
+        'fake-token',
+        mockOrchestrator as any,
+        mockSessionStore as any
+      );
 
       const chatId = '456';
       const expectedSessionId = uuidv5(`telegram:${chatId}`, SERA_SESSION_NAMESPACE);
 
       // Mock axios response for sendMessage
-      (axios.post as any).mockResolvedValueOnce({ data: { ok: true } });
+      vi.mocked(axios.post).mockResolvedValueOnce({ data: { ok: true } });
 
-      // @ts-ignore
+      // @ts-expect-error - testing with mock event object
       await adapter.handleMessage({
         from: { id: 123, username: 'testuser' },
         chat: { id: parseInt(chatId) },
@@ -63,16 +69,16 @@ describe('Channel Adapters', () => {
     });
 
     it('should enforce rate limits and not call agent', async () => {
-      const adapter = new TelegramAdapter('fake-token', mockOrchestrator, mockSessionStore, {
+      const adapter = new TelegramAdapter('fake-token', mockOrchestrator as any, mockSessionStore as any, {
         maxMessagesPerWindow: 2,
       });
 
       // Mock sendMessage
-      (axios.post as any).mockResolvedValue({ data: { ok: true } });
+      vi.mocked(axios.post).mockResolvedValue({ data: { ok: true } });
 
       // Send 3 messages
       for (let i = 0; i < 3; i++) {
-        // @ts-ignore
+        // @ts-expect-error - testing with mock event object
         await adapter.handleMessage({
           from: { id: 123, username: 'testuser' },
           chat: { id: 456 },
@@ -92,11 +98,11 @@ describe('Channel Adapters', () => {
 
   describe('DiscordAdapter', () => {
     it('should handle incoming messages', async () => {
-      const adapter = new DiscordAdapter('fake-token', mockOrchestrator, mockSessionStore);
+      const adapter = new DiscordAdapter('fake-token', mockOrchestrator as any, mockSessionStore as any);
 
-      (axios.post as any).mockResolvedValueOnce({ data: { id: 'msg-id' } });
+      vi.mocked(axios.post).mockResolvedValueOnce({ data: { id: 'msg-id' } });
 
-      // @ts-ignore
+      // @ts-expect-error - testing with mock event object
       await adapter.handleMessage({
         author: { id: 'user-1', username: 'testuser', bot: false },
         channel_id: 'chan-1',
@@ -119,11 +125,11 @@ describe('Channel Adapters', () => {
       const adapter = new WhatsAppAdapter(
         'fake-token',
         'phone-id',
-        mockOrchestrator,
-        mockSessionStore
+        mockOrchestrator as any,
+        mockSessionStore as any
       );
 
-      (axios.post as any).mockResolvedValueOnce({ data: { messaging_product: 'whatsapp' } });
+      vi.mocked(axios.post).mockResolvedValueOnce({ data: { messaging_product: 'whatsapp' } });
 
       const payload = {
         entry: [

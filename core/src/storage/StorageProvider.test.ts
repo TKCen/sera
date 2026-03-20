@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StorageProviderFactory } from './StorageProvider.js';
 import { LocalStorageProvider } from './LocalStorageProvider.js';
 import { DockerVolumeProvider } from './DockerVolumeProvider.js';
+import type Docker from 'dockerode';
 
 // ── Mock Docker for DockerVolumeProvider ────────────────────────────────────────
 
@@ -76,7 +77,7 @@ describe('DockerVolumeProvider', () => {
 
   beforeEach(() => {
     mockDocker = createMockDocker();
-    provider = new DockerVolumeProvider(mockDocker as any, 'sera-ws');
+    provider = new DockerVolumeProvider(mockDocker as unknown as Docker, 'sera-ws');
   });
 
   it('should have name "docker-volume"', () => {
@@ -150,7 +151,7 @@ describe('StorageProviderFactory', () => {
   it('should list all registered providers', () => {
     const factory = new StorageProviderFactory('local');
     factory.register(new LocalStorageProvider());
-    factory.register(new DockerVolumeProvider(createMockDocker() as any));
+    factory.register(new DockerVolumeProvider(createMockDocker() as unknown as Docker));
 
     const names = factory.listProviders();
     expect(names).toContain('local');
@@ -161,7 +162,7 @@ describe('StorageProviderFactory', () => {
   it('should support registering multiple providers and resolving each', () => {
     const factory = new StorageProviderFactory('local');
     factory.register(new LocalStorageProvider());
-    factory.register(new DockerVolumeProvider(createMockDocker() as any));
+    factory.register(new DockerVolumeProvider(createMockDocker() as unknown as Docker));
 
     expect(factory.getProvider('local').name).toBe('local');
     expect(factory.getProvider('docker-volume').name).toBe('docker-volume');

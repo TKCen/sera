@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { IntercomService } from './IntercomService.js';
-import { pool } from '../lib/database.js';
+import { pool, query } from '../lib/database.js';
 
 // ── Mocks ───────────────────────────────────────────────────────────────────────
 
 vi.mock('../lib/database.js', () => ({
   pool: {
-    query: vi.fn().mockResolvedValue({ rows: [] }),
+    query: vi.fn<any>().mockResolvedValue({ rows: [] }),
   },
+  query: vi.fn<any>().mockResolvedValue({ rows: [] }),
 }));
 
 vi.mock('axios', () => ({
@@ -38,7 +39,7 @@ describe('Story 9.7: Thought Stream Persistence', () => {
     // Wait a tiny bit for the "fire and forget" async call
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(pool.query).toHaveBeenCalledWith(
+    expect(query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO thought_events'),
       expect.arrayContaining([agentId, taskId, 'reasoning', 'Thinking...'])
     );
@@ -53,12 +54,16 @@ describe('Story 9.7: Thought Stream Persistence', () => {
         published_at: new Date().toISOString(),
         step: 'plan',
         content: 'I have a plan',
+        circle_id: 'test-circle', // Assuming a default value for circle_id to make it syntactically correct
+        capabilities: [], // Assuming an empty array for capabilities to make it syntactically correct
         agent_instance_id: agentId,
         task_id: taskId,
         iteration: 1,
       },
     ];
-    (pool.query as any).mockResolvedValue({ rows: mockRows });
+    (query as any).mockResolvedValue({
+      rows: mockRows,
+    });
 
     const thoughts = await intercom.getThoughts(agentId, { taskId });
 
@@ -69,6 +74,6 @@ describe('Story 9.7: Thought Stream Persistence', () => {
       expect.arrayContaining([agentId, taskId])
     );
     expect(thoughts).toHaveLength(1);
-    expect(thoughts[0].content).toBe('I have a plan');
+    expect(thoughts[0]!.content).toBe('I have a plan');
   });
 });

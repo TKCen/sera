@@ -1,21 +1,10 @@
-import { cn } from '@/lib/utils';
+import { cn, utilPct, budgetBarColor } from '@/lib/utils';
 
 interface BudgetBarProps {
   label: string;
   current: number;
   limit?: number;
   className?: string;
-}
-
-function utilPct(current: number, limit?: number): number {
-  if (!limit || limit <= 0) return 0;
-  return Math.min((current / limit) * 100, 100);
-}
-
-export function budgetBarColor(pct: number): string {
-  if (pct >= 90) return 'bg-sera-error';
-  if (pct >= 70) return 'bg-sera-warning';
-  return 'bg-sera-success';
 }
 
 export function BudgetBar({ label, current, limit, className }: BudgetBarProps) {

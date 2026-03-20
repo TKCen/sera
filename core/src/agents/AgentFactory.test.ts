@@ -36,7 +36,7 @@ describe('AgentFactory', () => {
 
       const agent = AgentFactory.createAgent(manifest);
       expect(agent.name).toBe('Winston');
-      // @ts-ignore - manifest is protected but we want to check it in test
+      // @ts-expect-error - manifest is protected but we want to check it in test
       expect(agent.manifest.metadata.name).toBe('architect-prime');
     });
   });

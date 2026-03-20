@@ -47,7 +47,6 @@ import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
 import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
 import { initDb, pool } from './lib/database.js';
 import { config } from './lib/config.js';
-import { OpenAIProvider } from './lib/llm/OpenAIProvider.js';
 import { AuthService } from './auth/auth-service.js';
 import { ApiKeyProvider } from './auth/api-key-provider.js';
 import { OIDCAuthPlugin } from './auth/oidc-provider.js';
@@ -60,7 +59,7 @@ import { AgentRegistry } from './agents/registry.service.js';
 import { ResourceImporter } from './agents/importer.service.js';
 import { BootstrapService } from './agents/bootstrap.service.js';
 import { createRegistryRouter } from './routes/registry.js';
-import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
+import { createLifecycleRouter } from './routes/lifecycle.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { ProviderRegistry } from './llm/ProviderRegistry.js';
 import { LlmRouter } from './llm/LlmRouter.js';
@@ -108,8 +107,8 @@ authService.registerPlugin(new ApiKeyProvider());
 if (process.env.OIDC_ISSUER_URL) {
   try {
     authService.registerPlugin(new OIDCAuthPlugin());
-  } catch (err: any) {
-    logger.warn(`OIDC provider disabled: ${err.message}`);
+  } catch (err: unknown) {
+    logger.warn(`OIDC provider disabled: ${(err as Error).message}`);
   }
 } else {
   logger.warn('OIDC_ISSUER_URL not set — running in API-key-only mode');
@@ -152,7 +151,7 @@ intercomService.setBridgeService(bridgeService);
 app.use(cors());
 app.use(
   express.json({
-    verify: (req: any, res, buf) => {
+    verify: (req: import('express').Request & { rawBody?: Buffer }, _res, buf) => {
       req.rawBody = buf;
     },
   })

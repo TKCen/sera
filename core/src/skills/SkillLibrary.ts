@@ -27,7 +27,7 @@ export class SkillLibrary {
 
   /** @internal For testing only */
   public static resetInstance(): void {
-    SkillLibrary.instance = undefined as any;
+    SkillLibrary.instance = undefined as unknown as SkillLibrary;
   }
 
   public setIntercom(intercom: IntercomService): void {
@@ -85,8 +85,8 @@ export class SkillLibrary {
             );
           }
         }
-      } catch (err) {
-        if ((err as any).code !== 'ENOENT') {
+      } catch (err: unknown) {
+        if ((err as { code?: string }).code !== 'ENOENT') {
           stats.errors.push(
             `Error scanning directory ${dirPath}: ${err instanceof Error ? err.message : String(err)}`
           );
@@ -126,7 +126,7 @@ export class SkillLibrary {
     const uniqueDirs = Array.from(new Set(searchPaths.map((s) => s.path)));
 
     this.watcher = chokidar.watch(uniqueDirs, {
-      ignored: /(^|[\/\\])\../, // ignore dotfiles
+      ignored: /(^|[/\\])\../, // ignore dotfiles
       persistent: true,
       ignoreInitial: true, // we already loaded them
       usePolling: true,
@@ -143,13 +143,13 @@ export class SkillLibrary {
           const source = filePath.includes('skills' + path.sep + 'builtin')
             ? 'bundled'
             : 'external';
-          const doc = await this.parseSkillFile(filePath, source as any);
+          const doc = await this.parseSkillFile(filePath, source as 'bundled' | 'external');
           if (doc) {
             await this.upsertSkill(doc);
             logger.info(`Skill hot-reloaded: ${doc.name} v${doc.version}`);
             this.emitReloadEvent('skill', doc.name, doc.version);
           }
-        } catch (err) {
+        } catch (err: unknown) {
           logger.error(`Failed to hot-reload skill ${filePath}:`, err);
         }
       } else if (ext === '.yaml' && filePath.includes('packages')) {
@@ -161,7 +161,7 @@ export class SkillLibrary {
             logger.info(`Skill package hot-reloaded: ${pkg.name} v${pkg.version}`);
             this.emitReloadEvent('package', pkg.name, pkg.version);
           }
-        } catch (err) {
+        } catch (err: unknown) {
           logger.error(`Failed to hot-reload package ${filePath}:`, err);
         }
       }
@@ -200,7 +200,7 @@ export class SkillLibrary {
         })
       );
       return Array.prototype.concat(...files).filter((f: string) => f.endsWith(ext));
-    } catch (err) {
+    } catch {
       return [];
     }
   }
@@ -291,7 +291,7 @@ export class SkillLibrary {
 
   async getSkill(name: string, version?: string): Promise<SkillDocument | null> {
     let query = 'SELECT * FROM skills WHERE name = $1';
-    let params = [name];
+    const params = [name];
     if (version) {
       query += ' AND version = $2';
       params.push(version);
@@ -322,7 +322,7 @@ export class SkillLibrary {
 
   async getPackage(name: string, version?: string): Promise<SkillPackage | null> {
     let query = 'SELECT * FROM skill_packages WHERE name = $1';
-    let params = [name];
+    const params = [name];
     if (version) {
       query += ' AND version = $2';
       params.push(version);
@@ -356,7 +356,7 @@ export class SkillLibrary {
     }));
   }
 
-  async listPackages(): Promise<any[]> {
+  async listPackages(): Promise<SkillPackage[]> {
     const { rows } = await this.pool.query(
       'SELECT name, version, description, skills FROM skill_packages ORDER BY name, version DESC'
     );

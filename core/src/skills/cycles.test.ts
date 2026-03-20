@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SkillRegistry } from './SkillRegistry.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
 
 describe('SkillRegistry - Cycle Detection', () => {
   let registry: SkillRegistry;
@@ -18,7 +17,9 @@ describe('SkillRegistry - Cycle Detection', () => {
       handler: async () => ({ success: true }),
       requires: ['s1'],
     });
-    const manifest = { skills: ['s1'] } as any;
+    const manifest = {
+      skills: ['s1'],
+    } as unknown as import('../agents/manifest/types.js').AgentManifest;
     const errors = registry.validateManifestSkills(manifest);
     expect(errors[0]).toContain('Circular skill dependency detected: s1 -> s1');
   });
@@ -40,7 +41,9 @@ describe('SkillRegistry - Cycle Detection', () => {
       handler: async () => ({ success: true }),
       requires: ['s1'],
     });
-    const manifest = { skills: ['s1'] } as any;
+    const manifest = {
+      skills: ['s1'],
+    } as unknown as import('../agents/manifest/types.js').AgentManifest;
     const errors = registry.validateManifestSkills(manifest);
     expect(errors[0]).toContain('Circular skill dependency detected');
     expect(errors[0]).toMatch(/s1 -> s2 -> s1|s2 -> s1 -> s2/);
@@ -62,7 +65,9 @@ describe('SkillRegistry - Cycle Detection', () => {
       source: 'builtin',
       handler: async () => ({ success: true }),
     });
-    const manifest = { skills: ['s1'] } as any;
+    const manifest = {
+      skills: ['s1'],
+    } as unknown as import('../agents/manifest/types.js').AgentManifest;
     const errors = registry.validateManifestSkills(manifest);
     expect(errors).toHaveLength(0);
   });

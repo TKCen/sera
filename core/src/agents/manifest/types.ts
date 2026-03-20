@@ -118,7 +118,37 @@ export interface AgentManifest {
   permissions?: PermissionsConfig;
   capabilities?: string[];
   schedules?: ScheduleManifest[];
-  overrides?: Record<string, any>;
+  mounts?: Array<{ hostPath: string; containerPath: string; mode: 'ro' | 'rw' }>;
+  overrides?: Record<string, unknown>;
+}
+
+// ── Resolved Capabilities (Runtime) ─────────────────────────────────────────────
+export interface ResolvedCapabilities {
+  filesystem?: {
+    write?: boolean;
+    maxWorkspaceSizeGB?: number;
+  };
+  fs?: {
+    write?: boolean;
+  };
+  network?: {
+    outbound?: string[];
+  };
+  exec?: {
+    commands?: string[];
+  };
+  resources?: {
+    cpu_shares?: number;
+    memory_limit?: number;
+  };
+  security?: {
+    readonlyRootfs?: boolean;
+  };
+  secrets?: {
+    access?: string[];
+  };
+  capabilities?: string[];
+  [key: string]: unknown;
 }
 
 // ── Known field names for validation ────────────────────────────────────────────
@@ -139,6 +169,7 @@ export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'permissions',
   'capabilities',
   'schedules',
+  'mounts',
   'overrides',
 ]);
 

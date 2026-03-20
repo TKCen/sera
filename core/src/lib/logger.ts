@@ -5,19 +5,19 @@ export class Logger {
     this.component = component;
   }
 
-  info(...args: any[]): void {
+  info(...args: unknown[]): void {
     console.log(`[${this.component}]`, ...args);
   }
 
-  warn(...args: any[]): void {
+  warn(...args: unknown[]): void {
     console.warn(`[${this.component}]`, ...args);
   }
 
-  error(...args: any[]): void {
+  error(...args: unknown[]): void {
     console.error(`[${this.component}]`, ...args);
   }
 
-  debug(...args: any[]): void {
-    // console.debug(`[${this.component}]`, ...args);
+  debug(..._args: unknown[]): void {
+    // console.debug(`[${this.component}]`, ..._args);
   }
 }

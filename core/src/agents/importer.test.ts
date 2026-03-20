@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ResourceImporter } from './importer.service.js';
+import type { AgentRegistry } from './registry.service.js';
 import path from 'path';
 import fs from 'fs/promises';
 
 describe('ResourceImporter', () => {
-  let registryMock: any;
+  let registryMock: Record<string, import('vitest').Mock>;
   let importer: ResourceImporter;
   const baseDir = path.join(process.cwd(), 'test-manifests');
 
@@ -15,7 +16,7 @@ describe('ResourceImporter', () => {
       upsertSandboxBoundary: vi.fn().mockResolvedValue({}),
       upsertTemplate: vi.fn().mockResolvedValue({}),
     };
-    importer = new ResourceImporter(registryMock, baseDir);
+    importer = new ResourceImporter(registryMock as unknown as AgentRegistry, baseDir);
 
     // Create test directories and files
     await fs.mkdir(path.join(baseDir, 'lists', 'network-allowlist'), { recursive: true });

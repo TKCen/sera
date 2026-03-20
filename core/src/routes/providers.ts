@@ -59,7 +59,7 @@ export function createProvidersRouter(
     try {
       const models = await llmRouter.listModels();
       res.json({ providers: models });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Failed to list providers:', err);
       res.status(502).json({ error: 'Failed to retrieve provider list' });
     }
@@ -96,9 +96,9 @@ export function createProvidersRouter(
         `Provider added | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
       );
       res.status(201).json({ modelName, result });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Failed to add provider ${modelName}:`, err);
-      res.status(502).json({ error: `Failed to add provider: ${err.message}` });
+      res.status(502).json({ error: `Failed to add provider: ${(err as Error).message}` });
     }
   });
 
@@ -118,9 +118,9 @@ export function createProvidersRouter(
           `Provider removed | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
         );
         res.status(204).end();
-      } catch (err: any) {
+      } catch (err: unknown) {
         logger.error(`Failed to remove provider ${modelName}:`, err);
-        res.status(502).json({ error: `Failed to remove provider: ${err.message}` });
+        res.status(502).json({ error: `Failed to remove provider: ${(err as Error).message}` });
       }
     }
   );
@@ -134,8 +134,8 @@ export function createProvidersRouter(
     try {
       const result = await llmRouter.testModel(modelName);
       res.status(result.ok ? 200 : 502).json(result);
-    } catch (err: any) {
-      res.status(502).json({ ok: false, error: err.message });
+    } catch (err: unknown) {
+      res.status(502).json({ ok: false, error: (err as Error).message });
     }
   });
 

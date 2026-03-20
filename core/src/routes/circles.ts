@@ -91,9 +91,11 @@ export function createCircleRouter(
         .then(() => {
           res.status(201).json({ success: true, name: body.metadata.name });
         })
-        .catch((err) => res.status(500).json({ error: err.message }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+        .catch((err: unknown) =>
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+        );
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -127,9 +129,11 @@ export function createCircleRouter(
         .then(() => {
           res.json({ success: true });
         })
-        .catch((err) => res.status(500).json({ error: err.message }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+        .catch((err: unknown) =>
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+        );
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -155,9 +159,11 @@ export function createCircleRouter(
         .then(() => {
           res.json({ success: true });
         })
-        .catch((err) => res.status(500).json({ error: err.message }));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+        .catch((err: unknown) =>
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+        );
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -198,8 +204,8 @@ export function createCircleRouter(
       circleRegistry.loadProjectContext(circle, circlesDir);
 
       res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -240,8 +246,8 @@ export function createCircleRouter(
 
       await intercomService.broadcastToCircle(fromManifest, name, payload || {});
       res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -255,8 +261,11 @@ function findCircleFile(circlesDir: string, circleName: string): string | undefi
   const files = fs.readdirSync(circlesDir).filter((f) => f.endsWith('.circle.yaml'));
   for (const file of files) {
     try {
-      const raw = yaml.load(fs.readFileSync(path.join(circlesDir, file), 'utf-8')) as any;
-      if (raw?.metadata?.name === circleName) {
+      const raw = yaml.load(fs.readFileSync(path.join(circlesDir, file), 'utf-8')) as Record<
+        string,
+        unknown
+      >;
+      if ((raw?.['metadata'] as Record<string, unknown> | undefined)?.['name'] === circleName) {
         return path.join(circlesDir, file);
       }
     } catch {

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ScheduleService } from './ScheduleService.js';
 import { pool } from '../lib/database.js';
-import { PgBoss } from 'pg-boss';
 
 // Mock Database
 vi.mock('../lib/database.js', () => ({
@@ -22,6 +21,7 @@ vi.mock('pg-boss', () => {
   PgBossMock.prototype.schedule = vi.fn().mockResolvedValue(undefined);
   PgBossMock.prototype.unschedule = vi.fn().mockResolvedValue(undefined);
   PgBossMock.prototype.work = vi.fn().mockResolvedValue(undefined);
+  PgBossMock.prototype.createQueue = vi.fn().mockResolvedValue(undefined);
   return { PgBoss: PgBossMock };
 });
 
@@ -40,7 +40,7 @@ describe('ScheduleService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     service = ScheduleService.getInstance();
-    (service as any).initialized = false;
+    (service as unknown).initialized = false;
   });
 
   describe('reconcile', () => {
@@ -54,7 +54,7 @@ describe('ScheduleService', () => {
         type: 'cron',
       };
 
-      (pool.query as any)
+      (pool.query as unknown)
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // reconcile in start()
         .mockResolvedValueOnce({ rows: [] }) // pgboss query in start()
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // manual reconcile call
@@ -63,7 +63,7 @@ describe('ScheduleService', () => {
       await service.start('postgres://localhost/test');
       await service.reconcile();
 
-      const boss = (service as any).boss;
+      const boss = (service as unknown).boss;
 
       // Verify missing schedule was added
       expect(boss.schedule).toHaveBeenCalledWith(mockDbSchedule.id, mockDbSchedule.expression, {

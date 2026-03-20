@@ -35,7 +35,7 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
       }));
 
       res.json({ usage });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Error fetching global budget:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -66,7 +66,7 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
       }));
 
       res.json({ rankings });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Error fetching agent rankings:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -100,7 +100,7 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
       }));
 
       res.json({ agentId, usage });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Error fetching budget for agent ${req.params.id}:`, err);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -120,7 +120,7 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
       const agentId = String(req.params['id']);
       const status = await meteringService.checkBudget(agentId);
       res.json({ agentId, ...status });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Error fetching budget for agent ${String(req.params['id'])}:`, err);
       res.status(500).json({ error: 'Internal server error' });
     }

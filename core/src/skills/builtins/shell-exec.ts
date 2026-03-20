@@ -38,14 +38,15 @@ export const shellExecSkill: SkillDefinition = {
       });
 
       return { success: true, data: output };
-    } catch (err: any) {
-      let errorMessage = err instanceof Error ? err.message : String(err);
+    } catch (err: unknown) {
+      const error = err as { message?: string; stderr?: string; stdout?: string };
+      let errorMessage = error.message || String(err);
 
-      if (err.stderr) {
-        errorMessage += `\nStderr: ${err.stderr}`;
+      if (error.stderr) {
+        errorMessage += `\nStderr: ${error.stderr}`;
       }
-      if (err.stdout) {
-        errorMessage += `\nStdout: ${err.stdout}`;
+      if (error.stdout) {
+        errorMessage += `\nStdout: ${error.stdout}`;
       }
 
       return {

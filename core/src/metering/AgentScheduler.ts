@@ -27,7 +27,7 @@ export class AgentScheduler {
       }
 
       return isWithin;
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Error checking quota for agent ${agentId}:`, err);
       // Fail-open: if DB check fails, allow the request
       return true;

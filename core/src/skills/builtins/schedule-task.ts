@@ -54,11 +54,18 @@ export const scheduleTaskSkill: SkillDefinition = {
       return { success: false, error: 'Skill must be executed in an agent instance context.' };
     }
 
-    const { action, name, cron, task, scheduleId, status } = params as any;
+    const { action, name, cron, task, scheduleId, status } = params as {
+      action: string;
+      name?: string;
+      cron?: string;
+      task?: object;
+      scheduleId?: string;
+      status?: string;
+    };
 
     try {
       switch (action) {
-        case 'create':
+        case 'create': {
           if (!name || !cron || !task) {
             return {
               success: false,
@@ -76,15 +83,17 @@ export const scheduleTaskSkill: SkillDefinition = {
             success: true,
             data: { scheduleId: newId, message: `Schedule "${name}" created successfully.` },
           };
+        }
 
-        case 'list':
+        case 'list': {
           const listResult = await query(
             'SELECT id, name, cron, task, status, last_run FROM schedules WHERE agent_id = $1',
             [agentId]
           );
           return { success: true, data: { schedules: listResult.rows } };
+        }
 
-        case 'delete':
+        case 'delete': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for delete action.' };
           const delRes = await query('DELETE FROM schedules WHERE id = $1 AND agent_id = $2', [
@@ -94,8 +103,9 @@ export const scheduleTaskSkill: SkillDefinition = {
           if (delRes.rowCount === 0)
             return { success: false, error: 'Schedule not found or not owned by this agent.' };
           return { success: true, data: { message: 'Schedule deleted successfully.' } };
+        }
 
-        case 'update':
+        case 'update': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for update action.' };
           const currentRes = await query(
@@ -117,12 +127,13 @@ export const scheduleTaskSkill: SkillDefinition = {
             [updName, updCron, updTask, updStatus, scheduleId]
           );
           return { success: true, data: { message: 'Schedule updated successfully.' } };
+        }
 
         default:
           return { success: false, error: `Unsupported action: ${action}` };
       }
-    } catch (err: any) {
-      return { success: false, error: `Database error: ${err.message}` };
+    } catch (err: unknown) {
+      return { success: false, error: `Database error: ${(err as Error).message}` };
     }
   },
 };

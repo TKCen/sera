@@ -3,7 +3,7 @@
  * Tests the pure logic functions — DB and Centrifugo calls are mocked.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // ── pruneOldTaskResults is tested separately (needs DB) ──────────────────────
 

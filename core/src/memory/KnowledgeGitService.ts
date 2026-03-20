@@ -103,7 +103,7 @@ export class KnowledgeGitService {
       const archivedPath = `${repoDir}.archived-${Date.now()}`;
       await fs.rename(repoDir, archivedPath);
       logger.info(`Archived knowledge repo for circle "${circleId}" to ${archivedPath}`);
-    } catch (err) {
+    } catch {
       // Directory doesn't exist, nothing to archive
       logger.debug(`No knowledge repo to archive for circle "${circleId}" at ${repoDir}`);
     }
@@ -211,7 +211,7 @@ export class KnowledgeGitService {
          SET status='merged', approved_by=$1, updated_at=now()
        WHERE circle_id=$2 AND agent_instance_id=$3 AND status='pending'`,
       [approvedBy ?? 'system', circleId, agentInstanceId]
-    ).catch((err) => logger.warn('Failed to update merge request status:', err));
+    ).catch((_err) => logger.warn('Failed to update merge request status:', _err));
 
     // Re-index main branch into circle namespace
     const namespace: MemoryNamespace =

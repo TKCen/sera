@@ -86,7 +86,7 @@ export class ToolExecutor {
         .catch((err) => logger.error('Audit record failed:', err));
 
       if (this.sandboxManager) {
-        (this.sandboxManager as any).audit?.('tool_denied', manifest.metadata.name, {
+        this.sandboxManager.audit('tool_denied', manifest.metadata.name, {
           skillId,
           agentInstanceId,
           instanceId: agentInstanceId,

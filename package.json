@@ -26,9 +26,12 @@
     "lint:core": "npm run lint --workspace=core",
     "lint:web":  "npm run lint --workspace=web",
 
-    "format":      "npm run format --workspaces --if-present",
-    "format:core": "npm run format --workspace=core",
-    "format:web":  "npm run format --workspace=web",
+    "format":            "npm run format --workspaces --if-present",
+    "format:core":       "npm run format --workspace=core",
+    "format:web":        "npm run format --workspace=web",
+    "format:check":      "npm run format:check --workspaces --if-present",
+    "format:check:core": "npm run format:check --workspace=core",
+    "format:check:web":  "npm run format:check --workspace=web",
 
     "test":             "npm run test --workspaces --if-present",
     "test:unit":        "npm run test:unit --workspaces --if-present",
@@ -36,6 +39,13 @@
     "test:core":        "npm run test --workspace=core",
     "test:web":         "npm run test --workspace=web",
     "test:tui":         "cd tui && go test ./...",
+
+    "build":      "npm run build --workspaces --if-present && npm run build:tui",
+    "build:core": "npm run build --workspace=core",
+    "build:web":  "npm run build --workspace=web",
+    "build:tui":  "cd tui && go build -o tui.exe .",
+
+    "check-all": "npm run format && npm run lint && npm run typecheck && npm run test && npm run build",
 
     "pre-commit":    "npm run typecheck && npm run lint && npm run test:web",
 

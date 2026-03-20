@@ -162,6 +162,18 @@ All commands run from the repository root via `npm run <script>`.
 | `npm run format` | all | Prettier write all workspaces |
 | `npm run format:core` | core | |
 | `npm run format:web` | web | |
+| `npm run format:check` | all | Prettier check (no writes — use in CI) |
+| `npm run format:check:core` | core | |
+| `npm run format:check:web` | web | |
+
+### Builds
+
+| Command | Scope | Description |
+|---|---|---|
+| `npm run build` | all | Build all workspaces + TUI |
+| `npm run build:core` | core | `tsc` |
+| `npm run build:web` | web | `tsc -b && vite build` |
+| `npm run build:tui` | tui | `go build` |
 
 ### Tests
 
@@ -184,7 +196,7 @@ npm run hooks:install
 npm run pre-commit   # typecheck + lint + web tests
 ```
 
-The pre-commit check runs: `typecheck → lint → test:web`. Integration tests are excluded because they require running services; run `npm run test:integration` separately in CI or against a live stack.
+The pre-commit check runs: `typecheck → lint → test:web`. For a full end-to-end verification run `npm run check-all` (format → lint → typecheck → test → build). Integration tests are excluded because they require running services; run `npm run test:integration` separately in CI or against a live stack.
 
 ### TUI
 

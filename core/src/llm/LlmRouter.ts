@@ -109,7 +109,6 @@ function toContext(request: ChatCompletionRequest): Context {
 
     switch (msg.role) {
       case 'system':
-        // pi-mono separates systemPrompt from the message list
         systemPrompt = msg.content ?? '';
         break;
 
@@ -131,19 +130,20 @@ function toContext(request: ChatCompletionRequest): Context {
         }
 
         if (Array.isArray(msg.tool_calls)) {
-          for (const tc of msg.tool_calls as Record<string, any>[]) {
+          for (const tc of msg.tool_calls as Record<string, unknown>[]) {
             let parsedArgs: Record<string, unknown> = {};
             try {
-              parsedArgs = tc['function']?.['arguments']
-                ? (JSON.parse(tc['function']['arguments'] as string) as Record<string, unknown>)
+              const functionBlock = tc['function'] as Record<string, unknown>;
+              parsedArgs = functionBlock?.['arguments']
+                ? (JSON.parse(functionBlock['arguments'] as string) as Record<string, unknown>)
                 : {};
             } catch {
               parsedArgs = {};
             }
             const toolCall: ToolCall = {
               type: 'toolCall',
-              id: tc['id'] ?? '',
-              name: tc['function']?.['name'] ?? '',
+              id: (tc['id'] as string) ?? '',
+              name: ((tc['function'] as Record<string, unknown>)?.['name'] as string) ?? '',
               arguments: parsedArgs,
             };
             content.push(toolCall);
@@ -186,20 +186,24 @@ function toContext(request: ChatCompletionRequest): Context {
   // Convert OpenAI tool definitions to pi-mono Tool format.
   const tools =
     Array.isArray(request.tools) && request.tools.length > 0
-      ? (request.tools as Record<string, any>[])
+      ? (request.tools as Record<string, unknown>[])
           .filter((t) => t['type'] === 'function')
-          .map((t) => ({
-            name: t['function']?.['name'] ?? '',
-            description: t['function']?.['description'] ?? '',
-            parameters: t['function']?.['parameters'] ?? {},
-          }))
+          .map((t) => {
+            const fn = t['function'] as Record<string, unknown>;
+            return {
+              name: (fn?.['name'] as string) ?? '',
+              description: (fn?.['description'] as string) ?? '',
+              parameters: (fn?.['parameters'] as Record<string, unknown>) ?? {},
+            };
+          })
       : undefined;
 
-  return {
-    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+  const ctx: any = {
     messages,
-    ...(tools ? { tools } : {}),
+    systemPrompt: systemPrompt || undefined,
+    tools: tools && tools.length > 0 ? tools : undefined,
   };
+  return ctx;
 }
 
 /** Map a pi-mono StopReason to an OpenAI finish_reason string. */
@@ -475,8 +479,8 @@ export class LlmRouter {
       const eventStream = this.dispatch(config, context, { maxTokens: 1 });
       await eventStream.result();
       return { ok: true, latencyMs: Date.now() - start };
-    } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - start, error: err.message as string };
+    } catch (err: unknown) {
+      return { ok: false, latencyMs: Date.now() - start, error: (err as Error).message };
     }
   }
 }

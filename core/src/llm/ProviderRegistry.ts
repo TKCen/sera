@@ -93,8 +93,10 @@ export class ProviderRegistry {
         this.configs.set(cfg.modelName, cfg);
       }
       logger.info(`Loaded ${this.configs.size} provider(s) from ${this.configPath}`);
-    } catch (err: any) {
-      logger.error(`Failed to load providers config at ${this.configPath}: ${err.message}`);
+    } catch (err: unknown) {
+      logger.error(
+        `Failed to load providers config at ${this.configPath}: ${(err as Error).message}`
+      );
     }
   }
 

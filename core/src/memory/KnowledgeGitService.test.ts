@@ -56,7 +56,7 @@ describe('KnowledgeGitService', () => {
     // Re-import after setting env
     const mod = await import('./KnowledgeGitService.js');
     KnowledgeGitService = mod.KnowledgeGitService;
-    (KnowledgeGitService as any).instance = undefined;
+    (KnowledgeGitService as unknown as { instance: undefined }).instance = undefined;
   });
 
   afterEach(async () => {

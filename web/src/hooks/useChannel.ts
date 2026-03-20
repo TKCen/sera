@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PublicationContext } from 'centrifuge';
-import { useCentrifugoContext } from '@/contexts/CentrifugoContext';
+import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 
 export function useChannel<T = unknown>(channelName: string): T | null {
   const { client } = useCentrifugoContext();

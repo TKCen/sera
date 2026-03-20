@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SkillRegistry } from './SkillRegistry.js';
-import type { SkillDefinition, SkillResult } from './types.js';
+import type { SkillDefinition } from './types.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentContext } from './types.js';
+import type { MCPRegistry } from '../mcp/registry.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -143,13 +145,17 @@ describe('SkillRegistry', () => {
   describe('invoke', () => {
     it('should invoke a registered skill and return its result', async () => {
       registry.register(dummySkill('echo'));
-      const result = await registry.invoke('echo', { input: 'hello' }, {} as any);
+      const result = await registry.invoke(
+        'echo',
+        { input: 'hello' },
+        {} as unknown as AgentContext
+      );
       expect(result.success).toBe(true);
       expect(result.data).toBe('echo:hello');
     });
 
     it('should return error for unknown skill', async () => {
-      const result = await registry.invoke('unknown', {}, {} as any);
+      const result = await registry.invoke('unknown', {}, {} as unknown as AgentContext);
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
     });
@@ -161,7 +167,7 @@ describe('SkillRegistry', () => {
           throw new Error('boom');
         },
       });
-      const result = await registry.invoke('broken', {}, {} as any);
+      const result = await registry.invoke('broken', {}, {} as unknown as AgentContext);
       expect(result.success).toBe(false);
       expect(result.error).toBe('boom');
     });
@@ -183,7 +189,7 @@ describe('SkillRegistry', () => {
         },
       });
 
-      const result = await registry.invoke('outer', {}, {} as any);
+      const result = await registry.invoke('outer', {}, {} as unknown as AgentContext);
       expect(result.success).toBe(true);
       expect(result.data).toBe('outer(echo:composed)');
     });
@@ -248,14 +254,56 @@ describe('SkillRegistry', () => {
         ]),
         getClient: vi.fn().mockReturnValue({
           callTool: mockCallTool,
+          listTools: vi.fn().mockResolvedValue({
+            tools: [
+              {
+                name: 'mcp-tool-a',
+                description: 'A mock MCP tool',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    query: { type: 'string', description: 'Search query' },
+                    count: { type: 'integer', description: 'How many' },
+                  },
+                  required: ['query'],
+                },
+              },
+            ],
+          }),
         }),
+        getClients: vi.fn().mockReturnValue(
+          new Map([
+            [
+              'test-server',
+              {
+                callTool: mockCallTool,
+                listTools: vi.fn().mockResolvedValue({
+                  tools: [
+                    {
+                      name: 'mcp-tool-a',
+                      description: 'A mock MCP tool',
+                      inputSchema: {
+                        type: 'object',
+                        properties: {
+                          query: { type: 'string', description: 'Search query' },
+                          count: { type: 'integer', description: 'How many' },
+                        },
+                        required: ['query'],
+                      },
+                    },
+                  ],
+                }),
+              },
+            ],
+          ])
+        ),
       };
 
-      const count = await registry.bridgeMCPTools(mockMCPRegistry as any);
+      const count = await registry.bridgeMCPTools(mockMCPRegistry as unknown as MCPRegistry);
       expect(count).toBe(1);
-      expect(registry.has('mcp-tool-a')).toBe(true);
+      expect(registry.has('test-server/mcp-tool-a')).toBe(true);
 
-      const skill = registry.get('mcp-tool-a')!;
+      const skill = registry.get('test-server/mcp-tool-a')!;
       expect(skill.source).toBe('mcp');
       expect(skill.parameters).toHaveLength(2);
       expect(skill.parameters[0]).toEqual({
@@ -272,12 +320,15 @@ describe('SkillRegistry', () => {
       });
 
       // Invoke the bridged skill
-      const result = await registry.invoke('mcp-tool-a', { query: 'test' }, {} as any);
+      const result = await registry.invoke('test-server/mcp-tool-a', { query: 'test' }, {
+        manifest: { metadata: { name: 'test' } },
+      } as unknown as AgentContext);
       expect(result.success).toBe(true);
-      expect(mockCallTool).toHaveBeenCalledWith('mcp-tool-a', { query: 'test' });
+      expect(mockCallTool).toHaveBeenCalledWith('mcp-tool-a', { query: 'test' }, expect.anything());
     });
 
     it('should handle MCP tool invocation errors gracefully', async () => {
+      const mockCallTool = vi.fn().mockRejectedValue(new Error('connection lost'));
       const mockMCPRegistry = {
         getAllTools: vi.fn().mockResolvedValue([
           {
@@ -286,12 +337,30 @@ describe('SkillRegistry', () => {
           },
         ]),
         getClient: vi.fn().mockReturnValue({
-          callTool: vi.fn().mockRejectedValue(new Error('connection lost')),
+          callTool: mockCallTool,
+          listTools: vi.fn().mockResolvedValue({
+            tools: [{ name: 'fail-tool', description: 'Will fail', inputSchema: {} }],
+          }),
         }),
+        getClients: vi.fn().mockReturnValue(
+          new Map([
+            [
+              'err-server',
+              {
+                callTool: mockCallTool,
+                listTools: vi.fn().mockResolvedValue({
+                  tools: [{ name: 'fail-tool', description: 'Will fail', inputSchema: {} }],
+                }),
+              },
+            ],
+          ])
+        ),
       };
 
-      await registry.bridgeMCPTools(mockMCPRegistry as any);
-      const result = await registry.invoke('fail-tool', {}, {} as any);
+      await registry.bridgeMCPTools(mockMCPRegistry as unknown as MCPRegistry);
+      const result = await registry.invoke('err-server/fail-tool', {}, {
+        manifest: { metadata: { name: 'test' } },
+      } as unknown as AgentContext);
       expect(result.success).toBe(false);
       expect(result.error).toBe('connection lost');
     });
@@ -304,9 +373,10 @@ describe('SkillRegistry', () => {
             { serverName: 'gone', tools: [{ name: 'ghost', description: '', inputSchema: {} }] },
           ]),
         getClient: vi.fn().mockReturnValue(undefined),
+        getClients: vi.fn().mockReturnValue(new Map()),
       };
 
-      const count = await registry.bridgeMCPTools(mockMCPRegistry as any);
+      const count = await registry.bridgeMCPTools(mockMCPRegistry as unknown as MCPRegistry);
       expect(count).toBe(0);
       expect(registry.has('ghost')).toBe(false);
     });

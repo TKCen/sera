@@ -73,7 +73,7 @@ import { ActingContextBuilder } from '../identity/acting-context.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-const OPERATOR = { sub: 'user|op', email: 'alice@example.com', roles: ['operator'] as any };
+const OPERATOR = { sub: 'user|op', email: 'alice@example.com', roles: ['operator'] };
 const AGENT_ID = 'agt-1';
 const INSTANCE_ID = 'inst-1';
 const DELEGATION_ID = '00000000-0000-4000-a000-000000000001';

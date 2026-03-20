@@ -44,12 +44,12 @@ describe('Audit Export Streaming', () => {
       }),
       release: vi.fn(),
     };
-    (pool.connect as any).mockResolvedValue(clientMock);
+    vi.mocked(pool.connect).mockResolvedValue(clientMock as unknown as import('pg').PoolClient);
 
     const memoryBefore = process.memoryUsage().heapUsed;
     let streamCount = 0;
 
-    await service.streamEntries((row) => {
+    await service.streamEntries((_row) => {
       streamCount++;
       // Simulate writing to response
     });

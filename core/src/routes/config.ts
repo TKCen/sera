@@ -36,9 +36,9 @@ export function createConfigRouter(): Router {
       config.saveLlmConfig(req.body);
       logger.info('Legacy LLM configuration updated');
       res.json({ success: true });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Failed to update LLM config:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -52,9 +52,9 @@ export function createConfigRouter(): Router {
         model: config.llm.model,
         response: response.content,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('LLM test failed:', err);
-      res.json({ success: false, error: err.message });
+      res.json({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -85,9 +85,9 @@ export function createConfigRouter(): Router {
       config.saveProviderConfig(id, req.body);
       logger.info(`Provider configuration updated: ${id}`);
       res.json({ success: true });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Failed to update provider config (${id}):`, err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -124,10 +124,10 @@ export function createConfigRouter(): Router {
         provider: id,
         response: response.content,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       // In tests, we might want to see the error, but we should not crash the test suite.
       // The frontend expects success: false and the error message.
-      res.json({ success: false, error: err.message });
+      res.json({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -141,9 +141,9 @@ export function createConfigRouter(): Router {
       config.setActiveProvider(providerId);
       logger.info(`Active provider set to: ${providerId}`);
       res.json({ success: true, activeProvider: providerId });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Failed to set active provider (${providerId}):`, err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

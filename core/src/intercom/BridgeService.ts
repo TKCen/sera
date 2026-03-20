@@ -32,7 +32,7 @@ export class BridgeService {
   /**
    * Connect to a remote SERA instance (Story 9.6 stub).
    */
-  connect(remoteUrl: string, token: string): void {
+  connect(remoteUrl: string, _token: string): void {
     logger.info(`Federation: Connecting to ${remoteUrl} (stub)`);
   }
 
@@ -63,7 +63,7 @@ export class BridgeService {
 
     // Find a local circle that has a connection to the target remote circle
     const localCircles = this.registry?.listCircles() || [];
-    let connectionFound: any = null;
+    let connectionFound: import('../circles/types.js').CircleConnection | null = null;
 
     for (const lc of localCircles) {
       const conn = lc.connections?.find((c) => c.circle === circleName);
@@ -81,7 +81,7 @@ export class BridgeService {
       return undefined;
     }
 
-    const axiosConfig: any = {
+    const axiosConfig: import('axios').CreateAxiosDefaults = {
       baseURL: auth.endpoint,
       timeout: 10000,
       headers: {
@@ -100,12 +100,13 @@ export class BridgeService {
         });
         axiosConfig.httpsAgent = httpsAgent;
         logger.info(`Configured mTLS for connection to ${circleName}`);
-      } catch (err: any) {
-        logger.error(`Failed to load certificates for ${circleName}: ${err.message}`);
+      } catch (err: unknown) {
+        logger.error(`Failed to load certificates for ${circleName}: ${(err as Error).message}`);
         return undefined;
       }
     } else if (auth.type === 'token' && auth.token) {
-      axiosConfig.headers['Authorization'] = `Bearer ${auth.token}`;
+      if (!axiosConfig.headers) axiosConfig.headers = {};
+      (axiosConfig.headers as Record<string, string>)['Authorization'] = `Bearer ${auth.token}`;
       logger.info(`Configured token auth for connection to ${circleName}`);
     }
 
@@ -139,17 +140,18 @@ export class BridgeService {
       if (client) {
         try {
           // Avoid infinite loops by tagging the message or checking source
-          if ((message.source as any).bridged) return;
+          const source = message.source as Record<string, unknown>;
+          if (source.bridged) return;
 
           const bridgedMessage = {
             ...message,
-            source: { ...message.source, bridged: true },
+            source: { ...source, bridged: true },
           };
 
           await client.post('/api/intercom/bridge/receive', { channel, message: bridgedMessage });
           logger.info(`Forwarded message to ${targetCircle} on channel ${channel}`);
-        } catch (err: any) {
-          logger.error(`Failed to bridge to ${targetCircle}: ${err.message}`);
+        } catch (err: unknown) {
+          logger.error(`Failed to bridge to ${targetCircle}: ${(err as Error).message}`);
         }
       }
     }

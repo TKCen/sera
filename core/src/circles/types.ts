@@ -67,6 +67,8 @@ export interface CircleManifest {
   partyMode?: PartyModeConfig;
   connections?: CircleConnection[];
 }
+/** Runtime representation of a Circle. */
+export type Circle = CircleManifest;
 
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_CIRCLE_FIELDS = new Set([

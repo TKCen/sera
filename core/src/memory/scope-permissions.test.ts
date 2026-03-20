@@ -41,7 +41,6 @@ vi.mock('./blocks/ScopedMemoryBlockStore.js', () => ({
       tags: [],
       importance: 3,
       title: 'Test',
-      content: 'Test content',
     });
   },
 }));
@@ -207,13 +206,13 @@ describe('knowledge-query scope permission checks', () => {
       makeContext({})
     );
     expect(result.success).toBe(true);
-    expect((result.data as any).results).toEqual([]);
+    expect((result.data as { results: unknown[] }).results).toEqual([]);
   });
 
   it('global scope: always accessible', async () => {
     const result = await querySkill.handler({ query: 'test', scopes: ['global'] }, makeContext({}));
     expect(result.success).toBe(true);
-    expect((result.data as any).results).toEqual([]);
+    expect((result.data as { results: unknown[] }).results).toEqual([]);
   });
 
   it('circle scope with no circle membership: returns error marker', async () => {
@@ -222,7 +221,7 @@ describe('knowledge-query scope permission checks', () => {
       makeContext({ circle: '' })
     );
     expect(result.success).toBe(true);
-    expect((result.data as any).error).toBe('not_a_circle_member');
+    expect((result.data as { error: string }).error).toBe('not_a_circle_member');
   });
 
   it('circle scope with membership: proceeds to search', async () => {
@@ -231,7 +230,7 @@ describe('knowledge-query scope permission checks', () => {
       makeContext({ circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
-    expect(Array.isArray((result.data as any).results)).toBe(true);
+    expect(Array.isArray((result.data as { results: unknown[] }).results)).toBe(true);
   });
 
   it('default scopes include personal, circle, and global', async () => {
@@ -248,6 +247,6 @@ describe('knowledge-query scope permission checks', () => {
       makeContext({ circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
-    expect((result.data as any).results).toEqual([]);
+    expect((result.data as { results: unknown[] }).results).toEqual([]);
   });
 });

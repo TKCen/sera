@@ -140,8 +140,8 @@ export class LiteLLMClient {
           owned_by: String(m['owned_by'] ?? 'litellm'),
         }));
       }
-    } catch (err: any) {
-      logger.warn(`Failed to fetch LiteLLM model list: ${err.message}`);
+    } catch (err: unknown) {
+      logger.warn(`Failed to fetch LiteLLM model list: ${(err as Error).message}`);
     }
     return [];
   }
@@ -177,8 +177,8 @@ export class LiteLLMClient {
         { headers: { 'X-SERA-Agent-Id': 'sera-core-test' } }
       );
       return { ok: true, latencyMs: Date.now() - start };
-    } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - start, error: err.message };
+    } catch (err: unknown) {
+      return { ok: false, latencyMs: Date.now() - start, error: (err as Error).message };
     }
   }
 }

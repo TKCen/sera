@@ -11,8 +11,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
     try {
       const templates = await registry.listTemplates();
       res.json(templates);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -23,8 +23,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       }
       const template = await registry.upsertTemplate(req.body);
       res.status(201).json(template);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -33,8 +33,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       const template = await registry.getTemplate(req.params.name);
       if (!template) return res.status(404).json({ error: 'Template not found' });
       res.json(template);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -42,13 +42,14 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
     try {
       const template = await registry.updateTemplate(req.params.name, req.body);
       res.json(template);
-    } catch (err: any) {
-      const code = err.message.includes('not found')
+    } catch (err: unknown) {
+      const error = err as Error;
+      const code = error.message.includes('not found')
         ? 404
-        : err.message.includes('builtin')
+        : error.message.includes('builtin')
           ? 403
           : 500;
-      res.status(code).json({ error: err.message });
+      res.status(code).json({ error: error.message });
     }
   });
 
@@ -56,15 +57,16 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
     try {
       const template = await registry.deleteTemplate(req.params.name);
       res.json({ message: 'Template deleted', template });
-    } catch (err: any) {
-      const code = err.message.includes('not found')
+    } catch (err: unknown) {
+      const error = err as Error;
+      const code = error.message.includes('not found')
         ? 404
-        : err.message.includes('builtin')
+        : error.message.includes('builtin')
           ? 403
-          : err.message.includes('referenced')
+          : error.message.includes('referenced')
             ? 409
             : 500;
-      res.status(code).json({ error: err.message });
+      res.status(code).json({ error: error.message });
     }
   });
 
@@ -73,8 +75,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       const instances = await registry.listInstances();
       const filtered = instances.filter((i) => i.template_ref === req.params.name);
       res.json(filtered);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -83,8 +85,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
     try {
       const instances = await registry.listInstances();
       res.json(instances);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -101,11 +103,11 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
         templateRef: metadata.templateRef,
         displayName: metadata.displayName || undefined,
         circle: metadata.circle || undefined,
-        overrides: overrides || {},
+        overrides: (overrides as Record<string, unknown>) || {},
       } as any);
       res.status(201).json(instance);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -114,8 +116,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       const instance = await registry.getInstance(req.params.id);
       if (!instance) return res.status(404).json({ error: 'Instance not found' });
       res.json(instance);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -124,8 +126,8 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
     try {
       await importer.importAll();
       res.json({ status: 'ok', message: 'Registry reloaded from filesystem' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

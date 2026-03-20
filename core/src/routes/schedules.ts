@@ -22,8 +22,8 @@ export const createSchedulesRouter = () => {
 
       const { rows } = await pool.query(query, params);
       res.json(rows);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -34,8 +34,8 @@ export const createSchedulesRouter = () => {
     try {
       const schedule = await scheduleService.createSchedule(req.body);
       res.status(201).json(schedule);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
     }
   });
 
@@ -47,8 +47,8 @@ export const createSchedulesRouter = () => {
       const { rows } = await pool.query('SELECT * FROM schedules WHERE id = $1', [req.params.id]);
       if (rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
       res.json(rows[0]);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -65,8 +65,8 @@ export const createSchedulesRouter = () => {
 
       const schedule = await scheduleService.updateSchedule(req.params.id, req.body);
       res.json(schedule);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
     }
   });
 
@@ -82,18 +82,16 @@ export const createSchedulesRouter = () => {
       if (rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
 
       if (rows[0].source === 'manifest') {
-        return res
-          .status(403)
-          .json({
-            error:
-              'Manifest-declared schedules cannot be deleted via API. Remove it from the agent manifest instead.',
-          });
+        return res.status(403).json({
+          error:
+            'Manifest-declared schedules cannot be deleted via API. Remove it from the agent manifest instead.',
+        });
       }
 
       await scheduleService.deleteSchedule(req.params.id);
       res.status(204).send();
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -104,8 +102,8 @@ export const createSchedulesRouter = () => {
     try {
       await scheduleService.triggerSchedule(req.params.id);
       res.json({ status: 'triggered' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

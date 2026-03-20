@@ -88,7 +88,7 @@ export class SkillInjector {
     }
 
     // 4. Fetch full documents and resolve dependencies
-    const loadedSkills: any[] = [];
+    const loadedSkills: import('./schema.js').SkillDocument[] = [];
     const processed = new Set<string>();
     const queue: SkillPin[] = Array.from(skillsToLoad.entries()).map(([name, version]) => ({
       name,
@@ -116,7 +116,7 @@ export class SkillInjector {
 
     // 5. Token budgeting
     let currentTokens = 0;
-    const finalSkills: any[] = [];
+    const finalSkills: import('./schema.js').SkillDocument[] = [];
     let droppedCount = 0;
 
     for (const skill of loadedSkills) {

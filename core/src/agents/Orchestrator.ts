@@ -1,5 +1,4 @@
 import fs from 'fs';
-import path from 'path';
 import { execSync } from 'child_process';
 import { BaseAgent } from './BaseAgent.js';
 import { AgentFactory } from './AgentFactory.js';
@@ -156,8 +155,8 @@ export class Orchestrator {
     const instance = await AgentFactory.getInstance(instanceId);
     if (!instance) throw new Error(`Agent instance "${instanceId}" not found`);
 
-    const manifest = this.manifests.get(instance.templateName);
-    if (!manifest) throw new Error(`Template "${instance.templateName}" not found`);
+    const manifest = await this.registry.getTemplate(instance.template_ref);
+    if (manifest) this.manifests.set(instance.template_ref, manifest as any);
 
     const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
@@ -168,8 +167,12 @@ export class Orchestrator {
 
     // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────
     const templateLifecycle =
-      (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
-    const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle;
+      (manifest as any).spec?.lifecycle?.mode ??
+      instance.lifecycle_mode ??
+      'persistent';
+    const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle as
+      | 'persistent'
+      | 'ephemeral';
 
     // ── Subagent spawn validation & Circle Inheritance ───────────────────
     const effectiveParentId = parentInstanceId ?? instance.parent_instance_id;
@@ -229,8 +232,8 @@ export class Orchestrator {
             {
               agentId: instance.id,
               agentName: manifest.metadata.name,
-              circleId: resolvedCircleId ?? (manifest.metadata as any).circle ?? '',
-              capabilities: resolvedCapabilities,
+              circleId: (resolvedCircleId || (manifest as any).metadata.circle || '') as string,
+              capabilities: resolvedCapabilities as any,
               scope: 'agent',
             },
             '24h'
@@ -239,8 +242,15 @@ export class Orchestrator {
 
         // Story 16.9 — load agent-env secrets (exposure: agent-env only)
         const agentEnvSecrets: Record<string, string> = {};
-        const secretNames: string[] = Array.isArray(resolvedCapabilities?.secrets?.access)
-          ? (resolvedCapabilities.secrets.access as string[])
+        const capabilities = (resolvedCapabilities as any);
+        const limitGB = capabilities?.maxWorkspaceSizeGB || 5;
+        const canWrite = capabilities?.write !== false;
+
+        if (!canWrite) {
+          // TODO: Implement read-only workspace
+        }
+        const secretNames: string[] = Array.isArray(capabilities?.secrets?.access)
+          ? (capabilities.secrets.access as string[])
           : [];
 
         if (secretNames.length > 0) {
@@ -284,7 +294,7 @@ export class Orchestrator {
             type: 'agent',
             agentName: manifest.metadata.name,
             image: 'sera-agent-worker:latest',
-            hostWorkspacePath: instance.workspacePath,
+            ...(instance.workspace_path ? { hostWorkspacePath: instance.workspace_path } : {}),
             lifecycleMode: resolvedLifecycle,
             ...(task !== undefined ? { task } : {}),
             ...(identityToken !== undefined ? { token: identityToken } : {}),
@@ -360,8 +370,8 @@ export class Orchestrator {
 
       if (!containerId || !manifest) {
         const instance = await AgentFactory.getInstance(instanceId);
-        containerId = containerId ?? instance?.containerId;
-        manifest = manifest ?? (instance ? this.manifests.get(instance.templateName) : undefined);
+        containerId = containerId ?? instance?.container_id;
+        manifest = manifest ?? (instance ? this.manifests.get(instance.template_ref) : undefined);
       }
 
       if (containerId && manifest) {
@@ -426,8 +436,8 @@ export class Orchestrator {
       const errored = await this.registry.listInstances({ status: 'error' });
 
       for (const instance of [...stopped, ...errored]) {
-        const updatedAt = new Date(instance.updated_at);
-        if (updatedAt < cutoff) {
+        const lastUpdate = instance.updated_at ? new Date(instance.updated_at).getTime() : 0;
+        if (lastUpdate < cutoff.getTime()) {
           await this.sandboxManager
             .teardown(instance.id)
             .catch((err) => logger.warn(`Cleanup: failed to teardown ${instance.id}:`, err));
@@ -484,7 +494,7 @@ export class Orchestrator {
     const throttled = await this.registry.listInstances({ status: 'throttled' });
 
     for (const instance of [...running, ...throttled]) {
-      const caps = instance.resolved_capabilities;
+      const caps = instance.resolved_capabilities as any;
       const limitGB: number | undefined = caps?.filesystem?.maxWorkspaceSizeGB;
 
       const workspacePath = instance.workspace_path;
@@ -525,9 +535,9 @@ export class Orchestrator {
           this.publishLifecycleEvent('throttled', instance.id, instance.name);
           logger.warn(`Agent ${instance.name} exceeded disk quota: ${usedGB}GB / ${limitGB}GB`);
         }
-      } else if (instance.status === 'throttled') {
+      } else if ((instance.status as string) === 'throttled') {
         // Usage dropped below limit — restore to running
-        await this.registry.updateInstanceStatus(instance.id, 'running');
+        await (this.registry as any).updateInstanceStatus(instance.id, 'running');
         this.publishLifecycleEvent('running', instance.id, instance.name);
         logger.info(`Agent ${instance.name} usage back within quota: ${usedGB}GB / ${limitGB}GB`);
       }
@@ -551,10 +561,10 @@ export class Orchestrator {
       } else if (action === 'die') {
         const status = exitCode !== undefined && exitCode !== 0 ? 'error' : 'stopped';
         const agent = this.agents.get(instanceId);
-        if (agent) agent.status = status as any;
+        if (agent) agent.status = status as 'error' | 'stopped';
         await this.registry.updateInstanceStatus(instanceId, status);
         this.heartbeats.delete(instanceId);
-        this.publishLifecycleEvent(status as any, instanceId, event.agentName);
+        this.publishLifecycleEvent(status, instanceId, event.agentName);
       } else if (action === 'oom') {
         const agent = this.agents.get(instanceId);
         if (agent) agent.status = 'error';
@@ -573,7 +583,7 @@ export class Orchestrator {
     // Story 3.5 — warn about dangling containers on startup
     if (this.registry) {
       const instances = await this.registry.listInstances();
-      const knownIds = new Set(instances.map((i: any) => i.id as string));
+      const knownIds = new Set(instances.map((i) => i.id));
       await this.sandboxManager.checkDanglingContainers(knownIds);
     }
   }
@@ -662,11 +672,11 @@ export class Orchestrator {
     return Array.from(this.agents.values())[0];
   }
 
-  public listAgents(): any[] {
+  public listAgents(): { id?: string; name: string; status: string; startTime: Date }[] {
     const active = Array.from(this.agents.values()).map((a) => ({
-      id: a.agentInstanceId,
+      id: a.agentInstanceId || '',
       name: a.getManifest().metadata.name,
-      status: a.status,
+      status: a.status as string,
       startTime: a.startTime,
     }));
     return active;
@@ -678,7 +688,7 @@ export class Orchestrator {
     await this.startInstance(instanceId);
   }
 
-  public getAgentInfo(name: string): any {
+  public getAgentInfo(name: string): { name: string; manifest: AgentManifest } | undefined {
     const manifest = this.manifests.get(name);
     if (!manifest) return undefined;
     return { name: manifest.metadata.name, manifest };

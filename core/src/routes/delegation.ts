@@ -16,7 +16,7 @@ import { pool } from '../lib/database.js';
 import { requireRole } from '../auth/authMiddleware.js';
 import { AuditService } from '../audit/AuditService.js';
 import { IntercomService } from '../intercom/IntercomService.js';
-import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
+import type { DelegationScope } from '../identity/acting-context.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('DelegationRouter');
@@ -122,8 +122,10 @@ export function createDelegationRouter(intercomService?: IntercomService) {
       } else {
         signedToken = await jwtBuilder.sign(getDelegationSignKey());
       }
-    } catch (err: any) {
-      return res.status(500).json({ error: `Failed to sign delegation token: ${err.message}` });
+    } catch (err: unknown) {
+      return res
+        .status(500)
+        .json({ error: `Failed to sign delegation token: ${(err as Error).message}` });
     }
 
     // Persist to DB

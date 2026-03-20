@@ -1,5 +1,5 @@
 import type { AgentResponse, CapturedThought, ChatMessage } from './types.js';
-import type { LLMProvider, ToolCall } from '../lib/llm/types.js';
+import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
@@ -287,8 +287,6 @@ export abstract class BaseAgent {
             );
 
             // Record audit entries for tool calls
-            const auditService = AuditService.getInstance();
-            const auditId = this.agentInstanceId || this.role;
             for (let i = 0; i < activeCalls.length; i++) {
               const tc = activeCalls[i]!;
               const tr = toolResults[i]!;
@@ -351,19 +349,20 @@ export abstract class BaseAgent {
       );
 
       return await this.streamSimple(input, cleanHistory, messages, streamChannel, messageId);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error('Stream processing error:', error);
       if (this.intercom) {
         await this.intercom.publishToken(
           this.agentInstanceId || this.role,
-          `⚠️ Error: ${error.message}`,
+          `⚠️ Error: ${errorMessage}`,
           true,
           messageId
         );
       }
       return {
         thought: 'Error during streaming.',
-        finalAnswer: `Error: ${error.message}`,
+        finalAnswer: `Error: ${errorMessage}`,
         thoughts: this._capturedThoughts.slice(),
       };
     } finally {
@@ -538,13 +537,13 @@ export abstract class BaseAgent {
     return planDescription;
   }
 
-  protected async act(action: any): Promise<any> {
+  protected async act(action: unknown): Promise<unknown> {
     this.logger.debug(`Acting: ${JSON.stringify(action)}`);
     await this.publishThought('act', `Executing: ${JSON.stringify(action)}`);
     return { status: 'success' };
   }
 
-  protected async reflect(outcome: any): Promise<void> {
+  protected async reflect(outcome: unknown): Promise<void> {
     this.logger.debug(`Reflecting on outcome: ${JSON.stringify(outcome)}`);
     await this.publishThought('reflect', `Outcome: ${JSON.stringify(outcome)}`);
   }

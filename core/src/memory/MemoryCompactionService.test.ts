@@ -45,7 +45,7 @@ describe('MemoryCompactionService', () => {
 
     const mod = await import('./MemoryCompactionService.js');
     MemoryCompactionService = mod.MemoryCompactionService;
-    (MemoryCompactionService as any).instance = undefined;
+    (MemoryCompactionService as unknown as { instance: unknown }).instance = undefined;
   });
 
   afterEach(async () => {

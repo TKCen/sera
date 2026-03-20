@@ -14,15 +14,9 @@ export class AuthService {
 
   async authenticate(req: Request): Promise<OperatorIdentity | null> {
     for (const plugin of this.plugins) {
-      try {
-        const identity = await plugin.authenticate(req);
-        if (identity) {
-          return identity;
-        }
-      } catch (err: any) {
-        // If a plugin recognized its credentials but they were invalid,
-        // it should throw. We bubble that up.
-        throw err;
+      const identity = await plugin.authenticate(req);
+      if (identity) {
+        return identity;
       }
     }
 

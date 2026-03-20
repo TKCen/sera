@@ -59,15 +59,17 @@ async function* makeStreamResponse(
 // replicate the extraction logic from OpenAIProvider here.  This is a
 // white-box test that verifies the specific lines we changed.
 
-function extractChatResult(message: any) {
-  const content = message?.content || '';
-  const reasoning: string | undefined = (message as any)?.reasoning_content || undefined;
+function extractChatResult(message: unknown) {
+  const msg = message as { content?: string; reasoning_content?: string };
+  const content = msg?.content || '';
+  const reasoning: string | undefined = msg?.reasoning_content || undefined;
   return { content, reasoning };
 }
 
-function extractStreamChunk(delta: any) {
-  const token: string = delta?.content || '';
-  const reasoning: string | undefined = delta?.reasoning_content || undefined;
+function extractStreamChunk(delta: unknown) {
+  const d = delta as { content?: string; reasoning_content?: string };
+  const token: string = d?.content || '';
+  const reasoning: string | undefined = d?.reasoning_content || undefined;
   return { token, reasoning };
 }
 
@@ -109,7 +111,7 @@ describe('chatStream() reasoning_content extraction', () => {
       { reasoning_content: 'Thinking…', content: '' },
       { content: 'Answer.', reasoning_content: '' },
     ])) {
-      const delta = (raw as any).choices[0]?.delta;
+      const delta = (raw as { choices: { delta: unknown }[] }).choices[0]?.delta;
       if (delta === undefined) continue;
       const chunk = extractStreamChunk(delta);
       if (chunk.token || chunk.reasoning) chunks.push(chunk);
@@ -127,7 +129,7 @@ describe('chatStream() reasoning_content extraction', () => {
     const chunks: ReturnType<typeof extractStreamChunk>[] = [];
 
     for await (const raw of makeStreamResponse([{ content: 'Hello world.' }])) {
-      const delta = (raw as any).choices[0]?.delta;
+      const delta = (raw as { choices: { delta: unknown }[] }).choices[0]?.delta;
       if (delta === undefined) continue;
       const chunk = extractStreamChunk(delta);
       if (chunk.token || chunk.reasoning) chunks.push(chunk);

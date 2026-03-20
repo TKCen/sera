@@ -162,7 +162,10 @@ export default function AgentDetailPage() {
       </div>
 
       {/* Confirmation dialog */}
-      <Dialog open={confirmAction !== null} onOpenChange={(o) => !o && setConfirmAction(null)}>
+      <Dialog
+        open={confirmAction !== null}
+        onOpenChange={(o: boolean) => !o && setConfirmAction(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{confirmAction === 'stop' ? 'Stop agent' : 'Restart agent'}</DialogTitle>

@@ -6,7 +6,7 @@ vi.mock('jose', () => ({
   jwtVerify: vi.fn(),
 }));
 
-import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { jwtVerify } from 'jose';
 import { OIDCAuthPlugin } from './oidc-provider.js';
 import type { Request } from 'express';
 
@@ -118,7 +118,7 @@ describe('OIDCAuthPlugin', () => {
   });
 
   it('throws on expired token', async () => {
-    const expiredErr = new Error('JWT expired') as any;
+    const expiredErr = new Error('JWT expired') as unknown as { code: string };
     expiredErr.code = 'ERR_JWT_EXPIRED';
     vi.mocked(jwtVerify).mockRejectedValueOnce(expiredErr);
 
@@ -129,7 +129,7 @@ describe('OIDCAuthPlugin', () => {
   });
 
   it('throws on invalid signature', async () => {
-    const sigErr = new Error('signature verification failed') as any;
+    const sigErr = new Error('signature verification failed') as unknown as { code: string };
     sigErr.code = 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED';
     vi.mocked(jwtVerify).mockRejectedValueOnce(sigErr);
 

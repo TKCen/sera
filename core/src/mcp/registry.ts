@@ -181,7 +181,7 @@ export class MCPRegistry {
           serverName,
           timestamp: new Date().toISOString(),
         })
-        .catch((err: any) => logger.warn('Failed to broadcast MCP update:', err));
+        .catch((err: unknown) => logger.warn('Failed to broadcast MCP update:', err));
     }
   }
 
@@ -208,7 +208,7 @@ export class MCPRegistry {
           status: 'connected',
           toolCount: tools.tools.length,
         });
-      } catch (err) {
+      } catch {
         infos.push({
           name,
           status: 'error',
@@ -238,7 +238,9 @@ export class MCPRegistry {
   /**
    * Register tools from the embedded sera-core MCP server.
    */
-  public async registerSeraCoreTools(seraMcp: any): Promise<void> {
+  public async registerSeraCoreTools(
+    seraMcp: import('./SeraMCPServer.js').SeraMCPServer
+  ): Promise<void> {
     const name = 'sera-core';
 
     // Create a shim that matches the MCPClient interface.
@@ -267,14 +269,14 @@ export class MCPRegistry {
           ],
         };
       },
-      callTool: async (toolName: string, args: any) => {
+      callTool: async (toolName: string, args: Record<string, unknown>) => {
         return await seraMcp.callTool(toolName, args);
       },
       disconnect: async () => {},
-    } as any;
+    };
 
     this.clients.set(name, {
-      client: mockClient,
+      client: mockClient as unknown as MCPClient,
       instanceId: 'local',
     });
 

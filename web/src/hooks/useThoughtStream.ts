@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PublicationContext } from 'centrifuge';
-import { useCentrifugoContext } from '@/contexts/CentrifugoContext';
+import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import type { ThoughtEvent } from '@/lib/api/types';
 
 export function useThoughtStream(agentId: string): ThoughtEvent[] {

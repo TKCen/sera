@@ -28,7 +28,7 @@ describe('ApiKeyProvider', () => {
       headers: {
         authorization: `Bearer ${BOOTSTRAP_KEY}`,
       },
-    } as any;
+    } as unknown as import('express').Request;
 
     const identity = await provider.authenticate(req);
     expect(identity).not.toBeNull();
@@ -37,20 +37,22 @@ describe('ApiKeyProvider', () => {
   });
 
   it('should return null if no authorization header', async () => {
-    const req = { headers: {} } as any;
+    const req = { headers: {} } as unknown as import('express').Request;
     const identity = await provider.authenticate(req);
     expect(identity).toBeNull();
   });
 
   it('should return null if not Bearer token', async () => {
-    const req = { headers: { authorization: 'Basic ...' } } as any;
+    const req = { headers: { authorization: 'Basic ...' } } as unknown as import('express').Request;
     const identity = await provider.authenticate(req);
     expect(identity).toBeNull();
   });
 
   it('should authenticate with a valid database API key', async () => {
     const key = 'sera_valid_key';
-    const req = { headers: { authorization: `Bearer ${key}` } } as any;
+    const req = {
+      headers: { authorization: `Bearer ${key}` },
+    } as unknown as import('express').Request;
 
     vi.mocked(db.query).mockResolvedValueOnce({
       rowCount: 1,
@@ -62,10 +64,13 @@ describe('ApiKeyProvider', () => {
           roles: ['operator'],
         },
       ],
-    } as any);
+    } as unknown as import('pg').QueryResult<any>);
 
     // Mock the UPDATE last_used_at query
-    vi.mocked(db.query).mockResolvedValueOnce({ rowCount: 1, rows: [] } as any);
+    vi.mocked(db.query).mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [],
+    } as unknown as import('pg').QueryResult<any>);
 
     vi.mocked(argon2.verify).mockResolvedValue(true);
 
@@ -78,7 +83,9 @@ describe('ApiKeyProvider', () => {
 
   it('should throw if database key is invalid', async () => {
     const key = 'sera_invalid_key';
-    const req = { headers: { authorization: `Bearer ${key}` } } as any;
+    const req = {
+      headers: { authorization: `Bearer ${key}` },
+    } as unknown as import('express').Request;
 
     vi.mocked(db.query).mockResolvedValueOnce({
       rowCount: 1,
@@ -90,7 +97,7 @@ describe('ApiKeyProvider', () => {
           roles: ['operator'],
         },
       ],
-    } as any);
+    } as unknown as import('pg').QueryResult<any>);
 
     vi.mocked(argon2.verify).mockResolvedValue(false);
 
@@ -99,7 +106,9 @@ describe('ApiKeyProvider', () => {
 
   it('should return null if key does not start with sera_', async () => {
     const key = 'not_sera_prefix';
-    const req = { headers: { authorization: `Bearer ${key}` } } as any;
+    const req = {
+      headers: { authorization: `Bearer ${key}` },
+    } as unknown as import('express').Request;
 
     const identity = await provider.authenticate(req);
     expect(identity).toBeNull();

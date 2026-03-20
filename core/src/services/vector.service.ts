@@ -140,7 +140,7 @@ export class VectorService {
             with_payload: true,
           };
           if (qdrantFilter) {
-            searchParams.filter = qdrantFilter as any;
+            searchParams.filter = qdrantFilter as Record<string, unknown>;
           }
           const results = await this.client.search(name, searchParams);
           for (const r of results) {
@@ -236,8 +236,11 @@ export class VectorService {
     const name = collectionName(namespace);
     try {
       const info = await this.client.getCollection(name);
-      const count = (info as any).vectors_count ?? (info as any).points_count ?? 0;
-      return { vectorCount: count as number };
+      const countValue =
+        (info as unknown as Record<string, number>).vectors_count ??
+        (info as unknown as Record<string, number>).points_count ??
+        0;
+      return { vectorCount: countValue };
     } catch {
       return null;
     }
@@ -271,7 +274,7 @@ export class VectorService {
     filter?: unknown
   ): Promise<Array<{ id: string | number; score: number; payload: unknown }>> {
     const params: Parameters<typeof this.client.search>[1] = { vector, limit, with_payload: true };
-    if (filter !== undefined) params.filter = filter as any;
+    if (filter !== undefined) params.filter = filter as Record<string, unknown>;
     const results = await this.client.search(this.legacyCollectionName, params);
     return results.map((r) => ({ id: r.id, score: r.score, payload: r.payload ?? {} }));
   }

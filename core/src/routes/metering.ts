@@ -39,7 +39,7 @@ export function createMeteringRouter(meteringService: MeteringService): Router {
       });
 
       res.json({ data: rows });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Error fetching usage:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -53,7 +53,7 @@ export function createMeteringRouter(meteringService: MeteringService): Router {
     try {
       const summary = await meteringService.getDailySummary();
       res.json(summary);
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Error fetching summary:', err);
       res.status(500).json({ error: 'Internal server error' });
     }

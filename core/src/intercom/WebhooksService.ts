@@ -114,12 +114,13 @@ export class WebhooksService {
           ['success', new Date(), deliveryId]
         );
         logger.info(`Successfully delivered webhook ${slug} to system.${webhook.event_type}`);
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const error = err as Error;
         await pool.query(
           'UPDATE webhook_deliveries SET status = $1, error_message = $2, processed_at = $3 WHERE id = $4',
-          ['failed', err.message, new Date(), deliveryId]
+          ['failed', error.message, new Date(), deliveryId]
         );
-        logger.error(`Failed to deliver webhook ${slug}: ${err.message}`);
+        logger.error(`Failed to deliver webhook ${slug}: ${error.message}`);
       }
     };
 
@@ -134,7 +135,7 @@ export class WebhooksService {
     urlPath: string,
     secret: string,
     eventType: string
-  ): Promise<any> {
+  ): Promise<unknown> {
     const res = await pool.query(
       'INSERT INTO webhooks (name, url_path, secret, event_type) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, urlPath, secret, eventType]
@@ -145,7 +146,7 @@ export class WebhooksService {
   /**
    * List all webhooks.
    */
-  async listWebhooks(): Promise<any[]> {
+  async listWebhooks(): Promise<unknown[]> {
     const res = await pool.query(
       'SELECT id, name, url_path, event_type, enabled, created_at FROM webhooks ORDER BY created_at DESC'
     );

@@ -1,11 +1,6 @@
 import type { Pool } from 'pg';
-import type {
-  AgentTemplate,
-  AgentInstance,
-  NamedList,
-  CapabilityPolicy,
-  SandboxBoundary,
-} from './schemas.js';
+import type { AgentTemplate, NamedList, CapabilityPolicy, SandboxBoundary } from './schemas.js';
+import type { AgentInstance } from './types.js';
 import { ScheduleService } from '../services/ScheduleService.js';
 
 import { Logger } from '../lib/logger.js';
@@ -84,7 +79,7 @@ export class AgentRegistry {
     displayName?: string;
     templateRef: string;
     circle?: string;
-    overrides?: any;
+    overrides?: Record<string, unknown>;
     lifecycleMode?: 'persistent' | 'ephemeral';
     parentInstanceId?: string;
   }) {
@@ -145,19 +140,21 @@ export class AgentRegistry {
     }
   }
 
-  async getInstance(id: string) {
+  async getInstance(id: string): Promise<AgentInstance | null> {
     const res = await this.pool.query('SELECT * FROM agent_instances WHERE id = $1', [id]);
-    return res.rows[0];
+    return res.rows[0] || null;
   }
 
-  async getInstanceByName(name: string) {
+  async getInstanceByName(name: string): Promise<AgentInstance | null> {
     const res = await this.pool.query('SELECT * FROM agent_instances WHERE name = $1', [name]);
-    return res.rows[0];
+    return res.rows[0] || null;
   }
 
-  async listInstances(filters: { circle?: string; status?: string } = {}) {
-    let query = 'SELECT * FROM agent_instances';
-    const params: any[] = [];
+  async listInstances(
+    filters: { circle?: string; status?: string } = {}
+  ): Promise<AgentInstance[]> {
+    let queryText = 'SELECT * FROM agent_instances';
+    const params: unknown[] = [];
     const wheres: string[] = [];
 
     if (filters.circle) {
@@ -169,9 +166,9 @@ export class AgentRegistry {
       wheres.push(`status = $${params.length}`);
     }
 
-    if (wheres.length > 0) query += ' WHERE ' + wheres.join(' AND ');
-    query += ' ORDER BY created_at DESC';
-    const res = await this.pool.query(query, params);
+    if (wheres.length > 0) queryText += ' WHERE ' + wheres.join(' AND ');
+    queryText += ' ORDER BY created_at DESC';
+    const res = await this.pool.query(queryText, params);
     return res.rows;
   }
 
@@ -195,17 +192,22 @@ export class AgentRegistry {
 
   async updateInstanceConfig(
     id: string,
-    overrides: any,
-    resolvedConfig?: any,
-    resolvedCapabilities?: any
+    overrides: unknown,
+    resolvedConfig?: unknown,
+    resolvedCapabilities?: unknown
   ) {
-    const query = `
+    const queryText = `
       UPDATE agent_instances
       SET overrides = $2, resolved_config = $3, resolved_capabilities = $4, updated_at = NOW()
       WHERE id = $1
       RETURNING *;
     `;
-    const res = await this.pool.query(query, [id, overrides, resolvedConfig, resolvedCapabilities]);
+    const res = await this.pool.query(queryText, [
+      id,
+      overrides,
+      resolvedConfig,
+      resolvedCapabilities,
+    ]);
     return res.rows[0];
   }
 
@@ -222,9 +224,9 @@ export class AgentRegistry {
    * List all direct and indirect subagents of a given instance.
    * Returns instances in order from parent to leaf.
    */
-  async listSubagents(parentInstanceId: string): Promise<any[]> {
+  async listSubagents(parentInstanceId: string): Promise<unknown[]> {
     // Recursive CTE traverses the full subagent tree
-    const query = `
+    const queryText = `
       WITH RECURSIVE subtree AS (
         SELECT *, 0 AS lineage_depth
         FROM agent_instances
@@ -236,7 +238,7 @@ export class AgentRegistry {
       )
       SELECT * FROM subtree ORDER BY lineage_depth, created_at;
     `;
-    const res = await this.pool.query(query, [parentInstanceId]);
+    const res = await this.pool.query(queryText, [parentInstanceId]);
     return res.rows;
   }
 
@@ -381,7 +383,7 @@ export class AgentRegistry {
     return res.rows[0];
   }
 
-  async listCapabilityGrants(agentInstanceId: string, includeRevoked = false): Promise<any[]> {
+  async listCapabilityGrants(agentInstanceId: string, includeRevoked = false): Promise<unknown[]> {
     let query = `
       SELECT
         id, agent_instance_id, dimension, value, grant_type,

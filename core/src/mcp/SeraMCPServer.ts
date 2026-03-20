@@ -1,18 +1,11 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import {
-  type CallToolRequest,
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Orchestrator } from '../agents/Orchestrator.js';
-import { Logger } from '../lib/logger.js';
 import { CircleService } from '../circles/CircleService.js';
 import { pool } from '../lib/database.js';
 import { AuditService } from '../audit/AuditService.js';
 import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
-
-const logger = new Logger('SeraMCPServer');
 
 /**
  * SeraMCPServer — an embedded MCP server that exposes platform management tools.
@@ -226,42 +219,43 @@ export class SeraMCPServer {
     });
   }
 
-  public async callTool(name: string, args: any) {
+  public async callTool(name: string, args: unknown) {
     try {
+      const toolArgs = (args || {}) as Record<string, unknown>;
       switch (name) {
         case 'list_agents':
           return this.handleListAgents();
         case 'restart_agent':
-          return this.handleRestartAgent(args?.agentId as string);
+          return this.handleRestartAgent(toolArgs?.agentId as string);
         case 'circles.create':
-          return this.handleCreateCircle(args);
+          return this.handleCreateCircle(toolArgs);
         case 'circles.list':
           return this.handleListCircles();
         case 'circles.add_member':
-          return this.handleAddMember(args.circleId, args.agentId);
+          return this.handleAddMember(toolArgs['circleId'] as string, toolArgs['agentId'] as string);
         case 'orchestration.sequential':
-          return this.handleSequentialOrchestration(args.tasks);
+          return this.handleSequentialOrchestration(toolArgs['tasks'] as any[]);
         case 'orchestration.parallel':
-          return this.handleParallelOrchestration(args.tasks);
+          return this.handleParallelOrchestration(toolArgs['tasks'] as any[]);
         case 'orchestration.hierarchical':
-          return this.handleHierarchicalOrchestration(args.managerAgent, args.tasks);
+          return this.handleHierarchicalOrchestration(toolArgs['managerAgent'] as string, toolArgs['tasks'] as any[]);
         case 'circle.broadcast':
-          return this.handleCircleBroadcast(args.circleId, args.payload);
+          return this.handleCircleBroadcast(toolArgs['circleId'] as string, toolArgs['payload']);
         case 'agents.spawn_subagent':
           return this.handleSpawnSubagent(
-            args.role,
-            args.task,
-            args.circle,
-            args.parentAgentId,
-            args.delegations
+            toolArgs['role'] as string,
+            toolArgs['task'] as string,
+            toolArgs['circle'] as string,
+            toolArgs['parentAgentId'] as string,
+            toolArgs['delegations'] as any[]
           );
         default:
           throw new Error(`Tool not found: ${name}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         isError: true,
-        content: [{ type: 'text', text: err.message }],
+        content: [{ type: 'text', text: (err as Error).message }],
       };
     }
   }
@@ -285,8 +279,13 @@ export class SeraMCPServer {
     };
   }
 
-  private async handleCreateCircle(args: any) {
-    const circle = await this.circleService.createCircle(args);
+  private async handleCreateCircle(args: Record<string, unknown>) {
+    const circle = await this.circleService.createCircle({
+      name: args.name as string,
+      displayName: args.displayName as string,
+      description: args.description as string,
+      constitution: args.constitution as string,
+    });
     return {
       content: [{ type: 'text', text: `Circle "${circle.name}" created with ID: ${circle.id}` }],
     };
@@ -306,28 +305,38 @@ export class SeraMCPServer {
     };
   }
 
-  private async handleSequentialOrchestration(tasks: any[]) {
-    const result = await this.orchestrator.executeWithProcess('sequential', tasks);
+  private async handleSequentialOrchestration(tasks: unknown[]) {
+    const result = await this.orchestrator.executeWithProcess(
+      'sequential',
+      tasks as import('../agents/process/types.js').ProcessTask[]
+    );
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
-  private async handleParallelOrchestration(tasks: any[]) {
-    const result = await this.orchestrator.executeWithProcess('parallel', tasks);
+  private async handleParallelOrchestration(tasks: unknown[]) {
+    const result = await this.orchestrator.executeWithProcess(
+      'parallel',
+      tasks as import('../agents/process/types.js').ProcessTask[]
+    );
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
-  private async handleHierarchicalOrchestration(managerAgent: string, tasks: any[]) {
-    const result = await this.orchestrator.executeWithProcess('hierarchical', tasks, managerAgent);
+  private async handleHierarchicalOrchestration(managerAgent: string, tasks: unknown[]) {
+    const result = await this.orchestrator.executeWithProcess(
+      'hierarchical',
+      tasks as import('../agents/process/types.js').ProcessTask[],
+      managerAgent
+    );
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
-  private async handleCircleBroadcast(circleId: string, payload: any) {
+  private async handleCircleBroadcast(circleId: string, payload: unknown) {
     const intercom = this.orchestrator.getIntercom();
     if (!intercom) throw new Error('Intercom service not available');
     await intercom.publish(`circle:${circleId}`, payload);
@@ -370,7 +379,6 @@ export class SeraMCPServer {
     const childDelegationIds: string[] = [];
     if (delegations && delegations.length > 0 && parentAgentId) {
       const childInstanceId = instance.id;
-      const issuedAt = new Date().toISOString();
 
       for (const delegation of delegations) {
         const { delegationTokenId, narrowedScope } = delegation;

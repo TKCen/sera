@@ -77,7 +77,7 @@ describe('Reflector', () => {
     // Create entries with refs
     const e1 = await manager.addEntry('core', { title: 'E1', content: 'First' });
     const e2 = await manager.addEntry('core', { title: 'E2', content: 'Second', refs: [e1.id] });
-    const e3 = await manager.addEntry('core', { title: 'E3', content: 'Third' });
+    await manager.addEntry('core', { title: 'E3', content: 'Third' });
     // Fill up to exceed threshold
     for (let i = 0; i < 3; i++) {
       await manager.addEntry('core', { title: `Filler ${i}`, content: 'filler' });

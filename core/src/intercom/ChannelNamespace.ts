@@ -52,6 +52,19 @@ export class ChannelNamespace {
     return `tokens:${agentId}`;
   }
 
+  /**
+   * Bridge channel for cross-instance communication.
+   * bridge:dm:{circleA}:{circleB}:{agentA}:{agentB}
+   */
+  static bridgeDm(
+    fromCircle: string,
+    toCircle: string,
+    fromAgent: string,
+    toAgent: string
+  ): string {
+    return `bridge:dm:${fromCircle}:${toCircle}:${fromAgent}:${toAgent}`;
+  }
+
   // ── Validation ──────────────────────────────────────────────────────────────
 
   /**

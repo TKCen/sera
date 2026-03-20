@@ -22,7 +22,7 @@ export const createAuditRouter = () => {
       if (principalId || delegationId) {
         const { pool } = await import('../lib/database.js');
         const conditions: string[] = [];
-        const params: any[] = [];
+        const params: unknown[] = [];
 
         if (principalId) {
           params.push(principalId as string);
@@ -61,8 +61,8 @@ export const createAuditRouter = () => {
       });
 
       res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -96,9 +96,9 @@ export const createAuditRouter = () => {
         eventType: 'audit.exported',
         payload: { format },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
       } else {
         res.end();
       }

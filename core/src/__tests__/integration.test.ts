@@ -11,7 +11,6 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import fs from 'fs/promises';
 import os from 'os';
-import { Orchestrator } from '../agents/Orchestrator.js';
 
 // Include all mocks that index.ts depends on
 vi.mock('../lib/database.js', () => ({
@@ -35,8 +34,14 @@ vi.mock('../lib/llm/OpenAIProvider.js', () => ({
 
 vi.mock('../intercom/IntercomService.js', () => ({
   IntercomService: class {
-    setBridgeService() {}
-    publishThought() {}
+    setBridgeService = vi.fn();
+    publishThought = vi.fn();
+    publish = vi.fn().mockResolvedValue(undefined);
+    publishMessage = vi.fn().mockResolvedValue({ id: 'msg-1' });
+    sendDirectMessage = vi.fn().mockResolvedValue({ id: 'msg-2' });
+    getAgentChannels = vi.fn().mockReturnValue([]);
+    generateConnectionToken = vi.fn().mockResolvedValue('token-123');
+    generateSubscriptionToken = vi.fn().mockResolvedValue('sub-token-123');
   },
   IntercomError: class extends Error {},
   IntercomPermissionError: class extends Error {},
@@ -44,6 +49,14 @@ vi.mock('../intercom/IntercomService.js', () => ({
 
 vi.mock('../services/embedding.service.js', () => ({
   EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) },
+}));
+
+vi.mock('../audit/AuditService.js', () => ({
+  AuditService: {
+    getInstance: () => ({
+      record: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
 }));
 
 vi.mock('../services/vector.service.js', () => ({
@@ -54,19 +67,83 @@ vi.mock('../services/vector.service.js', () => ({
   },
 }));
 
-let app: any;
+vi.mock('../circles/CircleRegistry.js', () => {
+  return {
+    CircleRegistry: class {
+      listCircles = vi.fn().mockReturnValue([
+        {
+          metadata: { name: 'development', displayName: 'Development' },
+          agents: ['architect-prime'],
+        },
+        {
+          metadata: { name: 'operations', displayName: 'Operations' },
+          agents: ['researcher-prime'],
+        },
+      ]);
+      listCircleSummaries = vi.fn().mockReturnValue([
+        {
+          name: 'development',
+          displayName: 'Development',
+          agents: ['architect-prime'],
+          hasProjectContext: true,
+          channelCount: 0,
+        },
+        {
+          name: 'operations',
+          displayName: 'Operations',
+          agents: ['researcher-prime'],
+          hasProjectContext: false,
+          channelCount: 0,
+        },
+      ]);
+      getCircle = vi.fn();
+      loadFromDirectory = vi.fn().mockResolvedValue(undefined);
+      init = vi.fn().mockResolvedValue(undefined);
+    },
+  };
+});
+
+vi.mock('../agents/Orchestrator.js', () => {
+  return {
+    Orchestrator: class {
+      getPrimaryAgent = vi.fn().mockReturnValue({
+        role: 'architect-prime',
+        name: 'Architect',
+        process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' }),
+      });
+      listAgents = vi
+        .fn()
+        .mockReturnValue([
+          { name: 'architect-prime' },
+          { name: 'developer-prime' },
+          { name: 'researcher-prime' },
+        ]);
+      listCircles = vi.fn().mockReturnValue([{ name: 'development' }, { name: 'operations' }]);
+      getManifest = vi.fn();
+      getAllManifests = vi.fn().mockReturnValue([]);
+      loadAllManifests = vi.fn().mockResolvedValue(undefined);
+      loadTemplates = vi.fn();
+      setIntercom = vi.fn();
+      setToolExecutor = vi.fn();
+      setSkillRegistry = vi.fn();
+      setMemoryManager = vi.fn();
+      setSandboxManager = vi.fn();
+      setRegistry = vi.fn();
+      setMetering = vi.fn();
+      setIdentityService = vi.fn();
+      init = vi.fn().mockResolvedValue(undefined);
+    },
+  };
+});
+
+import type { Express } from 'express';
+let app: Express;
 let tempMemoryPath: string;
 
 beforeAll(async () => {
   tempMemoryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'sera-memory-'));
   process.env.MEMORY_PATH = tempMemoryPath;
   process.env.WORKSPACE_DIR = path.resolve(__dirname, '..', '..', '..');
-
-  vi.spyOn(Orchestrator.prototype, 'getPrimaryAgent').mockReturnValue({
-    role: 'architect-prime',
-    name: 'Architect',
-    process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' }),
-  } as any);
 
   // Dynamically import the Express app after mocks and env vars are in place
   const appModule = await import('../index.js');
@@ -87,7 +164,7 @@ describe('SERA Integration Tests', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
 
-      const names = res.body.map((a: any) => a.name); // Orchestrator.listAgents returns array of { name, ... }
+      const names = res.body.map((a: { name: string }) => a.name); // Orchestrator.listAgents returns array of { name, ... }
       expect(names).toContain('architect-prime');
       expect(names).toContain('developer-prime');
       expect(names).toContain('researcher-prime');
@@ -101,7 +178,7 @@ describe('SERA Integration Tests', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
 
-      const names = res.body.map((c: any) => c.name);
+      const names = res.body.map((c: { name: string }) => c.name);
       expect(names).toContain('development');
       expect(names).toContain('operations');
     });
@@ -158,7 +235,7 @@ describe('SERA Integration Tests', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
 
-      const skillIds = res.body.map((s: any) => s.id);
+      const skillIds = res.body.map((s: { id: string }) => s.id);
       expect(skillIds).toContain('file-read');
       expect(skillIds).toContain('file-write');
     });

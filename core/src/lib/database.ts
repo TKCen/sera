@@ -11,13 +11,15 @@ export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-export const query = (text: string, params?: any[]) => pool.query(text, params);
+export const query = (text: string, params?: unknown[]) => pool.query(text, params);
 
 export const initDb = async () => {
   try {
     const migrationsDir = path.resolve(import.meta.dirname, '..', '..', 'src', 'db', 'migrations');
 
-    const runner = (migrate as any).default || migrate;
+    const runner =
+      (migrate as unknown as { default: (o: Record<string, unknown>) => Promise<void> }).default ||
+      migrate;
     await runner({
       databaseUrl: process.env.DATABASE_URL!,
       dir: migrationsDir,

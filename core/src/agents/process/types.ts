@@ -14,7 +14,7 @@ export type ProcessType = 'sequential' | 'parallel' | 'hierarchical' | 'flow';
 // ── Flow State ──────────────────────────────────────────────────────────────────
 
 /** Shared state/memory for Flow-based orchestration. */
-export type FlowState = Record<string, any>;
+export type FlowState = Record<string, unknown>;
 
 // ── Task & Result ───────────────────────────────────────────────────────────────
 

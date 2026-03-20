@@ -51,7 +51,11 @@ export class MCPClient {
     return await this.client.listTools();
   }
 
-  async callTool(name: string, arguments_: any, meta?: any) {
+  async callTool(
+    name: string,
+    arguments_: Record<string, unknown>,
+    meta?: Record<string, unknown>
+  ) {
     return await this.client.callTool({
       name,
       arguments: arguments_,

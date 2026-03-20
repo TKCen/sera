@@ -98,7 +98,6 @@ export class ScheduleService {
 
     // 3. Remove stale schedules from pg-boss
     // We can query pgboss.schedule table directly
-    const dbScheduleIds = dbSchedules.map((s) => s.id);
     const { rows: pgbossSchedules } = await pool.query(
       "SELECT name FROM pgboss.schedule WHERE name NOT IN (SELECT id::text FROM schedules WHERE type = 'cron' AND status = 'active')"
     );
@@ -169,7 +168,7 @@ export class ScheduleService {
     }
 
     const setClause = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
-    const values = fields.map((f) => (updates as any)[f]);
+    const values = fields.map((f) => (updates as Record<string, unknown>)[f]);
 
     const { rows } = await pool.query<Schedule>(
       `UPDATE schedules SET ${setClause}, updated_at = now() WHERE id = $1 RETURNING *`,
@@ -293,7 +292,7 @@ export class ScheduleService {
 
       // Start with task
       // Note: We need to update Orchestrator.startInstance to accept a task
-      await (this.orchestrator as any)
+      await this.orchestrator
         .startInstance(schedule.agent_instance_id, undefined, schedule.task)
         .catch((err: Error) => {
           logger.error(`Failed to spawn ephemeral agent ${schedule.agent_name} for schedule:`, err);

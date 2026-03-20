@@ -81,7 +81,7 @@ export class FlowProcess implements ProcessStrategy {
   private isTaskReady(
     task: ProcessTask,
     completedTaskIds: Set<string>,
-    failedTaskIds: Set<string>
+    _failedTaskIds: Set<string>
   ): boolean {
     if (!task.dependsOn || task.dependsOn.length === 0) {
       return true;

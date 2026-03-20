@@ -50,13 +50,13 @@ export class AgentFactory {
 
     return {
       id,
-      templateName,
+      template_ref: templateName,
       name,
-      workspacePath: finalWorkspacePath,
+      workspace_path: finalWorkspacePath,
       status: 'active',
-      createdAt: now,
-      updatedAt: now,
-      circle_id: circleId,
+      created_at: now,
+      updated_at: now,
+      circle_id: circleId || null,
     };
   }
 
@@ -75,13 +75,13 @@ export class AgentFactory {
 
     return {
       id: row.id,
-      templateName: row.template_name,
+      template_ref: row.template_name,
       name: row.name,
-      workspacePath: row.workspace_path,
-      containerId: row.container_id,
-      status: row.status as any,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
+      workspace_path: row.workspace_path,
+      container_id: row.container_id,
+      status: row.status as AgentInstance['status'],
+      created_at: row.created_at,
+      updated_at: row.updated_at,
       circle_id: row.circle_id,
       lifecycle_mode: row.lifecycle_mode,
       parent_instance_id: row.parent_instance_id,
@@ -114,13 +114,13 @@ export class AgentFactory {
 
     return result.rows.map((row) => ({
       id: row.id,
-      templateName: row.template_name,
+      template_ref: row.template_name,
       name: row.name,
-      workspacePath: row.workspace_path,
-      containerId: row.container_id,
-      status: row.status as any,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
+      workspace_path: row.workspace_path,
+      container_id: row.container_id,
+      status: row.status as AgentInstance['status'],
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     }));
   }
 

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { BudgetBar, budgetBarColor } from '@/components/BudgetBar';
+import { BudgetBar } from '@/components/BudgetBar';
+import { budgetBarColor } from '@/lib/utils';
 
 describe('budgetBarColor', () => {
   it('returns success colour below 70%', () => {

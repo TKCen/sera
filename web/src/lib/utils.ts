@@ -1,6 +1,17 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+export function utilPct(current: number, limit?: number): number {
+  if (!limit || limit <= 0) return 0;
+  return Math.min((current / limit) * 100, 100);
+}
+
+export function budgetBarColor(pct: number): string {
+  if (pct >= 90) return 'bg-sera-error';
+  if (pct >= 70) return 'bg-sera-warning';
+  return 'bg-sera-success';
+}
+
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }

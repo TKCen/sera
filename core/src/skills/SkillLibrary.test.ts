@@ -3,10 +3,12 @@ import { SkillLibrary } from './SkillLibrary.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import type { Pool } from 'pg';
+import type { IntercomService } from '../intercom/IntercomService.js';
 
 describe('SkillLibrary', () => {
   let tmpDir: string;
-  let poolMock: any;
+  let poolMock: Record<string, import('vitest').Mock>;
 
   beforeEach(async () => {
     SkillLibrary.resetInstance();
@@ -35,8 +37,8 @@ triggers: ["test"]
 `
     );
 
-    const lib = SkillLibrary.getInstance(poolMock);
-    // @ts-ignore - accessing private method for testing
+    const lib = SkillLibrary.getInstance(poolMock as unknown as Pool);
+    // @ts-expect-error - accessing private method for testing
     const doc = await lib.parseSkillFile(skillPath, 'external');
 
     expect(doc).not.toBeNull();
@@ -56,15 +58,15 @@ invalid: true
 `
     );
 
-    const lib = SkillLibrary.getInstance(poolMock);
-    // @ts-ignore
+    const lib = SkillLibrary.getInstance(poolMock as unknown as Pool);
+    // @ts-expect-error - accessing private method for testing invalid front-matter
     const doc = await lib.parseSkillFile(skillPath, 'external');
 
     expect(doc).toBeNull();
   });
 
   it('should upsert a skill to the database', async () => {
-    const lib = SkillLibrary.getInstance(poolMock);
+    const lib = SkillLibrary.getInstance(poolMock as unknown as Pool);
     const doc = {
       id: 'test-skill',
       name: 'Test Skill',
@@ -75,22 +77,25 @@ invalid: true
       source: 'bundled' as const,
     };
 
-    // @ts-ignore
+    // @ts-expect-error - doc is missing some required SkillDocument fields for testing
     await lib.upsertSkill(doc);
 
-    expect(poolMock.query).toHaveBeenCalledWith(
+    expect(poolMock['query']).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO skills'),
       expect.arrayContaining(['Test Skill', '1.0.0', '# Content', 'bundled'])
     );
   });
 
   it('should watch for changes and reload skills', async () => {
-    const lib = SkillLibrary.getInstance(poolMock);
+    const lib = SkillLibrary.getInstance(poolMock as unknown as Pool);
     const intercomMock = { publish: vi.fn().mockResolvedValue(undefined) };
-    lib.setIntercom(intercomMock as any);
+    lib.setIntercom(intercomMock as unknown as IntercomService);
 
     // Mock search paths to use tmpDir
-    vi.spyOn(lib as any, 'getSearchPaths').mockReturnValue([{ path: tmpDir, source: 'external' }]);
+    vi.spyOn(
+      lib as unknown as { getSearchPaths: () => unknown[] },
+      'getSearchPaths'
+    ).mockReturnValue([{ path: tmpDir, source: 'external' }]);
 
     lib.watchSkills();
 
@@ -112,10 +117,10 @@ triggers: ["hot"]
     // Wait for chokidar to pick up the change (DoD says within 2s)
     for (let i = 0; i < 4; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      if (poolMock.query.mock.calls.length > 0) break;
+      if (poolMock['query'].mock.calls.length > 0) break;
     }
 
-    expect(poolMock.query).toHaveBeenCalledWith(
+    expect(poolMock['query']).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO skills'),
       expect.arrayContaining(['New Skill', '1.1.0'])
     );

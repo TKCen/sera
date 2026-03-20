@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { IntercomError, IntercomPermissionError } from '../intercom/IntercomService.js';
+import type { IntercomMessageType } from '../intercom/types.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
 import type { BridgeService } from '../intercom/BridgeService.js';
 
@@ -50,7 +51,7 @@ export function createIntercomRouter(
         manifest.metadata.name,
         manifest.metadata.circle ?? '',
         channel,
-        type as any,
+        type as IntercomMessageType,
         payload,
         { securityTier: manifest.metadata.tier }
       );

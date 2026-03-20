@@ -53,24 +53,28 @@ export class TelegramAdapter extends ChannelAdapter {
             await this.handleMessage(update.message);
           }
         }
-      } catch (err: any) {
-        if (err.code === 'ECONNABORTED') {
+      } catch (err: unknown) {
+        const error = err as { code?: string; message?: string };
+        if (error.code === 'ECONNABORTED') {
           // Timeout is expected
         } else {
-          this.logger.error('Error polling Telegram updates:', err.message);
+          this.logger.error('Error polling Telegram updates:', error.message);
           await new Promise((resolve) => setTimeout(resolve, 5000));
         }
       }
     }
   }
 
-  private async handleMessage(message: any) {
+  private async handleMessage(message: Record<string, unknown>) {
+    const from = (message.from as Record<string, unknown>) || {};
+    const chat = (message.chat as Record<string, unknown>) || {};
+
     const incoming: IncomingMessage = {
       platform: 'Telegram',
-      userId: String(message.from.id),
-      userName: message.from.username || message.from.first_name,
-      chatId: String(message.chat.id),
-      text: message.text,
+      userId: String(from.id || 'unknown'),
+      userName: (from.username as string) || (from.first_name as string) || 'unknown',
+      chatId: String(chat.id || 'unknown'),
+      text: (message.text as string) || '',
     };
 
     if (this.isRateLimited(incoming.userId)) {
@@ -94,7 +98,7 @@ export class TelegramAdapter extends ChannelAdapter {
       const sessionId = uuidv5(`telegram:${incoming.chatId}`, SERA_SESSION_NAMESPACE);
 
       let history: ChatMessage[] = [];
-      let session = await this.sessionStore.getSession(sessionId);
+      const session = await this.sessionStore.getSession(sessionId);
 
       if (session) {
         const msgs = await this.sessionStore.getMessages(sessionId);
@@ -127,8 +131,8 @@ export class TelegramAdapter extends ChannelAdapter {
         role: 'assistant',
         content: reply,
       });
-    } catch (err: any) {
-      this.logger.error('Error processing Telegram message:', err.message);
+    } catch (err: unknown) {
+      this.logger.error('Error processing Telegram message:', (err as Error).message);
       await this.sendMessage(
         incoming.chatId,
         'Sorry, I encountered an error while processing your message.'
@@ -142,8 +146,8 @@ export class TelegramAdapter extends ChannelAdapter {
         chat_id: chatId,
         text: text,
       });
-    } catch (err: any) {
-      this.logger.error(`Failed to send Telegram message to ${chatId}:`, err.message);
+    } catch (err: unknown) {
+      this.logger.error(`Failed to send Telegram message to ${chatId}:`, (err as Error).message);
     }
   }
 }

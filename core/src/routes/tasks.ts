@@ -127,7 +127,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
     const rows = await pool.query<TaskRow>(
       `SELECT * FROM task_queue WHERE ${conditions.join(' AND ')}
        ORDER BY priority ASC, created_at ASC`,
-      params as any[]
+      params
     );
 
     return res.json(rows.rows.map(toPublicTask));

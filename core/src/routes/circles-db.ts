@@ -15,8 +15,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
     try {
       const circles = await circleService.listCircles();
       res.json(circles);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -33,11 +33,12 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
         ...(constitution !== undefined ? { constitution } : {}),
       });
       res.status(201).json(circle);
-    } catch (err: any) {
-      if (err.message?.includes('unique') || err.code === '23505') {
+    } catch (err: unknown) {
+      const error = err as { message?: string; code?: string };
+      if (error.message?.includes('unique') || error.code === '23505') {
         return res.status(409).json({ error: `Circle name "${req.body.name}" already exists` });
       }
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: error.message || String(err) });
     }
   });
 
@@ -47,8 +48,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
       if (!circle) return res.status(404).json({ error: 'Circle not found' });
       const members = await circleService.getMembers(circle.id);
       res.json({ ...circle, members });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -62,8 +63,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
       });
       if (!updated) return res.status(404).json({ error: 'Circle not found' });
       res.json(updated);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -71,11 +72,11 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
     try {
       await circleService.deleteCircle(req.params.id!);
       res.json({ success: true });
-    } catch (err: any) {
-      if (err.message?.includes('active agent')) {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message?.includes('active agent')) {
         return res.status(409).json({ error: err.message });
       }
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -85,8 +86,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
       if (!circle) return res.status(404).json({ error: 'Circle not found' });
       const members = await circleService.getMembers(circle.id);
       res.json(members);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -125,8 +126,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
       ).catch((err) => logger.error(`Party session ${session.id} failed:`, err));
 
       res.status(202).json({ sessionId: session.id, circleId: circle.id, status: 'started' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -137,8 +138,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
         return res.status(404).json({ error: 'Party session not found' });
       }
       res.json(session);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

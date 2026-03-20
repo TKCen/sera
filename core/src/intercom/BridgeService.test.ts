@@ -63,14 +63,17 @@ describe('BridgeService', () => {
       },
     ]);
     vi.spyOn(registry, 'getCircle').mockImplementation((name) => {
-      if (name === 'local') return { metadata: { name: 'local' } } as any;
+      if (name === 'local')
+        return { metadata: { name: 'local' } } as unknown as import('../circles/types.js').Circle;
       return undefined;
     });
 
     const mockAxiosInstance = {
       post: vi.fn().mockResolvedValue({ data: { success: true } }),
     };
-    (axios.create as any).mockReturnValue(mockAxiosInstance);
+    vi.mocked(axios.create).mockReturnValue(
+      mockAxiosInstance as unknown as import('axios').AxiosInstance
+    );
 
     const message: IntercomMessage = {
       id: '2',

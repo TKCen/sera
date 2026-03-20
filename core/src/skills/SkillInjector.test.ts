@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SkillInjector } from './SkillInjector.js';
 import { SkillLibrary } from './SkillLibrary.js';
+import type { Pool } from 'pg';
 
 vi.mock('./SkillLibrary.js', () => ({
   SkillLibrary: {
@@ -10,8 +11,8 @@ vi.mock('./SkillLibrary.js', () => ({
 
 describe('SkillInjector', () => {
   let injector: SkillInjector;
-  let poolMock: any;
-  let libMock: any;
+  let poolMock: Record<string, import('vitest').Mock>;
+  let libMock: Record<string, import('vitest').Mock>;
 
   beforeEach(() => {
     poolMock = { query: vi.fn().mockResolvedValue({ rows: [] }) };
@@ -20,8 +21,8 @@ describe('SkillInjector', () => {
       getSkill: vi.fn(),
       getPackage: vi.fn().mockResolvedValue(null),
     };
-    (SkillLibrary.getInstance as any).mockReturnValue(libMock);
-    injector = new SkillInjector(poolMock);
+    vi.mocked(SkillLibrary.getInstance).mockReturnValue(libMock as unknown as SkillLibrary);
+    injector = new SkillInjector(poolMock as unknown as Pool);
   });
 
   it('should inject a declared skill', async () => {
@@ -31,7 +32,7 @@ describe('SkillInjector', () => {
       content: 'Skill content',
       triggers: [],
     };
-    libMock.getSkill.mockResolvedValue(skillDoc);
+    (libMock['getSkill'] as any).mockResolvedValue(skillDoc);
 
     const prompt = '## Guiding Principles\n- Be helpful.\n\n## Context';
     const result = await injector.inject(prompt, ['test-skill'], [], 'user message');
@@ -51,8 +52,8 @@ describe('SkillInjector', () => {
       version: '1.0.0',
       content: 'Git guidance',
     };
-    libMock.listSkills.mockResolvedValue([skillInfo]);
-    libMock.getSkill.mockResolvedValue(skillDoc);
+    (libMock['listSkills'] as any).mockResolvedValue([skillInfo]);
+    (libMock['getSkill'] as any).mockResolvedValue(skillDoc);
 
     const prompt = '## Guiding Principles\n- Be helpful.';
     const result = await injector.inject(prompt, [], [], 'I need to commit my changes');
@@ -66,7 +67,7 @@ describe('SkillInjector', () => {
     const skill1 = { name: 's1', version: '1', content: 'A'.repeat(400), triggers: [] };
     const skill2 = { name: 's2', version: '1', content: 'B'.repeat(4000), triggers: [] };
 
-    libMock.getSkill.mockImplementation((name: string) => {
+    (libMock['getSkill'] as any).mockImplementation((name: string) => {
       if (name === 's1') return Promise.resolve(skill1);
       if (name === 's2') return Promise.resolve(skill2);
       return Promise.resolve(null);
@@ -84,7 +85,7 @@ describe('SkillInjector', () => {
 });
 
 describe('SkillInjector — constitution injection (Story 10.2)', () => {
-  let constitutionLibMock: any;
+  let constitutionLibMock: Record<string, import('vitest').Mock>;
 
   beforeEach(() => {
     constitutionLibMock = {
@@ -92,16 +93,18 @@ describe('SkillInjector — constitution injection (Story 10.2)', () => {
       getSkill: vi.fn().mockResolvedValue(null),
       getPackage: vi.fn().mockResolvedValue(null),
     };
-    (SkillLibrary.getInstance as any).mockReturnValue(constitutionLibMock);
+    vi.mocked(SkillLibrary.getInstance)!.mockReturnValue(
+      constitutionLibMock as unknown as SkillLibrary
+    );
   });
 
   function makeInjector(constitutionOrNull: string | null) {
-    const poolMock = {
+    const pMock = {
       query: vi.fn().mockResolvedValue({
         rows: constitutionOrNull !== null ? [{ constitution: constitutionOrNull }] : [],
       }),
-    };
-    return { injector: new SkillInjector(poolMock as any), poolMock };
+    } as unknown as Record<string, import('vitest').Mock>;
+    return { injector: new SkillInjector(pMock as unknown as Pool), poolMock: pMock };
   }
 
   it('injects constitution block when circle has one', async () => {
@@ -122,7 +125,7 @@ describe('SkillInjector — constitution injection (Story 10.2)', () => {
   it('does not query DB when no circleId is provided', async () => {
     const { injector, poolMock } = makeInjector('# ignored');
     await injector.inject('Base prompt.', [], [], '');
-    expect(poolMock.query).not.toHaveBeenCalled();
+    expect(poolMock['query']).not.toHaveBeenCalled();
   });
 
   it('truncates oversized constitution from the bottom, preserving opening statement', async () => {

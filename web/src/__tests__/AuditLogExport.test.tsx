@@ -6,7 +6,7 @@ import { BrowserRouter } from 'react-router';
 // Must be hoisted so vi.mock factory can reference it
 const mockRoles = vi.hoisted(() => ({ value: ['admin'] as string[] }));
 
-vi.mock('@/contexts/AuthContext', () => ({
+vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({
     roles: mockRoles.value,
     user: { sub: 'dev', name: 'Dev', roles: mockRoles.value },

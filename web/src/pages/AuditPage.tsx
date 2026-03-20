@@ -10,7 +10,7 @@ import {
   Filter,
 } from 'lucide-react';
 import { useAuditEvents, useVerifyAuditChain } from '@/hooks/useAudit';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/hooks/useAuth';
 import { getAuditExportUrl } from '@/lib/api/audit';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';

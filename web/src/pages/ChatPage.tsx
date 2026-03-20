@@ -16,7 +16,7 @@ interface TokenPayload {
   messageId?: string;
 }
 
-interface ThoughtPayload extends ThoughtEvent {}
+type ThoughtPayload = ThoughtEvent;
 
 interface Message {
   id: string;

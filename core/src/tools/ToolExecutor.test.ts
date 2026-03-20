@@ -1,6 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ToolExecutor } from './ToolExecutor.js';
 import type { SkillRegistry } from '../skills/SkillRegistry.js';
+
+vi.mock('../audit/AuditService.js', () => ({
+  AuditService: {
+    getInstance: () => ({
+      record: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
 import type { AgentManifest } from '../agents/manifest/types.js';
 import type { SkillInfo, SkillResult } from '../skills/types.js';
 import type { ToolCall } from '../lib/llm/types.js';
@@ -27,7 +36,7 @@ function minimalManifest(): AgentManifest {
       name: 'test-model',
     },
     tools: {
-      allowed: ['web-search', 'file-read'],
+      allowed: ['*'],
     },
   };
 }
@@ -170,6 +179,7 @@ describe('ToolExecutor', () => {
           manifest: minimalManifest(),
           agentInstanceId: undefined,
           containerId: undefined,
+          sessionId: 'default',
           sandboxManager: undefined,
         }
       );
@@ -258,7 +268,7 @@ describe('ToolExecutor', () => {
 
     it('should handle thrown exceptions in skill execution', async () => {
       const registry = createMockRegistry([]);
-      (registry.invoke as any).mockRejectedValue(new Error('Unexpected crash'));
+      vi.mocked(registry.invoke).mockRejectedValue(new Error('Unexpected crash'));
       const executor = new ToolExecutor(registry);
 
       const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router';
-import { useAuthInternal } from '@/contexts/AuthContext';
+import { useAuthInternal } from '@/hooks/useAuth';
 import { Spinner } from '@/components/ui/spinner';
 
 interface OIDCCallbackResponse {

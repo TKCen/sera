@@ -21,7 +21,7 @@ import {
   useDeleteRoutingRule,
 } from '@/hooks/useNotifications';
 import type { NotificationChannel, CreateChannelPayload } from '@/lib/api/notifications';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/hooks/useAuth';
 import { ForbiddenView } from '@/views/ForbiddenView';
 
 const CHANNEL_TYPES = ['webhook', 'email', 'discord', 'slack'] as const;
@@ -116,7 +116,7 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o: boolean) => !o && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Add Channel</DialogTitle>
@@ -213,7 +213,7 @@ function CreateRuleDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o: boolean) => !o && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Add Routing Rule</DialogTitle>

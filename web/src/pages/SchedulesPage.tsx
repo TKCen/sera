@@ -251,7 +251,7 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
       )}
 
       {/* Delete confirmation */}
-      <Dialog open={confirmDelete} onOpenChange={(o) => !o && setConfirmDelete(false)}>
+      <Dialog open={confirmDelete} onOpenChange={(o: boolean) => !o && setConfirmDelete(false)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete schedule</DialogTitle>
@@ -281,7 +281,7 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
       </Dialog>
 
       {/* Trigger confirmation */}
-      <Dialog open={confirmTrigger} onOpenChange={(o) => !o && setConfirmTrigger(false)}>
+      <Dialog open={confirmTrigger} onOpenChange={(o: boolean) => !o && setConfirmTrigger(false)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Run schedule now</DialogTitle>

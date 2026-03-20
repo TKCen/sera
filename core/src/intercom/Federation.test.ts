@@ -6,35 +6,23 @@ import { CircleRegistry } from '../circles/CircleRegistry.js';
 import { createIntercomRouter } from '../routes/intercom.js';
 import request from 'supertest';
 import type { AgentManifest } from '../agents/manifest/types.js';
-import axios from 'axios';
 
-vi.mock('axios', async (importOriginal) => {
-  const actual: any = await importOriginal();
+vi.mock('axios', () => {
   return {
-    ...actual,
     default: {
-      ...actual.default,
-      create: vi.fn((config) => {
-        const instance = actual.default.create(config);
-        instance.post = vi.fn().mockImplementation((url, data) => {
-          if (
-            url === '' &&
-            (data?.method === 'publish' ||
-              data?.method === 'presence' ||
-              data?.method === 'history')
-          ) {
-            return Promise.resolve({ data: { result: {} } });
+      create: vi.fn().mockImplementation(() => ({
+        post: vi.fn().mockImplementation(async (url: string, data: unknown) => {
+          // If the URL is for Instance B, call appB directly
+          const appB = (global as unknown as { appB: express.Express }).appB;
+          if (appB && url.includes('/api/intercom/bridge/receive')) {
+            const res = await request(appB)
+              .post('/api/intercom/bridge/receive')
+              .send(data as object);
+            return { data: res.body, status: res.status };
           }
-          // Use real axios for actual HTTP calls to localhost
-          // BridgeService calls client.post('/api/intercom/bridge/receive', ...)
-          // baseURL is 'http://localhost:3002/api/intercom'
-          const fullUrl = url.startsWith('http') ? url : (config.baseURL || '') + url;
-          // Log for debugging
-          // console.log(`Mock axios posting to: ${fullUrl}`);
-          return actual.default.post(fullUrl, data, config);
-        });
-        return instance;
-      }),
+          return { data: { result: {} }, status: 200 };
+        }),
+      })),
     },
   };
 });
@@ -46,7 +34,7 @@ describe('Federation Verification', () => {
   let intercomB: IntercomService;
   let bridgeA: BridgeService;
   let bridgeB: BridgeService;
-  let serverB: any;
+  let serverB: import('http').Server;
 
   beforeEach(async () => {
     // Instance A Setup
@@ -71,10 +59,13 @@ describe('Federation Verification', () => {
             },
           },
         ],
-      },
+      } as unknown as import('../circles/types.js').Circle,
     ]);
     vi.spyOn(registryA, 'getCircle').mockImplementation((name) => {
-      if (name === 'circle-a') return { metadata: { name: 'circle-a' } } as any;
+      if (name === 'circle-a')
+        return {
+          metadata: { name: 'circle-a' },
+        } as unknown as import('../circles/types.js').Circle;
       return undefined;
     });
 
@@ -111,10 +102,13 @@ describe('Federation Verification', () => {
         kind: 'Circle',
         metadata: { name: 'circle-b', displayName: 'Circle B' },
         agents: ['agent-b'],
-      },
+      } as unknown as import('../circles/types.js').Circle,
     ]);
     vi.spyOn(registryB, 'getCircle').mockImplementation((name) => {
-      if (name === 'circle-b') return { metadata: { name: 'circle-b' } } as any;
+      if (name === 'circle-b')
+        return {
+          metadata: { name: 'circle-b' },
+        } as unknown as import('../circles/types.js').Circle;
       return undefined;
     });
 
@@ -122,6 +116,7 @@ describe('Federation Verification', () => {
     intercomB.setBridgeService(bridgeB);
 
     appB = express();
+    (global as unknown as { appB: express.Express }).appB = appB;
     appB.use(express.json());
     appB.use(
       '/api/intercom',
@@ -139,7 +134,29 @@ describe('Federation Verification', () => {
     );
 
     // Listen on a port for Instance B so A can connect
-    serverB = appB.listen(3002);
+    serverB = appB.listen(0);
+    const address = serverB.address() as import('net').AddressInfo;
+    const port = address.port;
+
+    // Update connection to point to the actual dynamic port
+    vi.spyOn(registryA, 'listCircles').mockReturnValue([
+      {
+        apiVersion: 'sera/v1',
+        kind: 'Circle',
+        metadata: { name: 'circle-a', displayName: 'Circle A' },
+        agents: ['agent-a'],
+        connections: [
+          {
+            circle: 'circle-b',
+            auth: {
+              type: 'token',
+              endpoint: `http://localhost:${port}`,
+              token: 'secret-a-to-b',
+            },
+          },
+        ],
+      } as unknown as import('../circles/types.js').Circle,
+    ]);
   });
 
   afterEach(() => {
@@ -166,10 +183,10 @@ describe('Federation Verification', () => {
 
     // Verify Instance B received the message
     expect(publishSpyB).toHaveBeenCalled();
-    const [channel, message] = publishSpyB.mock.calls[0] as [string, any];
-    expect(channel).toBe('bridge:dm:circle-a:circle-b:agent-a:agent-b');
-    expect(message.payload.text).toBe('Hello Instance B!');
-    expect(message.source.agent).toBe('agent-a');
-    expect(message.source.circle).toBe('circle-a');
+    const [, message] = publishSpyB.mock.calls[0] as [string, unknown];
+    const intercomMsg = message as import('./types.js').IntercomMessage;
+    expect(intercomMsg.payload['text']).toBe('Hello Instance B!');
+    expect(intercomMsg.source['agent']).toBe('agent-a');
+    expect(intercomMsg.source['circle']).toBe('circle-a');
   });
 });

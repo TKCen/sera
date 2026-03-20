@@ -267,7 +267,7 @@ describe('LLM Proxy Router', () => {
 
     it('should record metering after successful call', async () => {
       const { router, validToken, meteringService } = await createTestSetup();
-      const handlers = getHandler(router, 'post', '/chat/completions')!;
+      const handlers = getHandler(router, 'post', '/chat/completions')! as any[];
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
@@ -303,7 +303,7 @@ describe('LLM Proxy Router', () => {
 
     it('should reject requests without messages', async () => {
       const { router, validToken } = await createTestSetup();
-      const handlers = getHandler(router, 'post', '/chat/completions')!;
+      const handlers = getHandler(router, 'post', '/chat/completions')! as any[];
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
@@ -323,7 +323,7 @@ describe('LLM Proxy Router', () => {
         dailyUsed: 50000,
         dailyQuota: 100000,
       });
-      const handlers = getHandler(router, 'post', '/chat/completions')!;
+      const handlers = getHandler(router, 'post', '/chat/completions')! as any[];
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
@@ -353,7 +353,7 @@ describe('LLM Proxy Router', () => {
         dailyUsed: 99999,
         dailyQuota: 100,
       });
-      const handlers = getHandler(router, 'post', '/chat/completions')!;
+      const handlers = getHandler(router, 'post', '/chat/completions')! as any[];
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
@@ -375,7 +375,7 @@ describe('LLM Proxy Router', () => {
       (err as any).provider = 'lmstudio';
       vi.spyOn(circuitBreakerService, 'call').mockRejectedValue(err);
 
-      const handlers = getHandler(router, 'post', '/chat/completions')!;
+      const handlers = getHandler(router, 'post', '/chat/completions')! as any[];
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },

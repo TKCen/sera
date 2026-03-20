@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 // Must mock fetch before importing EmbeddingService
 const mockFetch = vi.fn();
@@ -6,16 +6,24 @@ vi.stubGlobal('fetch', mockFetch);
 
 describe('EmbeddingService', () => {
   let EmbeddingService: typeof import('./embedding.service.js').EmbeddingService;
-  let EMBEDDING_VECTOR_SIZE: number;
+
+  const originalOllamaUrl = process.env.OLLAMA_URL;
+
+  beforeAll(() => {
+    process.env.OLLAMA_URL = 'http://localhost:11434';
+  });
+
+  afterAll(() => {
+    process.env.OLLAMA_URL = originalOllamaUrl;
+  });
 
   beforeEach(async () => {
     vi.resetModules();
     mockFetch.mockReset();
     const mod = await import('./embedding.service.js');
     EmbeddingService = mod.EmbeddingService;
-    EMBEDDING_VECTOR_SIZE = mod.EMBEDDING_VECTOR_SIZE;
     // Reset singleton for each test
-    (EmbeddingService as any).instance = undefined;
+    (EmbeddingService as unknown as { instance: undefined }).instance = undefined;
   });
 
   afterEach(() => {

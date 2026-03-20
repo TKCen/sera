@@ -24,8 +24,8 @@ export const AgentCrashedSchema = z.object({
 export const ToolCalledSchema = z.object({
   skillId: z.string().optional(), // From ToolExecutor
   tool: z.string().optional(), // From BaseAgent
-  params: z.any().optional(),
-  args: z.any().optional(),
+  params: z.unknown().optional(),
+  args: z.unknown().optional(),
   success: z.boolean().optional(),
   error: z.string().optional(),
   result: z.string().optional(),
@@ -122,7 +122,7 @@ export const DelegationDerivedSchema = z.object({
   parentDelegationId: z.string().uuid(),
   childDelegationId: z.string().uuid(),
   childAgentId: z.string(),
-  narrowedScope: z.any(),
+  narrowedScope: z.unknown(),
 });
 
 export const CredentialResolutionDeniedSchema = z.object({
@@ -161,7 +161,7 @@ export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
  * Validates an audit payload against its registered schema.
  * If no schema is registered, it accepts the payload as-is (Story 11.4: arbitrary payloads).
  */
-export function validatePayload(eventType: string, payload: any): any {
+export function validatePayload(eventType: string, payload: unknown): unknown {
   const schema = EVENT_SCHEMAS[eventType];
   if (!schema) return payload;
   return schema.parse(payload);

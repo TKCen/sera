@@ -8,7 +8,6 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import { v4 as uuidv4 } from 'uuid';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
@@ -36,8 +35,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       const templateName = req.query.template as string | undefined;
       const instances = await AgentFactory.listInstances(templateName);
       res.json(instances);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -60,8 +59,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       await orchestrator.startInstance(instance.id);
 
       res.status(201).json(instance);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -87,8 +86,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       });
 
       res.json(thoughts);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -124,11 +123,12 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       // 2. Send message
       const msg = await intercom.sendDirectMessage(fromManifest, id, payload);
       res.json({ success: true, message: msg });
-    } catch (err: any) {
-      if (err.name === 'IntercomPermissionError') {
-        return res.status(403).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      if (error.name === 'IntercomPermissionError') {
+        return res.status(403).json({ error: error.message });
       }
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: error.message });
     }
   });
 
@@ -143,8 +143,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
         return res.status(404).json({ error: `Agent instance "${req.params.id}" not found` });
       }
       res.json(instance);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -170,8 +170,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       });
 
       res.json(thoughts);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -192,8 +192,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       await AgentFactory.deleteInstance(id);
 
       res.status(204).send();
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -227,9 +227,10 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
         reply: response.finalAnswer || response.thought || 'No response.',
         thought: response.thought,
       });
-    } catch (err: any) {
-      logger.error('Preview chat error:', err);
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      logger.error('Preview chat error:', error);
+      res.status(500).json({ error: error.message });
     }
   });
 
@@ -271,8 +272,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     try {
       const raw = fs.readFileSync(filePath, 'utf-8');
       res.type('text/yaml').send(raw);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -321,11 +322,15 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
       const result = orchestrator.reloadTemplates();
 
       res.json({ success: true, ...result });
-    } catch (err: any) {
-      if (err.name === 'ManifestValidationError') {
-        return res.status(400).json({ error: err.message, field: err.field });
+    } catch (err: unknown) {
+      const error = err as Error;
+      if (error.name === 'ManifestValidationError') {
+        return res.status(400).json({
+          error: error.message,
+          field: (error as { field?: string }).field,
+        });
       }
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: error.message });
     }
   });
 
@@ -340,8 +345,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     try {
       const result = orchestrator.reloadTemplates();
       res.json({ success: true, ...result });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

@@ -10,7 +10,7 @@ async function main() {
 
   console.log('\n--- Loaded Agents ---');
   for (const agent of orchestrator.listAgents()) {
-    console.log(`  ${agent.icon} ${agent.displayName} (${agent.name}) — ${agent.role}`);
+    console.log(`  - ${agent.name} [${agent.status}] (Started: ${agent.startTime.toISOString()})`);
   }
 
   console.log('\n--- Scenario 1: Simple Task ---');

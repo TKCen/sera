@@ -14,8 +14,8 @@ export function createKnowledgeRouter(): Router {
     try {
       const log = await gitService.log(req.params.id!);
       res.json(log);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -24,19 +24,20 @@ export function createKnowledgeRouter(): Router {
     try {
       const requests = await gitService.listMergeRequests(req.params.id!);
       res.json(requests);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
   /** POST /api/knowledge/circles/:id/merge-requests/:requestId/approve */
   router.post('/circles/:id/merge-requests/:requestId/approve', async (req, res) => {
     try {
-      const approvedBy = (req as any).identity?.id ?? 'operator';
+      const reqWithIdentity = req as unknown as { identity?: { id?: string } };
+      const approvedBy = reqWithIdentity.identity?.id ?? 'operator';
       await gitService.approveMergeRequest(req.params.requestId!, approvedBy);
       res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -53,8 +54,8 @@ export function createKnowledgeRouter(): Router {
         strategy,
         note: 'Resolution strategy acknowledged — operator action required to finalise',
       });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

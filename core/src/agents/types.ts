@@ -21,7 +21,7 @@ export interface AgentResponse {
   thought: string;
   action?: {
     tool: string;
-    args: any;
+    args: Record<string, unknown>;
   };
   delegation?: {
     agentRole: string;
@@ -34,20 +34,21 @@ export interface AgentResponse {
 
 export interface AgentInstance {
   id: string;
-  templateName: string;
   name: string;
-  workspacePath: string;
-  containerId?: string;
-  status: 'active' | 'inactive' | 'error';
-  overrides?: any;
-  createdAt: string;
-  updatedAt: string;
-  // DB columns added in Epics 02/03
+  display_name?: string;
+  template_ref: string;
+  circle?: string;
+  status: 'created' | 'running' | 'stopped' | 'error' | 'unresponsive' | 'throttled' | 'active' | 'inactive';
+  overrides?: Record<string, unknown>;
   lifecycle_mode?: 'persistent' | 'ephemeral';
   parent_instance_id?: string;
-  template_ref?: string;
-  resolved_capabilities?: any;
+  resolved_config?: Record<string, unknown>;
+  resolved_capabilities?: Record<string, unknown>;
   workspace_path?: string;
+  workspace_used_gb?: number;
   container_id?: string;
-  circle_id?: string | null | undefined;
+  circle_id?: string | null;
+  last_heartbeat_at?: string | Date;
+  updated_at: string | Date;
+  created_at: string | Date;
 }

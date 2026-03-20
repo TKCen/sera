@@ -6,6 +6,10 @@ vi.mock('../lib/database.js', () => ({
   query: vi.fn(),
 }));
 
+vi.mock('argon2', () => ({
+  verify: vi.fn(),
+}));
+
 describe('PostgresSecretsProvider', () => {
   const MASTER_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; // 32 bytes hex
 
@@ -36,14 +40,14 @@ describe('PostgresSecretsProvider', () => {
       const agentContext = { agentId: 'agent-1', agentName: 'test-agent' };
 
       // Mock database response for the get call
-      let storedValue: any;
-      let storedIv: any;
+      let storedValue: Buffer | undefined;
+      let storedIv: Buffer | undefined;
 
       vi.mocked(db.query).mockImplementation(async (sql, params) => {
         if (sql.includes('INSERT INTO secrets')) {
-          storedValue = params?.[1];
-          storedIv = params?.[2];
-          return { rowCount: 1, rows: [] } as any;
+          storedValue = params?.[1] as Buffer;
+          storedIv = params?.[2] as Buffer;
+          return { rowCount: 1, rows: [] } as unknown as import('pg').QueryResult<any>;
         }
         if (sql.includes('SELECT encrypted_value')) {
           return {
@@ -55,9 +59,9 @@ describe('PostgresSecretsProvider', () => {
                 allowed_agents: ['test-agent'],
               },
             ],
-          } as any;
+          } as unknown as import('pg').QueryResult<any>;
         }
-        return { rowCount: 0, rows: [] } as any;
+        return { rowCount: 0, rows: [] } as unknown as import('pg').QueryResult<any>;
       });
 
       await provider.set(secretName, secretValue, { allowedAgents: ['test-agent'] });
@@ -81,7 +85,7 @@ describe('PostgresSecretsProvider', () => {
             allowed_agents: ['test-agent'],
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       await expect(provider.get(secretName, agentContext)).rejects.toThrow(
         'Secret decryption failed'
@@ -104,7 +108,7 @@ describe('PostgresSecretsProvider', () => {
             allowed_agents: ['authorized-agent'],
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       const value = await provider.get(secretName, agentContext);
       expect(value).toBeNull();
@@ -117,7 +121,9 @@ describe('PostgresSecretsProvider', () => {
       const secretValue = 'unrestricted-data';
 
       // Accessing private method for testing encryption logic
-      const { encryptedValue, iv } = (provider as any).encrypt(secretValue);
+      const { encryptedValue, iv } = (
+        provider as unknown as { encrypt: (v: string) => { encryptedValue: Buffer; iv: Buffer } }
+      ).encrypt(secretValue);
 
       vi.mocked(db.query).mockResolvedValue({
         rowCount: 1,
@@ -128,7 +134,7 @@ describe('PostgresSecretsProvider', () => {
             allowed_agents: ['*'],
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       const value = await provider.get('any-secret', { agentId: 'any', agentName: 'any' });
       expect(value).toBe(secretValue);
@@ -152,10 +158,17 @@ describe('PostgresSecretsProvider', () => {
           },
         ],
       };
-      vi.mocked(db.query).mockResolvedValue(mockResult as any);
+      vi.mocked(db.query).mockResolvedValue(
+        mockResult as unknown as import('pg').QueryResult<any>
+      );
 
-      const context = { operator: { sub: 'admin', roles: ['admin'] } };
-      const list = await provider.list({ tags: ['prod'] }, context);
+      const context = {
+        operator: {
+          sub: 'admin',
+          roles: ['admin'] as import('../auth/interfaces.js').OperatorRole[],
+        },
+      };
+      const list = await provider.list({ tags: ['prod'] }, context as unknown as import('./interfaces.js').SecretAccessContext);
       expect(list).toHaveLength(1);
       expect(list[0]!.name).toBe('secret1');
       expect(db.query).toHaveBeenCalledWith(expect.stringContaining('tags && $1'), [['prod']]);
@@ -163,8 +176,13 @@ describe('PostgresSecretsProvider', () => {
 
     it('should perform soft delete', async () => {
       const provider = new PostgresSecretsProvider();
-      const context = { operator: { sub: 'admin', roles: ['admin'] } };
-      await provider.delete('old-secret', context);
+      const context = {
+        operator: {
+          sub: 'admin',
+          roles: ['admin'] as import('../auth/interfaces.js').OperatorRole[],
+        },
+      };
+      await provider.delete('old-secret', context as unknown as import('./interfaces.js').SecretAccessContext);
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('UPDATE secrets SET deleted_at = NOW()'),
         ['old-secret']
@@ -175,7 +193,7 @@ describe('PostgresSecretsProvider', () => {
   describe('healthCheck', () => {
     it('should return true if DB is healthy', async () => {
       const provider = new PostgresSecretsProvider();
-      vi.mocked(db.query).mockResolvedValue({} as any);
+      vi.mocked(db.query).mockResolvedValue({} as unknown as import('pg').QueryResult<any>);
       expect(await provider.healthCheck()).toBe(true);
     });
 

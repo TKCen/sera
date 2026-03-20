@@ -49,10 +49,9 @@ router.post('/definition', async (req, res) => {
     await client.openFile(uri, getLanguageId(absolutePath));
     const definition = await client.getDefinition(uri, line, character);
     res.json({ definition });
-  } catch (error: any) {
-    res
-      .status(error.message.startsWith('Access denied') ? 403 : 500)
-      .json({ error: error.message });
+  } catch (error: unknown) {
+    const err = error as Error;
+    res.status(err.message.startsWith('Access denied') ? 403 : 500).json({ error: err.message });
   }
 });
 
@@ -76,10 +75,9 @@ router.post('/references', async (req, res) => {
     await client.openFile(uri, getLanguageId(absolutePath));
     const references = await client.getReferences(uri, line, character);
     res.json({ references });
-  } catch (error: any) {
-    res
-      .status(error.message.startsWith('Access denied') ? 403 : 500)
-      .json({ error: error.message });
+  } catch (error: unknown) {
+    const err = error as Error;
+    res.status(err.message.startsWith('Access denied') ? 403 : 500).json({ error: err.message });
   }
 });
 
@@ -103,10 +101,9 @@ router.post('/symbols', async (req, res) => {
     await client.openFile(uri, getLanguageId(absolutePath));
     const symbols = await client.getDocumentSymbols(uri);
     res.json({ symbols });
-  } catch (error: any) {
-    res
-      .status(error.message.startsWith('Access denied') ? 403 : 500)
-      .json({ error: error.message });
+  } catch (error: unknown) {
+    const err = error as Error;
+    res.status(err.message.startsWith('Access denied') ? 403 : 500).json({ error: err.message });
   }
 });
 

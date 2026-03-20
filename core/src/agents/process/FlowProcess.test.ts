@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ProcessManager } from './ProcessManager.js';
 import type { ProcessTask } from './types.js';
 import type { AgentResponse } from '../types.js';
+import type { BaseAgent } from '../BaseAgent.js';
 
 // ── Mock Agent ──────────────────────────────────────────────────────────────────
 
@@ -9,12 +10,12 @@ function createMockAgent(roleName: string, response: string) {
   return {
     name: `${roleName}-display`,
     role: roleName,
-    process: vi.fn().mockResolvedValue({
+    process: (vi.fn() as any).mockResolvedValue({
       thought: `Thinking about it`,
       finalAnswer: response,
     } satisfies AgentResponse),
     updateLlmProvider: vi.fn(),
-  } as any;
+  } as unknown as BaseAgent;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ describe('FlowProcess', () => {
     expect(result.results[1]!.taskId).toBe('t2');
 
     // Check context passing
-    const bCall = agentB.process.mock.calls[0]![0] as string;
+    const bCall = (agentB.process as any).mock.calls[0]![0] as string;
     expect(bCall).toContain('[Task t1]: Output A');
   });
 
@@ -76,7 +77,7 @@ describe('FlowProcess', () => {
     const result = await manager.run('flow', tasks, agents);
 
     expect(result.results).toHaveLength(3);
-    const cCall = agentC.process.mock.calls[0]![0] as string;
+    const cCall = (agentC.process as any).mock.calls[0]![0] as string;
     expect(cCall).toContain('[Task t1]: A');
     expect(cCall).toContain('[Task t2]: B');
   });

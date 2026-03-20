@@ -26,9 +26,16 @@ const mockClient = {
   removeSubscription: vi.fn(),
 };
 
-vi.mock('@/contexts/CentrifugoContext', () => ({
+vi.mock('@/hooks/useCentrifugo', () => ({
   useCentrifugoContext: () => ({ client: mockClient, connected: true }),
-  CentrifugoProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({
+    user: { sub: 'dev', name: 'Dev', roles: ['admin'] },
+    isAuthenticated: true,
+    isLoading: false,
+  }),
 }));
 
 vi.mock('@/lib/api/agents', async (importOriginal) => {

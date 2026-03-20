@@ -43,7 +43,7 @@ export class IngestionService {
               path: path.relative(this.workspaceRoot || '', file),
               content: chunk,
               chunkIndex: i,
-            } as Record<string, any>,
+            } as Record<string, unknown>,
           });
         }
 

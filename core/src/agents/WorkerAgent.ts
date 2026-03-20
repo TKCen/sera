@@ -73,8 +73,6 @@ export class WorkerAgent extends BaseAgent {
       // However, if we ever add it, we should record audit entries.
     }
 
-    const auditService = AuditService.getInstance();
-    const auditId = this.agentInstanceId || this.role;
     try {
       await AuditService.getInstance().record({
         actorType: 'agent',
@@ -96,8 +94,9 @@ export class WorkerAgent extends BaseAgent {
     try {
       const parsed = parseJson(response.content);
       if (parsed && typeof parsed === 'object') {
-        await this.reflect({ thought: parsed.thought, finalAnswer: parsed.finalAnswer });
-        return parsed;
+        const result = parsed as any;
+        await this.reflect({ thought: result.thought, finalAnswer: result.finalAnswer });
+        return result;
       }
       const result: AgentResponse = {
         thought: `Completed task: ${input}`,

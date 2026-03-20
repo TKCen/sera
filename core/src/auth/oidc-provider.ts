@@ -108,22 +108,23 @@ export class OIDCAuthPlugin implements AuthPlugin {
       }
 
       return identity;
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
       // Token looks like a JWT but validation failed — throw so caller gets 401
-      if (err?.code === 'ERR_JWT_EXPIRED') {
-        const e = new Error('invalid_token') as any;
+      if (error?.code === 'ERR_JWT_EXPIRED') {
+        const e = new Error('invalid_token') as unknown as { statusCode: number; hint: string };
         e.statusCode = 401;
         e.hint = 'The access token has expired. Please re-authenticate.';
         throw e;
       }
       if (
-        err?.code?.startsWith('ERR_JWT') ||
-        err?.code?.startsWith('ERR_JWS') ||
-        err?.code?.startsWith('ERR_JWK')
+        error?.code?.startsWith('ERR_JWT') ||
+        error?.code?.startsWith('ERR_JWS') ||
+        error?.code?.startsWith('ERR_JWK')
       ) {
-        const e = new Error('invalid_token') as any;
+        const e = new Error('invalid_token') as unknown as { statusCode: number; hint: string };
         e.statusCode = 401;
-        e.hint = err.message ?? 'Token validation failed';
+        e.hint = error.message ?? 'Token validation failed';
         throw e;
       }
       // Not recognisably ours — let another plugin try

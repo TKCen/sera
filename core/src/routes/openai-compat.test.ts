@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { app } from '../index.js';
 
@@ -32,6 +32,7 @@ vi.mock('../services/vector.service.js', () => ({
 
 vi.mock('../intercom/IntercomService.js', () => {
   class MockIntercomService {
+    setBridgeService = vi.fn();
     publish = vi.fn().mockResolvedValue(undefined);
     publishThought = vi.fn().mockResolvedValue(undefined);
     publishStreamToken = vi.fn().mockResolvedValue(undefined);

@@ -19,23 +19,17 @@
  */
 
 import { Router } from 'express';
-import path from 'path';
-import fs from 'fs';
 import type { Request, Response, RequestHandler } from 'express';
 import { CapabilityResolver } from '../capability/resolver.js';
 import { WorktreeManager } from '../sandbox/WorktreeManager.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { SandboxManager } from '../sandbox/SandboxManager.js';
-import type {
-  PermissionRequestService,
-  PermissionDecision,
-} from '../sandbox/PermissionRequestService.js';
-import { Logger } from '../lib/logger.js';
-
-const logger = new Logger('LifecycleRouter');
+import { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
+import type { PermissionDecision } from '../sandbox/PermissionRequestService.js';
 
 // Typed param shapes
+
 type IdParam = { id: string };
 type RequestIdParam = { requestId: string };
 type IdGrantParam = { id: string; grantId: string };
@@ -55,9 +49,10 @@ export function createLifecycleRouter(
       const resolver = new CapabilityResolver(registry);
       const result = await resolver.resolve(req.params.id);
       res.json(result);
-    } catch (err: any) {
-      const code = err.name === 'CapabilityEscalationError' ? 422 : 500;
-      res.status(code).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      const code = error.name === 'CapabilityEscalationError' ? 422 : 500;
+      res.status(code).json({ error: error.message });
     }
   };
   router.post('/:id/resolve-capabilities', resolveCapabilities as RequestHandler);
@@ -77,8 +72,8 @@ export function createLifecycleRouter(
 
       WorktreeManager.merge(repoPath, instance.name, instance.id, targetBranch);
       res.json({ merged: true, branch: `agent/${instance.name}/${instance.id}`, targetBranch });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.post('/:id/worktree/merge', worktreeMerge as RequestHandler);
@@ -93,8 +88,8 @@ export function createLifecycleRouter(
 
       WorktreeManager.remove(repoPath, instance.name, instance.id);
       res.json({ removed: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.delete('/:id/worktree', worktreeDelete as RequestHandler);
@@ -105,16 +100,16 @@ export function createLifecycleRouter(
     try {
       const instance = await registry.getInstance(req.params.id);
       if (!instance) return void res.status(404).json({ error: 'Instance not found' });
-      const containerId: string | undefined = instance.container_id ?? instance.containerId;
-      if (!containerId)
+      const container_id: string | undefined = instance.container_id;
+      if (!container_id)
         return void res.status(404).json({ error: 'No container for this instance' });
 
       const tailStr = req.query['tail'];
       const tail = tailStr ? parseInt(tailStr as string, 10) : 100;
-      const logs = await sandboxManager.getLogs(containerId, tail);
+      const logs = await sandboxManager.getLogs(container_id, tail);
       res.type('text/plain').send(logs);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.get('/:id/logs', getLogs as RequestHandler);
@@ -128,8 +123,8 @@ export function createLifecycleRouter(
 
       await orchestrator.cleanupInstance(req.params.id);
       res.json({ cleaned: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.post('/:id/cleanup', cleanup as RequestHandler);
@@ -140,8 +135,8 @@ export function createLifecycleRouter(
     try {
       const subagents = await registry.listSubagents(req.params.id);
       res.json(subagents);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.get('/:id/subagents', getSubagents as RequestHandler);
@@ -151,7 +146,7 @@ export function createLifecycleRouter(
   const permissionRequest: RequestHandler<IdParam> = async (req, res) => {
     try {
       const id = req.params.id;
-      const identity = (req as any).agentIdentity as { agentId?: string } | undefined;
+      const identity = (req as unknown as { agentIdentity?: { agentId?: string } }).agentIdentity;
 
       if (identity?.agentId && identity.agentId !== id) {
         return void res.status(403).json({ error: 'Token agentId does not match URL' });
@@ -172,8 +167,8 @@ export function createLifecycleRouter(
 
       const result = await permService.request(id, instance.name, dimension, value, reason);
       res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.post('/:id/permission-request', permissionRequest as RequestHandler);
@@ -183,8 +178,8 @@ export function createLifecycleRouter(
       const sessionGrants = permService.getSessionGrants(req.params.id);
       const persistentGrants = await registry.listCapabilityGrants(req.params.id);
       res.json({ session: sessionGrants, persistent: persistentGrants });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.get('/:id/grants', listGrants as RequestHandler);
@@ -203,8 +198,8 @@ export function createLifecycleRouter(
       await orchestrator.stopInstance(req.params.id);
       const agent = await orchestrator.startInstance(req.params.id);
       res.json({ restarted: true, agentName: agent.name });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.post('/:id/restart', restart as RequestHandler);
@@ -219,8 +214,8 @@ export function createLifecycleRouter(
       if (!revokedPersistent) return void res.status(404).json({ error: 'Grant not found' });
 
       res.json({ revoked: true, type: 'persistent' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   };
   router.delete('/:id/grants/:grantId', revokeGrant as RequestHandler);
@@ -251,9 +246,9 @@ export function createPermissionRouter(permService: PermissionRequestService): R
         return void res.status(400).json({ error: 'decision must be "grant" or "deny"' });
       }
 
-      const operatorIdentity = (req as any).operator as
-        | { sub?: string; email?: string; name?: string }
-        | undefined;
+      const operatorIdentity = (
+        req as unknown as { operator?: { sub?: string; email?: string; name?: string } }
+      ).operator;
       const result = await permService.decide(
         requestId,
         {
@@ -266,9 +261,10 @@ export function createPermissionRouter(permService: PermissionRequestService): R
         operatorIdentity?.name
       );
       res.json(result);
-    } catch (err: any) {
-      const code = err.message.includes('not found') ? 404 : 500;
-      res.status(code).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      const code = error.message.includes('not found') ? 404 : 500;
+      res.status(code).json({ error: error.message });
     }
   };
   router.post('/:requestId/decision', decide as RequestHandler);

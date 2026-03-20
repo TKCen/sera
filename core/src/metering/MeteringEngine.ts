@@ -25,7 +25,7 @@ export class MeteringEngine {
       logger.debug(
         `Recorded usage for agent ${event.agentId}: ${event.totalTokens} tokens (${event.model})`
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error(`Failed to record usage event for agent ${event.agentId}:`, err);
     }
   }

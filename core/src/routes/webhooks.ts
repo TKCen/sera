@@ -9,7 +9,7 @@ const logger = new Logger('WebhookRouter');
  */
 export function createWebhooksRouter(
   webhooksService: WebhooksService,
-  authMiddleware?: any
+  authMiddleware?: import('express').RequestHandler
 ): Router {
   const router = Router();
 
@@ -28,8 +28,8 @@ export function createWebhooksRouter(
 
         const webhook = await webhooksService.createWebhook(name, urlPath, secret, eventType);
         res.status(201).json(webhook);
-      } catch (err: any) {
-        res.status(500).json({ error: err.message });
+      } catch (err: unknown) {
+        res.status(500).json({ error: (err as Error).message });
       }
     });
 
@@ -41,8 +41,8 @@ export function createWebhooksRouter(
       try {
         const webhooks = await webhooksService.listWebhooks();
         res.json(webhooks);
-      } catch (err: any) {
-        res.status(500).json({ error: err.message });
+      } catch (err: unknown) {
+        res.status(500).json({ error: (err as Error).message });
       }
     });
   }
@@ -58,8 +58,8 @@ export function createWebhooksRouter(
       const timestamp = req.headers['x-sera-timestamp'];
       const nonce = req.headers['x-sera-nonce'];
 
-      const rawBody = (req as any).rawBody
-        ? (req as any).rawBody.toString('utf-8')
+      const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody
+        ? (req as unknown as { rawBody: Buffer }).rawBody.toString('utf-8')
         : JSON.stringify(req.body);
 
       const sig = Array.isArray(signature) ? signature[0] : signature;
@@ -80,9 +80,10 @@ export function createWebhooksRouter(
       return res
         .status(401)
         .json({ error: 'Missing or invalid X-Sera-Signature or X-Sera-Timestamp' });
-    } catch (err: any) {
-      logger.error(`Webhook processing error (${req.params.slug}):`, err.message);
-      res.status(err.message.includes('signature') ? 401 : 404).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      logger.error(`Webhook processing error (${req.params.slug}):`, error.message);
+      res.status(error.message.includes('signature') ? 401 : 404).json({ error: error.message });
     }
   });
 

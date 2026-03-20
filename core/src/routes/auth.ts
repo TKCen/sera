@@ -159,8 +159,8 @@ export function createAuthRouter(sessionStore?: WebSessionStore): {
 
       // Return opaque session token (NOT the OIDC access token) + user identity
       res.json({ user: identity, sessionToken });
-    } catch (err: any) {
-      logger.error('OIDC callback error:', err.message ?? String(err));
+    } catch (err: unknown) {
+      logger.error('OIDC callback error:', err instanceof Error ? err.message : String(err));
       res.status(500).json({ error: 'Authentication failed' });
     }
   });
@@ -196,8 +196,8 @@ export function createAuthRouter(sessionStore?: WebSessionStore): {
     try {
       const keys = await ApiKeyService.listKeys(req.operator!.sub);
       res.json(keys);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -228,8 +228,8 @@ export function createAuthRouter(sessionStore?: WebSessionStore): {
         .catch(() => {});
 
       res.status(201).json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -252,8 +252,8 @@ export function createAuthRouter(sessionStore?: WebSessionStore): {
         .catch(() => {});
 
       res.json({ message: 'API key revoked' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

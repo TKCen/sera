@@ -68,7 +68,7 @@ export function createSecretsRouter() {
           tags,
           allowedAgents: allowedAgents || [],
           allowedCircles: allowedCircles || [],
-          exposure: req.body.exposure || 'agent-env',
+          exposure: (req.body.exposure as any) || 'agent-env',
         } as any
       );
 

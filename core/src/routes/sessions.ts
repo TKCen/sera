@@ -18,8 +18,8 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
       const agentInstanceId = req.query.agentInstanceId as string | undefined;
       const sessions = await sessionStore.listSessions(agent, agentInstanceId);
       res.json(sessions);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -35,8 +35,8 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
       }
       const session = await sessionStore.createSession({ agentName, title });
       res.status(201).json(session);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -52,8 +52,8 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
       }
       const messages = await sessionStore.getMessages(req.params.id);
       res.json({ ...session, messages });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -72,8 +72,8 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
         return res.status(404).json({ error: 'Session not found' });
       }
       res.json(session);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -88,8 +88,8 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
         return res.status(404).json({ error: 'Session not found' });
       }
       res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

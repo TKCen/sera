@@ -168,12 +168,14 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
         }
 
         const gitService = KnowledgeGitService.getInstance();
-        const { block, commitHash: _commitHash } = await gitService.write(
-          circleId,
+        const { block } = await gitService.write(circleId, agentId, context.agentName, {
+          content,
+          type,
           agentId,
-          context.agentName,
-          { content, type, agentId, tags, importance, ...(title ? { title } : {}) }
-        );
+          tags,
+          importance,
+          ...(title ? { title } : {}),
+        });
 
         const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
         let pendingMerge = false;

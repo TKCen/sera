@@ -1,9 +1,6 @@
 import type { AgentRegistry } from './registry.service.js';
 import type { ResourceImporter } from './importer.service.js';
 import { Logger } from '../lib/logger.js';
-import fs from 'fs/promises';
-import path from 'path';
-import yaml from 'js-yaml';
 
 const logger = new Logger('Bootstrap');
 

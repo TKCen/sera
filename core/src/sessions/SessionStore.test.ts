@@ -35,7 +35,10 @@ describe('SessionStore', () => {
 
   describe('createSession', () => {
     it('creates a session with default title', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 } as any);
+      mockQuery.mockResolvedValueOnce({
+        rows: [],
+        rowCount: 1,
+      } as unknown as import('pg').QueryResult<any>);
 
       const session = await store.createSession({ agentName: 'architect-prime' });
 
@@ -53,7 +56,10 @@ describe('SessionStore', () => {
     });
 
     it('creates a session with custom title', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 } as any);
+      mockQuery.mockResolvedValueOnce({
+        rows: [],
+        rowCount: 1,
+      } as unknown as import('pg').QueryResult<any>);
 
       const session = await store.createSession({
         agentName: 'researcher',
@@ -77,7 +83,7 @@ describe('SessionStore', () => {
             updated_at: '2026-03-17T10:05:00Z',
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       const session = await store.getSession('sess-1');
 
@@ -88,7 +94,7 @@ describe('SessionStore', () => {
     });
 
     it('returns null when not found', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [] } as any);
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<any>);
 
       const session = await store.getSession('nonexistent');
       expect(session).toBeNull();
@@ -116,7 +122,7 @@ describe('SessionStore', () => {
             updated_at: '2026-03-17T09:00:00Z',
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       const sessions = await store.listSessions();
       expect(sessions).toHaveLength(2);
@@ -126,7 +132,7 @@ describe('SessionStore', () => {
     });
 
     it('lists sessions filtered by agent', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [] } as any);
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<any>);
 
       await store.listSessions('architect-prime');
 
@@ -140,8 +146,14 @@ describe('SessionStore', () => {
     it('inserts a message and updates session', async () => {
       // First call: INSERT message, Second call: UPDATE session
       mockQuery
-        .mockResolvedValueOnce({ rows: [], rowCount: 1 } as any)
-        .mockResolvedValueOnce({ rows: [], rowCount: 1 } as any);
+        .mockResolvedValueOnce({
+          rows: [],
+          rowCount: 1,
+        } as unknown as import('pg').QueryResult<any>)
+        .mockResolvedValueOnce({
+          rows: [],
+          rowCount: 1,
+        } as unknown as import('pg').QueryResult<any>);
 
       const msg = await store.addMessage({
         sessionId: 'sess-1',
@@ -178,7 +190,7 @@ describe('SessionStore', () => {
             created_at: '2026-03-17T10:00:01Z',
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       const messages = await store.getMessages('s1');
       expect(messages).toHaveLength(2);
@@ -201,9 +213,11 @@ describe('SessionStore', () => {
             updated_at: '2026-03-17T10:00:00Z',
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
       // DELETE query
-      mockQuery.mockResolvedValueOnce({ rowCount: 1 } as any);
+      mockQuery.mockResolvedValueOnce({
+        rowCount: 1,
+      } as unknown as import('pg').QueryResult<any>);
 
       const result = await store.deleteSession('s1');
       expect(result).toBe(true);
@@ -211,9 +225,11 @@ describe('SessionStore', () => {
 
     it('returns false when session not found', async () => {
       // getSession returns nothing
-      mockQuery.mockResolvedValueOnce({ rows: [] } as any);
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<any>);
       // DELETE query
-      mockQuery.mockResolvedValueOnce({ rowCount: 0 } as any);
+      mockQuery.mockResolvedValueOnce({
+        rowCount: 0,
+      } as unknown as import('pg').QueryResult<any>);
 
       const result = await store.deleteSession('nonexistent');
       expect(result).toBe(false);
@@ -233,7 +249,7 @@ describe('SessionStore', () => {
             updated_at: '2026-03-17T10:05:00Z',
           },
         ],
-      } as any);
+      } as unknown as import('pg').QueryResult<any>);
 
       const session = await store.updateSessionTitle('s1', 'New Title');
       expect(session).not.toBeNull();
@@ -241,7 +257,7 @@ describe('SessionStore', () => {
     });
 
     it('returns null for nonexistent session', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [] } as any);
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<any>);
 
       const session = await store.updateSessionTitle('nonexistent', 'Title');
       expect(session).toBeNull();

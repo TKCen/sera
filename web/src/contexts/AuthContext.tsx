@@ -1,31 +1,7 @@
 /// <reference types="vite/client" />
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { setAuthHeaderGetter, onUnauthorized } from '@/lib/api/client';
-
-interface User {
-  sub: string;
-  name?: string;
-  email?: string;
-  roles?: string[];
-}
-
-interface AuthContextValue {
-  isAuthenticated: boolean;
-  user: User | null;
-  roles: string[];
-  isLoading: boolean;
-  login: () => void;
-  logout: () => void;
-}
-
-const AuthContext = createContext<AuthContextValue>({
-  isAuthenticated: false,
-  user: null,
-  roles: [],
-  isLoading: true,
-  login: () => undefined,
-  logout: () => undefined,
-});
+import { AuthContext, AuthInternalContext, type User } from './AuthContext.types';
 
 // Keys for temporary PKCE state (cleared immediately after callback)
 const SESSION_KEY_SESSION_TOKEN = 'sera_session_token';
@@ -167,19 +143,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-// Internal context for callback page to wire session after OIDC exchange
-interface AuthInternalContextValue {
-  setSessionAndUser: (token: string, user: User) => void;
-  getPKCEVerifier: () => string | null;
-  clearPKCEVerifier: () => void;
-}
-
-const AuthInternalContext = createContext<AuthInternalContextValue>({
-  setSessionAndUser: () => undefined,
-  getPKCEVerifier: () => null,
-  clearPKCEVerifier: () => undefined,
-});
-
 function AuthContextInternal({
   children,
   setSessionAndUser,
@@ -198,12 +161,4 @@ function AuthContextInternal({
       {children}
     </AuthInternalContext.Provider>
   );
-}
-
-export function useAuth(): AuthContextValue {
-  return useContext(AuthContext);
-}
-
-export function useAuthInternal(): AuthInternalContextValue {
-  return useContext(AuthInternalContext);
 }

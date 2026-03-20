@@ -132,7 +132,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
     }
 
     let sql = 'SELECT * FROM secrets WHERE deleted_at IS NULL';
-    const params: any[] = [];
+    const params: unknown[] = [];
 
     if (filter?.tags && filter.tags.length > 0) {
       sql += ' AND tags && $1';

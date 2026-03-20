@@ -12,6 +12,7 @@ import * as jose from 'jose';
 import { Logger } from '../lib/logger.js';
 import { ChannelNamespace } from './ChannelNamespace.js';
 import { pool } from '../lib/database.js';
+import type { BridgeService } from './BridgeService.js';
 import type {
   IntercomMessage,
   IntercomMessageType,
@@ -35,7 +36,7 @@ const logger = new Logger('Intercom');
 export class IntercomService {
   private readonly http: AxiosInstance;
 
-  private bridge?: any;
+  private bridge?: BridgeService;
 
   constructor(apiUrl?: string, apiKey?: string) {
     this.http = axios.create({
@@ -51,7 +52,7 @@ export class IntercomService {
   /**
    * Set the bridge service for cross-instance federation.
    */
-  setBridgeService(bridge: any): void {
+  setBridgeService(bridge: BridgeService): void {
     this.bridge = bridge;
   }
 
@@ -69,8 +70,8 @@ export class IntercomService {
 
       // Forward to bridge for federation
       if (this.bridge && data && typeof data === 'object') {
-        this.bridge.handleLocalPublish(channel, data).catch((err: any) => {
-          logger.warn(`Bridge failed to forward ${channel}: ${err.message}`);
+        this.bridge.handleLocalPublish(channel, data as IntercomMessage).catch((err: unknown) => {
+          logger.warn(`Bridge failed to forward ${channel}: ${(err as Error).message}`);
         });
       }
     } catch (err) {
@@ -89,7 +90,9 @@ export class IntercomService {
         params: { channel, limit },
       });
       const publications = res.data?.result?.publications;
-      return Array.isArray(publications) ? publications.map((p: any) => p.data) : [];
+      return Array.isArray(publications)
+        ? publications.map((p: Record<string, unknown>) => p.data)
+        : [];
     } catch (err) {
       const message = err instanceof AxiosError ? err.message : String(err);
       logger.error(`Failed to get history for ${channel}: ${message}`);
@@ -143,7 +146,7 @@ export class IntercomService {
     payload: Record<string, unknown>
   ): Promise<IntercomMessage> {
     const fromAgentId = fromManifest.metadata.name;
-    const circle = fromManifest.metadata.circle;
+    const fromCircle = fromManifest.metadata.circle || 'unknown';
 
     // Validate permission
     const canMessage = fromManifest.intercom?.canMessage ?? [];
@@ -151,9 +154,19 @@ export class IntercomService {
       throw new IntercomPermissionError(fromAgentId, toAgentId);
     }
 
-    const channel = ChannelNamespace.private(fromAgentId, toAgentId);
+    let channel: string;
+    if (toAgentId.includes('@')) {
+      // Remote agent: agent-b@circle-b
+      const [targetAgent, targetCircle] = toAgentId.split('@');
+      if (!targetAgent || !targetCircle) {
+        throw new Error(`Invalid remote agent identifier: ${toAgentId}`);
+      }
+      channel = ChannelNamespace.bridgeDm(fromCircle, targetCircle, fromAgentId, targetAgent);
+    } else {
+      channel = ChannelNamespace.private(fromAgentId, toAgentId);
+    }
 
-    return this.publishMessage(fromAgentId, circle ?? '', channel, 'message', payload, {
+    return this.publishMessage(fromAgentId, fromCircle, channel, 'message', payload, {
       securityTier: fromManifest.metadata.tier,
     });
   }
@@ -192,8 +205,8 @@ export class IntercomService {
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [agentId, taskId || null, stepType, content, iteration || 0, timestamp]
         );
-      } catch (err: any) {
-        logger.error(`Failed to persist thought for ${agentId}: ${err.message}`);
+      } catch (err: unknown) {
+        logger.error(`Failed to persist thought for ${agentId}: ${(err as Error).message}`);
       }
     };
 
@@ -209,10 +222,10 @@ export class IntercomService {
   async getThoughts(
     agentId: string,
     options: { taskId?: string; limit?: number; offset?: number } = {}
-  ): Promise<any[]> {
+  ): Promise<ThoughtEvent[]> {
     const { taskId, limit = 50, offset = 0 } = options;
     let queryText = `SELECT * FROM thought_events WHERE agent_instance_id = $1`;
-    const params: any[] = [agentId];
+    const params: unknown[] = [agentId];
 
     if (taskId) {
       params.push(taskId);
@@ -228,6 +241,7 @@ export class IntercomService {
       stepType: row.step,
       content: row.content,
       agentId: row.agent_instance_id,
+      agentDisplayName: '', // Display name not in DB for now
       taskId: row.task_id,
       iteration: row.iteration,
     }));

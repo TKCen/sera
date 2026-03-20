@@ -7,7 +7,7 @@
 /**
  * Extracts and parses the first JSON object or array found in a string.
  */
-export function parseJson<T = any>(text: string): T {
+export function parseJson<T = unknown>(text: string): T {
   if (!text) {
     throw new Error('Empty input');
   }
@@ -101,7 +101,7 @@ export function parseJson<T = any>(text: string): T {
 /**
  * Safely attempts to parse JSON, returning a fallback value on failure.
  */
-export function safeParseJson<T = any>(text: string, fallback: T): T {
+export function safeParseJson<T = unknown>(text: string, fallback: T): T {
   try {
     return parseJson<T>(text);
   } catch {

@@ -10,7 +10,7 @@ import {
   CardDescription,
   CardContent,
 } from '@/components/ui/card';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function LoginPage() {
   const { isAuthenticated, login } = useAuth();

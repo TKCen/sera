@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PoolClient } from 'pg';
 import { ScheduleService } from '../services/ScheduleService.js';
 import { AuditService } from '../audit/AuditService.js';
 import { pool } from '../lib/database.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
 
 // Mock Database Pool
 vi.mock('../lib/database.js', () => ({
@@ -33,21 +35,21 @@ describe('Epic 11 Integration', () => {
     vi.clearAllMocks();
     scheduleService = ScheduleService.getInstance();
     auditService = AuditService.getInstance();
-    (scheduleService as any).initialized = false;
-    (auditService as any).initialized = false;
+    (scheduleService as unknown as { initialized: boolean }).initialized = false;
+    (auditService as unknown as { initialized: boolean }).initialized = false;
   });
 
   it('firing a scheduled task creates an audit record', async () => {
     const mockOrchestrator = {
       startInstance: vi.fn().mockResolvedValue({}),
     };
-    scheduleService.setOrchestrator(mockOrchestrator as any);
+    scheduleService.setOrchestrator(mockOrchestrator as unknown as Orchestrator);
 
     const scheduleId = '11111111-1111-4111-a111-111111111111';
     const agentId = '22222222-2222-4222-a222-222222222222';
 
     // Mock schedule lookup
-    (pool.query as any).mockImplementation((q: string, params: any[]) => {
+    vi.mocked(pool.query).mockImplementation(((q: string, _params: unknown[] | undefined) => {
       if (q.includes('FROM schedules')) {
         return Promise.resolve({
           rows: [
@@ -69,13 +71,13 @@ describe('Epic 11 Integration', () => {
         });
       }
       return Promise.resolve({ rows: [] });
-    });
+    }) as unknown as typeof pool.query);
 
     const clientMock = {
       query: vi.fn().mockResolvedValue({ rows: [{ seq: '100', hash: 'some-hash' }] }),
       release: vi.fn(),
     };
-    (pool.connect as any).mockResolvedValue(clientMock);
+    vi.mocked(pool.connect).mockResolvedValue(clientMock as unknown as PoolClient);
 
     // Trigger the schedule
     await scheduleService.triggerSchedule(scheduleId);
@@ -85,12 +87,13 @@ describe('Epic 11 Integration', () => {
 
     // Verify audit record was created
     const recordCall = clientMock.query.mock.calls.find((c) =>
-      c[0].includes('INSERT INTO audit_trail')
+      (c[0] as string).includes('INSERT INTO audit_trail')
     );
     expect(recordCall).toBeDefined();
     if (recordCall) {
       expect(recordCall[1]).toContain('schedule.fired');
-      expect(recordCall[1][6].scheduleId).toBe(scheduleId);
+      const payload = (recordCall[1] as unknown as unknown[])[6] as { scheduleId: string };
+      expect(payload.scheduleId).toBe(scheduleId);
     }
   });
 });

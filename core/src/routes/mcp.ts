@@ -1,11 +1,8 @@
 import { Router } from 'express';
 import { MCPRegistry } from '../mcp/registry.js';
 import { SkillRegistry } from '../skills/SkillRegistry.js';
-import { Logger } from '../lib/logger.js';
 
-const logger = new Logger('MCPRouter');
-
-export function createMCPRouter(mcpRegistry: MCPRegistry, skillRegistry: SkillRegistry) {
+export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillRegistry) {
   const router = Router();
 
   /**
@@ -20,8 +17,8 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, skillRegistry: SkillRe
       }
       await mcpRegistry.registerContainerServer(manifest);
       res.json({ message: `MCP server "${manifest.metadata.name}" registered successfully` });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -37,8 +34,8 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, skillRegistry: SkillRe
       } else {
         res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
       }
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

@@ -9,6 +9,7 @@
  */
 
 import { Router } from 'express';
+import type { Response } from 'express';
 import type { AgentManifest } from '../agents/manifest/types.js';
 import { SandboxManager } from '../sandbox/SandboxManager.js';
 import { ToolRunner } from '../sandbox/ToolRunner.js';
@@ -28,7 +29,7 @@ export function createSandboxRouter(
   /**
    * Helper: resolve manifest or return 404.
    */
-  function getManifestOrFail(agentName: string | undefined, res: any): AgentManifest | null {
+  function getManifestOrFail(agentName: string | undefined, res: Response): AgentManifest | null {
     if (!agentName || typeof agentName !== 'string') {
       res.status(400).json({ error: 'agentName is required' });
       return null;

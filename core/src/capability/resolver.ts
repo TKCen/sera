@@ -1,7 +1,7 @@
 import type { AgentRegistry } from '../agents/registry.service.js';
 
 export class CapabilityEscalationError extends Error {
-  constructor(dimension: string, expected: any, actual: any) {
+  constructor(dimension: string, expected: unknown, actual: unknown) {
     const expectedStr = JSON.stringify(expected);
     const actualStr = JSON.stringify(actual);
     super(
@@ -14,7 +14,7 @@ export class CapabilityEscalationError extends Error {
 export class CapabilityResolver {
   constructor(private registry: AgentRegistry) {}
 
-  async resolve(instanceId: string): Promise<any> {
+  async resolve(instanceId: string): Promise<{ spec: unknown; resolvedCapabilities: unknown }> {
     const instance = await this.registry.getInstance(instanceId);
     if (!instance) throw new Error(`Instance ${instanceId} not found`);
 
@@ -22,7 +22,11 @@ export class CapabilityResolver {
     if (!template) throw new Error(`Template ${instance.template_ref} not found`);
 
     // Merge template spec with instance overrides
-    const spec = this.deepMerge(template.spec, instance.overrides);
+    const spec = this.deepMerge(template.spec, instance.overrides) as {
+      sandboxBoundary: string;
+      policyRef?: string;
+      capabilities?: Record<string, unknown>;
+    };
 
     const boundary = await this.registry.getSandboxBoundary(spec.sandboxBoundary);
     if (!boundary) throw new Error(`Boundary ${spec.sandboxBoundary} not found`);
@@ -31,15 +35,15 @@ export class CapabilityResolver {
 
     // Resolve base allowed capabilities: Boundary ∩ Policy
     const baseCapabilities = await this.resolveEffectiveCapabilities(
-      boundary.capabilities,
-      policy?.capabilities || {},
+      (boundary.capabilities as Record<string, unknown>) || {},
+      (policy?.capabilities as Record<string, unknown>) || {},
       {} // No inline here yet, we'll check it after
     );
 
     // Resolve inline capabilities and check for escalation
     const finalCapabilities = await this.resolveEffectiveCapabilities(
-      boundary.capabilities,
-      policy?.capabilities || {},
+      (boundary.capabilities as Record<string, unknown>) || {},
+      (policy?.capabilities as Record<string, unknown>) || {},
       spec.capabilities || {}
     );
 
@@ -58,19 +62,22 @@ export class CapabilityResolver {
     };
   }
 
-  private verifyNoEscalation(base: any, actual: any, path: string = '') {
-    if (!actual) return;
+  private verifyNoEscalation(base: unknown, actual: unknown, path: string = '') {
+    if (!actual || typeof actual !== 'object') return;
 
-    for (const key in actual) {
-      const b = base && typeof base === 'object' ? (base as any)[key] : undefined;
-      const a = actual[key];
+    const actualObj = actual as Record<string, unknown>;
+    const baseObj = (base && typeof base === 'object' ? base : {}) as Record<string, unknown>;
+
+    for (const key in actualObj) {
+      const b = baseObj[key];
+      const a = actualObj[key];
       const currentPath = path ? `${path}.${key}` : key;
 
       if (b === undefined || b === false) {
         if (a !== undefined && a !== false && a !== null) {
           // Special case for empty arrays or objects - they are not an escalation if base was undefined
           if (Array.isArray(a) && a.length === 0) continue;
-          if (typeof a === 'object' && Object.keys(a).length === 0) continue;
+          if (typeof a === 'object' && a !== null && Object.keys(a).length === 0) continue;
 
           throw new CapabilityEscalationError(currentPath, b, a);
         }
@@ -88,8 +95,9 @@ export class CapabilityResolver {
         continue;
       }
 
-      if (typeof b === 'object') {
-        if (typeof a !== 'object') throw new CapabilityEscalationError(currentPath, b, a);
+      if (typeof b === 'object' && b !== null) {
+        if (typeof a !== 'object' || a === null)
+          throw new CapabilityEscalationError(currentPath, b, a);
         this.verifyNoEscalation(b, a, currentPath);
         continue;
       }
@@ -99,11 +107,11 @@ export class CapabilityResolver {
     }
   }
 
-  private async applyAlwaysDenied(capabilities: any) {
+  private async applyAlwaysDenied(capabilities: unknown): Promise<unknown> {
     const lists = await this.registry.listAlwaysEnforcedNamedLists();
     if (!lists || !lists.length) return capabilities;
 
-    const result = { ...capabilities };
+    const result = { ...(capabilities as Record<string, unknown>) };
 
     // Group by dimension (network-denylist -> network, command-denylist -> exec.commands)
     const denylistsByDimension: Record<string, string[]> = {};
@@ -115,7 +123,7 @@ export class CapabilityResolver {
 
       if (dimension) {
         if (!denylistsByDimension[dimension]) denylistsByDimension[dimension] = [];
-        const expanded = await this.expandList(list?.entries || [], type);
+        const expanded = await this.expandList((list?.entries as unknown[]) || [], type);
         const dimensionList = denylistsByDimension[dimension];
         if (dimensionList) {
           dimensionList.push(...expanded);
@@ -129,12 +137,12 @@ export class CapabilityResolver {
       if (!denyPatterns) continue;
 
       const keys = dimension.split('.');
-      let target: any = result;
+      let target: Record<string, unknown> = result;
       for (let i = 0; i < keys.length - 1; i++) {
         const key = keys[i];
         if (key) {
           if (!target[key]) target[key] = {};
-          target = target[key];
+          target = target[key] as Record<string, unknown>;
         }
       }
       const lastKey = keys[keys.length - 1];
@@ -145,11 +153,6 @@ export class CapabilityResolver {
         target[lastKey] = allowed.filter(
           (item) => !denyPatterns.some((pattern) => this.matches(item, pattern))
         );
-      } else if (lastKey && target[lastKey] === true) {
-        // If the target was 'true' (all allowed) but we have a denylist, we must convert to empty (most restrictive safely)
-        // or a specific structure. Decision: Always-denied on a 'true' permission means we restrict to 'true' minus those.
-        // But for now, if it's 'true', we don't have an allowlist to filter.
-        // This is a rare edge case in our current schema.
       }
     }
 
@@ -158,15 +161,18 @@ export class CapabilityResolver {
 
   private matches(value: string, pattern: string): boolean {
     // Glob-style matching: git * matches git status
-    // Simple implementation for now: replace * with .* and use regex
     const regex = new RegExp(
       '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$'
     );
     return regex.test(value);
   }
 
-  private async resolveEffectiveCapabilities(boundary: any, policy: any, inline: any) {
-    const result: any = {};
+  private async resolveEffectiveCapabilities(
+    boundary: Record<string, unknown>,
+    policy: Record<string, unknown>,
+    inline: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const result: Record<string, unknown> = {};
     const allKeys = new Set([
       ...Object.keys(boundary),
       ...Object.keys(policy),
@@ -184,41 +190,33 @@ export class CapabilityResolver {
     return result;
   }
 
-  private async intersect(b: any, p: any, i: any, key: string): Promise<any> {
-    // If any layer is missing, it's treated as "not granted" (restricted)
-    // UNLESS it's the boundary, which is the ceiling.
-
-    // Boundary is the hard ceiling. If not in boundary, it's false/empty.
+  private async intersect(b: unknown, p: unknown, i: unknown, key: string): Promise<unknown> {
     if (b === undefined || b === false) return false;
     if (b === true) {
-      // If boundary allows all, policy and inline can restrict
-      const base = p !== undefined ? p : b; // Policy wins over boundary if present
+      const base = p !== undefined ? p : b;
       return i !== undefined ? this.narrow(base, i) : base;
     }
 
-    // If boundary is a specific object/list, policy and inline must be sub-sets
-    if (typeof b === 'object' && !Array.isArray(b)) {
-      const res: any = {};
-      const subKeys = new Set([
-        ...Object.keys(b),
-        ...Object.keys(p || {}),
-        ...Object.keys(i || {}),
-      ]);
+    if (typeof b === 'object' && b !== null && !Array.isArray(b)) {
+      const res: Record<string, unknown> = {};
+      const bObj = b as Record<string, unknown>;
+      const pObj = (p || {}) as Record<string, unknown>;
+      const iObj = (i || {}) as Record<string, unknown>;
+
+      const subKeys = new Set([...Object.keys(bObj), ...Object.keys(pObj), ...Object.keys(iObj)]);
       for (const skey of subKeys) {
-        res[skey] = await this.intersect(b[skey], (p || {})[skey], (i || {})[skey], skey);
+        res[skey] = await this.intersect(bObj[skey], pObj[skey], iObj[skey], skey);
       }
       return res;
     }
 
     if (Array.isArray(b)) {
-      // For lists (allow/deny), intersection = elements present in ALL layers (if present)
       let current = await this.expandList(b, key);
       if (p !== undefined && Array.isArray(p)) {
         const pExpanded = await this.expandList(p, key);
         const setP = new Set(pExpanded);
         current = current.filter((item) => setP.has(item));
       } else if (p !== undefined) {
-        // Policy mismatch, treat as empty (most restrictive)
         current = [];
       }
 
@@ -227,36 +225,35 @@ export class CapabilityResolver {
         const setI = new Set(iExpanded);
         current = current.filter((item) => setI.has(item));
       } else if (i !== undefined) {
-        // Inline mismatch, treat as empty
         current = [];
       }
       return current;
     }
 
-    return b; // Default to boundary if no further restriction
+    return b;
   }
 
-  private narrow(base: any, overrides: any) {
+  private narrow(base: unknown, overrides: unknown) {
     if (base === true) return overrides;
     if (base === false) return false;
-    // Further narrowing logic for objects/arrays
-    return overrides; // Simplified for now, most restrictive wins
+    return overrides;
   }
 
-  private async expandCapabilities(caps: any): Promise<any> {
+  private async expandCapabilities(caps: unknown): Promise<unknown> {
     if (!caps || typeof caps !== 'object') return caps;
     if (Array.isArray(caps)) {
       return this.expandList(caps, 'generic');
     }
-    const result: any = {};
-    for (const key in caps) {
-      result[key] = await this.expandCapabilities(caps[key]);
+    const result: Record<string, unknown> = {};
+    const capsObj = caps as Record<string, unknown>;
+    for (const key in capsObj) {
+      result[key] = await this.expandCapabilities(capsObj[key]);
     }
     return result;
   }
 
   private async expandList(
-    items: any[],
+    items: unknown[],
     type: string,
     visited = new Set<string>()
   ): Promise<string[]> {
@@ -265,8 +262,8 @@ export class CapabilityResolver {
     for (const item of items) {
       if (typeof item === 'string') {
         result.add(item);
-      } else if (item?.$ref) {
-        const refName = item.$ref;
+      } else if (item && typeof item === 'object' && (item as Record<string, unknown>).$ref) {
+        const refName = (item as Record<string, unknown>).$ref as string;
         if (visited.has(refName)) {
           throw new Error(`Circular reference detected in NamedList: ${refName}`);
         }
@@ -274,41 +271,47 @@ export class CapabilityResolver {
         nextVisited.add(refName);
         const list = await this.registry.getNamedList(refName);
         if (!list) throw new Error(`NamedList ${refName} not found`);
-        const expanded = await this.expandList(list.entries, type, nextVisited);
+        const expanded = await this.expandList(
+          (list.entries as unknown[]) || [],
+          type,
+          nextVisited
+        );
         expanded.forEach((e) => result.add(e));
       }
     }
     return Array.from(result);
   }
 
-  private deepMerge(base: any, overrides: any): any {
-    if (!overrides) return base;
+  private deepMerge(base: unknown, overrides: unknown): unknown {
+    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides))
+      return overrides ?? base;
 
-    // If overrides is an array, check for $append/$remove patterns
-    if (Array.isArray(overrides)) {
-      return overrides; // Standard replacement for arrays unless it's the special skill object
-    }
+    const result = { ...((base as Record<string, unknown>) || {}) };
+    const overObj = overrides as Record<string, unknown>;
+    for (const key in overObj) {
+      const val = overObj[key];
 
-    const result = { ...base };
-    for (const key in overrides) {
-      const val = overrides[key];
-
-      // Special handling for skill-like lists if they use the $append/$remove pattern
-      if (val && typeof val === 'object' && !Array.isArray(val) && (val.$append || val.$remove)) {
-        let current = Array.isArray(base[key]) ? [...base[key]] : [];
-        if (val.$append) {
-          const toAdd = Array.isArray(val.$append) ? val.$append : [val.$append];
-          toAdd.forEach((item: any) => {
+      if (
+        val &&
+        typeof val === 'object' &&
+        !Array.isArray(val) &&
+        ((val as Record<string, unknown>).$append || (val as Record<string, unknown>).$remove)
+      ) {
+        const v = val as { $append?: unknown | unknown[]; $remove?: unknown | unknown[] };
+        let current = Array.isArray(result[key]) ? [...(result[key] as unknown[])] : [];
+        if (v.$append) {
+          const toAdd = Array.isArray(v.$append) ? v.$append : [v.$append];
+          toAdd.forEach((item) => {
             if (!current.includes(item)) current.push(item);
           });
         }
-        if (val.$remove) {
-          const toRemove = Array.isArray(val.$remove) ? val.$remove : [val.$remove];
-          current = current.filter((item: any) => !toRemove.includes(item));
+        if (v.$remove) {
+          const toRemove = Array.isArray(v.$remove) ? v.$remove : [v.$remove];
+          current = current.filter((item) => !toRemove.includes(item));
         }
         result[key] = current;
       } else if (val && typeof val === 'object' && !Array.isArray(val)) {
-        result[key] = this.deepMerge(base[key] || {}, val);
+        result[key] = this.deepMerge((result[key] || {}) as Record<string, unknown>, val);
       } else {
         result[key] = val;
       }

@@ -2,7 +2,6 @@ import { Router } from 'express';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { PipelineService } from '../services/PipelineService.js';
 import type { PipelineStep } from '../services/PipelineService.js';
-import { IntercomService } from '../intercom/IntercomService.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('PipelinesRouter');
@@ -30,7 +29,7 @@ export function createPipelinesRouter(orchestrator: Orchestrator) {
         return res.status(400).json({ error: 'hierarchical pipelines require managerAgent' });
       }
 
-      const steps: PipelineStep[] = tasks.map((t: any) => ({
+      const steps: PipelineStep[] = tasks.map((t) => ({
         agentId: t.assignedAgent,
         description: t.description,
         status: 'pending',
@@ -50,8 +49,8 @@ export function createPipelinesRouter(orchestrator: Orchestrator) {
       ).catch((err) => logger.error(`Pipeline ${pipeline.id} failed:`, err));
 
       res.status(202).json(pipeline);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -61,8 +60,8 @@ export function createPipelinesRouter(orchestrator: Orchestrator) {
       const pipeline = await pipelineService.get(req.params.id!);
       if (!pipeline) return res.status(404).json({ error: 'Pipeline not found' });
       res.json(pipeline);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

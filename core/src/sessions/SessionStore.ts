@@ -87,7 +87,7 @@ export class SessionStore {
          FROM chat_sessions ORDER BY updated_at DESC`
       );
     }
-    return result.rows.map((row: any) => this.rowToSession(row));
+    return result.rows.map((row) => this.rowToSession(row as Record<string, unknown>));
   }
 
   async updateSessionTitle(id: string, title: string): Promise<ChatSession | null> {
@@ -109,8 +109,8 @@ export class SessionStore {
 
     // Best-effort: remove JSONL mirror
     if (session && result.rowCount && result.rowCount > 0) {
-      this.removeJsonlMirror(session.agentName, id).catch((err) => {
-        logger.warn(`Failed to remove JSONL mirror for session ${id}:`, err);
+      this.removeJsonlMirror(session.agentName, id).catch((err: unknown) => {
+        logger.warn(`Failed to remove JSONL mirror for session ${id}:`, (err as Error).message);
       });
     }
 
@@ -161,7 +161,7 @@ export class SessionStore {
        ORDER BY created_at ASC`,
       [sessionId]
     );
-    return result.rows.map((row: any) => this.rowToMessage(row));
+    return result.rows.map((row) => this.rowToMessage(row as Record<string, unknown>));
   }
 
   // ── JSONL Disk Mirror ─────────────────────────────────────────────────────
@@ -187,8 +187,8 @@ export class SessionStore {
       );
 
       await fs.writeFile(filePath, lines.join('\n') + '\n', 'utf-8');
-    } catch (err) {
-      logger.warn(`Failed to write JSONL mirror for session ${sessionId}:`, err);
+    } catch (err: unknown) {
+      logger.warn(`Failed to write JSONL mirror for session ${sessionId}:`, (err as Error).message);
     }
   }
 
@@ -212,26 +212,35 @@ export class SessionStore {
 
   // ── Row Mappers ───────────────────────────────────────────────────────────
 
-  private rowToSession(row: any): ChatSession {
+  private rowToSession(row: Record<string, unknown>): ChatSession {
     return {
-      id: row.id,
-      agentName: row.agent_name,
-      agentInstanceId: row.agent_instance_id,
-      title: row.title,
-      messageCount: row.message_count,
-      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+      id: row['id'] as string,
+      agentName: row['agent_name'] as string,
+      agentInstanceId: row['agent_instance_id'] as string,
+      title: row['title'] as string,
+      messageCount: row['message_count'] as number,
+      createdAt:
+        row['created_at'] instanceof Date
+          ? (row['created_at'] as Date).toISOString()
+          : (row['created_at'] as string),
+      updatedAt:
+        row['updated_at'] instanceof Date
+          ? (row['updated_at'] as Date).toISOString()
+          : (row['updated_at'] as string),
     };
   }
 
-  private rowToMessage(row: any): SessionMessage {
+  private rowToMessage(row: Record<string, unknown>): SessionMessage {
     return {
-      id: row.id,
-      sessionId: row.session_id,
-      role: row.role,
-      content: row.content,
-      metadata: row.metadata ?? undefined,
-      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      id: row['id'] as string,
+      sessionId: row['session_id'] as string,
+      role: row['role'] as SessionMessage['role'],
+      content: row['content'] as string,
+      metadata: (row['metadata'] as Record<string, unknown>) ?? undefined,
+      createdAt:
+        row['created_at'] instanceof Date
+          ? (row['created_at'] as Date).toISOString()
+          : (row['created_at'] as string),
     };
   }
 }

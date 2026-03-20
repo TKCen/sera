@@ -56,7 +56,7 @@ export class MCPServerManager {
       mounts: manifest.mounts, // Now supported by SandboxManager.spawn
     };
 
-    const request = {
+    const request: import('../sandbox/types.js').SpawnRequest = {
       agentName: serverName,
       type: 'mcp-server' as const,
       image: manifest.image,
@@ -67,7 +67,7 @@ export class MCPServerManager {
 
     const info = await this.sandboxManager.spawn(
       this.manifestToAgentManifest(manifest),
-      request as any,
+      request,
       resolvedCapabilities,
       instanceId
     );
@@ -106,7 +106,9 @@ export class MCPServerManager {
    * Mock-conversion of MCPServerManifest to AgentManifest for SandboxManager compatibility.
    * This is a shim until SandboxManager is more general.
    */
-  private manifestToAgentManifest(mcp: MCPServerManifest): any {
+  private manifestToAgentManifest(
+    mcp: MCPServerManifest
+  ): import('../agents/manifest/types.js').AgentManifest {
     return {
       apiVersion: mcp.apiVersion,
       kind: 'Agent', // SandboxManager expects 'Agent' or similar
@@ -114,6 +116,7 @@ export class MCPServerManager {
         name: mcp.metadata.name,
         displayName: mcp.metadata.name,
         tier: 1, // MCP servers are essentially tier 1 (restricted)
+        icon: 'bot',
       },
       identity: {
         role: 'MCP Server',

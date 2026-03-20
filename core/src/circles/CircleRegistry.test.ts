@@ -114,13 +114,13 @@ describe('CircleRegistry', () => {
 
     it('should reject missing metadata.name', () => {
       const obj = validCircleObj();
-      delete (obj['metadata'] as any).name;
+      delete (obj['metadata'] as Record<string, unknown>).name;
       expect(() => CircleRegistry.validateCircle(obj)).toThrow(/missing required field.*name/i);
     });
 
     it('should reject missing metadata.displayName', () => {
       const obj = validCircleObj();
-      delete (obj['metadata'] as any).displayName;
+      delete (obj['metadata'] as Record<string, unknown>).displayName;
       expect(() => CircleRegistry.validateCircle(obj)).toThrow(
         /missing required field.*displayName/i
       );

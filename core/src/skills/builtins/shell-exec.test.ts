@@ -1,17 +1,24 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { shellExecSkill } from './shell-exec.js';
 import type { AgentContext } from '../types.js';
+import type { SecurityTier } from '../../agents/manifest/types.js';
 import path from 'path';
 
 describe('shellExecSkill', () => {
   const mockContext: AgentContext = {
     agentName: 'TestAgent',
     workspacePath: process.cwd(),
-    tier: 2,
+    tier: 2 as SecurityTier,
     manifest: {
       apiVersion: 'v1',
       kind: 'Agent',
-      metadata: { name: 'TestAgent', displayName: 'Test Agent', icon: '', circle: 'test', tier: 2 },
+      metadata: {
+        name: 'TestAgent',
+        displayName: 'Test Agent',
+        icon: '',
+        circle: 'test',
+        tier: 2 as SecurityTier,
+      },
       identity: { role: 'tester', description: 'Test agent' },
       model: { provider: 'openai', name: 'gpt-4' },
     },
@@ -31,11 +38,18 @@ describe('shellExecSkill', () => {
 
   it('should return error if tier is less than 2', async () => {
     const params = { command: 'echo "hello"' };
-    const lowTierContext = { ...mockContext, tier: 1 };
+    const lowTierContext = {
+      ...mockContext,
+      tier: 1 as SecurityTier,
+      manifest: {
+        ...mockContext.manifest,
+        metadata: { ...mockContext.manifest.metadata, tier: 1 as SecurityTier },
+      },
+    };
     const result = await shellExecSkill.handler(params, lowTierContext);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Agent tier must be 2 or higher');
+    expect(result.error).toContain('Agent is not permitted to execute shell commands');
   });
 
   it('should return error if command fails', async () => {

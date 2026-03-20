@@ -98,7 +98,7 @@ export class OpenAIProvider implements LLMProvider {
       const choice = response.choices[0];
       const rawToolCalls = choice?.message?.tool_calls;
       const toolCalls: ToolCall[] = rawToolCalls
-        ? rawToolCalls.map((tc: any) => ({
+        ? rawToolCalls.map((tc) => ({
             id: tc.id as string,
             type: 'function' as const,
             function: {
@@ -108,22 +108,23 @@ export class OpenAIProvider implements LLMProvider {
           }))
         : [];
 
+      const reasoning = (choice?.message as unknown as { reasoning_content?: string })?.reasoning_content;
+
       const result: LLMResponse = {
         content: choice?.message?.content || '',
-        reasoning: (choice?.message as any)?.reasoning_content || undefined,
+        ...(reasoning ? { reasoning } : {}),
         usage: {
           promptTokens: response.usage?.prompt_tokens || 0,
           completionTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
         },
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
       };
-      if (toolCalls.length > 0) {
-        result.toolCalls = toolCalls;
-      }
       return result;
-    } catch (error: any) {
-      logger.error('LLM Chat Error:', error);
-      throw new Error(`LLM provider failed: ${error.message}`);
+    } catch (error: unknown) {
+      const err = error as Error;
+      logger.error('LLM Chat Error:', err);
+      throw new Error(`LLM provider failed: ${err.message}`);
     }
   }
 
@@ -138,12 +139,15 @@ export class OpenAIProvider implements LLMProvider {
       });
 
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta as any;
+        const delta = chunk.choices[0]?.delta as unknown as {
+          content?: string;
+          reasoning_content?: string;
+        };
         const token = delta?.content || '';
         const reasoning = delta?.reasoning_content || undefined;
 
         if (token || reasoning) {
-          yield { token, reasoning, done: false };
+          yield { token, ...(reasoning ? { reasoning } : {}), done: false };
         }
         if (chunk.usage) {
           yield {
@@ -160,9 +164,10 @@ export class OpenAIProvider implements LLMProvider {
       }
 
       yield { token: '', done: true };
-    } catch (error: any) {
-      logger.error('LLM Stream Error:', error);
-      throw new Error(`LLM stream failed: ${error.message}`);
+    } catch (error: unknown) {
+      const err = error as Error;
+      logger.error('LLM Stream Error:', err);
+      throw new Error(`LLM stream failed: ${err.message}`);
     }
   }
 }

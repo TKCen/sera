@@ -1,6 +1,6 @@
-import { useCentrifugoContext, type ConnectionState } from '@/contexts/CentrifugoContext';
+import { useContext } from 'react';
+import { CentrifugoContext, type CentrifugoContextValue } from '@/contexts/CentrifugoContext.types';
 
-export function useCentrifugo(): { connectionState: ConnectionState } {
-  const { connectionState } = useCentrifugoContext();
-  return { connectionState };
+export function useCentrifugoContext(): CentrifugoContextValue {
+  return useContext(CentrifugoContext);
 }

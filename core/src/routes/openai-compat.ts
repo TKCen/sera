@@ -86,12 +86,17 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
     }
 
     // Map request messages to internal ChatMessage format
-    const chatMessages: ChatMessage[] = messages.map((m: any) => ({
-      role: m.role,
-      content: m.content || '',
-      tool_calls: m.tool_calls,
-      tool_call_id: m.tool_call_id,
-    }));
+    const chatMessages: ChatMessage[] = messages.map(
+      (m: { role: string; content?: string; tool_calls?: unknown[]; tool_call_id?: string }) => {
+        const msg: ChatMessage = {
+          role: m.role as 'user' | 'assistant' | 'system' | 'tool',
+          content: m.content || '',
+        };
+        if (m.tool_calls) msg.tool_calls = m.tool_calls;
+        if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+        return msg;
+      }
+    );
 
     const lastMsg = chatMessages[chatMessages.length - 1];
     const history = chatMessages.slice(0, -1);
@@ -109,11 +114,12 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
       try {
         await agent.processStream(input, history, messageId);
         res.end();
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const error = err as Error;
         if (!res.headersSent) {
-          res.status(500).json({ error: { message: err.message } });
+          res.status(500).json({ error: { message: error.message } });
         } else {
-          res.write(`data: ${JSON.stringify({ error: { message: err.message } })}\n\n`);
+          res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
           res.end();
         }
       }
@@ -145,8 +151,8 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
           },
         };
         res.json(openAIResponse);
-      } catch (err: any) {
-        res.status(500).json({ error: { message: err.message } });
+      } catch (err: unknown) {
+        res.status(500).json({ error: { message: (err as Error).message } });
       }
     }
   });

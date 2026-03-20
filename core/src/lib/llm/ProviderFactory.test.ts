@@ -16,15 +16,14 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('./OpenAIProvider.js', () => {
-  return {
-    OpenAIProvider: vi.fn().mockImplementation((config) => {
-      return {
-        configOverride: config,
-        chat: vi.fn(),
-        chatStream: vi.fn(),
-      };
-    }),
-  };
+  const OpenAIProviderMock = vi.fn().mockImplementation(function (this: unknown, cfg: unknown) {
+    const self = this as { configOverride: unknown; chat: unknown; chatStream: unknown };
+    self.configOverride = cfg;
+    self.chat = vi.fn();
+    self.chatStream = vi.fn();
+    return self;
+  });
+  return { OpenAIProvider: OpenAIProviderMock };
 });
 
 describe('ProviderFactory', () => {
@@ -47,7 +46,9 @@ describe('ProviderFactory', () => {
         temperature: 0.5,
       };
 
-      const provider = ProviderFactory.createFromModelConfig(modelConfig) as any;
+      const provider = ProviderFactory.createFromModelConfig(modelConfig) as unknown as {
+        configOverride: { baseUrl: string };
+      };
 
       expect(config.getProviderConfig).toHaveBeenCalledWith('custom-id');
       expect(OpenAIProvider).toHaveBeenCalledWith({
@@ -106,7 +107,7 @@ describe('ProviderFactory', () => {
           name: 'manifest-model',
           temperature: 0.9,
         },
-      } as any;
+      } as unknown as import('../agents/manifest/types.js').AgentManifest;
 
       const spy = vi.spyOn(ProviderFactory, 'createFromModelConfig');
       ProviderFactory.createFromManifest(manifest);

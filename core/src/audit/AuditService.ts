@@ -10,9 +10,9 @@ export type ActorType = 'operator' | 'agent' | 'system';
 export interface AuditEntry {
   actorType: ActorType;
   actorId: string;
-  actingContext: any | null;
+  actingContext: Record<string, unknown> | null;
   eventType: string;
-  payload: any;
+  payload: Record<string, unknown>;
 }
 
 export interface AuditRecord extends AuditEntry {
@@ -77,7 +77,7 @@ export class AuditService {
     }
   }
 
-  private async createGenesisRecord(client: any): Promise<void> {
+  private async createGenesisRecord(client: import('pg').PoolClient): Promise<void> {
     const timestamp = new Date();
     const actorType = 'system';
     const actorId = 'system';
@@ -138,7 +138,7 @@ export class AuditService {
         entry.actorType,
         entry.actorId,
         entry.eventType,
-        validatedPayload,
+        validatedPayload as any,
         prevHash
       );
 
@@ -192,7 +192,7 @@ export class AuditService {
         record.actor_type,
         record.actor_id,
         record.event_type,
-        record.payload,
+        record.payload as any,
         record.prev_hash
       );
 
@@ -228,7 +228,7 @@ export class AuditService {
   }): Promise<{ entries: AuditRecord[]; total: number }> {
     const { actorId, eventType, from, to, limit = 50, offset = 0 } = filters;
     const conditions: string[] = [];
-    const params: any[] = [];
+    const params: unknown[] = [];
 
     if (actorId) {
       params.push(actorId);
@@ -263,7 +263,7 @@ export class AuditService {
   /**
    * Stream the full audit trail as JSONL.
    */
-  public async streamEntries(onRow: (row: any) => void): Promise<void> {
+  public async streamEntries(onRow: (row: AuditRecord) => void): Promise<void> {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -278,7 +278,7 @@ export class AuditService {
           hasMore = false;
         } else {
           for (const row of rows) {
-            onRow(row);
+            onRow(row as AuditRecord);
           }
         }
       }
@@ -297,7 +297,7 @@ export class AuditService {
     actorType: string,
     actorId: string,
     eventType: string,
-    payload: any,
+    payload: Record<string, unknown>,
     prevHash: string | null
   ): string {
     const canonical = [
@@ -313,14 +313,14 @@ export class AuditService {
     return crypto.createHash('sha256').update(canonical).digest('hex');
   }
 
-  private sortObjectKeys(obj: any): any {
+  private sortObjectKeys(obj: unknown): unknown {
     if (obj === null || typeof obj !== 'object') return obj;
     if (Array.isArray(obj)) return obj.map((item) => this.sortObjectKeys(item));
 
-    return Object.keys(obj)
+    return Object.keys(obj as Record<string, unknown>)
       .sort()
-      .reduce((acc: any, key) => {
-        acc[key] = this.sortObjectKeys(obj[key]);
+      .reduce((acc: Record<string, unknown>, key) => {
+        acc[key] = this.sortObjectKeys((obj as Record<string, unknown>)[key]);
         return acc;
       }, {});
   }

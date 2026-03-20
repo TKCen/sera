@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PartySession, PartySessionManager } from './PartyMode.js';
 import type { CircleManifest } from './types.js';
 import type { AgentResponse } from '../agents/types.js';
+import type { BaseAgent } from '../agents/BaseAgent.js';
 
 // ── Mock Agent ──────────────────────────────────────────────────────────────────
 
@@ -14,7 +15,7 @@ function createMockAgent(roleName: string, displayName: string, response: string
       finalAnswer: response,
     } satisfies AgentResponse),
     updateLlmProvider: vi.fn(),
-  } as any;
+  } as unknown as BaseAgent;
 }
 
 // ── Mock Circle ─────────────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ function createMockCircle(overrides?: Partial<CircleManifest>): CircleManifest {
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
 describe('PartySession', () => {
-  let agents: Map<string, any>;
+  let agents: Map<string, BaseAgent>;
 
   beforeEach(() => {
     agents = new Map([
@@ -68,7 +69,7 @@ describe('PartySession', () => {
     await session.sendMessage('Discuss testing');
 
     // Second agent should have seen first agent's response in its prompt
-    const agentB = agents.get('agent-b');
+    const agentB = agents.get('agent-b') as unknown as { process: import('vitest').Mock };
     const prompt = agentB.process.mock.calls[0]![0] as string;
     expect(prompt).toContain('Alice says hello');
   });

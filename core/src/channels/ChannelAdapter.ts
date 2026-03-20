@@ -6,7 +6,7 @@ export interface IncomingMessage {
   userName: string;
   chatId: string;
   text: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export abstract class ChannelAdapter {

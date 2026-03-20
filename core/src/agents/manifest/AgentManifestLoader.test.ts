@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
 import { AgentManifestLoader, ManifestValidationError } from './AgentManifestLoader.js';
-import type { AgentManifest } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -61,19 +60,19 @@ describe('AgentManifestLoader', () => {
 
     it('should reject invalid security tiers', () => {
       const obj = validManifestObj();
-      (obj['metadata'] as any).tier = 5;
+      (obj['metadata'] as Record<string, unknown>).tier = 5;
       expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/invalid security tier.*5/i);
     });
 
     it('should reject tier 0', () => {
       const obj = validManifestObj();
-      (obj['metadata'] as any).tier = 0;
+      (obj['metadata'] as Record<string, unknown>).tier = 0;
       expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/invalid security tier/i);
     });
 
     it('should reject missing metadata.name', () => {
       const obj = validManifestObj();
-      delete (obj['metadata'] as any).name;
+      delete (obj['metadata'] as Record<string, unknown>).name;
       expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
         /missing required field.*name/i
       );
@@ -89,7 +88,7 @@ describe('AgentManifestLoader', () => {
 
     it('should reject missing identity.role', () => {
       const obj = validManifestObj();
-      delete (obj['identity'] as any).role;
+      delete (obj['identity'] as Record<string, unknown>).role;
       expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
         /missing required field.*role/i
       );
@@ -105,7 +104,7 @@ describe('AgentManifestLoader', () => {
 
     it('should reject missing model.provider', () => {
       const obj = validManifestObj();
-      delete (obj['model'] as any).provider;
+      delete (obj['model'] as Record<string, unknown>).provider;
       expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
         /missing required field.*provider/i
       );
@@ -122,7 +121,7 @@ describe('AgentManifestLoader', () => {
 
     it('should default icon to 🤖 when not provided', () => {
       const obj = validManifestObj();
-      delete (obj['metadata'] as any).icon;
+      delete (obj['metadata'] as Record<string, unknown>).icon;
       const manifest = AgentManifestLoader.validateManifest(obj);
       expect(manifest.metadata.icon).toBe('🤖');
     });

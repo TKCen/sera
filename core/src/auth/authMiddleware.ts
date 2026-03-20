@@ -17,6 +17,7 @@ import type { WebSessionStore } from './web-session-store.js';
 // ── Express type augmentation ───────────────────────────────────────────────
 
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       agentIdentity?: AgentTokenClaims;
@@ -71,11 +72,12 @@ export function createAuthMiddleware(
       const claims = await identityService.verifyToken(token);
       req.agentIdentity = claims;
       next();
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const error = err as { code?: string; name?: string; message?: string };
       const message =
-        err.code === 'ERR_JWT_EXPIRED' || err.name === 'TokenExpiredError'
+        error.code === 'ERR_JWT_EXPIRED' || error.name === 'TokenExpiredError'
           ? 'Token expired'
-          : err.message || 'Invalid credentials';
+          : error.message || 'Invalid credentials';
       res.status(401).json({ error: message });
     }
   };

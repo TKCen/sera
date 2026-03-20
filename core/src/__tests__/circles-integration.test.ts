@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import type { BaseAgent } from '../agents/BaseAgent.js';
 
 const hasDb = !!process.env.DATABASE_URL;
 
@@ -94,7 +95,7 @@ describe.skipIf(!hasDb)('Parallel coordination integration (Story 10.4)', () => 
       process: vi.fn().mockResolvedValue({ finalAnswer: output }),
     });
 
-    const agents = new Map<string, any>([
+    const agents = new Map<string, unknown>([
       ['agent-a', makeAgent('agent-a', 'Result from A')],
       ['agent-b', makeAgent('agent-b', 'Result from B')],
     ]);
@@ -106,7 +107,7 @@ describe.skipIf(!hasDb)('Parallel coordination integration (Story 10.4)', () => 
         { id: 'task-1', description: 'Task for A', assignedAgent: 'agent-a' },
         { id: 'task-2', description: 'Task for B', assignedAgent: 'agent-b' },
       ],
-      agents
+      agents as unknown as Map<string, BaseAgent>
     );
 
     expect(result.processType).toBe('parallel');
@@ -119,7 +120,7 @@ describe.skipIf(!hasDb)('Parallel coordination integration (Story 10.4)', () => 
   it('parallel process marks individual failures without aborting', async () => {
     const { ProcessManager } = await import('../agents/process/ProcessManager.js');
 
-    const agents = new Map<string, any>([
+    const agents = new Map<string, unknown>([
       ['agent-ok', { role: 'agent-ok', process: vi.fn().mockResolvedValue({ finalAnswer: 'ok' }) }],
       ['agent-fail', { role: 'agent-fail', process: vi.fn().mockRejectedValue(new Error('boom')) }],
     ]);
@@ -131,7 +132,7 @@ describe.skipIf(!hasDb)('Parallel coordination integration (Story 10.4)', () => 
         { id: 't1', description: 'ok task', assignedAgent: 'agent-ok' },
         { id: 't2', description: 'fail task', assignedAgent: 'agent-fail' },
       ],
-      agents
+      agents as unknown as Map<string, BaseAgent>
     );
 
     expect(result.results.find((r) => r.taskId === 't1')?.status).toBe('completed');

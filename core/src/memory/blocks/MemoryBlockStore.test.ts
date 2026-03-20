@@ -3,7 +3,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { MemoryBlockStore } from './MemoryBlockStore.js';
-import type { MemoryBlockType } from './types.js';
 
 describe('MemoryBlockStore', () => {
   let tmpDir: string;
@@ -245,7 +244,7 @@ describe('MemoryBlockStore', () => {
   });
 
   it('should handle concurrent writes to the same block type', async () => {
-    const promises: Promise<any>[] = [];
+    const promises: Promise<unknown>[] = [];
     for (let i = 0; i < 20; i++) {
       promises.push(
         store.addEntry('core', { title: `Concurrent Entry ${i}`, content: `Content ${i}` })
@@ -261,7 +260,7 @@ describe('MemoryBlockStore', () => {
   it('should handle concurrent updates to the same entry gracefully', async () => {
     const entry = await store.addEntry('core', { title: 'Shared Entry', content: 'Initial' });
 
-    const promises: Promise<any>[] = [];
+    const promises: Promise<unknown>[] = [];
     for (let i = 0; i < 10; i++) {
       promises.push(store.updateEntry(entry.id, `Update ${i}`));
     }

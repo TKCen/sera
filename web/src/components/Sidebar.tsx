@@ -18,7 +18,7 @@ import {
 import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
 import type { HealthResponse } from '@/lib/api/types';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 
 interface NavItem {

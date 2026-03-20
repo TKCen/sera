@@ -32,7 +32,7 @@ export class ResourceImporter {
     ];
     for (const type of types) {
       const dir = path.join(this.baseDir, 'lists', type);
-      await this.importDir(dir, NamedListSchema, (data) => this.registry.upsertNamedList(data));
+      await this.importDir(dir, NamedListSchema, (data) => this.registry.upsertNamedList(data as any));
     }
   }
 
@@ -54,19 +54,23 @@ export class ResourceImporter {
     // Builtin templates
     const builtinDir = path.join(this.baseDir, 'templates', 'builtin');
     await this.importDir(builtinDir, AgentTemplateSchema, (data) => {
-      data.metadata.builtin = true;
-      return this.registry.upsertTemplate(data);
+      (data.metadata as any).builtin = true;
+      return this.registry.upsertTemplate(data as any);
     });
 
     // Custom templates
     const customDir = path.join(this.baseDir, 'templates', 'custom');
     await this.importDir(customDir, AgentTemplateSchema, (data) => {
-      data.metadata.builtin = false;
-      return this.registry.upsertTemplate(data);
+      (data.metadata as any).builtin = false;
+      return this.registry.upsertTemplate(data as any);
     });
   }
 
-  private async importDir(dir: string, schema: any, upsertFn: (data: any) => Promise<any>) {
+  private async importDir<T>(
+    dir: string,
+    schema: import('zod').ZodSchema<T>,
+    upsertFn: (data: T) => Promise<unknown>
+  ) {
     try {
       const files = await fs.readdir(dir);
       for (const file of files) {
@@ -85,8 +89,8 @@ export class ResourceImporter {
           console.log(`Imported ${filePath}`);
         }
       }
-    } catch (err: any) {
-      if (err.code !== 'ENOENT') {
+    } catch (err: unknown) {
+      if ((err as { code?: string }).code !== 'ENOENT') {
         console.error(`Error reading directory ${dir}:`, err);
       }
     }

@@ -25,6 +25,7 @@ import SettingsPage from '@/pages/SettingsPage';
 import ToolsPage from '@/pages/ToolsPage';
 import MemoryDetailPage from '@/pages/MemoryDetailPage';
 import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
+import ChannelsPage from '@/pages/ChannelsPage';
 import LoginPage from '@/pages/LoginPage';
 import AuthCallbackPage from '@/pages/AuthCallbackPage';
 import { ForbiddenView } from '@/views/ForbiddenView';
@@ -65,6 +66,7 @@ createRoot(el).render(
                 <Route path="schedules" element={<SchedulesPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="tools" element={<ToolsPage />} />
+                <Route path="channels" element={<ChannelsPage />} />
                 <Route path="memory/:id" element={<MemoryDetailPage />} />
                 <Route path="403" element={<ForbiddenView />} />
               </Route>

@@ -75,6 +75,8 @@ import { EmbeddingService } from './services/embedding.service.js';
 import { AuditService } from './audit/AuditService.js';
 import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
+import { createNotificationsRouter } from './routes/notifications.js';
+import { NotificationService } from './channels/NotificationService.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -208,6 +210,13 @@ const delegationRouter = createDelegationRouter(intercomService);
 app.use('/api/delegation', authMiddleware, delegationRouter);
 app.use('/api', authMiddleware, delegationRouter);
 
+// Epic 18 — Integration Channels
+const { publicRouter: notifPublicRouter, protectedRouter: notifProtectedRouter } =
+  createNotificationsRouter();
+app.use('/api/notifications', notifPublicRouter);
+app.use('/api/notifications', authMiddleware, notifProtectedRouter);
+app.use('/api/channels', authMiddleware, notifProtectedRouter);
+
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
 
@@ -320,6 +329,26 @@ const startServer = async () => {
     setInterval(() => {
       expireOldDelegationTokens().catch(() => {});
     }, 5 * 60 * 1_000);
+
+    // Epic 18 — Start notification service and wire permission hook
+    if (process.env.DATABASE_URL) {
+      const notificationService = NotificationService.getInstance();
+      notificationService.setPermissionService(permissionService);
+      await notificationService.start(process.env.DATABASE_URL).catch((err: unknown) =>
+        logger.error('NotificationService failed to start:', err),
+      );
+
+      permissionService.setOnRequestCreated((req) => {
+        notificationService.dispatchEvent(
+          'permission.requested',
+          `Permission Request: ${req.dimension}=${req.value}`,
+          `Agent **${req.agentName}** (${req.agentId}) requests ${req.dimension} access to \`${req.value}\`.\n${req.reason ?? ''}`,
+          'warning',
+          { requestId: req.requestId, agentId: req.agentId, dimension: req.dimension, value: req.value },
+          { requestId: req.requestId, requestType: 'permission' },
+        );
+      });
+    }
 
     app.listen(port, () => logger.info(`SERA Core running on port ${port}`));
   }

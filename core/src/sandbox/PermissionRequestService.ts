@@ -59,10 +59,17 @@ export class PermissionRequestService {
   /** Session grants keyed by agentInstanceId → grant list */
   private sessionGrants = new Map<string, SessionGrant[]>();
 
+  /** Optional hook — called after a permission request is created (Epic 18 channel dispatch). */
+  private onRequestCreated?: (req: PermissionRequest) => void;
+
   constructor(
     private registry: AgentRegistry,
     private intercom: IntercomService,
   ) {}
+
+  setOnRequestCreated(hook: (req: PermissionRequest) => void): void {
+    this.onRequestCreated = hook;
+  }
 
   // ── Request ──────────────────────────────────────────────────────────────
 
@@ -130,6 +137,10 @@ export class PermissionRequestService {
     }, timeoutMs);
 
     logger.info(`Permission request ${requestId} from ${agentName} (${agentId}): ${dimension}=${value}`);
+
+    // Epic 18 — dispatch to notification channels (non-blocking)
+    this.onRequestCreated?.(permRequest);
+
     return { status: 'pending', requestId };
   }
 

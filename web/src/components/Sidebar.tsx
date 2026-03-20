@@ -13,6 +13,7 @@ import {
   Shield,
   ScrollText,
   HeartPulse,
+  Radio,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
@@ -47,6 +48,7 @@ const navGroups: NavGroup[] = [
     title: 'Automation',
     items: [
       { label: 'Schedules', href: '/schedules', icon: <CalendarClock size={16} /> },
+      { label: 'Channels', href: '/channels', icon: <Radio size={16} />, requireRoles: ['admin'] },
     ],
   },
   {

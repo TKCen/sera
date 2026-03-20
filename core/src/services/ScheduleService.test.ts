@@ -40,7 +40,7 @@ describe('ScheduleService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     service = ScheduleService.getInstance();
-    (service as unknown).initialized = false;
+    (service as any).initialized = false;
   });
 
   describe('reconcile', () => {
@@ -54,7 +54,7 @@ describe('ScheduleService', () => {
         type: 'cron',
       };
 
-      (pool.query as unknown)
+      (pool.query as any)
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // reconcile in start()
         .mockResolvedValueOnce({ rows: [] }) // pgboss query in start()
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // manual reconcile call
@@ -63,7 +63,7 @@ describe('ScheduleService', () => {
       await service.start('postgres://localhost/test');
       await service.reconcile();
 
-      const boss = (service as unknown).boss;
+      const boss = (service as any).boss;
 
       // Verify missing schedule was added
       expect(boss.schedule).toHaveBeenCalledWith(mockDbSchedule.id, mockDbSchedule.expression, {

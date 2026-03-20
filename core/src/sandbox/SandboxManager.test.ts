@@ -92,7 +92,7 @@ describe('SandboxManager', () => {
         command: ['echo', 'hello'],
       };
 
-      const resolved = { linux: { cpu_shares: 512, memory_limit: 512 * 1024 * 1024 } };
+      const resolved = { resources: { cpu_shares: 512, memory_limit: 512 } };
       const info = await manager.spawn(manifest, request, resolved, 'inst-123');
 
       expect(info.containerId).toBe('container-abc123');
@@ -126,7 +126,7 @@ describe('SandboxManager', () => {
       };
 
       const resolved = {
-        linux: { cpu_shares: 256, memory_limit: 256 * 1024 * 1024 },
+        resources: { cpu_shares: 256, memory_limit: 256 },
         fs: { write: false },
       };
       await manager.spawn(manifest, request, resolved, 'inst-ro');
@@ -197,7 +197,7 @@ describe('SandboxManager', () => {
         manager.exec(otherManifest, {
           containerId: 'container-abc123',
           command: ['cat', '/etc/passwd'],
-        } as unknown)
+        } as any)
       ).rejects.toThrow(/cannot exec/);
     });
   });

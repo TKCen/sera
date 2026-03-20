@@ -32,7 +32,9 @@ export class ResourceImporter {
     ];
     for (const type of types) {
       const dir = path.join(this.baseDir, 'lists', type);
-      await this.importDir(dir, NamedListSchema, (data) => this.registry.upsertNamedList(data as any));
+      await this.importDir(dir, NamedListSchema, (data) =>
+        this.registry.upsertNamedList(data as any)
+      );
     }
   }
 

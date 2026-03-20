@@ -117,7 +117,7 @@ triggers: ["hot"]
     // Wait for chokidar to pick up the change (DoD says within 2s)
     for (let i = 0; i < 4; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      if (poolMock['query'].mock.calls.length > 0) break;
+      if (poolMock['query']!.mock.calls.length > 0) break;
     }
 
     expect(poolMock['query']).toHaveBeenCalledWith(

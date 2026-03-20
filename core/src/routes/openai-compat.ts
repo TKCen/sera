@@ -92,7 +92,7 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
           role: m.role as 'user' | 'assistant' | 'system' | 'tool',
           content: m.content || '',
         };
-        if (m.tool_calls) msg.tool_calls = m.tool_calls;
+        if (m.tool_calls) msg.tool_calls = m.tool_calls as any[];
         if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
         return msg;
       }

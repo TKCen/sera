@@ -1,6 +1,4 @@
-// @ts-ignore
 import yargs from 'yargs';
-// @ts-ignore
 import { hideBin } from 'yargs/helpers';
 import fs from 'node:fs';
 import matter from 'gray-matter';

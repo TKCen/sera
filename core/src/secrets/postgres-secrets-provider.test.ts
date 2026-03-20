@@ -158,9 +158,7 @@ describe('PostgresSecretsProvider', () => {
           },
         ],
       };
-      vi.mocked(db.query).mockResolvedValue(
-        mockResult as unknown as import('pg').QueryResult<any>
-      );
+      vi.mocked(db.query).mockResolvedValue(mockResult as unknown as import('pg').QueryResult<any>);
 
       const context = {
         operator: {
@@ -168,7 +166,10 @@ describe('PostgresSecretsProvider', () => {
           roles: ['admin'] as import('../auth/interfaces.js').OperatorRole[],
         },
       };
-      const list = await provider.list({ tags: ['prod'] }, context as unknown as import('./interfaces.js').SecretAccessContext);
+      const list = await provider.list(
+        { tags: ['prod'] },
+        context as unknown as import('./interfaces.js').SecretAccessContext
+      );
       expect(list).toHaveLength(1);
       expect(list[0]!.name).toBe('secret1');
       expect(db.query).toHaveBeenCalledWith(expect.stringContaining('tags && $1'), [['prod']]);
@@ -182,7 +183,10 @@ describe('PostgresSecretsProvider', () => {
           roles: ['admin'] as import('../auth/interfaces.js').OperatorRole[],
         },
       };
-      await provider.delete('old-secret', context as unknown as import('./interfaces.js').SecretAccessContext);
+      await provider.delete(
+        'old-secret',
+        context as unknown as import('./interfaces.js').SecretAccessContext
+      );
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('UPDATE secrets SET deleted_at = NOW()'),
         ['old-secret']

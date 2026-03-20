@@ -44,7 +44,7 @@ describe('Audit Export Streaming', () => {
       }),
       release: vi.fn(),
     };
-    vi.mocked(pool.connect).mockResolvedValue(clientMock as unknown as import('pg').PoolClient);
+    vi.mocked(pool.connect).mockResolvedValue(clientMock as any);
 
     const memoryBefore = process.memoryUsage().heapUsed;
     let streamCount = 0;

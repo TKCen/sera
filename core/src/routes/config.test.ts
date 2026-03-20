@@ -39,6 +39,24 @@ vi.mock('../lib/llm/ProviderFactory.js', () => ({
   },
 }));
 
+// Mock OpenAIProvider
+vi.mock('../lib/llm/OpenAIProvider.js', () => {
+  let baseURL: string | undefined;
+  return {
+    OpenAIProvider: vi.fn().mockImplementation((override?: any) => {
+      baseURL = override?.baseUrl;
+      return {
+        chat: vi.fn().mockImplementation(async () => {
+          if (baseURL === 'http://invalid-url') {
+            throw new Error('Connection failed');
+          }
+          return { content: 'Mock OpenAI response' };
+        }),
+      };
+    }),
+  };
+});
+
 describe('Config Routes', () => {
   let app: express.Express;
 

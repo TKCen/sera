@@ -38,7 +38,15 @@ export interface AgentInstance {
   display_name?: string;
   template_ref: string;
   circle?: string;
-  status: 'created' | 'running' | 'stopped' | 'error' | 'unresponsive' | 'throttled' | 'active' | 'inactive';
+  status:
+    | 'created'
+    | 'running'
+    | 'stopped'
+    | 'error'
+    | 'unresponsive'
+    | 'throttled'
+    | 'active'
+    | 'inactive';
   overrides?: Record<string, unknown>;
   lifecycle_mode?: 'persistent' | 'ephemeral';
   parent_instance_id?: string;

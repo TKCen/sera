@@ -69,9 +69,14 @@ describe('Channel Adapters', () => {
     });
 
     it('should enforce rate limits and not call agent', async () => {
-      const adapter = new TelegramAdapter('fake-token', mockOrchestrator as any, mockSessionStore as any, {
-        maxMessagesPerWindow: 2,
-      });
+      const adapter = new TelegramAdapter(
+        'fake-token',
+        mockOrchestrator as any,
+        mockSessionStore as any,
+        {
+          maxMessagesPerWindow: 2,
+        }
+      );
 
       // Mock sendMessage
       vi.mocked(axios.post).mockResolvedValue({ data: { ok: true } });
@@ -98,7 +103,11 @@ describe('Channel Adapters', () => {
 
   describe('DiscordAdapter', () => {
     it('should handle incoming messages', async () => {
-      const adapter = new DiscordAdapter('fake-token', mockOrchestrator as any, mockSessionStore as any);
+      const adapter = new DiscordAdapter(
+        'fake-token',
+        mockOrchestrator as any,
+        mockSessionStore as any
+      );
 
       vi.mocked(axios.post).mockResolvedValueOnce({ data: { id: 'msg-id' } });
 

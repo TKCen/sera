@@ -108,7 +108,8 @@ export class OpenAIProvider implements LLMProvider {
           }))
         : [];
 
-      const reasoning = (choice?.message as unknown as { reasoning_content?: string })?.reasoning_content;
+      const reasoning = (choice?.message as unknown as { reasoning_content?: string })
+        ?.reasoning_content;
 
       const result: LLMResponse = {
         content: choice?.message?.content || '',

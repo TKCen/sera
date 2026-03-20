@@ -53,7 +53,7 @@ describe('Registry Routes', () => {
       templateRef: 'base-template',
       displayName: undefined,
       circle: undefined,
-      overrides: undefined,
+      overrides: {},
     });
   });
 

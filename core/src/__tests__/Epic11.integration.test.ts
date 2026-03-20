@@ -77,7 +77,7 @@ describe('Epic 11 Integration', () => {
       query: vi.fn().mockResolvedValue({ rows: [{ seq: '100', hash: 'some-hash' }] }),
       release: vi.fn(),
     };
-    vi.mocked(pool.connect).mockResolvedValue(clientMock as unknown as PoolClient);
+    vi.mocked(pool.connect).mockResolvedValue(clientMock as any);
 
     // Trigger the schedule
     await scheduleService.triggerSchedule(scheduleId);

@@ -16,8 +16,8 @@ vi.mock('../lib/config.js', () => ({
 }));
 
 // Mock LlmRouter — default returns a successful response
-vi.mock('../llm/LlmRouter.js', () => ({
-  LlmRouter: vi.fn().mockImplementation(() => ({
+vi.mock('../llm/LlmRouter.js', () => {
+  const LlmRouterMock = vi.fn().mockImplementation(() => ({
     chatCompletion: vi.fn().mockResolvedValue({
       response: {
         id: 'chatcmpl-test',
@@ -42,14 +42,19 @@ vi.mock('../llm/LlmRouter.js', () => ({
     addModel: vi.fn(),
     deleteModel: vi.fn(),
     testModel: vi.fn(),
-  })),
-  // ProviderRegistry mock (imported by LlmRouter consumers)
-  ProviderRegistry: vi.fn().mockImplementation(() => ({})),
-}));
+  }));
+
+  const ProviderRegistryMock = vi.fn().mockImplementation(() => ({}));
+
+  return {
+    LlmRouter: LlmRouterMock,
+    ProviderRegistry: ProviderRegistryMock,
+  };
+});
 
 // Mock the CircuitBreakerService — default passes through to client.chatCompletion
-vi.mock('../llm/CircuitBreakerService.js', () => ({
-  CircuitBreakerService: vi.fn().mockImplementation((client: any) => ({
+vi.mock('../llm/CircuitBreakerService.js', () => {
+  const CircuitBreakerServiceMock = vi.fn().mockImplementation((client: any) => ({
     client,
     call: vi
       .fn()
@@ -58,9 +63,13 @@ vi.mock('../llm/CircuitBreakerService.js', () => ({
       ),
     getState: vi.fn().mockReturnValue([]),
     getProviderState: vi.fn().mockReturnValue(null),
-  })),
-  providerFromModel: vi.fn().mockReturnValue('lmstudio'),
-}));
+  }));
+
+  return {
+    CircuitBreakerService: CircuitBreakerServiceMock,
+    providerFromModel: vi.fn().mockReturnValue('lmstudio'),
+  };
+});
 
 vi.mock('../middleware/rateLimitStub.js', () => ({
   rateLimitStub: vi.fn().mockImplementation((_req: any, _res: any, next: any) => next()),
@@ -155,7 +164,15 @@ function getHandler(router: any, method: string, path: string) {
   return null;
 }
 
-async function executeHandlers(handlers: Function[], req: Request, res: Response) {
+async function executeHandlers(
+  handlers: ((
+    req: Request,
+    res: Response,
+    next: import('express').NextFunction
+  ) => void | Promise<void>)[],
+  req: Request,
+  res: Response
+) {
   for (const handler of handlers) {
     let nextCalled = false;
     const next: NextFunction = () => {

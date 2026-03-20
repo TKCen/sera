@@ -39,7 +39,7 @@ describe('Story 9.7: Thought Stream Persistence', () => {
     // Wait a tiny bit for the "fire and forget" async call
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(query).toHaveBeenCalledWith(
+    expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO thought_events'),
       expect.arrayContaining([agentId, taskId, 'reasoning', 'Thinking...'])
     );

@@ -232,13 +232,19 @@ export class SeraMCPServer {
         case 'circles.list':
           return this.handleListCircles();
         case 'circles.add_member':
-          return this.handleAddMember(toolArgs['circleId'] as string, toolArgs['agentId'] as string);
+          return this.handleAddMember(
+            toolArgs['circleId'] as string,
+            toolArgs['agentId'] as string
+          );
         case 'orchestration.sequential':
           return this.handleSequentialOrchestration(toolArgs['tasks'] as any[]);
         case 'orchestration.parallel':
           return this.handleParallelOrchestration(toolArgs['tasks'] as any[]);
         case 'orchestration.hierarchical':
-          return this.handleHierarchicalOrchestration(toolArgs['managerAgent'] as string, toolArgs['tasks'] as any[]);
+          return this.handleHierarchicalOrchestration(
+            toolArgs['managerAgent'] as string,
+            toolArgs['tasks'] as any[]
+          );
         case 'circle.broadcast':
           return this.handleCircleBroadcast(toolArgs['circleId'] as string, toolArgs['payload']);
         case 'agents.spawn_subagent':

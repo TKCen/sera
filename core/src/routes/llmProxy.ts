@@ -115,7 +115,8 @@ export function createLlmProxyRouter(
       }
 
       // ── 2. Validate request body ───────────────────────────────────────────
-      let { model, messages, temperature, tools, stream } = req.body as Record<string, unknown>;
+      const { model, temperature, tools, stream } = req.body as Record<string, any>;
+      let { messages } = req.body as Record<string, any>;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         res
@@ -168,11 +169,9 @@ export function createLlmProxyRouter(
             return;
           }
           logger.error(`Stream proxy error | agent=${agentId}:`, err);
-          res
-            .status(502)
-            .json({
-              error: { message: `Upstream LLM error: ${err.message}`, type: 'upstream_error' },
-            });
+          res.status(502).json({
+            error: { message: `Upstream LLM error: ${err.message}`, type: 'upstream_error' },
+          });
           return;
         }
       }

@@ -13,8 +13,8 @@
     "format": "prettier --write --log-level warn src",
     "format:check": "prettier --check src",
     "test": "vitest run",
-    "test:unit": "vitest run --testPathPattern='(?<!integration)\\.test\\.ts$'",
-    "test:integration": "vitest run --testPathPattern='src/__tests__'",
+    "test:unit": "vitest run --exclude='src/__tests__/**'",
+    "test:integration": "vitest run src/__tests__",
     "migrate": "node-pg-migrate up --migrations-dir src/db/migrations"
   },
   "keywords": [],

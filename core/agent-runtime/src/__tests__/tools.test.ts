@@ -15,7 +15,13 @@ describe('RuntimeToolExecutor', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    try {
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      console.warn('Cleanup failed:', err);
+    }
   });
 
   describe('executeTool() — file-read', () => {

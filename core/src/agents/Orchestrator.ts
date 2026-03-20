@@ -167,9 +167,7 @@ export class Orchestrator {
 
     // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────
     const templateLifecycle =
-      (manifest as any).spec?.lifecycle?.mode ??
-      instance.lifecycle_mode ??
-      'persistent';
+      (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
     const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle as
       | 'persistent'
       | 'ephemeral';
@@ -242,7 +240,7 @@ export class Orchestrator {
 
         // Story 16.9 — load agent-env secrets (exposure: agent-env only)
         const agentEnvSecrets: Record<string, string> = {};
-        const capabilities = (resolvedCapabilities as any);
+        const capabilities = resolvedCapabilities as any;
         const limitGB = capabilities?.maxWorkspaceSizeGB || 5;
         const canWrite = capabilities?.write !== false;
 

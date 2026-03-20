@@ -47,7 +47,7 @@ const AddProviderSchema = z.object({
 
 export function createProvidersRouter(
   llmRouter: LlmRouter,
-  circuitBreakerService: CircuitBreakerService,
+  circuitBreakerService: CircuitBreakerService
 ): Router {
   const router = Router();
 
@@ -92,7 +92,9 @@ export function createProvidersRouter(
         ...(apiKeyEnvVar ? { apiKeyEnvVar } : {}),
         ...(description ? { description } : {}),
       });
-      logger.info(`Provider added | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`);
+      logger.info(
+        `Provider added | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
+      );
       res.status(201).json({ modelName, result });
     } catch (err: any) {
       logger.error(`Failed to add provider ${modelName}:`, err);
@@ -112,13 +114,15 @@ export function createProvidersRouter(
       const modelName = String(req.params['modelName']);
       try {
         await llmRouter.deleteModel(modelName);
-        logger.info(`Provider removed | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`);
+        logger.info(
+          `Provider removed | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
+        );
         res.status(204).end();
       } catch (err: any) {
         logger.error(`Failed to remove provider ${modelName}:`, err);
         res.status(502).json({ error: `Failed to remove provider: ${err.message}` });
       }
-    },
+    }
   );
 
   /**
@@ -146,7 +150,11 @@ export function createProvidersRouter(
 
     if (!state) {
       // No breaker exists yet — provider has never been called through Core
-      res.json({ provider, state: 'closed', message: 'No circuit breaker instantiated (no calls made yet)' });
+      res.json({
+        provider,
+        state: 'closed',
+        message: 'No circuit breaker instantiated (no calls made yet)',
+      });
       return;
     }
 

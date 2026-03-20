@@ -23,7 +23,8 @@ describe('parseJson', () => {
   });
 
   it('should extract and parse JSON from surrounding text with markdown', () => {
-    const input = 'Sure, here is the JSON:\n\n```json\n{"foo": "bar"}\n```\n\nLet me know if you need anything else.';
+    const input =
+      'Sure, here is the JSON:\n\n```json\n{"foo": "bar"}\n```\n\nLet me know if you need anything else.';
     expect(parseJson(input)).toEqual({ foo: 'bar' });
   });
 

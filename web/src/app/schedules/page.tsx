@@ -10,7 +10,7 @@ import {
   RefreshCw,
   Search,
   Bot,
-  AlertCircle
+  AlertCircle,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -52,7 +52,7 @@ export default function SchedulesPage() {
       setLoading(true);
       const [sRes, iRes] = await Promise.all([
         fetch('/api/core/schedules'),
-        fetch('/api/core/agents/instances')
+        fetch('/api/core/agents/instances'),
       ]);
 
       if (!sRes.ok) throw new Error('Failed to fetch schedules');
@@ -149,18 +149,23 @@ export default function SchedulesPage() {
   };
 
   // Group schedules by agent
-  const groupedSchedules = schedules.reduce((acc, s) => {
-    if (!acc[s.agent_id]) acc[s.agent_id] = { name: s.agent_name, items: [] };
-    acc[s.agent_id].items.push(s);
-    return acc;
-  }, {} as Record<string, { name: string; items: Schedule[] }>);
+  const groupedSchedules = schedules.reduce(
+    (acc, s) => {
+      if (!acc[s.agent_id]) acc[s.agent_id] = { name: s.agent_name, items: [] };
+      acc[s.agent_id].items.push(s);
+      return acc;
+    },
+    {} as Record<string, { name: string; items: Schedule[] }>
+  );
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Schedules</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Automate agent tasks on a recurring basis</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            Automate agent tasks on a recurring basis
+          </p>
         </div>
         <button
           onClick={() => {
@@ -195,66 +200,73 @@ export default function SchedulesPage() {
           </div>
           <h2 className="text-lg font-semibold text-sera-text mb-2">No schedules found</h2>
           <p className="text-sm text-sera-text-muted text-center max-w-md">
-            Set up automated workflows, recurring data collection, and periodic reports by creating your first schedule.
+            Set up automated workflows, recurring data collection, and periodic reports by creating
+            your first schedule.
           </p>
         </div>
       )}
 
-      {!loading && Object.entries(groupedSchedules).map(([agentId, group]) => (
-        <div key={agentId} className="mb-8">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-sera-text-dim mb-4 flex items-center gap-2">
-            <Bot size={14} />
-            {group.name}
-          </h2>
-          <div className="grid gap-4">
-            {group.items.map((schedule) => (
-              <div key={schedule.id} className="sera-card p-5 flex items-center justify-between group">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-1">
-                    <h3 className="text-sm font-semibold text-sera-text">{schedule.name}</h3>
-                    <span className={`sera-badge-${schedule.status === 'active' ? 'accent' : 'muted'} text-[10px]`}>
-                      {schedule.status}
-                    </span>
+      {!loading &&
+        Object.entries(groupedSchedules).map(([agentId, group]) => (
+          <div key={agentId} className="mb-8">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-sera-text-dim mb-4 flex items-center gap-2">
+              <Bot size={14} />
+              {group.name}
+            </h2>
+            <div className="grid gap-4">
+              {group.items.map((schedule) => (
+                <div
+                  key={schedule.id}
+                  className="sera-card p-5 flex items-center justify-between group"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-1">
+                      <h3 className="text-sm font-semibold text-sera-text">{schedule.name}</h3>
+                      <span
+                        className={`sera-badge-${schedule.status === 'active' ? 'accent' : 'muted'} text-[10px]`}
+                      >
+                        {schedule.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-sera-text-muted font-mono">
+                      <span className="flex items-center gap-1">
+                        <CalendarClock size={12} />
+                        {schedule.cron}
+                      </span>
+                      {schedule.last_run && (
+                        <span>Last run: {new Date(schedule.last_run).toLocaleString()}</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 text-xs text-sera-text-muted font-mono">
-                    <span className="flex items-center gap-1">
-                      <CalendarClock size={12} />
-                      {schedule.cron}
-                    </span>
-                    {schedule.last_run && (
-                      <span>Last run: {new Date(schedule.last_run).toLocaleString()}</span>
-                    )}
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => toggleStatus(schedule)}
-                    className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors"
-                    title={schedule.status === 'active' ? 'Pause' : 'Resume'}
-                  >
-                    {schedule.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
-                  </button>
-                  <button
-                    onClick={() => openEditModal(schedule)}
-                    className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors"
-                    title="Edit"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(schedule.id)}
-                    className="p-2 text-sera-text-dim hover:text-sera-error hover:bg-sera-error/10 rounded-md transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => toggleStatus(schedule)}
+                      className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors"
+                      title={schedule.status === 'active' ? 'Pause' : 'Resume'}
+                    >
+                      {schedule.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
+                    </button>
+                    <button
+                      onClick={() => openEditModal(schedule)}
+                      className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors"
+                      title="Edit"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(schedule.id)}
+                      className="p-2 text-sera-text-dim hover:text-sera-error hover:bg-sera-error/10 rounded-md transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
 
       {/* Create/Edit Modal */}
       {isModalOpen && (
@@ -277,8 +289,10 @@ export default function SchedulesPage() {
                   className="w-full bg-sera-surface border border-sera-border rounded-lg px-3 py-2 text-sm text-sera-text focus:outline-none focus:border-sera-accent"
                 >
                   <option value="">Select an agent...</option>
-                  {instances.map(i => (
-                    <option key={i.id} value={i.id}>{i.name} ({i.templateName})</option>
+                  {instances.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name} ({i.templateName})
+                    </option>
                   ))}
                 </select>
               </div>
@@ -309,7 +323,9 @@ export default function SchedulesPage() {
                   placeholder="e.g. 0 9 * * *"
                   className="w-full bg-sera-surface border border-sera-border rounded-lg px-3 py-2 text-sm text-sera-text focus:outline-none focus:border-sera-accent font-mono"
                 />
-                <p className="text-[10px] text-sera-text-muted mt-1">Standard crontab format (min hour dom month dow)</p>
+                <p className="text-[10px] text-sera-text-muted mt-1">
+                  Standard crontab format (min hour dom month dow)
+                </p>
               </div>
 
               <div>
@@ -333,10 +349,7 @@ export default function SchedulesPage() {
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  className="flex-1 sera-btn-primary"
-                >
+                <button type="submit" className="flex-1 sera-btn-primary">
                   {editingSchedule ? 'Save Changes' : 'Create Schedule'}
                 </button>
               </div>

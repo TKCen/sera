@@ -27,7 +27,10 @@ import { WorktreeManager } from '../sandbox/WorktreeManager.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { SandboxManager } from '../sandbox/SandboxManager.js';
-import type { PermissionRequestService, PermissionDecision } from '../sandbox/PermissionRequestService.js';
+import type {
+  PermissionRequestService,
+  PermissionDecision,
+} from '../sandbox/PermissionRequestService.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('LifecycleRouter');
@@ -41,7 +44,7 @@ export function createLifecycleRouter(
   registry: AgentRegistry,
   orchestrator: Orchestrator,
   sandboxManager: SandboxManager,
-  permService: PermissionRequestService,
+  permService: PermissionRequestService
 ): Router {
   const router = Router();
 
@@ -66,7 +69,10 @@ export function createLifecycleRouter(
       const instance = await registry.getInstance(req.params.id);
       if (!instance) return void res.status(404).json({ error: 'Instance not found' });
 
-      const { repoPath, targetBranch = 'main' } = req.body as { repoPath?: string; targetBranch?: string };
+      const { repoPath, targetBranch = 'main' } = req.body as {
+        repoPath?: string;
+        targetBranch?: string;
+      };
       if (!repoPath) return void res.status(400).json({ error: 'repoPath is required' });
 
       WorktreeManager.merge(repoPath, instance.name, instance.id, targetBranch);
@@ -100,7 +106,8 @@ export function createLifecycleRouter(
       const instance = await registry.getInstance(req.params.id);
       if (!instance) return void res.status(404).json({ error: 'Instance not found' });
       const containerId: string | undefined = instance.container_id ?? instance.containerId;
-      if (!containerId) return void res.status(404).json({ error: 'No container for this instance' });
+      if (!containerId)
+        return void res.status(404).json({ error: 'No container for this instance' });
 
       const tailStr = req.query['tail'];
       const tail = tailStr ? parseInt(tailStr as string, 10) : 100;
@@ -223,9 +230,7 @@ export function createLifecycleRouter(
 
 // ── Separate router for /api/permission-requests ─────────────────────────────
 
-export function createPermissionRouter(
-  permService: PermissionRequestService,
-): Router {
+export function createPermissionRouter(permService: PermissionRequestService): Router {
   const router = Router();
 
   router.get('/', (req: Request, res: Response) => {
@@ -246,7 +251,9 @@ export function createPermissionRouter(
         return void res.status(400).json({ error: 'decision must be "grant" or "deny"' });
       }
 
-      const operatorIdentity = (req as any).operator as { sub?: string; email?: string; name?: string } | undefined;
+      const operatorIdentity = (req as any).operator as
+        | { sub?: string; email?: string; name?: string }
+        | undefined;
       const result = await permService.decide(
         requestId,
         {
@@ -256,7 +263,7 @@ export function createPermissionRouter(
         },
         operatorIdentity?.sub,
         operatorIdentity?.email,
-        operatorIdentity?.name,
+        operatorIdentity?.name
       );
       res.json(result);
     } catch (err: any) {

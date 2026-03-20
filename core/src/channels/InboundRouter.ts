@@ -15,9 +15,7 @@ interface InboundRoute {
 
 /** Allowed interpolation variables — no arbitrary expressions. */
 function interpolate(template: string, message: string, sender: string): string {
-  return template
-    .replace(/\{\{message\}\}/g, message)
-    .replace(/\{\{sender\}\}/g, sender);
+  return template.replace(/\{\{message\}\}/g, message).replace(/\{\{sender\}\}/g, sender);
 }
 
 /**
@@ -46,7 +44,7 @@ export class InboundRouter {
     message: string,
     sender: string,
     platformUserId: string,
-    dispatchTask: (agentId: string, task: string, context: Record<string, unknown>) => Promise<void>,
+    dispatchTask: (agentId: string, task: string, context: Record<string, unknown>) => Promise<void>
   ): Promise<boolean> {
     let routes: InboundRoute[] = [];
     try {
@@ -61,7 +59,7 @@ export class InboundRouter {
       }>(
         `SELECT * FROM inbound_channel_routes
          WHERE channel_type = $1 AND platform_channel_id = $2`,
-        [channelType, platformChannelId],
+        [channelType, platformChannelId]
       );
 
       routes = rows.map((r) => ({
@@ -101,7 +99,7 @@ export class InboundRouter {
         await dispatchTask(route.targetAgentId, taskText, context);
         routed = true;
         logger.info(
-          `Inbound ${channelType} message from ${sender} routed to agent ${route.targetAgentId}`,
+          `Inbound ${channelType} message from ${sender} routed to agent ${route.targetAgentId}`
         );
       } catch (err) {
         logger.warn(`Failed to dispatch inbound message to agent ${route.targetAgentId}:`, err);

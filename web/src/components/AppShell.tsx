@@ -22,8 +22,8 @@ export function AppShell() {
 
   const baseTitle = 'SERA | Sandboxed Extensible Reasoning Agent';
   const pageTitle =
-    Object.entries(routeTitles).find(([path]) =>
-      location.pathname === path || location.pathname.startsWith(path + '/'),
+    Object.entries(routeTitles).find(
+      ([path]) => location.pathname === path || location.pathname.startsWith(path + '/')
     )?.[1] ?? null;
 
   if (pageTitle) {
@@ -46,7 +46,9 @@ export function AppShell() {
               : `${unhealthyComponents.length} components are unhealthy`}
             {' — '}
           </span>
-          <Link to="/health" className="underline hover:no-underline">View system health</Link>
+          <Link to="/health" className="underline hover:no-underline">
+            View system health
+          </Link>
         </div>
       )}
       <div className="flex flex-1 overflow-hidden">

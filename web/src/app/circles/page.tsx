@@ -35,7 +35,9 @@ export default function CirclesPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Circles</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Organize agents into collaborative teams</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            Organize agents into collaborative teams
+          </p>
         </div>
       </div>
 
@@ -83,7 +85,9 @@ export default function CirclesPage() {
                 {circle.displayName}
               </h3>
               {circle.description && (
-                <p className="text-xs text-sera-text-muted mt-1 line-clamp-2">{circle.description}</p>
+                <p className="text-xs text-sera-text-muted mt-1 line-clamp-2">
+                  {circle.description}
+                </p>
               )}
 
               <div className="mt-3 flex items-center gap-3">
@@ -102,7 +106,10 @@ export default function CirclesPage() {
               {/* Agent chips */}
               <div className="mt-3 flex flex-wrap gap-1">
                 {circle.agents.slice(0, 5).map((agent) => (
-                  <span key={agent} className="text-[10px] px-1.5 py-0.5 rounded bg-sera-surface-hover text-sera-text-muted">
+                  <span
+                    key={agent}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-sera-surface-hover text-sera-text-muted"
+                  >
                     {agent}
                   </span>
                 ))}
@@ -125,7 +132,8 @@ export default function CirclesPage() {
           </div>
           <h3 className="text-sm font-semibold text-sera-text mb-1">No circles found</h3>
           <p className="text-xs text-sera-text-muted text-center max-w-sm">
-            Create CIRCLE.yaml files in the <code className="text-sera-accent">sera/circles/</code> directory to define circles.
+            Create CIRCLE.yaml files in the <code className="text-sera-accent">sera/circles/</code>{' '}
+            directory to define circles.
           </p>
         </div>
       )}

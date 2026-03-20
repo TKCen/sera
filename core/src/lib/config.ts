@@ -131,7 +131,7 @@ export const config = {
     rateLimit: {
       windowMs: parseInt(process.env.CHANNEL_RATE_LIMIT_WINDOW_MS || '60000', 10),
       maxMessages: parseInt(process.env.CHANNEL_RATE_LIMIT_MAX_MESSAGES || '20', 10),
-    }
+    },
   },
 
   databaseUrl: process.env.DATABASE_URL,

@@ -24,11 +24,7 @@ import type { Schedule } from '@/lib/api/types';
 import { useAgents } from '@/hooks/useAgents';
 
 function statusBadge(status: Schedule['status']) {
-  return (
-    <Badge variant={status === 'active' ? 'success' : 'default'}>
-      {status}
-    </Badge>
-  );
+  return <Badge variant={status === 'active' ? 'success' : 'default'}>{status}</Badge>;
 }
 
 function lastRunBadge(s?: Schedule['lastRunStatus']) {
@@ -53,7 +49,10 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
 
   const handleSave = useCallback(async () => {
     try {
-      await updateSchedule.mutateAsync({ id: sched.id, data: { expression: expr, taskPrompt: prompt } });
+      await updateSchedule.mutateAsync({
+        id: sched.id,
+        data: { expression: expr, taskPrompt: prompt },
+      });
       toast.success('Schedule updated');
       setEditing(false);
     } catch {
@@ -141,36 +140,46 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
             )}
           </div>
         </td>
-        <td className="py-3 px-4">
-          {statusBadge(sched.status)}
-        </td>
+        <td className="py-3 px-4">{statusBadge(sched.status)}</td>
         <td className="py-3 px-4">
           <div className="flex items-center gap-1">
             {!isManifest && (
               <button
-                onClick={() => { void handleToggle(); }}
+                onClick={() => {
+                  void handleToggle();
+                }}
                 disabled={updateSchedule.isPending}
                 className={`relative inline-flex h-4 w-8 cursor-pointer rounded-full transition-colors ${
-                  sched.status === 'active' ? 'bg-sera-success' : 'bg-sera-surface-hover border border-sera-border'
+                  sched.status === 'active'
+                    ? 'bg-sera-success'
+                    : 'bg-sera-surface-hover border border-sera-border'
                 }`}
                 title={sched.status === 'active' ? 'Pause schedule' : 'Activate schedule'}
               >
-                <span className={`inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transition-transform ${
-                  sched.status === 'active' ? 'translate-x-4' : 'translate-x-0.5'
-                }`} />
+                <span
+                  className={`inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transition-transform ${
+                    sched.status === 'active' ? 'translate-x-4' : 'translate-x-0.5'
+                  }`}
+                />
               </button>
             )}
             {editing ? (
               <>
                 <button
-                  onClick={() => { void handleSave(); }}
+                  onClick={() => {
+                    void handleSave();
+                  }}
                   className="text-sera-success hover:opacity-80 p-1"
                   title="Save"
                 >
                   <Check size={14} />
                 </button>
                 <button
-                  onClick={() => { setEditing(false); setExpr(sched.expression); setPrompt(sched.taskPrompt ?? ''); }}
+                  onClick={() => {
+                    setEditing(false);
+                    setExpr(sched.expression);
+                    setPrompt(sched.taskPrompt ?? '');
+                  }}
                   className="text-sera-text-dim hover:text-sera-text p-1"
                   title="Cancel"
                 >
@@ -215,7 +224,9 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
         <tr className="border-b border-sera-border/50 bg-sera-bg/30">
           <td colSpan={8} className="px-4 py-3">
             <div className="space-y-1">
-              <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">Task Prompt</label>
+              <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">
+                Task Prompt
+              </label>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -245,14 +256,24 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
           <DialogHeader>
             <DialogTitle>Delete schedule</DialogTitle>
             <DialogDescription>
-              Delete schedule <strong>{sched.name}</strong> for agent <strong>{sched.agentName}</strong>? This cannot be undone.
+              Delete schedule <strong>{sched.name}</strong> for agent{' '}
+              <strong>{sched.agentName}</strong>? This cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <div className="flex gap-3 justify-end mt-4">
             <DialogClose asChild>
-              <Button variant="ghost" size="sm">Cancel</Button>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
             </DialogClose>
-            <Button size="sm" variant="danger" onClick={() => { void handleDelete(); }} disabled={deleteSchedule.isPending}>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                void handleDelete();
+              }}
+              disabled={deleteSchedule.isPending}
+            >
               Delete
             </Button>
           </div>
@@ -270,9 +291,18 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
           </DialogHeader>
           <div className="flex gap-3 justify-end mt-4">
             <DialogClose asChild>
-              <Button variant="ghost" size="sm">Cancel</Button>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
             </DialogClose>
-            <Button size="sm" variant="outline" onClick={() => { void handleTrigger(); }} disabled={triggerSchedule.isPending}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void handleTrigger();
+              }}
+              disabled={triggerSchedule.isPending}
+            >
               <Play size={13} /> Run Now
             </Button>
           </div>
@@ -300,7 +330,9 @@ export default function SchedulesPage() {
         <div>
           <h1 className="sera-page-title">Schedules</h1>
           <p className="text-sm text-sera-text-muted mt-1">
-            {schedules ? `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}` : 'Loading…'}
+            {schedules
+              ? `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`
+              : 'Loading…'}
           </p>
         </div>
       </div>
@@ -314,12 +346,20 @@ export default function SchedulesPage() {
         >
           <option value="">All agents</option>
           {agentNames.map((n) => (
-            <option key={n} value={n}>{n}</option>
+            <option key={n} value={n}>
+              {n}
+            </option>
           ))}
         </select>
 
         <div className="flex items-center gap-1 border border-sera-border rounded-lg p-1">
-          {([['', 'All'], ['active', 'Active'], ['paused', 'Paused']] as [string, string][]).map(([val, label]) => (
+          {(
+            [
+              ['', 'All'],
+              ['active', 'Active'],
+              ['paused', 'Paused'],
+            ] as [string, string][]
+          ).map(([val, label]) => (
             <button
               key={val}
               onClick={() => setStatusFilter(val as '' | 'active' | 'paused')}
@@ -356,7 +396,9 @@ export default function SchedulesPage() {
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="border-b border-sera-border/50">
                     {Array.from({ length: 8 }).map((_, j) => (
-                      <td key={j} className="py-3 px-4"><Skeleton className="h-4 w-full" /></td>
+                      <td key={j} className="py-3 px-4">
+                        <Skeleton className="h-4 w-full" />
+                      </td>
                     ))}
                   </tr>
                 ))

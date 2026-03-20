@@ -8,7 +8,7 @@ vi.mock('../lib/database.js', () => ({
 
 describe('PostgresSecretsProvider', () => {
   const MASTER_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; // 32 bytes hex
-  
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.SECRETS_MASTER_KEY = MASTER_KEY;
@@ -22,7 +22,9 @@ describe('PostgresSecretsProvider', () => {
 
     it('should throw if SECRETS_MASTER_KEY is not 32 bytes', () => {
       process.env.SECRETS_MASTER_KEY = 'too-short';
-      expect(() => new PostgresSecretsProvider()).toThrow('SECRETS_MASTER_KEY must be a 32-byte hex string');
+      expect(() => new PostgresSecretsProvider()).toThrow(
+        'SECRETS_MASTER_KEY must be a 32-byte hex string'
+      );
     });
   });
 
@@ -46,11 +48,13 @@ describe('PostgresSecretsProvider', () => {
         if (sql.includes('SELECT encrypted_value')) {
           return {
             rowCount: 1,
-            rows: [{
-              encrypted_value: storedValue,
-              iv: storedIv,
-              allowed_agents: ['test-agent']
-            }]
+            rows: [
+              {
+                encrypted_value: storedValue,
+                iv: storedIv,
+                allowed_agents: ['test-agent'],
+              },
+            ],
           } as any;
         }
         return { rowCount: 0, rows: [] } as any;
@@ -70,14 +74,18 @@ describe('PostgresSecretsProvider', () => {
 
       vi.mocked(db.query).mockResolvedValue({
         rowCount: 1,
-        rows: [{
-          encrypted_value: Buffer.from('invalid-data'),
-          iv: Buffer.alloc(12),
-          allowed_agents: ['test-agent']
-        }]
+        rows: [
+          {
+            encrypted_value: Buffer.from('invalid-data'),
+            iv: Buffer.alloc(12),
+            allowed_agents: ['test-agent'],
+          },
+        ],
       } as any);
 
-      await expect(provider.get(secretName, agentContext)).rejects.toThrow('Secret decryption failed');
+      await expect(provider.get(secretName, agentContext)).rejects.toThrow(
+        'Secret decryption failed'
+      );
     });
   });
 
@@ -89,11 +97,13 @@ describe('PostgresSecretsProvider', () => {
 
       vi.mocked(db.query).mockResolvedValue({
         rowCount: 1,
-        rows: [{
-          encrypted_value: Buffer.from('...'),
-          iv: Buffer.alloc(12),
-          allowed_agents: ['authorized-agent']
-        }]
+        rows: [
+          {
+            encrypted_value: Buffer.from('...'),
+            iv: Buffer.alloc(12),
+            allowed_agents: ['authorized-agent'],
+          },
+        ],
       } as any);
 
       const value = await provider.get(secretName, agentContext);
@@ -102,20 +112,22 @@ describe('PostgresSecretsProvider', () => {
 
     it('should allow access if "*" is in allowed_agents', async () => {
       const provider = new PostgresSecretsProvider();
-      
+
       // We need to use the real internal encrypt to get a valid ciphertext
       const secretValue = 'unrestricted-data';
-      
+
       // Accessing private method for testing encryption logic
       const { encryptedValue, iv } = (provider as any).encrypt(secretValue);
 
       vi.mocked(db.query).mockResolvedValue({
         rowCount: 1,
-        rows: [{
-          encrypted_value: encryptedValue,
-          iv: iv,
-          allowed_agents: ['*']
-        }]
+        rows: [
+          {
+            encrypted_value: encryptedValue,
+            iv: iv,
+            allowed_agents: ['*'],
+          },
+        ],
       } as any);
 
       const value = await provider.get('any-secret', { agentId: 'any', agentName: 'any' });
@@ -128,15 +140,17 @@ describe('PostgresSecretsProvider', () => {
       const provider = new PostgresSecretsProvider();
       const mockResult = {
         rowCount: 1,
-        rows: [{
-          id: '1',
-          name: 'secret1',
-          allowed_agents: ['agent1'],
-          tags: ['prod'],
-          exposure: 'per-call',
-          created_at: new Date(),
-          updated_at: new Date()
-        }]
+        rows: [
+          {
+            id: '1',
+            name: 'secret1',
+            allowed_agents: ['agent1'],
+            tags: ['prod'],
+            exposure: 'per-call',
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ],
       };
       vi.mocked(db.query).mockResolvedValue(mockResult as any);
 
@@ -151,7 +165,10 @@ describe('PostgresSecretsProvider', () => {
       const provider = new PostgresSecretsProvider();
       const context = { operator: { sub: 'admin', roles: ['admin'] } };
       await provider.delete('old-secret', context);
-      expect(db.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE secrets SET deleted_at = NOW()'), ['old-secret']);
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE secrets SET deleted_at = NOW()'),
+        ['old-secret']
+      );
     });
   });
 

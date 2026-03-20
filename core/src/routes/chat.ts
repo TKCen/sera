@@ -16,13 +16,13 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
   async function resolveSession(
     sessionId: string | undefined,
     agentName: string,
-    agentInstanceId?: string,
+    agentInstanceId?: string
   ): Promise<{ sessionId: string; history: ChatMessage[]; isNew: boolean }> {
     if (sessionId) {
       const existing = await sessionStore.getSession(sessionId);
       if (existing) {
         const msgs = await sessionStore.getMessages(sessionId);
-        const history: ChatMessage[] = msgs.map(m => ({
+        const history: ChatMessage[] = msgs.map((m) => ({
           role: m.role as ChatMessage['role'],
           content: m.content,
         }));
@@ -39,7 +39,12 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
    */
   router.post('/chat', async (req, res) => {
     try {
-      const { message, sessionId: incomingSessionId, agentName: incomingAgent, agentInstanceId } = req.body;
+      const {
+        message,
+        sessionId: incomingSessionId,
+        agentName: incomingAgent,
+        agentInstanceId,
+      } = req.body;
       if (!message) {
         return res.status(400).json({ error: 'message is required' });
       }
@@ -56,7 +61,9 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
           try {
             agent = await orchestrator.startInstance(agentInstanceId);
           } catch {
-            return res.status(404).json({ error: `Agent instance "${agentInstanceId}" not found.` });
+            return res
+              .status(404)
+              .json({ error: `Agent instance "${agentInstanceId}" not found.` });
           }
         }
         agentName = agent.role;
@@ -68,13 +75,19 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
       } else {
         agent = orchestrator.getPrimaryAgent();
         if (!agent) {
-          return res.status(500).json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
+          return res
+            .status(500)
+            .json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
         }
         agentName = agent.role;
       }
 
       // Resolve or create session
-      const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName, agentInstanceId);
+      const { sessionId, history, isNew } = await resolveSession(
+        incomingSessionId,
+        agentName,
+        agentInstanceId
+      );
 
       try {
         const response = await agent.process(message, history);
@@ -101,9 +114,13 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
       } catch (agentError: any) {
         logger.error(`[${agent.name}] Error during processing:`, agentError);
         if (agentError.name === 'AbortError' || agentError.message.includes('timeout')) {
-          return res.status(504).json({ error: `Agent "${agent.name}" timed out while processing.` });
+          return res
+            .status(504)
+            .json({ error: `Agent "${agent.name}" timed out while processing.` });
         }
-        return res.status(500).json({ error: `LLM error from "${agent.name}": ${agentError.message}` });
+        return res
+          .status(500)
+          .json({ error: `LLM error from "${agent.name}": ${agentError.message}` });
       }
     } catch (error: any) {
       logger.error('Chat API error:', error);
@@ -116,7 +133,12 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
    */
   router.post('/chat/stream', async (req, res) => {
     try {
-      const { message, sessionId: incomingSessionId, agentName: incomingAgent, agentInstanceId } = req.body;
+      const {
+        message,
+        sessionId: incomingSessionId,
+        agentName: incomingAgent,
+        agentInstanceId,
+      } = req.body;
       if (!message) {
         return res.status(400).json({ error: 'message is required' });
       }
@@ -133,7 +155,9 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
           try {
             agent = await orchestrator.startInstance(agentInstanceId);
           } catch {
-            return res.status(404).json({ error: `Agent instance "${agentInstanceId}" not found.` });
+            return res
+              .status(404)
+              .json({ error: `Agent instance "${agentInstanceId}" not found.` });
           }
         }
         agentName = agent.role;
@@ -151,7 +175,11 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
       }
 
       // Resolve or create session
-      const { sessionId, history, isNew } = await resolveSession(incomingSessionId, agentName, agentInstanceId);
+      const { sessionId, history, isNew } = await resolveSession(
+        incomingSessionId,
+        agentName,
+        agentInstanceId
+      );
 
       // Return immediately — streaming happens via Centrifugo
       res.json({ sessionId, messageId });

@@ -13,26 +13,30 @@ vi.mock('../lib/config.js', () => ({
     providers: {
       activeProvider: 'openai',
       providers: {
-        openai: { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', model: 'gpt-4o' }
-      }
+        openai: { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', model: 'gpt-4o' },
+      },
     },
     saveLlmConfig: vi.fn(),
     saveProviderConfig: vi.fn(),
     setActiveProvider: vi.fn(),
-    getProviderConfig: vi.fn((id) => ({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', model: 'gpt-4o' }))
-  }
+    getProviderConfig: vi.fn((id) => ({
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'sk-test',
+      model: 'gpt-4o',
+    })),
+  },
 }));
 
 // Mock ProviderFactory
 vi.mock('../lib/llm/ProviderFactory.js', () => ({
   ProviderFactory: {
     createDefault: vi.fn(() => ({
-      chat: vi.fn().mockResolvedValue({ content: 'Mock response' })
+      chat: vi.fn().mockResolvedValue({ content: 'Mock response' }),
     })),
     createFromModelConfig: vi.fn(() => ({
-      chat: vi.fn().mockResolvedValue({ content: 'Mock provider response' })
-    }))
-  }
+      chat: vi.fn().mockResolvedValue({ content: 'Mock provider response' }),
+    })),
+  },
 }));
 
 describe('Config Routes', () => {
@@ -69,17 +73,13 @@ describe('Config Routes', () => {
   });
 
   it('PUT /api/providers/:id should update provider config', async () => {
-    const res = await request(app)
-      .put('/api/providers/openai')
-      .send({ baseUrl: 'new-url' });
+    const res = await request(app).put('/api/providers/openai').send({ baseUrl: 'new-url' });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
 
   it('POST /api/providers/active should set active provider', async () => {
-    const res = await request(app)
-      .post('/api/providers/active')
-      .send({ providerId: 'lmstudio' });
+    const res = await request(app).post('/api/providers/active').send({ providerId: 'lmstudio' });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.activeProvider).toBe('lmstudio');

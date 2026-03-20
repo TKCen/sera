@@ -1,6 +1,14 @@
 import { useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
-import { ShieldAlert, ChevronDown, ChevronRight, Download, CheckCircle2, XCircle, Filter } from 'lucide-react';
+import {
+  ShieldAlert,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  CheckCircle2,
+  XCircle,
+  Filter,
+} from 'lucide-react';
 import { useAuditEvents, useVerifyAuditChain } from '@/hooks/useAudit';
 import { useAuth } from '@/contexts/AuthContext';
 import { getAuditExportUrl } from '@/lib/api/audit';
@@ -27,7 +35,11 @@ function EventRow({ event }: { event: AuditEvent }) {
       >
         <td className="py-3 px-4">
           <div className="flex items-center gap-1">
-            {expanded ? <ChevronDown size={12} className="text-sera-text-dim" /> : <ChevronRight size={12} className="text-sera-text-dim" />}
+            {expanded ? (
+              <ChevronDown size={12} className="text-sera-text-dim" />
+            ) : (
+              <ChevronRight size={12} className="text-sera-text-dim" />
+            )}
             <span className="text-xs font-mono text-sera-text-dim">{fmtTs(event.timestamp)}</span>
           </div>
         </td>
@@ -42,7 +54,9 @@ function EventRow({ event }: { event: AuditEvent }) {
           {event.resourceType && (
             <span className="text-xs text-sera-text-muted">
               {event.resourceType}
-              {event.resourceId && <span className="font-mono ml-1 text-sera-text-dim">#{event.resourceId}</span>}
+              {event.resourceId && (
+                <span className="font-mono ml-1 text-sera-text-dim">#{event.resourceId}</span>
+              )}
             </span>
           )}
         </td>
@@ -82,7 +96,11 @@ export default function AuditPage() {
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
 
-  const [verifyResult, setVerifyResult] = useState<{ valid: boolean; brokenAtSequence?: number; checkedCount: number } | null>(null);
+  const [verifyResult, setVerifyResult] = useState<{
+    valid: boolean;
+    brokenAtSequence?: number;
+    checkedCount: number;
+  } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState<'jsonl' | 'csv'>('jsonl');
 
@@ -195,7 +213,9 @@ export default function AuditPage() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => { void handleVerify(); }}
+            onClick={() => {
+              void handleVerify();
+            }}
             disabled={verify.isPending}
           >
             {verify.isPending ? <Spinner /> : <CheckCircle2 size={13} />}
@@ -212,7 +232,9 @@ export default function AuditPage() {
               <option value="csv">CSV</option>
             </select>
             <button
-              onClick={() => { void handleExport(); }}
+              onClick={() => {
+                void handleExport();
+              }}
               disabled={exporting}
               className="flex items-center gap-1 px-3 py-2 text-xs text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover transition-colors"
             >
@@ -225,18 +247,21 @@ export default function AuditPage() {
 
       {/* Verify result */}
       {verifyResult && (
-        <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border text-sm ${
-          verifyResult.valid
-            ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
-            : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
-        }`}>
-          {verifyResult.valid
-            ? <CheckCircle2 size={16} />
-            : <XCircle size={16} />}
+        <div
+          className={`flex items-center gap-3 px-4 py-3 rounded-lg border text-sm ${
+            verifyResult.valid
+              ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
+              : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
+          }`}
+        >
+          {verifyResult.valid ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
           {verifyResult.valid
             ? `Chain integrity verified — ${verifyResult.checkedCount} events checked`
             : `Chain broken at sequence #${verifyResult.brokenAtSequence}`}
-          <button onClick={() => setVerifyResult(null)} className="ml-auto text-current opacity-60 hover:opacity-100">
+          <button
+            onClick={() => setVerifyResult(null)}
+            className="ml-auto text-current opacity-60 hover:opacity-100"
+          >
             <XCircle size={14} />
           </button>
         </div>
@@ -246,31 +271,46 @@ export default function AuditPage() {
       {showFilters && (
         <div className="sera-card-static p-4 grid grid-cols-2 lg:grid-cols-3 gap-4">
           <div className="space-y-1">
-            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">Actor / Agent ID</label>
+            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">
+              Actor / Agent ID
+            </label>
             <input
               type="text"
               value={actorId}
-              onChange={(e) => { setActorId(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setActorId(e.target.value);
+                setPage(1);
+              }}
               placeholder="agent-name or user-id"
               className="sera-input text-xs w-full"
             />
           </div>
           <div className="space-y-1">
-            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">Event Type</label>
+            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">
+              Event Type
+            </label>
             <input
               type="text"
               value={eventType}
-              onChange={(e) => { setEventType(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setEventType(e.target.value);
+                setPage(1);
+              }}
               placeholder="e.g. llm.request"
               className="sera-input text-xs w-full"
             />
           </div>
           <div className="space-y-1">
-            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">Resource Type</label>
+            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">
+              Resource Type
+            </label>
             <input
               type="text"
               value={resourceType}
-              onChange={(e) => { setResourceType(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setResourceType(e.target.value);
+                setPage(1);
+              }}
               placeholder="e.g. agent, task"
               className="sera-input text-xs w-full"
             />
@@ -280,7 +320,10 @@ export default function AuditPage() {
             <input
               type="datetime-local"
               value={from}
-              onChange={(e) => { setFrom(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                setPage(1);
+              }}
               className="sera-input text-xs w-full"
             />
           </div>
@@ -289,16 +332,24 @@ export default function AuditPage() {
             <input
               type="datetime-local"
               value={to}
-              onChange={(e) => { setTo(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setPage(1);
+              }}
               className="sera-input text-xs w-full"
             />
           </div>
           <div className="space-y-1">
-            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">Full-text Search</label>
+            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">
+              Full-text Search
+            </label>
             <input
               type="text"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
               placeholder="action or resource ID"
               className="sera-input text-xs w-full"
             />
@@ -337,9 +388,7 @@ export default function AuditPage() {
                   </td>
                 </tr>
               ) : (
-                (data?.events ?? []).map((ev) => (
-                  <EventRow key={ev.id} event={ev} />
-                ))
+                (data?.events ?? []).map((ev) => <EventRow key={ev.id} event={ev} />)
               )}
             </tbody>
           </table>
@@ -352,10 +401,20 @@ export default function AuditPage() {
               Page {page} of {totalPages} — {data?.total.toLocaleString()} events
             </span>
             <div className="flex items-center gap-1">
-              <Button size="sm" variant="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+              >
                 Prev
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+              >
                 Next
               </Button>
             </div>

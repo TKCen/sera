@@ -21,8 +21,7 @@ import matter from 'gray-matter';
 
 const logger = new Logger('KnowledgeGitService');
 
-const KNOWLEDGE_BASE_PATH =
-  process.env.KNOWLEDGE_BASE_PATH ?? '/knowledge';
+const KNOWLEDGE_BASE_PATH = process.env.KNOWLEDGE_BASE_PATH ?? '/knowledge';
 
 const SYSTEM_CIRCLE_ID = 'system';
 
@@ -125,7 +124,7 @@ export class KnowledgeGitService {
     circleId: string,
     agentInstanceId: string,
     agentName: string,
-    opts: KnowledgeBlockCreateOpts,
+    opts: KnowledgeBlockCreateOpts
   ): Promise<{ block: KnowledgeBlock; commitHash: string }> {
     await this.initCircleRepo(circleId);
     const repoDir = this.repoPath(circleId);
@@ -179,7 +178,9 @@ export class KnowledgeGitService {
     // Index into agent-branch Qdrant namespace
     await this.indexBlock(block, circleId, commitHash, filePath, agentInstanceId);
 
-    logger.info(`KnowledgeGitService: committed block ${block.id} to ${branch} in circle "${circleId}"`);
+    logger.info(
+      `KnowledgeGitService: committed block ${block.id} to ${branch} in circle "${circleId}"`
+    );
     return { block, commitHash };
   }
 
@@ -190,11 +191,7 @@ export class KnowledgeGitService {
    * If approvedBy is provided (or capability allows it), merge runs immediately
    * and triggers Qdrant re-indexing.
    */
-  async mergeToMain(
-    circleId: string,
-    agentInstanceId: string,
-    approvedBy?: string,
-  ): Promise<void> {
+  async mergeToMain(circleId: string, agentInstanceId: string, approvedBy?: string): Promise<void> {
     const repoDir = this.repoPath(circleId);
     const git = simpleGit(repoDir);
     const branch = this.branchName(agentInstanceId);
@@ -213,13 +210,12 @@ export class KnowledgeGitService {
       `UPDATE knowledge_merge_requests
          SET status='merged', approved_by=$1, updated_at=now()
        WHERE circle_id=$2 AND agent_instance_id=$3 AND status='pending'`,
-      [approvedBy ?? 'system', circleId, agentInstanceId],
-    ).catch(err => logger.warn('Failed to update merge request status:', err));
+      [approvedBy ?? 'system', circleId, agentInstanceId]
+    ).catch((err) => logger.warn('Failed to update merge request status:', err));
 
     // Re-index main branch into circle namespace
-    const namespace: MemoryNamespace = circleId === SYSTEM_CIRCLE_ID
-      ? 'global'
-      : `circle:${circleId}`;
+    const namespace: MemoryNamespace =
+      circleId === SYSTEM_CIRCLE_ID ? 'global' : `circle:${circleId}`;
     const store = new ScopedMemoryBlockStore(repoDir);
     await this.vectorService.rebuildNamespace(namespace, repoDir, store, agentInstanceId);
 
@@ -238,7 +234,7 @@ export class KnowledgeGitService {
   async createMergeRequest(
     circleId: string,
     agentInstanceId: string,
-    agentName: string,
+    agentName: string
   ): Promise<MergeRequest> {
     const branch = this.branchName(agentInstanceId);
     const diffSummary = await this.diff(circleId, agentInstanceId).catch(() => '');
@@ -248,23 +244,20 @@ export class KnowledgeGitService {
        VALUES ($1,$2,$3,$4,$5,'pending',$6)
        ON CONFLICT (id) DO NOTHING
        RETURNING *`,
-      [uuidv4(), circleId, agentInstanceId, agentName, branch, diffSummary],
+      [uuidv4(), circleId, agentInstanceId, agentName, branch, diffSummary]
     );
     const row = result.rows[0] as Record<string, unknown> | undefined;
     if (!row) throw new Error('Failed to create merge request');
     return this.rowToMergeRequest(row);
   }
 
-  async approveMergeRequest(
-    requestId: string,
-    approvedBy: string,
-  ): Promise<void> {
+  async approveMergeRequest(requestId: string, approvedBy: string): Promise<void> {
     const result = await query(
       `UPDATE knowledge_merge_requests
          SET status='approved', approved_by=$1, updated_at=now()
        WHERE id=$2 AND status='pending'
        RETURNING circle_id, agent_instance_id`,
-      [approvedBy, requestId],
+      [approvedBy, requestId]
     );
     const row = result.rows[0] as { circle_id: string; agent_instance_id: string } | undefined;
     if (!row) throw new Error(`Merge request ${requestId} not found or not pending`);
@@ -276,9 +269,9 @@ export class KnowledgeGitService {
       `SELECT * FROM knowledge_merge_requests
        WHERE circle_id=$1
        ORDER BY created_at DESC`,
-      [circleId],
+      [circleId]
     );
-    return (result.rows as Record<string, unknown>[]).map(r => this.rowToMergeRequest(r));
+    return (result.rows as Record<string, unknown>[]).map((r) => this.rowToMergeRequest(r));
   }
 
   private rowToMergeRequest(row: Record<string, unknown>): MergeRequest {
@@ -316,8 +309,16 @@ export class KnowledgeGitService {
   async log(circleId: string, filePath?: string): Promise<GitLogEntry[]> {
     const repoDir = this.repoPath(circleId);
     const git = simpleGit(repoDir);
-    type LogEntry = { hash: string; author_name: string; author_email: string; date: string; message: string };
-    const logResult = await (git as unknown as { log: (args: string[]) => Promise<{ all: readonly LogEntry[] }> })
+    type LogEntry = {
+      hash: string;
+      author_name: string;
+      author_email: string;
+      date: string;
+      message: string;
+    };
+    const logResult = await (
+      git as unknown as { log: (args: string[]) => Promise<{ all: readonly LogEntry[] }> }
+    )
       .log(filePath ? ['main', '--', filePath] : ['main'])
       .catch(() => ({ all: [] as LogEntry[] }));
     return (logResult.all ?? []).map((entry: LogEntry) => ({
@@ -325,7 +326,7 @@ export class KnowledgeGitService {
       authorName: entry.author_name,
       authorAgentId: (() => {
         const m = entry.author_email?.match(/sera-agent-([^@]+)@/);
-        return m ? m[1]! : entry.author_email ?? '';
+        return m ? m[1]! : (entry.author_email ?? '');
       })(),
       timestamp: entry.date,
       message: entry.message,
@@ -339,13 +340,12 @@ export class KnowledgeGitService {
     circleId: string,
     commitHash: string,
     sourceFile: string,
-    agentInstanceId: string,
+    agentInstanceId: string
   ): Promise<void> {
     if (!this.embeddingService.isAvailable()) return;
     try {
-      const namespace: MemoryNamespace = circleId === SYSTEM_CIRCLE_ID
-        ? 'global'
-        : `circle:${circleId}`;
+      const namespace: MemoryNamespace =
+        circleId === SYSTEM_CIRCLE_ID ? 'global' : `circle:${circleId}`;
       const vector = await this.embeddingService.embed(`${block.title}\n${block.content}`);
       await this.vectorService.upsert(block.id, namespace, vector, {
         agent_id: agentInstanceId,

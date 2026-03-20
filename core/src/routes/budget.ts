@@ -29,9 +29,9 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
          ORDER BY date ASC`
       );
 
-      const usage = result.rows.map(row => ({
+      const usage = result.rows.map((row) => ({
         date: row.date.toISOString().split('T')[0],
-        totalTokens: parseInt(row.total_tokens, 10)
+        totalTokens: parseInt(row.total_tokens, 10),
       }));
 
       res.json({ usage });
@@ -60,9 +60,9 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
          ORDER BY total_tokens DESC`
       );
 
-      const rankings = result.rows.map(row => ({
+      const rankings = result.rows.map((row) => ({
         agentId: row.agent_id,
-        totalTokens: parseInt(row.total_tokens, 10)
+        totalTokens: parseInt(row.total_tokens, 10),
       }));
 
       res.json({ rankings });
@@ -91,12 +91,12 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
          WHERE agent_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
          GROUP BY DATE_TRUNC('day', created_at)
          ORDER BY date ASC`,
-         [agentId]
+        [agentId]
       );
 
-      const usage = result.rows.map(row => ({
+      const usage = result.rows.map((row) => ({
         date: row.date.toISOString().split('T')[0],
-        totalTokens: parseInt(row.total_tokens, 10)
+        totalTokens: parseInt(row.total_tokens, 10),
       }));
 
       res.json({ agentId, usage });

@@ -14,7 +14,7 @@ export class SkillInjector {
 
   /**
    * Injects relevant skills into the system prompt.
-   * 
+   *
    * @param systemPrompt The original system prompt
    * @param declaredSkills List of skill names or pins from agent manifest
    * @param declaredPackages List of skill package names from agent manifest
@@ -30,14 +30,13 @@ export class SkillInjector {
     tokenBudget: number = 4000
   ): Promise<string> {
     const skillLibrary = SkillLibrary.getInstance(this.pool);
-    
+
     // 0. Inject Circle Constitution (Story 10.2)
     let constitutionXml = '';
     if (circleId) {
-      const res = await this.pool.query(
-        'SELECT constitution FROM circles WHERE id = $1',
-        [circleId]
-      );
+      const res = await this.pool.query('SELECT constitution FROM circles WHERE id = $1', [
+        circleId,
+      ]);
       if (res.rows.length > 0 && res.rows[0].constitution) {
         const fullConstitution = res.rows[0].constitution;
         const truncated = this.truncateConstitution(fullConstitution, 2048); // Target ~2000 tokens
@@ -73,7 +72,11 @@ export class SkillInjector {
     // 3. Auto-triggering
     const allSkills = await skillLibrary.listSkills();
     for (const skill of allSkills) {
-      if (skill.triggers.some(trigger => messageContent.toLowerCase().includes(trigger.toLowerCase()))) {
+      if (
+        skill.triggers.some((trigger) =>
+          messageContent.toLowerCase().includes(trigger.toLowerCase())
+        )
+      ) {
         if (!skillsToLoad.has(skill.name)) {
           skillsToLoad.set(skill.name, undefined);
         }
@@ -87,7 +90,10 @@ export class SkillInjector {
     // 4. Fetch full documents and resolve dependencies
     const loadedSkills: any[] = [];
     const processed = new Set<string>();
-    const queue: SkillPin[] = Array.from(skillsToLoad.entries()).map(([name, version]) => ({ name, version }));
+    const queue: SkillPin[] = Array.from(skillsToLoad.entries()).map(([name, version]) => ({
+      name,
+      version,
+    }));
 
     while (queue.length > 0) {
       const pin = queue.shift()!;
@@ -103,7 +109,7 @@ export class SkillInjector {
         loadedSkills.push(doc);
         if (doc.requires && doc.requires.length > 0) {
           // Dependencies usually don't have pinned versions in the front-matter schema yet
-          queue.push(...doc.requires.map(r => ({ name: r })));
+          queue.push(...doc.requires.map((r) => ({ name: r })));
         }
       }
     }
@@ -114,7 +120,7 @@ export class SkillInjector {
     let droppedCount = 0;
 
     for (const skill of loadedSkills) {
-      const estimatedTokens = (skill.content.length / 4) + 100;
+      const estimatedTokens = skill.content.length / 4 + 100;
       if (currentTokens + estimatedTokens <= tokenBudget) {
         finalSkills.push(skill);
         currentTokens += estimatedTokens;
@@ -124,7 +130,9 @@ export class SkillInjector {
     }
 
     if (droppedCount > 0) {
-      logger.warn(`Skill budget exceeded: dropped ${droppedCount} skills. [thought:reflect: Skill budget exceeded, dropping context]`);
+      logger.warn(
+        `Skill budget exceeded: dropped ${droppedCount} skills. [thought:reflect: Skill budget exceeded, dropping context]`
+      );
     }
 
     if (finalSkills.length === 0) {
@@ -134,11 +142,11 @@ export class SkillInjector {
     // 6. Format as XML
     const skillsXml = [
       '<skills>',
-      ...finalSkills.map(s => {
+      ...finalSkills.map((s) => {
         const idAttr = s.id ? ` id="${s.id}"` : '';
         return `  <skill${idAttr} name="${s.name}" version="${s.version}">\n${s.content}\n  </skill>`;
       }),
-      '</skills>'
+      '</skills>',
     ].join('\n');
 
     const totalInjection = (constitutionXml + skillsXml).trim();
@@ -148,10 +156,12 @@ export class SkillInjector {
     if (principlesMatch !== -1) {
       const nextSectionMatch = systemPrompt.indexOf('\n## ', principlesMatch + 20);
       const insertIdx = nextSectionMatch !== -1 ? nextSectionMatch : systemPrompt.length;
-      
+
       return (
         systemPrompt.slice(0, insertIdx).trim() +
-        '\n\n' + totalInjection + '\n\n' +
+        '\n\n' +
+        totalInjection +
+        '\n\n' +
         systemPrompt.slice(insertIdx).trim()
       ).trim();
     }
@@ -165,7 +175,7 @@ export class SkillInjector {
   private truncateConstitution(text: string, maxChars: number): string {
     if (text.length <= maxChars) return text;
 
-    const lines = text.split('\n').filter(l => l.trim() !== '');
+    const lines = text.split('\n').filter((l) => l.trim() !== '');
     if (lines.length <= 1) return text.slice(0, maxChars) + '... [truncated]';
 
     // Keep the first paragraph/line as it usually contains the "Core Purpose"
@@ -177,7 +187,7 @@ export class SkillInjector {
     // Truncate from the bottom up (keep top lines)
     let currentLength = head.length;
     const keptLines = [head];
-    
+
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
       if (line === undefined) continue;

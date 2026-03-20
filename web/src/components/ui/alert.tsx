@@ -2,22 +2,19 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import { AlertCircle, CheckCircle2, Info, AlertTriangle } from 'lucide-react';
 
-const alertVariants = cva(
-  'flex gap-3 items-start rounded-lg border p-4 text-sm',
-  {
-    variants: {
-      variant: {
-        info: 'bg-sera-info/10 border-sera-info/30 text-sera-info',
-        success: 'bg-sera-success/10 border-sera-success/30 text-sera-success',
-        warning: 'bg-sera-warning/10 border-sera-warning/30 text-sera-warning',
-        error: 'bg-sera-error/10 border-sera-error/30 text-sera-error',
-      },
-    },
-    defaultVariants: {
-      variant: 'info',
+const alertVariants = cva('flex gap-3 items-start rounded-lg border p-4 text-sm', {
+  variants: {
+    variant: {
+      info: 'bg-sera-info/10 border-sera-info/30 text-sera-info',
+      success: 'bg-sera-success/10 border-sera-success/30 text-sera-success',
+      warning: 'bg-sera-warning/10 border-sera-warning/30 text-sera-warning',
+      error: 'bg-sera-error/10 border-sera-error/30 text-sera-error',
     },
   },
-);
+  defaultVariants: {
+    variant: 'info',
+  },
+});
 
 const icons = {
   info: Info,
@@ -26,7 +23,8 @@ const icons = {
   error: AlertCircle,
 };
 
-interface AlertProps extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof alertVariants> {
+interface AlertProps
+  extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof alertVariants> {
   title?: string;
 }
 

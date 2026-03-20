@@ -17,8 +17,12 @@ export function useSchedules(params: { agentName?: string; status?: string } = {
 export function useCreateSchedule() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Omit<Schedule, 'id' | 'source' | 'lastRunAt' | 'lastRunStatus' | 'lastRunOutput' | 'nextRunAt'>) =>
-      schedulesApi.createSchedule(data),
+    mutationFn: (
+      data: Omit<
+        Schedule,
+        'id' | 'source' | 'lastRunAt' | 'lastRunStatus' | 'lastRunOutput' | 'nextRunAt'
+      >
+    ) => schedulesApi.createSchedule(data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['schedules'] });
     },

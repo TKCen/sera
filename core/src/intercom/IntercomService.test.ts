@@ -81,7 +81,7 @@ describe('IntercomService', () => {
     it('throws IntercomPermissionError for unpermitted peer', async () => {
       const manifest = createManifest();
       await expect(
-        service.sendDirectMessage(manifest, 'unknown-agent', { text: 'Hi' }),
+        service.sendDirectMessage(manifest, 'unknown-agent', { text: 'Hi' })
       ).rejects.toThrow(IntercomPermissionError);
     });
   });
@@ -106,7 +106,7 @@ describe('IntercomService', () => {
     it('throws when agent is not a member of the circle', async () => {
       const manifest = createManifest();
       await expect(
-        service.broadcastToCircle(manifest, 'operations', { data: 'test' }),
+        service.broadcastToCircle(manifest, 'operations', { data: 'test' })
       ).rejects.toThrow('is not a member of circle');
     });
   });

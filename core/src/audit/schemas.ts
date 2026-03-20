@@ -23,7 +23,7 @@ export const AgentCrashedSchema = z.object({
 
 export const ToolCalledSchema = z.object({
   skillId: z.string().optional(), // From ToolExecutor
-  tool: z.string().optional(),    // From BaseAgent
+  tool: z.string().optional(), // From BaseAgent
   params: z.any().optional(),
   args: z.any().optional(),
   success: z.boolean().optional(),

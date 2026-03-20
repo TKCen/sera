@@ -47,16 +47,19 @@ describe('LocalStorageProvider', () => {
   });
 
   it('should build correct bind mount strings', () => {
-    expect(provider.getBindMount('agent-a', '/workspace', 'rw'))
-      .toBe('/workspaces/agent-a:/workspace:rw');
+    expect(provider.getBindMount('agent-a', '/workspace', 'rw')).toBe(
+      '/workspaces/agent-a:/workspace:rw'
+    );
 
-    expect(provider.getBindMount('agent-b', '/workspace', 'ro'))
-      .toBe('/workspaces/agent-b:/workspace:ro');
+    expect(provider.getBindMount('agent-b', '/workspace', 'ro')).toBe(
+      '/workspaces/agent-b:/workspace:ro'
+    );
   });
 
   it('should use custom workspace path in bind mount', () => {
-    expect(provider.getBindMount('agent-a', '/workspace', 'rw', '/my/custom/path'))
-      .toBe('/my/custom/path:/workspace:rw');
+    expect(provider.getBindMount('agent-a', '/workspace', 'rw', '/my/custom/path')).toBe(
+      '/my/custom/path:/workspace:rw'
+    );
   });
 
   it('should be a no-op on unmount', async () => {
@@ -112,11 +115,11 @@ describe('DockerVolumeProvider', () => {
   });
 
   it('should build volume mount strings', () => {
-    expect(provider.getBindMount('agent-a', '/workspace', 'rw'))
-      .toBe('sera-ws-agent-a:/workspace:rw');
+    expect(provider.getBindMount('agent-a', '/workspace', 'rw')).toBe(
+      'sera-ws-agent-a:/workspace:rw'
+    );
 
-    expect(provider.getBindMount('agent-b', '/data', 'ro'))
-      .toBe('sera-ws-agent-b:/data:ro');
+    expect(provider.getBindMount('agent-b', '/data', 'ro')).toBe('sera-ws-agent-b:/data:ro');
   });
 });
 

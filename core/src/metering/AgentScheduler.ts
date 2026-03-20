@@ -16,7 +16,7 @@ export class AgentScheduler {
         `SELECT COALESCE(SUM(total_tokens), 0) AS total
          FROM usage_events
          WHERE agent_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
-        [agentId],
+        [agentId]
       );
 
       const used = parseInt(result.rows[0]?.total ?? '0', 10);

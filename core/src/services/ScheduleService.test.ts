@@ -64,13 +64,11 @@ describe('ScheduleService', () => {
       await service.reconcile();
 
       const boss = (service as any).boss;
-      
+
       // Verify missing schedule was added
-      expect(boss.schedule).toHaveBeenCalledWith(
-        mockDbSchedule.id,
-        mockDbSchedule.expression,
-        { scheduleId: mockDbSchedule.id }
-      );
+      expect(boss.schedule).toHaveBeenCalledWith(mockDbSchedule.id, mockDbSchedule.expression, {
+        scheduleId: mockDbSchedule.id,
+      });
 
       // Verify stale schedule was removed
       expect(boss.unschedule).toHaveBeenCalledWith('22222222-2222-4222-a222-222222222222');

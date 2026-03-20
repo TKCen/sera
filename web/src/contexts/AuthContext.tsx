@@ -1,12 +1,5 @@
 /// <reference types="vite/client" />
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode,
-} from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { setAuthHeaderGetter, onUnauthorized } from '@/lib/api/client';
 
 interface User {
@@ -163,13 +156,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         roles: user?.roles ?? [],
         isLoading,
-        login: () => { void login(); },
+        login: () => {
+          void login();
+        },
         logout,
       }}
     >
-      <AuthContextInternal setSessionAndUser={setSessionAndUser}>
-        {children}
-      </AuthContextInternal>
+      <AuthContextInternal setSessionAndUser={setSessionAndUser}>{children}</AuthContextInternal>
     </AuthContext.Provider>
   );
 }

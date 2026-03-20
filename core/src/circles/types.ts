@@ -70,6 +70,13 @@ export interface CircleManifest {
 
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_CIRCLE_FIELDS = new Set([
-  'apiVersion', 'kind', 'metadata', 'projectContext', 'agents',
-  'knowledge', 'channels', 'partyMode', 'connections',
+  'apiVersion',
+  'kind',
+  'metadata',
+  'projectContext',
+  'agents',
+  'knowledge',
+  'channels',
+  'partyMode',
+  'connections',
 ]);

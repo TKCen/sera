@@ -85,7 +85,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => {
@@ -97,7 +97,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
@@ -110,7 +110,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
@@ -121,7 +121,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
@@ -138,7 +138,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
@@ -165,7 +165,7 @@ describe('ChatPage streaming', () => {
           content: 'I am observing',
           agentId: 'test-agent',
           timestamp: new Date().toISOString(),
-        }),
+        })
       );
     });
 
@@ -178,7 +178,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
@@ -214,7 +214,7 @@ describe('ChatPage streaming', () => {
     render(
       <TestWrapper>
         <ChatPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Test Agent'));

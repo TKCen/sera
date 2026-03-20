@@ -38,9 +38,7 @@ export const PROVIDER_CATALOG: ProviderDefinition[] = [
     defaultBaseUrl: 'http://host.docker.internal:1234/v1',
     requiresKey: false,
     description: 'Run open-source models locally with a desktop app. OpenAI-compatible API.',
-    models: [
-      { id: 'lmstudio-local', name: 'Local Model', tier: 'local', contextWindow: 32768 },
-    ],
+    models: [{ id: 'lmstudio-local', name: 'Local Model', tier: 'local', contextWindow: 32768 }],
   },
   {
     id: 'ollama',
@@ -80,9 +78,24 @@ export const PROVIDER_CATALOG: ProviderDefinition[] = [
     requiresKey: true,
     description: 'Claude Opus, Sonnet, and Haiku. Best-in-class reasoning.',
     models: [
-      { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', tier: 'frontier', contextWindow: 200000 },
-      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', tier: 'smart', contextWindow: 200000 },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tier: 'fast', contextWindow: 200000 },
+      {
+        id: 'claude-opus-4-20250514',
+        name: 'Claude Opus 4',
+        tier: 'frontier',
+        contextWindow: 200000,
+      },
+      {
+        id: 'claude-sonnet-4-20250514',
+        name: 'Claude Sonnet 4',
+        tier: 'smart',
+        contextWindow: 200000,
+      },
+      {
+        id: 'claude-haiku-4-5-20251001',
+        name: 'Claude Haiku 4.5',
+        tier: 'fast',
+        contextWindow: 200000,
+      },
     ],
   },
   {
@@ -118,7 +131,12 @@ export const PROVIDER_CATALOG: ProviderDefinition[] = [
     requiresKey: true,
     description: 'Ultra-fast LPU inference. Free tier with rate limits.',
     models: [
-      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', tier: 'balanced', contextWindow: 128000 },
+      {
+        id: 'llama-3.3-70b-versatile',
+        name: 'Llama 3.3 70B',
+        tier: 'balanced',
+        contextWindow: 128000,
+      },
       { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B', tier: 'balanced', contextWindow: 32768 },
       { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B', tier: 'fast', contextWindow: 128000 },
     ],
@@ -131,10 +149,25 @@ export const PROVIDER_CATALOG: ProviderDefinition[] = [
     requiresKey: true,
     description: 'Unified gateway to 200+ models. One key, all providers.',
     models: [
-      { id: 'openrouter/google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', tier: 'smart', contextWindow: 1048576 },
-      { id: 'openrouter/anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', tier: 'smart', contextWindow: 200000 },
+      {
+        id: 'openrouter/google/gemini-2.5-flash',
+        name: 'Gemini 2.5 Flash',
+        tier: 'smart',
+        contextWindow: 1048576,
+      },
+      {
+        id: 'openrouter/anthropic/claude-sonnet-4',
+        name: 'Claude Sonnet 4',
+        tier: 'smart',
+        contextWindow: 200000,
+      },
       { id: 'openrouter/openai/gpt-4o', name: 'GPT-4o', tier: 'smart', contextWindow: 128000 },
-      { id: 'openrouter/deepseek/deepseek-chat', name: 'DeepSeek V3', tier: 'smart', contextWindow: 128000 },
+      {
+        id: 'openrouter/deepseek/deepseek-chat',
+        name: 'DeepSeek V3',
+        tier: 'smart',
+        contextWindow: 128000,
+      },
     ],
   },
 ];

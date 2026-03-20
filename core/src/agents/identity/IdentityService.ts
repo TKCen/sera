@@ -11,51 +11,49 @@ export class IdentityService {
    * Generate a complete system prompt from an agent manifest.
    * Optionally injects circle project context and dynamic memory context into the prompt.
    */
-  static generateSystemPrompt(manifest: AgentManifest, circleContext?: string, dynamicMemoryContext?: string): string {
+  static generateSystemPrompt(
+    manifest: AgentManifest,
+    circleContext?: string,
+    dynamicMemoryContext?: string
+  ): string {
     const sections: string[] = [];
 
     // ── Role & Persona ────────────────────────────────────────────────────────
-    sections.push(
-      `You are ${manifest.metadata.displayName}, a ${manifest.identity.role}.`,
-    );
+    sections.push(`You are ${manifest.metadata.displayName}, a ${manifest.identity.role}.`);
     sections.push(manifest.identity.description.trim());
 
     // ── Communication Style ───────────────────────────────────────────────────
     if (manifest.identity.communicationStyle) {
-      sections.push(
-        `## Communication Style\n${manifest.identity.communicationStyle.trim()}`,
-      );
+      sections.push(`## Communication Style\n${manifest.identity.communicationStyle.trim()}`);
     }
 
     // ── Principles ────────────────────────────────────────────────────────────
     if (manifest.identity.principles && manifest.identity.principles.length > 0) {
-      const principlesList = manifest.identity.principles
-        .map(p => `- ${p}`)
-        .join('\n');
+      const principlesList = manifest.identity.principles.map((p) => `- ${p}`).join('\n');
       sections.push(`## Guiding Principles\n${principlesList}`);
     }
 
     // ── Available Tools ───────────────────────────────────────────────────────
     if (manifest.tools?.allowed && manifest.tools.allowed.length > 0) {
-      const toolsList = manifest.tools.allowed.map(t => `- ${t}`).join('\n');
+      const toolsList = manifest.tools.allowed.map((t) => `- ${t}`).join('\n');
       sections.push(`## Available Tools\n${toolsList}`);
     }
 
     if (manifest.tools?.denied && manifest.tools.denied.length > 0) {
-      const deniedList = manifest.tools.denied.map(t => `- ${t}`).join('\n');
+      const deniedList = manifest.tools.denied.map((t) => `- ${t}`).join('\n');
       sections.push(`## Denied Tools (never use these)\n${deniedList}`);
     }
 
     // ── Skills ────────────────────────────────────────────────────────────────
     if (manifest.skills && manifest.skills.length > 0) {
-      const skillsList = manifest.skills.map(s => `- ${s}`).join('\n');
+      const skillsList = manifest.skills.map((s) => `- ${s}`).join('\n');
       sections.push(`## Available Skills\n${skillsList}`);
     }
 
     // ── Subagents ─────────────────────────────────────────────────────────────
     if (manifest.subagents?.allowed && manifest.subagents.allowed.length > 0) {
       const subList = manifest.subagents.allowed
-        .map(s => {
+        .map((s) => {
           let entry = `- ${s.role} (max ${s.maxInstances ?? '∞'} instances)`;
           if (s.requiresApproval) entry += ' [requires human approval]';
           return entry;
@@ -66,17 +64,19 @@ export class IdentityService {
 
     // ── Project Context (Circle Constitution) ─────────────────────────────────
     if (circleContext) {
-      sections.push(`## Project Context\nThe following project context is shared by all agents in your circle:\n\n${circleContext.trim()}`);
+      sections.push(
+        `## Project Context\nThe following project context is shared by all agents in your circle:\n\n${circleContext.trim()}`
+      );
     }
 
     // ── Response Format ───────────────────────────────────────────────────────
     sections.push(
       `## Response Format\nYou MUST respond in JSON format with this structure:\n` +
-      `{\n` +
-      `  "thought": "your inner monologue and reasoning",\n` +
-      `  "delegation": { "agentRole": "role-name", "task": "description" },  // optional\n` +
-      `  "finalAnswer": "your response to the user"  // optional\n` +
-      `}`,
+        `{\n` +
+        `  "thought": "your inner monologue and reasoning",\n` +
+        `  "delegation": { "agentRole": "role-name", "task": "description" },  // optional\n` +
+        `  "finalAnswer": "your response to the user"  // optional\n` +
+        `}`
     );
 
     // ── Memory Context ────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ export class IdentityService {
     // ── Circle Context ────────────────────────────────────────────────────────
     sections.push(
       `## Context\nYou belong to the "${manifest.metadata.circle}" circle. ` +
-      `Your security tier is ${manifest.metadata.tier}.`,
+        `Your security tier is ${manifest.metadata.tier}.`
     );
 
     return sections.join('\n\n');
@@ -98,15 +98,23 @@ export class IdentityService {
    * Same as the standard prompt but instructs the LLM to respond in natural
    * language (not JSON), since tokens stream to the UI in real-time.
    */
-  static generateStreamingSystemPrompt(manifest: AgentManifest, circleContext?: string, dynamicMemoryContext?: string): string {
-    const base = IdentityService.generateSystemPrompt(manifest, circleContext, dynamicMemoryContext);
+  static generateStreamingSystemPrompt(
+    manifest: AgentManifest,
+    circleContext?: string,
+    dynamicMemoryContext?: string
+  ): string {
+    const base = IdentityService.generateSystemPrompt(
+      manifest,
+      circleContext,
+      dynamicMemoryContext
+    );
 
     // Replace the JSON response format with a natural-language instruction
     const withFormat = base.replace(
       /## Response Format[\s\S]*?(?=## Context)/,
       `## Response Format\n` +
-      `Respond directly and naturally in markdown. Do NOT wrap your response in JSON.\n` +
-      `Focus on providing a helpful, well-formatted answer to the user's question.\n\n`,
+        `Respond directly and naturally in markdown. Do NOT wrap your response in JSON.\n` +
+        `Focus on providing a helpful, well-formatted answer to the user's question.\n\n`
     );
 
     // Append stability guidelines

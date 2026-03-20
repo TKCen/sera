@@ -48,7 +48,9 @@ describe('AgentManifestLoader', () => {
 
     it('should reject unknown top-level fields', () => {
       const obj = { ...validManifestObj(), unknownField: 'surprise' };
-      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/unknown top-level field.*unknownField/i);
+      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
+        /unknown top-level field.*unknownField/i
+      );
     });
 
     it('should reject invalid kind', () => {
@@ -72,31 +74,41 @@ describe('AgentManifestLoader', () => {
     it('should reject missing metadata.name', () => {
       const obj = validManifestObj();
       delete (obj['metadata'] as any).name;
-      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/missing required field.*name/i);
+      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
+        /missing required field.*name/i
+      );
     });
 
     it('should reject missing identity', () => {
       const obj = validManifestObj();
       delete obj['identity'];
-      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/missing required field.*identity/i);
+      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
+        /missing required field.*identity/i
+      );
     });
 
     it('should reject missing identity.role', () => {
       const obj = validManifestObj();
       delete (obj['identity'] as any).role;
-      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/missing required field.*role/i);
+      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
+        /missing required field.*role/i
+      );
     });
 
     it('should reject missing model', () => {
       const obj = validManifestObj();
       delete obj['model'];
-      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/missing required field.*model/i);
+      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
+        /missing required field.*model/i
+      );
     });
 
     it('should reject missing model.provider', () => {
       const obj = validManifestObj();
       delete (obj['model'] as any).provider;
-      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(/missing required field.*provider/i);
+      expect(() => AgentManifestLoader.validateManifest(obj)).toThrow(
+        /missing required field.*provider/i
+      );
     });
 
     it('should accept manifest without optional fields', () => {
@@ -119,7 +131,9 @@ describe('AgentManifestLoader', () => {
   describe('loadManifest', () => {
     it('should load the architect example manifest from disk', () => {
       const agentsDir = path.resolve(import.meta.dirname, '..', '..', '..', '..', 'agents');
-      const manifest = AgentManifestLoader.loadManifest(path.join(agentsDir, 'architect.agent.yaml'));
+      const manifest = AgentManifestLoader.loadManifest(
+        path.join(agentsDir, 'architect.agent.yaml')
+      );
 
       expect(manifest.metadata.name).toBe('architect-prime');
       expect(manifest.metadata.displayName).toBe('Winston');
@@ -131,8 +145,9 @@ describe('AgentManifestLoader', () => {
     });
 
     it('should throw for non-existent file', () => {
-      expect(() => AgentManifestLoader.loadManifest('/nonexistent/path.yaml'))
-        .toThrow(/not found/i);
+      expect(() => AgentManifestLoader.loadManifest('/nonexistent/path.yaml')).toThrow(
+        /not found/i
+      );
     });
   });
 
@@ -142,8 +157,14 @@ describe('AgentManifestLoader', () => {
       const manifests = AgentManifestLoader.loadAllManifests(agentsDir);
 
       expect(manifests.length).toBe(5);
-      const names = manifests.map(m => m.metadata.name).sort();
-      expect(names).toEqual(['architect-prime', 'developer-prime', 'general-assistant', 'researcher-prime', 'writer']);
+      const names = manifests.map((m) => m.metadata.name).sort();
+      expect(names).toEqual([
+        'architect-prime',
+        'developer-prime',
+        'general-assistant',
+        'researcher-prime',
+        'writer',
+      ]);
     });
 
     it('should return empty array for non-existent directory', () => {

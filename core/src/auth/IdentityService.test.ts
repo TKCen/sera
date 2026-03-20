@@ -38,7 +38,11 @@ describe('IdentityService', () => {
     });
 
     it('should include provided agentName', async () => {
-      const token = await service.signToken({ ...samplePayload, agentName: 'my-agent', scope: 'internal' });
+      const token = await service.signToken({
+        ...samplePayload,
+        agentName: 'my-agent',
+        scope: 'internal',
+      });
       const claims = await service.verifyToken(token);
       expect(claims.agentName).toBe('my-agent');
       expect(claims.scope).toBe('internal');
@@ -75,7 +79,7 @@ describe('IdentityService', () => {
       // Sign with 1-second expiry
       const token = await service.signToken(samplePayload, '1s');
       // Wait for expiry
-      await new Promise(resolve => setTimeout(resolve, 1100));
+      await new Promise((resolve) => setTimeout(resolve, 1100));
       await expect(service.verifyToken(token)).rejects.toThrow();
     });
   });

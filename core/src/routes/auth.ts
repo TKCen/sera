@@ -72,7 +72,12 @@ export function createAuthRouter(sessionStore?: WebSessionStore): {
       return;
     }
 
-    const { code, codeVerifier, redirectUri, clientId: reqClientId } = req.body as {
+    const {
+      code,
+      codeVerifier,
+      redirectUri,
+      clientId: reqClientId,
+    } = req.body as {
       code?: string;
       codeVerifier?: string;
       redirectUri?: string;
@@ -283,9 +288,10 @@ function decodeTokenClaims(token: string): OperatorIdentity | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
-    const payload = JSON.parse(
-      Buffer.from(parts[1]!, 'base64url').toString('utf8'),
-    ) as Record<string, unknown>;
+    const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >;
 
     const sub = typeof payload['sub'] === 'string' ? payload['sub'] : null;
     if (!sub) return null;
@@ -313,7 +319,9 @@ function mapGroupsToRoles(groups: string[]): OperatorRole[] {
     if (process.env.OIDC_ROLE_MAPPING) {
       roleMapping = JSON.parse(process.env.OIDC_ROLE_MAPPING) as typeof roleMapping;
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   const roles = new Set<OperatorRole>();
   for (const g of groups) {

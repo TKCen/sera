@@ -109,7 +109,7 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       let block = await scopedStore.readByAgent(agentId, id);
       if (!block) {
         const archived = await scopedStore.listArchive(agentId);
-        block = archived.find(b => b.id === id) ?? null;
+        block = archived.find((b) => b.id === id) ?? null;
       }
       if (!block) return res.status(404).json({ error: 'Block not found' });
       res.json(block);

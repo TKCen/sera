@@ -11,7 +11,7 @@ export interface IncomingMessage {
 
 export abstract class ChannelAdapter {
   protected logger: Logger;
-  protected userRateLimits: Map<string, { count: number, lastReset: number }> = new Map();
+  protected userRateLimits: Map<string, { count: number; lastReset: number }> = new Map();
   protected rateLimitWindow: number;
   protected maxMessagesPerWindow: number;
   private cleanupInterval: NodeJS.Timeout | null = null;
@@ -35,7 +35,7 @@ export abstract class ChannelAdapter {
     const now = Date.now();
     const limit = this.userRateLimits.get(userId);
 
-    if (!limit || (now - limit.lastReset) > this.rateLimitWindow) {
+    if (!limit || now - limit.lastReset > this.rateLimitWindow) {
       this.userRateLimits.set(userId, { count: 1, lastReset: now });
       return false;
     }
@@ -54,7 +54,7 @@ export abstract class ChannelAdapter {
   private cleanupRateLimits() {
     const now = Date.now();
     for (const [userId, limit] of this.userRateLimits.entries()) {
-      if ((now - limit.lastReset) > this.rateLimitWindow * 2) {
+      if (now - limit.lastReset > this.rateLimitWindow * 2) {
         this.userRateLimits.delete(userId);
       }
     }

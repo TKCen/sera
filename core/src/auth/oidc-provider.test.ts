@@ -123,7 +123,9 @@ describe('OIDCAuthPlugin', () => {
     vi.mocked(jwtVerify).mockRejectedValueOnce(expiredErr);
 
     const plugin = new OIDCAuthPlugin();
-    await expect(plugin.authenticate(makeReq(FAKE_JWT) as Request)).rejects.toThrow('invalid_token');
+    await expect(plugin.authenticate(makeReq(FAKE_JWT) as Request)).rejects.toThrow(
+      'invalid_token'
+    );
   });
 
   it('throws on invalid signature', async () => {
@@ -132,7 +134,9 @@ describe('OIDCAuthPlugin', () => {
     vi.mocked(jwtVerify).mockRejectedValueOnce(sigErr);
 
     const plugin = new OIDCAuthPlugin();
-    await expect(plugin.authenticate(makeReq(FAKE_JWT) as Request)).rejects.toThrow('invalid_token');
+    await expect(plugin.authenticate(makeReq(FAKE_JWT) as Request)).rejects.toThrow(
+      'invalid_token'
+    );
   });
 
   it('does not log the raw token value', async () => {

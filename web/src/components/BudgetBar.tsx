@@ -26,11 +26,19 @@ export function BudgetBar({ label, current, limit, className }: BudgetBarProps) 
     <div className={cn('space-y-1.5', className)}>
       <div className="flex items-center justify-between text-xs">
         <span className="text-sera-text-muted">{label}</span>
-        <span className={cn('font-mono font-medium', pct >= 90 ? 'text-sera-error' : pct >= 70 ? 'text-sera-warning' : 'text-sera-text-muted')}>
+        <span
+          className={cn(
+            'font-mono font-medium',
+            pct >= 90 ? 'text-sera-error' : pct >= 70 ? 'text-sera-warning' : 'text-sera-text-muted'
+          )}
+        >
           {current.toLocaleString()} / {limit !== undefined ? limit.toLocaleString() : '∞'}
         </span>
       </div>
-      <div className="h-2 w-full bg-sera-surface-hover rounded-full overflow-hidden" data-testid="budget-bar-track">
+      <div
+        className="h-2 w-full bg-sera-surface-hover rounded-full overflow-hidden"
+        data-testid="budget-bar-track"
+      >
         <div
           className={cn('h-full rounded-full transition-all duration-300', color)}
           style={{ width: `${pct}%` }}

@@ -4,21 +4,30 @@ import { app } from '../index.js';
 
 vi.mock('../lib/llm/OpenAIProvider.js', () => ({
   OpenAIProvider: class {
-    async chat() { return { content: 'Mocked response' }; }
-    async *chatStream() { yield { token: 'Mocked response', done: false }; yield { token: '', done: true }; }
-  }
+    async chat() {
+      return { content: 'Mocked response' };
+    }
+    async *chatStream() {
+      yield { token: 'Mocked response', done: false };
+      yield { token: '', done: true };
+    }
+  },
 }));
 
 vi.mock('../services/embedding.service.js', () => ({
-  EmbeddingService: { getInstance: vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([]) }) },
+  EmbeddingService: {
+    getInstance: vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([]) }),
+  },
 }));
 
 vi.mock('../services/vector.service.js', () => ({
   VectorService: class {
-    async search() { return []; }
+    async search() {
+      return [];
+    }
     async upsertPoints() {}
     async deletePoints() {}
-  }
+  },
 }));
 
 vi.mock('../intercom/IntercomService.js', () => {
@@ -38,7 +47,7 @@ describe('OpenAI-Compatible API', () => {
       .post('/v1/chat/completions')
       .send({
         model: 'unknown-agent',
-        messages: [{ role: 'user', content: 'hello' }]
+        messages: [{ role: 'user', content: 'hello' }],
       });
 
     expect(response.status).toBe(404);
@@ -49,7 +58,7 @@ describe('OpenAI-Compatible API', () => {
     const response = await request(app)
       .post('/v1/chat/completions')
       .send({
-        messages: [{ role: 'user', content: 'hello' }]
+        messages: [{ role: 'user', content: 'hello' }],
       });
 
     expect(response.status).toBe(400);
@@ -57,23 +66,19 @@ describe('OpenAI-Compatible API', () => {
   });
 
   it('POST /v1/chat/completions should return 400 if messages are missing', async () => {
-    const response = await request(app)
-      .post('/v1/chat/completions')
-      .send({
-        model: 'architect-prime'
-      });
+    const response = await request(app).post('/v1/chat/completions').send({
+      model: 'architect-prime',
+    });
 
     expect(response.status).toBe(400);
     expect(response.body.error.message).toBe('messages array is required and cannot be empty');
   });
 
   it('POST /v1/chat/completions should return 400 if messages are empty', async () => {
-    const response = await request(app)
-      .post('/v1/chat/completions')
-      .send({
-        model: 'architect-prime',
-        messages: []
-      });
+    const response = await request(app).post('/v1/chat/completions').send({
+      model: 'architect-prime',
+      messages: [],
+    });
 
     expect(response.status).toBe(400);
     expect(response.body.error.message).toBe('messages array is required and cannot be empty');
@@ -88,7 +93,7 @@ describe('OpenAI-Compatible API', () => {
       .send({
         model: 'architect-prime',
         messages: [{ role: 'user', content: 'Say hello' }],
-        stream: false
+        stream: false,
       });
 
     // Note: This test might fail if the real LLM is called and not configured.
@@ -108,7 +113,7 @@ describe('OpenAI-Compatible API', () => {
       .send({
         model: 'architect-prime',
         messages: [{ role: 'user', content: 'Say hello' }],
-        stream: true
+        stream: true,
       });
 
     expect([200, 500, 502]).toContain(response.status);

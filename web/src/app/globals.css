@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @plugin "tailwindcss-animate";
 @plugin "@tailwindcss/typography";
@@ -50,8 +50,8 @@
   --radius-sm: 6px;
 
   /* Fonts */
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
 /* ─── Base ────────────────────────────────────────────────────────────────── */
@@ -63,7 +63,7 @@
 
   body {
     @apply bg-sera-bg text-sera-text font-sans antialiased;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   }
 
   /* Clean focus styles */
@@ -99,7 +99,9 @@
   /* Card / Panel */
   .sera-card {
     @apply bg-sera-surface border border-sera-border rounded-xl;
-    transition: border-color 150ms ease, background-color 150ms ease;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease;
   }
 
   .sera-card:hover {
@@ -206,7 +208,12 @@
     @apply text-sera-text;
 
     /* Headings */
-    & h1, & h2, & h3, & h4, & h5, & h6 {
+    & h1,
+    & h2,
+    & h3,
+    & h4,
+    & h5,
+    & h6 {
       @apply text-sera-text font-semibold mt-3 mb-1.5;
     }
 

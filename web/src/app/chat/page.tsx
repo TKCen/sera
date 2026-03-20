@@ -1,7 +1,26 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Loader2, Bot, User, Brain, Eye, Map, Zap, RotateCcw, ChevronDown, Sparkles, Plus, MessageSquare, Trash2, PanelLeftClose, PanelLeftOpen, Wrench, CheckCircle2 } from 'lucide-react';
+import {
+  Send,
+  Loader2,
+  Bot,
+  User,
+  Brain,
+  Eye,
+  Map,
+  Zap,
+  RotateCcw,
+  ChevronDown,
+  Sparkles,
+  Plus,
+  MessageSquare,
+  Trash2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Wrench,
+  CheckCircle2,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { subscribeToThoughts, subscribeToStream, type ThoughtEvent } from '../../lib/centrifugo';
@@ -86,11 +105,11 @@ export default function ChatPage() {
         if (res.ok) {
           const data = await res.json();
           setInstances(data);
-          
+
           // Check URL query for instance ID first
           const urlParams = new URLSearchParams(window.location.search);
           const queryId = urlParams.get('instance');
-          
+
           if (queryId && data.find((i: AgentInstance) => i.id === queryId)) {
             setSelectedInstanceId(queryId);
           } else if (data.length > 0 && !selectedInstanceId) {
@@ -156,7 +175,7 @@ export default function ChatPage() {
     e.stopPropagation();
     try {
       await fetch(`/api/core/sessions/${id}`, { method: 'DELETE' });
-      setSessions(prev => prev.filter(s => s.id !== id));
+      setSessions((prev) => prev.filter((s) => s.id !== id));
       if (sessionId === id) {
         startNewSession();
       }
@@ -166,7 +185,7 @@ export default function ChatPage() {
   };
 
   const toggleThoughts = useCallback((messageId: string) => {
-    setExpandedThoughts(prev => {
+    setExpandedThoughts((prev) => {
       const next = new Set(prev);
       if (next.has(messageId)) {
         next.delete(messageId);
@@ -202,27 +221,35 @@ export default function ChatPage() {
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMsg, seraMsg]);
+    setMessages((prev) => [...prev, userMsg, seraMsg]);
     setInput('');
     setIsLoading(true);
     // Auto-expand thoughts while streaming
-    setExpandedThoughts(prev => new Set(prev).add(seraMsgId));
+    setExpandedThoughts((prev) => new Set(prev).add(seraMsgId));
 
     // Subscribe to thoughts for this instance
-    const unsubThoughts = subscribeToThoughts(selectedInstanceId || 'unknown', (event: ThoughtEvent) => {
-      setMessages(prev => prev.map(msg =>
-        msg.id === seraMsgId
-          ? {
-              ...msg,
-              thoughts: [...msg.thoughts, {
-                timestamp: event.timestamp,
-                stepType: event.stepType,
-                content: event.content,
-              }],
-            }
-          : msg
-      ));
-    });
+    const unsubThoughts = subscribeToThoughts(
+      selectedInstanceId || 'unknown',
+      (event: ThoughtEvent) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === seraMsgId
+              ? {
+                  ...msg,
+                  thoughts: [
+                    ...msg.thoughts,
+                    {
+                      timestamp: event.timestamp,
+                      stepType: event.stepType,
+                      content: event.content,
+                    },
+                  ],
+                }
+              : msg
+          )
+        );
+      }
+    );
     currentThoughtsRef.current = unsubThoughts;
 
     try {
@@ -248,22 +275,18 @@ export default function ChatPage() {
         messageId,
         // onToken: accumulate text
         (token: string) => {
-          setMessages(prev => prev.map(msg =>
-            msg.id === seraMsgId
-              ? { ...msg, text: msg.text + token }
-              : msg
-          ));
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === seraMsgId ? { ...msg, text: msg.text + token } : msg))
+          );
         },
         // onDone: mark streaming complete
         () => {
-          setMessages(prev => prev.map(msg =>
-            msg.id === seraMsgId
-              ? { ...msg, isStreaming: false }
-              : msg
-          ));
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === seraMsgId ? { ...msg, isStreaming: false } : msg))
+          );
           setIsLoading(false);
           // Auto-collapse thoughts after streaming
-          setExpandedThoughts(prev => {
+          setExpandedThoughts((prev) => {
             const next = new Set(prev);
             next.delete(seraMsgId);
             return next;
@@ -274,19 +297,21 @@ export default function ChatPage() {
           inputRef.current?.focus();
           // Refresh sessions list
           fetchSessions();
-        },
+        }
       );
       currentStreamRef.current = unsubStream;
     } catch (err: any) {
-      setMessages(prev => prev.map(msg =>
-        msg.id === seraMsgId
-          ? {
-              ...msg,
-              text: `Error: ${err.message}. Check your LLM configuration in Settings.`,
-              isStreaming: false,
-            }
-          : msg
-      ));
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === seraMsgId
+            ? {
+                ...msg,
+                text: `Error: ${err.message}. Check your LLM configuration in Settings.`,
+                isStreaming: false,
+              }
+            : msg
+        )
+      );
       setIsLoading(false);
       unsubThoughts();
       currentThoughtsRef.current = null;
@@ -330,22 +355,29 @@ export default function ChatPage() {
   );
 
   // Group sessions by agentName
-  const groupedSessions = sessions.reduce((acc, s) => {
-    const key = s.agentName || 'Unknown Agent';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(s);
-    return acc;
-  }, {} as Record<string, SessionInfo[]>);
+  const groupedSessions = sessions.reduce(
+    (acc, s) => {
+      const key = s.agentName || 'Unknown Agent';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(s);
+      return acc;
+    },
+    {} as Record<string, SessionInfo[]>
+  );
 
   // Session sidebar
   const sessionSidebar = (
-    <div className={`
+    <div
+      className={`
       flex flex-col border-r border-sera-border bg-sera-bg transition-all duration-200
       ${sidebarOpen ? 'w-64 min-w-[256px]' : 'w-0 min-w-0 overflow-hidden'}
-    `}>
+    `}
+    >
       {/* Sidebar header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-sera-border">
-        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim">Sessions</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim">
+          Sessions
+        </span>
         <button
           onClick={startNewSession}
           className="p-1 rounded hover:bg-sera-surface text-sera-text-muted hover:text-sera-accent transition-colors"
@@ -356,9 +388,7 @@ export default function ChatPage() {
       </div>
 
       {/* Agent selector in sidebar */}
-      <div className="px-3 py-2 border-b border-sera-border">
-        {agentSelector}
-      </div>
+      <div className="px-3 py-2 border-b border-sera-border">{agentSelector}</div>
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto">
@@ -384,13 +414,17 @@ export default function ChatPage() {
                       onClick={() => loadSession(s.id)}
                       className={`
                         w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors
-                        ${sessionId === s.id
-                          ? 'bg-sera-accent-soft border-l-2 border-sera-accent'
-                          : 'hover:bg-sera-surface border-l-2 border-transparent'
+                        ${
+                          sessionId === s.id
+                            ? 'bg-sera-accent-soft border-l-2 border-sera-accent'
+                            : 'hover:bg-sera-surface border-l-2 border-transparent'
                         }
                       `}
                     >
-                      <MessageSquare size={13} className="text-sera-text-dim mt-0.5 flex-shrink-0" />
+                      <MessageSquare
+                        size={13}
+                        className="text-sera-text-dim mt-0.5 flex-shrink-0"
+                      />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-sera-text truncate">{s.title}</p>
                         <p className="text-[10px] text-sera-text-dim mt-0.5">
@@ -429,9 +463,10 @@ export default function ChatPage() {
           onClick={() => toggleThoughts(msg.id)}
           className={`
             flex items-center gap-1.5 text-[12px] font-medium transition-colors duration-200 group
-            ${msg.isStreaming && msg.thoughts.length > 0
-              ? 'text-sera-accent'
-              : 'text-sera-text-dim hover:text-sera-text-muted'
+            ${
+              msg.isStreaming && msg.thoughts.length > 0
+                ? 'text-sera-accent'
+                : 'text-sera-text-dim hover:text-sera-text-muted'
             }
           `}
         >
@@ -444,8 +479,7 @@ export default function ChatPage() {
               ? 'Thinking…'
               : msg.isStreaming
                 ? 'Thinking…'
-                : 'Thought process'
-            }
+                : 'Thought process'}
           </span>
           <ChevronDown
             size={12}
@@ -460,9 +494,11 @@ export default function ChatPage() {
             ${isExpanded ? 'max-h-[1200px] opacity-100 mt-2' : 'max-h-0 opacity-0'}
           `}
         >
-          <div className={`pl-3 border-l-2 py-1 space-y-2.5 ${
-            msg.isStreaming ? 'border-sera-accent/50' : 'border-sera-border'
-          } transition-colors duration-300`}>
+          <div
+            className={`pl-3 border-l-2 py-1 space-y-2.5 ${
+              msg.isStreaming ? 'border-sera-accent/50' : 'border-sera-border'
+            } transition-colors duration-300`}
+          >
             {msg.thoughts.map((thought, i) => {
               // ── Reasoning block ──────────────────────────────────────────────
               if (thought.stepType === 'reasoning') {
@@ -474,24 +510,31 @@ export default function ChatPage() {
                     open
                   >
                     <summary className="flex items-center gap-1.5 cursor-pointer list-none select-none mb-2">
-                      <span className={`text-violet-400 flex-shrink-0 ${
-                        msg.isStreaming && isLast ? 'animate-pulse' : ''
-                      }`}>
+                      <span
+                        className={`text-violet-400 flex-shrink-0 ${
+                          msg.isStreaming && isLast ? 'animate-pulse' : ''
+                        }`}
+                      >
                         <Brain size={11} />
                       </span>
                       <span className="text-[11px] font-semibold text-violet-300">
                         {msg.isStreaming && isLast ? 'Reasoning…' : 'Reasoning'}
                       </span>
-                      <ChevronDown size={10} className="ml-auto text-violet-400/60 transition-transform group-open:rotate-180" />
+                      <ChevronDown
+                        size={10}
+                        className="ml-auto text-violet-400/60 transition-transform group-open:rotate-180"
+                      />
                     </summary>
                     <div className="relative ml-3">
-                      <div className="
+                      <div
+                        className="
                         pl-3 border-l border-violet-400/25
                         text-[11.5px] text-sera-text-dim leading-relaxed
                         whitespace-pre-wrap
                         max-h-80 overflow-y-auto
                         [scrollbar-width:thin]
-                      ">
+                      "
+                      >
                         {thought.content}
                       </div>
                       {/* Bottom fade gradient when content may overflow */}
@@ -520,7 +563,10 @@ export default function ChatPage() {
                 }
 
                 return (
-                  <div key={`${thought.timestamp}-${i}`} className="animate-in fade-in slide-in-from-left-2 duration-200">
+                  <div
+                    key={`${thought.timestamp}-${i}`}
+                    className="animate-in fade-in slide-in-from-left-2 duration-200"
+                  >
                     <div className="flex items-center gap-1.5 mb-1">
                       <span className={`flex-shrink-0 ${STEP_COLORS['tool-call']}`}>
                         {STEP_ICONS['tool-call']}
@@ -528,12 +574,16 @@ export default function ChatPage() {
                       <span className="text-[11px] font-semibold text-cyan-300">{toolName}</span>
                     </div>
                     {paramDisplay && (
-                      <pre className="
+                      <pre
+                        className="
                         ml-4 text-[10.5px] text-sera-text-muted leading-relaxed
                         bg-sera-bg/60 border border-sera-border rounded px-2 py-1.5
                         overflow-x-auto whitespace-pre-wrap break-all
                         [scrollbar-width:thin]
-                      ">{paramDisplay}</pre>
+                      "
+                      >
+                        {paramDisplay}
+                      </pre>
                     )}
                   </div>
                 );
@@ -541,7 +591,9 @@ export default function ChatPage() {
 
               // ── Tool-result block ────────────────────────────────────────────
               if (thought.stepType === 'tool-result') {
-                const raw = thought.content.startsWith('Result: ') ? thought.content.substring(8) : thought.content;
+                const raw = thought.content.startsWith('Result: ')
+                  ? thought.content.substring(8)
+                  : thought.content;
                 const wasTruncated = thought.content.endsWith('...');
 
                 // Try to parse as structured data (e.g. web-search returns JSON array)
@@ -551,17 +603,23 @@ export default function ChatPage() {
                   if (Array.isArray(parsed) && parsed.length > 0 && 'title' in parsed[0]) {
                     parsedResults = parsed;
                   }
-                } catch { /* not JSON */ }
+                } catch {
+                  /* not JSON */
+                }
 
                 if (parsedResults) {
                   return (
-                    <div key={`${thought.timestamp}-${i}`} className="animate-in fade-in slide-in-from-left-2 duration-200">
+                    <div
+                      key={`${thought.timestamp}-${i}`}
+                      className="animate-in fade-in slide-in-from-left-2 duration-200"
+                    >
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <span className={`flex-shrink-0 ${STEP_COLORS['tool-result']}`}>
                           {STEP_ICONS['tool-result']}
                         </span>
                         <span className="text-[11px] font-semibold text-teal-300">
-                          {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''} fetched
+                          {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''}{' '}
+                          fetched
                         </span>
                       </div>
                       <div className="ml-4 space-y-1.5">
@@ -590,15 +648,22 @@ export default function ChatPage() {
 
                 // Generic result fallback
                 return (
-                  <div key={`${thought.timestamp}-${i}`} className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+                  <div
+                    key={`${thought.timestamp}-${i}`}
+                    className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
+                  >
                     <span className={`mt-0.5 flex-shrink-0 ${STEP_COLORS['tool-result']}`}>
                       {STEP_ICONS['tool-result']}
                     </span>
                     <div className="text-[11px] leading-relaxed min-w-0">
                       <span className="font-semibold text-teal-300">Result: </span>
-                      <span className="text-sera-text-muted break-all">{raw.length > 300 ? raw.substring(0, 300) + '…' : raw}</span>
+                      <span className="text-sera-text-muted break-all">
+                        {raw.length > 300 ? raw.substring(0, 300) + '…' : raw}
+                      </span>
                       {(wasTruncated || raw.length > 300) && (
-                        <span className="text-sera-text-dim ml-1 italic text-[10px]">({raw.length} chars)</span>
+                        <span className="text-sera-text-dim ml-1 italic text-[10px]">
+                          ({raw.length} chars)
+                        </span>
                       )}
                     </div>
                   </div>
@@ -612,7 +677,9 @@ export default function ChatPage() {
                   key={`${thought.timestamp}-${i}`}
                   className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
                 >
-                  <span className={`mt-0.5 flex-shrink-0 ${STEP_COLORS[thought.stepType] || 'text-sera-text-dim'}`}>
+                  <span
+                    className={`mt-0.5 flex-shrink-0 ${STEP_COLORS[thought.stepType] || 'text-sera-text-dim'}`}
+                  >
                     {STEP_ICONS[thought.stepType] || <Brain size={11} />}
                   </span>
                   <span className="text-[11px] text-sera-text-muted leading-relaxed">
@@ -634,7 +701,7 @@ export default function ChatPage() {
   };
   const sidebarToggle = (
     <button
-      onClick={() => setSidebarOpen(prev => !prev)}
+      onClick={() => setSidebarOpen((prev) => !prev)}
       className="p-1.5 rounded hover:bg-sera-surface text-sera-text-dim hover:text-sera-text transition-colors"
       title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
     >
@@ -681,13 +748,12 @@ export default function ChatPage() {
           </div>
           <h2 className="text-xl font-semibold text-sera-text mb-2">How can I help you?</h2>
           <p className="text-sm text-sera-text-muted mb-8 text-center max-w-md">
-            Start a conversation with Sera. Configure your LLM provider in Settings if you haven&apos;t already.
+            Start a conversation with Sera. Configure your LLM provider in Settings if you
+            haven&apos;t already.
           </p>
 
           {/* Centered input */}
-          <div className="w-full max-w-2xl">
-            {inputBar}
-          </div>
+          <div className="w-full max-w-2xl">{inputBar}</div>
         </div>
       </div>
     );
@@ -703,7 +769,7 @@ export default function ChatPage() {
             {sidebarToggle}
             {sessionId && (
               <span className="text-xs text-sera-text-dim font-mono truncate">
-                {sessions.find(s => s.id === sessionId)?.title || 'New Chat'}
+                {sessions.find((s) => s.id === sessionId)?.title || 'New Chat'}
               </span>
             )}
           </div>
@@ -726,24 +792,31 @@ export default function ChatPage() {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-8 py-6 space-y-5">
           {messages.map((msg) => (
-            <div key={msg.id} className={`flex gap-3 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div
+              key={msg.id}
+              className={`flex gap-3 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
               {msg.sender === 'sera' && (
                 <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
                   <Bot size={16} className="text-sera-accent" />
                 </div>
               )}
-              <div className={`max-w-[70%] rounded-xl px-4 py-3 ${
-                msg.sender === 'user'
-                  ? 'bg-sera-accent text-sera-bg'
-                  : 'bg-sera-surface border border-sera-border text-sera-text'
-              }`}>
+              <div
+                className={`max-w-[70%] rounded-xl px-4 py-3 ${
+                  msg.sender === 'user'
+                    ? 'bg-sera-accent text-sera-bg'
+                    : 'bg-sera-surface border border-sera-border text-sera-text'
+                }`}
+              >
                 {/* Inline thinking block (Gemini-style) */}
                 {renderThinkingBlock(msg)}
 
                 {/* Message content */}
-                <div className={`text-sm break-words leading-relaxed max-w-none ${
-                  msg.sender === 'user' ? 'text-sera-bg' : 'chat-prose'
-                }`}>
+                <div
+                  className={`text-sm break-words leading-relaxed max-w-none ${
+                    msg.sender === 'user' ? 'text-sera-bg' : 'chat-prose'
+                  }`}
+                >
                   {msg.sender === 'user' ? (
                     <p className="whitespace-pre-wrap m-0">{msg.text}</p>
                   ) : msg.isStreaming && !msg.text ? (
@@ -775,9 +848,7 @@ export default function ChatPage() {
 
         {/* Input bar */}
         <div className="border-t border-sera-border p-4">
-          <div className="max-w-3xl mx-auto">
-            {inputBar}
-          </div>
+          <div className="max-w-3xl mx-auto">{inputBar}</div>
         </div>
       </div>
     </div>

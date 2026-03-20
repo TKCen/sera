@@ -16,10 +16,7 @@ import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AgentRouter');
 
-export function createAgentRouter(
-  orchestrator: Orchestrator,
-  agentsDir: string,
-) {
+export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string) {
   const router = Router();
 
   // ── List all agent templates ───────────────────────────────────────────────
@@ -77,7 +74,7 @@ export function createAgentRouter(
     try {
       const { id } = req.params;
       const { taskId, limit, offset } = req.query;
-      
+
       const intercom = orchestrator.getIntercom();
       if (!intercom) {
         return res.status(503).json({ error: 'Intercom service not available' });
@@ -86,9 +83,9 @@ export function createAgentRouter(
       const thoughts = await intercom.getThoughts(id, {
         taskId: taskId as string,
         limit: limit ? parseInt(limit as string) : 50,
-        offset: offset ? parseInt(offset as string) : 0
+        offset: offset ? parseInt(offset as string) : 0,
       });
-      
+
       res.json(thoughts);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -150,7 +147,7 @@ export function createAgentRouter(
       res.status(500).json({ error: err.message });
     }
   });
-  
+
   // ── Get agent thoughts ───────────────────────────────────────────────────
   /**
    * Gets persisted thoughts for a specific agent instance.
@@ -160,7 +157,7 @@ export function createAgentRouter(
     try {
       const { id } = req.params;
       const { taskId, limit, offset } = req.query;
-      
+
       const intercom = orchestrator.getIntercom();
       if (!intercom) {
         return res.status(503).json({ error: 'Intercom service not available' });
@@ -169,9 +166,9 @@ export function createAgentRouter(
       const thoughts = await intercom.getThoughts(id, {
         taskId: taskId as string,
         limit: limit ? parseInt(limit as string) : 50,
-        offset: offset ? parseInt(offset as string) : 0
+        offset: offset ? parseInt(offset as string) : 0,
       });
-      
+
       res.json(thoughts);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -228,7 +225,7 @@ export function createAgentRouter(
 
       res.json({
         reply: response.finalAnswer || response.thought || 'No response.',
-        thought: response.thought
+        thought: response.thought,
       });
     } catch (err: any) {
       logger.error('Preview chat error:', err);

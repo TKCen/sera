@@ -39,15 +39,13 @@ describe('Registry Routes', () => {
       kind: 'Agent',
       metadata: {
         name: 'my-agent',
-        templateRef: 'base-template'
-      }
+        templateRef: 'base-template',
+      },
     };
     registryMock.createInstance.mockResolvedValue({ id: 'uuid-1', ...manifest.metadata });
-    
-    const res = await request(app)
-      .post('/api/registry/instances')
-      .send(manifest);
-    
+
+    const res = await request(app).post('/api/registry/instances').send(manifest);
+
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('uuid-1');
     expect(registryMock.createInstance).toHaveBeenCalledWith({
@@ -55,7 +53,7 @@ describe('Registry Routes', () => {
       templateRef: 'base-template',
       displayName: undefined,
       circle: undefined,
-      overrides: undefined
+      overrides: undefined,
     });
   });
 
@@ -67,9 +65,7 @@ describe('Registry Routes', () => {
   });
 
   it('POST /api/registry/instances returns 400 for invalid manifest', async () => {
-    const res = await request(app)
-      .post('/api/registry/instances')
-      .send({ invalid: 'field' });
+    const res = await request(app).post('/api/registry/instances').send({ invalid: 'field' });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Invalid manifest');
   });

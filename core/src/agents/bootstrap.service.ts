@@ -17,7 +17,7 @@ export class BootstrapService {
   async ensureSeraInstantiated() {
     const instances = await this.registry.listInstances();
     if (instances.length > 0) {
-      return { bootstrapped: true, seraInstanceId: instances.find(i => i.name === 'sera')?.id };
+      return { bootstrapped: true, seraInstanceId: instances.find((i) => i.name === 'sera')?.id };
     }
 
     logger.info('Performing initial bootstrap...');
@@ -37,7 +37,7 @@ export class BootstrapService {
       displayName: 'Sera (Primary Agent)',
       templateRef: 'sera',
       circle: 'default',
-      lifecycleMode: 'persistent'
+      lifecycleMode: 'persistent',
     });
 
     logger.info(`Sera primary agent instantiated with ID: ${sera.id}`);
@@ -47,10 +47,10 @@ export class BootstrapService {
 
   async getBootstrapStatus() {
     const instances = await this.registry.listInstances();
-    const sera = instances.find(i => i.name === 'sera');
+    const sera = instances.find((i) => i.name === 'sera');
     return {
       bootstrapped: !!sera,
-      seraInstanceId: sera?.id || null
+      seraInstanceId: sera?.id || null,
     };
   }
 }

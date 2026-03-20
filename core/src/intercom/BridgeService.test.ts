@@ -85,12 +85,14 @@ describe('BridgeService', () => {
 
     await bridge.handleLocalPublish('bridge:local:remote:updates', message);
 
-    expect(axios.create).toHaveBeenCalledWith(expect.objectContaining({
-      baseURL: 'http://remote-instance/api',
-      headers: expect.objectContaining({
-        Authorization: 'Bearer secret',
-      }),
-    }));
+    expect(axios.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'http://remote-instance/api',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer secret',
+        }),
+      })
+    );
     expect(mockAxiosInstance.post).toHaveBeenCalledWith(
       '/api/intercom/bridge/receive',
       expect.objectContaining({
@@ -98,7 +100,7 @@ describe('BridgeService', () => {
         message: expect.objectContaining({
           payload: { text: 'hello' },
         }),
-      }),
+      })
     );
   });
 

@@ -23,7 +23,7 @@ export type CredentialSource = 'delegation' | 'service-identity' | 'secret';
 export interface ResolvedCredential {
   value: string;
   sourceType: CredentialSource;
-  sourceId: string;  // delegationTokenId | identityId | secretName (never the value)
+  sourceId: string; // delegationTokenId | identityId | secretName (never the value)
 }
 
 export class CredentialResolver {
@@ -40,7 +40,7 @@ export class CredentialResolver {
     service: string,
     agentId: string,
     instanceId: string,
-    actingContext: ActingContext | null,
+    actingContext: ActingContext | null
   ): Promise<ResolvedCredential | null> {
     // 1. Active delegation token
     if (actingContext?.delegationTokenId) {
@@ -48,11 +48,11 @@ export class CredentialResolver {
         service,
         actingContext.delegationTokenId,
         agentId,
-        instanceId,
+        instanceId
       );
       if (result) {
         logger.debug(
-          `[${agentId}] resolved "${service}" via delegation ${actingContext.delegationTokenId}`,
+          `[${agentId}] resolved "${service}" via delegation ${actingContext.delegationTokenId}`
         );
         return result;
       }
@@ -61,7 +61,9 @@ export class CredentialResolver {
     // 2. Agent service identity (instance > template > '*')
     const identityResult = await this.resolveFromServiceIdentity(service, agentId, instanceId);
     if (identityResult) {
-      logger.debug(`[${agentId}] resolved "${service}" via service-identity ${identityResult.sourceId}`);
+      logger.debug(
+        `[${agentId}] resolved "${service}" via service-identity ${identityResult.sourceId}`
+      );
       return identityResult;
     }
 
@@ -83,7 +85,7 @@ export class CredentialResolver {
     service: string,
     delegationTokenId: string,
     agentId: string,
-    instanceId: string,
+    instanceId: string
   ): Promise<ResolvedCredential | null> {
     const { rows } = await pool.query(
       `SELECT * FROM delegation_tokens
@@ -91,7 +93,7 @@ export class CredentialResolver {
          AND (actor_agent_id = $2 OR actor_instance_id::text = $3)
          AND revoked_at IS NULL
          AND (expires_at IS NULL OR expires_at > now())`,
-      [delegationTokenId, agentId, instanceId],
+      [delegationTokenId, agentId, instanceId]
     );
 
     const token = rows[0];
@@ -110,12 +112,12 @@ export class CredentialResolver {
         `UPDATE delegation_tokens
          SET use_count = use_count + 1, last_used_at = now(), revoked_at = now()
          WHERE id = $1`,
-        [delegationTokenId],
+        [delegationTokenId]
       );
     } else {
       await pool.query(
         `UPDATE delegation_tokens SET use_count = use_count + 1, last_used_at = now() WHERE id = $1`,
-        [delegationTokenId],
+        [delegationTokenId]
       );
     }
 
@@ -125,7 +127,7 @@ export class CredentialResolver {
   private async resolveFromServiceIdentity(
     service: string,
     agentId: string,
-    instanceId: string,
+    instanceId: string
   ): Promise<ResolvedCredential | null> {
     // Priority: instance UUID > template name > wildcard '*'
     const { rows } = await pool.query(
@@ -141,7 +143,7 @@ export class CredentialResolver {
            ELSE 3
          END
        LIMIT 1`,
-      [service, instanceId, agentId],
+      [service, instanceId, agentId]
     );
 
     const identity = rows[0];
@@ -156,13 +158,13 @@ export class CredentialResolver {
 
   private async resolveFromSecret(
     service: string,
-    agentId: string,
+    agentId: string
   ): Promise<ResolvedCredential | null> {
     const secretsManager = SecretsManager.getInstance();
     const secrets = await secretsManager.list({ agentId, tags: [service] }, { agentId });
 
     const matching = secrets.find(
-      s => s.allowedAgents.includes(agentId) || s.allowedAgents.includes('*'),
+      (s) => s.allowedAgents.includes(agentId) || s.allowedAgents.includes('*')
     );
     if (!matching) return null;
 

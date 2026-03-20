@@ -44,13 +44,20 @@ export default function CircleDetailPage() {
   }, [circleName]);
 
   if (loading) {
-    return <div className="flex items-center justify-center h-full"><span className="text-sm text-sera-text-muted">Loading…</span></div>;
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-sm text-sera-text-muted">Loading…</span>
+      </div>
+    );
   }
 
   if (error || !circle) {
     return (
       <div className="p-8 max-w-5xl mx-auto">
-        <Link href="/circles" className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+        <Link
+          href="/circles"
+          className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4"
+        >
           <ArrowLeft size={14} /> Back to Circles
         </Link>
         <div className="sera-card-static p-6 text-center">
@@ -64,7 +71,10 @@ export default function CircleDetailPage() {
   return (
     <div className="p-8 max-w-5xl mx-auto">
       {/* Breadcrumb */}
-      <Link href="/circles" className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+      <Link
+        href="/circles"
+        className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4"
+      >
         <ArrowLeft size={14} /> Back to Circles
       </Link>
 
@@ -135,19 +145,25 @@ export default function CircleDetailPage() {
         {/* Party Mode */}
         {circle.partyMode && (
           <div className="sera-card-static p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Party Mode</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">
+              Party Mode
+            </h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-sera-text-muted">Status</span>
-                {circle.partyMode.enabled
-                  ? <span className="sera-badge-success">Enabled</span>
-                  : <span className="sera-badge-muted">Disabled</span>
-                }
+                {circle.partyMode.enabled ? (
+                  <span className="sera-badge-success">Enabled</span>
+                ) : (
+                  <span className="sera-badge-muted">Disabled</span>
+                )}
               </div>
               {circle.partyMode.orchestrator && (
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-sera-text-muted">Orchestrator</span>
-                  <Link href={`/agents/${circle.partyMode.orchestrator}`} className="text-sm text-sera-accent hover:brightness-110">
+                  <Link
+                    href={`/agents/${circle.partyMode.orchestrator}`}
+                    className="text-sm text-sera-accent hover:brightness-110"
+                  >
                     {circle.partyMode.orchestrator}
                   </Link>
                 </div>
@@ -165,10 +181,14 @@ export default function CircleDetailPage() {
         {/* Knowledge */}
         {circle.knowledge && (
           <div className="sera-card-static p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">Knowledge</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-3">
+              Knowledge
+            </h3>
             <div className="flex items-center justify-between">
               <span className="text-xs text-sera-text-muted">Qdrant Collection</span>
-              <span className="text-sm text-sera-text font-mono">{circle.knowledge.qdrantCollection}</span>
+              <span className="text-sm text-sera-text font-mono">
+                {circle.knowledge.qdrantCollection}
+              </span>
             </div>
           </div>
         )}
@@ -179,7 +199,9 @@ export default function CircleDetailPage() {
         <div className="mt-6 sera-card-static p-5">
           <div className="flex items-center gap-2 mb-3">
             <FileText size={14} className="text-sera-accent" />
-            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim">Project Context</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim">
+              Project Context
+            </h3>
           </div>
           <pre className="text-xs text-sera-text-muted leading-relaxed whitespace-pre-wrap font-mono bg-sera-bg/50 rounded-lg p-4 max-h-96 overflow-y-auto">
             {circle.projectContextContent}

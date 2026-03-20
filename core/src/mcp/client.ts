@@ -1,6 +1,6 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('MCPClient');
@@ -11,8 +11,8 @@ export interface MCPClientOptions {
   name: string;
   transport: MCPTransportType;
   command?: string; // for stdio
-  args?: string[];  // for stdio
-  url?: string;     // for http/sse
+  args?: string[]; // for stdio
+  url?: string; // for http/sse
 }
 
 export class MCPClient {
@@ -33,8 +33,8 @@ export class MCPClient {
 
     this.client = new Client(
       {
-        name: "sera-core",
-        version: "1.0.0",
+        name: 'sera-core',
+        version: '1.0.0',
       },
       {
         capabilities: {},
@@ -63,4 +63,3 @@ export class MCPClient {
     await this.transport.close();
   }
 }
-

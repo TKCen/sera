@@ -30,7 +30,7 @@ export function AgentStatusBadge({ agentId, staticStatus, className }: AgentStat
         'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium tracking-wide uppercase',
         'transition-colors duration-300',
         statusVariant(status),
-        className,
+        className
       )}
     >
       <span
@@ -39,7 +39,10 @@ export function AgentStatusBadge({ agentId, staticStatus, className }: AgentStat
           status === 'running' && 'bg-sera-success',
           status === 'error' && 'bg-sera-error',
           status === 'unresponsive' && 'bg-sera-warning',
-          status !== 'running' && status !== 'error' && status !== 'unresponsive' && 'bg-sera-text-muted',
+          status !== 'running' &&
+            status !== 'error' &&
+            status !== 'unresponsive' &&
+            'bg-sera-text-muted'
         )}
       />
       {status}

@@ -17,10 +17,7 @@ import type {
 export class SequentialProcess implements ProcessStrategy {
   readonly type = 'sequential' as const;
 
-  async execute(
-    tasks: ProcessTask[],
-    agents: Map<string, BaseAgent>,
-  ): Promise<ProcessRunResult> {
+  async execute(tasks: ProcessTask[], agents: Map<string, BaseAgent>): Promise<ProcessRunResult> {
     const startTime = Date.now();
     const results: ProcessResult[] = [];
     let previousOutput = '';
@@ -85,10 +82,7 @@ export class SequentialProcess implements ProcessStrategy {
     };
   }
 
-  private resolveAgent(
-    task: ProcessTask,
-    agents: Map<string, BaseAgent>,
-  ): BaseAgent | undefined {
+  private resolveAgent(task: ProcessTask, agents: Map<string, BaseAgent>): BaseAgent | undefined {
     if (task.assignedAgent) {
       return agents.get(task.assignedAgent);
     }

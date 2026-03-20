@@ -83,8 +83,12 @@ describe('Webhook dispatch integration', () => {
 
     expect(axios.post).toHaveBeenCalledWith(
       'https://example.com/webhook',
-      expect.objectContaining({ event: expect.objectContaining({ eventType: 'permission.requested' }) }),
-      expect.objectContaining({ headers: expect.objectContaining({ 'X-Sera-Signature': expect.stringMatching(/^sha256=/) }) }),
+      expect.objectContaining({
+        event: expect.objectContaining({ eventType: 'permission.requested' }),
+      }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Sera-Signature': expect.stringMatching(/^sha256=/) }),
+      })
     );
   });
 

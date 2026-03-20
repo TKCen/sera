@@ -19,7 +19,7 @@ import { PolicyViolationError } from '../sandbox/TierPolicy.js';
 
 export function createSandboxRouter(
   sandboxManager: SandboxManager,
-  resolveManifest: (agentName: string) => AgentManifest | undefined,
+  resolveManifest: (agentName: string) => AgentManifest | undefined
 ): Router {
   const router = Router();
   const toolRunner = new ToolRunner(sandboxManager);
@@ -109,7 +109,7 @@ export function createSandboxRouter(
         throw new PolicyViolationError(
           `Agent "${manifest.metadata.name}" is explicitly denied tool/command "${toolName}"`,
           manifest.metadata.name,
-          'tool_denied',
+          'tool_denied'
         );
       }
 
@@ -118,7 +118,7 @@ export function createSandboxRouter(
           throw new PolicyViolationError(
             `Agent "${manifest.metadata.name}" is not allowed tool/command "${toolName}"`,
             manifest.metadata.name,
-            'tool_not_allowed',
+            'tool_not_allowed'
           );
         }
       }

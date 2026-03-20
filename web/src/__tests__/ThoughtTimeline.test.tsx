@@ -68,9 +68,7 @@ describe('ThoughtTimeline', () => {
   });
 
   it('shows key events empty state in collapsed mode', () => {
-    const thoughts: ThoughtEvent[] = [
-      makeThought('observe', 'Observe only', 0),
-    ];
+    const thoughts: ThoughtEvent[] = [makeThought('observe', 'Observe only', 0)];
 
     render(<ThoughtTimeline thoughts={thoughts} />);
     fireEvent.click(screen.getByText('Key events'));
@@ -82,7 +80,7 @@ describe('ThoughtTimeline', () => {
     const scrollToMock = vi.fn();
 
     const { rerender } = render(
-      <ThoughtTimeline thoughts={[makeThought('observe', 'First thought', 0)]} />,
+      <ThoughtTimeline thoughts={[makeThought('observe', 'First thought', 0)]} />
     );
 
     const scrollContainer = document.querySelector('[class*="overflow-y-auto"]') as HTMLElement;
@@ -101,7 +99,7 @@ describe('ThoughtTimeline', () => {
             makeThought('observe', 'First thought', 0),
             makeThought('act', 'Second thought', 1),
           ]}
-        />,
+        />
       );
     });
 
@@ -111,7 +109,7 @@ describe('ThoughtTimeline', () => {
 
   it('freezes scroll when user has scrolled up', () => {
     const { rerender } = render(
-      <ThoughtTimeline thoughts={[makeThought('observe', 'Initial thought', 0)]} />,
+      <ThoughtTimeline thoughts={[makeThought('observe', 'Initial thought', 0)]} />
     );
 
     const scrollContainer = document.querySelector('[class*="overflow-y-auto"]') as HTMLElement;
@@ -134,7 +132,7 @@ describe('ThoughtTimeline', () => {
             makeThought('observe', 'Initial thought', 0),
             makeThought('plan', 'New thought', 1),
           ]}
-        />,
+        />
       );
     });
 

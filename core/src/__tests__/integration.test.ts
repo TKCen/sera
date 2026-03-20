@@ -19,14 +19,18 @@ vi.mock('../lib/database.js', () => ({
   query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
   pool: {
     query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
-  }
+  },
 }));
 
 vi.mock('../lib/llm/OpenAIProvider.js', () => ({
   OpenAIProvider: class {
-    async chat() { return { content: 'Mock' }; }
-    async *chatStream() { yield { token: 'Mock', done: true }; }
-  }
+    async chat() {
+      return { content: 'Mock' };
+    }
+    async *chatStream() {
+      yield { token: 'Mock', done: true };
+    }
+  },
 }));
 
 vi.mock('../intercom/IntercomService.js', () => ({
@@ -39,11 +43,15 @@ vi.mock('../intercom/IntercomService.js', () => ({
 }));
 
 vi.mock('../services/embedding.service.js', () => ({
-  EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) }
+  EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) },
 }));
 
 vi.mock('../services/vector.service.js', () => ({
-  VectorService: class { async search() { return []; } }
+  VectorService: class {
+    async search() {
+      return [];
+    }
+  },
 }));
 
 let app: any;
@@ -57,7 +65,7 @@ beforeAll(async () => {
   vi.spyOn(Orchestrator.prototype, 'getPrimaryAgent').mockReturnValue({
     role: 'architect-prime',
     name: 'Architect',
-    process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' })
+    process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' }),
   } as any);
 
   // Dynamically import the Express app after mocks and env vars are in place
@@ -101,9 +109,7 @@ describe('SERA Integration Tests', () => {
 
   describe('c. Chat flow', () => {
     it('should hit the orchestrator and use the loaded agent mock', async () => {
-      const res = await request(app)
-        .post('/api/chat')
-        .send({ message: 'Hello, world!' });
+      const res = await request(app).post('/api/chat').send({ message: 'Hello, world!' });
 
       if (res.status === 500) {
         console.error('500 ERROR BODY:', res.body);

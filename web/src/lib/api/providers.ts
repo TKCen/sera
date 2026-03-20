@@ -28,19 +28,16 @@ export function getProviders(): Promise<ProvidersResponse> {
 
 export function updateProvider(
   id: string,
-  config: Partial<Pick<ProviderConfig, 'baseUrl' | 'model'> & { apiKey?: string }>,
+  config: Partial<Pick<ProviderConfig, 'baseUrl' | 'model'> & { apiKey?: string }>
 ): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/providers/${encodeURIComponent(id)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    },
-  );
+  return request<{ success: boolean }>(`/providers/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
 }
 
 export function testProvider(
-  id: string,
+  id: string
 ): Promise<{ success: boolean; provider: string; response?: string; error?: string }> {
   return request(`/providers/${encodeURIComponent(id)}/test`, {
     method: 'POST',
@@ -48,7 +45,7 @@ export function testProvider(
 }
 
 export function setActiveProvider(
-  providerId: string,
+  providerId: string
 ): Promise<{ success: boolean; activeProvider: string }> {
   return request('/providers/active', {
     method: 'POST',

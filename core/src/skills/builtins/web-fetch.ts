@@ -8,11 +8,10 @@ import type { SkillDefinition } from '../types.js';
  */
 export const webFetchSkill: SkillDefinition = {
   id: 'web-fetch',
-  description: 'Fetch a URL and return its text content. Useful for reading web pages, documentation, or API responses.',
+  description:
+    'Fetch a URL and return its text content. Useful for reading web pages, documentation, or API responses.',
   source: 'builtin',
-  parameters: [
-    { name: 'url', type: 'string', description: 'The URL to fetch', required: true },
-  ],
+  parameters: [{ name: 'url', type: 'string', description: 'The URL to fetch', required: true }],
   handler: async (params, _context) => {
     const url = params['url'];
     if (!url || typeof url !== 'string') {
@@ -37,13 +36,12 @@ export const webFetchSkill: SkillDefinition = {
         responseType: 'text',
         headers: {
           'User-Agent': 'SERA-Agent/1.0',
-          'Accept': 'text/html,text/plain,application/json,*/*',
+          Accept: 'text/html,text/plain,application/json,*/*',
         },
       });
 
-      const content = typeof response.data === 'string'
-        ? response.data
-        : JSON.stringify(response.data);
+      const content =
+        typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
 
       return {
         success: true,

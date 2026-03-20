@@ -54,10 +54,7 @@ export class ToolRunner {
 
     // ── Wait for completion with timeout ──────────────────────────────────
     try {
-      const result = await this.waitForCompletion(
-        sandbox.containerId,
-        timeoutMs,
-      );
+      const result = await this.waitForCompletion(sandbox.containerId, timeoutMs);
 
       return {
         ...result,
@@ -82,7 +79,7 @@ export class ToolRunner {
    */
   private async waitForCompletion(
     containerId: string,
-    timeoutMs: number,
+    timeoutMs: number
   ): Promise<Omit<ToolResult, 'durationMs'>> {
     return new Promise((resolve, reject) => {
       let resolved = false;
@@ -100,14 +97,14 @@ export class ToolRunner {
       }, timeoutMs);
 
       this.pollContainer(containerId)
-        .then(result => {
+        .then((result) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timer);
             resolve(result);
           }
         })
-        .catch(err => {
+        .catch((err) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timer);
@@ -120,22 +117,20 @@ export class ToolRunner {
   /**
    * Poll a container until it stops, then capture its logs.
    */
-  private async pollContainer(
-    containerId: string,
-  ): Promise<Omit<ToolResult, 'durationMs'>> {
+  private async pollContainer(containerId: string): Promise<Omit<ToolResult, 'durationMs'>> {
     // Wait for the container to exit by polling (simple approach)
     const POLL_INTERVAL = 500; // ms
-    const MAX_POLLS = 600;     // 300s max
+    const MAX_POLLS = 600; // 300s max
 
     for (let i = 0; i < MAX_POLLS; i++) {
       const containers = this.sandboxManager.listContainers();
-      const sandbox = containers.find(c => c.containerId === containerId);
+      const sandbox = containers.find((c) => c.containerId === containerId);
 
       if (!sandbox || sandbox.status === 'stopped') {
         break;
       }
 
-      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
     }
 
     // Capture logs

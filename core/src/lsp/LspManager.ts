@@ -10,7 +10,7 @@ export class LspManager {
     this.rootDir = rootDir;
   }
 
-  private getLanguageServerConfig(ext: string): { command: string, args: string[] } | null {
+  private getLanguageServerConfig(ext: string): { command: string; args: string[] } | null {
     switch (ext) {
       case '.ts':
       case '.tsx':
@@ -18,7 +18,7 @@ export class LspManager {
       case '.jsx':
         return {
           command: 'typescript-language-server',
-          args: ['--stdio']
+          args: ['--stdio'],
         };
       default:
         return null;
@@ -39,7 +39,7 @@ export class LspManager {
     const client = new LspClient({
       rootUri: URI.file(this.rootDir).toString(),
       serverCommand: config.command,
-      serverArgs: config.args
+      serverArgs: config.args,
     });
 
     await client.start();

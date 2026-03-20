@@ -74,9 +74,15 @@ export class OIDCAuthPlugin implements AuthPlugin {
       const verifyOptions: Parameters<typeof jwtVerify>[2] = {
         issuer: this.issuerUrl,
         algorithms: [
-          'RS256', 'RS384', 'RS512',
-          'PS256', 'PS384', 'PS512',
-          'ES256', 'ES384', 'ES512',
+          'RS256',
+          'RS384',
+          'RS512',
+          'PS256',
+          'PS384',
+          'PS512',
+          'ES256',
+          'ES384',
+          'ES512',
         ],
       };
       if (this.audience) {

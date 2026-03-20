@@ -25,8 +25,8 @@ const DEFAULT_TOOL_TIMEOUT_MS = 60_000;
 export class ToolExecutor {
   constructor(
     private readonly skillRegistry: SkillRegistry,
-    private readonly sandboxManager?: import('../sandbox/SandboxManager.js').SandboxManager,
-  ) { }
+    private readonly sandboxManager?: import('../sandbox/SandboxManager.js').SandboxManager
+  ) {}
 
   // ── Tool Definitions ──────────────────────────────────────────────────────
 
@@ -43,9 +43,9 @@ export class ToolExecutor {
     const denied = tools.denied ?? [];
 
     return skills
-      .filter(skill => {
-        const isDenied = denied.some(p => ToolExecutor.matches(p, skill.id));
-        const isAllowed = allowed.some(p => ToolExecutor.matches(p, skill.id));
+      .filter((skill) => {
+        const isDenied = denied.some((p) => ToolExecutor.matches(p, skill.id));
+        const isAllowed = allowed.some((p) => ToolExecutor.matches(p, skill.id));
         return isAllowed && !isDenied;
       })
       .map((skill) => ToolExecutor.skillToToolDef(skill));
@@ -61,7 +61,7 @@ export class ToolExecutor {
     manifest: AgentManifest,
     agentInstanceId?: string,
     containerId?: string,
-    sessionId?: string,
+    sessionId?: string
   ): Promise<ChatMessage> {
     const { id, function: fn } = toolCall;
     const skillId = fn.name;
@@ -71,23 +71,25 @@ export class ToolExecutor {
     const allowed = tools.allowed ?? ['*'];
     const denied = tools.denied ?? [];
 
-    const isDenied = denied.some(p => ToolExecutor.matches(p, skillId));
-    const isAllowed = allowed.some(p => ToolExecutor.matches(p, skillId));
+    const isDenied = denied.some((p) => ToolExecutor.matches(p, skillId));
+    const isAllowed = allowed.some((p) => ToolExecutor.matches(p, skillId));
 
     if (isDenied || !isAllowed) {
-      await AuditService.getInstance().record({
-        actorType: 'agent',
-        actorId: agentInstanceId || manifest.metadata.name,
-        actingContext: null,
-        eventType: 'tool.denied',
-        payload: { skillId, agentInstanceId }
-      }).catch(err => logger.error('Audit record failed:', err));
+      await AuditService.getInstance()
+        .record({
+          actorType: 'agent',
+          actorId: agentInstanceId || manifest.metadata.name,
+          actingContext: null,
+          eventType: 'tool.denied',
+          payload: { skillId, agentInstanceId },
+        })
+        .catch((err) => logger.error('Audit record failed:', err));
 
       if (this.sandboxManager) {
         (this.sandboxManager as any).audit?.('tool_denied', manifest.metadata.name, {
           skillId,
           agentInstanceId,
-          instanceId: agentInstanceId
+          instanceId: agentInstanceId,
         });
       }
       return {
@@ -113,7 +115,7 @@ export class ToolExecutor {
       // Parse arguments
       let params: Record<string, unknown>;
       try {
-        params = fn.arguments ? parseJson(fn.arguments) as Record<string, unknown> : {};
+        params = fn.arguments ? (parseJson(fn.arguments) as Record<string, unknown>) : {};
       } catch {
         return {
           role: 'tool',
@@ -128,20 +130,21 @@ export class ToolExecutor {
         ToolExecutor.timeout(DEFAULT_TOOL_TIMEOUT_MS, skillId),
       ]);
 
-      await AuditService.getInstance().record({
-        actorType: 'agent',
-        actorId: agentInstanceId || manifest.metadata.name,
-        actingContext: null,
-        eventType: 'tool.called',
-        payload: { skillId, params, success: result.success, error: result.error }
-      }).catch(err => logger.error('Audit record failed:', err));
+      await AuditService.getInstance()
+        .record({
+          actorType: 'agent',
+          actorId: agentInstanceId || manifest.metadata.name,
+          actingContext: null,
+          eventType: 'tool.called',
+          payload: { skillId, params, success: result.success, error: result.error },
+        })
+        .catch((err) => logger.error('Audit record failed:', err));
 
       // Format result
       let content: string;
       if (result.success) {
-        content = typeof result.data === 'string'
-          ? result.data
-          : JSON.stringify(result.data, null, 2);
+        content =
+          typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2);
       } else {
         content = `Error: ${result.error ?? 'Unknown error'}`;
       }
@@ -165,7 +168,6 @@ export class ToolExecutor {
     }
   }
 
-
   /**
    * Execute multiple tool calls in parallel.
    * Returns an array of tool-role ChatMessages in the same order.
@@ -175,9 +177,11 @@ export class ToolExecutor {
     manifest: AgentManifest,
     agentInstanceId?: string,
     containerId?: string,
-    sessionId?: string,
+    sessionId?: string
   ): Promise<ChatMessage[]> {
-    return Promise.all(toolCalls.map((tc) => this.executeTool(tc, manifest, agentInstanceId, containerId, sessionId)));
+    return Promise.all(
+      toolCalls.map((tc) => this.executeTool(tc, manifest, agentInstanceId, containerId, sessionId))
+    );
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -232,16 +236,20 @@ export class ToolExecutor {
   /**
    * Map SkillParameter types to JSON Schema types.
    */
-  private static skillTypeToJsonType(
-    type: SkillParameter['type'],
-  ): string {
+  private static skillTypeToJsonType(type: SkillParameter['type']): string {
     switch (type) {
-      case 'string': return 'string';
-      case 'number': return 'number';
-      case 'boolean': return 'boolean';
-      case 'array': return 'array';
-      case 'object': return 'object';
-      default: return 'string';
+      case 'string':
+        return 'string';
+      case 'number':
+        return 'number';
+      case 'boolean':
+        return 'boolean';
+      case 'array':
+        return 'array';
+      case 'object':
+        return 'object';
+      default:
+        return 'string';
     }
   }
 
@@ -250,7 +258,10 @@ export class ToolExecutor {
    */
   private static truncate(content: string): string {
     if (content.length <= MAX_RESULT_LENGTH) return content;
-    return content.substring(0, MAX_RESULT_LENGTH) + '\n\n[TRUNCATED — output exceeded 50,000 characters]';
+    return (
+      content.substring(0, MAX_RESULT_LENGTH) +
+      '\n\n[TRUNCATED — output exceeded 50,000 characters]'
+    );
   }
 
   /**
@@ -258,10 +269,7 @@ export class ToolExecutor {
    */
   private static timeout(ms: number, skillId: string): Promise<never> {
     return new Promise((_resolve, reject) => {
-      setTimeout(
-        () => reject(new Error(`Tool "${skillId}" timed out after ${ms / 1000}s`)),
-        ms,
-      );
+      setTimeout(() => reject(new Error(`Tool "${skillId}" timed out after ${ms / 1000}s`)), ms);
     });
   }
 }

@@ -1,7 +1,9 @@
 import { request } from './client';
 import type { Schedule } from './types';
 
-export function listSchedules(params: { agentName?: string; status?: string } = {}): Promise<Schedule[]> {
+export function listSchedules(
+  params: { agentName?: string; status?: string } = {}
+): Promise<Schedule[]> {
   const q = new URLSearchParams();
   if (params.agentName) q.set('agentName', params.agentName);
   if (params.status) q.set('status', params.status);
@@ -9,7 +11,12 @@ export function listSchedules(params: { agentName?: string; status?: string } = 
   return request<Schedule[]>(`/schedules${qs ? `?${qs}` : ''}`);
 }
 
-export function createSchedule(data: Omit<Schedule, 'id' | 'source' | 'lastRunAt' | 'lastRunStatus' | 'lastRunOutput' | 'nextRunAt'>): Promise<Schedule> {
+export function createSchedule(
+  data: Omit<
+    Schedule,
+    'id' | 'source' | 'lastRunAt' | 'lastRunStatus' | 'lastRunOutput' | 'nextRunAt'
+  >
+): Promise<Schedule> {
   return request<Schedule>('/schedules', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -18,7 +25,7 @@ export function createSchedule(data: Omit<Schedule, 'id' | 'source' | 'lastRunAt
 
 export function updateSchedule(
   id: string,
-  data: Partial<Pick<Schedule, 'expression' | 'taskPrompt' | 'status' | 'name'>>,
+  data: Partial<Pick<Schedule, 'expression' | 'taskPrompt' | 'status' | 'name'>>
 ): Promise<Schedule> {
   return request<Schedule>(`/schedules/${encodeURIComponent(id)}`, {
     method: 'PATCH',

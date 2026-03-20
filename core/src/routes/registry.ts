@@ -43,7 +43,11 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       const template = await registry.updateTemplate(req.params.name, req.body);
       res.json(template);
     } catch (err: any) {
-      const code = err.message.includes('not found') ? 404 : err.message.includes('builtin') ? 403 : 500;
+      const code = err.message.includes('not found')
+        ? 404
+        : err.message.includes('builtin')
+          ? 403
+          : 500;
       res.status(code).json({ error: err.message });
     }
   });
@@ -53,7 +57,13 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       const template = await registry.deleteTemplate(req.params.name);
       res.json({ message: 'Template deleted', template });
     } catch (err: any) {
-      const code = err.message.includes('not found') ? 404 : err.message.includes('builtin') ? 403 : err.message.includes('referenced') ? 409 : 500;
+      const code = err.message.includes('not found')
+        ? 404
+        : err.message.includes('builtin')
+          ? 403
+          : err.message.includes('referenced')
+            ? 409
+            : 500;
       res.status(code).json({ error: err.message });
     }
   });
@@ -61,7 +71,7 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
   router.get('/templates/:name/instances', async (req, res) => {
     try {
       const instances = await registry.listInstances();
-      const filtered = instances.filter(i => i.template_ref === req.params.name);
+      const filtered = instances.filter((i) => i.template_ref === req.params.name);
       res.json(filtered);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -84,14 +94,14 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       if (!result.success) {
         return res.status(400).json({ error: 'Invalid manifest', details: result.error.format() });
       }
-      
+
       const { metadata, overrides } = result.data;
       const instance = await registry.createInstance({
         name: metadata.name,
         templateRef: metadata.templateRef,
         displayName: metadata.displayName || undefined,
         circle: metadata.circle || undefined,
-        overrides: overrides || {}
+        overrides: overrides || {},
       } as any);
       res.status(201).json(instance);
     } catch (err: any) {

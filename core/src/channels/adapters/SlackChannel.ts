@@ -22,7 +22,7 @@ export class SlackChannel implements Channel {
   constructor(
     readonly id: string,
     readonly name: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ) {
     const appToken = config['appToken'];
     const signingSecret = config['signingSecret'];
@@ -99,7 +99,7 @@ export class SlackChannel implements Channel {
       const svc = ActionTokenService.getInstance();
       const { approveUrl, denyUrl } = svc.buildActionUrls(
         event.actions.approveToken,
-        event.actions.denyToken,
+        event.actions.denyToken
       );
 
       blocks.push({
@@ -134,7 +134,11 @@ export class SlackChannel implements Channel {
         await this.webClient.auth.test();
         return { healthy: true, latencyMs: Date.now() - start };
       }
-      await axios.post(this.cfg.webhookUrl, { text: 'ping' }, { timeout: 5_000, validateStatus: () => true });
+      await axios.post(
+        this.cfg.webhookUrl,
+        { text: 'ping' },
+        { timeout: 5_000, validateStatus: () => true }
+      );
       return { healthy: true, latencyMs: Date.now() - start };
     } catch (err: unknown) {
       return { healthy: false, error: err instanceof Error ? err.message : String(err) };

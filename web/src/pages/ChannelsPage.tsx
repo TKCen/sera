@@ -31,7 +31,10 @@ const SEVERITY_OPTIONS = ['info', 'warning', 'critical'] as const;
 
 // ── Config field definitions per channel type ────────────────────────────────
 
-const CONFIG_FIELDS: Record<ChannelType, Array<{ key: string; label: string; type?: string; placeholder?: string }>> = {
+const CONFIG_FIELDS: Record<
+  ChannelType,
+  Array<{ key: string; label: string; type?: string; placeholder?: string }>
+> = {
   webhook: [
     { key: 'url', label: 'Webhook URL', placeholder: 'https://example.com/hook' },
     { key: 'secret', label: 'Signing Secret (optional)', type: 'password' },
@@ -46,12 +49,20 @@ const CONFIG_FIELDS: Record<ChannelType, Array<{ key: string; label: string; typ
     { key: 'to', label: 'To Addresses (comma-separated)', placeholder: 'ops@example.com' },
   ],
   discord: [
-    { key: 'webhookUrl', label: 'Discord Webhook URL', placeholder: 'https://discord.com/api/webhooks/...' },
+    {
+      key: 'webhookUrl',
+      label: 'Discord Webhook URL',
+      placeholder: 'https://discord.com/api/webhooks/...',
+    },
     { key: 'botToken', label: 'Bot Token (optional)', type: 'password' },
     { key: 'approvalChannelId', label: 'Approval Channel ID (optional)' },
   ],
   slack: [
-    { key: 'webhookUrl', label: 'Slack Incoming Webhook URL', placeholder: 'https://hooks.slack.com/...' },
+    {
+      key: 'webhookUrl',
+      label: 'Slack Incoming Webhook URL',
+      placeholder: 'https://hooks.slack.com/...',
+    },
     { key: 'botToken', label: 'Bot Token (optional)', type: 'password' },
     { key: 'appToken', label: 'App Token (optional)', type: 'password' },
     { key: 'signingSecret', label: 'Signing Secret (optional)', type: 'password' },
@@ -95,7 +106,13 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
   function submit() {
     if (!name.trim()) return;
     const payload: CreateChannelPayload = { name: name.trim(), type, config: buildConfig() };
-    create.mutate(payload, { onSuccess: () => { onClose(); setName(''); setConfigValues({}); } });
+    create.mutate(payload, {
+      onSuccess: () => {
+        onClose();
+        setName('');
+        setConfigValues({});
+      },
+    });
   }
 
   return (
@@ -108,7 +125,11 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
         <div className="space-y-3">
           <div>
             <label className="sera-label">Name</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ops-discord" />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="ops-discord"
+            />
           </div>
 
           <div>
@@ -116,10 +137,15 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
             <select
               className="w-full rounded border border-sera-border bg-sera-surface text-sera-text px-3 py-2 text-sm"
               value={type}
-              onChange={(e) => { setType(e.target.value as ChannelType); setConfigValues({}); }}
+              onChange={(e) => {
+                setType(e.target.value as ChannelType);
+                setConfigValues({});
+              }}
             >
               {CHANNEL_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t}>
+                  {t}
+                </option>
               ))}
             </select>
           </div>
@@ -168,7 +194,7 @@ function CreateRuleDialog({
 
   function toggle(id: string) {
     setSelectedChannels((prev) =>
-      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id],
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
     );
   }
 
@@ -176,7 +202,13 @@ function CreateRuleDialog({
     if (!eventType.trim() || selectedChannels.length === 0) return;
     create.mutate(
       { eventType: eventType.trim(), channelIds: selectedChannels, minSeverity },
-      { onSuccess: () => { onClose(); setEventType('*'); setSelectedChannels([]); } },
+      {
+        onSuccess: () => {
+          onClose();
+          setEventType('*');
+          setSelectedChannels([]);
+        },
+      }
     );
   }
 
@@ -195,7 +227,9 @@ function CreateRuleDialog({
               onChange={(e) => setEventType(e.target.value)}
               placeholder="permission.* or * or agent.crashed"
             />
-            <p className="text-[11px] text-sera-text-dim mt-1">Supports * wildcard, e.g. permission.*</p>
+            <p className="text-[11px] text-sera-text-dim mt-1">
+              Supports * wildcard, e.g. permission.*
+            </p>
           </div>
 
           <div>
@@ -206,7 +240,9 @@ function CreateRuleDialog({
               onChange={(e) => setMinSeverity(e.target.value)}
             >
               {SEVERITY_OPTIONS.map((s) => (
-                <option key={s} value={s}>{s}</option>
+                <option key={s} value={s}>
+                  {s}
+                </option>
               ))}
             </select>
           </div>
@@ -215,7 +251,10 @@ function CreateRuleDialog({
             <label className="sera-label">Target Channels</label>
             <div className="space-y-1 max-h-40 overflow-y-auto border border-sera-border rounded p-2">
               {channels.map((ch) => (
-                <label key={ch.id} className="flex items-center gap-2 cursor-pointer text-sm text-sera-text">
+                <label
+                  key={ch.id}
+                  className="flex items-center gap-2 cursor-pointer text-sm text-sera-text"
+                >
                   <input
                     type="checkbox"
                     checked={selectedChannels.includes(ch.id)}
@@ -291,12 +330,17 @@ export default function ChannelsPage() {
 
         {channelsLoading ? (
           <div className="space-y-2">
-            {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+            {[...Array(2)].map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
           </div>
         ) : channels && channels.length > 0 ? (
           <div className="border border-sera-border rounded-lg overflow-hidden divide-y divide-sera-border">
             {channels.map((ch) => (
-              <div key={ch.id} className="flex items-center gap-3 px-4 py-3 bg-sera-surface hover:bg-sera-surface-hover">
+              <div
+                key={ch.id}
+                className="flex items-center gap-3 px-4 py-3 bg-sera-surface hover:bg-sera-surface-hover"
+              >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-sera-text">{ch.name}</span>
@@ -337,15 +381,23 @@ export default function ChannelsPage() {
       {/* ── Routing Rules ─────────────────────────────────────────────────── */}
       <section>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-sera-text uppercase tracking-wide">Routing Rules</h2>
-          <Button size="sm" onClick={() => setAddRuleOpen(true)} disabled={!channels || channels.length === 0}>
+          <h2 className="text-sm font-semibold text-sera-text uppercase tracking-wide">
+            Routing Rules
+          </h2>
+          <Button
+            size="sm"
+            onClick={() => setAddRuleOpen(true)}
+            disabled={!channels || channels.length === 0}
+          >
             <Plus size={14} className="mr-1" /> Add Rule
           </Button>
         </div>
 
         {rulesLoading ? (
           <div className="space-y-2">
-            {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+            {[...Array(2)].map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
           </div>
         ) : rules && rules.length > 0 ? (
           <div className="border border-sera-border rounded-lg overflow-hidden divide-y divide-sera-border">
@@ -362,14 +414,23 @@ export default function ChannelsPage() {
                     <code className="text-sm font-mono text-sera-accent">{rule.eventType}</code>
                     <Badge variant="default">{rule.minSeverity}+</Badge>
                     <span className="text-xs text-sera-text-dim ml-auto">
-                      → {ruleChannels.map((c) => c.name).join(', ') || `${rule.channelIds.length} channel(s)`}
+                      →{' '}
+                      {ruleChannels.map((c) => c.name).join(', ') ||
+                        `${rule.channelIds.length} channel(s)`}
                     </span>
                   </button>
                   {expanded && (
                     <div className="px-4 pb-3 flex items-center justify-between">
                       <div className="text-xs text-sera-text-dim space-y-1">
-                        <div>Channels: {ruleChannels.map((c) => c.name).join(', ') || rule.channelIds.join(', ')}</div>
-                        {rule.filter && <div>Filter: <code>{JSON.stringify(rule.filter)}</code></div>}
+                        <div>
+                          Channels:{' '}
+                          {ruleChannels.map((c) => c.name).join(', ') || rule.channelIds.join(', ')}
+                        </div>
+                        {rule.filter && (
+                          <div>
+                            Filter: <code>{JSON.stringify(rule.filter)}</code>
+                          </div>
+                        )}
                       </div>
                       <Button
                         size="sm"

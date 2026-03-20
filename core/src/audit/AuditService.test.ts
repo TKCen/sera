@@ -28,7 +28,8 @@ describe('AuditService', () => {
     it('creates a genesis record if empty', async () => {
       // Mock empty DB
       (pool.connect as any).mockResolvedValueOnce({
-        query: vi.fn()
+        query: vi
+          .fn()
           .mockResolvedValueOnce({ rows: [] }) // Check if any records exist
           .mockResolvedValueOnce({ rows: [{ seq: '1' }] }) // nextval for genesis
           .mockResolvedValueOnce({ rows: [] }), // INSERT
@@ -39,7 +40,7 @@ describe('AuditService', () => {
       (pool.query as any).mockResolvedValueOnce({ rows: [] });
 
       await service.initialize();
-      
+
       expect(pool.connect).toHaveBeenCalled();
     });
 
@@ -64,11 +65,13 @@ describe('AuditService', () => {
         actorId: 'agent-1',
         actingContext: null,
         eventType: 'test.event',
-        payload: { foo: 'bar' }
+        payload: { foo: 'bar' },
       });
 
       // Verify the insert call had a hash and prev_hash
-      const insertCall = clientMock.query.mock.calls.find(c => c[0].includes('INSERT INTO audit_trail'));
+      const insertCall = clientMock.query.mock.calls.find((c) =>
+        c[0].includes('INSERT INTO audit_trail')
+      );
       expect(insertCall).toBeDefined();
       if (insertCall) {
         expect(insertCall[1][7]).toBe('prev-hash'); // prev_hash
@@ -89,7 +92,7 @@ describe('AuditService', () => {
           'agent-1',
           'test.event',
           JSON.stringify({ foo: 'bar' }),
-          prev || ''
+          prev || '',
         ].join('|');
         return crypto.createHash('sha256').update(canonical).digest('hex');
       };
@@ -99,9 +102,27 @@ describe('AuditService', () => {
 
       (pool.query as any).mockResolvedValueOnce({
         rows: [
-          { sequence: '2', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: hash1, hash: hash2 },
-          { sequence: '1', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: null, hash: hash1 },
-        ]
+          {
+            sequence: '2',
+            timestamp,
+            actor_type: 'agent',
+            actor_id: 'agent-1',
+            event_type: 'test.event',
+            payload: { foo: 'bar' },
+            prev_hash: hash1,
+            hash: hash2,
+          },
+          {
+            sequence: '1',
+            timestamp,
+            actor_type: 'agent',
+            actor_id: 'agent-1',
+            event_type: 'test.event',
+            payload: { foo: 'bar' },
+            prev_hash: null,
+            hash: hash1,
+          },
+        ],
       });
 
       const result = await service.verifyIntegrity();
@@ -112,8 +133,17 @@ describe('AuditService', () => {
       const timestamp = new Date();
       (pool.query as any).mockResolvedValueOnce({
         rows: [
-          { sequence: '1', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: null, hash: 'WRONG-HASH' },
-        ]
+          {
+            sequence: '1',
+            timestamp,
+            actor_type: 'agent',
+            actor_id: 'agent-1',
+            event_type: 'test.event',
+            payload: { foo: 'bar' },
+            prev_hash: null,
+            hash: 'WRONG-HASH',
+          },
+        ],
       });
 
       const result = await service.verifyIntegrity();
@@ -128,21 +158,40 @@ describe('AuditService', () => {
 
       // Mock computeHash to return consistent hashes but we'll break the prev_hash link
       const originalComputeHash = (service as any).computeHash;
-      (service as any).computeHash = vi.fn()
+      (service as any).computeHash = vi
+        .fn()
         .mockReturnValueOnce('hash-1')
         .mockReturnValueOnce('hash-2');
 
       (pool.query as any).mockResolvedValueOnce({
         rows: [
-          { sequence: '2', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: 'WRONG-PREV-HASH', hash: 'hash-2' },
-          { sequence: '1', timestamp, actor_type: 'agent', actor_id: 'agent-1', event_type: 'test.event', payload: { foo: 'bar' }, prev_hash: null, hash: 'hash-1' },
-        ]
+          {
+            sequence: '2',
+            timestamp,
+            actor_type: 'agent',
+            actor_id: 'agent-1',
+            event_type: 'test.event',
+            payload: { foo: 'bar' },
+            prev_hash: 'WRONG-PREV-HASH',
+            hash: 'hash-2',
+          },
+          {
+            sequence: '1',
+            timestamp,
+            actor_type: 'agent',
+            actor_id: 'agent-1',
+            event_type: 'test.event',
+            payload: { foo: 'bar' },
+            prev_hash: null,
+            hash: 'hash-1',
+          },
+        ],
       });
 
       const result = await service.verifyIntegrity();
       expect(result.valid).toBe(false);
       expect(result.brokenAt).toBe('2');
-      
+
       (service as any).computeHash = originalComputeHash;
     });
   });

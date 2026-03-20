@@ -121,7 +121,9 @@ export class MemoryBlockStore {
   }
 
   /** Find the filepath for an entry by scanning all block dirs.  Returns null if not found. */
-  private async findEntryFile(id: string): Promise<{ filepath: string; type: MemoryBlockType } | null> {
+  private async findEntryFile(
+    id: string
+  ): Promise<{ filepath: string; type: MemoryBlockType } | null> {
     for (const type of MEMORY_BLOCK_TYPES) {
       const dir = this.blockDir(type);
       let files: string[];
@@ -147,7 +149,7 @@ export class MemoryBlockStore {
   private parseWikilinks(content: string): string[] {
     const matches = content.match(/\[\[([^\]]+)\]\]/g);
     if (!matches) return [];
-    return matches.map(m => m.slice(2, -2));
+    return matches.map((m) => m.slice(2, -2));
   }
 
   // ── Block Operations ────────────────────────────────────────────────────────
@@ -314,7 +316,7 @@ export class MemoryBlockStore {
   /** Build the full memory graph (nodes + edges) for visualization. */
   async getGraph(): Promise<MemoryGraph> {
     const blocks = await this.loadAll();
-    const allEntries = blocks.flatMap(b => b.entries);
+    const allEntries = blocks.flatMap((b) => b.entries);
 
     // Build title → id index for wikilink resolution
     const titleToId = new Map<string, string>();
@@ -322,7 +324,7 @@ export class MemoryBlockStore {
       titleToId.set(entry.title.toLowerCase(), entry.id);
     }
 
-    const nodes: GraphNode[] = allEntries.map(e => ({
+    const nodes: GraphNode[] = allEntries.map((e) => ({
       id: e.id,
       title: e.title,
       type: e.type,
@@ -364,14 +366,14 @@ export class MemoryBlockStore {
   /** Full-text search across all entries. */
   async search(query: string, limit?: number): Promise<MemoryEntry[]> {
     const blocks = await this.loadAll();
-    const allEntries = blocks.flatMap(b => b.entries);
+    const allEntries = blocks.flatMap((b) => b.entries);
     const q = query.toLowerCase();
 
     const results = allEntries.filter(
-      e =>
+      (e) =>
         e.title.toLowerCase().includes(q) ||
         e.content.toLowerCase().includes(q) ||
-        e.tags.some(t => t.toLowerCase().includes(q)),
+        e.tags.some((t) => t.toLowerCase().includes(q))
     );
 
     return limit ? results.slice(0, limit) : results;

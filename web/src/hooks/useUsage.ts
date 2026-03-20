@@ -6,11 +6,7 @@ export const usageKeys = {
   budget: (agentName: string) => ['usage', 'budget', agentName] as const,
 };
 
-export function useUsage(params: {
-  groupBy?: 'agent' | 'model';
-  from?: string;
-  to?: string;
-}) {
+export function useUsage(params: { groupBy?: 'agent' | 'model'; from?: string; to?: string }) {
   return useQuery({
     queryKey: usageKeys.all(params),
     queryFn: () => usageApi.getUsage(params),
@@ -30,8 +26,10 @@ export function useAgentBudget(agentName: string) {
 export function usePatchAgentBudget(agentName: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (budget: { maxLlmTokensPerHour?: number | null; maxLlmTokensPerDay?: number | null }) =>
-      usageApi.patchAgentBudget(agentName, budget),
+    mutationFn: (budget: {
+      maxLlmTokensPerHour?: number | null;
+      maxLlmTokensPerDay?: number | null;
+    }) => usageApi.patchAgentBudget(agentName, budget),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: usageKeys.budget(agentName) });
     },

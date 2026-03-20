@@ -40,18 +40,27 @@ describe('MeteringService', () => {
       expect(mockQuery).toHaveBeenCalledTimes(2);
 
       // Check token_usage insert
-      const tokenUsageCall = mockQuery.mock.calls.find(c =>
-        typeof c[0] === 'string' && c[0].includes('INSERT INTO token_usage'),
+      const tokenUsageCall = mockQuery.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO token_usage')
       );
       expect(tokenUsageCall).toBeDefined();
       expect(tokenUsageCall![1]).toEqual(['agent-001', 'dev-circle', 'gpt-4', 100, 50, 150]);
 
       // Check usage_events insert
-      const usageEventsCall = mockQuery.mock.calls.find(c =>
-        typeof c[0] === 'string' && c[0].includes('INSERT INTO usage_events'),
+      const usageEventsCall = mockQuery.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO usage_events')
       );
       expect(usageEventsCall).toBeDefined();
-      expect(usageEventsCall![1]).toEqual(['agent-001', 'gpt-4', 100, 50, 150, 0.003, 250, 'success']);
+      expect(usageEventsCall![1]).toEqual([
+        'agent-001',
+        'gpt-4',
+        100,
+        50,
+        150,
+        0.003,
+        250,
+        'success',
+      ]);
     });
 
     it('should default status to success when not provided', async () => {
@@ -68,8 +77,8 @@ describe('MeteringService', () => {
         totalTokens: 15,
       });
 
-      const usageEventsCall = mockQuery.mock.calls.find(c =>
-        typeof c[0] === 'string' && c[0].includes('INSERT INTO usage_events'),
+      const usageEventsCall = mockQuery.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO usage_events')
       )!;
       // status (index 7) should be 'success'
       expect(usageEventsCall[1]![7]).toBe('success');

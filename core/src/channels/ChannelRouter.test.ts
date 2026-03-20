@@ -182,7 +182,9 @@ describe('ChannelRouter', () => {
 
   it('does not throw when the channel send fails', async () => {
     const ch = makeChannel('c5');
-    ch.send = async () => { throw new Error('network error'); };
+    ch.send = async () => {
+      throw new Error('network error');
+    };
     router.register(ch);
 
     vi.mocked(pool.query)

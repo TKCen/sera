@@ -6,7 +6,11 @@
 
 import type { SkillDefinition } from '../types.js';
 import { KNOWLEDGE_BLOCK_TYPES } from '../../memory/blocks/scoped-types.js';
-import type { KnowledgeBlockType, MemoryScope, Importance } from '../../memory/blocks/scoped-types.js';
+import type {
+  KnowledgeBlockType,
+  MemoryScope,
+  Importance,
+} from '../../memory/blocks/scoped-types.js';
 import { ScopedMemoryBlockStore } from '../../memory/blocks/ScopedMemoryBlockStore.js';
 import { EmbeddingService } from '../../services/embedding.service.js';
 import { VectorService } from '../../services/vector.service.js';
@@ -24,7 +28,7 @@ const writeTimestamps = new Map<string, number[]>();
 function checkRateLimit(agentId: string): boolean {
   const now = Date.now();
   const ts = writeTimestamps.get(agentId) ?? [];
-  const recent = ts.filter(t => now - t < 60_000);
+  const recent = ts.filter((t) => now - t < 60_000);
   recent.push(now);
   writeTimestamps.set(agentId, recent);
   return recent.length <= 10;
@@ -39,7 +43,12 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
     description: 'Store a knowledge entry to personal, circle, or global memory.',
     source: 'builtin',
     parameters: [
-      { name: 'content', type: 'string', description: 'Content of the knowledge block (Markdown)', required: true },
+      {
+        name: 'content',
+        type: 'string',
+        description: 'Content of the knowledge block (Markdown)',
+        required: true,
+      },
       {
         name: 'type',
         type: 'string',
@@ -54,8 +63,18 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
       },
       { name: 'tags', type: 'array', description: 'Optional tag list', required: false },
       { name: 'title', type: 'string', description: 'Optional title', required: false },
-      { name: 'importance', type: 'number', description: 'Importance 1-5 (default 3)', required: false },
-      { name: 'circleId', type: 'string', description: 'Required when scope=circle and agent is in multiple circles', required: false },
+      {
+        name: 'importance',
+        type: 'number',
+        description: 'Importance 1-5 (default 3)',
+        required: false,
+      },
+      {
+        name: 'circleId',
+        type: 'string',
+        description: 'Required when scope=circle and agent is in multiple circles',
+        required: false,
+      },
     ],
     handler: async (params, context) => {
       const content = params['content'];
@@ -64,13 +83,20 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
       }
 
       const rawType = params['type'];
-      if (typeof rawType !== 'string' || !KNOWLEDGE_BLOCK_TYPES.includes(rawType as KnowledgeBlockType)) {
-        return { success: false, error: `"type" must be one of: ${KNOWLEDGE_BLOCK_TYPES.join(', ')}` };
+      if (
+        typeof rawType !== 'string' ||
+        !KNOWLEDGE_BLOCK_TYPES.includes(rawType as KnowledgeBlockType)
+      ) {
+        return {
+          success: false,
+          error: `"type" must be one of: ${KNOWLEDGE_BLOCK_TYPES.join(', ')}`,
+        };
       }
       const type = rawType as KnowledgeBlockType;
 
       const scope: MemoryScope =
-        typeof params['scope'] === 'string' && ['personal', 'circle', 'global'].includes(params['scope'])
+        typeof params['scope'] === 'string' &&
+        ['personal', 'circle', 'global'].includes(params['scope'])
           ? (params['scope'] as MemoryScope)
           : 'personal';
 
@@ -83,12 +109,19 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
       const tags = Array.isArray(params['tags']) ? (params['tags'] as string[]) : [];
       const title = typeof params['title'] === 'string' ? params['title'] : undefined;
       const importanceRaw = typeof params['importance'] === 'number' ? params['importance'] : 3;
-      const importance = (Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance);
+      const importance = Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance;
 
       // ── Personal scope ──────────────────────────────────────────────────
       if (scope === 'personal') {
         const store = new ScopedMemoryBlockStore(MEMORY_ROOT);
-        const block = await store.write({ content, type, agentId, tags, importance, ...(title ? { title } : {}) });
+        const block = await store.write({
+          content,
+          type,
+          agentId,
+          tags,
+          importance,
+          ...(title ? { title } : {}),
+        });
 
         if (embeddingService.isAvailable()) {
           try {
@@ -115,13 +148,20 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
       // ── Circle scope ────────────────────────────────────────────────────
       if (scope === 'circle') {
         const capabilities: string[] = context.manifest.capabilities ?? [];
-        if (!capabilities.includes('knowledgeWrite:circle') && !capabilities.includes('knowledgeWrite:merge-without-approval')) {
-          return { success: false, error: 'Insufficient capability: knowledgeWrite:circle required' };
+        if (
+          !capabilities.includes('knowledgeWrite:circle') &&
+          !capabilities.includes('knowledgeWrite:merge-without-approval')
+        ) {
+          return {
+            success: false,
+            error: 'Insufficient capability: knowledgeWrite:circle required',
+          };
         }
 
-        const circleId = (typeof params['circleId'] === 'string' && params['circleId'])
-          ? params['circleId']
-          : context.manifest.metadata.circle;
+        const circleId =
+          typeof params['circleId'] === 'string' && params['circleId']
+            ? params['circleId']
+            : context.manifest.metadata.circle;
 
         if (!circleId) {
           return { success: false, error: 'No circleId available — agent is not a circle member' };
@@ -132,7 +172,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
           circleId,
           agentId,
           context.agentName,
-          { content, type, agentId, tags, importance, ...(title ? { title } : {}) },
+          { content, type, agentId, tags, importance, ...(title ? { title } : {}) }
         );
 
         const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
@@ -145,30 +185,43 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
             pendingMerge = true;
           }
         } else {
-          await gitService.createMergeRequest(circleId, agentId, context.agentName).catch(err => {
+          await gitService.createMergeRequest(circleId, agentId, context.agentName).catch((err) => {
             logger.warn('Failed to create merge request:', err);
           });
           pendingMerge = true;
         }
 
-        await recordAudit(agentId, 'knowledge.committed', { blockId: block.id, type, scope, circleId });
+        await recordAudit(agentId, 'knowledge.committed', {
+          blockId: block.id,
+          type,
+          scope,
+          circleId,
+        });
         return { success: true, data: { id: block.id, scope, success: true, pendingMerge } };
       }
 
       // ── Global scope ────────────────────────────────────────────────────
       if (scope === 'global') {
         const capabilities: string[] = context.manifest.capabilities ?? [];
-        if (!capabilities.includes('knowledgeWrite:global') && !capabilities.includes('knowledgeWrite:merge-without-approval')) {
-          return { success: false, error: 'Insufficient capability: knowledgeWrite:global required' };
+        if (
+          !capabilities.includes('knowledgeWrite:global') &&
+          !capabilities.includes('knowledgeWrite:merge-without-approval')
+        ) {
+          return {
+            success: false,
+            error: 'Insufficient capability: knowledgeWrite:global required',
+          };
         }
 
         const gitService = KnowledgeGitService.getInstance();
-        const { block } = await gitService.write(
-          'system',
+        const { block } = await gitService.write('system', agentId, context.agentName, {
+          content,
+          type,
           agentId,
-          context.agentName,
-          { content, type, agentId, tags, importance, ...(title ? { title } : {}) },
-        );
+          tags,
+          importance,
+          ...(title ? { title } : {}),
+        });
 
         const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
         let pendingMerge = false;
@@ -180,7 +233,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
             pendingMerge = true;
           }
         } else {
-          await gitService.createMergeRequest('system', agentId, context.agentName).catch(err => {
+          await gitService.createMergeRequest('system', agentId, context.agentName).catch((err) => {
             logger.warn('Failed to create merge request:', err);
           });
           pendingMerge = true;
@@ -198,7 +251,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 async function recordAudit(
   agentId: string,
   eventType: string,
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown>
 ): Promise<void> {
   try {
     await AuditService.getInstance().record({
@@ -206,7 +259,7 @@ async function recordAudit(
       actorId: agentId,
       actingContext: null,
       eventType,
-      payload
+      payload,
     });
   } catch (err) {
     logger.warn('Audit record failed:', err);

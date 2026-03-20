@@ -73,15 +73,21 @@ describe('Epic 09: Real-Time Messaging', () => {
 
     it('restricts viewer to thought streams only', async () => {
       // Allowed
-      const thoughtToken = await intercom.generateSubscriptionToken('user-1', 'thoughts:a', 'viewer');
+      const thoughtToken = await intercom.generateSubscriptionToken(
+        'user-1',
+        'thoughts:a',
+        'viewer'
+      );
       expect(thoughtToken).toBeDefined();
 
       // Denied
-      await expect(intercom.generateSubscriptionToken('user-1', 'tokens:a', 'viewer'))
-        .rejects.toThrow('Role "viewer" is only permitted to subscribe to thought streams');
-      
-      await expect(intercom.generateSubscriptionToken('user-1', 'private:a:b', 'viewer'))
-        .rejects.toThrow('Role "viewer" is only permitted to subscribe to thought streams');
+      await expect(
+        intercom.generateSubscriptionToken('user-1', 'tokens:a', 'viewer')
+      ).rejects.toThrow('Role "viewer" is only permitted to subscribe to thought streams');
+
+      await expect(
+        intercom.generateSubscriptionToken('user-1', 'private:a:b', 'viewer')
+      ).rejects.toThrow('Role "viewer" is only permitted to subscribe to thought streams');
     });
   });
 
@@ -115,7 +121,7 @@ describe('Epic 09: Real-Time Messaging', () => {
     it('rejects a replay (duplicate nonce)', () => {
       const signature = computeSignature(secret, body, timestamp);
       const nonce = 'nonce-123';
-      
+
       const firstTry = webhooks.verifySignature(secret, body, signature, timestamp, nonce);
       expect(firstTry).toBe(true);
 

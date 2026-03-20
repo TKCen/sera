@@ -40,7 +40,7 @@ export class OpenAIProvider implements LLMProvider {
    * Handles tool_calls and tool_call_id fields correctly.
    */
   private static toOpenAIMessages(
-    messages: ChatMessage[],
+    messages: ChatMessage[]
   ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
     return messages.map((msg) => {
       if (msg.role === 'tool') {
@@ -88,8 +88,7 @@ export class OpenAIProvider implements LLMProvider {
           function: {
             name: t.function.name,
             description: t.function.description,
-            parameters: t.function.parameters as unknown as
-              Record<string, unknown>,
+            parameters: t.function.parameters as unknown as Record<string, unknown>,
           },
         }));
       }

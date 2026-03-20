@@ -26,7 +26,7 @@ export interface ChannelEvent {
 export type ReplyHandler = (
   requestId: string,
   decision: 'approve' | 'deny',
-  platformUserId: string,
+  platformUserId: string
 ) => Promise<void>;
 
 export interface ChannelHealth {

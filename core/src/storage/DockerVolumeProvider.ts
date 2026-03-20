@@ -66,11 +66,7 @@ export class DockerVolumeProvider implements StorageProvider {
    * Build a Docker volume mount string.
    * Named volumes use the same `source:target:mode` syntax as bind mounts.
    */
-  getBindMount(
-    agentId: string,
-    containerPath: string,
-    mode: FilesystemMode,
-  ): string {
+  getBindMount(agentId: string, containerPath: string, mode: FilesystemMode): string {
     const volumeName = this.volumeName(agentId);
     return `${volumeName}:${containerPath}:${mode}`;
   }

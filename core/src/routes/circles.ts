@@ -16,7 +16,7 @@ export function createCircleRouter(
   circleRegistry: CircleRegistry,
   circlesDir: string,
   getAgentManifests: () => AgentManifest[],
-  orchestrator: Orchestrator,
+  orchestrator: Orchestrator
 ) {
   const router = Router();
 
@@ -60,7 +60,9 @@ export function createCircleRouter(
     try {
       const body = req.body;
       if (!body || typeof body !== 'object') {
-        return res.status(400).json({ error: 'Request body must be a JSON circle manifest object' });
+        return res
+          .status(400)
+          .json({ error: 'Request body must be a JSON circle manifest object' });
       }
 
       // Ensure required fields
@@ -84,10 +86,12 @@ export function createCircleRouter(
       fs.writeFileSync(filePath, yamlStr, 'utf-8');
 
       // Reload circles
-      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests()).then(() => {
-        res.status(201).json({ success: true, name: body.metadata.name });
-      }).catch(err => res.status(500).json({ error: err.message }));
-
+      circleRegistry
+        .loadFromDirectory(circlesDir, getAgentManifests())
+        .then(() => {
+          res.status(201).json({ success: true, name: body.metadata.name });
+        })
+        .catch((err) => res.status(500).json({ error: err.message }));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -113,14 +117,17 @@ export function createCircleRouter(
       body.kind = 'Circle';
 
       const yamlStr = yaml.dump(body, { lineWidth: 120, noRefs: true, sortKeys: false });
-      const filePath = findCircleFile(circlesDir, name) ?? path.join(circlesDir, `${name}.circle.yaml`);
+      const filePath =
+        findCircleFile(circlesDir, name) ?? path.join(circlesDir, `${name}.circle.yaml`);
       fs.writeFileSync(filePath, yamlStr, 'utf-8');
 
       // Reload
-      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests()).then(() => {
-        res.json({ success: true });
-      }).catch(err => res.status(500).json({ error: err.message }));
-
+      circleRegistry
+        .loadFromDirectory(circlesDir, getAgentManifests())
+        .then(() => {
+          res.json({ success: true });
+        })
+        .catch((err) => res.status(500).json({ error: err.message }));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -143,9 +150,12 @@ export function createCircleRouter(
     try {
       fs.unlinkSync(filePath);
       // Reload to remove from registry
-      circleRegistry.loadFromDirectory(circlesDir, getAgentManifests()).then(() => {
-        res.json({ success: true });
-      }).catch(err => res.status(500).json({ error: err.message }));
+      circleRegistry
+        .loadFromDirectory(circlesDir, getAgentManifests())
+        .then(() => {
+          res.json({ success: true });
+        })
+        .catch((err) => res.status(500).json({ error: err.message }));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -217,7 +227,7 @@ export function createCircleRouter(
       return res.status(403).json({ error: `Agent "${from}" is not a member of circle "${name}"` });
     }
 
-    const fromManifest = getAgentManifests().find(m => m.metadata.name === from);
+    const fromManifest = getAgentManifests().find((m) => m.metadata.name === from);
     if (!fromManifest) {
       return res.status(404).json({ error: `Manifest for agent "${from}" not found` });
     }
@@ -242,7 +252,7 @@ export function createCircleRouter(
 
 function findCircleFile(circlesDir: string, circleName: string): string | undefined {
   if (!fs.existsSync(circlesDir)) return undefined;
-  const files = fs.readdirSync(circlesDir).filter(f => f.endsWith('.circle.yaml'));
+  const files = fs.readdirSync(circlesDir).filter((f) => f.endsWith('.circle.yaml'));
   for (const file of files) {
     try {
       const raw = yaml.load(fs.readFileSync(path.join(circlesDir, file), 'utf-8')) as any;

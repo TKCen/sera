@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
 import { CircleRegistry } from './CircleRegistry.js';
-import { AgentManifestLoader, ManifestValidationError } from '../agents/manifest/AgentManifestLoader.js';
+import {
+  AgentManifestLoader,
+  ManifestValidationError,
+} from '../agents/manifest/AgentManifestLoader.js';
 import type { CircleManifest } from './types.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
 
@@ -70,9 +73,7 @@ describe('CircleRegistry', () => {
           orchestrator: 'agent-a',
           selectionStrategy: 'relevance',
         },
-        connections: [
-          { circle: 'other-circle', bridgeChannels: ['shared'], auth: 'internal' },
-        ],
+        connections: [{ circle: 'other-circle', bridgeChannels: ['shared'], auth: 'internal' }],
         projectContext: {
           path: 'test/project-context.md',
           autoLoad: true,
@@ -94,7 +95,9 @@ describe('CircleRegistry', () => {
 
     it('should reject unknown top-level fields', () => {
       const obj = { ...validCircleObj(), unknownField: 'surprise' };
-      expect(() => CircleRegistry.validateCircle(obj)).toThrow(/unknown top-level field.*unknownField/i);
+      expect(() => CircleRegistry.validateCircle(obj)).toThrow(
+        /unknown top-level field.*unknownField/i
+      );
     });
 
     it('should reject invalid kind', () => {
@@ -118,7 +121,9 @@ describe('CircleRegistry', () => {
     it('should reject missing metadata.displayName', () => {
       const obj = validCircleObj();
       delete (obj['metadata'] as any).displayName;
-      expect(() => CircleRegistry.validateCircle(obj)).toThrow(/missing required field.*displayName/i);
+      expect(() => CircleRegistry.validateCircle(obj)).toThrow(
+        /missing required field.*displayName/i
+      );
     });
 
     it('should reject non-array agents', () => {
@@ -130,7 +135,9 @@ describe('CircleRegistry', () => {
     it('should reject non-string entries in agents', () => {
       const obj = validCircleObj();
       obj['agents'] = ['valid', 42];
-      expect(() => CircleRegistry.validateCircle(obj)).toThrow(/each entry in.*agents.*must be a string/i);
+      expect(() => CircleRegistry.validateCircle(obj)).toThrow(
+        /each entry in.*agents.*must be a string/i
+      );
     });
 
     it('should accept an empty agents array', () => {
@@ -143,7 +150,9 @@ describe('CircleRegistry', () => {
     it('should reject knowledge without qdrantCollection', () => {
       const obj = validCircleObj();
       obj['knowledge'] = { postgresSchema: 'test' };
-      expect(() => CircleRegistry.validateCircle(obj)).toThrow(/missing required field.*qdrantCollection/i);
+      expect(() => CircleRegistry.validateCircle(obj)).toThrow(
+        /missing required field.*qdrantCollection/i
+      );
     });
 
     it('should reject non-array channels', () => {
@@ -178,7 +187,9 @@ describe('CircleRegistry', () => {
   describe('loadCircle', () => {
     it('should load the development example circle from disk', async () => {
       const circlesDir = path.resolve(import.meta.dirname, '..', '..', '..', 'circles');
-      const circle = await CircleRegistry.loadCircle(path.join(circlesDir, 'development.circle.yaml'));
+      const circle = await CircleRegistry.loadCircle(
+        path.join(circlesDir, 'development.circle.yaml')
+      );
 
       expect(circle.metadata.name).toBe('development');
       expect(circle.metadata.displayName).toBe('Development Circle');
@@ -188,7 +199,9 @@ describe('CircleRegistry', () => {
     });
 
     it('should throw for non-existent file', async () => {
-      await expect(CircleRegistry.loadCircle('/nonexistent/path.yaml')).rejects.toThrow(/not found/i);
+      await expect(CircleRegistry.loadCircle('/nonexistent/path.yaml')).rejects.toThrow(
+        /not found/i
+      );
     });
   });
 
@@ -198,7 +211,7 @@ describe('CircleRegistry', () => {
       const circles = await CircleRegistry.loadAllCircles(circlesDir);
 
       expect(circles.length).toBe(2);
-      const names = circles.map(c => c.metadata.name).sort();
+      const names = circles.map((c) => c.metadata.name).sort();
       expect(names).toEqual(['development', 'operations']);
     });
 
@@ -275,7 +288,7 @@ describe('CircleRegistry', () => {
       const summaries = registry.listCircleSummaries();
       expect(summaries.length).toBe(2);
 
-      const devSummary = summaries.find(s => s.name === 'development');
+      const devSummary = summaries.find((s) => s.name === 'development');
       expect(devSummary).toBeDefined();
       expect(devSummary!.hasProjectContext).toBe(true);
       expect(devSummary!.agents).toContain('architect-prime');

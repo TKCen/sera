@@ -69,21 +69,21 @@ export class NotificationService {
             await pool
               .query(
                 `UPDATE notification_dispatches SET status = 'sent', sent_at = now() WHERE id = $1`,
-                [dispatchId],
+                [dispatchId]
               )
               .catch(() => {});
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             await pool
-              .query(
-                `UPDATE notification_dispatches SET last_error = $2 WHERE id = $1`,
-                [dispatchId, msg],
-              )
+              .query(`UPDATE notification_dispatches SET last_error = $2 WHERE id = $1`, [
+                dispatchId,
+                msg,
+              ])
               .catch(() => {});
             throw err; // Let pg-boss handle retry
           }
         }
-      },
+      }
     );
 
     await this.loadChannels();
@@ -126,7 +126,7 @@ export class NotificationService {
     id: string,
     name: string,
     type: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ): Channel | null {
     switch (type) {
       case 'webhook': {
@@ -162,7 +162,7 @@ export class NotificationService {
   async createChannel(
     name: string,
     type: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ): Promise<ChannelRecord> {
     const id = uuidv4();
     const { rows } = await pool.query<{
@@ -176,7 +176,7 @@ export class NotificationService {
       `INSERT INTO notification_channels (id, name, type, config)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
-      [id, name, type, JSON.stringify(config)],
+      [id, name, type, JSON.stringify(config)]
     );
 
     const row = rows[0]!;
@@ -209,7 +209,9 @@ export class NotificationService {
       config: Record<string, unknown>;
       enabled: boolean;
       created_at: Date;
-    }>('SELECT id, name, type, config, enabled, created_at FROM notification_channels ORDER BY created_at');
+    }>(
+      'SELECT id, name, type, config, enabled, created_at FROM notification_channels ORDER BY created_at'
+    );
 
     return rows.map((r) => ({
       id: r.id,
@@ -222,7 +224,15 @@ export class NotificationService {
   }
 
   private redactConfig(type: string, config: Record<string, unknown>): Record<string, unknown> {
-    const sensitive = new Set(['secret', 'password', 'smtpPassword', 'botToken', 'appToken', 'signingSecret', 'token']);
+    const sensitive = new Set([
+      'secret',
+      'password',
+      'smtpPassword',
+      'botToken',
+      'appToken',
+      'signingSecret',
+      'token',
+    ]);
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(config)) {
       out[k] = sensitive.has(k) ? '[redacted]' : v;
@@ -243,7 +253,7 @@ export class NotificationService {
     actionable?: {
       requestId: string;
       requestType: RequestType;
-    },
+    }
   ): void {
     (async () => {
       const event: ChannelEvent = {
@@ -259,7 +269,7 @@ export class NotificationService {
       if (actionable) {
         const tokens = await ActionTokenService.getInstance().issue(
           actionable.requestId,
-          actionable.requestType,
+          actionable.requestType
         );
         event.actions = {
           requestId: actionable.requestId,
@@ -283,7 +293,7 @@ export class NotificationService {
     action: 'approve' | 'deny',
     requestType: RequestType,
     channelSource: string,
-    channelType: string,
+    channelType: string
   ): Promise<void> {
     const decision = action === 'approve' ? 'grant' : 'deny';
 
@@ -310,6 +320,8 @@ export class NotificationService {
       })
       .catch(() => {});
 
-    ChannelRouter.getInstance().markStale(requestId).catch(() => {});
+    ChannelRouter.getInstance()
+      .markStale(requestId)
+      .catch(() => {});
   }
 }

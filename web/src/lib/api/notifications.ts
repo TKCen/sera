@@ -49,10 +49,9 @@ export function deleteChannel(id: string): Promise<{ ok: boolean }> {
 }
 
 export function testChannel(id: string): Promise<{ ok: boolean; error?: string }> {
-  return request<{ ok: boolean; error?: string }>(
-    `/channels/${encodeURIComponent(id)}/test`,
-    { method: 'POST' },
-  );
+  return request<{ ok: boolean; error?: string }>(`/channels/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+  });
 }
 
 export function listRoutingRules(): Promise<RoutingRule[]> {

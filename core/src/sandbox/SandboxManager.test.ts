@@ -8,7 +8,7 @@ import path from 'path';
 
 vi.mock('fs');
 vi.mock('path', async () => {
-  const actual = await vi.importActual('path') as any;
+  const actual = (await vi.importActual('path')) as any;
   return {
     ...actual,
     join: vi.fn((...args) => args.join('/')), // Simplified for tests
@@ -128,7 +128,10 @@ describe('SandboxManager', () => {
         image: 'alpine',
       };
 
-      const resolved = { linux: { cpu_shares: 256, memory_limit: 256 * 1024 * 1024 }, fs: { write: false } };
+      const resolved = {
+        linux: { cpu_shares: 256, memory_limit: 256 * 1024 * 1024 },
+        fs: { write: false },
+      };
       await manager.spawn(manifest, request, resolved, 'inst-ro');
 
       const createArgs = mockDocker.createContainer.mock.calls[0]![0];
@@ -137,7 +140,9 @@ describe('SandboxManager', () => {
       expect(createArgs.HostConfig.Memory).toBe(256 * 1024 * 1024);
       // Bind mount should be read-only for workspace
       const binds = createArgs.HostConfig.Binds;
-      const workspaceBind = binds?.find((b: string) => b.replace(/\\/g, '/').includes('/workspaces/inst-ro:/workspace:ro'));
+      const workspaceBind = binds?.find((b: string) =>
+        b.replace(/\\/g, '/').includes('/workspaces/inst-ro:/workspace:ro')
+      );
       expect(workspaceBind).toBeDefined();
       expect(workspaceBind).toContain(':ro');
     });
@@ -147,11 +152,16 @@ describe('SandboxManager', () => {
     it('should execute a command in a running container', async () => {
       const manifest = makeManifest();
       // First spawn a container
-      await manager.spawn(manifest, {
-        agentName: 'test-agent',
-        type: 'tool',
-        image: 'alpine',
-      }, {}, 'container-abc123');
+      await manager.spawn(
+        manifest,
+        {
+          agentName: 'test-agent',
+          type: 'tool',
+          image: 'alpine',
+        },
+        {},
+        'container-abc123'
+      );
 
       const result = await manager.exec(manifest, {
         containerId: 'container-abc123',
@@ -165,11 +175,16 @@ describe('SandboxManager', () => {
 
     it('should reject exec from a different agent', async () => {
       const manifest = makeManifest();
-      await manager.spawn(manifest, {
-        agentName: 'test-agent',
-        type: 'tool',
-        image: 'alpine',
-      }, {}, 'container-abc123');
+      await manager.spawn(
+        manifest,
+        {
+          agentName: 'test-agent',
+          type: 'tool',
+          image: 'alpine',
+        },
+        {},
+        'container-abc123'
+      );
 
       const otherManifest = makeManifest({
         metadata: {
@@ -185,7 +200,7 @@ describe('SandboxManager', () => {
         manager.exec(otherManifest, {
           containerId: 'container-abc123',
           command: ['cat', '/etc/passwd'],
-        } as any),
+        } as any)
       ).rejects.toThrow(/cannot exec/);
     });
   });
@@ -193,11 +208,16 @@ describe('SandboxManager', () => {
   describe('remove', () => {
     it('should stop and remove a container', async () => {
       const manifest = makeManifest();
-      await manager.spawn(manifest, {
-        agentName: 'test-agent',
-        type: 'tool',
-        image: 'alpine',
-      }, {}, 'container-abc123');
+      await manager.spawn(
+        manifest,
+        {
+          agentName: 'test-agent',
+          type: 'tool',
+          image: 'alpine',
+        },
+        {},
+        'container-abc123'
+      );
 
       await manager.remove(manifest, 'container-abc123');
 
@@ -210,11 +230,16 @@ describe('SandboxManager', () => {
   describe('listContainers', () => {
     it('should list all containers', async () => {
       const manifest = makeManifest();
-      await manager.spawn(manifest, {
-        agentName: 'test-agent',
-        type: 'tool',
-        image: 'alpine',
-      }, {}, 'inst-1');
+      await manager.spawn(
+        manifest,
+        {
+          agentName: 'test-agent',
+          type: 'tool',
+          image: 'alpine',
+        },
+        {},
+        'inst-1'
+      );
 
       const list = manager.listContainers();
       expect(list).toHaveLength(1);
@@ -223,11 +248,16 @@ describe('SandboxManager', () => {
 
     it('should filter by agent name', async () => {
       const manifest = makeManifest();
-      await manager.spawn(manifest, {
-        agentName: 'test-agent',
-        type: 'tool',
-        image: 'alpine',
-      }, {}, 'inst-1');
+      await manager.spawn(
+        manifest,
+        {
+          agentName: 'test-agent',
+          type: 'tool',
+          image: 'alpine',
+        },
+        {},
+        'inst-1'
+      );
 
       expect(manager.listContainers('test-agent')).toHaveLength(1);
       expect(manager.listContainers('other-agent')).toHaveLength(0);
@@ -247,13 +277,18 @@ describe('SandboxManager', () => {
         subagents: { allowed: [{ role: 'researcher', maxInstances: 5 }] },
       } as any);
 
-      await manager.spawn(manifest, {
-        agentName: 'test-agent',
-        type: 'subagent',
-        image: 'node:20',
-      }, {}, 'inst-sub');
+      await manager.spawn(
+        manifest,
+        {
+          agentName: 'test-agent',
+          type: 'subagent',
+          image: 'node:20',
+        },
+        {},
+        'inst-sub'
+      );
 
-      // We need to set subagentRole manually in the request for countSubagents to work 
+      // We need to set subagentRole manually in the request for countSubagents to work
       // since our simplified spawn in test doesn't do role validation anymore
       const sandboxInfo = manager.listContainers()[0]!;
       sandboxInfo.subagentRole = 'researcher';

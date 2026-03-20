@@ -64,7 +64,7 @@ export class MeteringService {
           record.promptTokens,
           record.completionTokens,
           record.totalTokens,
-        ],
+        ]
       ),
       // Full audit table (usage_events)
       query(
@@ -81,14 +81,14 @@ export class MeteringService {
           record.costUsd ?? null,
           record.latencyMs ?? null,
           status,
-        ],
+        ]
       ),
     ]);
 
     logger.info(
       `Usage recorded | agent=${record.agentId} model=${record.model} ` +
-      `prompt=${record.promptTokens} completion=${record.completionTokens} ` +
-      `cost=${record.costUsd?.toFixed(6) ?? 'n/a'} latency=${record.latencyMs ?? 'n/a'}ms`,
+        `prompt=${record.promptTokens} completion=${record.completionTokens} ` +
+        `cost=${record.costUsd?.toFixed(6) ?? 'n/a'} latency=${record.latencyMs ?? 'n/a'}ms`
     );
   }
 
@@ -100,7 +100,7 @@ export class MeteringService {
       `SELECT COALESCE(SUM(total_tokens), 0) AS total
        FROM token_usage
        WHERE agent_id = $1 AND created_at > NOW() - INTERVAL '1 hour' * $2`,
-      [agentId, windowHours],
+      [agentId, windowHours]
     );
     return parseInt(result.rows[0]?.total ?? '0', 10);
   }
@@ -115,16 +115,16 @@ export class MeteringService {
     // Fetch quota (or use defaults)
     const quotaResult = await query(
       `SELECT max_tokens_per_hour, max_tokens_per_day FROM token_quotas WHERE agent_id = $1`,
-      [agentId],
+      [agentId]
     );
 
     const hourlyQuota = parseInt(
       quotaResult.rows[0]?.max_tokens_per_hour ?? String(DEFAULT_HOURLY_QUOTA),
-      10,
+      10
     );
     const dailyQuota = parseInt(
       quotaResult.rows[0]?.max_tokens_per_day ?? String(DEFAULT_DAILY_QUOTA),
-      10,
+      10
     );
 
     // Fetch current usage
@@ -134,13 +134,15 @@ export class MeteringService {
     const allowed = hourlyUsed < hourlyQuota && dailyUsed < dailyQuota;
 
     if (!allowed) {
-      await AuditService.getInstance().record({
-        actorType: 'agent',
-        actorId: agentId,
-        actingContext: null,
-        eventType: 'budget.exceeded',
-        payload: { hourlyUsed, hourlyQuota, dailyUsed, dailyQuota }
-      }).catch(err => logger.error('Audit record failed:', err));
+      await AuditService.getInstance()
+        .record({
+          actorType: 'agent',
+          actorId: agentId,
+          actingContext: null,
+          eventType: 'budget.exceeded',
+          payload: { hourlyUsed, hourlyQuota, dailyUsed, dailyQuota },
+        })
+        .catch((err) => logger.error('Audit record failed:', err));
     }
 
     return { allowed, hourlyUsed, hourlyQuota, dailyUsed, dailyQuota };
@@ -192,10 +194,10 @@ export class MeteringService {
        ${where}
        GROUP BY DATE_TRUNC('${truncFn}', created_at)${params.agentId ? '' : ', agent_id'}
        ORDER BY period ASC`,
-      args,
+      args
     );
 
-    return result.rows.map(row => ({
+    return result.rows.map((row) => ({
       period: (row.period as Date).toISOString(),
       ...(params.agentId ? {} : { agentId: row.agent_id as string }),
       totalTokens: parseInt(row.total_tokens, 10),
@@ -218,7 +220,7 @@ export class MeteringService {
          COALESCE(SUM(cost_usd), 0) AS cost_usd,
          COUNT(DISTINCT agent_id) AS agent_count
        FROM usage_events
-       WHERE created_at >= DATE_TRUNC('day', NOW())`,
+       WHERE created_at >= DATE_TRUNC('day', NOW())`
     );
 
     const row = result.rows[0];

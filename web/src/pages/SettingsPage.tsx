@@ -1,9 +1,26 @@
 import { useState } from 'react';
 import {
-  Zap, Save, CheckCircle, XCircle, RefreshCw, ChevronDown, ChevronUp,
-  Server, Cloud, Radio, Layers, Settings2, Sliders, Activity,
+  Zap,
+  Save,
+  CheckCircle,
+  XCircle,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  Server,
+  Cloud,
+  Radio,
+  Layers,
+  Settings2,
+  Sliders,
+  Activity,
 } from 'lucide-react';
-import { useProviders, useUpdateProvider, useSetActiveProvider, useLLMConfig } from '@/hooks/useProviders';
+import {
+  useProviders,
+  useUpdateProvider,
+  useSetActiveProvider,
+  useLLMConfig,
+} from '@/hooks/useProviders';
 import { useCircuitBreakers, useResetCircuitBreaker } from '@/hooks/useHealth';
 import * as providersApi from '@/lib/api/providers';
 import { Spinner } from '@/components/ui/spinner';
@@ -50,7 +67,9 @@ function TierBadge({ tier }: { tier: string }) {
 
 function ProviderCard({ provider }: { provider: ProviderExtended }) {
   const [expanded, setExpanded] = useState(false);
-  const [baseUrl, setBaseUrl] = useState(provider.savedConfig?.baseUrl ?? provider.defaultBaseUrl ?? '');
+  const [baseUrl, setBaseUrl] = useState(
+    provider.savedConfig?.baseUrl ?? provider.defaultBaseUrl ?? ''
+  );
   const [apiKey, setApiKey] = useState(provider.savedConfig?.apiKey ?? '');
   const [model, setModel] = useState(provider.savedConfig?.model ?? provider.models?.[0]?.id ?? '');
   const [testStatus, setTestStatus] = useState<TestStatus>('idle');
@@ -64,7 +83,9 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
     try {
       const result = await providersApi.testProvider(provider.id);
       setTestStatus(result.success ? 'success' : 'error');
-      setTestMessage(result.success ? 'Connection successful' : (result.error ?? 'Connection failed'));
+      setTestMessage(
+        result.success ? 'Connection successful' : (result.error ?? 'Connection failed')
+      );
     } catch {
       setTestStatus('error');
       setTestMessage('Connection failed');
@@ -77,7 +98,9 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
 
   const borderClass = provider.isActive
     ? 'border-sera-accent/40 shadow-[0_0_15px_rgba(0,229,255,0.08)]'
-    : provider.configured ? 'border-sera-success/30' : '';
+    : provider.configured
+      ? 'border-sera-success/30'
+      : '';
 
   return (
     <div className={`sera-card-static overflow-hidden ${borderClass}`}>
@@ -86,11 +109,13 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
         className="w-full p-4 flex items-center justify-between hover:bg-sera-surface-hover transition-colors"
       >
         <div className="flex items-center gap-3">
-          <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-            provider.category === 'local'
-              ? 'bg-amber-500/10 border border-amber-500/20'
-              : 'bg-sera-accent-soft border border-sera-border-active'
-          }`}>
+          <div
+            className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+              provider.category === 'local'
+                ? 'bg-amber-500/10 border border-amber-500/20'
+                : 'bg-sera-accent-soft border border-sera-border-active'
+            }`}
+          >
             {provider.category === 'local' ? (
               <Server size={16} className="text-amber-400" />
             ) : (
@@ -114,7 +139,11 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
           ) : (
             <span className="w-2 h-2 rounded-full bg-sera-text-dim/30" />
           )}
-          {expanded ? <ChevronUp size={14} className="text-sera-text-dim" /> : <ChevronDown size={14} className="text-sera-text-dim" />}
+          {expanded ? (
+            <ChevronUp size={14} className="text-sera-text-dim" />
+          ) : (
+            <ChevronDown size={14} className="text-sera-text-dim" />
+          )}
         </div>
       </button>
 
@@ -122,12 +151,20 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
         <div className="border-t border-sera-border p-4 space-y-4 bg-sera-bg/50">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5 col-span-2">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">Base API URL</label>
-              <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="sera-input font-mono text-xs" />
+              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                Base API URL
+              </label>
+              <input
+                type="text"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                className="sera-input font-mono text-xs"
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
-                API Key {!provider.requiresKey && <span className="text-sera-text-dim/50">(optional)</span>}
+                API Key{' '}
+                {!provider.requiresKey && <span className="text-sera-text-dim/50">(optional)</span>}
               </label>
               <input
                 type="password"
@@ -138,21 +175,31 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">Model</label>
-              <select value={model} onChange={(e) => setModel(e.target.value)} className="sera-input text-xs appearance-none">
+              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                Model
+              </label>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="sera-input text-xs appearance-none"
+              >
                 {provider.models?.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
                 ))}
               </select>
             </div>
           </div>
 
           {testStatus !== 'idle' && testStatus !== 'testing' && (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
-              testStatus === 'success'
-                ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
-                : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
-            }`}>
+            <div
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
+                testStatus === 'success'
+                  ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
+                  : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
+              }`}
+            >
               {testStatus === 'success' ? <CheckCircle size={14} /> : <XCircle size={14} />}
               <span>{testMessage}</span>
             </div>
@@ -167,11 +214,17 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
 
           <div className="flex gap-3">
             <button
-              onClick={() => { void handleTest(); }}
+              onClick={() => {
+                void handleTest();
+              }}
               disabled={testStatus === 'testing'}
               className="sera-btn-ghost flex-1 border border-sera-border py-2.5 text-xs disabled:opacity-30"
             >
-              {testStatus === 'testing' ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} />}
+              {testStatus === 'testing' ? (
+                <RefreshCw className="animate-spin" size={14} />
+              ) : (
+                <Zap size={14} />
+              )}
               Test Connection
             </button>
             <button
@@ -179,7 +232,11 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
               disabled={updateProvider.isPending}
               className="sera-btn-primary flex-1 text-xs disabled:opacity-30"
             >
-              {updateProvider.isPending ? <RefreshCw className="animate-spin" size={14} /> : <Save size={14} />}
+              {updateProvider.isPending ? (
+                <RefreshCw className="animate-spin" size={14} />
+              ) : (
+                <Save size={14} />
+              )}
               Save Config
             </button>
             {!provider.isActive && provider.configured && (
@@ -224,7 +281,9 @@ export default function SettingsPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Settings</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Configure providers, models, and system behavior</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            Configure providers, models, and system behavior
+          </p>
         </div>
       </div>
 
@@ -256,21 +315,31 @@ export default function SettingsPage() {
               <section>
                 <div className="flex items-center gap-2 mb-4">
                   <Server size={14} className="text-amber-400" />
-                  <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">Local Providers</h2>
-                  <span className="text-[11px] text-sera-text-dim/60">— Running on your homelab</span>
+                  <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
+                    Local Providers
+                  </h2>
+                  <span className="text-[11px] text-sera-text-dim/60">
+                    — Running on your homelab
+                  </span>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {localProviders.map((p) => <ProviderCard key={p.id} provider={p} />)}
+                  {localProviders.map((p) => (
+                    <ProviderCard key={p.id} provider={p} />
+                  ))}
                 </div>
               </section>
               <section>
                 <div className="flex items-center gap-2 mb-4">
                   <Cloud size={14} className="text-sera-accent" />
-                  <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">Cloud Providers</h2>
+                  <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
+                    Cloud Providers
+                  </h2>
                   <span className="text-[11px] text-sera-text-dim/60">— API key required</span>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {cloudProviders.map((p) => <ProviderCard key={p.id} provider={p} />)}
+                  {cloudProviders.map((p) => (
+                    <ProviderCard key={p.id} provider={p} />
+                  ))}
                 </div>
               </section>
             </div>
@@ -295,13 +364,20 @@ export default function SettingsPage() {
                     </thead>
                     <tbody>
                       {allModels.map((m, i) => (
-                        <tr key={`${m.provider}-${m.id}-${i}`} className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors">
+                        <tr
+                          key={`${m.provider}-${m.id}-${i}`}
+                          className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                        >
                           <td className="py-3 px-3">
                             <span className="text-sera-text">{m.name}</span>
-                            <span className="text-sera-text-dim text-[10px] block font-mono">{m.id}</span>
+                            <span className="text-sera-text-dim text-[10px] block font-mono">
+                              {m.id}
+                            </span>
                           </td>
                           <td className="py-3 px-3 text-sera-text-muted">{m.provider}</td>
-                          <td className="py-3 px-3"><TierBadge tier={m.tier} /></td>
+                          <td className="py-3 px-3">
+                            <TierBadge tier={m.tier} />
+                          </td>
                           <td className="py-3 px-3 text-right text-sera-text-muted font-mono text-xs">
                             {m.contextWindow >= 1000000
                               ? `${(m.contextWindow / 1000000).toFixed(1)}M`
@@ -319,7 +395,11 @@ export default function SettingsPage() {
           {tab === 'circuit-breakers' && (
             <CircuitBreakersTab
               breakers={circuitBreakers ?? []}
-              onReset={(p) => { void resetCB.mutateAsync(p).then(() => { void refetchCB(); }); }}
+              onReset={(p) => {
+                void resetCB.mutateAsync(p).then(() => {
+                  void refetchCB();
+                });
+              }}
               resetting={resetCB.isPending}
             />
           )}
@@ -327,18 +407,26 @@ export default function SettingsPage() {
           {tab === 'general' && (
             <div className="sera-card-static p-6 space-y-6 max-w-xl">
               <div>
-                <h3 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase mb-4">Agent Defaults</h3>
+                <h3 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase mb-4">
+                  Agent Defaults
+                </h3>
                 <div className="space-y-4">
                   <div className="space-y-1.5">
                     <div className="flex justify-between items-center mb-1">
-                      <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">Temperature</label>
-                      <span className="text-xs text-sera-accent font-mono">{llmConfig?.model ?? '—'}</span>
+                      <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                        Temperature
+                      </label>
+                      <span className="text-xs text-sera-accent font-mono">
+                        {llmConfig?.model ?? '—'}
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
               <div className="border-t border-sera-border pt-6">
-                <h3 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase mb-3">System Info</h3>
+                <h3 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase mb-3">
+                  System Info
+                </h3>
                 <div className="space-y-2 text-xs">
                   <div className="flex justify-between">
                     <span className="text-sera-text-muted">Platform</span>
@@ -373,14 +461,21 @@ function CircuitBreakersTab({
   onReset,
   resetting,
 }: {
-  breakers: Array<{ provider: string; state: string; failures: number; lastFailureAt?: string; nextRetryAt?: string }>;
+  breakers: Array<{
+    provider: string;
+    state: string;
+    failures: number;
+    lastFailureAt?: string;
+    nextRetryAt?: string;
+  }>;
   onReset: (provider: string) => void;
   resetting: boolean;
 }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-sera-text-muted">
-        Circuit breakers protect against repeated failures. When open, requests to the provider are paused.
+        Circuit breakers protect against repeated failures. When open, requests to the provider are
+        paused.
       </p>
       {breakers.length === 0 ? (
         <div className="sera-card-static p-8 text-center text-sera-text-dim text-sm">
@@ -401,7 +496,10 @@ function CircuitBreakersTab({
             </thead>
             <tbody>
               {breakers.map((cb) => (
-                <tr key={cb.provider} className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors">
+                <tr
+                  key={cb.provider}
+                  className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                >
                   <td className="py-3 px-4 font-mono text-xs text-sera-text">{cb.provider}</td>
                   <td className="py-3 px-4">{cbStateBadge(cb.state)}</td>
                   <td className="py-3 px-4 text-sera-text-muted">{cb.failures}</td>
@@ -413,7 +511,12 @@ function CircuitBreakersTab({
                   </td>
                   <td className="py-3 px-4 text-right">
                     {cb.state !== 'closed' && (
-                      <Button size="sm" variant="ghost" disabled={resetting} onClick={() => onReset(cb.provider)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={resetting}
+                        onClick={() => onReset(cb.provider)}
+                      >
                         <RefreshCw size={12} /> Reset
                       </Button>
                     )}

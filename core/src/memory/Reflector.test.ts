@@ -10,7 +10,9 @@ import type { LLMProvider } from '../lib/llm/types.js';
 function createMockLLM(summary: string = 'Compacted summary of entries.'): LLMProvider {
   return {
     chat: vi.fn().mockResolvedValue({ content: summary }),
-    async *chatStream() { yield { token: summary, done: true }; },
+    async *chatStream() {
+      yield { token: summary, done: true };
+    },
   };
 }
 

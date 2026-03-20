@@ -79,9 +79,7 @@ describe('ToolExecutor', () => {
           id: 'file-read',
           description: 'Read a file',
           source: 'builtin',
-          parameters: [
-            { name: 'path', type: 'string', description: 'File path', required: true },
-          ],
+          parameters: [{ name: 'path', type: 'string', description: 'File path', required: true }],
         },
       ];
 
@@ -130,9 +128,7 @@ describe('ToolExecutor', () => {
           id: 'optional-tool',
           description: 'All optional',
           source: 'builtin',
-          parameters: [
-            { name: 'foo', type: 'string', description: 'Optional', required: false },
-          ],
+          parameters: [{ name: 'foo', type: 'string', description: 'Optional', required: false }],
         },
       ];
 
@@ -164,15 +160,19 @@ describe('ToolExecutor', () => {
       expect(result.role).toBe('tool');
       expect(result.tool_call_id).toBe('tc-1');
       expect(result.content).toContain('hello');
-      expect(registry.invoke).toHaveBeenCalledWith('test-skill', { input: 'world' }, {
-        agentName: 'test-agent',
-        workspacePath: 'workspaces/test-agent',
-        tier: 2,
-        manifest: minimalManifest(),
-        agentInstanceId: undefined,
-        containerId: undefined,
-        sandboxManager: undefined,
-      });
+      expect(registry.invoke).toHaveBeenCalledWith(
+        'test-skill',
+        { input: 'world' },
+        {
+          agentName: 'test-agent',
+          workspacePath: 'workspaces/test-agent',
+          tier: 2,
+          manifest: minimalManifest(),
+          agentInstanceId: undefined,
+          containerId: undefined,
+          sandboxManager: undefined,
+        }
+      );
     });
 
     it('should return string data as-is', async () => {

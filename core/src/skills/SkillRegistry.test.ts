@@ -10,9 +10,7 @@ function dummySkill(id: string, source: 'builtin' | 'mcp' | 'custom' = 'builtin'
     id,
     description: `Test skill: ${id}`,
     source,
-    parameters: [
-      { name: 'input', type: 'string', description: 'Test input', required: true },
-    ],
+    parameters: [{ name: 'input', type: 'string', description: 'Test input', required: true }],
     handler: async (params) => {
       return { success: true, data: `echo:${String(params['input'])}` };
     },
@@ -90,7 +88,7 @@ describe('SkillRegistry', () => {
       registry.register(dummySkill('b', 'mcp'));
       const list = registry.listAll();
       expect(list).toHaveLength(2);
-      expect(list.map(s => s.id).sort()).toEqual(['a', 'b']);
+      expect(list.map((s) => s.id).sort()).toEqual(['a', 'b']);
       // SkillInfo should not have handler
       for (const info of list) {
         expect(info).not.toHaveProperty('handler');
@@ -106,7 +104,7 @@ describe('SkillRegistry', () => {
 
       const manifest = minimalManifest({ skills: ['skill-a', 'skill-b'] });
       const list = registry.listForAgent(manifest);
-      expect(list.map(s => s.id).sort()).toEqual(['skill-a', 'skill-b']);
+      expect(list.map((s) => s.id).sort()).toEqual(['skill-a', 'skill-b']);
     });
 
     it('should include tools.allowed that are registered as skills', () => {
@@ -117,7 +115,7 @@ describe('SkillRegistry', () => {
         tools: { allowed: ['file-read', 'web-search'] },
       });
       const list = registry.listForAgent(manifest);
-      expect(list.map(s => s.id).sort()).toEqual(['file-read', 'web-search']);
+      expect(list.map((s) => s.id).sort()).toEqual(['file-read', 'web-search']);
     });
 
     it('should subtract tools.denied from the list', () => {
@@ -128,7 +126,7 @@ describe('SkillRegistry', () => {
         tools: { allowed: ['file-read', 'web-search'], denied: ['web-search'] },
       });
       const list = registry.listForAgent(manifest);
-      expect(list.map(s => s.id)).toEqual(['file-read']);
+      expect(list.map((s) => s.id)).toEqual(['file-read']);
     });
 
     it('should not include unregistered skills from manifest', () => {
@@ -136,7 +134,7 @@ describe('SkillRegistry', () => {
 
       const manifest = minimalManifest({ skills: ['exists', 'does-not-exist'] });
       const list = registry.listForAgent(manifest);
-      expect(list.map(s => s.id)).toEqual(['exists']);
+      expect(list.map((s) => s.id)).toEqual(['exists']);
     });
   });
 
@@ -159,7 +157,9 @@ describe('SkillRegistry', () => {
     it('should catch handler exceptions and return error', async () => {
       registry.register({
         ...dummySkill('broken'),
-        handler: async () => { throw new Error('boom'); },
+        handler: async () => {
+          throw new Error('boom');
+        },
       });
       const result = await registry.invoke('broken', {}, {} as any);
       expect(result.success).toBe(false);
@@ -298,9 +298,11 @@ describe('SkillRegistry', () => {
 
     it('should skip servers where getClient returns undefined', async () => {
       const mockMCPRegistry = {
-        getAllTools: vi.fn().mockResolvedValue([
-          { serverName: 'gone', tools: [{ name: 'ghost', description: '', inputSchema: {} }] },
-        ]),
+        getAllTools: vi
+          .fn()
+          .mockResolvedValue([
+            { serverName: 'gone', tools: [{ name: 'ghost', description: '', inputSchema: {} }] },
+          ]),
         getClient: vi.fn().mockReturnValue(undefined),
       };
 

@@ -19,7 +19,7 @@ export class APIError extends Error {
   constructor(
     public readonly status: number,
     message: string,
-    public readonly code?: string,
+    public readonly code?: string
   ) {
     super(message);
     this.name = 'APIError';
@@ -40,10 +40,7 @@ function notifyUnauthorized(): void {
   unauthorizedListeners.forEach((fn) => fn());
 }
 
-export async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
+export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const authHeader = _getAuthHeader();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -76,10 +73,7 @@ export async function request<T>(
   return response.json() as Promise<T>;
 }
 
-export async function requestText(
-  path: string,
-  options: RequestInit = {},
-): Promise<string> {
+export async function requestText(path: string, options: RequestInit = {}): Promise<string> {
   const authHeader = _getAuthHeader();
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),

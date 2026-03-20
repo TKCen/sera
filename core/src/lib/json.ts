@@ -16,8 +16,9 @@ export function parseJson<T = any>(text: string): T {
 
   // 1. Strip markdown code blocks if present
   // Matches ```json ... ``` or ``` ... ```
-  const codeBlockMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/m)
-                      || cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const codeBlockMatch =
+    cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/m) ||
+    cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
 
   if (codeBlockMatch && codeBlockMatch[1]) {
     cleaned = codeBlockMatch[1].trim();
@@ -81,7 +82,9 @@ export function parseJson<T = any>(text: string): T {
               } catch (innerErr) {
                 // If it fails, maybe it wasn't the right matching pair (unlikely with this logic)
                 // but we keep looking just in case or throw.
-                throw new Error(`Failed to parse extracted JSON: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}`);
+                throw new Error(
+                  `Failed to parse extracted JSON: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}`
+                );
               }
             }
           }
@@ -89,7 +92,9 @@ export function parseJson<T = any>(text: string): T {
       }
     }
 
-    throw new Error(`No valid JSON found in input: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(
+      `No valid JSON found in input: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 

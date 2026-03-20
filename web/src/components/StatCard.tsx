@@ -22,12 +22,13 @@ export function StatCard({ label, value, trend, trendLabel, className }: StatCar
         <div
           className={cn(
             'mt-2 flex items-center gap-1 text-xs',
-            isPositive ? 'text-sera-success' : 'text-sera-error',
+            isPositive ? 'text-sera-success' : 'text-sera-error'
           )}
         >
           <TrendIcon size={12} />
           <span>
-            {isPositive ? '+' : ''}{trend}%{trendLabel ? ` ${trendLabel}` : ''}
+            {isPositive ? '+' : ''}
+            {trend}%{trendLabel ? ` ${trendLabel}` : ''}
           </span>
         </div>
       )}

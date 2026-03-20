@@ -50,7 +50,16 @@ vi.mock('./KnowledgeGitService.js', () => ({
   KnowledgeGitService: {
     getInstance: () => ({
       write: vi.fn().mockResolvedValue({
-        block: { id: 'git-id', agentId: 'a', type: 'fact', timestamp: new Date().toISOString(), tags: [], importance: 3, title: 'T', content: 'C' },
+        block: {
+          id: 'git-id',
+          agentId: 'a',
+          type: 'fact',
+          timestamp: new Date().toISOString(),
+          tags: [],
+          importance: 3,
+          title: 'T',
+          content: 'C',
+        },
         commitHash: 'abc123',
       }),
       autoMerge: vi.fn().mockResolvedValue(undefined),
@@ -67,12 +76,14 @@ import { createKnowledgeStoreSkill } from '../skills/builtins/knowledge-store.js
 import { createKnowledgeQuerySkill } from '../skills/builtins/knowledge-query.js';
 import type { AgentContext } from '../skills/types.js';
 
-function makeContext(overrides: Partial<{
-  agentInstanceId: string;
-  capabilities: string[];
-  circle: string;
-  additionalCircles: string[];
-}>): AgentContext {
+function makeContext(
+  overrides: Partial<{
+    agentInstanceId: string;
+    capabilities: string[];
+    circle: string;
+    additionalCircles: string[];
+  }>
+): AgentContext {
   return {
     agentName: 'TestAgent',
     workspacePath: '/tmp/ws',
@@ -111,17 +122,14 @@ describe('knowledge-store scope permission checks', () => {
   // ── Personal scope (always allowed) ────────────────────────────────────────
 
   it('personal scope: succeeds with no capabilities', async () => {
-    const result = await storeSkill.handler(
-      { ...baseParams, scope: 'personal' },
-      makeContext({}),
-    );
+    const result = await storeSkill.handler({ ...baseParams, scope: 'personal' }, makeContext({}));
     expect(result.success).toBe(true);
   });
 
   it('personal scope: succeeds even when agent has no circle', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'personal' },
-      makeContext({ circle: '' }),
+      makeContext({ circle: '' })
     );
     expect(result.success).toBe(true);
   });
@@ -131,7 +139,7 @@ describe('knowledge-store scope permission checks', () => {
   it('circle scope: succeeds with knowledgeWrite:circle capability', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'circle' },
-      makeContext({ capabilities: ['knowledgeWrite:circle'], circle: 'my-circle' }),
+      makeContext({ capabilities: ['knowledgeWrite:circle'], circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
   });
@@ -139,7 +147,7 @@ describe('knowledge-store scope permission checks', () => {
   it('circle scope: succeeds with knowledgeWrite:merge-without-approval capability', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'circle' },
-      makeContext({ capabilities: ['knowledgeWrite:merge-without-approval'], circle: 'my-circle' }),
+      makeContext({ capabilities: ['knowledgeWrite:merge-without-approval'], circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
   });
@@ -147,7 +155,7 @@ describe('knowledge-store scope permission checks', () => {
   it('circle scope: DENIED without capability', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'circle' },
-      makeContext({ capabilities: [], circle: 'my-circle' }),
+      makeContext({ capabilities: [], circle: 'my-circle' })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('knowledgeWrite:circle');
@@ -156,7 +164,7 @@ describe('knowledge-store scope permission checks', () => {
   it('circle scope: DENIED when no circle membership', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'circle' },
-      makeContext({ capabilities: ['knowledgeWrite:circle'], circle: '' }),
+      makeContext({ capabilities: ['knowledgeWrite:circle'], circle: '' })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('circle');
@@ -167,7 +175,7 @@ describe('knowledge-store scope permission checks', () => {
   it('global scope: succeeds with knowledgeWrite:global capability', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'global' },
-      makeContext({ capabilities: ['knowledgeWrite:global'] }),
+      makeContext({ capabilities: ['knowledgeWrite:global'] })
     );
     expect(result.success).toBe(true);
   });
@@ -175,7 +183,7 @@ describe('knowledge-store scope permission checks', () => {
   it('global scope: succeeds with knowledgeWrite:merge-without-approval capability', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'global' },
-      makeContext({ capabilities: ['knowledgeWrite:merge-without-approval'] }),
+      makeContext({ capabilities: ['knowledgeWrite:merge-without-approval'] })
     );
     expect(result.success).toBe(true);
   });
@@ -183,7 +191,7 @@ describe('knowledge-store scope permission checks', () => {
   it('global scope: DENIED without capability', async () => {
     const result = await storeSkill.handler(
       { ...baseParams, scope: 'global' },
-      makeContext({ capabilities: [] }),
+      makeContext({ capabilities: [] })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('knowledgeWrite:global');
@@ -196,17 +204,14 @@ describe('knowledge-query scope permission checks', () => {
   it('personal scope: always accessible', async () => {
     const result = await querySkill.handler(
       { query: 'test', scopes: ['personal'] },
-      makeContext({}),
+      makeContext({})
     );
     expect(result.success).toBe(true);
     expect((result.data as any).results).toEqual([]);
   });
 
   it('global scope: always accessible', async () => {
-    const result = await querySkill.handler(
-      { query: 'test', scopes: ['global'] },
-      makeContext({}),
-    );
+    const result = await querySkill.handler({ query: 'test', scopes: ['global'] }, makeContext({}));
     expect(result.success).toBe(true);
     expect((result.data as any).results).toEqual([]);
   });
@@ -214,7 +219,7 @@ describe('knowledge-query scope permission checks', () => {
   it('circle scope with no circle membership: returns error marker', async () => {
     const result = await querySkill.handler(
       { query: 'test', scopes: ['circle'] },
-      makeContext({ circle: '' }),
+      makeContext({ circle: '' })
     );
     expect(result.success).toBe(true);
     expect((result.data as any).error).toBe('not_a_circle_member');
@@ -223,7 +228,7 @@ describe('knowledge-query scope permission checks', () => {
   it('circle scope with membership: proceeds to search', async () => {
     const result = await querySkill.handler(
       { query: 'test', scopes: ['circle'] },
-      makeContext({ circle: 'my-circle' }),
+      makeContext({ circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
     expect(Array.isArray((result.data as any).results)).toBe(true);
@@ -232,7 +237,7 @@ describe('knowledge-query scope permission checks', () => {
   it('default scopes include personal, circle, and global', async () => {
     const result = await querySkill.handler(
       { query: 'test' },
-      makeContext({ circle: 'my-circle' }),
+      makeContext({ circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
   });
@@ -240,7 +245,7 @@ describe('knowledge-query scope permission checks', () => {
   it('empty results returned as array, not error', async () => {
     const result = await querySkill.handler(
       { query: 'nonexistent topic' },
-      makeContext({ circle: 'my-circle' }),
+      makeContext({ circle: 'my-circle' })
     );
     expect(result.success).toBe(true);
     expect((result.data as any).results).toEqual([]);

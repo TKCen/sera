@@ -17,10 +17,7 @@ import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('MemoryCompactionService');
 
-const ARCHIVE_AFTER_DAYS = parseInt(
-  process.env.MEMORY_ARCHIVE_AFTER_DAYS ?? '30',
-  10,
-);
+const ARCHIVE_AFTER_DAYS = parseInt(process.env.MEMORY_ARCHIVE_AFTER_DAYS ?? '30', 10);
 
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';
 const JOB_NAME = 'memory-compaction';
@@ -53,7 +50,7 @@ export class MemoryCompactionService {
 
     // Run daily at 03:00
     await this.boss.schedule(JOB_NAME, '0 3 * * *', {});
-    await this.boss.work<{ agentId?: string }>(JOB_NAME, async jobs => {
+    await this.boss.work<{ agentId?: string }>(JOB_NAME, async (jobs) => {
       const job = Array.isArray(jobs) ? jobs[0] : jobs;
       const agentId = (job as { data?: { agentId?: string } }).data?.agentId;
       if (agentId) {
@@ -85,7 +82,7 @@ export class MemoryCompactionService {
     const cutoffIso = cutoffDate.toISOString();
 
     const blocks = await this.store.list(agentId, { before: cutoffIso });
-    const toArchive = blocks.filter(b => b.importance <= 2);
+    const toArchive = blocks.filter((b) => b.importance <= 2);
 
     let blocksArchived = 0;
     let vectorsRemoved = 0;
@@ -106,7 +103,7 @@ export class MemoryCompactionService {
     }
 
     logger.info(
-      `Compaction for agent ${agentId}: archived=${blocksArchived}, vectors_removed=${vectorsRemoved}`,
+      `Compaction for agent ${agentId}: archived=${blocksArchived}, vectors_removed=${vectorsRemoved}`
     );
     return { agentId, blocksArchived, vectorsRemoved };
   }

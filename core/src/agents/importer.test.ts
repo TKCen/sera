@@ -57,12 +57,16 @@ capabilities:
   it('imports valid resources from directory structure', async () => {
     await importer.importAll();
 
-    expect(registryMock.upsertNamedList).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: expect.objectContaining({ name: 'github-apis' })
-    }));
-    expect(registryMock.upsertCapabilityPolicy).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: expect.objectContaining({ name: 'standard' })
-    }));
+    expect(registryMock.upsertNamedList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ name: 'github-apis' }),
+      })
+    );
+    expect(registryMock.upsertCapabilityPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ name: 'standard' }),
+      })
+    );
   });
 
   it('skips invalid manifests', async () => {

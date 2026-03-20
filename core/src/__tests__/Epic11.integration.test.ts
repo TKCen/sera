@@ -50,20 +50,22 @@ describe('Epic 11 Integration', () => {
     (pool.query as any).mockImplementation((q: string, params: any[]) => {
       if (q.includes('FROM schedules')) {
         return Promise.resolve({
-          rows: [{
-            id: scheduleId,
-            agent_instance_id: agentId,
-            agent_name: 'test-agent',
-            name: 'test-schedule',
-            task: 'do something',
-            type: 'cron',
-            status: 'active'
-          }]
+          rows: [
+            {
+              id: scheduleId,
+              agent_instance_id: agentId,
+              agent_name: 'test-agent',
+              name: 'test-schedule',
+              task: 'do something',
+              type: 'cron',
+              status: 'active',
+            },
+          ],
         });
       }
       if (q.includes('FROM agent_instances')) {
         return Promise.resolve({
-          rows: [{ lifecycle_mode: 'ephemeral', status: 'stopped' }]
+          rows: [{ lifecycle_mode: 'ephemeral', status: 'stopped' }],
         });
       }
       return Promise.resolve({ rows: [] });
@@ -82,7 +84,9 @@ describe('Epic 11 Integration', () => {
     expect(mockOrchestrator.startInstance).toHaveBeenCalledWith(agentId, undefined, 'do something');
 
     // Verify audit record was created
-    const recordCall = clientMock.query.mock.calls.find(c => c[0].includes('INSERT INTO audit_trail'));
+    const recordCall = clientMock.query.mock.calls.find((c) =>
+      c[0].includes('INSERT INTO audit_trail')
+    );
     expect(recordCall).toBeDefined();
     if (recordCall) {
       expect(recordCall[1]).toContain('schedule.fired');

@@ -22,7 +22,9 @@ describe('SkillLibrary', () => {
 
   it('should parse a valid skill file', async () => {
     const skillPath = path.join(tmpDir, 'test-skill.md');
-    await fs.writeFile(skillPath, `---
+    await fs.writeFile(
+      skillPath,
+      `---
 id: test-skill
 name: Test Skill
 version: 1.0.0
@@ -30,7 +32,8 @@ description: A test skill
 triggers: ["test"]
 ---
 # Content
-`);
+`
+    );
 
     const lib = SkillLibrary.getInstance(poolMock);
     // @ts-ignore - accessing private method for testing
@@ -44,11 +47,14 @@ triggers: ["test"]
 
   it('should return null for invalid front-matter', async () => {
     const skillPath = path.join(tmpDir, 'invalid-skill.md');
-    await fs.writeFile(skillPath, `---
+    await fs.writeFile(
+      skillPath,
+      `---
 invalid: true
 ---
 # Content
-`);
+`
+    );
 
     const lib = SkillLibrary.getInstance(poolMock);
     // @ts-ignore
@@ -84,14 +90,12 @@ invalid: true
     lib.setIntercom(intercomMock as any);
 
     // Mock search paths to use tmpDir
-    vi.spyOn(lib as any, 'getSearchPaths').mockReturnValue([
-      { path: tmpDir, source: 'external' }
-    ]);
+    vi.spyOn(lib as any, 'getSearchPaths').mockReturnValue([{ path: tmpDir, source: 'external' }]);
 
     lib.watchSkills();
 
     // Give chokidar some time to start
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Create a new skill file
     const skillPath = path.join(tmpDir, 'new-skill.md');
@@ -107,7 +111,7 @@ triggers: ["hot"]
 
     // Wait for chokidar to pick up the change (DoD says within 2s)
     for (let i = 0; i < 4; i++) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       if (poolMock.query.mock.calls.length > 0) break;
     }
 

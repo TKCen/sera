@@ -12,6 +12,6 @@ export function getCircuitBreakers(): Promise<CircuitBreakerState[]> {
 export function resetCircuitBreaker(provider: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(
     `/system/circuit-breakers/${encodeURIComponent(provider)}/reset`,
-    { method: 'POST' },
+    { method: 'POST' }
   );
 }

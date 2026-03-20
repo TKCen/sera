@@ -12,7 +12,7 @@ export class WorkerAgent extends BaseAgent {
     llmProvider: LLMProvider,
     intercom?: import('../intercom/IntercomService.js').IntercomService,
     agentInstanceId?: string,
-    memoryManager?: import('../memory/manager.js').MemoryManager,
+    memoryManager?: import('../memory/manager.js').MemoryManager
   ) {
     super(manifest, llmProvider, intercom, agentInstanceId, memoryManager);
   }
@@ -25,7 +25,7 @@ export class WorkerAgent extends BaseAgent {
     if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
       const allowed = await this.agentScheduler.isWithinQuota(
         this.agentInstanceId || this.role,
-        this.manifest.resources.maxLlmTokensPerHour,
+        this.manifest.resources.maxLlmTokensPerHour
       );
       if (!allowed) {
         const errorMsg = '⚠️ Hourly token quota exceeded. Request denied.';
@@ -39,13 +39,17 @@ export class WorkerAgent extends BaseAgent {
       dynamicContext = await this.memoryManager.assembleContext(input);
     }
 
-    const systemPrompt = IdentityService.generateSystemPrompt(this.manifest, undefined, dynamicContext);
+    const systemPrompt = IdentityService.generateSystemPrompt(
+      this.manifest,
+      undefined,
+      dynamicContext
+    );
 
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
     const response = await this.llmProvider.chat([
       { role: 'system', content: systemPrompt },
-      ...fullHistory
+      ...fullHistory,
     ]);
 
     // Record usage
@@ -57,7 +61,10 @@ export class WorkerAgent extends BaseAgent {
       });
     }
 
-    this.history = [...fullHistory, { role: 'assistant', content: response.content } as ChatMessage];
+    this.history = [
+      ...fullHistory,
+      { role: 'assistant', content: response.content } as ChatMessage,
+    ];
 
     if (response.toolCalls && response.toolCalls.length > 0 && this.toolExecutor) {
       // ── Agentic Tool Loop ──────────────────────────────────────────────────
@@ -76,8 +83,11 @@ export class WorkerAgent extends BaseAgent {
         eventType: 'chat',
         payload: {
           input,
-          response: response.content.length > 500 ? response.content.substring(0, 500) + '...' : response.content
-        }
+          response:
+            response.content.length > 500
+              ? response.content.substring(0, 500) + '...'
+              : response.content,
+        },
       });
     } catch (auditErr) {
       this.logger.error('Failed to record audit entry:', auditErr);
@@ -99,7 +109,7 @@ export class WorkerAgent extends BaseAgent {
       this.logger.error('Failed to parse worker response:', error);
       return {
         thought: 'Error parsing response.',
-        finalAnswer: response.content
+        finalAnswer: response.content,
       };
     }
   }

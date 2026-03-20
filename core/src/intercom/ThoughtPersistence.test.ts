@@ -31,12 +31,12 @@ describe('Story 9.7: Thought Stream Persistence', () => {
   it('persists a thought to the database when published', async () => {
     const agentId = 'test-agent';
     const taskId = 'task-123';
-    
+
     // Simulate non-blocking persistence
     await intercom.publishThought(agentId, 'Test Agent', 'reasoning', 'Thinking...', taskId);
-    
+
     // Wait a tiny bit for the "fire and forget" async call
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO thought_events'),
@@ -47,23 +47,25 @@ describe('Story 9.7: Thought Stream Persistence', () => {
   it('retrieves persisted thoughts with filtering', async () => {
     const agentId = 'test-agent';
     const taskId = 'task-123';
-    
+
     const mockRows = [
-      { 
-        published_at: new Date().toISOString(), 
-        step: 'plan', 
-        content: 'I have a plan', 
-        agent_instance_id: agentId, 
+      {
+        published_at: new Date().toISOString(),
+        step: 'plan',
+        content: 'I have a plan',
+        agent_instance_id: agentId,
         task_id: taskId,
-        iteration: 1
-      }
+        iteration: 1,
+      },
     ];
     (pool.query as any).mockResolvedValue({ rows: mockRows });
 
     const thoughts = await intercom.getThoughts(agentId, { taskId });
-    
+
     expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT * FROM thought_events WHERE agent_instance_id = $1 AND task_id = $2'),
+      expect.stringContaining(
+        'SELECT * FROM thought_events WHERE agent_instance_id = $1 AND task_id = $2'
+      ),
       expect.arrayContaining([agentId, taskId])
     );
     expect(thoughts).toHaveLength(1);

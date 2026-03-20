@@ -17,7 +17,7 @@ import { scheduleTaskSkill } from './schedule-task.js';
  */
 export function registerBuiltinSkills(
   registry: SkillRegistry,
-  _memoryManager: MemoryManager,
+  _memoryManager: MemoryManager
 ): void {
   registry.register(webSearchSkill);
   registry.register(webFetchSkill);

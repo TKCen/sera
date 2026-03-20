@@ -102,8 +102,8 @@ export function createLlmProxyRouter(
         const period = budget.hourlyUsed >= budget.hourlyQuota ? 'hourly' : 'daily';
         logger.warn(
           `Budget exceeded | agent=${agentId} ` +
-          `hourly=${budget.hourlyUsed}/${budget.hourlyQuota} ` +
-          `daily=${budget.dailyUsed}/${budget.dailyQuota}`,
+            `hourly=${budget.hourlyUsed}/${budget.hourlyQuota} ` +
+            `daily=${budget.dailyUsed}/${budget.dailyQuota}`
         );
         res.status(429).json({
           error: 'budget_exceeded',
@@ -118,7 +118,9 @@ export function createLlmProxyRouter(
       let { model, messages, temperature, tools, stream } = req.body as Record<string, unknown>;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
-        res.status(400).json({ error: { message: '`messages` array is required and must be non-empty' } });
+        res
+          .status(400)
+          .json({ error: { message: '`messages` array is required and must be non-empty' } });
         return;
       }
 
@@ -129,7 +131,8 @@ export function createLlmProxyRouter(
         logger.error('Context assembly failed (continuing without enrichment):', err);
       }
 
-      const modelName = typeof model === 'string' ? model : (process.env.LLM_MODEL ?? 'lmstudio-default');
+      const modelName =
+        typeof model === 'string' ? model : (process.env.LLM_MODEL ?? 'lmstudio-default');
 
       const chatRequest = {
         model: modelName,
@@ -144,7 +147,7 @@ export function createLlmProxyRouter(
           logger.info(`Proxy stream | agent=${agentId} model=${modelName}`);
           const streamRes = await llmRouter.chatCompletionStream(
             { ...chatRequest, stream: true },
-            agentId,
+            agentId
           );
 
           res.setHeader('Content-Type', 'text/event-stream');
@@ -165,7 +168,11 @@ export function createLlmProxyRouter(
             return;
           }
           logger.error(`Stream proxy error | agent=${agentId}:`, err);
-          res.status(502).json({ error: { message: `Upstream LLM error: ${err.message}`, type: 'upstream_error' } });
+          res
+            .status(502)
+            .json({
+              error: { message: `Upstream LLM error: ${err.message}`, type: 'upstream_error' },
+            });
           return;
         }
       }
@@ -173,7 +180,7 @@ export function createLlmProxyRouter(
       // ── 4. Non-streaming path — call through circuit breaker ───────────────
       logger.info(
         `Proxy request | agent=${agentId} model=${modelName} messages=${(messages as any[]).length} ` +
-        `tools=${Array.isArray(tools) ? tools.length : 0}`,
+          `tools=${Array.isArray(tools) ? tools.length : 0}`
       );
 
       let llmResponse: Awaited<ReturnType<CircuitBreakerService['call']>> | null = null;
@@ -194,16 +201,18 @@ export function createLlmProxyRouter(
         }
 
         // Record failed call in metering (Story 4.4)
-        meteringService.recordUsage({
-          agentId,
-          circleId,
-          model: modelName,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          latencyMs: Date.now() - latencyStart,
-          status: 'error',
-        }).catch(merr => logger.error('Failed to record error metering:', merr));
+        meteringService
+          .recordUsage({
+            agentId,
+            circleId,
+            model: modelName,
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            latencyMs: Date.now() - latencyStart,
+            status: 'error',
+          })
+          .catch((merr) => logger.error('Failed to record error metering:', merr));
 
         logger.error(`LLM proxy error | agent=${agentId}:`, err);
         res.status(502).json({
@@ -215,25 +224,27 @@ export function createLlmProxyRouter(
       // ── 5. Record metering async (Story 4.4) ──────────────────────────────
       // Non-blocking — does not add latency to the response path.
       const usage = llmResponse.response.usage;
-      meteringService.recordUsage({
-        agentId,
-        circleId,
-        model: modelName,
-        promptTokens: usage?.prompt_tokens ?? 0,
-        completionTokens: usage?.completion_tokens ?? 0,
-        totalTokens: usage?.total_tokens ?? 0,
-        latencyMs: llmResponse.latencyMs,
-        status: callStatus,
-      }).catch(err => logger.error('Failed to record metering:', err));
+      meteringService
+        .recordUsage({
+          agentId,
+          circleId,
+          model: modelName,
+          promptTokens: usage?.prompt_tokens ?? 0,
+          completionTokens: usage?.completion_tokens ?? 0,
+          totalTokens: usage?.total_tokens ?? 0,
+          latencyMs: llmResponse.latencyMs,
+          status: callStatus,
+        })
+        .catch((err) => logger.error('Failed to record metering:', err));
 
       // ── 6. Return response ─────────────────────────────────────────────────
       logger.debug(
         `Proxy complete | agent=${agentId} model=${modelName} ` +
-        `tokens=${usage?.total_tokens ?? 0} latency=${llmResponse.latencyMs}ms`,
+          `tokens=${usage?.total_tokens ?? 0} latency=${llmResponse.latencyMs}ms`
       );
 
       res.json(llmResponse.response);
-    },
+    }
   );
 
   // ── GET /models ────────────────────────────────────────────────────────────

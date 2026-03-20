@@ -90,7 +90,9 @@ export class ChannelRouter {
         channel_ids: string[];
         min_severity: string;
         filter: Record<string, unknown> | null;
-      }>('SELECT id, event_type, channel_ids, min_severity, filter FROM notification_routing_rules');
+      }>(
+        'SELECT id, event_type, channel_ids, min_severity, filter FROM notification_routing_rules'
+      );
 
       rules = rows.map((r) => ({
         id: r.id,
@@ -128,7 +130,7 @@ export class ChannelRouter {
       .query(
         `INSERT INTO notification_dispatches (id, event_id, channel_id, event_type, status, attempts)
          VALUES ($1, $2, $3, $4, 'pending', 0)`,
-        [dispatchId, event.id, channel.id, event.eventType],
+        [dispatchId, event.id, channel.id, event.eventType]
       )
       .catch(() => {});
 
@@ -140,7 +142,7 @@ export class ChannelRouter {
     event: ChannelEvent,
     dispatchId: string,
     attempt: number,
-    maxAttempts = 3,
+    maxAttempts = 3
   ): void {
     channel
       .send(event)
@@ -150,27 +152,32 @@ export class ChannelRouter {
             `UPDATE notification_dispatches
              SET status = 'sent', sent_at = now(), attempts = $2
              WHERE id = $1`,
-            [dispatchId, attempt],
+            [dispatchId, attempt]
           )
           .catch(() => {});
       })
       .catch((err: unknown) => {
         const errMsg = err instanceof Error ? err.message : String(err);
         logger.warn(
-          `Channel ${channel.id} dispatch attempt ${attempt}/${maxAttempts} failed: ${errMsg}`,
+          `Channel ${channel.id} dispatch attempt ${attempt}/${maxAttempts} failed: ${errMsg}`
         );
 
         if (attempt < maxAttempts) {
           const delayMs = Math.pow(2, attempt - 1) * 5_000; // 5s, 10s, 20s
-          setTimeout(() => this.sendWithRetry(channel, event, dispatchId, attempt + 1, maxAttempts), delayMs);
+          setTimeout(
+            () => this.sendWithRetry(channel, event, dispatchId, attempt + 1, maxAttempts),
+            delayMs
+          );
         } else {
-          logger.warn(`Channel ${channel.id} dispatch permanently failed after ${maxAttempts} attempts`);
+          logger.warn(
+            `Channel ${channel.id} dispatch permanently failed after ${maxAttempts} attempts`
+          );
           pool
             .query(
               `UPDATE notification_dispatches
                SET status = 'failed', last_error = $2, attempts = $3
                WHERE id = $1`,
-              [dispatchId, errMsg, attempt],
+              [dispatchId, errMsg, attempt]
             )
             .catch(() => {});
         }
@@ -186,7 +193,7 @@ export class ChannelRouter {
         `UPDATE notification_dispatches
          SET status = 'stale'
          WHERE event_id = $1 AND status = 'pending'`,
-        [requestId],
+        [requestId]
       )
       .catch(() => {});
   }

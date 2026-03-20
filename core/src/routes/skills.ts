@@ -32,14 +32,11 @@ export function createSkillsRouter(
 
       // Enrich executable skills with usage info
       const manifests = orchestrator.getAllManifests();
-      const enrichedExec = executableSkills.map(skill => {
+      const enrichedExec = executableSkills.map((skill) => {
         const usedBy: string[] = [];
         for (const manifest of manifests) {
-          const skills = (manifest.skills ?? []).map(s => typeof s === 'string' ? s : s.name);
-          const agentSkills = new Set<string>([
-            ...skills,
-            ...(manifest.tools?.allowed ?? []),
-          ]);
+          const skills = (manifest.skills ?? []).map((s) => (typeof s === 'string' ? s : s.name));
+          const agentSkills = new Set<string>([...skills, ...(manifest.tools?.allowed ?? [])]);
           if (agentSkills.has(skill.id)) {
             usedBy.push(manifest.metadata.name);
           }
@@ -48,10 +45,10 @@ export function createSkillsRouter(
       });
 
       // Enrich guidance skills with usage info
-      const enrichedGuidance = guidanceSkills.map(skill => {
+      const enrichedGuidance = guidanceSkills.map((skill) => {
         const usedBy: string[] = [];
         for (const manifest of manifests) {
-          const skills = (manifest.skills ?? []).map(s => typeof s === 'string' ? s : s.name);
+          const skills = (manifest.skills ?? []).map((s) => (typeof s === 'string' ? s : s.name));
           if (skills.includes(skill.name)) {
             usedBy.push(manifest.metadata.name);
           }
@@ -70,14 +67,14 @@ export function createSkillsRouter(
     try {
       const { name } = req.params;
       const { version } = req.query;
-      
+
       const skillLibrary = SkillLibrary.getInstance(pool);
       const skill = await skillLibrary.getSkill(name, version as string);
-      
+
       if (!skill) {
         return res.status(404).json({ error: `Skill "${name}" not found` });
       }
-      
+
       res.json(skill);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

@@ -48,7 +48,9 @@ export class BridgeService {
    * Route a message through the federation bridge (Story 9.6 stub).
    */
   route(message: IntercomMessage): void {
-    logger.info(`Federation: Routing message via bridge (stub) — channel=${message.target.channel}`);
+    logger.info(
+      `Federation: Routing message via bridge (stub) — channel=${message.target.channel}`
+    );
   }
 
   /**
@@ -64,7 +66,7 @@ export class BridgeService {
     let connectionFound: any = null;
 
     for (const lc of localCircles) {
-      const conn = lc.connections?.find(c => c.circle === circleName);
+      const conn = lc.connections?.find((c) => c.circle === circleName);
       if (conn && conn.auth !== 'internal' && typeof conn.auth === 'object') {
         connectionFound = conn;
         break;
@@ -141,7 +143,7 @@ export class BridgeService {
 
           const bridgedMessage = {
             ...message,
-            source: { ...message.source, bridged: true }
+            source: { ...message.source, bridged: true },
           };
 
           await client.post('/api/intercom/bridge/receive', { channel, message: bridgedMessage });
@@ -162,9 +164,9 @@ export class BridgeService {
     for (const cName of circles) {
       // If it's not a local circle, check if we have a connection to it
       if (!this.registry.getCircle(cName)) {
-        const hasConnection = this.registry.listCircles().some(lc =>
-          lc.connections?.some(conn => conn.circle === cName)
-        );
+        const hasConnection = this.registry
+          .listCircles()
+          .some((lc) => lc.connections?.some((conn) => conn.circle === cName));
         if (hasConnection) return cName;
       }
     }

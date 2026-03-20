@@ -89,7 +89,7 @@ describe('ProcessManager', () => {
 
       expect(result.processType).toBe('parallel');
       expect(result.results).toHaveLength(2);
-      expect(result.results.every(r => r.status === 'completed')).toBe(true);
+      expect(result.results.every((r) => r.status === 'completed')).toBe(true);
       expect(result.finalOutput).toContain('Parallel A');
       expect(result.finalOutput).toContain('Parallel B');
     });
@@ -100,9 +100,7 @@ describe('ProcessManager', () => {
       const agents = new Map([['worker', createMockAgent('worker', 'work')]]);
       const tasks: ProcessTask[] = [{ id: 't1', description: 'task' }];
 
-      await expect(
-        manager.run('hierarchical', tasks, agents),
-      ).rejects.toThrow(/managerAgent/);
+      await expect(manager.run('hierarchical', tasks, agents)).rejects.toThrow(/managerAgent/);
     });
 
     it('should have the manager review worker results', async () => {
@@ -141,9 +139,9 @@ describe('ProcessManager', () => {
 
   describe('unknown type', () => {
     it('should throw for unknown process type', async () => {
-      await expect(
-        manager.run('unknown' as any, [], new Map()),
-      ).rejects.toThrow(/Unknown process type/);
+      await expect(manager.run('unknown' as any, [], new Map())).rejects.toThrow(
+        /Unknown process type/
+      );
     });
   });
 });

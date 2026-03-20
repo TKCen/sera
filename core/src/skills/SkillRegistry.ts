@@ -1,10 +1,6 @@
 import type { AgentManifest } from '../agents/manifest/types.js';
 import type { MCPRegistry } from '../mcp/registry.js';
-import type {
-  SkillDefinition,
-  SkillResult,
-  SkillInfo,
-} from './types.js';
+import type { SkillDefinition, SkillResult, SkillInfo } from './types.js';
 
 /**
  * Central registry for all agent skills.
@@ -87,7 +83,7 @@ export class SkillRegistry {
     }
 
     return [...ids]
-      .map(id => this.skills.get(id))
+      .map((id) => this.skills.get(id))
       .filter((s): s is SkillDefinition => s !== undefined)
       .map(SkillRegistry.toInfo);
   }
@@ -101,7 +97,7 @@ export class SkillRegistry {
   async invoke(
     id: string,
     params: Record<string, unknown>,
-    context: import('./types.js').AgentContext,
+    context: import('./types.js').AgentContext
   ): Promise<SkillResult> {
     const skill = this.skills.get(id);
     if (!skill) {
@@ -112,7 +108,7 @@ export class SkillRegistry {
       const compositionInvoke = (
         childId: string,
         childParams: Record<string, unknown>,
-        childContext: import('./types.js').AgentContext,
+        childContext: import('./types.js').AgentContext
       ) => this.invoke(childId, childParams, childContext);
 
       return await skill.handler(params, context, compositionInvoke);
@@ -244,7 +240,10 @@ export class SkillRegistry {
             if (serverName === 'sera-core' || skillId.startsWith('sera-core/')) {
               const capabilities = context.manifest.capabilities ?? [];
               if (!capabilities.includes('seraManagement')) {
-                return { success: false, error: `Access denied: tool "${skillId}" requires "seraManagement" capability.` };
+                return {
+                  success: false,
+                  error: `Access denied: tool "${skillId}" requires "seraManagement" capability.`,
+                };
               }
             }
 
@@ -257,7 +256,7 @@ export class SkillRegistry {
                   circleId: context.manifest.metadata.circle,
                   // Simplified credential resolution for Story 7.8
                   credentials: (context.manifest as any).secrets || {},
-                }
+                },
               };
 
               const result = await mcpClient.callTool(toolName, params, meta);
@@ -279,7 +278,6 @@ export class SkillRegistry {
     }
   }
 
-
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   /** Strip the handler from a SkillDefinition for safe serialization. */
@@ -297,17 +295,15 @@ export class SkillRegistry {
    * into a flat array of `SkillParameter` entries.
    */
   private static jsonSchemaToParams(
-    schema: Record<string, unknown> | undefined,
+    schema: Record<string, unknown> | undefined
   ): import('./types.js').SkillParameter[] {
     if (!schema || typeof schema !== 'object') return [];
 
-    const properties = schema['properties'] as
-      | Record<string, Record<string, unknown>>
-      | undefined;
+    const properties = schema['properties'] as Record<string, Record<string, unknown>> | undefined;
     if (!properties) return [];
 
     const required = new Set(
-      Array.isArray(schema['required']) ? (schema['required'] as string[]) : [],
+      Array.isArray(schema['required']) ? (schema['required'] as string[]) : []
     );
 
     return Object.entries(properties).map(([name, prop]) => ({
@@ -318,9 +314,7 @@ export class SkillRegistry {
     }));
   }
 
-  private static mapJsonType(
-    jsonType: unknown,
-  ): import('./types.js').SkillParameter['type'] {
+  private static mapJsonType(jsonType: unknown): import('./types.js').SkillParameter['type'] {
     switch (jsonType) {
       case 'string':
         return 'string';

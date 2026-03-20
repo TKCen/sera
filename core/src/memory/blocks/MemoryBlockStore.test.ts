@@ -107,7 +107,7 @@ describe('MemoryBlockStore', () => {
   it('should load all blocks (empty ones too)', async () => {
     const blocks = await store.loadAll();
     expect(blocks).toHaveLength(4);
-    const types = blocks.map(b => b.type);
+    const types = blocks.map((b) => b.type);
     expect(types).toContain('human');
     expect(types).toContain('persona');
     expect(types).toContain('core');
@@ -152,7 +152,7 @@ describe('MemoryBlockStore', () => {
     // Adding the same ref again should be idempotent
     await store.addRef(a.id, b.id);
     retrieved = await store.getEntry(a.id);
-    expect(retrieved!.refs.filter(r => r === b.id)).toHaveLength(1);
+    expect(retrieved!.refs.filter((r) => r === b.id)).toHaveLength(1);
 
     const removed = await store.removeRef(a.id, b.id);
     expect(removed).toBe(true);
@@ -279,7 +279,7 @@ describe('MemoryBlockStore', () => {
 
     const entry = await store.addEntry('core', {
       title: 'Large Entry',
-      content: largeContent
+      content: largeContent,
     });
 
     const retrieved = await store.getEntry(entry.id);
@@ -289,7 +289,10 @@ describe('MemoryBlockStore', () => {
 
   it('should handle special characters in titles', async () => {
     const weirdTitle = 'My @Weird #Title! (With spaces)';
-    const entry = await store.addEntry('core', { title: weirdTitle, content: 'Special characters.' });
+    const entry = await store.addEntry('core', {
+      title: weirdTitle,
+      content: 'Special characters.',
+    });
 
     expect(entry.title).toBe(weirdTitle);
 

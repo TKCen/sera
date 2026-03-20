@@ -16,7 +16,7 @@ export const query = (text: string, params?: any[]) => pool.query(text, params);
 export const initDb = async () => {
   try {
     const migrationsDir = path.resolve(import.meta.dirname, '..', '..', 'src', 'db', 'migrations');
-    
+
     const runner = (migrate as any).default || migrate;
     await runner({
       databaseUrl: process.env.DATABASE_URL!,

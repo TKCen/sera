@@ -15,17 +15,17 @@ describe('CapabilityResolver - NamedList & $ref', () => {
       listAlwaysEnforcedNamedLists: vi.fn().mockResolvedValue([]),
     };
     resolver = new CapabilityResolver(registryMock);
-    
+
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
     registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1' } });
   });
 
   it('expands $ref in NamedLists', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({
-      capabilities: { 'network-allowlist': [{ $ref: 'base-apis' }] }
+      capabilities: { 'network-allowlist': [{ $ref: 'base-apis' }] },
     });
     registryMock.getNamedList.mockResolvedValue({
-      entries: ['api.github.com', 'api.openai.com']
+      entries: ['api.github.com', 'api.openai.com'],
     });
 
     const result = await resolver.resolve('id');
@@ -34,7 +34,7 @@ describe('CapabilityResolver - NamedList & $ref', () => {
 
   it('detects circular references', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({
-      capabilities: { 'network-allowlist': [{ $ref: 'list-a' }] }
+      capabilities: { 'network-allowlist': [{ $ref: 'list-a' }] },
     });
     // list-a -> list-b -> list-a
     // list-a -> list-b -> list-a
@@ -52,16 +52,20 @@ describe('CapabilityResolver - NamedList & $ref', () => {
     // Policy: github + anthropic
     // Result: github
     registryMock.getSandboxBoundary.mockResolvedValue({
-      capabilities: { 'network-allowlist': [{ $ref: 'boundary-list' }] }
+      capabilities: { 'network-allowlist': [{ $ref: 'boundary-list' }] },
     });
     registryMock.getCapabilityPolicy.mockResolvedValue({
-      capabilities: { 'network-allowlist': [{ $ref: 'policy-list' }] }
+      capabilities: { 'network-allowlist': [{ $ref: 'policy-list' }] },
     });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', policyRef: 'p1' } });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', policyRef: 'p1' },
+    });
 
     registryMock.getNamedList.mockImplementation((name: string) => {
-      if (name === 'boundary-list') return Promise.resolve({ entries: ['github.com', 'openai.com'] });
-      if (name === 'policy-list') return Promise.resolve({ entries: ['github.com', 'anthropic.com'] });
+      if (name === 'boundary-list')
+        return Promise.resolve({ entries: ['github.com', 'openai.com'] });
+      if (name === 'policy-list')
+        return Promise.resolve({ entries: ['github.com', 'anthropic.com'] });
       return Promise.resolve(null);
     });
 

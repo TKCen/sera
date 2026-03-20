@@ -52,20 +52,18 @@ export class SubagentRunner {
     parentManifest: AgentManifest,
     childRole: string,
     task: string,
-    options?: { image?: string },
+    options?: { image?: string }
   ): Promise<SandboxInfo> {
     const parentName = parentManifest.metadata.name;
 
     // ── Validate role is allowed ──────────────────────────────────────────
-    const allowedEntry = parentManifest.subagents?.allowed?.find(
-      s => s.role === childRole,
-    );
+    const allowedEntry = parentManifest.subagents?.allowed?.find((s) => s.role === childRole);
 
     if (!allowedEntry) {
       throw new PolicyViolationError(
         `Agent "${parentName}" is not allowed to spawn subagent role "${childRole}"`,
         parentName,
-        'subagent_role_not_allowed',
+        'subagent_role_not_allowed'
       );
     }
 
@@ -76,7 +74,7 @@ export class SubagentRunner {
     // ── Check approval requirement ────────────────────────────────────────
     if (allowedEntry.requiresApproval) {
       logger.info(
-        `Subagent "${childRole}" for "${parentName}" requires human approval — auto-approved for now`,
+        `Subagent "${childRole}" for "${parentName}" requires human approval — auto-approved for now`
       );
       // Future: integrate with approval workflow
     }
@@ -99,7 +97,7 @@ export class SubagentRunner {
     });
 
     logger.info(
-      `Spawned subagent "${childRole}" for "${parentName}" → ${sandbox.containerId.substring(0, 12)}`,
+      `Spawned subagent "${childRole}" for "${parentName}" → ${sandbox.containerId.substring(0, 12)}`
     );
 
     return sandbox;
@@ -111,7 +109,7 @@ export class SubagentRunner {
   getActiveSubagents(parentName: string): SandboxInfo[] {
     return this.sandboxManager
       .listContainers(parentName)
-      .filter(c => c.type === 'subagent' && c.parentAgent === parentName);
+      .filter((c) => c.type === 'subagent' && c.parentAgent === parentName);
   }
 
   /**
@@ -120,12 +118,10 @@ export class SubagentRunner {
   async waitForSubagent(
     parentManifest: AgentManifest,
     containerId: string,
-    timeoutMs: number = 120_000,
+    timeoutMs: number = 120_000
   ): Promise<SubagentResult> {
     const startTime = Date.now();
-    const sandbox = this.sandboxManager
-      .listContainers()
-      .find(c => c.containerId === containerId);
+    const sandbox = this.sandboxManager.listContainers().find((c) => c.containerId === containerId);
 
     if (!sandbox) {
       return {
@@ -142,7 +138,7 @@ export class SubagentRunner {
     while (Date.now() - startTime < timeoutMs) {
       const current = this.sandboxManager
         .listContainers()
-        .find(c => c.containerId === containerId);
+        .find((c) => c.containerId === containerId);
 
       if (!current || current.status === 'stopped') {
         // Get output
@@ -169,7 +165,7 @@ export class SubagentRunner {
         };
       }
 
-      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
     }
 
     // Timeout — force remove

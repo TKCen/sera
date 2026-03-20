@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 export const SkillFrontMatterSchema = z.object({
-  id: z.string().regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/).optional(),
+  id: z
+    .string()
+    .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/)
+    .optional(),
   name: z.string().min(1),
   version: z.string().min(1),
   description: z.string().min(1),

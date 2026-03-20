@@ -88,17 +88,12 @@ describe('KnowledgeGitService', () => {
     const svc = KnowledgeGitService.getInstance();
     await svc.initCircleRepo('write-circle');
 
-    const { block, commitHash } = await svc.write(
-      'write-circle',
-      'agent-123',
-      'TestAgent',
-      {
-        content: 'The sky is blue.',
-        type: 'fact',
-        agentId: 'agent-123',
-        tags: ['sky'],
-      },
-    );
+    const { block, commitHash } = await svc.write('write-circle', 'agent-123', 'TestAgent', {
+      content: 'The sky is blue.',
+      type: 'fact',
+      agentId: 'agent-123',
+      tags: ['sky'],
+    });
 
     expect(block.id).toBeDefined();
     expect(block.type).toBe('fact');

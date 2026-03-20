@@ -27,9 +27,8 @@ export class ProviderFactory {
   static createFromModelConfig(modelConfig: ModelConfig): LLMProvider {
     const providerConfig = config.getProviderConfig(modelConfig.provider);
 
-    const temp = modelConfig.temperature !== undefined
-      ? { temperature: modelConfig.temperature }
-      : {};
+    const temp =
+      modelConfig.temperature !== undefined ? { temperature: modelConfig.temperature } : {};
 
     if (providerConfig?.baseUrl) {
       return new OpenAIProvider({

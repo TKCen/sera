@@ -32,7 +32,7 @@ export class ApiKeyService {
     const key = `sera_${randomPart}`;
 
     const keyHash = await argon2.hash(key);
-    
+
     let expiresAt: Date | null = null;
     if (params.expiresInDays) {
       expiresAt = new Date();

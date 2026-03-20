@@ -6,12 +6,7 @@
  */
 
 import type { BaseAgent } from '../BaseAgent.js';
-import type {
-  ProcessType,
-  ProcessTask,
-  ProcessRunResult,
-  ProcessStrategy,
-} from './types.js';
+import type { ProcessType, ProcessTask, ProcessRunResult, ProcessStrategy } from './types.js';
 import { SequentialProcess } from './SequentialProcess.js';
 import { ParallelProcess } from './ParallelProcess.js';
 import { HierarchicalProcess } from './HierarchicalProcess.js';
@@ -42,7 +37,7 @@ export class ProcessManager {
     type: ProcessType,
     tasks: ProcessTask[],
     agents: Map<string, BaseAgent>,
-    managerAgent?: BaseAgent,
+    managerAgent?: BaseAgent
   ): Promise<ProcessRunResult> {
     const strategy = this.strategies.get(type);
     if (!strategy) {
@@ -51,13 +46,11 @@ export class ProcessManager {
 
     if (type === 'hierarchical' && !managerAgent) {
       throw new Error(
-        'Hierarchical process requires a managerAgent. Pass the managing agent explicitly.',
+        'Hierarchical process requires a managerAgent. Pass the managing agent explicitly.'
       );
     }
 
-    logger.info(
-      `Running ${type} process with ${tasks.length} task(s) and ${agents.size} agent(s)`,
-    );
+    logger.info(`Running ${type} process with ${tasks.length} task(s) and ${agents.size} agent(s)`);
 
     return strategy.execute(tasks, agents, managerAgent);
   }
@@ -65,17 +58,14 @@ export class ProcessManager {
   /**
    * Convenience: run a single task description sequentially with one agent.
    */
-  async runSingle(
-    description: string,
-    agent: BaseAgent,
-  ): Promise<ProcessRunResult> {
+  async runSingle(description: string, agent: BaseAgent): Promise<ProcessRunResult> {
     const agents = new Map<string, BaseAgent>();
     agents.set(agent.role, agent);
 
     return this.run(
       'sequential',
       [{ id: 'single', description, assignedAgent: agent.role }],
-      agents,
+      agents
     );
   }
 }

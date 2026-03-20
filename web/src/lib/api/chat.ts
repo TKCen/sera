@@ -6,19 +6,14 @@ export interface ChatResponse {
   thought?: string;
 }
 
-export function sendChat(
-  message: string,
-  conversationId?: string,
-): Promise<ChatResponse> {
+export function sendChat(message: string, conversationId?: string): Promise<ChatResponse> {
   return request<ChatResponse>('/chat', {
     method: 'POST',
     body: JSON.stringify({ message, conversationId }),
   });
 }
 
-export function executeTask(
-  prompt: string,
-): Promise<{ result: unknown }> {
+export function executeTask(prompt: string): Promise<{ result: unknown }> {
   return request<{ result: unknown }>('/execute', {
     method: 'POST',
     body: JSON.stringify({ prompt }),

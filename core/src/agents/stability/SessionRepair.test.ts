@@ -16,7 +16,7 @@ function assistantWithTools(content: string, toolCallIds: string[]): ChatMessage
   return {
     role: 'assistant',
     content,
-    tool_calls: toolCallIds.map(id => ({
+    tool_calls: toolCallIds.map((id) => ({
       id,
       type: 'function' as const,
       function: { name: 'test', arguments: '{}' },
@@ -30,10 +30,7 @@ describe('SessionRepair', () => {
   // ── Clean history passthrough ─────────────────────────────────────────────
 
   it('should pass through a clean history unchanged', () => {
-    const history = [
-      msg('user', 'Hello'),
-      msg('assistant', 'Hi there!'),
-    ];
+    const history = [msg('user', 'Hello'), msg('assistant', 'Hi there!')];
 
     const { messages, report } = SessionRepair.repair(history);
 
@@ -86,7 +83,7 @@ describe('SessionRepair', () => {
     const { messages, report } = SessionRepair.repair(history);
 
     expect(messages).toHaveLength(2);
-    expect(messages.find(m => m.role === 'tool')).toBeUndefined();
+    expect(messages.find((m) => m.role === 'tool')).toBeUndefined();
     expect(report.orphanedToolMessages).toBe(1);
     expect(report.repaired).toBe(true);
   });
@@ -138,11 +135,7 @@ describe('SessionRepair', () => {
   });
 
   it('should NOT merge tool or system messages', () => {
-    const history = [
-      msg('system', 'Prompt A'),
-      msg('system', 'Prompt B'),
-      msg('user', 'Hello'),
-    ];
+    const history = [msg('system', 'Prompt A'), msg('system', 'Prompt B'), msg('user', 'Hello')];
 
     const { messages, report } = SessionRepair.repair(history);
 
@@ -171,9 +164,9 @@ describe('SessionRepair', () => {
   it('should handle all repair types simultaneously', () => {
     const history = [
       msg('user', 'Hello'),
-      msg('user', 'World'),           // will be merged with previous
-      msg('assistant', ''),            // will be removed (empty)
-      toolMsg('orphan', 'tc-bad'),     // will be removed (orphaned)
+      msg('user', 'World'), // will be merged with previous
+      msg('assistant', ''), // will be removed (empty)
+      toolMsg('orphan', 'tc-bad'), // will be removed (orphaned)
       msg('assistant', 'Response'),
     ];
 

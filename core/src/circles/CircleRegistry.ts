@@ -38,7 +38,7 @@ export class CircleRegistry {
       return [];
     }
 
-    const files = (await fs.readdir(dirPath)).filter(f => f.endsWith('.circle.yaml'));
+    const files = (await fs.readdir(dirPath)).filter((f) => f.endsWith('.circle.yaml'));
     const circles: CircleManifest[] = [];
 
     for (const file of files) {
@@ -70,10 +70,7 @@ export class CircleRegistry {
     // ── Reject unknown top-level fields ─────────────────────────────────────
     for (const key of Object.keys(obj)) {
       if (!KNOWN_CIRCLE_FIELDS.has(key)) {
-        throw new ManifestValidationError(
-          `Unknown top-level field: "${key}"${ctx}`,
-          key,
-        );
+        throw new ManifestValidationError(`Unknown top-level field: "${key}"${ctx}`, key);
       }
     }
 
@@ -83,7 +80,7 @@ export class CircleRegistry {
     if (obj['kind'] !== 'Circle') {
       throw new ManifestValidationError(
         `"kind" must be "Circle", got "${String(obj['kind'])}"${ctx}`,
-        'kind',
+        'kind'
       );
     }
 
@@ -95,17 +92,14 @@ export class CircleRegistry {
 
     // ── agents (required string array) ──────────────────────────────────────
     if (!Array.isArray(obj['agents'])) {
-      throw new ManifestValidationError(
-        `"agents" must be an array${ctx}`,
-        'agents',
-      );
+      throw new ManifestValidationError(`"agents" must be an array${ctx}`, 'agents');
     }
 
     for (const agent of obj['agents'] as unknown[]) {
       if (typeof agent !== 'string') {
         throw new ManifestValidationError(
           `Each entry in "agents" must be a string, got ${typeof agent}${ctx}`,
-          'agents',
+          'agents'
         );
       }
     }
@@ -119,10 +113,7 @@ export class CircleRegistry {
 
     // ── channels (optional array) ───────────────────────────────────────────
     if (obj['channels'] !== undefined && !Array.isArray(obj['channels'])) {
-      throw new ManifestValidationError(
-        `"channels" must be an array${ctx}`,
-        'channels',
-      );
+      throw new ManifestValidationError(`"channels" must be an array${ctx}`, 'channels');
     }
 
     // ── projectContext (optional) ──────────────────────────────────────────
@@ -135,16 +126,13 @@ export class CircleRegistry {
     // ── connections (optional array) ────────────────────────────────────────
     if (obj['connections'] !== undefined) {
       if (!Array.isArray(obj['connections'])) {
-        throw new ManifestValidationError(
-          `"connections" must be an array${ctx}`,
-          'connections',
-        );
+        throw new ManifestValidationError(`"connections" must be an array${ctx}`, 'connections');
       }
       for (const conn of obj['connections'] as unknown[]) {
         if (!conn || typeof conn !== 'object') {
           throw new ManifestValidationError(
             `Each connection must be an object${ctx}`,
-            'connections',
+            'connections'
           );
         }
         const connObj = conn as Record<string, unknown>;
@@ -153,7 +141,7 @@ export class CircleRegistry {
         if (connObj['bridgeChannels'] !== undefined && !Array.isArray(connObj['bridgeChannels'])) {
           throw new ManifestValidationError(
             `"bridgeChannels" in connection must be an array${ctx}`,
-            'connections',
+            'connections'
           );
         }
       }
@@ -168,10 +156,10 @@ export class CircleRegistry {
    */
   static validateAgentReferences(
     circle: CircleManifest,
-    agentManifests: AgentManifest[],
+    agentManifests: AgentManifest[]
   ): string[] {
-    const knownAgents = new Set(agentManifests.map(m => m.metadata.name));
-    return circle.agents.filter(name => !knownAgents.has(name));
+    const knownAgents = new Set(agentManifests.map((m) => m.metadata.name));
+    return circle.agents.filter((name) => !knownAgents.has(name));
   }
 
   // ── Instance Methods ──────────────────────────────────────────────────────────
@@ -187,7 +175,7 @@ export class CircleRegistry {
       const missing = CircleRegistry.validateAgentReferences(circle, agentManifests);
       if (missing.length > 0) {
         logger.warn(
-          `Circle "${circle.metadata.name}" references unknown agents: ${missing.join(', ')}`,
+          `Circle "${circle.metadata.name}" references unknown agents: ${missing.join(', ')}`
         );
       }
 
@@ -206,16 +194,17 @@ export class CircleRegistry {
    * Load the project-context.md for a circle.
    * Resolves the path relative to the circles directory.
    */
-  async loadProjectContext(circle: CircleManifest, circlesDir: string): Promise<string | undefined> {
+  async loadProjectContext(
+    circle: CircleManifest,
+    circlesDir: string
+  ): Promise<string | undefined> {
     if (!circle.projectContext?.path) return undefined;
 
     // Resolve relative to the circles directory
     const contextPath = path.resolve(circlesDir, circle.projectContext.path);
 
     if (!existsSync(contextPath)) {
-      logger.warn(
-        `Project context not found for "${circle.metadata.name}": ${contextPath}`,
-      );
+      logger.warn(`Project context not found for "${circle.metadata.name}": ${contextPath}`);
       return undefined;
     }
 
@@ -251,7 +240,7 @@ export class CircleRegistry {
     hasProjectContext: boolean;
     channelCount: number;
   }> {
-    return this.listCircles().map(c => {
+    return this.listCircles().map((c) => {
       const summary: {
         name: string;
         displayName: string;
@@ -275,41 +264,21 @@ export class CircleRegistry {
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
-  private static requireString(
-    obj: Record<string, unknown>,
-    field: string,
-    ctx: string,
-  ): void {
+  private static requireString(obj: Record<string, unknown>, field: string, ctx: string): void {
     if (obj[field] === undefined || obj[field] === null) {
-      throw new ManifestValidationError(
-        `Missing required field "${field}"${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Missing required field "${field}"${ctx}`, field);
     }
     if (typeof obj[field] !== 'string') {
-      throw new ManifestValidationError(
-        `Field "${field}" must be a string${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Field "${field}" must be a string${ctx}`, field);
     }
   }
 
-  private static requireObject(
-    obj: Record<string, unknown>,
-    field: string,
-    ctx: string,
-  ): void {
+  private static requireObject(obj: Record<string, unknown>, field: string, ctx: string): void {
     if (obj[field] === undefined || obj[field] === null) {
-      throw new ManifestValidationError(
-        `Missing required field "${field}"${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Missing required field "${field}"${ctx}`, field);
     }
     if (typeof obj[field] !== 'object' || Array.isArray(obj[field])) {
-      throw new ManifestValidationError(
-        `Field "${field}" must be an object${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Field "${field}" must be an object${ctx}`, field);
     }
   }
 }

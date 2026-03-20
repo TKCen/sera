@@ -31,28 +31,28 @@ export interface SecretFilter {
  */
 export interface SecretsProvider {
   readonly id: string;
-  
+
   /**
    * Retrieve a secret value.
    * Enforces access control internally (optional, but recommended).
    */
   get(name: string, context: SecretAccessContext): Promise<string | null>;
-  
+
   /**
    * Set/update a secret value.
    */
   set(name: string, value: string, metadata?: Partial<SecretMetadata>): Promise<void>;
-  
+
   /**
    * Delete a secret.
    */
   delete(name: string, context: SecretAccessContext): Promise<boolean>;
-  
+
   /**
    * List metadata for all secrets matching the filter.
    */
   list(filter: SecretFilter, context: SecretAccessContext): Promise<SecretMetadata[]>;
-  
+
   /**
    * Perform a health check on the secrets backend.
    */

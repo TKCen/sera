@@ -55,7 +55,7 @@ export class ScheduleService {
     await this.boss.work('agent-schedule', async (jobs) => {
       for (const job of jobs) {
         const { scheduleId } = job.data as { scheduleId: string };
-        await this.triggerSchedule(scheduleId).catch(err => {
+        await this.triggerSchedule(scheduleId).catch((err) => {
           logger.error(`Failed to trigger schedule ${scheduleId}:`, err);
         });
       }
@@ -83,20 +83,22 @@ export class ScheduleService {
     for (const schedule of dbSchedules) {
       try {
         await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
-        
+
         // Update next_run_at in DB
         // pg-boss doesn't easily expose next run time, but we can compute it if needed
         // For now, we rely on pg-boss to fire it.
       } catch (err) {
         logger.error(`Failed to schedule ${schedule.name} (${schedule.id}):`, err);
-        await pool.query("UPDATE schedules SET status = 'error', last_run_status = $1 WHERE id = $2", 
-          [(err as Error).message, schedule.id]);
+        await pool.query(
+          "UPDATE schedules SET status = 'error', last_run_status = $1 WHERE id = $2",
+          [(err as Error).message, schedule.id]
+        );
       }
     }
 
     // 3. Remove stale schedules from pg-boss
     // We can query pgboss.schedule table directly
-    const dbScheduleIds = dbSchedules.map(s => s.id);
+    const dbScheduleIds = dbSchedules.map((s) => s.id);
     const { rows: pgbossSchedules } = await pool.query(
       "SELECT name FROM pgboss.schedule WHERE name NOT IN (SELECT id::text FROM schedules WHERE type = 'cron' AND status = 'active')"
     );
@@ -112,9 +114,15 @@ export class ScheduleService {
 
   public async createSchedule(data: Partial<Schedule>): Promise<Schedule> {
     const id = uuidv4();
-    const { 
-      agent_instance_id, agent_name, name, description, 
-      type, expression, task, source = 'api' 
+    const {
+      agent_instance_id,
+      agent_name,
+      name,
+      description,
+      type,
+      expression,
+      task,
+      source = 'api',
     } = data;
 
     if (!agent_instance_id || !name || !type || !expression || !task) {
@@ -140,24 +148,28 @@ export class ScheduleService {
       actorId: 'system',
       actingContext: null,
       eventType: 'schedule.created',
-      payload: { scheduleId: schedule.id, name: schedule.name, agentId: schedule.agent_instance_id }
+      payload: {
+        scheduleId: schedule.id,
+        name: schedule.name,
+        agentId: schedule.agent_instance_id,
+      },
     });
 
     return schedule;
   }
 
   public async updateSchedule(id: string, updates: Partial<Schedule>): Promise<Schedule> {
-    const fields = Object.keys(updates).filter(k => 
+    const fields = Object.keys(updates).filter((k) =>
       ['name', 'description', 'expression', 'task', 'status'].includes(k)
     );
-    
+
     if (fields.length === 0) {
-      const { rows } = await pool.query<Schedule>("SELECT * FROM schedules WHERE id = $1", [id]);
+      const { rows } = await pool.query<Schedule>('SELECT * FROM schedules WHERE id = $1', [id]);
       return rows[0]!;
     }
 
     const setClause = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
-    const values = fields.map(f => (updates as any)[f]);
+    const values = fields.map((f) => (updates as any)[f]);
 
     const { rows } = await pool.query<Schedule>(
       `UPDATE schedules SET ${setClause}, updated_at = now() WHERE id = $1 RETURNING *`,
@@ -180,16 +192,19 @@ export class ScheduleService {
       actorId: 'system',
       actingContext: null,
       eventType: 'schedule.updated',
-      payload: { scheduleId: schedule.id, updates: fields }
+      payload: { scheduleId: schedule.id, updates: fields },
     });
 
     return schedule;
   }
 
   public async deleteSchedule(id: string): Promise<void> {
-    const { rows } = await pool.query("DELETE FROM schedules WHERE id = $1 RETURNING source, agent_instance_id, name", [id]);
+    const { rows } = await pool.query(
+      'DELETE FROM schedules WHERE id = $1 RETURNING source, agent_instance_id, name',
+      [id]
+    );
     const deleted = rows[0];
-    
+
     if (deleted && deleted.source === 'manifest') {
       // Re-insert if it's a manifest schedule? No, the instructions say manifest schedules cannot be deleted via API.
       // I should check this in the route handler.
@@ -205,13 +220,13 @@ export class ScheduleService {
         actorId: 'system',
         actingContext: null,
         eventType: 'schedule.deleted',
-        payload: { scheduleId: id, name: deleted.name, agentId: deleted.agent_instance_id }
+        payload: { scheduleId: id, name: deleted.name, agentId: deleted.agent_instance_id },
       });
     }
   }
 
   public async triggerSchedule(id: string): Promise<void> {
-    const { rows } = await pool.query<Schedule>("SELECT * FROM schedules WHERE id = $1", [id]);
+    const { rows } = await pool.query<Schedule>('SELECT * FROM schedules WHERE id = $1', [id]);
     const schedule = rows[0];
     if (!schedule) return;
 
@@ -224,12 +239,14 @@ export class ScheduleService {
 
     // Get agent instance to check lifecycle mode
     const agentInstance = await pool.query(
-      "SELECT lifecycle_mode, status FROM agent_instances WHERE id = $1",
+      'SELECT lifecycle_mode, status FROM agent_instances WHERE id = $1',
       [schedule.agent_instance_id]
     );
 
     if (agentInstance.rows.length === 0) {
-      logger.error(`Agent instance ${schedule.agent_instance_id} not found for schedule ${schedule.id}`);
+      logger.error(
+        `Agent instance ${schedule.agent_instance_id} not found for schedule ${schedule.id}`
+      );
       return;
     }
 
@@ -243,7 +260,9 @@ export class ScheduleService {
         [schedule.agent_instance_id]
       );
       if (runningTask.rows.length > 0) {
-        logger.warn(`Skipping scheduled task for ${schedule.agent_name}: agent is already running a task.`);
+        logger.warn(
+          `Skipping scheduled task for ${schedule.agent_name}: agent is already running a task.`
+        );
         await this.updateRunStatus(id, 'skipped', 'Agent already running a task');
         return;
       }
@@ -257,7 +276,7 @@ export class ScheduleService {
 
       // If agent not running, start it
       if (status !== 'running') {
-        await this.orchestrator.startInstance(schedule.agent_instance_id).catch(err => {
+        await this.orchestrator.startInstance(schedule.agent_instance_id).catch((err) => {
           logger.error(`Failed to start agent ${schedule.agent_name} for schedule:`, err);
         });
       }
@@ -265,30 +284,38 @@ export class ScheduleService {
       // Ephemeral agent
       // Check if already running (Story 11.2 skip fire)
       if (status === 'running') {
-        logger.warn(`Skipping scheduled task for ${schedule.agent_name}: ephemeral agent is already running.`);
+        logger.warn(
+          `Skipping scheduled task for ${schedule.agent_name}: ephemeral agent is already running.`
+        );
         await this.updateRunStatus(id, 'skipped', 'Agent already running');
         return;
       }
 
       // Start with task
       // Note: We need to update Orchestrator.startInstance to accept a task
-      await (this.orchestrator as any).startInstance(schedule.agent_instance_id, undefined, schedule.task).catch((err: Error) => {
-        logger.error(`Failed to spawn ephemeral agent ${schedule.agent_name} for schedule:`, err);
-      });
+      await (this.orchestrator as any)
+        .startInstance(schedule.agent_instance_id, undefined, schedule.task)
+        .catch((err: Error) => {
+          logger.error(`Failed to spawn ephemeral agent ${schedule.agent_name} for schedule:`, err);
+        });
     }
 
     await this.updateRunStatus(id, 'success');
-    
+
     await AuditService.getInstance().record({
       actorType: 'system',
       actorId: 'system',
       actingContext: null,
       eventType: 'schedule.fired',
-      payload: { scheduleId: schedule.id, agentId: schedule.agent_instance_id }
+      payload: { scheduleId: schedule.id, agentId: schedule.agent_instance_id },
     });
   }
 
-  private async updateRunStatus(id: string, runStatus: string, errorMessage?: string): Promise<void> {
+  private async updateRunStatus(
+    id: string,
+    runStatus: string,
+    errorMessage?: string
+  ): Promise<void> {
     await pool.query(
       `UPDATE schedules SET 
         last_run_at = now(), 

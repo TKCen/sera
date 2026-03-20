@@ -31,7 +31,7 @@ export class IdentityService {
       secretStr = crypto.randomBytes(32).toString('hex');
       logger.warn(
         'JWT_SECRET not set — using a random ephemeral secret. ' +
-        'Tokens will not survive server restarts. Set JWT_SECRET in production.',
+          'Tokens will not survive server restarts. Set JWT_SECRET in production.'
       );
     }
     this.secretBytes = new TextEncoder().encode(secretStr);
@@ -42,8 +42,9 @@ export class IdentityService {
    * Includes agentId, agentName, circleId, capabilities, and scope.
    */
   async signToken(
-    payload: Omit<AgentTokenPayload, 'scope' | 'agentName'> & Partial<Pick<AgentTokenPayload, 'scope' | 'agentName'>>,
-    expiresIn: string = DEFAULT_EXPIRY,
+    payload: Omit<AgentTokenPayload, 'scope' | 'agentName'> &
+      Partial<Pick<AgentTokenPayload, 'scope' | 'agentName'>>,
+    expiresIn: string = DEFAULT_EXPIRY
   ): Promise<string> {
     const claims: AgentTokenPayload = {
       agentId: payload.agentId,
@@ -69,7 +70,10 @@ export class IdentityService {
       algorithms: ['HS256'],
     });
 
-    const { agentId, agentName, circleId, capabilities, scope, iat, exp } = payload as Record<string, unknown>;
+    const { agentId, agentName, circleId, capabilities, scope, iat, exp } = payload as Record<
+      string,
+      unknown
+    >;
 
     if (typeof agentId !== 'string') throw new Error('Invalid token: missing agentId');
     if (typeof circleId !== 'string') throw new Error('Invalid token: missing circleId');

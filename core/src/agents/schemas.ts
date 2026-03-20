@@ -3,7 +3,10 @@ import { z } from 'zod';
 // ── Shared ──────────────────────────────────────────────────────────────────
 
 export const MetadataSchema = z.object({
-  name: z.string().regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/).max(63),
+  name: z
+    .string()
+    .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/)
+    .max(63),
   displayName: z.string().optional(),
   icon: z.string().optional(),
   builtin: z.boolean().default(false),
@@ -18,20 +21,28 @@ export const AgentTemplateSchema = z.object({
   kind: z.literal('AgentTemplate'),
   metadata: MetadataSchema,
   spec: z.object({
-    identity: z.object({
-      role: z.string().optional(),
-      principles: z.array(z.string()).optional(),
-    }).optional(),
-    model: z.object({
-      provider: z.string().optional(),
-      name: z.string().optional(),
-      temperature: z.number().optional(),
-      fallback: z.array(z.object({
-        provider: z.string(),
-        name: z.string(),
-        maxComplexity: z.number().optional(),
-      })).optional(),
-    }).optional(),
+    identity: z
+      .object({
+        role: z.string().optional(),
+        principles: z.array(z.string()).optional(),
+      })
+      .optional(),
+    model: z
+      .object({
+        provider: z.string().optional(),
+        name: z.string().optional(),
+        temperature: z.number().optional(),
+        fallback: z
+          .array(
+            z.object({
+              provider: z.string(),
+              name: z.string(),
+              maxComplexity: z.number().optional(),
+            })
+          )
+          .optional(),
+      })
+      .optional(),
     sandboxBoundary: z.string().optional(),
     policyRef: z.string().optional(),
     capabilities: z.record(z.any()).optional(),
@@ -40,24 +51,34 @@ export const AgentTemplateSchema = z.object({
     }),
     skills: z.array(z.string()).optional(),
     skillPackages: z.array(z.string()).optional(),
-    tools: z.object({
-      allowed: z.array(z.string()).optional(),
-      denied: z.array(z.string()).optional(),
-    }).optional(),
-    subagents: z.object({
-      allowed: z.array(z.object({
-        templateRef: z.string(),
-        maxInstances: z.number().optional(),
-        lifecycle: z.enum(['persistent', 'ephemeral']).default('ephemeral'),
-        requiresApproval: z.boolean().default(false),
-      })).optional(),
-    }).optional(),
-    resources: z.object({
-      cpu: z.string().optional(),
-      memory: z.string().optional(),
-      maxLlmTokensPerHour: z.number().optional(),
-      maxLlmTokensPerDay: z.number().optional(),
-    }).optional(),
+    tools: z
+      .object({
+        allowed: z.array(z.string()).optional(),
+        denied: z.array(z.string()).optional(),
+      })
+      .optional(),
+    subagents: z
+      .object({
+        allowed: z
+          .array(
+            z.object({
+              templateRef: z.string(),
+              maxInstances: z.number().optional(),
+              lifecycle: z.enum(['persistent', 'ephemeral']).default('ephemeral'),
+              requiresApproval: z.boolean().default(false),
+            })
+          )
+          .optional(),
+      })
+      .optional(),
+    resources: z
+      .object({
+        cpu: z.string().optional(),
+        memory: z.string().optional(),
+        maxLlmTokensPerHour: z.number().optional(),
+        maxLlmTokensPerDay: z.number().optional(),
+      })
+      .optional(),
     workspace: z.record(z.any()).optional(),
     memory: z.record(z.any()).optional(),
   }),
@@ -69,7 +90,10 @@ export const AgentInstanceSchema = z.object({
   apiVersion: z.literal('sera/v1'),
   kind: z.literal('Agent'),
   metadata: z.object({
-    name: z.string().regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/).max(63),
+    name: z
+      .string()
+      .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/)
+      .max(63),
     displayName: z.string().optional(),
     templateRef: z.string(),
     circle: z.string().optional(),
@@ -94,10 +118,7 @@ export const NamedListSchema = z.object({
     description: z.string().optional(),
     alwaysEnforced: z.boolean().default(false),
   }),
-  entries: z.array(z.union([
-    z.string(),
-    z.object({ $ref: z.string() }),
-  ])),
+  entries: z.array(z.union([z.string(), z.object({ $ref: z.string() })])),
 });
 
 // ── CapabilityPolicy ────────────────────────────────────────────────────────

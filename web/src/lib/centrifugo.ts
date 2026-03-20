@@ -71,7 +71,7 @@ function safeNewSubscription(centrifuge: Centrifuge, channel: string): Subscript
  */
 export function subscribeToThoughts(
   agentId: string,
-  onThought: (event: ThoughtEvent) => void,
+  onThought: (event: ThoughtEvent) => void
 ): () => void {
   const centrifuge = getClient();
   const channel = `internal:agent:${agentId}:thoughts`;
@@ -97,7 +97,7 @@ export function subscribeToThoughts(
  */
 export function subscribeToTerminal(
   agentId: string,
-  onOutput: (data: unknown) => void,
+  onOutput: (data: unknown) => void
 ): () => void {
   const centrifuge = getClient();
   const channel = `internal:agent:${agentId}:terminal`;
@@ -133,7 +133,7 @@ export interface StreamToken {
 export function subscribeToStream(
   messageId: string,
   onToken: (token: string) => void,
-  onDone: () => void,
+  onDone: () => void
 ): () => void {
   const centrifuge = getClient();
   const channel = `internal:stream:${messageId}`;
@@ -161,4 +161,3 @@ export function subscribeToStream(
     centrifuge.removeSubscription(sub);
   };
 }
-

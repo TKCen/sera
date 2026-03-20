@@ -10,7 +10,7 @@ SERA gives you a governed, extensible environment where AI agents run in isolate
 
 Most agentic frameworks treat the host system as a sandbox. SERA does not. Every agent is a container. Every tool call is governed. Every token is metered. You decide exactly what each agent can see, reach, and do — per agent, not per tier.
 
-**Local-first.** Your models, your keys, your data. Nothing leaves your network unless you explicitly configure it to. LiteLLM routes to any provider; Ollama runs everything locally.
+**Local-first.** Your models, your keys, your data. Nothing leaves your network unless you explicitly configure it to. LLM routing happens in-process; Ollama runs everything locally.
 
 **Governance as a first-class concern.** A three-layer permission model (SandboxBoundary × CapabilityPolicy × ManifestInline) gives enterprise-grade access control without enterprise complexity. Shared reference lists, deny-always semantics, and human-in-the-loop permission grants for runtime escalation.
 
@@ -40,7 +40,7 @@ Most agentic frameworks treat the host system as a sandbox. SERA does not. Every
 │ (sandboxed) │  └─────────────┘  └─────────────────────────┘
 └────┬────────┘
      │  MCP tool containers (per-agent, sandboxed)
-     └──► LiteLLM → any LLM provider (Ollama, OpenAI, Anthropic, …)
+     └──► LlmRouter → any LLM provider (Ollama, OpenAI, Anthropic, …)
 ```
 
 | Component | Technology | Role |
@@ -48,7 +48,7 @@ Most agentic frameworks treat the host system as a sandbox. SERA does not. Every
 | **sera-core** | Node.js 22 + TypeScript | Orchestrator, LLM proxy, governance, all API surfaces |
 | **sera-web** | Vite + React Router v7 + TanStack Query | Operator dashboard, real-time thought streams |
 | **Agent runtime** | TypeScript (containerised) | Lightweight reasoning loop running inside each agent container |
-| **LiteLLM** | `main-stable` | Provider gateway — dumb routing socket, all governance in sera-core |
+| **LlmRouter** | `@mariozechner/pi-ai` (in-process) | Provider gateway — cloud and local providers, no sidecar needed |
 | **Centrifugo** | Latest stable | Real-time pub/sub for thoughts, tokens, agent status |
 | **PostgreSQL** | 16 | Primary store — agents, audit trail, secrets, tasks, metering |
 | **Qdrant** | Latest | Vector search for agent memory and knowledge retrieval |
@@ -73,6 +73,28 @@ Most agentic frameworks treat the host system as a sandbox. SERA does not. Every
 
 ---
 
+## Repository Layout
+
+This is an **npm workspace monorepo**. The `core/` and `web/` packages are npm workspaces; the TUI is a standalone Go module.
+
+```
+sera/
+  core/               # sera-core — Node.js API server, orchestrator, governance
+  web/                # sera-web — Vite + React operator dashboard
+  tui/                # Go terminal UI (standalone module)
+  agents/             # Agent YAML manifests (instances)
+  templates/          # AgentTemplate definitions
+  schemas/            # JSON Schema for manifests and policies
+  sandbox-boundaries/ # Tier policy definitions (tier-1/2/3.yaml)
+  capability-policies/# CapabilityPolicy definitions
+  circles/            # Circle definitions and shared memory
+  lists/              # Network and command allow/denylists
+  docs/               # Architecture, epic specs, API reference
+  scripts/            # Repo-level tooling
+```
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -86,15 +108,15 @@ Most agentic frameworks treat the host system as a sandbox. SERA does not. Every
 git clone https://github.com/TKCen/sera.git
 cd sera
 
-# Create the agent network
+# Create the agent network (one-time)
 docker network create agent_net
 
 # Configure your environment
 cp .env.example .env
 # Edit .env — set your LLM provider URL and API keys
 
-# Start the stack
-docker compose up -d
+# Start the stack (production)
+npm run prod:up
 ```
 
 **Access points:**
@@ -103,21 +125,72 @@ docker compose up -d
 |---|---|
 | sera-web (dashboard) | http://localhost:3000 |
 | sera-core (API) | http://localhost:3001 |
-| LiteLLM (gateway) | http://localhost:4000 |
+| Centrifugo | http://localhost:10001 |
 
 On first start, sera-core prints a bootstrap API key to the log. Use it to configure your first operator account and connect your IdP (or leave it in API-key-only mode for local use).
 
-### Development
+---
+
+## Developer Commands
+
+All commands run from the repository root via `npm run <script>`.
+
+### Docker Compose
+
+| Command | Description |
+|---|---|
+| `npm run dev:up` | Start the full stack in **hot-reload dev mode** (core + web with live reload) |
+| `npm run dev:down` | Stop the dev stack |
+| `npm run dev:logs` | Tail dev stack logs |
+| `npm run prod:up` | Start the production stack |
+| `npm run prod:down` | Stop the production stack |
+| `npm run prod:logs` | Tail production logs |
+| `npm run prod:auth:up` | Start production stack **with Authentik** SSO |
+| `npm run prod:auth:down` | Stop the Authentik stack |
+| `npm run prod:auth:logs` | Tail Authentik stack logs |
+
+### Code Sanity
+
+| Command | Scope | Description |
+|---|---|---|
+| `npm run typecheck` | all | TypeScript type-check all workspaces |
+| `npm run typecheck:core` | core | |
+| `npm run typecheck:web` | web | |
+| `npm run lint` | all | ESLint all workspaces |
+| `npm run lint:core` | core | |
+| `npm run lint:web` | web | |
+| `npm run format` | all | Prettier write all workspaces |
+| `npm run format:core` | core | |
+| `npm run format:web` | web | |
+
+### Tests
+
+| Command | Scope | Description |
+|---|---|---|
+| `npm run test` | all | Run all tests across workspaces |
+| `npm run test:unit` | all | Unit tests only (no DB / Docker required) |
+| `npm run test:integration` | all | Integration tests (requires running services) |
+| `npm run test:core` | core | All core tests |
+| `npm run test:web` | web | All web tests |
+| `npm run test:tui` | tui | Go tests |
+
+### Pre-commit
 
 ```bash
-# Hot-reload mode (core + web)
-docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up
+# Install the git hook (one-time after cloning)
+npm run hooks:install
 
-# Run tests (from workspace root)
-D:/projects/homelab/sera/core/node_modules/.bin/vitest run
+# Run the pre-commit checks manually
+npm run pre-commit   # typecheck + lint + web tests
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the full development environment guide.
+The pre-commit check runs: `typecheck → lint → test:web`. Integration tests are excluded because they require running services; run `npm run test:integration` separately in CI or against a live stack.
+
+### TUI
+
+```bash
+npm run tui:build    # compiles tui/tui.exe
+```
 
 ---
 
@@ -130,6 +203,7 @@ See [CLAUDE.md](CLAUDE.md) for the full development environment guide.
 | [`docs/TESTING.md`](docs/TESTING.md) | Test strategy, patterns, and coverage requirements |
 | [`docs/epics/`](docs/epics/) | 18 epics covering the full feature roadmap with story-level acceptance criteria |
 | [`docs/openapi.yaml`](docs/openapi.yaml) | sera-core REST API specification |
+| [`CLAUDE.md`](CLAUDE.md) | AI assistant development guide — environment, conventions, learnings |
 
 ---
 

@@ -30,7 +30,7 @@ declare global {
 export function createAuthMiddleware(
   identityService: IdentityService,
   authService: AuthService,
-  sessionStore?: WebSessionStore,
+  sessionStore?: WebSessionStore
 ) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const authHeader = req.headers.authorization;
@@ -38,7 +38,8 @@ export function createAuthMiddleware(
     // Check session cookie (httpOnly, set after OIDC callback)
     const cookieHeader = req.headers.cookie ?? '';
     const sessionCookie = parseCookieValue(cookieHeader, 'sera_session');
-    const sessionToken = sessionCookie ?? (authHeader?.startsWith('Bearer sess_') ? authHeader.slice(7) : undefined);
+    const sessionToken =
+      sessionCookie ?? (authHeader?.startsWith('Bearer sess_') ? authHeader.slice(7) : undefined);
 
     // Try session token first (web UI sessions)
     if (sessionToken && sessionStore) {
@@ -90,7 +91,7 @@ export function requireRole(roles: OperatorRole[]) {
     }
 
     const hasRole = req.operator.roles.some(
-      (role: OperatorRole) => roles.includes(role) || role === 'admin',
+      (role: OperatorRole) => roles.includes(role) || role === 'admin'
     );
 
     if (!hasRole) {

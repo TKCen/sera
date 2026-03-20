@@ -1,16 +1,12 @@
 import { request } from './client';
-import type {
-  CircleSummary,
-  CircleManifest,
-  CircleDetails,
-} from './types';
+import type { CircleSummary, CircleManifest, CircleDetails } from './types';
 
 export function listCircles(): Promise<CircleSummary[]> {
   return request<CircleSummary[]>('/circles');
 }
 
 export function createCircle(
-  manifest: CircleManifest,
+  manifest: CircleManifest
 ): Promise<{ success: boolean; name: string }> {
   return request<{ success: boolean; name: string }>('/circles', {
     method: 'POST',
@@ -24,33 +20,23 @@ export function getCircle(name: string): Promise<CircleDetails> {
 
 export function updateCircle(
   name: string,
-  manifest: CircleManifest,
+  manifest: CircleManifest
 ): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/circles/${encodeURIComponent(name)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(manifest),
-    },
-  );
+  return request<{ success: boolean }>(`/circles/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(manifest),
+  });
 }
 
 export function deleteCircle(name: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/circles/${encodeURIComponent(name)}`,
-    { method: 'DELETE' },
-  );
+  return request<{ success: boolean }>(`/circles/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
 }
 
-export function updateCircleContext(
-  name: string,
-  content: string,
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/circles/${encodeURIComponent(name)}/context`,
-    {
-      method: 'PUT',
-      body: JSON.stringify({ content }),
-    },
-  );
+export function updateCircleContext(name: string, content: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/circles/${encodeURIComponent(name)}/context`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
 }

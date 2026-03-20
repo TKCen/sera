@@ -44,15 +44,15 @@ export default function AgentsPage() {
       setLoading(true);
       const [tRes, iRes] = await Promise.all([
         fetch('/api/core/agents/templates'),
-        fetch('/api/core/agents/instances')
+        fetch('/api/core/agents/instances'),
       ]);
-      
+
       if (!tRes.ok) throw new Error(`Failed to fetch templates: ${tRes.statusText}`);
       if (!iRes.ok) throw new Error(`Failed to fetch instances: ${iRes.statusText}`);
-      
+
       const tData = await tRes.json();
       const iData = await iRes.json();
-      
+
       setTemplates(tData);
       setInstances(iData);
       setError(null);
@@ -128,10 +128,15 @@ export default function AgentsPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Agents</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Manage and monitor your autonomous agents</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            Manage and monitor your autonomous agents
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href="/agents/create" className="sera-btn-primary flex items-center gap-2 px-4 py-2 text-sm">
+          <Link
+            href="/agents/create"
+            className="sera-btn-primary flex items-center gap-2 px-4 py-2 text-sm"
+          >
             <Plus size={16} />
             New Agent
           </Link>
@@ -180,9 +185,11 @@ export default function AgentsPage() {
                   <div>
                     <div className="flex items-start justify-between mb-3">
                       <div className="w-10 h-10 rounded-lg bg-sera-accent-soft flex items-center justify-center text-lg">
-                        {templates.find(t => t.name === instance.templateName)?.icon || '🤖'}
+                        {templates.find((t) => t.name === instance.templateName)?.icon || '🤖'}
                       </div>
-                      <span className={`sera-badge-${instance.status === 'active' ? 'accent' : 'muted'}`}>
+                      <span
+                        className={`sera-badge-${instance.status === 'active' ? 'accent' : 'muted'}`}
+                      >
                         {instance.status}
                       </span>
                     </div>
@@ -191,14 +198,16 @@ export default function AgentsPage() {
                         {instance.name}
                       </h3>
                     </Link>
-                    <p className="text-[10px] text-sera-text-muted mt-1 font-mono truncate">{instance.id}</p>
+                    <p className="text-[10px] text-sera-text-muted mt-1 font-mono truncate">
+                      {instance.id}
+                    </p>
                     <div className="mt-3 flex items-center gap-2">
                       <span className="text-[11px] text-sera-text-dim">
                         Template: {instance.templateName}
                       </span>
                     </div>
                   </div>
-                  
+
                   <div className="mt-4 pt-4 border-t border-sera-border flex justify-end">
                     <button
                       onClick={(e) => {
@@ -216,7 +225,9 @@ export default function AgentsPage() {
             </div>
           ) : (
             <div className="sera-card-static p-8 text-center border-dashed border-sera-border">
-              <p className="text-sm text-sera-text-muted">No active instances. Instantiate a template below to get started.</p>
+              <p className="text-sm text-sera-text-muted">
+                No active instances. Instantiate a template below to get started.
+              </p>
             </div>
           )}
         </section>
@@ -232,10 +243,7 @@ export default function AgentsPage() {
             {templates.map((template) => {
               const tierInfo = TIER_LABELS[template.tier] || TIER_LABELS[1];
               return (
-                <div
-                  key={template.name}
-                  className="sera-card p-4 flex flex-col"
-                >
+                <div key={template.name} className="sera-card p-4 flex flex-col">
                   <div className="flex items-start justify-between mb-3">
                     <div className="w-10 h-10 rounded-lg bg-sera-surface flex items-center justify-center text-lg">
                       {template.icon}
@@ -245,13 +253,15 @@ export default function AgentsPage() {
                       {tierInfo.label}
                     </span>
                   </div>
-                  <h3 className="text-sm font-semibold text-sera-text">
-                    {template.displayName}
-                  </h3>
-                  <p className="text-xs text-sera-text-muted mt-1 line-clamp-2 flex-1">{template.role}</p>
-                  
+                  <h3 className="text-sm font-semibold text-sera-text">{template.displayName}</h3>
+                  <p className="text-xs text-sera-text-muted mt-1 line-clamp-2 flex-1">
+                    {template.role}
+                  </p>
+
                   <div className="mt-4 pt-4 border-t border-sera-border flex items-center justify-between">
-                    <span className="text-[10px] text-sera-text-dim font-mono">{template.name}</span>
+                    <span className="text-[10px] text-sera-text-dim font-mono">
+                      {template.name}
+                    </span>
                     <button
                       onClick={() => setIsInstantiating(template)}
                       className="sera-badge-accent hover:scale-105 transition-transform cursor-pointer flex items-center gap-1"
@@ -271,9 +281,13 @@ export default function AgentsPage() {
       {isInstantiating && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-sera-bg/80 backdrop-blur-sm">
           <div className="sera-card-static w-full max-w-md p-6 animate-in zoom-in-95 duration-200">
-            <h3 className="text-lg font-semibold text-sera-text mb-2">Instantiate {isInstantiating.displayName}</h3>
-            <p className="text-sm text-sera-text-muted mb-6">Give your new agent instance a distinctive name.</p>
-            
+            <h3 className="text-lg font-semibold text-sera-text mb-2">
+              Instantiate {isInstantiating.displayName}
+            </h3>
+            <p className="text-sm text-sera-text-muted mb-6">
+              Give your new agent instance a distinctive name.
+            </p>
+
             <form onSubmit={handleInstantiate} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">
@@ -288,7 +302,7 @@ export default function AgentsPage() {
                   className="w-full bg-sera-surface border border-sera-border rounded-lg px-3 py-2 text-sm text-sera-text focus:outline-none focus:border-sera-accent"
                 />
               </div>
-              
+
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="button"
@@ -317,11 +331,15 @@ export default function AgentsPage() {
             <div className="w-12 h-12 rounded-full bg-sera-error/10 flex items-center justify-center text-sera-error mb-4 mx-auto">
               <Trash2 size={24} />
             </div>
-            <h3 className="text-lg font-semibold text-sera-text mb-2 text-center">Delete Agent Instance?</h3>
+            <h3 className="text-lg font-semibold text-sera-text mb-2 text-center">
+              Delete Agent Instance?
+            </h3>
             <p className="text-sm text-sera-text-muted mb-6 text-center">
-              This will stop the container for <span className="text-sera-text font-medium">"{isDeleting.name}"</span> and remove it from the database. This action cannot be undone.
+              This will stop the container for{' '}
+              <span className="text-sera-text font-medium">"{isDeleting.name}"</span> and remove it
+              from the database. This action cannot be undone.
             </p>
-            
+
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -357,7 +375,8 @@ export default function AgentsPage() {
           </div>
           <h3 className="text-sm font-semibold text-sera-text mb-1">No templates found</h3>
           <p className="text-xs text-sera-text-muted text-center max-w-sm">
-            Create AGENT.yaml files in the <code className="text-sera-accent">sera/agents/</code> directory.
+            Create AGENT.yaml files in the <code className="text-sera-accent">sera/agents/</code>{' '}
+            directory.
           </p>
         </div>
       )}

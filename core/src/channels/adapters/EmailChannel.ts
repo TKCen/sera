@@ -61,7 +61,7 @@ export class EmailChannel implements Channel {
   constructor(
     readonly id: string,
     readonly name: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ) {
     const smtpUser = config['smtpUser'];
     const smtpPassword = config['smtpPassword'];
@@ -92,7 +92,7 @@ export class EmailChannel implements Channel {
     if (event.actions) {
       const urls = ActionTokenService.getInstance().buildActionUrls(
         event.actions.approveToken,
-        event.actions.denyToken,
+        event.actions.denyToken
       );
       approveUrl = urls.approveUrl;
       denyUrl = urls.denyUrl;

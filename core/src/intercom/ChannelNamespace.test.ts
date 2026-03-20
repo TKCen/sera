@@ -6,36 +6,33 @@ describe('ChannelNamespace', () => {
 
   describe('builders', () => {
     it('builds a thoughts channel', () => {
-      expect(ChannelNamespace.thoughts('architect-prime'))
-        .toBe('thoughts:architect-prime');
+      expect(ChannelNamespace.thoughts('architect-prime')).toBe('thoughts:architect-prime');
     });
 
     it('builds a tokens channel', () => {
-      expect(ChannelNamespace.tokens('developer-prime'))
-        .toBe('tokens:developer-prime');
+      expect(ChannelNamespace.tokens('developer-prime')).toBe('tokens:developer-prime');
     });
 
     it('builds a DM channel with non-sorted agent IDs', () => {
       // Order should be preserved per Story 9.1 template
-      expect(ChannelNamespace.private('developer-prime', 'architect-prime'))
-        .toBe('private:developer-prime:architect-prime');
-      expect(ChannelNamespace.private('architect-prime', 'developer-prime'))
-        .toBe('private:architect-prime:developer-prime');
+      expect(ChannelNamespace.private('developer-prime', 'architect-prime')).toBe(
+        'private:developer-prime:architect-prime'
+      );
+      expect(ChannelNamespace.private('architect-prime', 'developer-prime')).toBe(
+        'private:architect-prime:developer-prime'
+      );
     });
 
     it('builds a circle channel', () => {
-      expect(ChannelNamespace.circle('development'))
-        .toBe('circle:development');
+      expect(ChannelNamespace.circle('development')).toBe('circle:development');
     });
 
     it('builds a status channel', () => {
-      expect(ChannelNamespace.status('architect-prime'))
-        .toBe('agent:architect-prime:status');
+      expect(ChannelNamespace.status('architect-prime')).toBe('agent:architect-prime:status');
     });
 
     it('builds a system channel', () => {
-      expect(ChannelNamespace.system('agents'))
-        .toBe('system.agents');
+      expect(ChannelNamespace.system('agents')).toBe('system.agents');
     });
   });
 
@@ -43,33 +40,27 @@ describe('ChannelNamespace', () => {
 
   describe('validate', () => {
     it('validates thoughts channel', () => {
-      expect(ChannelNamespace.validate('thoughts:architect-prime'))
-        .toBe('thoughts');
+      expect(ChannelNamespace.validate('thoughts:architect-prime')).toBe('thoughts');
     });
 
     it('validates tokens channel', () => {
-      expect(ChannelNamespace.validate('tokens:developer-prime'))
-        .toBe('tokens');
+      expect(ChannelNamespace.validate('tokens:developer-prime')).toBe('tokens');
     });
 
     it('validates private DM channel', () => {
-      expect(ChannelNamespace.validate('private:architect-prime:developer-prime'))
-        .toBe('private');
+      expect(ChannelNamespace.validate('private:architect-prime:developer-prime')).toBe('private');
     });
 
     it('validates circle channel', () => {
-      expect(ChannelNamespace.validate('circle:development'))
-        .toBe('circle');
+      expect(ChannelNamespace.validate('circle:development')).toBe('circle');
     });
 
     it('validates status channel', () => {
-      expect(ChannelNamespace.validate('agent:architect-prime:status'))
-        .toBe('agent');
+      expect(ChannelNamespace.validate('agent:architect-prime:status')).toBe('agent');
     });
 
     it('validates system channel', () => {
-      expect(ChannelNamespace.validate('system.agents'))
-        .toBe('system');
+      expect(ChannelNamespace.validate('system.agents')).toBe('system');
     });
 
     it('rejects empty string', () => {

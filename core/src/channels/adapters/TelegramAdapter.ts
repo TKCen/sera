@@ -55,10 +55,10 @@ export class TelegramAdapter extends ChannelAdapter {
         }
       } catch (err: any) {
         if (err.code === 'ECONNABORTED') {
-           // Timeout is expected
+          // Timeout is expected
         } else {
           this.logger.error('Error polling Telegram updates:', err.message);
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          await new Promise((resolve) => setTimeout(resolve, 5000));
         }
       }
     }
@@ -75,7 +75,10 @@ export class TelegramAdapter extends ChannelAdapter {
 
     if (this.isRateLimited(incoming.userId)) {
       this.logger.warn(`Rate limit exceeded for user ${incoming.userId}`);
-      await this.sendMessage(incoming.chatId, '⚠️ You are sending messages too fast. Please slow down.');
+      await this.sendMessage(
+        incoming.chatId,
+        '⚠️ You are sending messages too fast. Please slow down.'
+      );
       return;
     }
 
@@ -95,7 +98,7 @@ export class TelegramAdapter extends ChannelAdapter {
 
       if (session) {
         const msgs = await this.sessionStore.getMessages(sessionId);
-        history = msgs.map(m => ({
+        history = msgs.map((m) => ({
           role: m.role as ChatMessage['role'],
           content: m.content,
         }));
@@ -124,10 +127,12 @@ export class TelegramAdapter extends ChannelAdapter {
         role: 'assistant',
         content: reply,
       });
-
     } catch (err: any) {
       this.logger.error('Error processing Telegram message:', err.message);
-      await this.sendMessage(incoming.chatId, 'Sorry, I encountered an error while processing your message.');
+      await this.sendMessage(
+        incoming.chatId,
+        'Sorry, I encountered an error while processing your message.'
+      );
     }
   }
 

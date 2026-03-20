@@ -15,8 +15,8 @@ export interface MCPServerManifest {
   image: string;
   transport: 'stdio' | 'http';
   command?: string; // for stdio execution inside container
-  args?: string[];    // for stdio execution inside container
-  url?: string;     // for http transport if not same as container name
+  args?: string[]; // for stdio execution inside container
+  url?: string; // for http transport if not same as container name
   network?: {
     allowlist?: string[];
   };
@@ -40,7 +40,9 @@ export class MCPServerManager {
   /**
    * Spawn an MCP server container from a manifest.
    */
-  async spawnServer(manifest: MCPServerManifest): Promise<{ info: SandboxInfo, clientOptions: import('./client.js').MCPClientOptions }> {
+  async spawnServer(
+    manifest: MCPServerManifest
+  ): Promise<{ info: SandboxInfo; clientOptions: import('./client.js').MCPClientOptions }> {
     const serverName = manifest.metadata.name;
     const instanceId = `mcp-${serverName}-${uuidv4().substring(0, 8)}`;
 
@@ -93,10 +95,8 @@ export class MCPServerManager {
       };
     }
 
-
     return { info, clientOptions };
   }
-
 
   async stopServer(instanceId: string): Promise<void> {
     await this.sandboxManager.teardown(instanceId);

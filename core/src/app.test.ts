@@ -3,10 +3,12 @@ import request from 'supertest';
 
 vi.mock('./services/vector.service.js', () => ({
   VectorService: class {
-    async search() { return []; }
+    async search() {
+      return [];
+    }
     async upsertPoints() {}
     async deletePoints() {}
-  }
+  },
 }));
 
 import { app } from './index.js';

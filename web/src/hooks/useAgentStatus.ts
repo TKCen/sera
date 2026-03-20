@@ -7,8 +7,6 @@ interface AgentStatusPayload {
 }
 
 export function useAgentStatus(agentId: string): string | null {
-  const payload = useChannel<AgentStatusPayload>(
-    agentId ? `agent:${agentId}:status` : '',
-  );
+  const payload = useChannel<AgentStatusPayload>(agentId ? `agent:${agentId}:status` : '');
   return payload?.status ?? null;
 }

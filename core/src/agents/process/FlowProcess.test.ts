@@ -64,7 +64,13 @@ describe('FlowProcess', () => {
     const tasks: ProcessTask[] = [
       { id: 't1', description: 'Task 1', assignedAgent: 'agent-a' },
       { id: 't2', description: 'Task 2', assignedAgent: 'agent-b' },
-      { id: 't3', description: 'Task 3', assignedAgent: 'agent-c', dependsOn: ['t1', 't2'], routingType: 'and' },
+      {
+        id: 't3',
+        description: 'Task 3',
+        assignedAgent: 'agent-c',
+        dependsOn: ['t1', 't2'],
+        routingType: 'and',
+      },
     ];
 
     const result = await manager.run('flow', tasks, agents);
@@ -86,7 +92,13 @@ describe('FlowProcess', () => {
     // t2 depends on t1 but we'll run it as "or" (effectively same as sequential here since t1 finishes first)
     const tasks: ProcessTask[] = [
       { id: 't1', description: 'Task 1', assignedAgent: 'agent-a' },
-      { id: 't2', description: 'Task 2', assignedAgent: 'agent-b', dependsOn: ['t1'], routingType: 'or' },
+      {
+        id: 't2',
+        description: 'Task 2',
+        assignedAgent: 'agent-b',
+        dependsOn: ['t1'],
+        routingType: 'or',
+      },
     ];
 
     const result = await manager.run('flow', tasks, agents);

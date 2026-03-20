@@ -121,8 +121,8 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
         clampedRounds,
         orchestrator,
         intercom,
-        circleService,
-      ).catch(err => logger.error(`Party session ${session.id} failed:`, err));
+        circleService
+      ).catch((err) => logger.error(`Party session ${session.id} failed:`, err));
 
       res.status(202).json({ sessionId: session.id, circleId: circle.id, status: 'started' });
     } catch (err: any) {
@@ -153,7 +153,7 @@ async function runPartySession(
   maxRounds: number,
   orchestrator: Orchestrator,
   intercom: import('../intercom/IntercomService.js').IntercomService | undefined,
-  circleService: CircleService,
+  circleService: CircleService
 ): Promise<void> {
   const conversationHistory: string[] = [];
 
@@ -162,9 +162,10 @@ async function runPartySession(
       const agent = orchestrator.getAgent(agentId);
       if (!agent) continue;
 
-      const contextPrompt = conversationHistory.length > 0
-        ? `${prompt}\n\nPrevious responses:\n${conversationHistory.join('\n')}\n\nYour response:`
-        : prompt;
+      const contextPrompt =
+        conversationHistory.length > 0
+          ? `${prompt}\n\nPrevious responses:\n${conversationHistory.join('\n')}\n\nYour response:`
+          : prompt;
 
       let response = '';
       try {
@@ -185,13 +186,15 @@ async function runPartySession(
       conversationHistory.push(`${agentId}: ${response}`);
 
       if (intercom) {
-        await intercom.publish(`circle:${circleId}`, {
-          type: 'party.round',
-          sessionId,
-          agentId,
-          response,
-          round,
-        }).catch(() => {});
+        await intercom
+          .publish(`circle:${circleId}`, {
+            type: 'party.round',
+            sessionId,
+            agentId,
+            response,
+            round,
+          })
+          .catch(() => {});
       }
     }
   }

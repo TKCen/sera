@@ -31,9 +31,8 @@ export class MemoryManager {
   private static readonly writeTimestamps = new Map<string, number[]>();
 
   constructor(opts?: { circleId?: string; agentId?: string; basePath?: string }) {
-    const rootPath = opts?.basePath
-      ?? process.env.MEMORY_PATH
-      ?? path.join(process.cwd(), '..', 'memory');
+    const rootPath =
+      opts?.basePath ?? process.env.MEMORY_PATH ?? path.join(process.cwd(), '..', 'memory');
 
     // Namespace by agent or circle if provided
     let memoryPath = rootPath;
@@ -62,7 +61,7 @@ export class MemoryManager {
     const timestamps = MemoryManager.writeTimestamps.get(key) ?? [];
 
     // Filter out timestamps older than 1 minute
-    const recent = timestamps.filter(t => now - t < 60000);
+    const recent = timestamps.filter((t) => now - t < 60000);
     recent.push(now);
 
     MemoryManager.writeTimestamps.set(key, recent);
@@ -96,8 +95,8 @@ export class MemoryManager {
             type,
             id: entry.id,
             title: entry.title,
-            source: entry.source
-          }
+            source: entry.source,
+          },
         });
       } catch (auditErr) {
         logger.error('Failed to record audit entry:', auditErr);
@@ -132,8 +131,8 @@ export class MemoryManager {
           payload: {
             id: entry.id,
             title: entry.title,
-            type: entry.type
-          }
+            type: entry.type,
+          },
         });
       } catch (auditErr) {
         logger.error('Failed to record audit entry:', auditErr);
@@ -162,8 +161,8 @@ export class MemoryManager {
           payload: {
             id: entry.id,
             title: entry.title,
-            type: entry.type
-          }
+            type: entry.type,
+          },
         });
       } catch (auditErr) {
         logger.error('Failed to record audit entry:', auditErr);
@@ -212,7 +211,7 @@ export class MemoryManager {
     if (typeof query !== 'string') return [];
     if (!query.trim()) return [];
     if (limit !== undefined && (typeof limit !== 'number' || limit <= 0)) {
-       throw new Error('Limit must be a positive number');
+      throw new Error('Limit must be a positive number');
     }
 
     try {
@@ -273,14 +272,14 @@ export class MemoryManager {
         const vector = await this.embeddingService.generateEmbedding(query);
         // Search specifically in the 'archive' type if possible, or just general search
         const vectorResults = await this.vectorService.searchLegacy(vector, 3, {
-          must: [{ key: 'type', match: { value: 'archive' } }]
+          must: [{ key: 'type', match: { value: 'archive' } }],
         });
 
         if (vectorResults.length > 0) {
           sections.push('## Relevant Archival Memory');
           for (const res of vectorResults) {
             const p = res.payload as Record<string, unknown> | undefined;
-          sections.push(`### ${p?.['title'] || 'Unknown'}\n${p?.['content'] || ''}`);
+            sections.push(`### ${p?.['title'] || 'Unknown'}\n${p?.['content'] || ''}`);
           }
         }
       } catch (err) {
@@ -311,16 +310,18 @@ export class MemoryManager {
       const embedding = await this.embeddingService.generateEmbedding(
         `${entry.title}\n${entry.content}`
       );
-      await this.vectorService.upsertPoints([{
-        id: entry.id,
-        vector: embedding,
-        payload: {
-          title: entry.title,
-          content: entry.content,
-          type: entry.type,
-          tags: entry.tags,
-        }
-      }]);
+      await this.vectorService.upsertPoints([
+        {
+          id: entry.id,
+          vector: embedding,
+          payload: {
+            title: entry.title,
+            content: entry.content,
+            type: entry.type,
+            tags: entry.tags,
+          },
+        },
+      ]);
     } catch (err) {
       logger.error(`Failed to index entry ${entry.id}:`, err);
     }

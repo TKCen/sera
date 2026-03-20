@@ -2,7 +2,17 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Bot, Save, ArrowLeft, Play, RefreshCw, X, Shield, MessageSquare, Settings as SettingsIcon } from 'lucide-react';
+import {
+  Bot,
+  Save,
+  ArrowLeft,
+  Play,
+  RefreshCw,
+  X,
+  Shield,
+  MessageSquare,
+  Settings as SettingsIcon,
+} from 'lucide-react';
 import Link from 'next/link';
 
 interface PreviewMessage {
@@ -33,8 +43,15 @@ export default function CreateAgentPage() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const availableTools = [
-    'file-read', 'file-write', 'file-list', 'web-search', 'web-fetch',
-    'knowledge-store', 'knowledge-query', 'shell-exec', 'docker-exec'
+    'file-read',
+    'file-write',
+    'file-list',
+    'web-search',
+    'web-fetch',
+    'knowledge-store',
+    'knowledge-query',
+    'shell-exec',
+    'docker-exec',
   ];
 
   const buildManifest = () => {
@@ -53,7 +70,7 @@ export default function CreateAgentPage() {
         role,
         description,
         communicationStyle: style,
-        principles: principles.split('\n').filter(p => p.trim() !== ''),
+        principles: principles.split('\n').filter((p) => p.trim() !== ''),
       },
       model: {
         provider: 'lm-studio',
@@ -61,7 +78,7 @@ export default function CreateAgentPage() {
       },
       tools: {
         allowed: tools,
-      }
+      },
     };
   };
 
@@ -97,7 +114,7 @@ export default function CreateAgentPage() {
 
     const userMsg = previewMessage;
     setPreviewMessage('');
-    setPreviewHistory(prev => [...prev, { role: 'user', content: userMsg }]);
+    setPreviewHistory((prev) => [...prev, { role: 'user', content: userMsg }]);
     setIsPreviewLoading(true);
 
     try {
@@ -114,9 +131,12 @@ export default function CreateAgentPage() {
       if (!res.ok) throw new Error('Preview chat failed');
       const data = await res.json();
 
-      setPreviewHistory(prev => [...prev, { role: 'assistant', content: data.reply }]);
+      setPreviewHistory((prev) => [...prev, { role: 'assistant', content: data.reply }]);
     } catch (err: any) {
-      setPreviewHistory(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
+      setPreviewHistory((prev) => [
+        ...prev,
+        { role: 'assistant', content: `Error: ${err.message}` },
+      ]);
     } finally {
       setIsPreviewLoading(false);
     }
@@ -126,7 +146,10 @@ export default function CreateAgentPage() {
     <div className="p-8 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-4">
-          <Link href="/agents" className="p-2 text-sera-text-dim hover:text-sera-text hover:bg-sera-surface rounded-lg transition-colors">
+          <Link
+            href="/agents"
+            className="p-2 text-sera-text-dim hover:text-sera-text hover:bg-sera-surface rounded-lg transition-colors"
+          >
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -172,7 +195,12 @@ export default function CreateAgentPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label htmlFor="agent-name" className="text-[11px] font-semibold text-sera-text-dim uppercase">Internal Name (ID)</label>
+                <label
+                  htmlFor="agent-name"
+                  className="text-[11px] font-semibold text-sera-text-dim uppercase"
+                >
+                  Internal Name (ID)
+                </label>
                 <input
                   id="agent-name"
                   type="text"
@@ -183,7 +211,12 @@ export default function CreateAgentPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <label htmlFor="display-name" className="text-[11px] font-semibold text-sera-text-dim uppercase">Display Name</label>
+                <label
+                  htmlFor="display-name"
+                  className="text-[11px] font-semibold text-sera-text-dim uppercase"
+                >
+                  Display Name
+                </label>
                 <input
                   id="display-name"
                   type="text"
@@ -196,7 +229,12 @@ export default function CreateAgentPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="role" className="text-[11px] font-semibold text-sera-text-dim uppercase">Role Title</label>
+              <label
+                htmlFor="role"
+                className="text-[11px] font-semibold text-sera-text-dim uppercase"
+              >
+                Role Title
+              </label>
               <input
                 id="role"
                 type="text"
@@ -208,7 +246,12 @@ export default function CreateAgentPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="description" className="text-[11px] font-semibold text-sera-text-dim uppercase">Description / Persona</label>
+              <label
+                htmlFor="description"
+                className="text-[11px] font-semibold text-sera-text-dim uppercase"
+              >
+                Description / Persona
+              </label>
               <textarea
                 id="description"
                 value={description}
@@ -227,7 +270,12 @@ export default function CreateAgentPage() {
             </h2>
 
             <div className="space-y-1.5">
-              <label htmlFor="style" className="text-[11px] font-semibold text-sera-text-dim uppercase">Style Guidelines</label>
+              <label
+                htmlFor="style"
+                className="text-[11px] font-semibold text-sera-text-dim uppercase"
+              >
+                Style Guidelines
+              </label>
               <input
                 id="style"
                 type="text"
@@ -239,7 +287,12 @@ export default function CreateAgentPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="principles" className="text-[11px] font-semibold text-sera-text-dim uppercase">System Prompt / Principles (One per line)</label>
+              <label
+                htmlFor="principles"
+                className="text-[11px] font-semibold text-sera-text-dim uppercase"
+              >
+                System Prompt / Principles (One per line)
+              </label>
               <textarea
                 id="principles"
                 value={principles}
@@ -260,7 +313,12 @@ export default function CreateAgentPage() {
               Model Configuration
             </h2>
             <div className="space-y-1.5">
-              <label htmlFor="model-name" className="text-[11px] font-semibold text-sera-text-dim uppercase">Model Name (LM-Studio)</label>
+              <label
+                htmlFor="model-name"
+                className="text-[11px] font-semibold text-sera-text-dim uppercase"
+              >
+                Model Name (LM-Studio)
+              </label>
               <input
                 id="model-name"
                 type="text"
@@ -286,8 +344,8 @@ export default function CreateAgentPage() {
                   onClick={() => setTier(t as any)}
                   className={`flex-1 py-2 rounded border text-xs font-bold transition-all ${
                     tier === t
-                    ? 'bg-sera-accent/10 border-sera-accent text-sera-accent'
-                    : 'bg-sera-surface border-sera-border text-sera-text-dim hover:border-sera-border-hover'
+                      ? 'bg-sera-accent/10 border-sera-accent text-sera-accent'
+                      : 'bg-sera-surface border-sera-border text-sera-text-dim hover:border-sera-border-hover'
                   }`}
                 >
                   Tier {t}
@@ -300,20 +358,27 @@ export default function CreateAgentPage() {
           </section>
 
           <section className="sera-card-static p-6 space-y-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-sera-accent">Allowed Tools</h2>
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-sera-accent">
+              Allowed Tools
+            </h2>
             <div className="grid grid-cols-2 gap-2">
               {availableTools.map((tool) => (
-                <label key={tool} className="flex items-center gap-2 p-2 rounded hover:bg-sera-surface cursor-pointer group">
+                <label
+                  key={tool}
+                  className="flex items-center gap-2 p-2 rounded hover:bg-sera-surface cursor-pointer group"
+                >
                   <input
                     type="checkbox"
                     checked={tools.includes(tool)}
                     onChange={(e) => {
                       if (e.target.checked) setTools([...tools, tool]);
-                      else setTools(tools.filter(t => t !== tool));
+                      else setTools(tools.filter((t) => t !== tool));
                     }}
                     className="rounded border-sera-border text-sera-accent focus:ring-sera-accent bg-sera-surface"
                   />
-                  <span className="text-xs text-sera-text-muted group-hover:text-sera-text transition-colors">{tool}</span>
+                  <span className="text-xs text-sera-text-muted group-hover:text-sera-text transition-colors">
+                    {tool}
+                  </span>
                 </label>
               ))}
             </div>
@@ -331,11 +396,18 @@ export default function CreateAgentPage() {
                   <Play size={16} />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-sera-text">Persona Preview: {displayName || 'Unnamed Agent'}</h3>
-                  <p className="text-[10px] text-sera-text-dim uppercase tracking-widest">Transient Simulation Mode</p>
+                  <h3 className="text-sm font-bold text-sera-text">
+                    Persona Preview: {displayName || 'Unnamed Agent'}
+                  </h3>
+                  <p className="text-[10px] text-sera-text-dim uppercase tracking-widest">
+                    Transient Simulation Mode
+                  </p>
                 </div>
               </div>
-              <button onClick={() => setShowPreview(false)} className="p-1 hover:bg-sera-surface rounded">
+              <button
+                onClick={() => setShowPreview(false)}
+                className="p-1 hover:bg-sera-surface rounded"
+              >
                 <X size={18} className="text-sera-text-dim" />
               </button>
             </div>
@@ -344,16 +416,24 @@ export default function CreateAgentPage() {
               {previewHistory.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-50">
                   <MessageSquare size={40} className="text-sera-accent" />
-                  <p className="text-sm text-sera-text-muted">Send a message to test how your agent <br/>responds with the current configuration.</p>
+                  <p className="text-sm text-sera-text-muted">
+                    Send a message to test how your agent <br />
+                    responds with the current configuration.
+                  </p>
                 </div>
               )}
               {previewHistory.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[85%] p-4 rounded-xl text-sm ${
-                    msg.role === 'user'
-                    ? 'bg-sera-accent text-white'
-                    : 'bg-sera-surface border border-sera-border text-sera-text'
-                  }`}>
+                <div
+                  key={i}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[85%] p-4 rounded-xl text-sm ${
+                      msg.role === 'user'
+                        ? 'bg-sera-accent text-white'
+                        : 'bg-sera-surface border border-sera-border text-sera-text'
+                    }`}
+                  >
                     {msg.content}
                   </div>
                 </div>
@@ -368,7 +448,10 @@ export default function CreateAgentPage() {
               )}
             </div>
 
-            <form onSubmit={handlePreviewChat} className="p-4 bg-sera-surface border-t border-sera-border">
+            <form
+              onSubmit={handlePreviewChat}
+              className="p-4 bg-sera-surface border-t border-sera-border"
+            >
               <div className="relative">
                 <input
                   type="text"

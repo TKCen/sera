@@ -47,8 +47,7 @@ export function createNotificationsRouter(): {
    */
   publicRouter.post('/action', (async (req, res) => {
     const token =
-      (req.query['token'] as string | undefined) ??
-      (req.body as { token?: string })['token'];
+      (req.query['token'] as string | undefined) ?? (req.body as { token?: string })['token'];
 
     if (!token) {
       return void res.status(400).json({ error: 'token is required' });
@@ -63,7 +62,7 @@ export function createNotificationsRouter(): {
         claims.action,
         claims.requestType,
         'channel-action',
-        'token',
+        'token'
       );
 
       res.json({ ok: true, requestId: claims.sub, decision: claims.action });
@@ -169,7 +168,12 @@ export function createNotificationsRouter(): {
 
   /** POST /api/notifications/routing */
   protectedRouter.post('/routing', requireRole(['admin']), (async (req, res) => {
-    const { eventType, channelIds, filter, minSeverity = 'info' } = req.body as {
+    const {
+      eventType,
+      channelIds,
+      filter,
+      minSeverity = 'info',
+    } = req.body as {
       eventType?: string;
       channelIds?: string[];
       filter?: Record<string, unknown>;
@@ -193,7 +197,7 @@ export function createNotificationsRouter(): {
         `INSERT INTO notification_routing_rules (id, event_type, channel_ids, filter, min_severity)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
-        [id, eventType, channelIds, filter ? JSON.stringify(filter) : null, minSeverity],
+        [id, eventType, channelIds, filter ? JSON.stringify(filter) : null, minSeverity]
       )
       .catch((err: unknown) => {
         logger.error('Create routing rule error:', err);
@@ -230,7 +234,7 @@ export function createNotificationsRouter(): {
         filter: r.filter,
         minSeverity: r.min_severity,
         createdAt: r.created_at.toISOString(),
-      })),
+      }))
     );
   }) as RequestHandler);
 
@@ -272,7 +276,7 @@ export function createNotificationsRouter(): {
       created_at: Date;
     }>(
       `UPDATE notification_routing_rules SET ${updates.join(', ')} WHERE id = $1 RETURNING *`,
-      params,
+      params
     );
 
     if (!rowCount) return void res.status(404).json({ error: 'Rule not found' });
@@ -290,10 +294,9 @@ export function createNotificationsRouter(): {
   /** DELETE /api/notifications/routing/:id */
   protectedRouter.delete('/routing/:id', requireRole(['admin']), (async (req, res) => {
     const { id } = req.params as IdParam;
-    const { rowCount } = await pool.query(
-      'DELETE FROM notification_routing_rules WHERE id = $1',
-      [id],
-    );
+    const { rowCount } = await pool.query('DELETE FROM notification_routing_rules WHERE id = $1', [
+      id,
+    ]);
     if (!rowCount) return void res.status(404).json({ error: 'Rule not found' });
     res.json({ ok: true });
   }) as RequestHandler);
@@ -337,7 +340,7 @@ export function createNotificationsRouter(): {
          (id, channel_id, channel_type, platform_channel_id, target_agent_id, prefix, task_template)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [id, channelId, channelType, platformChannelId, targetAgentId, prefix ?? null, template],
+      [id, channelId, channelType, platformChannelId, targetAgentId, prefix ?? null, template]
     );
 
     const row = rows[0]!;
@@ -376,7 +379,7 @@ export function createNotificationsRouter(): {
         prefix: r.prefix,
         taskTemplate: r.task_template,
         createdAt: r.created_at.toISOString(),
-      })),
+      }))
     );
   }) as RequestHandler);
 
@@ -385,7 +388,10 @@ export function createNotificationsRouter(): {
   // ══════════════════════════════════════════════════════════════════════════
 
   /** POST /api/channels/discord/user-mapping */
-  protectedRouter.post('/discord/user-mapping', requireRole(['admin', 'operator']), (async (req, res) => {
+  protectedRouter.post('/discord/user-mapping', requireRole(['admin', 'operator']), (async (
+    req,
+    res
+  ) => {
     const { channelId, discordUserId, operatorSub } = req.body as {
       channelId?: string;
       discordUserId?: string;
@@ -402,14 +408,17 @@ export function createNotificationsRouter(): {
       `INSERT INTO channel_user_mappings (id, channel_id, channel_type, platform_user_id, operator_sub)
        VALUES ($1, $2, 'discord', $3, $4)
        ON CONFLICT (channel_type, platform_user_id) DO UPDATE SET operator_sub = EXCLUDED.operator_sub`,
-      [uuidv4(), channelId, discordUserId, operatorSub],
+      [uuidv4(), channelId, discordUserId, operatorSub]
     );
 
     res.status(201).json({ ok: true });
   }) as RequestHandler);
 
   /** POST /api/channels/slack/user-mapping */
-  protectedRouter.post('/slack/user-mapping', requireRole(['admin', 'operator']), (async (req, res) => {
+  protectedRouter.post('/slack/user-mapping', requireRole(['admin', 'operator']), (async (
+    req,
+    res
+  ) => {
     const { channelId, slackUserId, operatorSub } = req.body as {
       channelId?: string;
       slackUserId?: string;
@@ -426,7 +435,7 @@ export function createNotificationsRouter(): {
       `INSERT INTO channel_user_mappings (id, channel_id, channel_type, platform_user_id, operator_sub)
        VALUES ($1, $2, 'slack', $3, $4)
        ON CONFLICT (channel_type, platform_user_id) DO UPDATE SET operator_sub = EXCLUDED.operator_sub`,
-      [uuidv4(), channelId, slackUserId, operatorSub],
+      [uuidv4(), channelId, slackUserId, operatorSub]
     );
 
     res.status(201).json({ ok: true });
@@ -472,10 +481,10 @@ export function createNotificationsRouter(): {
     const { SlackChannel } = await import('../channels/adapters/SlackChannel.js');
     const channel = ChannelRouter.getInstance().getChannel(channelId);
     if (channel instanceof SlackChannel) {
-      const payload = typeof req.body === 'string'
-        ? JSON.parse(req.body)
-        : (req.body as unknown);
-      await channel.handleInteractivePayload(payload as Parameters<InstanceType<typeof SlackChannel>['handleInteractivePayload']>[0]);
+      const payload = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body as unknown);
+      await channel.handleInteractivePayload(
+        payload as Parameters<InstanceType<typeof SlackChannel>['handleInteractivePayload']>[0]
+      );
     }
 
     res.json({ ok: true });
@@ -488,7 +497,7 @@ async function getSlackSigningSecret(channelId: string): Promise<string | null> 
   try {
     const { rows } = await pool.query<{ config: Record<string, unknown> }>(
       `SELECT config FROM notification_channels WHERE id = $1 AND type = 'slack'`,
-      [channelId],
+      [channelId]
     );
     const cfg = rows[0]?.config;
     if (!cfg) return null;

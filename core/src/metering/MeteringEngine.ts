@@ -20,13 +20,7 @@ export class MeteringEngine {
       await query(
         `INSERT INTO usage_events (agent_id, model, prompt_tokens, completion_tokens, total_tokens)
          VALUES ($1, $2, $3, $4, $5)`,
-        [
-          event.agentId,
-          event.model,
-          event.promptTokens,
-          event.completionTokens,
-          event.totalTokens,
-        ],
+        [event.agentId, event.model, event.promptTokens, event.completionTokens, event.totalTokens]
       );
       logger.debug(
         `Recorded usage for agent ${event.agentId}: ${event.totalTokens} tokens (${event.model})`

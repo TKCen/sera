@@ -37,7 +37,12 @@ function defaultManifest(): AgentManifest {
       lifecycle: { mode: 'persistent' },
       skills: [],
       tools: { allowed: [], denied: [] },
-      resources: { cpu: '0.5', memory: '512m', maxLlmTokensPerHour: 100000, maxLlmTokensPerDay: 1000000 },
+      resources: {
+        cpu: '0.5',
+        memory: '512m',
+        maxLlmTokensPerHour: 100000,
+        maxLlmTokensPerDay: 1000000,
+      },
     },
   };
 }
@@ -74,7 +79,9 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
   const [yamlOpen, setYamlOpen] = useState(false);
   const [yamlError, setYamlError] = useState('');
   const [validating, setValidating] = useState(false);
-  const [validResult, setValidResult] = useState<{ valid: boolean; errors?: string[] } | null>(null);
+  const [validResult, setValidResult] = useState<{ valid: boolean; errors?: string[] } | null>(
+    null
+  );
 
   const syncingFromYaml = useRef(false);
   const syncingToYaml = useRef(false);
@@ -180,7 +187,12 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
   }
 
   return (
-    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-6 pb-8">
+    <form
+      onSubmit={(e) => {
+        void handleSubmit(e);
+      }}
+      className="space-y-6 pb-8"
+    >
       {/* Template selector */}
       {!isEdit && templates.length > 0 && (
         <section className="sera-card-static p-4">
@@ -265,13 +277,14 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
           <div>
             <FieldLabel label="Lifecycle" field="lifecycle" />
             {isLocked('lifecycle') ? (
-              <LockedInput field="lifecycle" value={manifest.spec?.lifecycle?.mode ?? 'persistent'} />
+              <LockedInput
+                field="lifecycle"
+                value={manifest.spec?.lifecycle?.mode ?? 'persistent'}
+              />
             ) : (
               <select
                 value={manifest.spec?.lifecycle?.mode ?? 'persistent'}
-                onChange={(e) =>
-                  updateField(['spec', 'lifecycle', 'mode'], e.target.value)
-                }
+                onChange={(e) => updateField(['spec', 'lifecycle', 'mode'], e.target.value)}
                 className="sera-input"
               >
                 <option value="persistent">Persistent</option>
@@ -317,7 +330,7 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
                     'p-3 rounded-lg border text-left transition-colors',
                     active
                       ? 'border-sera-accent bg-sera-accent-soft text-sera-accent'
-                      : 'border-sera-border bg-sera-surface text-sera-text-muted hover:border-sera-border-active',
+                      : 'border-sera-border bg-sera-surface text-sera-text-muted hover:border-sera-border-active'
                   )}
                 >
                   <div className="text-xs font-semibold">{tier.label}</div>
@@ -359,9 +372,15 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
           </div>
         </div>
         <div>
-          <FieldLabel label={`Temperature: ${manifest.spec?.model?.temperature ?? 0.7}`} field="model.temperature" />
+          <FieldLabel
+            label={`Temperature: ${manifest.spec?.model?.temperature ?? 0.7}`}
+            field="model.temperature"
+          />
           {isLocked('model.temperature') ? (
-            <LockedInput field="model.temperature" value={String(manifest.spec?.model?.temperature ?? 0.7)} />
+            <LockedInput
+              field="model.temperature"
+              value={String(manifest.spec?.model?.temperature ?? 0.7)}
+            />
           ) : (
             <input
               type="range"
@@ -369,7 +388,9 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
               max="1"
               step="0.05"
               value={manifest.spec?.model?.temperature ?? 0.7}
-              onChange={(e) => updateField(['spec', 'model', 'temperature'], parseFloat(e.target.value))}
+              onChange={(e) =>
+                updateField(['spec', 'model', 'temperature'], parseFloat(e.target.value))
+              }
               className="w-full accent-sera-accent"
             />
           )}
@@ -395,14 +416,14 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
                       const current = manifest.spec?.skills ?? [];
                       updateField(
                         ['spec', 'skills'],
-                        active ? current.filter((s) => s !== skill.id) : [...current, skill.id],
+                        active ? current.filter((s) => s !== skill.id) : [...current, skill.id]
                       );
                     }}
                     className={cn(
                       'px-2 py-1 rounded-md text-xs border transition-colors',
                       active
                         ? 'border-sera-accent bg-sera-accent-soft text-sera-accent'
-                        : 'border-sera-border text-sera-text-muted hover:border-sera-border-active',
+                        : 'border-sera-border text-sera-text-muted hover:border-sera-border-active'
                     )}
                   >
                     {skill.name ?? skill.id}
@@ -433,14 +454,14 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
                       const current = manifest.spec?.tools?.allowed ?? [];
                       updateField(
                         ['spec', 'tools', 'allowed'],
-                        allowed ? current.filter((t) => t !== tool.id) : [...current, tool.id],
+                        allowed ? current.filter((t) => t !== tool.id) : [...current, tool.id]
                       );
                     }}
                     className={cn(
                       'px-2 py-1 rounded-md text-xs border transition-colors',
                       allowed
                         ? 'border-sera-accent bg-sera-accent-soft text-sera-accent'
-                        : 'border-sera-border text-sera-text-muted hover:border-sera-border-active',
+                        : 'border-sera-border text-sera-text-muted hover:border-sera-border-active'
                     )}
                   >
                     {tool.name ?? tool.id}
@@ -461,7 +482,9 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
             <Input
               type="number"
               value={manifest.spec?.resources?.maxLlmTokensPerHour ?? 100000}
-              onChange={(e) => updateField(['spec', 'resources', 'maxLlmTokensPerHour'], parseInt(e.target.value))}
+              onChange={(e) =>
+                updateField(['spec', 'resources', 'maxLlmTokensPerHour'], parseInt(e.target.value))
+              }
               disabled={isLocked('resources.maxLlmTokensPerHour')}
             />
           </div>
@@ -470,7 +493,9 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
             <Input
               type="number"
               value={manifest.spec?.resources?.maxLlmTokensPerDay ?? 1000000}
-              onChange={(e) => updateField(['spec', 'resources', 'maxLlmTokensPerDay'], parseInt(e.target.value))}
+              onChange={(e) =>
+                updateField(['spec', 'resources', 'maxLlmTokensPerDay'], parseInt(e.target.value))
+              }
               disabled={isLocked('resources.maxLlmTokensPerDay')}
             />
           </div>
@@ -532,15 +557,13 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
           type="button"
           variant="outline"
           disabled={validating}
-          onClick={() => { void handleValidate(); }}
+          onClick={() => {
+            void handleValidate();
+          }}
         >
           {validating ? 'Validating…' : 'Validate manifest'}
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => navigate(-1)}
-        >
+        <Button type="button" variant="ghost" onClick={() => navigate(-1)}>
           Cancel
         </Button>
 
@@ -548,13 +571,17 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
           <span
             className={cn(
               'flex items-center gap-1 text-xs ml-2',
-              validResult.valid ? 'text-sera-success' : 'text-sera-error',
+              validResult.valid ? 'text-sera-success' : 'text-sera-error'
             )}
           >
             {validResult.valid ? (
-              <><CheckCircle size={13} /> Valid</>
+              <>
+                <CheckCircle size={13} /> Valid
+              </>
             ) : (
-              <><AlertCircle size={13} /> {validResult.errors?.join(', ') ?? 'Invalid'}</>
+              <>
+                <AlertCircle size={13} /> {validResult.errors?.join(', ') ?? 'Invalid'}
+              </>
             )}
           </span>
         )}

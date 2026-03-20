@@ -64,6 +64,6 @@ export interface ProcessStrategy {
   execute(
     tasks: ProcessTask[],
     agents: Map<string, BaseAgent>,
-    managerAgent?: BaseAgent,
+    managerAgent?: BaseAgent
   ): Promise<ProcessRunResult>;
 }

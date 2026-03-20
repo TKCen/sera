@@ -107,8 +107,8 @@ export class DiscordAdapter extends ChannelAdapter {
       properties: {
         os: 'linux',
         browser: 'sera',
-        device: 'sera'
-      }
+        device: 'sera',
+      },
     });
   }
 
@@ -132,7 +132,10 @@ export class DiscordAdapter extends ChannelAdapter {
 
     if (this.isRateLimited(incoming.userId)) {
       this.logger.warn(`Rate limit exceeded for user ${incoming.userId}`);
-      await this.sendMessage(incoming.chatId, '⚠️ You are sending messages too fast. Please slow down.');
+      await this.sendMessage(
+        incoming.chatId,
+        '⚠️ You are sending messages too fast. Please slow down.'
+      );
       return;
     }
 
@@ -157,13 +160,17 @@ export class DiscordAdapter extends ChannelAdapter {
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     try {
-      await axios.post(`https://discord.com/api/v10/channels/${chatId}/messages`, {
-        content: text,
-      }, {
-        headers: {
-          Authorization: `Bot ${this.token}`,
+      await axios.post(
+        `https://discord.com/api/v10/channels/${chatId}/messages`,
+        {
+          content: text,
+        },
+        {
+          headers: {
+            Authorization: `Bot ${this.token}`,
+          },
         }
-      });
+      );
     } catch (err: any) {
       this.logger.error(`Failed to send Discord message to ${chatId}:`, err.message);
     }

@@ -12,14 +12,14 @@ export const createSchedulesRouter = () => {
   router.get('/', async (req, res) => {
     try {
       const { agentId } = req.query;
-      let query = "SELECT * FROM schedules";
+      let query = 'SELECT * FROM schedules';
       const params = [];
       if (agentId) {
-        query += " WHERE agent_instance_id = $1";
+        query += ' WHERE agent_instance_id = $1';
         params.push(agentId);
       }
-      query += " ORDER BY created_at DESC";
-      
+      query += ' ORDER BY created_at DESC';
+
       const { rows } = await pool.query(query, params);
       res.json(rows);
     } catch (err: any) {
@@ -44,7 +44,7 @@ export const createSchedulesRouter = () => {
    */
   router.get('/:id', async (req, res) => {
     try {
-      const { rows } = await pool.query("SELECT * FROM schedules WHERE id = $1", [req.params.id]);
+      const { rows } = await pool.query('SELECT * FROM schedules WHERE id = $1', [req.params.id]);
       if (rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
       res.json(rows[0]);
     } catch (err: any) {
@@ -58,9 +58,11 @@ export const createSchedulesRouter = () => {
   router.patch('/:id', async (req, res) => {
     try {
       // Check if manifest schedule
-      const { rows } = await pool.query("SELECT source FROM schedules WHERE id = $1", [req.params.id]);
+      const { rows } = await pool.query('SELECT source FROM schedules WHERE id = $1', [
+        req.params.id,
+      ]);
       if (rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
-      
+
       const schedule = await scheduleService.updateSchedule(req.params.id, req.body);
       res.json(schedule);
     } catch (err: any) {
@@ -74,11 +76,18 @@ export const createSchedulesRouter = () => {
   router.delete('/:id', async (req, res) => {
     try {
       // Check if manifest schedule
-      const { rows } = await pool.query("SELECT source FROM schedules WHERE id = $1", [req.params.id]);
+      const { rows } = await pool.query('SELECT source FROM schedules WHERE id = $1', [
+        req.params.id,
+      ]);
       if (rows.length === 0) return res.status(404).json({ error: 'Schedule not found' });
-      
+
       if (rows[0].source === 'manifest') {
-        return res.status(403).json({ error: 'Manifest-declared schedules cannot be deleted via API. Remove it from the agent manifest instead.' });
+        return res
+          .status(403)
+          .json({
+            error:
+              'Manifest-declared schedules cannot be deleted via API. Remove it from the agent manifest instead.',
+          });
       }
 
       await scheduleService.deleteSchedule(req.params.id);

@@ -17,9 +17,7 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
       )}
       <div className="space-y-1">
         <h3 className="text-base font-semibold text-sera-text">{title}</h3>
-        {description && (
-          <p className="text-sm text-sera-text-muted max-w-xs">{description}</p>
-        )}
+        {description && <p className="text-sm text-sera-text-muted max-w-xs">{description}</p>}
       </div>
       {action && <div>{action}</div>}
     </div>

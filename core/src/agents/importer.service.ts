@@ -1,16 +1,19 @@
 import fs from 'fs/promises';
 import path from 'path';
 import yaml from 'js-yaml';
-import { 
-  AgentTemplateSchema, 
-  NamedListSchema, 
-  CapabilityPolicySchema, 
-  SandboxBoundarySchema 
+import {
+  AgentTemplateSchema,
+  NamedListSchema,
+  CapabilityPolicySchema,
+  SandboxBoundarySchema,
 } from './schemas.js';
 import { AgentRegistry } from './registry.service.js';
 
 export class ResourceImporter {
-  constructor(private registry: AgentRegistry, private baseDir: string) {}
+  constructor(
+    private registry: AgentRegistry,
+    private baseDir: string
+  ) {}
 
   async importAll() {
     await this.importNamedLists();
@@ -25,7 +28,7 @@ export class ResourceImporter {
       'network-denylist',
       'command-allowlist',
       'command-denylist',
-      'secret-list'
+      'secret-list',
     ];
     for (const type of types) {
       const dir = path.join(this.baseDir, 'lists', type);
@@ -35,12 +38,16 @@ export class ResourceImporter {
 
   private async importCapabilityPolicies() {
     const dir = path.join(this.baseDir, 'capability-policies');
-    await this.importDir(dir, CapabilityPolicySchema, (data) => this.registry.upsertCapabilityPolicy(data));
+    await this.importDir(dir, CapabilityPolicySchema, (data) =>
+      this.registry.upsertCapabilityPolicy(data)
+    );
   }
 
   private async importSandboxBoundaries() {
     const dir = path.join(this.baseDir, 'sandbox-boundaries');
-    await this.importDir(dir, SandboxBoundarySchema, (data) => this.registry.upsertSandboxBoundary(data));
+    await this.importDir(dir, SandboxBoundarySchema, (data) =>
+      this.registry.upsertSandboxBoundary(data)
+    );
   }
 
   private async importTemplates() {
@@ -67,7 +74,7 @@ export class ResourceImporter {
           const filePath = path.join(dir, file);
           const content = await fs.readFile(filePath, 'utf8');
           const rawData = yaml.load(content);
-          
+
           const result = schema.safeParse(rawData);
           if (!result.success) {
             console.error(`Error validating ${filePath}:`, result.error.format());

@@ -17,7 +17,12 @@ vi.mock('axios', async (importOriginal) => {
       create: vi.fn((config) => {
         const instance = actual.default.create(config);
         instance.post = vi.fn().mockImplementation((url, data) => {
-          if (url === '' && (data?.method === 'publish' || data?.method === 'presence' || data?.method === 'history')) {
+          if (
+            url === '' &&
+            (data?.method === 'publish' ||
+              data?.method === 'presence' ||
+              data?.method === 'history')
+          ) {
             return Promise.resolve({ data: { result: {} } });
           }
           // Use real axios for actual HTTP calls to localhost
@@ -78,13 +83,21 @@ describe('Federation Verification', () => {
 
     appA = express();
     appA.use(express.json());
-    appA.use('/api/intercom', createIntercomRouter(intercomA, (name) => {
-      if (name === 'agent-a') return {
-        metadata: { name: 'agent-a', circle: 'circle-a', tier: 1 },
-        intercom: { canMessage: ['*'] }
-      } as AgentManifest;
-      return undefined;
-    }, bridgeA));
+    appA.use(
+      '/api/intercom',
+      createIntercomRouter(
+        intercomA,
+        (name) => {
+          if (name === 'agent-a')
+            return {
+              metadata: { name: 'agent-a', circle: 'circle-a', tier: 1 },
+              intercom: { canMessage: ['*'] },
+            } as AgentManifest;
+          return undefined;
+        },
+        bridgeA
+      )
+    );
 
     // Instance B Setup
     intercomB = new IntercomService();
@@ -110,12 +123,20 @@ describe('Federation Verification', () => {
 
     appB = express();
     appB.use(express.json());
-    appB.use('/api/intercom', createIntercomRouter(intercomB, (name) => {
-      if (name === 'agent-b') return {
-        metadata: { name: 'agent-b', circle: 'circle-b', tier: 1 },
-      } as AgentManifest;
-      return undefined;
-    }, bridgeB));
+    appB.use(
+      '/api/intercom',
+      createIntercomRouter(
+        intercomB,
+        (name) => {
+          if (name === 'agent-b')
+            return {
+              metadata: { name: 'agent-b', circle: 'circle-b', tier: 1 },
+            } as AgentManifest;
+          return undefined;
+        },
+        bridgeB
+      )
+    );
 
     // Listen on a port for Instance B so A can connect
     serverB = appB.listen(3002);
@@ -141,7 +162,7 @@ describe('Federation Verification', () => {
     expect(response.status).toBe(200);
 
     // Give some time for the bridge request to complete
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Verify Instance B received the message
     expect(publishSpyB).toHaveBeenCalled();

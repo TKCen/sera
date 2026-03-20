@@ -106,14 +106,14 @@ describe.skipIf(!hasDb)('Parallel coordination integration (Story 10.4)', () => 
         { id: 'task-1', description: 'Task for A', assignedAgent: 'agent-a' },
         { id: 'task-2', description: 'Task for B', assignedAgent: 'agent-b' },
       ],
-      agents,
+      agents
     );
 
     expect(result.processType).toBe('parallel');
     expect(result.results).toHaveLength(2);
-    expect(result.results.every(r => r.status === 'completed')).toBe(true);
-    expect(result.results.find(r => r.taskId === 'task-1')?.output).toBe('Result from A');
-    expect(result.results.find(r => r.taskId === 'task-2')?.output).toBe('Result from B');
+    expect(result.results.every((r) => r.status === 'completed')).toBe(true);
+    expect(result.results.find((r) => r.taskId === 'task-1')?.output).toBe('Result from A');
+    expect(result.results.find((r) => r.taskId === 'task-2')?.output).toBe('Result from B');
   });
 
   it('parallel process marks individual failures without aborting', async () => {
@@ -131,11 +131,11 @@ describe.skipIf(!hasDb)('Parallel coordination integration (Story 10.4)', () => 
         { id: 't1', description: 'ok task', assignedAgent: 'agent-ok' },
         { id: 't2', description: 'fail task', assignedAgent: 'agent-fail' },
       ],
-      agents,
+      agents
     );
 
-    expect(result.results.find(r => r.taskId === 't1')?.status).toBe('completed');
-    expect(result.results.find(r => r.taskId === 't2')?.status).toBe('failed');
-    expect(result.results.find(r => r.taskId === 't2')?.error).toBe('boom');
+    expect(result.results.find((r) => r.taskId === 't1')?.status).toBe('completed');
+    expect(result.results.find((r) => r.taskId === 't2')?.status).toBe('failed');
+    expect(result.results.find((r) => r.taskId === 't2')?.error).toBe('boom');
   });
 });

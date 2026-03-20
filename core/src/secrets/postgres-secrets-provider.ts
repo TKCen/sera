@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import { query } from '../lib/database.js';
-import type { 
-  SecretsProvider, 
-  SecretAccessContext, 
-  SecretMetadata, 
-  SecretFilter 
+import type {
+  SecretsProvider,
+  SecretAccessContext,
+  SecretMetadata,
+  SecretFilter,
 } from './interfaces.js';
 import { Logger } from '../lib/logger.js';
 
@@ -22,7 +22,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
     if (!keyStr) {
       throw new Error('SECRETS_MASTER_KEY not set');
     }
-    
+
     this.masterKey = Buffer.from(keyStr, 'hex');
     if (this.masterKey.length !== 32) {
       throw new Error('SECRETS_MASTER_KEY must be a 32-byte hex string (64 characters)');
@@ -35,10 +35,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
       authTagLength: AUTH_TAG_LENGTH,
     });
 
-    const encryptedContent = Buffer.concat([
-      cipher.update(value, 'utf8'),
-      cipher.final(),
-    ]);
+    const encryptedContent = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
 
     const authTag = cipher.getAuthTag();
     const encryptedValue = Buffer.concat([encryptedContent, authTag]);
@@ -55,10 +52,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
     });
     decipher.setAuthTag(authTag);
 
-    const decrypted = Buffer.concat([
-      decipher.update(encryptedContent),
-      decipher.final(),
-    ]);
+    const decrypted = Buffer.concat([decipher.update(encryptedContent), decipher.final()]);
 
     return decrypted.toString('utf8');
   }
@@ -113,7 +107,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
         metadata?.description ?? null,
         metadata?.allowedAgents ?? [],
         metadata?.tags ?? [],
-        metadata?.exposure ?? 'per-call'
+        metadata?.exposure ?? 'per-call',
       ]
     );
   }
@@ -124,7 +118,10 @@ export class PostgresSecretsProvider implements SecretsProvider {
       throw new Error('Unauthorized: only operators can delete secrets');
     }
 
-    const result = await query('UPDATE secrets SET deleted_at = NOW() WHERE name = $1 AND deleted_at IS NULL', [name]);
+    const result = await query(
+      'UPDATE secrets SET deleted_at = NOW() WHERE name = $1 AND deleted_at IS NULL',
+      [name]
+    );
     return (result.rowCount ?? 0) > 0;
   }
 
@@ -143,12 +140,12 @@ export class PostgresSecretsProvider implements SecretsProvider {
     }
 
     if (filter?.agentId) {
-      // In a real scenario, we might filter by what an agent can see, 
+      // In a real scenario, we might filter by what an agent can see,
       // but for operator list it shows everything.
     }
 
     const result = await query(sql, params);
-    return result.rows.map(row => ({
+    return result.rows.map((row) => ({
       id: row.id,
       name: row.name,
       description: row.description,

@@ -7,9 +7,9 @@ import { ActionTokenService } from '../ActionTokenService.js';
 const logger = new Logger('DiscordChannel');
 
 const SEVERITY_COLOR: Record<string, number> = {
-  info: 0x3b82f6,    // blue
+  info: 0x3b82f6, // blue
   warning: 0xf59e0b, // amber
-  critical: 0xef4444,// red
+  critical: 0xef4444, // red
 };
 
 interface DiscordConfig {
@@ -27,7 +27,7 @@ export class DiscordChannel implements Channel {
   constructor(
     readonly id: string,
     readonly name: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ) {
     const botToken = config['botToken'];
     const approvalChannelId = config['approvalChannelId'];
@@ -75,7 +75,9 @@ export class DiscordChannel implements Channel {
         await message.reply(`✅ Decision recorded: ${decision}`);
       } catch (err: unknown) {
         logger.warn('Failed to process Discord reply:', err);
-        await message.reply('❌ Failed to process decision. The request may have expired.').catch(() => {});
+        await message
+          .reply('❌ Failed to process decision. The request may have expired.')
+          .catch(() => {});
       }
     });
 
@@ -107,7 +109,7 @@ export class DiscordChannel implements Channel {
       const svc = ActionTokenService.getInstance();
       const { approveUrl, denyUrl } = svc.buildActionUrls(
         event.actions.approveToken,
-        event.actions.denyToken,
+        event.actions.denyToken
       );
 
       components.push({

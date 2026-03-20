@@ -47,8 +47,10 @@ export class AuditService {
     const client = await pool.connect();
     try {
       // 1. Check if any records exist
-      const { rows } = await client.query('SELECT hash FROM audit_trail ORDER BY sequence DESC LIMIT 1');
-      
+      const { rows } = await client.query(
+        'SELECT hash FROM audit_trail ORDER BY sequence DESC LIMIT 1'
+      );
+
       if (rows.length === 0) {
         logger.info('Initializing audit trail with genesis record');
         await this.createGenesisRecord(client);
@@ -60,7 +62,9 @@ export class AuditService {
       // 2. Verify integrity of last N records
       const verificationResult = await this.verifyIntegrity(verifyCount);
       if (!verificationResult.valid) {
-        logger.error(`CRITICAL: Audit trail integrity check failed at sequence ${verificationResult.brokenAt}`);
+        logger.error(
+          `CRITICAL: Audit trail integrity check failed at sequence ${verificationResult.brokenAt}`
+        );
         // In a real production system, we might want to halt startup here.
         // For now, we log the critical error as requested.
       } else {
@@ -85,7 +89,15 @@ export class AuditService {
     const res = await client.query("SELECT nextval('audit_trail_sequence_seq') as seq");
     const sequence = res.rows[0].seq;
 
-    const hash = this.computeHash(sequence, timestamp, actorType, actorId, eventType, payload, prevHash);
+    const hash = this.computeHash(
+      sequence,
+      timestamp,
+      actorType,
+      actorId,
+      eventType,
+      payload,
+      prevHash
+    );
 
     await client.query(
       `INSERT INTO audit_trail 
@@ -107,24 +119,26 @@ export class AuditService {
       await client.query('BEGIN');
 
       const timestamp = new Date();
-      
+
       // Get next sequence and lock table to prevent race conditions on lastHash
       // Using a row lock on the last record or a custom lock
       await client.query('LOCK TABLE audit_trail IN EXCLUSIVE MODE');
-      
-      const lastRes = await client.query('SELECT hash FROM audit_trail ORDER BY sequence DESC LIMIT 1');
+
+      const lastRes = await client.query(
+        'SELECT hash FROM audit_trail ORDER BY sequence DESC LIMIT 1'
+      );
       const prevHash = lastRes.rows.length > 0 ? lastRes.rows[0].hash : null;
 
       const seqRes = await client.query("SELECT nextval('audit_trail_sequence_seq') as seq");
       const sequence = seqRes.rows[0].seq;
 
       const hash = this.computeHash(
-        sequence, 
-        timestamp, 
-        entry.actorType, 
-        entry.actorId, 
-        entry.eventType, 
-        validatedPayload, 
+        sequence,
+        timestamp,
+        entry.actorType,
+        entry.actorId,
+        entry.eventType,
+        validatedPayload,
         prevHash
       );
 
@@ -133,15 +147,15 @@ export class AuditService {
          (sequence, timestamp, actor_type, actor_id, acting_context, event_type, payload, prev_hash, hash) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
-          sequence, 
-          timestamp, 
-          entry.actorType, 
-          entry.actorId, 
-          entry.actingContext, 
-          entry.eventType, 
-          validatedPayload, 
-          prevHash, 
-          hash
+          sequence,
+          timestamp,
+          entry.actorType,
+          entry.actorId,
+          entry.actingContext,
+          entry.eventType,
+          validatedPayload,
+          prevHash,
+          hash,
         ]
       );
 
@@ -234,11 +248,8 @@ export class AuditService {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    
-    const countRes = await pool.query(
-      `SELECT COUNT(*) FROM audit_trail ${whereClause}`,
-      params
-    );
+
+    const countRes = await pool.query(`SELECT COUNT(*) FROM audit_trail ${whereClause}`, params);
     const total = parseInt(countRes.rows[0].count, 10);
 
     const entriesRes = await pool.query(
@@ -256,8 +267,10 @@ export class AuditService {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query('DECLARE audit_cursor CURSOR FOR SELECT * FROM audit_trail ORDER BY sequence ASC');
-      
+      await client.query(
+        'DECLARE audit_cursor CURSOR FOR SELECT * FROM audit_trail ORDER BY sequence ASC'
+      );
+
       let hasMore = true;
       while (hasMore) {
         const { rows } = await client.query('FETCH 100 FROM audit_cursor');
@@ -294,7 +307,7 @@ export class AuditService {
       actorId,
       eventType,
       JSON.stringify(this.sortObjectKeys(payload)),
-      prevHash || ''
+      prevHash || '',
     ].join('|');
 
     return crypto.createHash('sha256').update(canonical).digest('hex');
@@ -302,11 +315,13 @@ export class AuditService {
 
   private sortObjectKeys(obj: any): any {
     if (obj === null || typeof obj !== 'object') return obj;
-    if (Array.isArray(obj)) return obj.map(item => this.sortObjectKeys(item));
-    
-    return Object.keys(obj).sort().reduce((acc: any, key) => {
-      acc[key] = this.sortObjectKeys(obj[key]);
-      return acc;
-    }, {});
+    if (Array.isArray(obj)) return obj.map((item) => this.sortObjectKeys(item));
+
+    return Object.keys(obj)
+      .sort()
+      .reduce((acc: any, key) => {
+        acc[key] = this.sortObjectKeys(obj[key]);
+        return acc;
+      }, {});
   }
 }

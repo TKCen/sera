@@ -55,7 +55,7 @@ function TestWrapper({ children }: { children: React.ReactNode }) {
 // Build a large NDJSON response split into small chunks
 function buildStreamChunks(lines: number, chunkSize = 256): Uint8Array[] {
   const rows = Array.from({ length: lines }, (_, i) =>
-    JSON.stringify({ id: `evt-${i}`, sequence: i, eventType: 'test.event' }),
+    JSON.stringify({ id: `evt-${i}`, sequence: i, eventType: 'test.event' })
   );
   const full = new TextEncoder().encode(rows.join('\n'));
   const chunks: Uint8Array[] = [];
@@ -85,7 +85,7 @@ describe('AuditPage — streaming export', () => {
     render(
       <TestWrapper>
         <AuditPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => expect(screen.getByText('Audit Log')).toBeInTheDocument());
@@ -98,7 +98,7 @@ describe('AuditPage — streaming export', () => {
     render(
       <TestWrapper>
         <AuditPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     expect(screen.getByText('Access Restricted')).toBeInTheDocument();
@@ -113,15 +113,18 @@ describe('AuditPage — streaming export', () => {
       return { done: false as const, value: chunks[readIdx++] };
     });
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      body: { getReader: () => ({ read: mockReadFn }) },
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        body: { getReader: () => ({ read: mockReadFn }) },
+      })
+    );
 
     render(
       <TestWrapper>
         <AuditPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Audit Log'));
@@ -129,11 +132,13 @@ describe('AuditPage — streaming export', () => {
     // Track anchor element click for the download trigger
     const clickSpy = vi.fn();
     const origCreateElement = document.createElement.bind(document);
-    const createElementSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
-      const el = origCreateElement(tag);
-      if (tag === 'a') vi.spyOn(el as HTMLAnchorElement, 'click').mockImplementation(clickSpy);
-      return el;
-    });
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string) => {
+        const el = origCreateElement(tag);
+        if (tag === 'a') vi.spyOn(el as HTMLAnchorElement, 'click').mockImplementation(clickSpy);
+        return el;
+      });
 
     fireEvent.click(screen.getByText('Export'));
 
@@ -155,7 +160,7 @@ describe('AuditPage — streaming export', () => {
     render(
       <TestWrapper>
         <AuditPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => screen.getByText('Verify Chain'));
@@ -171,7 +176,7 @@ describe('AuditPage — streaming export', () => {
     render(
       <TestWrapper>
         <AuditPage />
-      </TestWrapper>,
+      </TestWrapper>
     );
 
     await waitFor(() => expect(screen.getByText('llm.request')).toBeInTheDocument());

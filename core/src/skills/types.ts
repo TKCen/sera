@@ -50,7 +50,11 @@ export interface AgentContext {
 export type SkillHandler = (
   params: Record<string, unknown>,
   context: AgentContext,
-  invoke?: (skillId: string, params: Record<string, unknown>, context: AgentContext) => Promise<SkillResult>,
+  invoke?: (
+    skillId: string,
+    params: Record<string, unknown>,
+    context: AgentContext
+  ) => Promise<SkillResult>
 ) => Promise<SkillResult>;
 
 // ── Skill Definition ────────────────────────────────────────────────────────────

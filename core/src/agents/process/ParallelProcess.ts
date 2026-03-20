@@ -16,14 +16,11 @@ import type {
 export class ParallelProcess implements ProcessStrategy {
   readonly type = 'parallel' as const;
 
-  async execute(
-    tasks: ProcessTask[],
-    agents: Map<string, BaseAgent>,
-  ): Promise<ProcessRunResult> {
+  async execute(tasks: ProcessTask[], agents: Map<string, BaseAgent>): Promise<ProcessRunResult> {
     const startTime = Date.now();
     const state: FlowState = {};
 
-    const promises = tasks.map(task => this.executeOne(task, agents));
+    const promises = tasks.map((task) => this.executeOne(task, agents));
     const results = await Promise.all(promises);
 
     // Aggregate into state
@@ -35,8 +32,8 @@ export class ParallelProcess implements ProcessStrategy {
 
     // Aggregate all completed outputs for final summary
     const completedOutputs = results
-      .filter(r => r.status === 'completed' && r.output)
-      .map(r => `[${r.agentName}]: ${r.output}`);
+      .filter((r) => r.status === 'completed' && r.output)
+      .map((r) => `[${r.agentName}]: ${r.output}`);
 
     return {
       processType: 'parallel',
@@ -48,7 +45,7 @@ export class ParallelProcess implements ProcessStrategy {
 
   private async executeOne(
     task: ProcessTask,
-    agents: Map<string, BaseAgent>,
+    agents: Map<string, BaseAgent>
   ): Promise<ProcessResult> {
     const taskStart = Date.now();
     const agent = task.assignedAgent

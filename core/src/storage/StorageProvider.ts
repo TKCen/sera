@@ -55,7 +55,7 @@ export interface StorageProvider {
     agentId: string,
     containerPath: string,
     mode: FilesystemMode,
-    workspacePath?: string,
+    workspacePath?: string
   ): string;
 }
 
@@ -87,7 +87,7 @@ export class StorageProviderFactory {
     if (!provider) {
       throw new Error(
         `Storage provider "${providerName}" is not registered. ` +
-        `Available providers: ${[...this.providers.keys()].join(', ') || '(none)'}`,
+          `Available providers: ${[...this.providers.keys()].join(', ') || '(none)'}`
       );
     }
 

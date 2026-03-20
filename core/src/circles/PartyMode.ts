@@ -62,7 +62,7 @@ export class PartySession {
       selectionStrategy?: SelectionStrategy;
       maxRounds?: number;
       orchestratorAgent?: BaseAgent;
-    },
+    }
   ) {
     this.sessionId = uuidv4();
     this.circleId = circleId;
@@ -79,14 +79,16 @@ export class PartySession {
    */
   async sendMessage(userMessage: string): Promise<PartyMessage[]> {
     if (!this.active) {
-      return [{
-        id: uuidv4(),
-        timestamp: new Date().toISOString(),
-        role: 'agent',
-        agentName: 'system',
-        agentDisplayName: 'System',
-        content: 'This party session has ended.',
-      }];
+      return [
+        {
+          id: uuidv4(),
+          timestamp: new Date().toISOString(),
+          role: 'agent',
+          agentName: 'system',
+          agentDisplayName: 'System',
+          content: 'This party session has ended.',
+        },
+      ];
     }
 
     // Check exit trigger
@@ -122,7 +124,7 @@ export class PartySession {
       if (this.messages.length > 1) {
         const recentHistory = this.messages
           .slice(-10) // last 10 messages for context
-          .map(m => {
+          .map((m) => {
             if (m.role === 'user') return `User: ${m.content}`;
             return `${m.agentDisplayName ?? m.agentName}: ${m.content}`;
           })
@@ -135,7 +137,9 @@ export class PartySession {
       }
 
       contextParts.push(`User's latest message: ${userMessage}`);
-      contextParts.push('Respond concisely and in character. Build on what others have said if relevant.');
+      contextParts.push(
+        'Respond concisely and in character. Build on what others have said if relevant.'
+      );
 
       const prompt = contextParts.join('\n\n');
 
@@ -243,8 +247,8 @@ export class PartySession {
         const agentList = this.agentNames.join(', ');
         const response = await this.orchestratorAgent.process(
           `Given the user message: "${userMessage}"\n\n` +
-          `Select 2-3 of the following agents that are most relevant to respond:\n${agentList}\n\n` +
-          `Respond with ONLY the agent names, comma-separated. No explanation.`,
+            `Select 2-3 of the following agents that are most relevant to respond:\n${agentList}\n\n` +
+            `Respond with ONLY the agent names, comma-separated. No explanation.`
         );
 
         const text = response.finalAnswer || response.thought || '';
@@ -280,12 +284,12 @@ export class PartySessionManager {
   createSession(
     circle: CircleManifest,
     agents: Map<string, BaseAgent>,
-    orchestratorAgent?: BaseAgent,
+    orchestratorAgent?: BaseAgent
   ): PartySession {
     if (!circle.partyMode?.enabled) {
       throw new Error(
         `Party mode is not enabled for circle "${circle.metadata.name}". ` +
-        `Set partyMode.enabled: true in the CIRCLE.yaml.`,
+          `Set partyMode.enabled: true in the CIRCLE.yaml.`
       );
     }
 
@@ -297,9 +301,7 @@ export class PartySessionManager {
     }
 
     if (circleAgents.size === 0) {
-      throw new Error(
-        `No agents available for circle "${circle.metadata.name}"`,
-      );
+      throw new Error(`No agents available for circle "${circle.metadata.name}"`);
     }
 
     const sessionConfig: {
@@ -319,7 +321,7 @@ export class PartySessionManager {
     this.sessions.set(session.sessionId, session);
     logger.info(
       `Created session ${session.sessionId} for circle "${circle.metadata.name}" ` +
-      `with ${circleAgents.size} agents (strategy: ${circle.partyMode.selectionStrategy ?? 'all'})`,
+        `with ${circleAgents.size} agents (strategy: ${circle.partyMode.selectionStrategy ?? 'all'})`
     );
 
     return session;
@@ -339,9 +341,7 @@ export class PartySessionManager {
 
   listSessions(circleId?: string): PartySessionInfo[] {
     const sessions = Array.from(this.sessions.values());
-    const filtered = circleId
-      ? sessions.filter(s => s.circleId === circleId)
-      : sessions;
-    return filtered.map(s => s.getInfo());
+    const filtered = circleId ? sessions.filter((s) => s.circleId === circleId) : sessions;
+    return filtered.map((s) => s.getInfo());
   }
 }

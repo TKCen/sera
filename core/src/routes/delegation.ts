@@ -16,10 +16,7 @@ import { pool } from '../lib/database.js';
 import { requireRole } from '../auth/authMiddleware.js';
 import { AuditService } from '../audit/AuditService.js';
 import { IntercomService } from '../intercom/IntercomService.js';
-import {
-  ActingContextBuilder,
-  type DelegationScope,
-} from '../identity/acting-context.js';
+import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('DelegationRouter');
@@ -91,7 +88,9 @@ export function createDelegationRouter(intercomService?: IntercomService) {
     };
 
     if (!agentId || !service || !permissions || !credentialSecretName) {
-      return res.status(400).json({ error: 'agentId, service, permissions, and credentialSecretName are required' });
+      return res
+        .status(400)
+        .json({ error: 'agentId, service, permissions, and credentialSecretName are required' });
     }
 
     const scope: DelegationScope = {
@@ -147,29 +146,33 @@ export function createDelegationRouter(intercomService?: IntercomService) {
         signedToken,
         issuedAt,
         expiryDate,
-      ],
+      ]
     );
 
     // Audit
-    await audit.record({
-      actorType: 'operator',
-      actorId: operator.sub,
-      actingContext: null,
-      eventType: 'delegation.created',
-      payload: { delegationId: id, agentId, service, grantType },
-    }).catch(err => logger.error('Audit failed:', err));
+    await audit
+      .record({
+        actorType: 'operator',
+        actorId: operator.sub,
+        actingContext: null,
+        eventType: 'delegation.created',
+        payload: { delegationId: id, agentId, service, grantType },
+      })
+      .catch((err) => logger.error('Audit failed:', err));
 
     // Notify agent via Centrifugo
     if (intercomService) {
       const targetChannel = instanceId ? `agent:${instanceId}` : `agent:${agentId}`;
-      intercomService.publish(targetChannel, {
-        type: 'system.delegation-granted',
-        delegationTokenId: id,
-        signedToken,
-        scope,
-        grantType,
-        expiresAt: expiryDate?.toISOString(),
-      }).catch(() => {});
+      intercomService
+        .publish(targetChannel, {
+          type: 'system.delegation-granted',
+          delegationTokenId: id,
+          signedToken,
+          scope,
+          grantType,
+          expiresAt: expiryDate?.toISOString(),
+        })
+        .catch(() => {});
     }
 
     res.status(201).json({ id, signedToken, scope, grantType, issuedAt: issuedAt.toISOString() });
@@ -204,7 +207,7 @@ export function createDelegationRouter(intercomService?: IntercomService) {
        FROM delegation_tokens
        WHERE principal_id = $1 ${whereExtra}
        ORDER BY issued_at DESC`,
-      [operator.sub],
+      [operator.sub]
     );
 
     res.json(rows);
@@ -222,7 +225,7 @@ export function createDelegationRouter(intercomService?: IntercomService) {
     // Fetch token (must belong to this operator)
     const { rows } = await pool.query(
       `SELECT * FROM delegation_tokens WHERE id = $1 AND principal_id = $2`,
-      [id, operator.sub],
+      [id, operator.sub]
     );
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Delegation token not found' });
@@ -239,10 +242,7 @@ export function createDelegationRouter(intercomService?: IntercomService) {
     }
 
     // Revoke the token itself
-    await pool.query(
-      `UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`,
-      [now, id],
-    );
+    await pool.query(`UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`, [now, id]);
 
     addToBlocklist(id, token.expires_at ? new Date(token.expires_at) : null);
 
@@ -251,21 +251,25 @@ export function createDelegationRouter(intercomService?: IntercomService) {
       const targetChannel = token.actor_instance_id
         ? `agent:${token.actor_instance_id}`
         : `agent:${token.actor_agent_id}`;
-      intercomService.publish(targetChannel, {
-        type: 'system.delegation-revoked',
-        delegationTokenId: id,
-        service: (token.scope as DelegationScope).service,
-        revokedBy: operator.sub,
-      }).catch(() => {});
+      intercomService
+        .publish(targetChannel, {
+          type: 'system.delegation-revoked',
+          delegationTokenId: id,
+          service: (token.scope as DelegationScope).service,
+          revokedBy: operator.sub,
+        })
+        .catch(() => {});
     }
 
-    await audit.record({
-      actorType: 'operator',
-      actorId: operator.sub,
-      actingContext: null,
-      eventType: 'delegation.revoked',
-      payload: { delegationId: id, cascade, childTokensRevoked, revokedBy: operator.sub },
-    }).catch(err => logger.error('Audit failed:', err));
+    await audit
+      .record({
+        actorType: 'operator',
+        actorId: operator.sub,
+        actingContext: null,
+        eventType: 'delegation.revoked',
+        payload: { delegationId: id, cascade, childTokensRevoked, revokedBy: operator.sub },
+      })
+      .catch((err) => logger.error('Audit failed:', err));
 
     res.json({ revoked: true, cascade, childTokensRevoked });
   });
@@ -282,7 +286,7 @@ export function createDelegationRouter(intercomService?: IntercomService) {
        FROM delegation_tokens
        WHERE parent_delegation_id = $1
        ORDER BY issued_at DESC`,
-      [id],
+      [id]
     );
     res.json(rows);
   });
@@ -300,7 +304,7 @@ export function createDelegationRouter(intercomService?: IntercomService) {
        WHERE acting_context->>'delegationTokenId' = $1
        ORDER BY sequence DESC
        LIMIT $2 OFFSET $3`,
-      [id, parseInt(String(limit), 10), parseInt(String(offset), 10)],
+      [id, parseInt(String(limit), 10), parseInt(String(offset), 10)]
     );
 
     res.json(rows);
@@ -313,124 +317,151 @@ export function createDelegationRouter(intercomService?: IntercomService) {
   /**
    * GET /api/agents/:agentId/service-identities
    */
-  router.get('/agents/:agentId/service-identities', requireRole(['admin', 'operator']), async (req, res) => {
-    const { agentId } = req.params;
-    const { rows } = await pool.query(
-      `SELECT id, agent_scope, service, external_id, display_name, scopes,
+  router.get(
+    '/agents/:agentId/service-identities',
+    requireRole(['admin', 'operator']),
+    async (req, res) => {
+      const { agentId } = req.params;
+      const { rows } = await pool.query(
+        `SELECT id, agent_scope, service, external_id, display_name, scopes,
               created_at, rotated_at, expires_at, revoked_at
        FROM agent_service_identities
        WHERE (agent_scope = $1 OR agent_scope = $2 OR agent_scope = '*')
          AND revoked_at IS NULL
        ORDER BY created_at DESC`,
-      [agentId, agentId],
-    );
-    res.json(rows);
-  });
+        [agentId, agentId]
+      );
+      res.json(rows);
+    }
+  );
 
   /**
    * POST /api/agents/:agentId/service-identities
    */
-  router.post('/agents/:agentId/service-identities', requireRole(['admin', 'operator']), async (req, res) => {
-    const { agentId } = req.params;
-    const { service, externalId, displayName, credentialSecretName, scopes, agentScope, expiresAt } = req.body as {
-      service: string;
-      externalId?: string;
-      displayName?: string;
-      credentialSecretName: string;
-      scopes?: string[];
-      agentScope?: string;
-      expiresAt?: string;
-    };
+  router.post(
+    '/agents/:agentId/service-identities',
+    requireRole(['admin', 'operator']),
+    async (req, res) => {
+      const { agentId } = req.params;
+      const {
+        service,
+        externalId,
+        displayName,
+        credentialSecretName,
+        scopes,
+        agentScope,
+        expiresAt,
+      } = req.body as {
+        service: string;
+        externalId?: string;
+        displayName?: string;
+        credentialSecretName: string;
+        scopes?: string[];
+        agentScope?: string;
+        expiresAt?: string;
+      };
 
-    if (!service || !credentialSecretName) {
-      return res.status(400).json({ error: 'service and credentialSecretName are required' });
-    }
+      if (!service || !credentialSecretName) {
+        return res.status(400).json({ error: 'service and credentialSecretName are required' });
+      }
 
-    const id = uuidv4();
-    const resolvedScope = agentScope ?? agentId;
+      const id = uuidv4();
+      const resolvedScope = agentScope ?? agentId;
 
-    await pool.query(
-      `INSERT INTO agent_service_identities
+      await pool.query(
+        `INSERT INTO agent_service_identities
        (id, agent_scope, service, external_id, display_name, credential_secret_name, scopes, expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        id,
-        resolvedScope,
-        service,
-        externalId ?? null,
-        displayName ?? null,
-        credentialSecretName,
-        scopes ?? null,
-        expiresAt ? new Date(expiresAt) : null,
-      ],
-    );
+        [
+          id,
+          resolvedScope,
+          service,
+          externalId ?? null,
+          displayName ?? null,
+          credentialSecretName,
+          scopes ?? null,
+          expiresAt ? new Date(expiresAt) : null,
+        ]
+      );
 
-    res.status(201).json({
-      id,
-      agentScope: resolvedScope,
-      service,
-      externalId,
-      displayName,
-      scopes,
-    });
-  });
+      res.status(201).json({
+        id,
+        agentScope: resolvedScope,
+        service,
+        externalId,
+        displayName,
+        scopes,
+      });
+    }
+  );
 
   /**
    * DELETE /api/agents/:agentId/service-identities/:identityId
    */
-  router.delete('/agents/:agentId/service-identities/:identityId', requireRole(['admin', 'operator']), async (req, res) => {
-    const { agentId, identityId } = req.params;
+  router.delete(
+    '/agents/:agentId/service-identities/:identityId',
+    requireRole(['admin', 'operator']),
+    async (req, res) => {
+      const { agentId, identityId } = req.params;
 
-    const { rowCount } = await pool.query(
-      `UPDATE agent_service_identities
+      const { rowCount } = await pool.query(
+        `UPDATE agent_service_identities
        SET revoked_at = now()
        WHERE id = $1 AND (agent_scope = $2 OR agent_scope = '*')
          AND revoked_at IS NULL`,
-      [identityId, agentId],
-    );
+        [identityId, agentId]
+      );
 
-    if (!rowCount || rowCount === 0) {
-      return res.status(404).json({ error: 'Service identity not found' });
+      if (!rowCount || rowCount === 0) {
+        return res.status(404).json({ error: 'Service identity not found' });
+      }
+
+      res.json({ revoked: true });
     }
-
-    res.json({ revoked: true });
-  });
+  );
 
   /**
    * POST /api/agents/:agentId/service-identities/:identityId/rotate
    * Update the credential_secret_name reference after rotating a bot token.
    */
-  router.post('/agents/:agentId/service-identities/:identityId/rotate', requireRole(['admin', 'operator']), async (req, res) => {
-    const { agentId, identityId } = req.params;
-    const { credentialSecretName } = req.body as { credentialSecretName: string };
+  router.post(
+    '/agents/:agentId/service-identities/:identityId/rotate',
+    requireRole(['admin', 'operator']),
+    async (req, res) => {
+      const { agentId, identityId } = req.params;
+      const { credentialSecretName } = req.body as { credentialSecretName: string };
 
-    if (!credentialSecretName) {
-      return res.status(400).json({ error: 'credentialSecretName is required' });
-    }
+      if (!credentialSecretName) {
+        return res.status(400).json({ error: 'credentialSecretName is required' });
+      }
 
-    const { rowCount } = await pool.query(
-      `UPDATE agent_service_identities
+      const { rowCount } = await pool.query(
+        `UPDATE agent_service_identities
        SET credential_secret_name = $1, rotated_at = now()
        WHERE id = $2 AND (agent_scope = $3 OR agent_scope = '*')
          AND revoked_at IS NULL`,
-      [credentialSecretName, identityId, agentId],
-    );
+        [credentialSecretName, identityId, agentId]
+      );
 
-    if (!rowCount || rowCount === 0) {
-      return res.status(404).json({ error: 'Service identity not found' });
+      if (!rowCount || rowCount === 0) {
+        return res.status(404).json({ error: 'Service identity not found' });
+      }
+
+      res.json({ rotated: true });
     }
-
-    res.json({ rotated: true });
-  });
+  );
 
   /**
    * GET /api/agents/:agentId/delegations
    * List active inbound delegations for an agent.
    */
-  router.get('/agents/:agentId/delegations', requireRole(['admin', 'operator']), async (req, res) => {
-    const { agentId } = req.params;
-    const { rows } = await pool.query(
-      `SELECT id, principal_id, principal_name, scope, grant_type,
+  router.get(
+    '/agents/:agentId/delegations',
+    requireRole(['admin', 'operator']),
+    async (req, res) => {
+      const { agentId } = req.params;
+      const { rows } = await pool.query(
+        `SELECT id, principal_id, principal_name, scope, grant_type,
               issued_at, expires_at, last_used_at, use_count,
               CASE
                 WHEN revoked_at IS NOT NULL THEN 'revoked'
@@ -442,10 +473,11 @@ export function createDelegationRouter(intercomService?: IntercomService) {
          AND revoked_at IS NULL
          AND (expires_at IS NULL OR expires_at > now())
        ORDER BY issued_at DESC`,
-      [agentId],
-    );
-    res.json(rows);
-  });
+        [agentId]
+      );
+      res.json(rows);
+    }
+  );
 
   return router;
 }
@@ -455,13 +487,13 @@ export function createDelegationRouter(intercomService?: IntercomService) {
 async function revokeChildrenCascade(
   parentId: string,
   now: Date,
-  intercomService?: IntercomService,
+  intercomService?: IntercomService
 ): Promise<number> {
   const { rows } = await pool.query(
     `SELECT id, actor_agent_id, actor_instance_id, scope, expires_at
      FROM delegation_tokens
      WHERE parent_delegation_id = $1 AND revoked_at IS NULL`,
-    [parentId],
+    [parentId]
   );
 
   let count = 0;
@@ -470,22 +502,21 @@ async function revokeChildrenCascade(
     count += await revokeChildrenCascade(child.id as string, now, intercomService);
 
     // Revoke this child
-    await pool.query(
-      `UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`,
-      [now, child.id],
-    );
+    await pool.query(`UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`, [now, child.id]);
     addToBlocklist(child.id as string, child.expires_at ? new Date(child.expires_at) : null);
 
     if (intercomService) {
       const targetChannel = child.actor_instance_id
         ? `agent:${child.actor_instance_id}`
         : `agent:${child.actor_agent_id}`;
-      intercomService.publish(targetChannel, {
-        type: 'system.delegation-revoked',
-        delegationTokenId: child.id,
-        service: (child.scope as DelegationScope).service,
-        reason: 'parent-revoked',
-      }).catch(() => {});
+      intercomService
+        .publish(targetChannel, {
+          type: 'system.delegation-revoked',
+          delegationTokenId: child.id,
+          service: (child.scope as DelegationScope).service,
+          reason: 'parent-revoked',
+        })
+        .catch(() => {});
     }
 
     count++;
@@ -496,7 +527,9 @@ async function revokeChildrenCascade(
 
 // ── JWT verification helper (used by auth middleware extension) ───────────
 
-export async function verifyDelegationToken(token: string): Promise<{ sub: string; act: string; scope: DelegationScope; jti: string } | null> {
+export async function verifyDelegationToken(
+  token: string
+): Promise<{ sub: string; act: string; scope: DelegationScope; jti: string } | null> {
   try {
     const { payload } = await jwtVerify(token, getDelegationSignKey(), {
       algorithms: ['HS256'],
@@ -518,7 +551,7 @@ export async function expireOldDelegationTokens(): Promise<void> {
        WHERE expires_at IS NOT NULL
          AND expires_at <= now()
          AND revoked_at IS NULL
-       RETURNING id, expires_at`,
+       RETURNING id, expires_at`
     );
     for (const row of rows) {
       addToBlocklist(row.id as string, new Date(row.expires_at));

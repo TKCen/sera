@@ -76,5 +76,5 @@ createRoot(el).render(
         </CentrifugoProvider>
       </AuthProvider>
     </QueryClientProvider>
-  </StrictMode>,
+  </StrictMode>
 );

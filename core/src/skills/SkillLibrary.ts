@@ -37,11 +37,16 @@ export class SkillLibrary {
   /**
    * Scans bundled and external skill directories and imports them into the DB.
    */
-  async loadSkills(): Promise<{ added: number; updated: number; skipped: number; errors: string[] }> {
+  async loadSkills(): Promise<{
+    added: number;
+    updated: number;
+    skipped: number;
+    errors: string[];
+  }> {
     const stats = { added: 0, updated: 0, skipped: 0, errors: [] as string[] };
-    
+
     const searchPaths = this.getSearchPaths();
-    const uniquePaths = Array.from(new Map(searchPaths.map(s => [s.path, s])).values());
+    const uniquePaths = Array.from(new Map(searchPaths.map((s) => [s.path, s])).values());
 
     // 2. Scan and parse
     for (const { path: dirPath, source } of uniquePaths) {
@@ -58,7 +63,9 @@ export class SkillLibrary {
               stats.skipped++;
             }
           } catch (err) {
-            stats.errors.push(`Error parsing skill ${file}: ${err instanceof Error ? err.message : String(err)}`);
+            stats.errors.push(
+              `Error parsing skill ${file}: ${err instanceof Error ? err.message : String(err)}`
+            );
           }
         }
 
@@ -73,12 +80,16 @@ export class SkillLibrary {
               stats.updated++;
             }
           } catch (err) {
-            stats.errors.push(`Error parsing package ${file}: ${err instanceof Error ? err.message : String(err)}`);
+            stats.errors.push(
+              `Error parsing package ${file}: ${err instanceof Error ? err.message : String(err)}`
+            );
           }
         }
       } catch (err) {
         if ((err as any).code !== 'ENOENT') {
-          stats.errors.push(`Error scanning directory ${dirPath}: ${err instanceof Error ? err.message : String(err)}`);
+          stats.errors.push(
+            `Error scanning directory ${dirPath}: ${err instanceof Error ? err.message : String(err)}`
+          );
         }
       }
     }
@@ -90,7 +101,7 @@ export class SkillLibrary {
     const workspaceRoot = process.env.WORKSPACE_DIR || path.resolve(process.cwd(), '..', '..');
     const searchPaths: { path: string; source: 'bundled' | 'external' }[] = [
       { path: path.resolve(process.cwd(), 'skills'), source: 'bundled' },
-      { path: path.resolve(workspaceRoot, 'skills'), source: 'bundled' }
+      { path: path.resolve(workspaceRoot, 'skills'), source: 'bundled' },
     ];
 
     if (process.env.SKILL_PACK_DIRS) {
@@ -112,7 +123,7 @@ export class SkillLibrary {
     if (this.watcher) this.watcher.close();
 
     const searchPaths = this.getSearchPaths();
-    const uniqueDirs = Array.from(new Set(searchPaths.map(s => s.path)));
+    const uniqueDirs = Array.from(new Set(searchPaths.map((s) => s.path)));
 
     this.watcher = chokidar.watch(uniqueDirs, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
@@ -129,7 +140,9 @@ export class SkillLibrary {
       if (ext === '.md') {
         // Individual skill reload
         try {
-          const source = filePath.includes('skills' + path.sep + 'builtin') ? 'bundled' : 'external';
+          const source = filePath.includes('skills' + path.sep + 'builtin')
+            ? 'bundled'
+            : 'external';
           const doc = await this.parseSkillFile(filePath, source as any);
           if (doc) {
             await this.upsertSkill(doc);
@@ -159,12 +172,14 @@ export class SkillLibrary {
 
   private emitReloadEvent(type: 'skill' | 'package', name: string, version: string): void {
     if (this.intercom) {
-      this.intercom.publish('system.skill-reloaded', {
-        type,
-        name,
-        version,
-        timestamp: new Date().toISOString()
-      }).catch(err => logger.warn('Failed to publish skill-reloaded event:', err));
+      this.intercom
+        .publish('system.skill-reloaded', {
+          type,
+          name,
+          version,
+          timestamp: new Date().toISOString(),
+        })
+        .catch((err) => logger.warn('Failed to publish skill-reloaded event:', err));
     }
   }
 
@@ -178,30 +193,38 @@ export class SkillLibrary {
   private async recursiveScan(dir: string, ext: string): Promise<string[]> {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
-      const files = await Promise.all(entries.map(async (entry) => {
-        const res = path.resolve(dir, entry.name);
-        return entry.isDirectory() ? this.recursiveScan(res, ext) : res;
-      }));
+      const files = await Promise.all(
+        entries.map(async (entry) => {
+          const res = path.resolve(dir, entry.name);
+          return entry.isDirectory() ? this.recursiveScan(res, ext) : res;
+        })
+      );
       return Array.prototype.concat(...files).filter((f: string) => f.endsWith(ext));
     } catch (err) {
       return [];
     }
   }
 
-  private async parseSkillFile(filePath: string, source: 'bundled' | 'external'): Promise<SkillDocument | null> {
+  private async parseSkillFile(
+    filePath: string,
+    source: 'bundled' | 'external'
+  ): Promise<SkillDocument | null> {
     const fileContent = await fs.readFile(filePath, 'utf-8');
     const { data, content } = matter(fileContent);
 
     const validation = SkillFrontMatterSchema.safeParse(data);
     if (!validation.success) {
-      console.warn(`[SkillLibrary] Invalid front-matter in ${filePath}:`, validation.error.format());
+      console.warn(
+        `[SkillLibrary] Invalid front-matter in ${filePath}:`,
+        validation.error.format()
+      );
       return null;
     }
 
     return {
       ...validation.data,
       content: content.trim(),
-      source
+      source,
     };
   }
 
@@ -249,7 +272,7 @@ export class SkillLibrary {
         doc.source,
         doc.category || null,
         JSON.stringify(doc.tags || []),
-        JSON.stringify(doc['applies-to'] || [])
+        JSON.stringify(doc['applies-to'] || []),
       ]
     );
   }
@@ -293,7 +316,7 @@ export class SkillLibrary {
       source: row.source,
       category: row.category,
       tags: row.tags,
-      'applies-to': row.applies_to
+      'applies-to': row.applies_to,
     };
   }
 
@@ -315,24 +338,28 @@ export class SkillLibrary {
       name: row.name,
       version: row.version,
       description: row.description,
-      skills: row.skills
+      skills: row.skills,
     };
   }
 
   async listSkills(): Promise<SkillFrontMatter[]> {
-    const { rows } = await this.pool.query('SELECT name, version, description, triggers, category, tags FROM skills ORDER BY name, version DESC');
-    return rows.map(row => ({
+    const { rows } = await this.pool.query(
+      'SELECT name, version, description, triggers, category, tags FROM skills ORDER BY name, version DESC'
+    );
+    return rows.map((row) => ({
       name: row.name,
       version: row.version,
       description: row.description,
       triggers: row.triggers,
       category: row.category,
-      tags: row.tags
+      tags: row.tags,
     }));
   }
 
   async listPackages(): Promise<any[]> {
-    const { rows } = await this.pool.query('SELECT name, version, description, skills FROM skill_packages ORDER BY name, version DESC');
+    const { rows } = await this.pool.query(
+      'SELECT name, version, description, skills FROM skill_packages ORDER BY name, version DESC'
+    );
     return rows;
   }
 }

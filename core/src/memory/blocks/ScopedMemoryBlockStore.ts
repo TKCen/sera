@@ -183,7 +183,7 @@ export class ScopedMemoryBlockStore {
         if (!block) continue;
 
         if (filters?.tags && filters.tags.length > 0) {
-          if (!filters.tags.some(t => block.tags.includes(t))) continue;
+          if (!filters.tags.some((t) => block.tags.includes(t))) continue;
         }
         if (filters?.since && block.timestamp < filters.since) continue;
         if (filters?.before && block.timestamp >= filters.before) continue;
@@ -279,7 +279,7 @@ export class ScopedMemoryBlockStore {
       const typeDir = path.join(this.memoryRoot, agentId, type);
       try {
         const files = await fs.readdir(typeDir);
-        count += files.filter(f => f.endsWith('.md')).length;
+        count += files.filter((f) => f.endsWith('.md')).length;
       } catch {
         // directory absent
       }

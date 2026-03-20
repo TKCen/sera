@@ -30,26 +30,28 @@ describe('CapabilityResolver', () => {
 
   it('throws error if boundary not found', async () => {
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
     registryMock.getSandboxBoundary.mockResolvedValue(null);
     await expect(resolver.resolve('id')).rejects.toThrow(/boundary b1 not found/i);
   });
 
   it('resolves capabilities by intersecting boundary, policy and manifest', async () => {
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { network: { outbound: ['google.com'] } } }
+      overrides: { capabilities: { network: { outbound: ['google.com'] } } },
     });
-    registryMock.getTemplate.mockResolvedValue({ 
-      spec: { sandboxBoundary: 'tier-2', policyRef: 'p1', lifecycle: { mode: 'persistent' } } 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'tier-2', policyRef: 'p1', lifecycle: { mode: 'persistent' } },
     });
     registryMock.getSandboxBoundary.mockResolvedValue({
       name: 'tier-2',
-      capabilities: { network: { outbound: ['google.com', 'github.com'] } }
+      capabilities: { network: { outbound: ['google.com', 'github.com'] } },
     });
     registryMock.getCapabilityPolicy.mockResolvedValue({
       name: 'p1',
-      capabilities: { network: { outbound: ['google.com', 'github.com'] } }
+      capabilities: { network: { outbound: ['google.com', 'github.com'] } },
     });
 
     const result = await resolver.resolve('id');
@@ -58,9 +60,11 @@ describe('CapabilityResolver', () => {
 
   it('handles missing policy or inline overrides', async () => {
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
     registryMock.getSandboxBoundary.mockResolvedValue({
-      capabilities: { network: { outbound: ['a.com'] } }
+      capabilities: { network: { outbound: ['a.com'] } },
     });
 
     const result = await resolver.resolve('id');
@@ -68,13 +72,15 @@ describe('CapabilityResolver', () => {
   });
 
   it('recursive intersection of objects and narrowing', async () => {
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { fs: { write: false } } }
+      overrides: { capabilities: { fs: { write: false } } },
     });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
     registryMock.getSandboxBoundary.mockResolvedValue({
-      capabilities: { fs: { read: true, write: true } }
+      capabilities: { fs: { read: true, write: true } },
     });
 
     const result = await resolver.resolve('id');
@@ -85,35 +91,43 @@ describe('CapabilityResolver', () => {
   it('handles boolean true/false in layers', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { root: true } });
     registryMock.getCapabilityPolicy.mockResolvedValue({ capabilities: { root: false } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', policyRef: 'p1', lifecycle: { mode: 'persistent' } } });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', policyRef: 'p1', lifecycle: { mode: 'persistent' } },
+    });
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    
+
     let result = await resolver.resolve('id');
     expect(result.resolvedCapabilities.root).toBe(false);
   });
 
   it('throws CapabilityEscalationError on broadening', async () => {
-    registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { fs: { read: true, write: false } } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getSandboxBoundary.mockResolvedValue({
+      capabilities: { fs: { read: true, write: false } },
+    });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { fs: { write: true } } }
+      overrides: { capabilities: { fs: { write: true } } },
     });
 
     await expect(resolver.resolve('id')).rejects.toThrow(/Capability escalation detected/i);
   });
 
   it('resolves NamedList references recursively', async () => {
-    registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { network: { outbound: ['google.com', 'github.com', 'npm.org'] } } });
-    registryMock.getTemplate.mockResolvedValue({ 
-      spec: { 
-        sandboxBoundary: 'b1', 
+    registryMock.getSandboxBoundary.mockResolvedValue({
+      capabilities: { network: { outbound: ['google.com', 'github.com', 'npm.org'] } },
+    });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: {
+        sandboxBoundary: 'b1',
         capabilities: { network: { outbound: [{ $ref: 'list1' }] } },
-        lifecycle: { mode: 'persistent' }
-      } 
+        lifecycle: { mode: 'persistent' },
+      },
     });
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    
+
     registryMock.getNamedList.mockImplementation((name: string) => {
       if (name === 'list1') return { entries: ['google.com', { $ref: 'list2' }] };
       if (name === 'list2') return { entries: ['github.com'] };
@@ -125,16 +139,18 @@ describe('CapabilityResolver', () => {
   });
 
   it('detects circular references in NamedLists', async () => {
-    registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { network: { outbound: ['a.com'] } } });
-    registryMock.getTemplate.mockResolvedValue({ 
-      spec: { 
-        sandboxBoundary: 'b1', 
+    registryMock.getSandboxBoundary.mockResolvedValue({
+      capabilities: { network: { outbound: ['a.com'] } },
+    });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: {
+        sandboxBoundary: 'b1',
         capabilities: { network: { outbound: [{ $ref: 'l1' }] } },
-        lifecycle: { mode: 'persistent' }
-      } 
+        lifecycle: { mode: 'persistent' },
+      },
     });
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    
+
     registryMock.getNamedList.mockImplementation((name: string) => {
       if (name === 'l1') return { entries: [{ $ref: 'l2' }] };
       if (name === 'l2') return { entries: [{ $ref: 'l1' }] };
@@ -145,14 +161,20 @@ describe('CapabilityResolver', () => {
   });
 
   it('enforces always-denied lists', async () => {
-    registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { exec: { commands: ['git *', 'rm -rf /'] } } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
+    registryMock.getSandboxBoundary.mockResolvedValue({
+      capabilities: { exec: { commands: ['git *', 'rm -rf /'] } },
+    });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    
-    registryMock.listAlwaysEnforcedNamedLists.mockResolvedValue([{
-      type: 'command-denylist',
-      entries: ['rm -rf *']
-    }]);
+
+    registryMock.listAlwaysEnforcedNamedLists.mockResolvedValue([
+      {
+        type: 'command-denylist',
+        entries: ['rm -rf *'],
+      },
+    ]);
 
     const result = await resolver.resolve('id');
     expect(result.resolvedCapabilities.exec.commands).toEqual(['git *']);
@@ -160,10 +182,12 @@ describe('CapabilityResolver', () => {
 
   it('handles broadening of arrays (escalation)', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { net: ['a.com'] } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { net: ['a.com', 'b.com'] } }
+      overrides: { capabilities: { net: ['a.com', 'b.com'] } },
     });
 
     await expect(resolver.resolve('id')).rejects.toThrow(/Capability escalation detected/i);
@@ -171,10 +195,12 @@ describe('CapabilityResolver', () => {
 
   it('handles mismatch in capability types (escalation)', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { net: ['a.com'] } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { net: { allow: ['a.com'] } } }
+      overrides: { capabilities: { net: { allow: ['a.com'] } } },
     });
 
     await expect(resolver.resolve('id')).rejects.toThrow(/Capability escalation detected/i);
@@ -182,10 +208,12 @@ describe('CapabilityResolver', () => {
 
   it('throws CapabilityEscalationError when boundary is object but manifest is scalar', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { fs: { read: true } } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { fs: true } }
+      overrides: { capabilities: { fs: true } },
     });
 
     await expect(resolver.resolve('id')).rejects.toThrow(/Capability escalation detected/i);
@@ -193,10 +221,12 @@ describe('CapabilityResolver', () => {
 
   it('allows empty array or object in manifest even if undefined in boundary', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { fs: { read: true } } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { capabilities: { fs: { write: [] }, net: {} } }
+      overrides: { capabilities: { fs: { write: [] }, net: {} } },
     });
 
     const result = await resolver.resolve('id');
@@ -206,13 +236,17 @@ describe('CapabilityResolver', () => {
 
   it('skips unknown list types in always-denied enforcement', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { root: true } });
-    registryMock.getTemplate.mockResolvedValue({ spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } } });
+    registryMock.getTemplate.mockResolvedValue({
+      spec: { sandboxBoundary: 'b1', lifecycle: { mode: 'persistent' } },
+    });
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
-    
-    registryMock.listAlwaysEnforcedNamedLists.mockResolvedValue([{
-      type: 'unknown-type',
-      entries: ['something']
-    }]);
+
+    registryMock.listAlwaysEnforcedNamedLists.mockResolvedValue([
+      {
+        type: 'unknown-type',
+        entries: ['something'],
+      },
+    ]);
 
     const result = await resolver.resolve('id');
     expect(result.resolvedCapabilities.root).toBe(true);
@@ -220,12 +254,12 @@ describe('CapabilityResolver', () => {
 
   it('throws error if NamedList reference not found', async () => {
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: { net: ['*'] } });
-    registryMock.getTemplate.mockResolvedValue({ 
-      spec: { 
-        sandboxBoundary: 'b1', 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: {
+        sandboxBoundary: 'b1',
         capabilities: { net: [{ $ref: 'missing' }] },
-        lifecycle: { mode: 'persistent' }
-      } 
+        lifecycle: { mode: 'persistent' },
+      },
     });
     registryMock.getInstance.mockResolvedValue({ template_ref: 'tpl' });
     registryMock.getNamedList.mockResolvedValue(null);
@@ -234,21 +268,21 @@ describe('CapabilityResolver', () => {
   });
 
   it('deepMerge handles $append and $remove for skills', async () => {
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { 
-        skills: { 
+      overrides: {
+        skills: {
           $append: ['new-skill'],
-          $remove: ['old-skill']
-        } 
-      }
+          $remove: ['old-skill'],
+        },
+      },
     });
-    registryMock.getTemplate.mockResolvedValue({ 
-      spec: { 
-        sandboxBoundary: 'b1', 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: {
+        sandboxBoundary: 'b1',
         skills: ['old-skill', 'base-skill'],
-        lifecycle: { mode: 'persistent' }
-      } 
+        lifecycle: { mode: 'persistent' },
+      },
     });
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: {} });
 
@@ -259,21 +293,21 @@ describe('CapabilityResolver', () => {
   });
 
   it('deepMerge handles scalar $append/$remove', async () => {
-    registryMock.getInstance.mockResolvedValue({ 
+    registryMock.getInstance.mockResolvedValue({
       template_ref: 'tpl',
-      overrides: { 
-        skills: { 
+      overrides: {
+        skills: {
           $append: 'scalar-skill',
-          $remove: 'base-skill'
-        } 
-      }
+          $remove: 'base-skill',
+        },
+      },
     });
-    registryMock.getTemplate.mockResolvedValue({ 
-      spec: { 
-        sandboxBoundary: 'b1', 
+    registryMock.getTemplate.mockResolvedValue({
+      spec: {
+        sandboxBoundary: 'b1',
         skills: ['base-skill'],
-        lifecycle: { mode: 'persistent' }
-      } 
+        lifecycle: { mode: 'persistent' },
+      },
     });
     registryMock.getSandboxBoundary.mockResolvedValue({ capabilities: {} });
 

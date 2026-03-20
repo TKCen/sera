@@ -64,7 +64,7 @@ export class PermissionRequestService {
 
   constructor(
     private registry: AgentRegistry,
-    private intercom: IntercomService,
+    private intercom: IntercomService
   ) {}
 
   setOnRequestCreated(hook: (req: PermissionRequest) => void): void {
@@ -84,7 +84,7 @@ export class PermissionRequestService {
     agentName: string,
     dimension: PermissionRequest['dimension'],
     value: string,
-    reason?: string,
+    reason?: string
   ): Promise<{ status: 'pending'; requestId: string }> {
     const requestId = uuidv4();
     const permRequest: PermissionRequest = {
@@ -101,42 +101,53 @@ export class PermissionRequestService {
     this.pending.set(requestId, permRequest);
 
     // Publish to Centrifugo system.permission-requests channel — non-blocking
-    this.intercom.publishSystemEvent('permission-requests', {
-      requestId,
-      agentId,
-      agentName,
-      dimension,
-      value,
-      reason,
-      requestedAt: permRequest.requestedAt,
-    }).catch(err => logger.warn('Failed to publish permission request to Centrifugo:', err));
+    this.intercom
+      .publishSystemEvent('permission-requests', {
+        requestId,
+        agentId,
+        agentName,
+        dimension,
+        value,
+        reason,
+        requestedAt: permRequest.requestedAt,
+      })
+      .catch((err) => logger.warn('Failed to publish permission request to Centrifugo:', err));
 
-    await AuditService.getInstance().record({
-      actorType: 'agent',
-      actorId: agentId,
-      actingContext: null,
-      eventType: 'permission.requested',
-      payload: { requestId, dimension, value, reason }
-    }).catch(err => logger.error('Audit record failed:', err));
+    await AuditService.getInstance()
+      .record({
+        actorType: 'agent',
+        actorId: agentId,
+        actingContext: null,
+        eventType: 'permission.requested',
+        payload: { requestId, dimension, value, reason },
+      })
+      .catch((err) => logger.error('Audit record failed:', err));
 
     // Auto-expire after timeout
-    const timeoutMs = parseInt(process.env.PERMISSION_REQUEST_TIMEOUT_MS ?? String(5 * 60 * 1000), 10);
+    const timeoutMs = parseInt(
+      process.env.PERMISSION_REQUEST_TIMEOUT_MS ?? String(5 * 60 * 1000),
+      10
+    );
     setTimeout(() => {
       const still = this.pending.get(requestId);
       if (still && still.status === 'pending') {
         still.status = 'expired';
         this.pending.delete(requestId);
-        this.intercom.publishSystemEvent('permission-requests', {
-          requestId,
-          agentId,
-          status: 'expired',
-          expiredAt: new Date().toISOString(),
-        }).catch(() => {});
+        this.intercom
+          .publishSystemEvent('permission-requests', {
+            requestId,
+            agentId,
+            status: 'expired',
+            expiredAt: new Date().toISOString(),
+          })
+          .catch(() => {});
         logger.info(`Permission request ${requestId} expired`);
       }
     }, timeoutMs);
 
-    logger.info(`Permission request ${requestId} from ${agentName} (${agentId}): ${dimension}=${value}`);
+    logger.info(
+      `Permission request ${requestId} from ${agentName} (${agentId}): ${dimension}=${value}`
+    );
 
     // Epic 18 — dispatch to notification channels (non-blocking)
     this.onRequestCreated?.(permRequest);
@@ -156,7 +167,7 @@ export class PermissionRequestService {
     decision: PermissionDecision,
     operatorId?: string,
     operatorEmail?: string,
-    operatorName?: string,
+    operatorName?: string
   ): Promise<PermissionRequest> {
     const req = this.pending.get(requestId);
     if (!req) {
@@ -166,21 +177,23 @@ export class PermissionRequestService {
     req.status = decision.decision === 'grant' ? 'granted' : 'denied';
     this.pending.delete(requestId);
 
-    await AuditService.getInstance().record({
-      actorType: 'operator',
-      actorId: operatorId || 'unknown',
-      actingContext: null,
-      eventType: decision.decision === 'grant' ? 'permission.granted' : 'permission.denied',
-      payload: {
-        requestId,
-        agentId: req.agentId,
-        dimension: req.dimension,
-        value: req.value,
-        grantType: decision.grantType,
-        actorEmail: operatorEmail,
-        actorName: operatorName,
-      },
-    }).catch(err => logger.error('Audit record failed:', err));
+    await AuditService.getInstance()
+      .record({
+        actorType: 'operator',
+        actorId: operatorId || 'unknown',
+        actingContext: null,
+        eventType: decision.decision === 'grant' ? 'permission.granted' : 'permission.denied',
+        payload: {
+          requestId,
+          agentId: req.agentId,
+          dimension: req.dimension,
+          value: req.value,
+          grantType: decision.grantType,
+          actorEmail: operatorEmail,
+          actorName: operatorName,
+        },
+      })
+      .catch((err) => logger.error('Audit record failed:', err));
 
     if (decision.decision === 'grant') {
       const grantType = decision.grantType ?? 'one-time';
@@ -210,27 +223,33 @@ export class PermissionRequestService {
           ...(operatorName !== undefined ? { grantedByName: operatorName } : {}),
           ...(decision.expiresAt !== undefined ? { expiresAt: decision.expiresAt } : {}),
         });
-        logger.info(`Persistent grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`);
+        logger.info(
+          `Persistent grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`
+        );
       }
       // one-time: nothing persisted — just returned to caller
     }
 
-    // Notify agent via Centrifugo (agent specific channel, using system.* prefix for notification if appropriate, 
-    // or status. In this case, Story 9.6 says system.* for platform events. 
+    // Notify agent via Centrifugo (agent specific channel, using system.* prefix for notification if appropriate,
+    // or status. In this case, Story 9.6 says system.* for platform events.
     // Agent-specific notification can be on agent:{agentId}:status or a specific event.
     // The previous implementation used `agent.${req.agentId}.grants` which is not in our canonical list.
     // I'll use system.permission-decisions or similar if it's a platform event.
-    this.intercom.publishSystemEvent('permission-decisions', {
-      requestId,
-      agentId: req.agentId,
-      decision: decision.decision,
-      grantType: decision.grantType,
-      dimension: req.dimension,
-      value: req.value,
-      decidedAt: new Date().toISOString(),
-    }).catch(() => {});
+    this.intercom
+      .publishSystemEvent('permission-decisions', {
+        requestId,
+        agentId: req.agentId,
+        decision: decision.decision,
+        grantType: decision.grantType,
+        dimension: req.dimension,
+        value: req.value,
+        decidedAt: new Date().toISOString(),
+      })
+      .catch(() => {});
 
-    logger.info(`Permission request ${requestId} decided: ${decision.decision} (${decision.grantType ?? 'n/a'}) by ${operatorId ?? 'unknown'}`);
+    logger.info(
+      `Permission request ${requestId} decided: ${decision.decision} (${decision.grantType ?? 'n/a'}) by ${operatorId ?? 'unknown'}`
+    );
     return req;
   }
 
@@ -238,7 +257,7 @@ export class PermissionRequestService {
 
   listPending(agentId?: string): PermissionRequest[] {
     const all = Array.from(this.pending.values());
-    return agentId ? all.filter(r => r.agentId === agentId) : all;
+    return agentId ? all.filter((r) => r.agentId === agentId) : all;
   }
 
   getSessionGrants(agentInstanceId: string): SessionGrant[] {
@@ -258,7 +277,7 @@ export class PermissionRequestService {
   revokeSessionGrant(agentInstanceId: string, grantId: string): boolean {
     const grants = this.sessionGrants.get(agentInstanceId);
     if (!grants) return false;
-    const idx = grants.findIndex(g => g.grantId === grantId);
+    const idx = grants.findIndex((g) => g.grantId === grantId);
     if (idx === -1) return false;
     grants.splice(idx, 1);
     return true;
@@ -270,7 +289,7 @@ export class PermissionRequestService {
    */
   hasActiveGrant(agentInstanceId: string, dimension: string, value: string): boolean {
     const grants = this.sessionGrants.get(agentInstanceId) ?? [];
-    return grants.some(g => {
+    return grants.some((g) => {
       if (g.dimension !== dimension) return false;
       if (g.expiresAt && new Date(g.expiresAt) < new Date()) return false;
       // Value match: exact or prefix (for filesystem paths)

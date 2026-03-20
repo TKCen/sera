@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ActingContextBuilder, type ActingContext, type DelegationScope } from './acting-context.js';
+import {
+  ActingContextBuilder,
+  type ActingContext,
+  type DelegationScope,
+} from './acting-context.js';
 
 const AGENT = {
   agentId: 'agt-1',
@@ -21,7 +25,11 @@ const SCOPE: DelegationScope = {
 describe('ActingContextBuilder', () => {
   describe('buildAutonomous()', () => {
     it('sets principal === actor, empty chain, agent-jwt authMethod', () => {
-      const ctx = ActingContextBuilder.buildAutonomous(AGENT.agentId, AGENT.agentName, AGENT.instanceId);
+      const ctx = ActingContextBuilder.buildAutonomous(
+        AGENT.agentId,
+        AGENT.agentName,
+        AGENT.instanceId
+      );
 
       expect(ctx.principal.type).toBe('agent');
       expect(ctx.principal.id).toBe(AGENT.agentId);
@@ -90,7 +98,7 @@ describe('ActingContextBuilder', () => {
         issuedAt: '2026-01-01T01:00:00Z',
       });
 
-      expect(child.principal.id).toBe(OPERATOR.operatorSub);  // inherited
+      expect(child.principal.id).toBe(OPERATOR.operatorSub); // inherited
       expect(child.actor.agentId).toBe('agt-2');
       expect(child.delegationChain).toHaveLength(2);
       expect(child.delegationChain[1]!.delegatorType).toBe('agent');
@@ -101,7 +109,11 @@ describe('ActingContextBuilder', () => {
 
   describe('validate()', () => {
     it('accepts valid autonomous context', () => {
-      const ctx = ActingContextBuilder.buildAutonomous(AGENT.agentId, AGENT.agentName, AGENT.instanceId);
+      const ctx = ActingContextBuilder.buildAutonomous(
+        AGENT.agentId,
+        AGENT.agentName,
+        AGENT.instanceId
+      );
       expect(ActingContextBuilder.validate(ctx).valid).toBe(true);
     });
 
@@ -136,8 +148,22 @@ describe('ActingContextBuilder', () => {
     it('rejects chain where non-first link has operator delegatorType', () => {
       const ctx: ActingContext = ActingContextBuilder.buildAutonomous('a', 'A', 'i');
       ctx.delegationChain = [
-        { delegatorType: 'operator', delegatorId: 'op-1', delegatorName: 'op', scope: SCOPE, grantType: 'session', issuedAt: '2026-01-01T00:00:00Z' },
-        { delegatorType: 'operator', delegatorId: 'op-2', delegatorName: 'op2', scope: SCOPE, grantType: 'session', issuedAt: '2026-01-01T00:00:00Z' },
+        {
+          delegatorType: 'operator',
+          delegatorId: 'op-1',
+          delegatorName: 'op',
+          scope: SCOPE,
+          grantType: 'session',
+          issuedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          delegatorType: 'operator',
+          delegatorId: 'op-2',
+          delegatorName: 'op2',
+          scope: SCOPE,
+          grantType: 'session',
+          issuedAt: '2026-01-01T00:00:00Z',
+        },
       ];
       const result = ActingContextBuilder.validate(ctx);
       expect(result.valid).toBe(false);
@@ -147,7 +173,10 @@ describe('ActingContextBuilder', () => {
 
   describe('validateScopeNarrowing()', () => {
     it('allows valid narrowing of permissions', () => {
-      const parent: DelegationScope = { service: 'github', permissions: ['repo:read', 'issues:write'] };
+      const parent: DelegationScope = {
+        service: 'github',
+        permissions: ['repo:read', 'issues:write'],
+      };
       const child: DelegationScope = { service: 'github', permissions: ['repo:read'] };
       expect(ActingContextBuilder.validateScopeNarrowing(parent, child)).toBeNull();
     });

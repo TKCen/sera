@@ -1,7 +1,15 @@
 import { useState, useCallback } from 'react';
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
 } from 'recharts';
 import { RefreshCw, Download, TrendingUp, Bot, DollarSign, Activity } from 'lucide-react';
 import { useUsage } from '@/hooks/useUsage';
@@ -9,7 +17,11 @@ import { Spinner } from '@/components/ui/spinner';
 
 type Range = '24h' | '7d' | '30d' | 'custom';
 
-function rangeToFromTo(range: Range, customFrom?: string, customTo?: string): { from: string; to: string } {
+function rangeToFromTo(
+  range: Range,
+  customFrom?: string,
+  customTo?: string
+): { from: string; to: string } {
   const now = new Date();
   const to = now.toISOString();
   if (range === 'custom') {
@@ -48,21 +60,28 @@ export default function InsightsPage() {
   const { from, to } = rangeToFromTo(range, customFrom, customTo);
   const { data, isLoading, refetch, isFetching } = useUsage({ groupBy: 'agent', from, to });
 
-  const toggleSort = useCallback((key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('desc');
-    }
-  }, [sortKey]);
+  const toggleSort = useCallback(
+    (key: SortKey) => {
+      if (sortKey === key) {
+        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      } else {
+        setSortKey(key);
+        setSortDir('desc');
+      }
+    },
+    [sortKey]
+  );
 
   const handleDownload = useCallback(async () => {
     if (!data) return;
     const rows = [
       ['Agent', 'Prompt Tokens', 'Completion Tokens', 'Total Tokens', '% of Total'],
       ...(data.byAgent ?? []).map((a) => [
-        a.agentName, a.promptTokens, a.completionTokens, a.totalTokens, a.pctOfTotal.toFixed(1),
+        a.agentName,
+        a.promptTokens,
+        a.completionTokens,
+        a.totalTokens,
+        a.pctOfTotal.toFixed(1),
       ]),
     ];
     const csv = rows.map((r) => r.join(',')).join('\n');
@@ -78,7 +97,8 @@ export default function InsightsPage() {
   const sortedAgents = [...(data?.byAgent ?? [])].sort((a, b) => {
     const av = a[sortKey] as number | string;
     const bv = b[sortKey] as number | string;
-    if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv as string) : (bv as string).localeCompare(av);
+    if (typeof av === 'string')
+      return sortDir === 'asc' ? av.localeCompare(bv as string) : (bv as string).localeCompare(av);
     return sortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number);
   });
 
@@ -99,7 +119,9 @@ export default function InsightsPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Insights</h1>
-          <p className="text-sm text-sera-text-muted mt-1">LLM token usage and cost across all agents</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            LLM token usage and cost across all agents
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 border border-sera-border rounded-lg p-1">
@@ -118,14 +140,18 @@ export default function InsightsPage() {
             ))}
           </div>
           <button
-            onClick={() => { void refetch(); }}
+            onClick={() => {
+              void refetch();
+            }}
             className="sera-btn-ghost p-2"
             title="Refresh"
           >
             <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
           </button>
           <button
-            onClick={() => { void handleDownload(); }}
+            onClick={() => {
+              void handleDownload();
+            }}
             className="sera-btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
           >
             <Download size={13} /> CSV
@@ -157,7 +183,9 @@ export default function InsightsPage() {
       )}
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-20"><Spinner /></div>
+        <div className="flex items-center justify-center py-20">
+          <Spinner />
+        </div>
       ) : (
         <>
           {/* Summary cards */}
@@ -179,9 +207,11 @@ export default function InsightsPage() {
             />
             <SummaryCard
               label="Estimated Cost"
-              value={data?.summary.estimatedCost !== undefined
-                ? `$${data.summary.estimatedCost.toFixed(4)}`
-                : '—'}
+              value={
+                data?.summary.estimatedCost !== undefined
+                  ? `$${data.summary.estimatedCost.toFixed(4)}`
+                  : '—'
+              }
               icon={<DollarSign size={16} className="text-sera-info" />}
             />
           </div>
@@ -190,7 +220,9 @@ export default function InsightsPage() {
           <div className="sera-card-static p-5">
             <h2 className="text-sm font-semibold text-sera-text mb-4">Token Usage Over Time</h2>
             {chartData.length === 0 ? (
-              <p className="text-center text-sera-text-dim text-sm py-10">No data for selected range.</p>
+              <p className="text-center text-sera-text-dim text-sm py-10">
+                No data for selected range.
+              </p>
             ) : (
               <ResponsiveContainer width="100%" height={240}>
                 <AreaChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -206,14 +238,36 @@ export default function InsightsPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                   <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }} />
-                  <YAxis tickFormatter={(v: number) => fmtTokens(v)} tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }} />
+                  <YAxis
+                    tickFormatter={(v: number) => fmtTokens(v)}
+                    tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
+                  />
                   <Tooltip
-                    contentStyle={{ background: 'var(--sera-surface)', border: '1px solid var(--sera-border)', borderRadius: '8px', fontSize: 12 }}
+                    contentStyle={{
+                      background: 'var(--sera-surface)',
+                      border: '1px solid var(--sera-border)',
+                      borderRadius: '8px',
+                      fontSize: 12,
+                    }}
                     formatter={(value: number, name: string) => [fmtTokens(value), name]}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Area type="monotone" dataKey="promptTokens" name="Prompt" stroke="var(--sera-accent)" fill="url(#gradPrompt)" strokeWidth={2} />
-                  <Area type="monotone" dataKey="completionTokens" name="Completion" stroke="var(--sera-success)" fill="url(#gradCompletion)" strokeWidth={2} />
+                  <Area
+                    type="monotone"
+                    dataKey="promptTokens"
+                    name="Prompt"
+                    stroke="var(--sera-accent)"
+                    fill="url(#gradPrompt)"
+                    strokeWidth={2}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="completionTokens"
+                    name="Completion"
+                    stroke="var(--sera-success)"
+                    fill="url(#gradCompletion)"
+                    strokeWidth={2}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             )}
@@ -224,17 +278,43 @@ export default function InsightsPage() {
             <div className="sera-card-static p-5">
               <h2 className="text-sm font-semibold text-sera-text mb-4">Per-Agent Breakdown</h2>
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={data?.byAgent ?? []} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <BarChart
+                  data={data?.byAgent ?? []}
+                  margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="agentName" tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }} />
-                  <YAxis tickFormatter={(v: number) => fmtTokens(v)} tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }} />
+                  <XAxis
+                    dataKey="agentName"
+                    tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
+                  />
+                  <YAxis
+                    tickFormatter={(v: number) => fmtTokens(v)}
+                    tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
+                  />
                   <Tooltip
-                    contentStyle={{ background: 'var(--sera-surface)', border: '1px solid var(--sera-border)', borderRadius: '8px', fontSize: 12 }}
+                    contentStyle={{
+                      background: 'var(--sera-surface)',
+                      border: '1px solid var(--sera-border)',
+                      borderRadius: '8px',
+                      fontSize: 12,
+                    }}
                     formatter={(value: number, name: string) => [fmtTokens(value), name]}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="promptTokens" name="Prompt" fill="var(--sera-accent)" stackId="a" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="completionTokens" name="Completion" fill="var(--sera-success)" stackId="a" radius={[4, 4, 0, 0]} />
+                  <Bar
+                    dataKey="promptTokens"
+                    name="Prompt"
+                    fill="var(--sera-accent)"
+                    stackId="a"
+                    radius={[0, 0, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="completionTokens"
+                    name="Completion"
+                    fill="var(--sera-success)"
+                    stackId="a"
+                    radius={[4, 4, 0, 0]}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -252,13 +332,15 @@ export default function InsightsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
-                      {([
-                        ['agentName', 'Agent'],
-                        ['promptTokens', 'Prompt'],
-                        ['completionTokens', 'Completion'],
-                        ['totalTokens', 'Total'],
-                        ['pctOfTotal', '% of Total'],
-                      ] as [SortKey, string][]).map(([key, label]) => (
+                      {(
+                        [
+                          ['agentName', 'Agent'],
+                          ['promptTokens', 'Prompt'],
+                          ['completionTokens', 'Completion'],
+                          ['totalTokens', 'Total'],
+                          ['pctOfTotal', '% of Total'],
+                        ] as [SortKey, string][]
+                      ).map(([key, label]) => (
                         <th
                           key={key}
                           className="text-left py-3 px-4 cursor-pointer hover:text-sera-text transition-colors select-none"
@@ -274,11 +356,20 @@ export default function InsightsPage() {
                   </thead>
                   <tbody>
                     {sortedAgents.map((a) => (
-                      <tr key={a.agentName} className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors">
+                      <tr
+                        key={a.agentName}
+                        className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                      >
                         <td className="py-3 px-4 text-sera-text font-medium">{a.agentName}</td>
-                        <td className="py-3 px-4 text-sera-text-muted font-mono">{fmtTokens(a.promptTokens)}</td>
-                        <td className="py-3 px-4 text-sera-text-muted font-mono">{fmtTokens(a.completionTokens)}</td>
-                        <td className="py-3 px-4 text-sera-text font-mono font-semibold">{fmtTokens(a.totalTokens)}</td>
+                        <td className="py-3 px-4 text-sera-text-muted font-mono">
+                          {fmtTokens(a.promptTokens)}
+                        </td>
+                        <td className="py-3 px-4 text-sera-text-muted font-mono">
+                          {fmtTokens(a.completionTokens)}
+                        </td>
+                        <td className="py-3 px-4 text-sera-text font-mono font-semibold">
+                          {fmtTokens(a.totalTokens)}
+                        </td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
                             <div className="flex-1 h-1.5 bg-sera-surface-hover rounded-full overflow-hidden">
@@ -287,7 +378,9 @@ export default function InsightsPage() {
                                 style={{ width: `${Math.min(a.pctOfTotal, 100)}%` }}
                               />
                             </div>
-                            <span className="text-xs text-sera-text-muted w-10 text-right">{a.pctOfTotal.toFixed(1)}%</span>
+                            <span className="text-xs text-sera-text-muted w-10 text-right">
+                              {a.pctOfTotal.toFixed(1)}%
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -316,11 +409,20 @@ export default function InsightsPage() {
                   </thead>
                   <tbody>
                     {(data?.byModel ?? []).map((m) => (
-                      <tr key={m.model} className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors">
+                      <tr
+                        key={m.model}
+                        className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                      >
                         <td className="py-3 px-4 text-sera-text font-mono text-xs">{m.model}</td>
-                        <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">{fmtTokens(m.promptTokens)}</td>
-                        <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">{fmtTokens(m.completionTokens)}</td>
-                        <td className="py-3 px-4 text-right text-sera-text font-mono text-xs font-semibold">{fmtTokens(m.totalTokens)}</td>
+                        <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">
+                          {fmtTokens(m.promptTokens)}
+                        </td>
+                        <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">
+                          {fmtTokens(m.completionTokens)}
+                        </td>
+                        <td className="py-3 px-4 text-right text-sera-text font-mono text-xs font-semibold">
+                          {fmtTokens(m.totalTokens)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -334,7 +436,15 @@ export default function InsightsPage() {
   );
 }
 
-function SummaryCard({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
+function SummaryCard({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+}) {
   return (
     <div className="sera-card-static p-4">
       <div className="flex items-center justify-between mb-2">

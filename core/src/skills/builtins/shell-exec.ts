@@ -12,7 +12,12 @@ export const shellExecSkill: SkillDefinition = {
   description: 'Execute a shell command in the workspace directory.',
   source: 'builtin',
   parameters: [
-    { name: 'command', type: 'string', description: 'The shell command to execute', required: true },
+    {
+      name: 'command',
+      type: 'string',
+      description: 'The shell command to execute',
+      required: true,
+    },
   ],
   handler: async (params, context) => {
     if (!TierPolicy.canExec(context.manifest)) {

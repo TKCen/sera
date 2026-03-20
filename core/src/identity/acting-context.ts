@@ -4,34 +4,31 @@
  * audit record in Epic 17.
  */
 
-const DELEGATION_MAX_CHAIN_DEPTH = parseInt(
-  process.env['DELEGATION_MAX_CHAIN_DEPTH'] ?? '5',
-  10,
-);
+const DELEGATION_MAX_CHAIN_DEPTH = parseInt(process.env['DELEGATION_MAX_CHAIN_DEPTH'] ?? '5', 10);
 
 // ── Core types ───────────────────────────────────────────────────────────────
 
 export interface DelegationScope {
-  service: string;           // e.g. 'github', 'google-calendar', '*'
-  permissions: string[];     // e.g. ['repo:read', 'issues:write'] or ['*']
+  service: string; // e.g. 'github', 'google-calendar', '*'
+  permissions: string[]; // e.g. ['repo:read', 'issues:write'] or ['*']
   resourceConstraints?: Record<string, string[]>; // e.g. { repos: ['org/repo'] }
 }
 
 export interface DelegationLink {
   delegatorType: 'operator' | 'agent';
-  delegatorId: string;       // operatorSub or agentId
+  delegatorId: string; // operatorSub or agentId
   delegatorName: string;
   scope: DelegationScope;
   grantType: 'one-time' | 'session' | 'persistent';
-  issuedAt: string;          // ISO 8601
+  issuedAt: string; // ISO 8601
   expiresAt?: string;
 }
 
 export interface ActingContext {
   principal: {
     type: 'operator' | 'agent';
-    id: string;              // operatorSub or agentId
-    name: string;            // email or agentName
+    id: string; // operatorSub or agentId
+    name: string; // email or agentName
     authMethod: 'oidc' | 'api-key' | 'agent-jwt' | 'delegation';
   };
   actor: {
@@ -39,8 +36,8 @@ export interface ActingContext {
     agentName: string;
     instanceId: string;
   };
-  delegationChain: DelegationLink[];  // empty = agent acting as own principal
-  delegationTokenId?: string;         // set when using an active delegation token
+  delegationChain: DelegationLink[]; // empty = agent acting as own principal
+  delegationTokenId?: string; // set when using an active delegation token
 }
 
 // ── Builder ──────────────────────────────────────────────────────────────────
@@ -50,11 +47,7 @@ export class ActingContextBuilder {
    * Autonomous context: agent acting as its own principal with its own service
    * identity. Principal === actor; empty delegation chain.
    */
-  static buildAutonomous(
-    agentId: string,
-    agentName: string,
-    instanceId: string,
-  ): ActingContext {
+  static buildAutonomous(agentId: string, agentName: string, instanceId: string): ActingContext {
     return {
       principal: {
         type: 'agent',
@@ -173,7 +166,7 @@ export class ActingContextBuilder {
    */
   static validateScopeNarrowing(
     parentScope: DelegationScope,
-    narrowedScope: DelegationScope,
+    narrowedScope: DelegationScope
   ): string | null {
     if (parentScope.service !== '*' && narrowedScope.service !== parentScope.service) {
       return `Cannot narrow scope to service "${narrowedScope.service}" — parent scope is "${parentScope.service}"`;

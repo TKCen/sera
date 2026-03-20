@@ -29,12 +29,12 @@ export default function HealthPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">System Health</h1>
-          <p className="text-sm text-sera-text-muted mt-1">
-            Component status refreshes every 30s
-          </p>
+          <p className="text-sm text-sera-text-muted mt-1">Component status refreshes every 30s</p>
         </div>
         <button
-          onClick={() => { void refetch(); }}
+          onClick={() => {
+            void refetch();
+          }}
           className="sera-btn-ghost p-2"
           title="Refresh"
         >
@@ -43,25 +43,35 @@ export default function HealthPage() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-20"><Spinner /></div>
+        <div className="flex items-center justify-center py-20">
+          <Spinner />
+        </div>
       ) : (
         <>
           {/* Overall status */}
-          <div className={`flex items-center gap-3 px-5 py-4 rounded-xl border ${
-            data?.status === 'healthy'
-              ? 'bg-sera-success/10 border-sera-success/30'
-              : data?.status === 'degraded'
-                ? 'bg-sera-warning/10 border-sera-warning/30'
-                : 'bg-sera-error/10 border-sera-error/30'
-          }`}>
-            {data?.status === 'healthy'
-              ? <CheckCircle2 size={20} className="text-sera-success" />
-              : data?.status === 'degraded'
-                ? <AlertTriangle size={20} className="text-sera-warning" />
-                : <XCircle size={20} className="text-sera-error" />}
+          <div
+            className={`flex items-center gap-3 px-5 py-4 rounded-xl border ${
+              data?.status === 'healthy'
+                ? 'bg-sera-success/10 border-sera-success/30'
+                : data?.status === 'degraded'
+                  ? 'bg-sera-warning/10 border-sera-warning/30'
+                  : 'bg-sera-error/10 border-sera-error/30'
+            }`}
+          >
+            {data?.status === 'healthy' ? (
+              <CheckCircle2 size={20} className="text-sera-success" />
+            ) : data?.status === 'degraded' ? (
+              <AlertTriangle size={20} className="text-sera-warning" />
+            ) : (
+              <XCircle size={20} className="text-sera-error" />
+            )}
             <div>
               <p className={`font-semibold ${statusColor(data?.status ?? 'unreachable')}`}>
-                {data?.status === 'healthy' ? 'All systems operational' : data?.status === 'degraded' ? 'Some components degraded' : 'System unhealthy'}
+                {data?.status === 'healthy'
+                  ? 'All systems operational'
+                  : data?.status === 'degraded'
+                    ? 'Some components degraded'
+                    : 'System unhealthy'}
               </p>
               {data?.timestamp && (
                 <p className="text-xs text-sera-text-dim mt-0.5">
@@ -104,12 +114,14 @@ export default function HealthPage() {
                 <h2 className="text-sm font-semibold text-sera-text">Agent Stats</h2>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                {([
-                  ['Total', data.agentStats.total, 'text-sera-text'],
-                  ['Running', data.agentStats.running, 'text-sera-success'],
-                  ['Stopped', data.agentStats.stopped, 'text-sera-text-muted'],
-                  ['Errored', data.agentStats.errored, 'text-sera-error'],
-                ] as [string, number, string][]).map(([label, value, color]) => (
+                {(
+                  [
+                    ['Total', data.agentStats.total, 'text-sera-text'],
+                    ['Running', data.agentStats.running, 'text-sera-success'],
+                    ['Stopped', data.agentStats.stopped, 'text-sera-text-muted'],
+                    ['Errored', data.agentStats.errored, 'text-sera-error'],
+                  ] as [string, number, string][]
+                ).map(([label, value, color]) => (
                   <div key={label} className="text-center">
                     <p className={`text-2xl font-bold ${color}`}>{value}</p>
                     <p className="text-xs text-sera-text-dim mt-1">{label}</p>

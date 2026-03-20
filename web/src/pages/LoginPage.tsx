@@ -3,7 +3,13 @@ import { useState } from 'react';
 import { Navigate } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { CardGlass, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import {
+  CardGlass,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginPage() {

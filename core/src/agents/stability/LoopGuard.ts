@@ -45,12 +45,12 @@ export class LoopGuard {
     if (count >= BLOCK_THRESHOLD) {
       status = 'block';
       logger.warn(
-        `BLOCKED duplicate tool call: "${toolName}" called ${count} times with same args`,
+        `BLOCKED duplicate tool call: "${toolName}" called ${count} times with same args`
       );
     } else if (count >= WARN_THRESHOLD) {
       status = 'warn';
       logger.warn(
-        `WARNING: "${toolName}" called ${count} times with same args (block at ${BLOCK_THRESHOLD})`,
+        `WARNING: "${toolName}" called ${count} times with same args (block at ${BLOCK_THRESHOLD})`
       );
     }
 

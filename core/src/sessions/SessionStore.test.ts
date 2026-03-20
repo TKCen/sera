@@ -67,14 +67,16 @@ describe('SessionStore', () => {
   describe('getSession', () => {
     it('returns session when found', async () => {
       mockQuery.mockResolvedValueOnce({
-        rows: [{
-          id: 'sess-1',
-          agent_name: 'architect-prime',
-          title: 'Test Session',
-          message_count: 5,
-          created_at: '2026-03-17T10:00:00Z',
-          updated_at: '2026-03-17T10:05:00Z',
-        }],
+        rows: [
+          {
+            id: 'sess-1',
+            agent_name: 'architect-prime',
+            title: 'Test Session',
+            message_count: 5,
+            created_at: '2026-03-17T10:00:00Z',
+            updated_at: '2026-03-17T10:05:00Z',
+          },
+        ],
       } as any);
 
       const session = await store.getSession('sess-1');
@@ -97,8 +99,22 @@ describe('SessionStore', () => {
     it('lists all sessions without filter', async () => {
       mockQuery.mockResolvedValueOnce({
         rows: [
-          { id: 's1', agent_name: 'a', title: 'T1', message_count: 2, created_at: '2026-03-17T10:00:00Z', updated_at: '2026-03-17T10:05:00Z' },
-          { id: 's2', agent_name: 'b', title: 'T2', message_count: 0, created_at: '2026-03-17T09:00:00Z', updated_at: '2026-03-17T09:00:00Z' },
+          {
+            id: 's1',
+            agent_name: 'a',
+            title: 'T1',
+            message_count: 2,
+            created_at: '2026-03-17T10:00:00Z',
+            updated_at: '2026-03-17T10:05:00Z',
+          },
+          {
+            id: 's2',
+            agent_name: 'b',
+            title: 'T2',
+            message_count: 0,
+            created_at: '2026-03-17T09:00:00Z',
+            updated_at: '2026-03-17T09:00:00Z',
+          },
         ],
       } as any);
 
@@ -145,8 +161,22 @@ describe('SessionStore', () => {
     it('returns messages in order', async () => {
       mockQuery.mockResolvedValueOnce({
         rows: [
-          { id: 'm1', session_id: 's1', role: 'user', content: 'Hi', metadata: null, created_at: '2026-03-17T10:00:00Z' },
-          { id: 'm2', session_id: 's1', role: 'assistant', content: 'Hello!', metadata: null, created_at: '2026-03-17T10:00:01Z' },
+          {
+            id: 'm1',
+            session_id: 's1',
+            role: 'user',
+            content: 'Hi',
+            metadata: null,
+            created_at: '2026-03-17T10:00:00Z',
+          },
+          {
+            id: 'm2',
+            session_id: 's1',
+            role: 'assistant',
+            content: 'Hello!',
+            metadata: null,
+            created_at: '2026-03-17T10:00:01Z',
+          },
         ],
       } as any);
 
@@ -161,7 +191,16 @@ describe('SessionStore', () => {
     it('returns true when session deleted', async () => {
       // getSession query
       mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 's1', agent_name: 'a', title: 'T', message_count: 0, created_at: '2026-03-17T10:00:00Z', updated_at: '2026-03-17T10:00:00Z' }],
+        rows: [
+          {
+            id: 's1',
+            agent_name: 'a',
+            title: 'T',
+            message_count: 0,
+            created_at: '2026-03-17T10:00:00Z',
+            updated_at: '2026-03-17T10:00:00Z',
+          },
+        ],
       } as any);
       // DELETE query
       mockQuery.mockResolvedValueOnce({ rowCount: 1 } as any);
@@ -184,7 +223,16 @@ describe('SessionStore', () => {
   describe('updateSessionTitle', () => {
     it('updates and returns the session', async () => {
       mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 's1', agent_name: 'a', title: 'New Title', message_count: 3, created_at: '2026-03-17T10:00:00Z', updated_at: '2026-03-17T10:05:00Z' }],
+        rows: [
+          {
+            id: 's1',
+            agent_name: 'a',
+            title: 'New Title',
+            message_count: 3,
+            created_at: '2026-03-17T10:00:00Z',
+            updated_at: '2026-03-17T10:05:00Z',
+          },
+        ],
       } as any);
 
       const session = await store.updateSessionTitle('s1', 'New Title');

@@ -22,7 +22,8 @@ const MAX_TOP_K = 30;
 export function createKnowledgeQuerySkill(): SkillDefinition {
   return {
     id: 'knowledge-query',
-    description: 'Search memory across personal, circle, and global scopes using semantic similarity.',
+    description:
+      'Search memory across personal, circle, and global scopes using semantic similarity.',
     source: 'builtin',
     parameters: [
       { name: 'query', type: 'string', description: 'Search query', required: true },
@@ -32,7 +33,12 @@ export function createKnowledgeQuerySkill(): SkillDefinition {
         description: "Scopes to search: ['personal', 'circle', 'global'] (default: all accessible)",
         required: false,
       },
-      { name: 'topK', type: 'number', description: `Max results (default ${DEFAULT_TOP_K}, max ${MAX_TOP_K})`, required: false },
+      {
+        name: 'topK',
+        type: 'number',
+        description: `Max results (default ${DEFAULT_TOP_K}, max ${MAX_TOP_K})`,
+        required: false,
+      },
       {
         name: 'filter',
         type: 'object',
@@ -53,13 +59,13 @@ export function createKnowledgeQuerySkill(): SkillDefinition {
       const agentId = context.agentInstanceId ?? context.agentName;
       const topK = Math.min(
         typeof params['topK'] === 'number' ? Math.max(1, params['topK']) : DEFAULT_TOP_K,
-        MAX_TOP_K,
+        MAX_TOP_K
       );
 
       // Build requested scopes
       const requestedScopes: MemoryScope[] = Array.isArray(params['scopes'])
         ? (params['scopes'] as string[]).filter((s): s is MemoryScope =>
-            ['personal', 'circle', 'global'].includes(s),
+            ['personal', 'circle', 'global'].includes(s)
           )
         : ['personal', 'circle', 'global'];
 
@@ -113,7 +119,10 @@ export function createKnowledgeQuerySkill(): SkillDefinition {
       try {
         queryVector = await embeddingService.embed(queryText);
       } catch (err) {
-        return { success: false, error: `Embedding failed: ${err instanceof Error ? err.message : String(err)}` };
+        return {
+          success: false,
+          error: `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
       }
 
       const rawResults = await vectorService.search(namespaces, queryVector, topK, filter);
@@ -122,7 +131,7 @@ export function createKnowledgeQuerySkill(): SkillDefinition {
         logger.warn(`knowledge-query: latency ${elapsed}ms exceeds 300ms target`);
       }
 
-      const results = rawResults.map(r => ({
+      const results = rawResults.map((r) => ({
         id: String(r.id),
         type: r.payload.type ?? '',
         content: r.payload.content ?? '',

@@ -46,7 +46,10 @@ export class WhatsAppAdapter extends ChannelAdapter {
 
     if (this.isRateLimited(incoming.userId)) {
       this.logger.warn(`Rate limit exceeded for user ${incoming.userId}`);
-      await this.sendMessage(incoming.chatId, '⚠️ You are sending messages too fast. Please slow down.');
+      await this.sendMessage(
+        incoming.chatId,
+        '⚠️ You are sending messages too fast. Please slow down.'
+      );
       return;
     }
 
@@ -68,16 +71,20 @@ export class WhatsAppAdapter extends ChannelAdapter {
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     try {
-      await axios.post(`https://graph.facebook.com/v17.0/${this.phoneNumberId}/messages`, {
-        messaging_product: 'whatsapp',
-        to: chatId,
-        text: { body: text },
-      }, {
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
+      await axios.post(
+        `https://graph.facebook.com/v17.0/${this.phoneNumberId}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          to: chatId,
+          text: { body: text },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            'Content-Type': 'application/json',
+          },
         }
-      });
+      );
     } catch (err: any) {
       this.logger.error(`Failed to send WhatsApp message to ${chatId}:`, err.message);
     }

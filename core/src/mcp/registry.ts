@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import chokidar from 'chokidar';
-import { MCPClient, type MCPClientOptions } from "./client.js";
+import { MCPClient, type MCPClientOptions } from './client.js';
 import { Logger } from '../lib/logger.js';
-import type { MCPServerManager, MCPServerManifest } from "./MCPServerManager.js";
-import type { IntercomService } from "../intercom/IntercomService.js";
+import type { MCPServerManager, MCPServerManifest } from './MCPServerManager.js';
+import type { IntercomService } from '../intercom/IntercomService.js';
 
 const logger = new Logger('MCPRegistry');
 
@@ -17,7 +17,10 @@ export interface MCPServerInfo {
 
 export class MCPRegistry {
   private static instance: MCPRegistry;
-  private clients: Map<string, { client: MCPClient, instanceId?: string, manifest?: MCPServerManifest }> = new Map();
+  private clients: Map<
+    string,
+    { client: MCPClient; instanceId?: string; manifest?: MCPServerManifest }
+  > = new Map();
   private manager?: MCPServerManager;
   private intercom?: IntercomService;
   private watcher?: chokidar.FSWatcher;
@@ -71,7 +74,7 @@ export class MCPRegistry {
   async registerContainerServer(manifest: MCPServerManifest) {
     if (!this.manager) throw new Error('MCPServerManager not initialized in registry');
     const name = manifest.metadata.name;
-    
+
     // If already registered, unregister first (hot-reload)
     if (this.clients.has(name)) {
       await this.unregisterClient(name);
@@ -131,18 +134,22 @@ export class MCPRegistry {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     this.watcher = chokidar.watch(dir, { ignoreInitial: true });
-    
+
     this.watcher.on('add', async (filePath) => {
       if (filePath.match(/\.mcp\.(yaml|yml|json)$/)) {
         logger.info(`Detected new MCP manifest: ${path.basename(filePath)}`);
-        await this.loadManifest(filePath).catch(err => logger.error(`Failed to load ${filePath}:`, err));
+        await this.loadManifest(filePath).catch((err) =>
+          logger.error(`Failed to load ${filePath}:`, err)
+        );
       }
     });
 
     this.watcher.on('change', async (filePath) => {
       if (filePath.match(/\.mcp\.(yaml|yml|json)$/)) {
         logger.info(`Detected MCP manifest change: ${path.basename(filePath)}`);
-        await this.loadManifest(filePath).catch(err => logger.error(`Failed to reload ${filePath}:`, err));
+        await this.loadManifest(filePath).catch((err) =>
+          logger.error(`Failed to reload ${filePath}:`, err)
+        );
       }
     });
 
@@ -159,20 +166,22 @@ export class MCPRegistry {
 
   private async loadManifest(filePath: string) {
     const content = fs.readFileSync(filePath, 'utf8');
-    const manifest = filePath.endsWith('.json') 
-      ? JSON.parse(content) 
-      : yaml.load(content) as MCPServerManifest;
-    
+    const manifest = filePath.endsWith('.json')
+      ? JSON.parse(content)
+      : (yaml.load(content) as MCPServerManifest);
+
     await this.registerContainerServer(manifest);
   }
 
   private broadcast(action: string, serverName: string) {
     if (this.intercom) {
-      this.intercom.publishSystem('mcp_registry_update', {
-        action,
-        serverName,
-        timestamp: new Date().toISOString()
-      }).catch((err: any) => logger.warn('Failed to broadcast MCP update:', err));
+      this.intercom
+        .publishSystem('mcp_registry_update', {
+          action,
+          serverName,
+          timestamp: new Date().toISOString(),
+        })
+        .catch((err: any) => logger.warn('Failed to broadcast MCP update:', err));
     }
   }
 
@@ -217,7 +226,7 @@ export class MCPRegistry {
         const tools = await entry.client.listTools();
         allTools.push({
           serverName: name,
-          tools: tools.tools
+          tools: tools.tools,
         });
       } catch (err) {
         logger.error(`Failed to list tools for server "${name}":`, err);
@@ -231,7 +240,7 @@ export class MCPRegistry {
    */
   public async registerSeraCoreTools(seraMcp: any): Promise<void> {
     const name = 'sera-core';
-    
+
     // Create a shim that matches the MCPClient interface.
     // Since this is in-process, we bypass the real transport-based MCPClient
     // and call the server instance (or its wrapper) directly.
@@ -240,22 +249,22 @@ export class MCPRegistry {
         return {
           tools: [
             {
-              name: "list_agents",
-              description: "List all active agents and their status.",
-              inputSchema: { type: "object", properties: {} },
+              name: 'list_agents',
+              description: 'List all active agents and their status.',
+              inputSchema: { type: 'object', properties: {} },
             },
             {
-              name: "restart_agent",
-              description: "Restart a specific agent by ID.",
+              name: 'restart_agent',
+              description: 'Restart a specific agent by ID.',
               inputSchema: {
-                type: "object",
+                type: 'object',
                 properties: {
-                  agentId: { type: "string" },
+                  agentId: { type: 'string' },
                 },
-                required: ["agentId"],
+                required: ['agentId'],
               },
             },
-          ]
+          ],
         };
       },
       callTool: async (toolName: string, args: any) => {

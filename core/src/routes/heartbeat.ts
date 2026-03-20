@@ -22,7 +22,7 @@ const logger = new Logger('Heartbeat');
 export function createHeartbeatRouter(
   orchestrator: Orchestrator,
   identityService: IdentityService,
-  authService: AuthService,
+  authService: AuthService
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(identityService, authService);

@@ -13,7 +13,12 @@ export const webSearchSkill: SkillDefinition = {
   source: 'builtin',
   parameters: [
     { name: 'query', type: 'string', description: 'The search query', required: true },
-    { name: 'limit', type: 'number', description: 'Max number of results to return (default 5)', required: false },
+    {
+      name: 'limit',
+      type: 'number',
+      description: 'Max number of results to return (default 5)',
+      required: false,
+    },
   ],
   handler: async (params, _context) => {
     const query = params['query'];
@@ -23,7 +28,10 @@ export const webSearchSkill: SkillDefinition = {
 
     // Prevent direct URL or IP address queries to mitigate SSRF
     if (/^(https?:\/\/|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/i.test(query)) {
-      return { success: false, error: 'Direct URLs and IP addresses are not allowed in search queries' };
+      return {
+        success: false,
+        error: 'Direct URLs and IP addresses are not allowed in search queries',
+      };
     }
 
     const limit = typeof params['limit'] === 'number' ? Math.min(params['limit'], 20) : 5;
@@ -39,7 +47,7 @@ export const webSearchSkill: SkillDefinition = {
         headers: {
           // DDG blocks requests without a user-agent
           'User-Agent': 'Mozilla/5.0 (compatible; SERA-Agent/1.0)',
-          'Accept': 'text/html,application/xhtml+xml,*/*',
+          Accept: 'text/html,application/xhtml+xml,*/*',
           'Accept-Language': 'en-US,en;q=0.9',
         },
         responseType: 'text',

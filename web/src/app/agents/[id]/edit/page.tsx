@@ -32,7 +32,9 @@ interface AgentManifest {
   };
   tools?: { allowed?: string[]; denied?: string[] };
   skills?: string[];
-  subagents?: { allowed?: Array<{ role: string; maxInstances?: number; requiresApproval?: boolean }> };
+  subagents?: {
+    allowed?: Array<{ role: string; maxInstances?: number; requiresApproval?: boolean }>;
+  };
   intercom?: {
     canMessage?: string[];
     channels?: { publish?: string[]; subscribe?: string[] };
@@ -55,12 +57,12 @@ export default function AgentEditPage() {
   const [rawYaml, setRawYaml] = useState<string>('');
 
   const [manifest, setManifest] = useState<AgentManifest | null>(null);
-  const [availableSkills, setAvailableSkills] = useState<{ id: string, name: string }[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<{ id: string; name: string }[]>([]);
 
   const handleManifestChange = (path: string[], value: unknown) => {
     if (!manifest) return;
 
-    setManifest(prev => {
+    setManifest((prev) => {
       if (!prev) return prev;
 
       // Deep clone the object to ensure immutability before modifying
@@ -150,14 +152,14 @@ export default function AgentEditPage() {
   const toggleTool = (toolId: string, listType: 'allowed' | 'denied') => {
     const currentList = manifest?.tools?.[listType] || [];
     const newList = currentList.includes(toolId)
-      ? currentList.filter(t => t !== toolId)
+      ? currentList.filter((t) => t !== toolId)
       : [...currentList, toolId];
 
     // If adding to one list, remove from the other to prevent conflicts
     const otherListType = listType === 'allowed' ? 'denied' : 'allowed';
     let otherList = manifest?.tools?.[otherListType] || [];
     if (newList.includes(toolId) && otherList.includes(toolId)) {
-      otherList = otherList.filter(t => t !== toolId);
+      otherList = otherList.filter((t) => t !== toolId);
       handleManifestChange(['tools', otherListType], otherList);
     }
 
@@ -166,15 +168,14 @@ export default function AgentEditPage() {
 
   // Fetch the agent manifest
   useEffect(() => {
-    Promise.all([
-      fetch(`/api/core/agents/${agentName}`),
-      fetch(`/api/core/skills`)
-    ])
+    Promise.all([fetch(`/api/core/agents/${agentName}`), fetch(`/api/core/skills`)])
       .then(async ([agentRes, skillsRes]) => {
         if (!agentRes.ok) throw new Error(`Agent not found`);
         const agentData = await agentRes.json();
         setManifest(agentData.manifest);
-        setRawYaml(yaml.dump(agentData.manifest, { lineWidth: 120, noRefs: true, sortKeys: false }));
+        setRawYaml(
+          yaml.dump(agentData.manifest, { lineWidth: 120, noRefs: true, sortKeys: false })
+        );
 
         if (skillsRes.ok) {
           const skillsData = await skillsRes.json();
@@ -231,7 +232,6 @@ export default function AgentEditPage() {
 
       setSuccess('Manifest saved successfully.');
       setTimeout(() => setSuccess(null), 3000);
-
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -271,7 +271,10 @@ export default function AgentEditPage() {
   if (error && !manifest && !rawMode) {
     return (
       <div className="p-8 max-w-5xl mx-auto">
-        <Link href={`/agents/${agentName}`} className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+        <Link
+          href={`/agents/${agentName}`}
+          className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4"
+        >
           <ArrowLeft size={14} /> Back to Agent
         </Link>
         <div className="sera-card-static p-6 text-center">
@@ -284,7 +287,10 @@ export default function AgentEditPage() {
   return (
     <div className="p-8 max-w-5xl mx-auto">
       {/* Breadcrumb */}
-      <Link href={`/agents/${agentName}`} className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+      <Link
+        href={`/agents/${agentName}`}
+        className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4"
+      >
         <ArrowLeft size={14} /> Back to Agent
       </Link>
 
@@ -292,24 +298,25 @@ export default function AgentEditPage() {
       <div className="flex items-start justify-between mb-8">
         <div>
           <h1 className="sera-page-title">Edit {manifest?.metadata?.displayName || agentName}</h1>
-          <p className="text-sm text-sera-text-muted mt-0.5">Modify the manifest configuration for this agent.</p>
+          <p className="text-sm text-sera-text-muted mt-0.5">
+            Modify the manifest configuration for this agent.
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={toggleRawMode}
-            className="sera-btn-ghost"
-            type="button"
-          >
-            {rawMode ? <><LayoutDashboard size={16} /> Visual Editor</> : <><Code size={16} /> Raw YAML</>}
+          <button onClick={toggleRawMode} className="sera-btn-ghost" type="button">
+            {rawMode ? (
+              <>
+                <LayoutDashboard size={16} /> Visual Editor
+              </>
+            ) : (
+              <>
+                <Code size={16} /> Raw YAML
+              </>
+            )}
           </button>
 
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="sera-btn-primary"
-            type="button"
-          >
+          <button onClick={handleSave} disabled={saving} className="sera-btn-primary" type="button">
             <Save size={16} />
             {saving ? 'Saving...' : 'Save Manifest'}
           </button>
@@ -341,13 +348,16 @@ export default function AgentEditPage() {
           </div>
         ) : (
           <div className="space-y-8">
-
             {/* Identity Section */}
             <div className="border border-sera-border rounded-xl p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">Identity</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">
+                Identity
+              </h3>
               <div className="grid grid-cols-1 gap-4">
                 <div>
-                  <label className="block text-xs text-sera-text-muted mb-1.5">Role <span className="text-sera-error">*</span></label>
+                  <label className="block text-xs text-sera-text-muted mb-1.5">
+                    Role <span className="text-sera-error">*</span>
+                  </label>
                   <input
                     type="text"
                     className="sera-input"
@@ -361,21 +371,31 @@ export default function AgentEditPage() {
                   <textarea
                     className="sera-input min-h-[80px]"
                     value={manifest?.identity?.description || ''}
-                    onChange={(e) => handleManifestChange(['identity', 'description'], e.target.value)}
+                    onChange={(e) =>
+                      handleManifestChange(['identity', 'description'], e.target.value)
+                    }
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-sera-text-muted mb-1.5">Communication Style</label>
+                  <label className="block text-xs text-sera-text-muted mb-1.5">
+                    Communication Style
+                  </label>
                   <textarea
                     className="sera-input min-h-[80px]"
                     value={manifest?.identity?.communicationStyle || ''}
-                    onChange={(e) => handleManifestChange(['identity', 'communicationStyle'], e.target.value)}
+                    onChange={(e) =>
+                      handleManifestChange(['identity', 'communicationStyle'], e.target.value)
+                    }
                   />
                 </div>
                 <div>
                   <label className="block text-xs text-sera-text-muted mb-1.5 flex justify-between items-center">
                     <span>Principles</span>
-                    <button type="button" onClick={addPrinciple} className="text-sera-accent hover:text-white transition-colors text-[10px] uppercase tracking-wider px-2 py-1 bg-sera-accent/10 rounded">
+                    <button
+                      type="button"
+                      onClick={addPrinciple}
+                      className="text-sera-accent hover:text-white transition-colors text-[10px] uppercase tracking-wider px-2 py-1 bg-sera-accent/10 rounded"
+                    >
                       + Add Principle
                     </button>
                   </label>
@@ -388,13 +408,20 @@ export default function AgentEditPage() {
                           value={principle}
                           onChange={(e) => updatePrinciples(idx, e.target.value)}
                         />
-                        <button type="button" onClick={() => removePrinciple(idx)} className="text-sera-error hover:bg-sera-error/10 px-3 rounded-lg border border-sera-border">
+                        <button
+                          type="button"
+                          onClick={() => removePrinciple(idx)}
+                          className="text-sera-error hover:bg-sera-error/10 px-3 rounded-lg border border-sera-border"
+                        >
                           ✕
                         </button>
                       </div>
                     ))}
-                    {(!manifest?.identity?.principles || manifest.identity.principles.length === 0) && (
-                      <div className="text-xs text-sera-text-dim italic">No principles defined.</div>
+                    {(!manifest?.identity?.principles ||
+                      manifest.identity.principles.length === 0) && (
+                      <div className="text-xs text-sera-text-dim italic">
+                        No principles defined.
+                      </div>
                     )}
                   </div>
                 </div>
@@ -403,10 +430,14 @@ export default function AgentEditPage() {
 
             {/* Model Section */}
             <div className="border border-sera-border rounded-xl p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">Model</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">
+                Model
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs text-sera-text-muted mb-1.5">Provider <span className="text-sera-error">*</span></label>
+                  <label className="block text-xs text-sera-text-muted mb-1.5">
+                    Provider <span className="text-sera-error">*</span>
+                  </label>
                   <select
                     className="sera-input"
                     value={manifest?.model?.provider || ''}
@@ -421,7 +452,9 @@ export default function AgentEditPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-sera-text-muted mb-1.5">Model Name <span className="text-sera-error">*</span></label>
+                  <label className="block text-xs text-sera-text-muted mb-1.5">
+                    Model Name <span className="text-sera-error">*</span>
+                  </label>
                   <input
                     type="text"
                     className="sera-input"
@@ -440,13 +473,19 @@ export default function AgentEditPage() {
                       step="0.1"
                       className="flex-grow accent-sera-accent"
                       value={manifest?.model?.temperature ?? 0.7}
-                      onChange={(e) => handleManifestChange(['model', 'temperature'], parseFloat(e.target.value))}
+                      onChange={(e) =>
+                        handleManifestChange(['model', 'temperature'], parseFloat(e.target.value))
+                      }
                     />
-                    <span className="w-10 text-right text-sm text-sera-text-dim font-mono">{manifest?.model?.temperature ?? 0.7}</span>
+                    <span className="w-10 text-right text-sm text-sera-text-dim font-mono">
+                      {manifest?.model?.temperature ?? 0.7}
+                    </span>
                   </div>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-xs text-sera-text-muted mb-1.5">Fallback Models</label>
+                  <label className="block text-xs text-sera-text-muted mb-1.5">
+                    Fallback Models
+                  </label>
                   <div className="space-y-2 border border-sera-border/50 rounded-lg p-3 bg-sera-bg/50">
                     {manifest?.model?.fallback?.map((fb, idx) => (
                       <div key={idx} className="flex flex-wrap gap-2 items-center">
@@ -479,7 +518,10 @@ export default function AgentEditPage() {
                           value={fb.maxComplexity || ''}
                           onChange={(e) => {
                             const newFallback = [...(manifest.model.fallback || [])];
-                            newFallback[idx] = { ...newFallback[idx], maxComplexity: parseInt(e.target.value) || undefined };
+                            newFallback[idx] = {
+                              ...newFallback[idx],
+                              maxComplexity: parseInt(e.target.value) || undefined,
+                            };
                             handleManifestChange(['model', 'fallback'], newFallback);
                           }}
                         />
@@ -487,7 +529,9 @@ export default function AgentEditPage() {
                           type="button"
                           className="text-sera-error hover:bg-sera-error/10 px-2 py-1 rounded-md border border-sera-border text-xs"
                           onClick={() => {
-                            const newFallback = manifest.model.fallback?.filter((_, i) => i !== idx);
+                            const newFallback = manifest.model.fallback?.filter(
+                              (_, i) => i !== idx
+                            );
                             handleManifestChange(['model', 'fallback'], newFallback);
                           }}
                         >
@@ -499,7 +543,10 @@ export default function AgentEditPage() {
                       type="button"
                       onClick={() => {
                         const fallbacks = manifest?.model?.fallback || [];
-                        handleManifestChange(['model', 'fallback'], [...fallbacks, { provider: '', name: '' }]);
+                        handleManifestChange(
+                          ['model', 'fallback'],
+                          [...fallbacks, { provider: '', name: '' }]
+                        );
                       }}
                       className="text-sera-accent hover:text-white transition-colors text-[10px] uppercase tracking-wider px-2 py-1 bg-sera-accent/10 rounded mt-1"
                     >
@@ -512,13 +559,20 @@ export default function AgentEditPage() {
 
             {/* Tools Section */}
             <div className="border border-sera-border rounded-xl p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">Tools</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">
+                Tools
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-xs font-medium text-sera-text mb-3">Allowed Tools</label>
+                  <label className="block text-xs font-medium text-sera-text mb-3">
+                    Allowed Tools
+                  </label>
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
                     {availableSkills.map((skill) => (
-                      <label key={`allowed-${skill.id}`} className="flex items-start gap-2 cursor-pointer group">
+                      <label
+                        key={`allowed-${skill.id}`}
+                        className="flex items-start gap-2 cursor-pointer group"
+                      >
                         <input
                           type="checkbox"
                           className="mt-1 accent-sera-accent rounded border-sera-border bg-sera-bg"
@@ -526,19 +580,30 @@ export default function AgentEditPage() {
                           onChange={() => toggleTool(skill.id, 'allowed')}
                         />
                         <div>
-                          <span className="text-sm text-sera-text group-hover:text-sera-accent transition-colors">{skill.id}</span>
-                          {skill.name && <p className="text-[10px] text-sera-text-dim">{skill.name}</p>}
+                          <span className="text-sm text-sera-text group-hover:text-sera-accent transition-colors">
+                            {skill.id}
+                          </span>
+                          {skill.name && (
+                            <p className="text-[10px] text-sera-text-dim">{skill.name}</p>
+                          )}
                         </div>
                       </label>
                     ))}
-                    {availableSkills.length === 0 && <span className="text-xs text-sera-text-dim italic">No tools available</span>}
+                    {availableSkills.length === 0 && (
+                      <span className="text-xs text-sera-text-dim italic">No tools available</span>
+                    )}
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-sera-text mb-3">Denied Tools</label>
+                  <label className="block text-xs font-medium text-sera-text mb-3">
+                    Denied Tools
+                  </label>
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
                     {availableSkills.map((skill) => (
-                      <label key={`denied-${skill.id}`} className="flex items-start gap-2 cursor-pointer group">
+                      <label
+                        key={`denied-${skill.id}`}
+                        className="flex items-start gap-2 cursor-pointer group"
+                      >
                         <input
                           type="checkbox"
                           className="mt-1 accent-sera-error rounded border-sera-border bg-sera-bg"
@@ -546,12 +611,18 @@ export default function AgentEditPage() {
                           onChange={() => toggleTool(skill.id, 'denied')}
                         />
                         <div>
-                          <span className="text-sm text-sera-text group-hover:text-sera-error transition-colors">{skill.id}</span>
-                          {skill.name && <p className="text-[10px] text-sera-text-dim">{skill.name}</p>}
+                          <span className="text-sm text-sera-text group-hover:text-sera-error transition-colors">
+                            {skill.id}
+                          </span>
+                          {skill.name && (
+                            <p className="text-[10px] text-sera-text-dim">{skill.name}</p>
+                          )}
                         </div>
                       </label>
                     ))}
-                    {availableSkills.length === 0 && <span className="text-xs text-sera-text-dim italic">No tools available</span>}
+                    {availableSkills.length === 0 && (
+                      <span className="text-xs text-sera-text-dim italic">No tools available</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -565,7 +636,10 @@ export default function AgentEditPage() {
                   type="button"
                   onClick={() => {
                     const subagents = manifest?.subagents?.allowed || [];
-                    handleManifestChange(['subagents', 'allowed'], [...subagents, { role: '', maxInstances: 1 }]);
+                    handleManifestChange(
+                      ['subagents', 'allowed'],
+                      [...subagents, { role: '', maxInstances: 1 }]
+                    );
                   }}
                   className="text-sera-accent hover:text-white transition-colors text-[10px] uppercase tracking-wider px-2 py-1 bg-sera-accent/10 rounded"
                 >
@@ -574,9 +648,14 @@ export default function AgentEditPage() {
               </h3>
               <div className="space-y-3">
                 {manifest?.subagents?.allowed?.map((subagent, idx) => (
-                  <div key={idx} className="flex flex-wrap gap-4 items-center bg-sera-bg/50 p-3 rounded-lg border border-sera-border/50">
+                  <div
+                    key={idx}
+                    className="flex flex-wrap gap-4 items-center bg-sera-bg/50 p-3 rounded-lg border border-sera-border/50"
+                  >
                     <div className="flex-1 min-w-[200px]">
-                      <label className="block text-[10px] text-sera-text-muted mb-1 uppercase tracking-wide">Role <span className="text-sera-error">*</span></label>
+                      <label className="block text-[10px] text-sera-text-muted mb-1 uppercase tracking-wide">
+                        Role <span className="text-sera-error">*</span>
+                      </label>
                       <input
                         type="text"
                         className="sera-input"
@@ -591,7 +670,9 @@ export default function AgentEditPage() {
                       />
                     </div>
                     <div className="w-24">
-                      <label className="block text-[10px] text-sera-text-muted mb-1 uppercase tracking-wide">Max Instances</label>
+                      <label className="block text-[10px] text-sera-text-muted mb-1 uppercase tracking-wide">
+                        Max Instances
+                      </label>
                       <input
                         type="number"
                         min="1"
@@ -599,7 +680,10 @@ export default function AgentEditPage() {
                         value={subagent.maxInstances || ''}
                         onChange={(e) => {
                           const newSubagents = [...(manifest.subagents?.allowed || [])];
-                          newSubagents[idx] = { ...newSubagents[idx], maxInstances: parseInt(e.target.value) || undefined };
+                          newSubagents[idx] = {
+                            ...newSubagents[idx],
+                            maxInstances: parseInt(e.target.value) || undefined,
+                          };
                           handleManifestChange(['subagents', 'allowed'], newSubagents);
                         }}
                       />
@@ -612,7 +696,10 @@ export default function AgentEditPage() {
                           checked={subagent.requiresApproval || false}
                           onChange={(e) => {
                             const newSubagents = [...(manifest.subagents?.allowed || [])];
-                            newSubagents[idx] = { ...newSubagents[idx], requiresApproval: e.target.checked };
+                            newSubagents[idx] = {
+                              ...newSubagents[idx],
+                              requiresApproval: e.target.checked,
+                            };
                             handleManifestChange(['subagents', 'allowed'], newSubagents);
                           }}
                         />
@@ -623,7 +710,9 @@ export default function AgentEditPage() {
                       type="button"
                       className="text-sera-error hover:bg-sera-error/10 p-2 rounded-md border border-sera-border mt-4"
                       onClick={() => {
-                        const newSubagents = manifest.subagents?.allowed?.filter((_, i) => i !== idx);
+                        const newSubagents = manifest.subagents?.allowed?.filter(
+                          (_, i) => i !== idx
+                        );
                         handleManifestChange(['subagents', 'allowed'], newSubagents);
                       }}
                     >
@@ -641,14 +730,20 @@ export default function AgentEditPage() {
 
             {/* Resources Section */}
             <div className="border border-sera-border rounded-xl p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">Resources & Security</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4 border-b border-sera-border pb-2">
+                Resources & Security
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
-                  <label className="block text-xs text-sera-text-muted mb-1.5">Security Tier <span className="text-sera-error">*</span></label>
+                  <label className="block text-xs text-sera-text-muted mb-1.5">
+                    Security Tier <span className="text-sera-error">*</span>
+                  </label>
                   <select
                     className="sera-input"
                     value={manifest?.metadata?.tier || 1}
-                    onChange={(e) => handleManifestChange(['metadata', 'tier'], parseInt(e.target.value))}
+                    onChange={(e) =>
+                      handleManifestChange(['metadata', 'tier'], parseInt(e.target.value))
+                    }
                     required
                   >
                     <option value={1}>Tier 1 (Restricted)</option>
@@ -678,7 +773,6 @@ export default function AgentEditPage() {
                 </div>
               </div>
             </div>
-
           </div>
         )}
       </div>

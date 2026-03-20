@@ -28,9 +28,9 @@ export class WebhooksService {
    * Story 9.8: Timing-safe, timestamp range, and nonce check.
    */
   verifySignature(
-    secret: string, 
-    body: string, 
-    signature: string, 
+    secret: string,
+    body: string,
+    signature: string,
     timestamp: string,
     nonce?: string
   ): boolean {
@@ -59,10 +59,7 @@ export class WebhooksService {
 
     // Use timing-safe comparison
     try {
-      return crypto.timingSafeEqual(
-        Buffer.from(signature, 'hex'), 
-        Buffer.from(expected, 'hex')
-      );
+      return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
     } catch {
       return false;
     }
@@ -72,13 +69,15 @@ export class WebhooksService {
    * Process an incoming webhook trigger.
    */
   async handleIncoming(
-    slug: string, 
-    rawBody: string, 
-    signature: string, 
+    slug: string,
+    rawBody: string,
+    signature: string,
     timestamp: string,
     nonce?: string
   ): Promise<void> {
-    const res = await pool.query('SELECT * FROM webhooks WHERE url_path = $1 AND enabled = true', [slug]);
+    const res = await pool.query('SELECT * FROM webhooks WHERE url_path = $1 AND enabled = true', [
+      slug,
+    ]);
     const webhook = res.rows[0];
 
     if (!webhook) {
@@ -104,10 +103,10 @@ export class WebhooksService {
     const publishAndLog = async () => {
       try {
         // Publish the wrapped payload as content
-        await this.intercom.publishSystemEvent(webhook.event_type, { 
+        await this.intercom.publishSystemEvent(webhook.event_type, {
           raw: rawBody,
           wrapped: wrappedPayload,
-          data: payload 
+          data: payload,
         });
 
         await pool.query(
@@ -130,7 +129,12 @@ export class WebhooksService {
   /**
    * Create a new webhook registration.
    */
-  async createWebhook(name: string, urlPath: string, secret: string, eventType: string): Promise<any> {
+  async createWebhook(
+    name: string,
+    urlPath: string,
+    secret: string,
+    eventType: string
+  ): Promise<any> {
     const res = await pool.query(
       'INSERT INTO webhooks (name, url_path, secret, event_type) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, urlPath, secret, eventType]
@@ -142,7 +146,9 @@ export class WebhooksService {
    * List all webhooks.
    */
   async listWebhooks(): Promise<any[]> {
-    const res = await pool.query('SELECT id, name, url_path, event_type, enabled, created_at FROM webhooks ORDER BY created_at DESC');
+    const res = await pool.query(
+      'SELECT id, name, url_path, event_type, enabled, created_at FROM webhooks ORDER BY created_at DESC'
+    );
     return res.rows;
   }
 }

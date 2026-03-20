@@ -7,10 +7,7 @@ const logger = new Logger('VectorService');
 
 // ── Namespace helpers ──────────────────────────────────────────────────────────
 
-export type MemoryNamespace =
-  | `personal:${string}`
-  | `circle:${string}`
-  | 'global';
+export type MemoryNamespace = `personal:${string}` | `circle:${string}` | 'global';
 
 export function collectionName(namespace: MemoryNamespace): string {
   if (namespace === 'global') return 'memory_global';
@@ -79,12 +76,12 @@ export class VectorService {
   private async ensureCollectionByName(
     name: string,
     vectorSize = EMBEDDING_VECTOR_SIZE,
-    attempt = 0,
+    attempt = 0
   ): Promise<void> {
     const maxAttempts = 5;
     try {
       const collections = await this.client.getCollections();
-      if (collections.collections.some(c => c.name === name)) return;
+      if (collections.collections.some((c) => c.name === name)) return;
       await this.client.createCollection(name, {
         vectors: { size: vectorSize, distance: 'Cosine' },
       });
@@ -96,7 +93,7 @@ export class VectorService {
       }
       const delay = Math.min(1000 * 2 ** attempt, 16_000);
       logger.warn(`Qdrant connection attempt ${attempt + 1} failed, retrying in ${delay}ms`);
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise((r) => setTimeout(r, delay));
       return this.ensureCollectionByName(name, vectorSize, attempt + 1);
     }
   }
@@ -107,7 +104,7 @@ export class VectorService {
     blockId: string,
     namespace: MemoryNamespace,
     vector: number[],
-    payload: VectorPayload,
+    payload: VectorPayload
   ): Promise<void> {
     const name = collectionName(namespace);
     await this.ensureCollectionByName(name);
@@ -127,13 +124,13 @@ export class VectorService {
     namespaces: MemoryNamespace[],
     queryVector: number[],
     topK: number,
-    filter?: SearchFilter,
+    filter?: SearchFilter
   ): Promise<SearchResult[]> {
     const perNamespace = Math.max(Math.ceil(topK / namespaces.length), topK);
     const allResults: SearchResult[] = [];
 
     await Promise.all(
-      namespaces.map(async ns => {
+      namespaces.map(async (ns) => {
         const name = collectionName(ns);
         try {
           const qdrantFilter = buildQdrantFilter(filter);
@@ -158,7 +155,7 @@ export class VectorService {
           // Collection may not exist yet — treat as empty
           logger.debug(`VectorService.search: namespace ${ns} not searchable: ${err}`);
         }
-      }),
+      })
     );
 
     // Merge and sort by score descending, take top topK
@@ -187,7 +184,7 @@ export class VectorService {
     namespace: MemoryNamespace,
     sourcePath: string,
     store: ScopedMemoryBlockStore,
-    agentId: string,
+    agentId: string
   ): Promise<void> {
     const name = collectionName(namespace);
     logger.info(`Rebuilding Qdrant namespace "${name}" from ${sourcePath}`);
@@ -208,20 +205,22 @@ export class VectorService {
         const vector = await embedding.embed(`${block.title}\n${block.content}`);
         await this.client.upsert(name, {
           wait: true,
-          points: [{
-            id: block.id,
-            vector,
-            payload: {
-              agent_id: block.agentId,
-              created_at: block.timestamp,
-              tags: block.tags,
-              type: block.type,
-              title: block.title,
-              content: block.content,
-              source_file: `${block.agentId}/${block.type}`,
-              namespace,
+          points: [
+            {
+              id: block.id,
+              vector,
+              payload: {
+                agent_id: block.agentId,
+                created_at: block.timestamp,
+                tags: block.tags,
+                type: block.type,
+                title: block.title,
+                content: block.content,
+                source_file: `${block.agentId}/${block.type}`,
+                namespace,
+              },
             },
-          }],
+          ],
         });
         indexed++;
       } catch (err) {
@@ -252,19 +251,29 @@ export class VectorService {
   }
 
   /** @deprecated Use upsert() with explicit namespace. */
-  async upsertPoints(points: Array<{ id: string | number; vector: number[]; payload: unknown }>): Promise<void> {
+  async upsertPoints(
+    points: Array<{ id: string | number; vector: number[]; payload: unknown }>
+  ): Promise<void> {
     await this.client.upsert(this.legacyCollectionName, {
       wait: true,
-      points: points.map(p => ({ id: p.id, vector: p.vector, payload: p.payload as Record<string, unknown> })),
+      points: points.map((p) => ({
+        id: p.id,
+        vector: p.vector,
+        payload: p.payload as Record<string, unknown>,
+      })),
     });
   }
 
   /** @deprecated Use search() with explicit namespaces. */
-  async searchLegacy(vector: number[], limit = 5, filter?: unknown): Promise<Array<{ id: string | number; score: number; payload: unknown }>> {
+  async searchLegacy(
+    vector: number[],
+    limit = 5,
+    filter?: unknown
+  ): Promise<Array<{ id: string | number; score: number; payload: unknown }>> {
     const params: Parameters<typeof this.client.search>[1] = { vector, limit, with_payload: true };
     if (filter !== undefined) params.filter = filter as any;
     const results = await this.client.search(this.legacyCollectionName, params);
-    return results.map(r => ({ id: r.id, score: r.score, payload: r.payload ?? {} }));
+    return results.map((r) => ({ id: r.id, score: r.score, payload: r.payload ?? {} }));
   }
 
   /** @deprecated */

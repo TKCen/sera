@@ -64,15 +64,13 @@ export class SessionRepair {
     report.mergedMessages = mergeCount;
 
     report.repaired =
-      report.orphanedToolMessages > 0 ||
-      report.emptyMessages > 0 ||
-      report.mergedMessages > 0;
+      report.orphanedToolMessages > 0 || report.emptyMessages > 0 || report.mergedMessages > 0;
 
     if (report.repaired) {
       logger.info(
         `Session repaired: ${report.orphanedToolMessages} orphaned tool msgs removed, ` +
-        `${report.emptyMessages} empty msgs removed, ` +
-        `${report.mergedMessages} consecutive msgs merged`,
+          `${report.emptyMessages} empty msgs removed, ` +
+          `${report.mergedMessages} consecutive msgs merged`
       );
     }
 
@@ -110,9 +108,10 @@ export class SessionRepair {
    * Merge consecutive messages with the same role into one.
    * Does NOT merge tool or system messages.
    */
-  private static mergeConsecutive(
-    messages: ChatMessage[],
-  ): { merged: ChatMessage[]; mergeCount: number } {
+  private static mergeConsecutive(messages: ChatMessage[]): {
+    merged: ChatMessage[];
+    mergeCount: number;
+  } {
     if (messages.length === 0) return { merged: [], mergeCount: 0 };
 
     const merged: ChatMessage[] = [messages[0]!];

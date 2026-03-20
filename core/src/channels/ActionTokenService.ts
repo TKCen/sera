@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import type { RequestType } from './channel.interface.js';
 
 export interface ActionTokenClaims {
-  sub: string;         // requestId
+  sub: string; // requestId
   action: 'approve' | 'deny';
   requestType: RequestType;
   iss: 'sera';
@@ -84,7 +84,7 @@ export class ActionTokenService {
 
   buildActionUrls(
     approveToken: string,
-    denyToken: string,
+    denyToken: string
   ): { approveUrl: string; denyUrl: string } {
     const base = (process.env['SERA_PUBLIC_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
     return {

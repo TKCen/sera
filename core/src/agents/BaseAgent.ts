@@ -51,7 +51,7 @@ export abstract class BaseAgent {
     llmProvider: LLMProvider,
     intercom?: IntercomService,
     agentInstanceId?: string,
-    memoryManager?: MemoryManager,
+    memoryManager?: MemoryManager
   ) {
     this.manifest = manifest;
     this.name = manifest.metadata.displayName;
@@ -103,7 +103,6 @@ export abstract class BaseAgent {
     this.identityService = identityService;
   }
 
-
   abstract process(input: string, history?: ChatMessage[]): Promise<AgentResponse>;
 
   // ── Streaming Process with Tool Loop ────────────────────────────────────────
@@ -117,7 +116,7 @@ export abstract class BaseAgent {
     input: string,
     history: ChatMessage[],
     messageId: string,
-    onThought?: (thought: CapturedThought) => void,
+    onThought?: (thought: CapturedThought) => void
   ): Promise<AgentResponse> {
     // Clear captured thoughts for this request
     this._capturedThoughts = [];
@@ -131,9 +130,10 @@ export abstract class BaseAgent {
     // Repair message history before building the conversation
     const { messages: cleanHistory, report } = SessionRepair.repair(history);
     if (report.repaired) {
-      await this.publishThought('reflect',
+      await this.publishThought(
+        'reflect',
         `Session repaired: ${report.orphanedToolMessages} orphaned tool msgs, ` +
-        `${report.emptyMessages} empty msgs, ${report.mergedMessages} merged msgs`,
+          `${report.emptyMessages} empty msgs, ${report.mergedMessages} merged msgs`
       );
     }
 
@@ -143,7 +143,14 @@ export abstract class BaseAgent {
     }
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: IdentityService.generateStreamingSystemPrompt(this.manifest, undefined, dynamicContext) },
+      {
+        role: 'system',
+        content: IdentityService.generateStreamingSystemPrompt(
+          this.manifest,
+          undefined,
+          dynamicContext
+        ),
+      },
       ...cleanHistory,
       { role: 'user', content: input },
     ];
@@ -154,7 +161,7 @@ export abstract class BaseAgent {
     if (this.agentScheduler && this.manifest.resources?.maxLlmTokensPerHour) {
       const allowed = await this.agentScheduler.isWithinQuota(
         this.agentInstanceId || this.role,
-        this.manifest.resources.maxLlmTokensPerHour,
+        this.manifest.resources.maxLlmTokensPerHour
       );
       if (!allowed) {
         const errorMsg = '⚠️ Hourly token quota exceeded. Request denied.';
@@ -165,9 +172,7 @@ export abstract class BaseAgent {
     }
 
     // Get tool definitions if ToolExecutor is available
-    const tools = this.toolExecutor
-      ? this.toolExecutor.getToolDefinitions(this.manifest)
-      : [];
+    const tools = this.toolExecutor ? this.toolExecutor.getToolDefinitions(this.manifest) : [];
     const hasTools = tools.length > 0;
 
     try {
@@ -196,38 +201,46 @@ export abstract class BaseAgent {
             const blockedCalls: string[] = [];
             for (const tc of response.toolCalls) {
               let parsedArgs: unknown;
-              try { parsedArgs = JSON.parse(tc.function.arguments || '{}'); } catch { parsedArgs = tc.function.arguments; }
+              try {
+                parsedArgs = JSON.parse(tc.function.arguments || '{}');
+              } catch {
+                parsedArgs = tc.function.arguments;
+              }
               const guard = this.loopGuard.recordCall(tc.function.name, parsedArgs);
 
               if (guard.status === 'block') {
                 blockedCalls.push(tc.function.name);
                 await this.publishThought(
                   'reflect',
-                  `⛔ Blocked duplicate call: **${tc.function.name}** (${guard.count} identical calls)`,
+                  `⛔ Blocked duplicate call: **${tc.function.name}** (${guard.count} identical calls)`
                 );
               } else if (guard.status === 'warn') {
                 await this.publishThought(
                   'reflect',
-                  `⚠️ Repeated call: **${tc.function.name}** (${guard.count} times) — try a different approach`,
+                  `⚠️ Repeated call: **${tc.function.name}** (${guard.count} times) — try a different approach`
                 );
               }
 
               await this.publishThought(
                 'tool-call',
-                `Tool: ${tc.function.name}\nParameters: ${tc.function.arguments}`,
+                `Tool: ${tc.function.name}\nParameters: ${tc.function.arguments}`
               );
             }
 
             // If ALL calls are blocked, force a text response without tools
             if (blockedCalls.length === response.toolCalls.length) {
-              await this.publishThought('reflect', 'All tool calls blocked by loop guard. Generating final response.');
+              await this.publishThought(
+                'reflect',
+                'All tool calls blocked by loop guard. Generating final response.'
+              );
               messages.push({
                 role: 'assistant',
                 content: response.content || '',
               } as ChatMessage);
               messages.push({
                 role: 'user',
-                content: 'Your previous tool calls were blocked because you repeated the same calls too many times. Please provide your best answer using the information you already have, without calling more tools.',
+                content:
+                  'Your previous tool calls were blocked because you repeated the same calls too many times. Please provide your best answer using the information you already have, without calling more tools.',
               });
               const fallback = await this.llmProvider.chat(messages);
 
@@ -239,7 +252,9 @@ export abstract class BaseAgent {
                 });
               }
 
-              const reply = fallback.content || 'I was unable to complete this task — my tool calls were repeating.';
+              const reply =
+                fallback.content ||
+                'I was unable to complete this task — my tool calls were repeating.';
               await this.streamTextToChannel(reply, streamChannel, messageId);
               this.history = [
                 ...cleanHistory,
@@ -251,7 +266,7 @@ export abstract class BaseAgent {
 
             // Filter out blocked calls
             const activeCalls = response.toolCalls.filter(
-              tc => !blockedCalls.includes(tc.function.name),
+              (tc) => !blockedCalls.includes(tc.function.name)
             );
 
             // Add assistant message with tool_calls to the conversation
@@ -268,7 +283,7 @@ export abstract class BaseAgent {
               this.manifest,
               this.agentInstanceId,
               this.containerId,
-              messageId,
+              messageId
             );
 
             // Record audit entries for tool calls
@@ -286,10 +301,10 @@ export abstract class BaseAgent {
                   payload: {
                     tool: tc.function.name,
                     args: tc.function.arguments,
-                    result: tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content
-                  }
+                    result:
+                      tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content,
+                  },
                 });
-
               } catch (auditErr) {
                 this.logger.error('Failed to record audit entry:', auditErr);
               }
@@ -297,9 +312,10 @@ export abstract class BaseAgent {
 
             // Publish results and add to conversation
             for (const result of toolResults) {
-              const preview = result.content.length > 2000
-                ? result.content.substring(0, 2000) + '...'
-                : result.content;
+              const preview =
+                result.content.length > 2000
+                  ? result.content.substring(0, 2000) + '...'
+                  : result.content;
               await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
             }
@@ -311,7 +327,13 @@ export abstract class BaseAgent {
           // ── Text Response (no tool calls) ───────────────────────────
           // Stream the final text response to the channel
           // The streamSimple handles history update and returns AgentResponse
-          const result = await this.streamSimple(input, cleanHistory, messages, streamChannel, messageId);
+          const result = await this.streamSimple(
+            input,
+            cleanHistory,
+            messages,
+            streamChannel,
+            messageId
+          );
           return result;
         } else {
           // ── No tools: simple streaming (original behavior) ──────────
@@ -320,11 +342,15 @@ export abstract class BaseAgent {
       }
 
       // ── Max iterations reached — force a final response without tools ──
-      this.logger.warn(`Tool loop hit max iterations (${MAX_TOOL_ITERATIONS}), forcing final response`);
-      await this.publishThought('reflect', `Reached maximum tool iterations (${MAX_TOOL_ITERATIONS}). Generating final response.`);
+      this.logger.warn(
+        `Tool loop hit max iterations (${MAX_TOOL_ITERATIONS}), forcing final response`
+      );
+      await this.publishThought(
+        'reflect',
+        `Reached maximum tool iterations (${MAX_TOOL_ITERATIONS}). Generating final response.`
+      );
 
       return await this.streamSimple(input, cleanHistory, messages, streamChannel, messageId);
-
     } catch (error: any) {
       this.logger.error('Stream processing error:', error);
       if (this.intercom) {
@@ -332,7 +358,7 @@ export abstract class BaseAgent {
           this.agentInstanceId || this.role,
           `⚠️ Error: ${error.message}`,
           true,
-          messageId,
+          messageId
         );
       }
       return {
@@ -354,7 +380,7 @@ export abstract class BaseAgent {
   private async streamTextToChannel(
     text: string,
     channel: string,
-    messageId: string,
+    messageId: string
   ): Promise<void> {
     if (!this.intercom) return;
 
@@ -376,7 +402,7 @@ export abstract class BaseAgent {
     originalHistory: ChatMessage[],
     messages: ChatMessage[],
     streamChannel: string,
-    messageId: string,
+    messageId: string
   ): Promise<AgentResponse> {
     let accumulated = '';
     let accumulatedReasoning = '';
@@ -410,7 +436,7 @@ export abstract class BaseAgent {
           this.agentInstanceId || this.role,
           chunk.token,
           chunk.done,
-          messageId,
+          messageId
         );
       }
     }
@@ -447,7 +473,7 @@ export abstract class BaseAgent {
     stepType: ThoughtStepType,
     content: string,
     taskId?: string,
-    iteration?: number,
+    iteration?: number
   ): Promise<void> {
     const timestamp = new Date().toISOString();
     // Capture for session persistence and notify external listener
@@ -461,7 +487,7 @@ export abstract class BaseAgent {
         stepType,
         content,
         taskId,
-        iteration,
+        iteration
       );
     } catch (err) {
       this.logger.error(`Failed to publish thought:`, err);
@@ -474,10 +500,7 @@ export abstract class BaseAgent {
    * Send a direct message to a peer agent.
    * Validates permissions against the agent's intercom.canMessage list.
    */
-  public async sendMessage(
-    toAgent: string,
-    payload: Record<string, unknown>,
-  ): Promise<void> {
+  public async sendMessage(toAgent: string, payload: Record<string, unknown>): Promise<void> {
     if (!this.intercom) {
       this.logger.warn(`Intercom not configured, cannot send message`);
       return;

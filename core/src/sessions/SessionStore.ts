@@ -27,9 +27,8 @@ export class SessionStore {
    *                 Sessions are written to `{basePath}/agents/{agentName}/sessions/`.
    */
   constructor(basePath?: string) {
-    this.sessionsBasePath = basePath
-      ?? process.env.MEMORY_PATH
-      ?? path.join(process.cwd(), '..', 'memory');
+    this.sessionsBasePath =
+      basePath ?? process.env.MEMORY_PATH ?? path.join(process.cwd(), '..', 'memory');
   }
 
   // ── Session CRUD ──────────────────────────────────────────────────────────
@@ -42,7 +41,7 @@ export class SessionStore {
     await query(
       `INSERT INTO chat_sessions (id, agent_name, agent_instance_id, title, message_count, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 0, $5, $5)`,
-      [id, opts.agentName, opts.agentInstanceId || null, title, now],
+      [id, opts.agentName, opts.agentInstanceId || null, title, now]
     );
 
     return {
@@ -60,7 +59,7 @@ export class SessionStore {
     const result = await query(
       `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
        FROM chat_sessions WHERE id = $1`,
-      [id],
+      [id]
     );
     if (result.rows.length === 0) return null;
     return this.rowToSession(result.rows[0]);
@@ -73,19 +72,19 @@ export class SessionStore {
         `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
          FROM chat_sessions WHERE agent_instance_id = $1
          ORDER BY updated_at DESC`,
-        [agentInstanceId],
+        [agentInstanceId]
       );
     } else if (agentName) {
       result = await query(
         `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
          FROM chat_sessions WHERE agent_name = $1
          ORDER BY updated_at DESC`,
-        [agentName],
+        [agentName]
       );
     } else {
       result = await query(
         `SELECT id, agent_name, agent_instance_id, title, message_count, created_at, updated_at
-         FROM chat_sessions ORDER BY updated_at DESC`,
+         FROM chat_sessions ORDER BY updated_at DESC`
       );
     }
     return result.rows.map((row: any) => this.rowToSession(row));
@@ -96,7 +95,7 @@ export class SessionStore {
       `UPDATE chat_sessions SET title = $1, updated_at = $2
        WHERE id = $3
        RETURNING id, agent_name, title, message_count, created_at, updated_at`,
-      [title, new Date().toISOString(), id],
+      [title, new Date().toISOString(), id]
     );
     if (result.rows.length === 0) return null;
     return this.rowToSession(result.rows[0]);
@@ -106,14 +105,11 @@ export class SessionStore {
     // Get agent name before deletion for JSONL cleanup
     const session = await this.getSession(id);
 
-    const result = await query(
-      `DELETE FROM chat_sessions WHERE id = $1`,
-      [id],
-    );
+    const result = await query(`DELETE FROM chat_sessions WHERE id = $1`, [id]);
 
     // Best-effort: remove JSONL mirror
     if (session && result.rowCount && result.rowCount > 0) {
-      this.removeJsonlMirror(session.agentName, id).catch(err => {
+      this.removeJsonlMirror(session.agentName, id).catch((err) => {
         logger.warn(`Failed to remove JSONL mirror for session ${id}:`, err);
       });
     }
@@ -130,7 +126,14 @@ export class SessionStore {
     await query(
       `INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, opts.sessionId, opts.role, opts.content, opts.metadata ? JSON.stringify(opts.metadata) : null, now],
+      [
+        id,
+        opts.sessionId,
+        opts.role,
+        opts.content,
+        opts.metadata ? JSON.stringify(opts.metadata) : null,
+        now,
+      ]
     );
 
     // Update session's message_count and updated_at
@@ -138,7 +141,7 @@ export class SessionStore {
       `UPDATE chat_sessions
        SET message_count = message_count + 1, updated_at = $1
        WHERE id = $2`,
-      [now, opts.sessionId],
+      [now, opts.sessionId]
     );
 
     return {
@@ -156,7 +159,7 @@ export class SessionStore {
       `SELECT id, session_id, role, content, metadata, created_at
        FROM chat_messages WHERE session_id = $1
        ORDER BY created_at ASC`,
-      [sessionId],
+      [sessionId]
     );
     return result.rows.map((row: any) => this.rowToMessage(row));
   }
@@ -174,12 +177,14 @@ export class SessionStore {
       await fs.mkdir(sessionsDir, { recursive: true });
 
       const filePath = path.join(sessionsDir, `${sessionId}.jsonl`);
-      const lines = messages.map(msg => JSON.stringify({
-        timestamp: msg.createdAt,
-        role: msg.role,
-        content: msg.content,
-        ...(msg.metadata ? { metadata: msg.metadata } : {}),
-      }));
+      const lines = messages.map((msg) =>
+        JSON.stringify({
+          timestamp: msg.createdAt,
+          role: msg.role,
+          content: msg.content,
+          ...(msg.metadata ? { metadata: msg.metadata } : {}),
+        })
+      );
 
       await fs.writeFile(filePath, lines.join('\n') + '\n', 'utf-8');
     } catch (err) {
@@ -192,7 +197,11 @@ export class SessionStore {
    */
   private async removeJsonlMirror(agentName: string, sessionId: string): Promise<void> {
     const filePath = path.join(
-      this.sessionsBasePath, 'agents', agentName, 'sessions', `${sessionId}.jsonl`,
+      this.sessionsBasePath,
+      'agents',
+      agentName,
+      'sessions',
+      `${sessionId}.jsonl`
     );
     try {
       await fs.unlink(filePath);

@@ -14,14 +14,24 @@ export default function CirclesPage() {
       </div>
       {isLoading ? (
         <div className="space-y-3">
-          {[1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
+          {[1, 2].map((i) => (
+            <Skeleton key={i} className="h-16 rounded-xl" />
+          ))}
         </div>
       ) : !circles?.length ? (
-        <EmptyState icon={<Users size={24} />} title="No circles" description="Create a circle to group agents." />
+        <EmptyState
+          icon={<Users size={24} />}
+          title="No circles"
+          description="Create a circle to group agents."
+        />
       ) : (
         <div className="space-y-2">
           {circles.map((c) => (
-            <Link key={c.name} to={`/circles/${c.name}`} className="sera-card flex items-center gap-4 px-4 py-3 block">
+            <Link
+              key={c.name}
+              to={`/circles/${c.name}`}
+              className="sera-card flex items-center gap-4 px-4 py-3 block"
+            >
               <div className="h-9 w-9 rounded-lg bg-sera-accent-soft flex items-center justify-center">
                 <Users size={16} className="text-sera-accent" />
               </div>

@@ -22,10 +22,7 @@ export class FlowProcess implements ProcessStrategy {
 
   private state: FlowState = {};
 
-  async execute(
-    tasks: ProcessTask[],
-    agents: Map<string, BaseAgent>,
-  ): Promise<ProcessRunResult> {
+  async execute(tasks: ProcessTask[], agents: Map<string, BaseAgent>): Promise<ProcessRunResult> {
     const startTime = Date.now();
     const results: ProcessResult[] = [];
     this.state = {};
@@ -47,7 +44,9 @@ export class FlowProcess implements ProcessStrategy {
       }
 
       if (readyTasks.length === 0 && pendingTasks.length > 0) {
-        logger.error(`Circular dependency or dead-end reached. Remaining tasks: ${pendingTasks.map(t => t.id).join(', ')}`);
+        logger.error(
+          `Circular dependency or dead-end reached. Remaining tasks: ${pendingTasks.map((t) => t.id).join(', ')}`
+        );
         break;
       }
 
@@ -68,9 +67,8 @@ export class FlowProcess implements ProcessStrategy {
       pendingTasks.push(...remainingTasks);
     }
 
-    const finalOutput = results.length > 0
-      ? results[results.length - 1]!.output
-      : 'No tasks were executed.';
+    const finalOutput =
+      results.length > 0 ? results[results.length - 1]!.output : 'No tasks were executed.';
 
     return {
       processType: 'flow',
@@ -83,7 +81,7 @@ export class FlowProcess implements ProcessStrategy {
   private isTaskReady(
     task: ProcessTask,
     completedTaskIds: Set<string>,
-    failedTaskIds: Set<string>,
+    failedTaskIds: Set<string>
   ): boolean {
     if (!task.dependsOn || task.dependsOn.length === 0) {
       return true;
@@ -92,15 +90,16 @@ export class FlowProcess implements ProcessStrategy {
     const routingType = task.routingType || 'and';
 
     if (routingType === 'and') {
-      return task.dependsOn.every(id => completedTaskIds.has(id));
-    } else { // 'or'
-      return task.dependsOn.some(id => completedTaskIds.has(id));
+      return task.dependsOn.every((id) => completedTaskIds.has(id));
+    } else {
+      // 'or'
+      return task.dependsOn.some((id) => completedTaskIds.has(id));
     }
   }
 
   private async executeOne(
     task: ProcessTask,
-    agents: Map<string, BaseAgent>,
+    agents: Map<string, BaseAgent>
   ): Promise<ProcessResult> {
     const taskStart = Date.now();
     const agent = this.resolveAgent(task, agents);
@@ -118,7 +117,7 @@ export class FlowProcess implements ProcessStrategy {
 
     // Build context from dependencies
     const relevantState = (task.dependsOn || [])
-      .map(id => `[Task ${id}]: ${this.state[id] || '(no output)'}`)
+      .map((id) => `[Task ${id}]: ${this.state[id] || '(no output)'}`)
       .join('\n\n');
 
     const contextualInput = relevantState
@@ -131,14 +130,14 @@ export class FlowProcess implements ProcessStrategy {
 
       // Check condition if present
       if (task.condition && !output.toLowerCase().includes(task.condition.toLowerCase())) {
-         return {
-           taskId: task.id,
-           agentName: agent.role,
-           output: `Condition [${task.condition}] not met. Output: ${output}`,
-           status: 'failed',
-           error: `Condition not met`,
-           durationMs: Date.now() - taskStart,
-         };
+        return {
+          taskId: task.id,
+          agentName: agent.role,
+          output: `Condition [${task.condition}] not met. Output: ${output}`,
+          status: 'failed',
+          error: `Condition not met`,
+          durationMs: Date.now() - taskStart,
+        };
       }
 
       return {
@@ -160,10 +159,7 @@ export class FlowProcess implements ProcessStrategy {
     }
   }
 
-  private resolveAgent(
-    task: ProcessTask,
-    agents: Map<string, BaseAgent>,
-  ): BaseAgent | undefined {
+  private resolveAgent(task: ProcessTask, agents: Map<string, BaseAgent>): BaseAgent | undefined {
     if (task.assignedAgent) {
       return agents.get(task.assignedAgent);
     }

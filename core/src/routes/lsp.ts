@@ -50,7 +50,9 @@ router.post('/definition', async (req, res) => {
     const definition = await client.getDefinition(uri, line, character);
     res.json({ definition });
   } catch (error: any) {
-    res.status(error.message.startsWith('Access denied') ? 403 : 500).json({ error: error.message });
+    res
+      .status(error.message.startsWith('Access denied') ? 403 : 500)
+      .json({ error: error.message });
   }
 });
 
@@ -75,7 +77,9 @@ router.post('/references', async (req, res) => {
     const references = await client.getReferences(uri, line, character);
     res.json({ references });
   } catch (error: any) {
-    res.status(error.message.startsWith('Access denied') ? 403 : 500).json({ error: error.message });
+    res
+      .status(error.message.startsWith('Access denied') ? 403 : 500)
+      .json({ error: error.message });
   }
 });
 
@@ -100,7 +104,9 @@ router.post('/symbols', async (req, res) => {
     const symbols = await client.getDocumentSymbols(uri);
     res.json({ symbols });
   } catch (error: any) {
-    res.status(error.message.startsWith('Access denied') ? 403 : 500).json({ error: error.message });
+    res
+      .status(error.message.startsWith('Access denied') ? 403 : 500)
+      .json({ error: error.message });
   }
 });
 

@@ -26,7 +26,7 @@ export function directMessage(params: {
 
 export function getChannelHistory(
   channel: string,
-  limit?: number,
+  limit?: number
 ): Promise<{ channel: string; messages: MessageObject[] }> {
   const params = new URLSearchParams({ channel });
   if (limit !== undefined) params.set('limit', String(limit));

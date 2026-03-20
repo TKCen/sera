@@ -81,7 +81,9 @@ export class ProviderRegistry {
 
   private loadSync(): void {
     if (!fs.existsSync(this.configPath)) {
-      logger.info(`No providers config at ${this.configPath} — relying on env-var bootstrap and auto-detection`);
+      logger.info(
+        `No providers config at ${this.configPath} — relying on env-var bootstrap and auto-detection`
+      );
       return;
     }
     try {
@@ -125,8 +127,13 @@ export class ProviderRegistry {
   private autoDetect(modelName: string): ProviderConfig | null {
     const lower = modelName.toLowerCase();
 
-    if (lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') ||
-        lower.startsWith('o4') || lower.startsWith('chatgpt-')) {
+    if (
+      lower.startsWith('gpt-') ||
+      lower.startsWith('o1') ||
+      lower.startsWith('o3') ||
+      lower.startsWith('o4') ||
+      lower.startsWith('chatgpt-')
+    ) {
       return { modelName, api: 'openai-completions', provider: 'openai' };
     }
     if (lower.startsWith('claude-')) {
@@ -161,7 +168,7 @@ export class ProviderRegistry {
 
     throw new Error(
       `No provider registered for model '${modelName}'. ` +
-      `Register it in ${this.configPath} or via POST /api/providers.`,
+        `Register it in ${this.configPath} or via POST /api/providers.`
     );
   }
 

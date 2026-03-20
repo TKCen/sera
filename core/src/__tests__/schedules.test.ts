@@ -22,9 +22,7 @@ describe('Schedules API', () => {
 
   it('GET /api/schedules should list all schedules', async () => {
     (query as any).mockResolvedValueOnce({
-      rows: [
-        { id: '1', name: 'Task 1', cron: '* * * * *', agent_name: 'Agent 1' }
-      ]
+      rows: [{ id: '1', name: 'Task 1', cron: '* * * * *', agent_name: 'Agent 1' }],
     });
 
     const res = await request(app).get('/api/schedules');
@@ -35,15 +33,16 @@ describe('Schedules API', () => {
 
   it('POST /api/schedules should create a new schedule', async () => {
     (query as any).mockResolvedValueOnce({ rowCount: 1 }); // INSERT
-    (query as any).mockResolvedValueOnce({ // SELECT back
-      rows: [{ id: 'new-id', name: 'New Task', agent_name: 'Agent 1' }]
+    (query as any).mockResolvedValueOnce({
+      // SELECT back
+      rows: [{ id: 'new-id', name: 'New Task', agent_name: 'Agent 1' }],
     });
 
     const payload = {
       agentId: 'agent-uuid',
       name: 'New Task',
       cron: '0 0 * * *',
-      task: { action: 'test' }
+      task: { action: 'test' },
     };
 
     const res = await request(app).post('/api/schedules').send(payload);

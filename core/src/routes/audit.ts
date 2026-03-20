@@ -37,12 +37,15 @@ export const createAuditRouter = () => {
         const limitVal = limit ? parseInt(limit as string, 10) : 50;
         const offsetVal = offset ? parseInt(offset as string, 10) : 0;
 
-        const countRes = await pool.query(`SELECT COUNT(*) FROM audit_trail ${whereClause}`, params);
+        const countRes = await pool.query(
+          `SELECT COUNT(*) FROM audit_trail ${whereClause}`,
+          params
+        );
         const total = parseInt(countRes.rows[0].count, 10);
 
         const entriesRes = await pool.query(
           `SELECT * FROM audit_trail ${whereClause} ORDER BY sequence DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-          [...params, limitVal, offsetVal],
+          [...params, limitVal, offsetVal]
         );
 
         return res.json({ entries: entriesRes.rows, total });
@@ -71,7 +74,9 @@ export const createAuditRouter = () => {
     try {
       const format = req.query.format || 'jsonl';
       if (format !== 'jsonl') {
-        return res.status(400).json({ error: 'Only jsonl format is supported for streaming export' });
+        return res
+          .status(400)
+          .json({ error: 'Only jsonl format is supported for streaming export' });
       }
 
       res.setHeader('Content-Type', 'application/x-jsonlines');
@@ -89,9 +94,8 @@ export const createAuditRouter = () => {
         actorId: req.operator?.sub || 'unknown',
         actingContext: null,
         eventType: 'audit.exported',
-        payload: { format }
+        payload: { format },
       });
-
     } catch (err: any) {
       if (!res.headersSent) {
         res.status(500).json({ error: err.message });

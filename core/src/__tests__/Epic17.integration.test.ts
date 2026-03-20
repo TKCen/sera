@@ -40,14 +40,30 @@ vi.mock('jose', async (importOriginal) => {
     ...original,
     SignJWT: class {
       private _claims: Record<string, unknown>;
-      constructor(claims: Record<string, unknown>) { this._claims = claims; }
-      setProtectedHeader() { return this; }
-      setIssuedAt() { return this; }
-      setExpirationTime() { return this; }
-      async sign() { return `mock-jwt-${JSON.stringify(this._claims).slice(0, 20)}`; }
+      constructor(claims: Record<string, unknown>) {
+        this._claims = claims;
+      }
+      setProtectedHeader() {
+        return this;
+      }
+      setIssuedAt() {
+        return this;
+      }
+      setExpirationTime() {
+        return this;
+      }
+      async sign() {
+        return `mock-jwt-${JSON.stringify(this._claims).slice(0, 20)}`;
+      }
     },
     jwtVerify: vi.fn().mockResolvedValue({
-      payload: { sub: 'user|op', act: 'agt-1', scope: { service: 'github', permissions: ['repo:read'] }, jti: 'tok-1', iss: 'sera' },
+      payload: {
+        sub: 'user|op',
+        act: 'agt-1',
+        scope: { service: 'github', permissions: ['repo:read'] },
+        jti: 'tok-1',
+        iss: 'sera',
+      },
     }),
   };
 });
@@ -136,13 +152,15 @@ describe('Epic 17 — Delegation flow', () => {
 
       // DB: delegation token lookup
       mockPoolQuery.mockResolvedValueOnce({
-        rows: [{
-          id: DELEGATION_ID,
-          actor_agent_id: AGENT_ID,
-          scope: { service: 'github', permissions: ['repo:read'] },
-          grant_type: 'session',
-          credential_secret_name: 'gh-token',
-        }],
+        rows: [
+          {
+            id: DELEGATION_ID,
+            actor_agent_id: AGENT_ID,
+            scope: { service: 'github', permissions: ['repo:read'] },
+            grant_type: 'session',
+            credential_secret_name: 'gh-token',
+          },
+        ],
       });
       // DB: UPDATE use_count
       mockPoolQuery.mockResolvedValueOnce({ rows: [] });
@@ -169,7 +187,7 @@ describe('Epic 17 — Delegation flow', () => {
 
       // Verify use_count was incremented
       const updateCall = mockPoolQuery.mock.calls.find(
-        c => typeof c[0] === 'string' && (c[0] as string).includes('use_count'),
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('use_count')
       );
       expect(updateCall).toBeDefined();
     });

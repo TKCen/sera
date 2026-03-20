@@ -25,17 +25,16 @@ export function getAgentBudget(agentName: string): Promise<{
 
 export function patchAgentBudget(
   agentName: string,
-  budget: { maxLlmTokensPerHour?: number | null; maxLlmTokensPerDay?: number | null },
+  budget: { maxLlmTokensPerHour?: number | null; maxLlmTokensPerDay?: number | null }
 ): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/agents/${encodeURIComponent(agentName)}/budget`,
-    { method: 'PATCH', body: JSON.stringify(budget) },
-  );
+  return request<{ success: boolean }>(`/agents/${encodeURIComponent(agentName)}/budget`, {
+    method: 'PATCH',
+    body: JSON.stringify(budget),
+  });
 }
 
 export function resetAgentBudget(agentName: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/agents/${encodeURIComponent(agentName)}/budget/reset`,
-    { method: 'POST' },
-  );
+  return request<{ success: boolean }>(`/agents/${encodeURIComponent(agentName)}/budget/reset`, {
+    method: 'POST',
+  });
 }

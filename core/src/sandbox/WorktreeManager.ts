@@ -28,10 +28,10 @@ export class WorktreeManager {
     fs.mkdirSync(path.join(repoPath, '.worktrees'), { recursive: true });
 
     try {
-      execSync(
-        `git worktree add "${worktreePath}" -b "${branchName}"`,
-        { cwd: repoPath, stdio: 'pipe' },
-      );
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
+        cwd: repoPath,
+        stdio: 'pipe',
+      });
     } catch (err) {
       logger.error('Failed to create worktree:', err);
       throw err;
@@ -49,10 +49,7 @@ export class WorktreeManager {
 
     logger.info(`Removing worktree: path=${worktreePath}`);
     try {
-      execSync(
-        `git worktree remove "${worktreePath}" --force`,
-        { cwd: repoPath, stdio: 'pipe' },
-      );
+      execSync(`git worktree remove "${worktreePath}" --force`, { cwd: repoPath, stdio: 'pipe' });
     } catch (err) {
       logger.warn('Failed to remove worktree via git, cleaning up manually:', err);
       if (fs.existsSync(worktreePath)) {
@@ -92,7 +89,7 @@ export class WorktreeManager {
     logger.info(`Merging ${branchName} into ${targetBranch}`);
     execSync(
       `git checkout "${targetBranch}" && git merge --no-ff "${branchName}" -m "Merge agent branch ${branchName}"`,
-      { cwd: repoPath, stdio: 'pipe', shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh' },
+      { cwd: repoPath, stdio: 'pipe', shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh' }
     );
   }
 

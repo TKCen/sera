@@ -19,7 +19,10 @@ export class ContextAssembler {
   private vectorService = new VectorService('_ctx_assembler_unused');
   private embeddingService = EmbeddingService.getInstance();
 
-  constructor(private pool: Pool, private orchestrator: Orchestrator) {
+  constructor(
+    private pool: Pool,
+    private orchestrator: Orchestrator
+  ) {
     this.skillInjector = new SkillInjector(pool);
   }
 
@@ -30,18 +33,18 @@ export class ContextAssembler {
    *    inject top-K memory blocks into the system prompt.
    */
   async assemble(agentId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
-    const systemMessage = messages.find(m => m.role === 'system');
+    const systemMessage = messages.find((m) => m.role === 'system');
     if (!systemMessage) return messages;
 
-    const manifest = this.orchestrator.getManifestByInstanceId(agentId)
-                  || this.orchestrator.getManifest(agentId);
+    const manifest =
+      this.orchestrator.getManifestByInstanceId(agentId) || this.orchestrator.getManifest(agentId);
 
     if (!manifest) return messages;
 
     // Skip assembly if agent has no memory configuration
     if (!manifest.memory) return messages;
 
-    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
     const currentMessage = lastUserMessage?.content ?? '';
 
     // Fetch instance for circle inheritance and metadata
@@ -53,29 +56,21 @@ export class ContextAssembler {
       manifest.skills ?? [],
       (manifest as any).skillPackages ?? [],
       currentMessage,
-      instance?.circle_id,
+      instance?.circle_id
     );
 
     // 2. RAG memory retrieval
-    const memoryContext = await this.retrieveMemoryContext(
-      agentId,
-      manifest,
-      currentMessage,
-    );
+    const memoryContext = await this.retrieveMemoryContext(agentId, manifest, currentMessage);
 
-    const newSystemContent = memoryContext
-      ? `${skillsPrompt}\n\n${memoryContext}`
-      : skillsPrompt;
+    const newSystemContent = memoryContext ? `${skillsPrompt}\n\n${memoryContext}` : skillsPrompt;
 
-    return messages.map(m =>
-      m.role === 'system' ? { ...m, content: newSystemContent } : m,
-    );
+    return messages.map((m) => (m.role === 'system' ? { ...m, content: newSystemContent } : m));
   }
 
   private async retrieveMemoryContext(
     agentId: string,
     manifest: import('../agents/manifest/types.js').AgentManifest,
-    currentMessage: string,
+    currentMessage: string
   ): Promise<string | null> {
     if (!this.embeddingService.isAvailable()) {
       logger.debug(`ContextAssembler: embedding unavailable for agent ${agentId}, skipping RAG`);
@@ -134,7 +129,9 @@ export class ContextAssembler {
       if (charCount + blockXml.length > charBudget) break;
       blocks.push(blockXml);
       charCount += blockXml.length;
-      logger.debug(`ContextAssembler: retrieved block ${r.id} from ${r.namespace} (score=${r.score.toFixed(3)})`);
+      logger.debug(
+        `ContextAssembler: retrieved block ${r.id} from ${r.namespace} (score=${r.score.toFixed(3)})`
+      );
     }
 
     if (blocks.length === 0) return null;

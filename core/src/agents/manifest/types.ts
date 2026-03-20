@@ -123,9 +123,22 @@ export interface AgentManifest {
 
 // ── Known field names for validation ────────────────────────────────────────────
 export const KNOWN_TOP_LEVEL_FIELDS = new Set([
-  'apiVersion', 'kind', 'metadata', 'identity', 'model',
-  'tools', 'skills', 'skillPackages', 'subagents', 'intercom', 'resources',
-  'workspace', 'memory', 'permissions', 'capabilities', 'schedules',
+  'apiVersion',
+  'kind',
+  'metadata',
+  'identity',
+  'model',
+  'tools',
+  'skills',
+  'skillPackages',
+  'subagents',
+  'intercom',
+  'resources',
+  'workspace',
+  'memory',
+  'permissions',
+  'capabilities',
+  'schedules',
   'overrides',
 ]);
 

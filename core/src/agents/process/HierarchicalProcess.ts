@@ -30,15 +30,13 @@ export class HierarchicalProcess implements ProcessStrategy {
   async execute(
     tasks: ProcessTask[],
     agents: Map<string, BaseAgent>,
-    managerAgent?: BaseAgent,
+    managerAgent?: BaseAgent
   ): Promise<ProcessRunResult> {
     const startTime = Date.now();
     const state: FlowState = {};
 
     if (!managerAgent) {
-      throw new Error(
-        'HierarchicalProcess requires a managerAgent to validate worker results',
-      );
+      throw new Error('HierarchicalProcess requires a managerAgent to validate worker results');
     }
 
     const results: ProcessResult[] = [];
@@ -60,11 +58,7 @@ export class HierarchicalProcess implements ProcessStrategy {
         continue;
       }
 
-      const result = await this.executeWithReview(
-        task,
-        worker,
-        managerAgent,
-      );
+      const result = await this.executeWithReview(task, worker, managerAgent);
       results.push(result);
       if (result.status === 'completed') {
         state[task.id] = result.output;
@@ -73,8 +67,8 @@ export class HierarchicalProcess implements ProcessStrategy {
 
     // Manager produces final consolidated answer
     const workerOutputs = results
-      .filter(r => r.status === 'completed')
-      .map(r => `[${r.agentName}] Task: ${r.taskId}\n${r.output}`)
+      .filter((r) => r.status === 'completed')
+      .map((r) => `[${r.agentName}] Task: ${r.taskId}\n${r.output}`)
       .join('\n\n---\n\n');
 
     let finalOutput = workerOutputs;
@@ -82,7 +76,7 @@ export class HierarchicalProcess implements ProcessStrategy {
     if (workerOutputs) {
       try {
         const consolidation = await managerAgent.process(
-          `You are the manager. Review and consolidate the following worker outputs into a final answer:\n\n${workerOutputs}`,
+          `You are the manager. Review and consolidate the following worker outputs into a final answer:\n\n${workerOutputs}`
         );
         finalOutput = consolidation.finalAnswer || consolidation.thought || workerOutputs;
       } catch {
@@ -105,7 +99,7 @@ export class HierarchicalProcess implements ProcessStrategy {
   private async executeWithReview(
     task: ProcessTask,
     worker: BaseAgent,
-    manager: BaseAgent,
+    manager: BaseAgent
   ): Promise<ProcessResult> {
     const taskStart = Date.now();
     let lastOutput = '';
@@ -113,19 +107,24 @@ export class HierarchicalProcess implements ProcessStrategy {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const input = attempt === 0
-          ? task.description
-          : `The manager rejected your previous answer and asked you to retry.\nPrevious answer: ${lastOutput}\n\nOriginal task: ${task.description}`;
+        const input =
+          attempt === 0
+            ? task.description
+            : `The manager rejected your previous answer and asked you to retry.\nPrevious answer: ${lastOutput}\n\nOriginal task: ${task.description}`;
 
         const workerResponse = await worker.process(input);
         lastOutput = workerResponse.finalAnswer || workerResponse.thought || '';
 
         // Have manager validate the result
         const reviewResponse = await manager.process(
-          `Review this worker output for the task "${task.description}":\n\n${lastOutput}\n\nRespond with either:\n- APPROVED: <reason> if the output is acceptable\n- REJECTED: <feedback> if the output needs improvement`,
+          `Review this worker output for the task "${task.description}":\n\n${lastOutput}\n\nRespond with either:\n- APPROVED: <reason> if the output is acceptable\n- REJECTED: <feedback> if the output needs improvement`
         );
 
-        const reviewText = (reviewResponse.finalAnswer || reviewResponse.thought || '').toUpperCase();
+        const reviewText = (
+          reviewResponse.finalAnswer ||
+          reviewResponse.thought ||
+          ''
+        ).toUpperCase();
 
         if (reviewText.includes('APPROVED')) {
           return {
@@ -137,9 +136,7 @@ export class HierarchicalProcess implements ProcessStrategy {
           };
         }
 
-        logger.info(
-          `Manager rejected attempt ${attempt + 1} for task "${task.id}"`,
-        );
+        logger.info(`Manager rejected attempt ${attempt + 1} for task "${task.id}"`);
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
       }
@@ -160,10 +157,7 @@ export class HierarchicalProcess implements ProcessStrategy {
   }
 
   /** Pick the first worker agent that isn't the manager. */
-  private pickWorker(
-    agents: Map<string, BaseAgent>,
-    manager: BaseAgent,
-  ): BaseAgent | undefined {
+  private pickWorker(agents: Map<string, BaseAgent>, manager: BaseAgent): BaseAgent | undefined {
     for (const agent of agents.values()) {
       if (agent.role !== manager.role) return agent;
     }

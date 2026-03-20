@@ -48,7 +48,9 @@ describe('ScopedMemoryBlockStore', () => {
   });
 
   it('persists importance and tags in frontmatter', async () => {
-    const block = await store.write(makeOpts({ importance: 5, tags: ['a', 'b'], title: 'My Title' }));
+    const block = await store.write(
+      makeOpts({ importance: 5, tags: ['a', 'b'], title: 'My Title' })
+    );
     const typeDir = path.join(tmpDir, agentId, 'fact');
     const files = await fs.readdir(typeDir);
     const raw = await fs.readFile(path.join(typeDir, files[0]!), 'utf8');

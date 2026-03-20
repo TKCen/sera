@@ -1,9 +1,9 @@
-"use client";
+'use client';
 
 import { useEffect, useState, useMemo } from 'react';
 import { Search, Filter, X, Tag } from 'lucide-react';
-import { GraphNode, MemoryGraphData } from "@/components/MemoryGraph";
-import MemoryGraphWrapper from "@/components/MemoryGraphWrapper";
+import { GraphNode, MemoryGraphData } from '@/components/MemoryGraph';
+import MemoryGraphWrapper from '@/components/MemoryGraphWrapper';
 
 interface MemoryEntry {
   id: string;
@@ -23,9 +23,9 @@ export default function InsightsPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filtering and Search State
-  const [searchQuery, setSearchQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [tagFilter, setTagFilter] = useState<string>('all');
 
   // Selected Node State
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
@@ -79,8 +79,8 @@ export default function InsightsPage() {
   const allTags = useMemo(() => {
     if (!graphData) return [];
     const tags = new Set<string>();
-    graphData.nodes.forEach(n => {
-      n.tags?.forEach(t => tags.add(t));
+    graphData.nodes.forEach((n) => {
+      n.tags?.forEach((t) => tags.add(t));
     });
     return Array.from(tags).sort();
   }, [graphData]);
@@ -91,16 +91,16 @@ export default function InsightsPage() {
     let nodes = graphData.nodes;
 
     if (typeFilter !== 'all') {
-      nodes = nodes.filter(n => n.type === typeFilter);
+      nodes = nodes.filter((n) => n.type === typeFilter);
     }
 
     if (tagFilter !== 'all') {
-      nodes = nodes.filter(n => n.tags && n.tags.includes(tagFilter));
+      nodes = nodes.filter((n) => n.tags && n.tags.includes(tagFilter));
     }
 
     // Edges are only kept if both from and to are in the filtered nodes
-    const nodeIds = new Set(nodes.map(n => n.id));
-    const edges = graphData.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges = graphData.edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to));
 
     return { nodes, edges };
   }, [graphData, typeFilter, tagFilter]);
@@ -118,18 +118,22 @@ export default function InsightsPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Knowledge Graph</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Interactive visualization of your agents' memories and their connections.</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            Interactive visualization of your agents' memories and their connections.
+          </p>
         </div>
       </div>
 
       <div className="flex-1 flex gap-6 mt-4 min-h-0">
         {/* Main Graph Area */}
         <div className="flex-1 flex flex-col bg-sera-surface border border-sera-border rounded-xl shadow-sm overflow-hidden relative">
-
           {/* Controls Bar */}
           <div className="p-4 border-b border-sera-border flex gap-4 bg-sera-bg/50 items-center justify-between z-10 flex-wrap">
             <div className="relative flex-1 min-w-[200px] max-w-md">
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-sera-text-muted" />
+              <Search
+                size={18}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-sera-text-muted"
+              />
               <input
                 type="text"
                 placeholder="Search memories by title or tags..."
@@ -139,7 +143,7 @@ export default function InsightsPage() {
               />
               {searchQuery && (
                 <button
-                  onClick={() => setSearchQuery("")}
+                  onClick={() => setSearchQuery('')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-sera-text-muted hover:text-sera-text"
                 >
                   <X size={14} />
@@ -156,8 +160,10 @@ export default function InsightsPage() {
                   className="bg-sera-bg border border-sera-border rounded-lg px-3 py-2 text-sm text-sera-text focus:outline-none focus:border-sera-primary appearance-none cursor-pointer pr-8 max-w-[150px]"
                 >
                   <option value="all">All Tags</option>
-                  {allTags.map(t => (
-                    <option key={t} value={t}>{t}</option>
+                  {allTags.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -208,25 +214,36 @@ export default function InsightsPage() {
           <div className="w-80 bg-sera-surface border border-sera-border rounded-xl shadow-sm flex flex-col overflow-hidden animate-in slide-in-from-right-4 duration-200">
             <div className="p-4 border-b border-sera-border flex justify-between items-start bg-sera-bg/50">
               <div>
-                <h3 className="font-medium text-sera-text truncate max-w-[220px]" title={selectedNode.title}>
+                <h3
+                  className="font-medium text-sera-text truncate max-w-[220px]"
+                  title={selectedNode.title}
+                >
                   {selectedNode.title}
                 </h3>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-sera-bg border border-sera-border text-sera-text-muted mt-2 inline-block capitalize">
                   {selectedNode.type}
                 </span>
               </div>
-              <button onClick={closePanel} className="text-sera-text-muted hover:text-sera-text p-1">
+              <button
+                onClick={closePanel}
+                className="text-sera-text-muted hover:text-sera-text p-1"
+              >
                 <X size={16} />
               </button>
             </div>
 
             <div className="p-4 flex-1 overflow-y-auto">
               <div className="mb-4">
-                <h4 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-2">Tags</h4>
+                <h4 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-2">
+                  Tags
+                </h4>
                 {selectedNode.tags && selectedNode.tags.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
-                    {selectedNode.tags.map(tag => (
-                      <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-sera-bg border border-sera-border rounded text-sera-text-muted">
+                    {selectedNode.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="text-[10px] px-1.5 py-0.5 bg-sera-bg border border-sera-border rounded text-sera-text-muted"
+                      >
                         #{tag}
                       </span>
                     ))}
@@ -237,7 +254,9 @@ export default function InsightsPage() {
               </div>
 
               <div className="mb-4">
-                <h4 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-2">Content Preview</h4>
+                <h4 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-2">
+                  Content Preview
+                </h4>
                 {entryLoading ? (
                   <div className="animate-pulse flex flex-col gap-2">
                     <div className="h-3 bg-sera-bg rounded w-3/4"></div>
@@ -254,15 +273,15 @@ export default function InsightsPage() {
               </div>
 
               <div className="mt-auto pt-4 flex flex-col items-center">
-                 <p className="text-xs text-sera-text-dim text-center mb-2">
-                   Double-click node to open full details
-                 </p>
-                 <a
-                   href={`/memory/${selectedNode.id}`}
-                   className="w-full py-2 bg-sera-bg hover:bg-sera-surface border border-sera-border rounded-lg text-sm text-sera-text text-center transition-colors block"
-                 >
-                   Open Entry
-                 </a>
+                <p className="text-xs text-sera-text-dim text-center mb-2">
+                  Double-click node to open full details
+                </p>
+                <a
+                  href={`/memory/${selectedNode.id}`}
+                  className="w-full py-2 bg-sera-bg hover:bg-sera-surface border border-sera-border rounded-lg text-sm text-sera-text text-center transition-colors block"
+                >
+                  Open Entry
+                </a>
               </div>
             </div>
           </div>

@@ -50,7 +50,7 @@ export function createConfigRouter(): Router {
       res.json({
         success: true,
         model: config.llm.model,
-        response: response.content
+        response: response.content,
       });
     } catch (err: any) {
       logger.error('LLM test failed:', err);
@@ -63,18 +63,18 @@ export function createConfigRouter(): Router {
   /** GET /api/providers — Lists all available provider configurations. */
   router.get('/providers', (req: Request, res: Response) => {
     const providersConfig = config.providers;
-    const providers = PROVIDER_CATALOG.map(p => {
+    const providers = PROVIDER_CATALOG.map((p) => {
       const savedConfig = providersConfig.providers[p.id] || null;
       return {
         ...p,
         configured: !!savedConfig,
         isActive: providersConfig.activeProvider === p.id,
-        savedConfig
+        savedConfig,
       };
     });
     res.json({
       activeProvider: providersConfig.activeProvider,
-      providers
+      providers,
     });
   });
 
@@ -110,7 +110,7 @@ export function createConfigRouter(): Router {
       } else {
         // Otherwise, use saved or catalog defaults
         const providerConfig = config.getProviderConfig(id);
-        const catalogEntry = PROVIDER_CATALOG.find(p => p.id === id);
+        const catalogEntry = PROVIDER_CATALOG.find((p) => p.id === id);
 
         provider = ProviderFactory.createFromModelConfig({
           provider: id,
@@ -122,7 +122,7 @@ export function createConfigRouter(): Router {
       res.json({
         success: true,
         provider: id,
-        response: response.content
+        response: response.content,
       });
     } catch (err: any) {
       // In tests, we might want to see the error, but we should not crash the test suite.

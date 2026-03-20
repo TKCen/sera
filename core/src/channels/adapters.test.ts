@@ -52,35 +52,41 @@ describe('Channel Adapters', () => {
       expect(mockOrchestrator.getPrimaryAgent).toHaveBeenCalled();
       expect(mockSessionStore.getSession).toHaveBeenCalledWith(expectedSessionId);
       expect(mockAgent.process).toHaveBeenCalledWith('hi', []);
-      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('sendMessage'), expect.objectContaining({
-        chat_id: chatId,
-        text: 'Hello from agent',
-      }));
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('sendMessage'),
+        expect.objectContaining({
+          chat_id: chatId,
+          text: 'Hello from agent',
+        })
+      );
       expect(mockSessionStore.addMessage).toHaveBeenCalled();
     });
 
     it('should enforce rate limits and not call agent', async () => {
-        const adapter = new TelegramAdapter('fake-token', mockOrchestrator, mockSessionStore, {
-          maxMessagesPerWindow: 2
+      const adapter = new TelegramAdapter('fake-token', mockOrchestrator, mockSessionStore, {
+        maxMessagesPerWindow: 2,
+      });
+
+      // Mock sendMessage
+      (axios.post as any).mockResolvedValue({ data: { ok: true } });
+
+      // Send 3 messages
+      for (let i = 0; i < 3; i++) {
+        // @ts-ignore
+        await adapter.handleMessage({
+          from: { id: 123, username: 'testuser' },
+          chat: { id: 456 },
+          text: 'hi',
         });
+      }
 
-        // Mock sendMessage
-        (axios.post as any).mockResolvedValue({ data: { ok: true } });
-
-        // Send 3 messages
-        for (let i = 0; i < 3; i++) {
-            // @ts-ignore
-            await adapter.handleMessage({
-                from: { id: 123, username: 'testuser' },
-                chat: { id: 456 },
-                text: 'hi',
-            });
-        }
-
-        expect(mockAgent.process).toHaveBeenCalledTimes(2);
-        expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('sendMessage'), expect.objectContaining({
-            text: expect.stringContaining('too fast'),
-        }));
+      expect(mockAgent.process).toHaveBeenCalledTimes(2);
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('sendMessage'),
+        expect.objectContaining({
+          text: expect.stringContaining('too fast'),
+        })
+      );
     });
   });
 
@@ -98,40 +104,59 @@ describe('Channel Adapters', () => {
       });
 
       expect(mockAgent.process).toHaveBeenCalledWith('hello discord', []);
-      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('channels/chan-1/messages'), expect.objectContaining({
-        content: 'Hello from agent',
-      }), expect.any(Object));
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('channels/chan-1/messages'),
+        expect.objectContaining({
+          content: 'Hello from agent',
+        }),
+        expect.any(Object)
+      );
     });
   });
 
   describe('WhatsAppAdapter', () => {
     it('should handle webhook payloads', async () => {
-      const adapter = new WhatsAppAdapter('fake-token', 'phone-id', mockOrchestrator, mockSessionStore);
+      const adapter = new WhatsAppAdapter(
+        'fake-token',
+        'phone-id',
+        mockOrchestrator,
+        mockSessionStore
+      );
 
       (axios.post as any).mockResolvedValueOnce({ data: { messaging_product: 'whatsapp' } });
 
       const payload = {
-        entry: [{
-          changes: [{
-            value: {
-              contacts: [{ profile: { name: 'testuser' } }],
-              messages: [{
-                from: 'whatsapp-id',
-                type: 'text',
-                text: { body: 'hello whatsapp' }
-              }]
-            }
-          }]
-        }]
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  contacts: [{ profile: { name: 'testuser' } }],
+                  messages: [
+                    {
+                      from: 'whatsapp-id',
+                      type: 'text',
+                      text: { body: 'hello whatsapp' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
       };
 
       await adapter.handleWebhookPayload(payload);
 
       expect(mockAgent.process).toHaveBeenCalledWith('hello whatsapp', []);
-      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('phone-id/messages'), expect.objectContaining({
-        to: 'whatsapp-id',
-        text: { body: 'Hello from agent' },
-      }), expect.any(Object));
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('phone-id/messages'),
+        expect.objectContaining({
+          to: 'whatsapp-id',
+          text: { body: 'Hello from agent' },
+        }),
+        expect.any(Object)
+      );
     });
   });
 });

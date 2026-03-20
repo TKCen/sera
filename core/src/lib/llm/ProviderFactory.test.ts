@@ -10,9 +10,9 @@ vi.mock('../config.js', () => ({
     llm: {
       baseUrl: 'http://global-fallback:1234/v1',
       apiKey: 'global-key',
-      model: 'global-model'
-    }
-  }
+      model: 'global-model',
+    },
+  },
 }));
 
 vi.mock('./OpenAIProvider.js', () => {
@@ -21,9 +21,9 @@ vi.mock('./OpenAIProvider.js', () => {
       return {
         configOverride: config,
         chat: vi.fn(),
-        chatStream: vi.fn()
+        chatStream: vi.fn(),
       };
-    })
+    }),
   };
 });
 
@@ -37,14 +37,14 @@ describe('ProviderFactory', () => {
       const mockProviderConfig = {
         baseUrl: 'http://custom-provider:8000/v1',
         apiKey: 'custom-key',
-        model: 'custom-default-model'
+        model: 'custom-default-model',
       };
       vi.mocked(config.getProviderConfig).mockReturnValue(mockProviderConfig);
 
       const modelConfig = {
         provider: 'custom-id',
         name: 'custom-model',
-        temperature: 0.5
+        temperature: 0.5,
       };
 
       const provider = ProviderFactory.createFromModelConfig(modelConfig) as any;
@@ -54,7 +54,7 @@ describe('ProviderFactory', () => {
         baseUrl: 'http://custom-provider:8000/v1',
         apiKey: 'custom-key',
         model: 'custom-model',
-        temperature: 0.5
+        temperature: 0.5,
       });
       expect(provider.configOverride.baseUrl).toBe('http://custom-provider:8000/v1');
     });
@@ -64,7 +64,7 @@ describe('ProviderFactory', () => {
 
       const modelConfig = {
         provider: 'non-existent',
-        name: 'requested-model'
+        name: 'requested-model',
       };
 
       ProviderFactory.createFromModelConfig(modelConfig);
@@ -72,7 +72,7 @@ describe('ProviderFactory', () => {
       expect(OpenAIProvider).toHaveBeenCalledWith({
         baseUrl: 'http://global-fallback:1234/v1',
         apiKey: 'global-key',
-        model: 'requested-model'
+        model: 'requested-model',
       });
     });
 
@@ -80,12 +80,12 @@ describe('ProviderFactory', () => {
       vi.mocked(config.getProviderConfig).mockReturnValue({
         baseUrl: 'http://no-key-provider:1234/v1',
         apiKey: '',
-        model: 'some-default-model'
+        model: 'some-default-model',
       });
 
       const modelConfig = {
         provider: 'no-key-id',
-        name: 'some-model'
+        name: 'some-model',
       };
 
       ProviderFactory.createFromModelConfig(modelConfig);
@@ -93,7 +93,7 @@ describe('ProviderFactory', () => {
       expect(OpenAIProvider).toHaveBeenCalledWith({
         baseUrl: 'http://no-key-provider:1234/v1',
         apiKey: 'not-needed',
-        model: 'some-model'
+        model: 'some-model',
       });
     });
   });
@@ -104,8 +104,8 @@ describe('ProviderFactory', () => {
         model: {
           provider: 'manifest-provider',
           name: 'manifest-model',
-          temperature: 0.9
-        }
+          temperature: 0.9,
+        },
       } as any;
 
       const spy = vi.spyOn(ProviderFactory, 'createFromModelConfig');

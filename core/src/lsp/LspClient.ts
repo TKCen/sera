@@ -17,7 +17,7 @@ import {
   type SymbolInformation,
   type DocumentSymbol,
   DidOpenTextDocumentNotification,
-  type DidOpenTextDocumentParams
+  type DidOpenTextDocumentParams,
 } from 'vscode-languageserver-protocol';
 import type { LspClientOptions } from './types.js';
 import fs from 'fs';
@@ -50,10 +50,10 @@ export class LspClient {
         textDocument: {
           definition: { dynamicRegistration: true },
           references: { dynamicRegistration: true },
-          documentSymbol: { dynamicRegistration: true }
-        }
+          documentSymbol: { dynamicRegistration: true },
+        },
       },
-      workspaceFolders: null
+      workspaceFolders: null,
     };
 
     try {
@@ -77,23 +77,29 @@ export class LspClient {
         uri,
         languageId,
         version: 1,
-        text: content
-      }
+        text: content,
+      },
     };
 
     await this.connection.sendNotification(DidOpenTextDocumentNotification.method, params);
     this.openedFiles.add(uri);
   }
 
-  async getDefinition(uri: string, line: number, character: number): Promise<Location | Location[] | null> {
+  async getDefinition(
+    uri: string,
+    line: number,
+    character: number
+  ): Promise<Location | Location[] | null> {
     if (!this.connection) throw new Error('LSP connection not established');
 
     const params: DefinitionParams = {
       textDocument: { uri },
-      position: { line, character }
+      position: { line, character },
     };
 
-    return this.connection.sendRequest(DefinitionRequest.method, params) as Promise<Location | Location[] | null>;
+    return this.connection.sendRequest(DefinitionRequest.method, params) as Promise<
+      Location | Location[] | null
+    >;
   }
 
   async getReferences(uri: string, line: number, character: number): Promise<Location[] | null> {
@@ -102,20 +108,24 @@ export class LspClient {
     const params: ReferenceParams = {
       textDocument: { uri },
       position: { line, character },
-      context: { includeDeclaration: true }
+      context: { includeDeclaration: true },
     };
 
-    return this.connection.sendRequest(ReferencesRequest.method, params) as Promise<Location[] | null>;
+    return this.connection.sendRequest(ReferencesRequest.method, params) as Promise<
+      Location[] | null
+    >;
   }
 
   async getDocumentSymbols(uri: string): Promise<SymbolInformation[] | DocumentSymbol[] | null> {
     if (!this.connection) throw new Error('LSP connection not established');
 
     const params: DocumentSymbolParams = {
-      textDocument: { uri }
+      textDocument: { uri },
     };
 
-    return this.connection.sendRequest(DocumentSymbolRequest.method, params) as Promise<SymbolInformation[] | DocumentSymbol[] | null>;
+    return this.connection.sendRequest(DocumentSymbolRequest.method, params) as Promise<
+      SymbolInformation[] | DocumentSymbol[] | null
+    >;
   }
 
   async stop(): Promise<void> {

@@ -26,8 +26,8 @@ describe('ApiKeyProvider', () => {
   it('should authenticate with bootstrap key', async () => {
     const req = {
       headers: {
-        authorization: `Bearer ${BOOTSTRAP_KEY}`
-      }
+        authorization: `Bearer ${BOOTSTRAP_KEY}`,
+      },
     } as any;
 
     const identity = await provider.authenticate(req);
@@ -54,12 +54,14 @@ describe('ApiKeyProvider', () => {
 
     vi.mocked(db.query).mockResolvedValueOnce({
       rowCount: 1,
-      rows: [{
-        id: 'key-id',
-        key_hash: 'hashed_key',
-        owner_sub: 'user-123',
-        roles: ['operator']
-      }]
+      rows: [
+        {
+          id: 'key-id',
+          key_hash: 'hashed_key',
+          owner_sub: 'user-123',
+          roles: ['operator'],
+        },
+      ],
     } as any);
 
     // Mock the UPDATE last_used_at query
@@ -80,12 +82,14 @@ describe('ApiKeyProvider', () => {
 
     vi.mocked(db.query).mockResolvedValueOnce({
       rowCount: 1,
-      rows: [{
-        id: 'key-id',
-        key_hash: 'different_hash',
-        owner_sub: 'user-123',
-        roles: ['operator']
-      }]
+      rows: [
+        {
+          id: 'key-id',
+          key_hash: 'different_hash',
+          owner_sub: 'user-123',
+          roles: ['operator'],
+        },
+      ],
     } as any);
 
     vi.mocked(argon2.verify).mockResolvedValue(false);

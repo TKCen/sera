@@ -70,20 +70,20 @@ export class IngestionService {
 
   private shouldIgnore(filePath: string): boolean {
     const ignoreList = [
-      'node_modules', 
-      '.git', 
-      'dist', 
-      '.next', 
-      'qdrant_data', 
-      'sera_db_data', 
-      'certs', 
-      'logs', 
-      '.pem', 
-      '.key', 
+      'node_modules',
+      '.git',
+      'dist',
+      '.next',
+      'qdrant_data',
+      'sera_db_data',
+      'certs',
+      'logs',
+      '.pem',
+      '.key',
       '.crt',
       'package-lock.json',
       'pnpm-lock.yaml',
-      'yarn.lock'
+      'yarn.lock',
     ];
     return ignoreList.some((pattern) => filePath.includes(pattern));
   }

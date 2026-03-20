@@ -108,7 +108,7 @@ export class IntercomService {
     channel: string,
     type: IntercomMessageType,
     payload: Record<string, unknown>,
-    metadata?: { replyTo?: string; ttl?: number; securityTier?: number },
+    metadata?: { replyTo?: string; ttl?: number; securityTier?: number }
   ): Promise<IntercomMessage> {
     const msgMetadata: MessageMetadata = {
       securityTier: metadata?.securityTier ?? 1,
@@ -140,7 +140,7 @@ export class IntercomService {
   async sendDirectMessage(
     fromManifest: AgentManifest,
     toAgentId: string,
-    payload: Record<string, unknown>,
+    payload: Record<string, unknown>
   ): Promise<IntercomMessage> {
     const fromAgentId = fromManifest.metadata.name;
     const circle = fromManifest.metadata.circle;
@@ -170,7 +170,7 @@ export class IntercomService {
     stepType: ThoughtStepType,
     content: string,
     taskId?: string,
-    iteration?: number,
+    iteration?: number
   ): Promise<void> {
     const channel = ChannelNamespace.thoughts(agentId);
     const timestamp = new Date().toISOString();
@@ -190,14 +190,7 @@ export class IntercomService {
         await pool.query(
           `INSERT INTO thought_events (agent_instance_id, task_id, step, content, iteration, published_at)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            agentId, 
-            taskId || null,
-            stepType,
-            content,
-            iteration || 0,
-            timestamp
-          ]
+          [agentId, taskId || null, stepType, content, iteration || 0, timestamp]
         );
       } catch (err: any) {
         logger.error(`Failed to persist thought for ${agentId}: ${err.message}`);
@@ -213,7 +206,10 @@ export class IntercomService {
   /**
    * Story 9.7: Get persisted thoughts for an agent.
    */
-  async getThoughts(agentId: string, options: { taskId?: string, limit?: number, offset?: number } = {}): Promise<any[]> {
+  async getThoughts(
+    agentId: string,
+    options: { taskId?: string; limit?: number; offset?: number } = {}
+  ): Promise<any[]> {
     const { taskId, limit = 50, offset = 0 } = options;
     let queryText = `SELECT * FROM thought_events WHERE agent_instance_id = $1`;
     const params: any[] = [agentId];
@@ -227,13 +223,13 @@ export class IntercomService {
     params.push(limit, offset);
 
     const res = await pool.query(queryText, params);
-    return res.rows.map(row => ({
+    return res.rows.map((row) => ({
       timestamp: row.published_at,
       stepType: row.step,
       content: row.content,
       agentId: row.agent_instance_id,
       taskId: row.task_id,
-      iteration: row.iteration
+      iteration: row.iteration,
     }));
   }
 
@@ -246,7 +242,7 @@ export class IntercomService {
     agentId: string,
     token: string,
     done: boolean,
-    messageId: string,
+    messageId: string
   ): Promise<void> {
     const channel = ChannelNamespace.tokens(agentId);
     const data: StreamToken = { token, done, messageId };
@@ -258,10 +254,7 @@ export class IntercomService {
   /**
    * Publish agent lifecycle status transition.
    */
-  async publishAgentStatus(
-    agentId: string,
-    status: string,
-  ): Promise<void> {
+  async publishAgentStatus(agentId: string, status: string): Promise<void> {
     const channel = ChannelNamespace.status(agentId);
     await this.publish(channel, {
       timestamp: new Date().toISOString(),
@@ -282,10 +275,7 @@ export class IntercomService {
   /**
    * Publish a platform event.
    */
-  async publishSystemEvent(
-    event: string,
-    payload: Record<string, unknown>,
-  ): Promise<void> {
+  async publishSystemEvent(event: string, payload: Record<string, unknown>): Promise<void> {
     const channel = ChannelNamespace.system(event);
     await this.publish(channel, {
       version: '1',
@@ -304,14 +294,17 @@ export class IntercomService {
   async broadcastToCircle(
     fromManifest: AgentManifest,
     circleId: string,
-    payload: Record<string, unknown>,
+    payload: Record<string, unknown>
   ): Promise<IntercomMessage> {
     const fromAgentId = fromManifest.metadata.name;
     const agentCircle = fromManifest.metadata.circle;
     const additionalCircles = fromManifest.metadata.additionalCircles ?? [];
 
     if (agentCircle !== circleId && !additionalCircles.includes(circleId)) {
-      throw new IntercomError(`Agent "${fromAgentId}" is not a member of circle "${circleId}"`, `circle:${circleId}`);
+      throw new IntercomError(
+        `Agent "${fromAgentId}" is not a member of circle "${circleId}"`,
+        `circle:${circleId}`
+      );
     }
 
     const channel = ChannelNamespace.circle(circleId);
@@ -334,12 +327,9 @@ export class IntercomService {
     circles: string[];
   } {
     const agentId = manifest.metadata.name;
-    const circles = [
-      manifest.metadata.circle,
-      ...(manifest.metadata.additionalCircles ?? []),
-    ];
+    const circles = [manifest.metadata.circle, ...(manifest.metadata.additionalCircles ?? [])];
 
-    const dmPeers = (manifest.intercom?.canMessage ?? []).map(peerId => {
+    const dmPeers = (manifest.intercom?.canMessage ?? []).map((peerId) => {
       return ChannelNamespace.private(agentId, peerId);
     });
 
@@ -348,7 +338,9 @@ export class IntercomService {
       status: ChannelNamespace.status(agentId),
       tokens: ChannelNamespace.tokens(agentId),
       dmPeers,
-      circles: circles.filter((c): c is string => c !== undefined).map(c => ChannelNamespace.circle(c)),
+      circles: circles
+        .filter((c): c is string => c !== undefined)
+        .map((c) => ChannelNamespace.circle(c)),
     };
   }
 
@@ -372,21 +364,24 @@ export class IntercomService {
    */
   async generateSubscriptionToken(userId: string, channel: string, role: string): Promise<string> {
     const prefix = ChannelNamespace.getPrefix(channel);
-    
+
     // Role-based access control
     if (role === 'viewer') {
       if (prefix !== 'thoughts') {
-        throw new IntercomError(`Role "viewer" is only permitted to subscribe to thought streams.`, channel);
+        throw new IntercomError(
+          `Role "viewer" is only permitted to subscribe to thought streams.`,
+          channel
+        );
       }
     } else if (role !== 'admin' && role !== 'operator') {
       throw new IntercomError(`Unauthorized role: ${role}`, channel);
     }
 
     const secret = new TextEncoder().encode(CENTRIFUGO_TOKEN_SECRET);
-    return new jose.SignJWT({ 
-      sub: userId, 
+    return new jose.SignJWT({
+      sub: userId,
       channel,
-      role // Include the operator's role as a claim
+      role, // Include the operator's role as a claim
     })
       .setProtectedHeader({ alg: 'HS256' })
       .setIssuedAt()
@@ -411,8 +406,8 @@ export class IntercomPermissionError extends IntercomError {
   constructor(fromAgent: string, toAgent: string) {
     super(
       `Agent "${fromAgent}" is not permitted to message "${toAgent}". ` +
-      `Add "${toAgent}" to the intercom.canMessage list in ${fromAgent}'s AGENT.yaml.`,
-      `private:${fromAgent}:${toAgent}`,
+        `Add "${toAgent}" to the intercom.canMessage list in ${fromAgent}'s AGENT.yaml.`,
+      `private:${fromAgent}:${toAgent}`
     );
     this.name = 'IntercomPermissionError';
   }

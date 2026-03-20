@@ -20,7 +20,6 @@ import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('Orchestrator');
 
-
 // Story 3.6 — agents that miss heartbeats for this long are marked unresponsive
 const HEARTBEAT_STALE_MS = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 10);
 
@@ -28,7 +27,10 @@ const HEARTBEAT_STALE_MS = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 
 const SUBAGENT_MAX_DEPTH = parseInt(process.env.SUBAGENT_MAX_DEPTH ?? '5', 10);
 
 export class RecursionLimitError extends Error {
-  constructor(public readonly currentDepth: number, public readonly maxDepth: number) {
+  constructor(
+    public readonly currentDepth: number,
+    public readonly maxDepth: number
+  ) {
     super(`Recursion limit exceeded: depth ${currentDepth} >= max ${maxDepth}`);
     this.name = 'RecursionLimitError';
   }
@@ -60,18 +62,21 @@ export class Orchestrator {
   constructor() {
     // Story 3.6 — periodic heartbeat staleness check
     this.heartbeatInterval = setInterval(() => {
-      this.checkStaleInstances().catch(err => logger.error('Heartbeat check error:', err));
+      this.checkStaleInstances().catch((err) => logger.error('Heartbeat check error:', err));
     }, 30000);
 
     // Story 3.7 — periodic cleanup of stopped/error containers
     this.cleanupInterval = setInterval(() => {
-      this.runCleanupJob().catch(err => logger.error('Cleanup job error:', err));
+      this.runCleanupJob().catch((err) => logger.error('Cleanup job error:', err));
     }, 60000);
 
     // Story 3.12 — periodic disk quota check (every 15 min)
-    this.diskQuotaInterval = setInterval(() => {
-      this.runDiskQuotaCheck().catch(err => logger.error('Disk quota check error:', err));
-    }, 15 * 60 * 1000);
+    this.diskQuotaInterval = setInterval(
+      () => {
+        this.runDiskQuotaCheck().catch((err) => logger.error('Disk quota check error:', err));
+      },
+      15 * 60 * 1000
+    );
   }
 
   public setRegistry(registry: AgentRegistry): void {
@@ -108,7 +113,9 @@ export class Orchestrator {
     return this.agents.get(instanceId)?.getManifest();
   }
 
-  public setSandboxManager(sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager): void {
+  public setSandboxManager(
+    sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager
+  ): void {
     this.sandboxManager = sandboxManager;
   }
 
@@ -139,7 +146,11 @@ export class Orchestrator {
    * Enforces lifecycle rules and recursion depth before spawning.
    * Stories 3.1–3.3, 3.5, 3.8, 3.11
    */
-  public async startInstance(instanceId: string, parentInstanceId?: string, task?: string): Promise<BaseAgent> {
+  public async startInstance(
+    instanceId: string,
+    parentInstanceId?: string,
+    task?: string
+  ): Promise<BaseAgent> {
     if (!this.registry) throw new Error('Registry not configured');
 
     const instance = await AgentFactory.getInstance(instanceId);
@@ -156,7 +167,8 @@ export class Orchestrator {
     }
 
     // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────
-    const templateLifecycle = (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
+    const templateLifecycle =
+      (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
     const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle;
 
     // ── Subagent spawn validation & Circle Inheritance ───────────────────
@@ -180,7 +192,7 @@ export class Orchestrator {
         // DECISION: hard guard — force child to ephemeral if parent is ephemeral
         await this.registry.updateInstanceStatus(instanceId, 'error');
         throw new Error(
-          `CapabilityEscalationError: ephemeral agent cannot spawn persistent subagent (Story 3.8)`,
+          `CapabilityEscalationError: ephemeral agent cannot spawn persistent subagent (Story 3.8)`
         );
       }
 
@@ -188,10 +200,10 @@ export class Orchestrator {
       if (!resolvedCircleId && parentInstance?.circle_id) {
         resolvedCircleId = parentInstance.circle_id;
         // Persist the inherited circle ID
-        await query(
-          `UPDATE agent_instances SET circle_id = $1 WHERE id = $2`,
-          [resolvedCircleId, instanceId],
-        );
+        await query(`UPDATE agent_instances SET circle_id = $1 WHERE id = $2`, [
+          resolvedCircleId,
+          instanceId,
+        ]);
       }
     }
 
@@ -204,7 +216,7 @@ export class Orchestrator {
       instance.id,
       instance.overrides,
       null,
-      resolvedCapabilities,
+      resolvedCapabilities
     );
 
     // ── Container Spawn (Story 3.1, 3.3) ─────────────────────────────────
@@ -221,7 +233,7 @@ export class Orchestrator {
               capabilities: resolvedCapabilities,
               scope: 'agent',
             },
-            '24h',
+            '24h'
           );
         }
 
@@ -244,18 +256,20 @@ export class Orchestrator {
                 const { query: dbQuery } = await import('../lib/database.js');
                 const metaResult = await dbQuery(
                   'SELECT exposure FROM secrets WHERE name = $1 AND deleted_at IS NULL',
-                  [secretName],
+                  [secretName]
                 );
                 const exposure = metaResult.rows[0]?.exposure ?? 'per-call';
                 if (exposure === 'agent-env') {
                   agentEnvSecrets[secretName] = secretValue;
-                  await AuditService.getInstance().record({
-                    actorType: 'system',
-                    actorId: 'system',
-                    actingContext: null,
-                    eventType: 'secret.injected',
-                    payload: { secretName, agentId: instance.id },
-                  }).catch(() => {});
+                  await AuditService.getInstance()
+                    .record({
+                      actorType: 'system',
+                      actorId: 'system',
+                      actingContext: null,
+                      eventType: 'secret.injected',
+                      payload: { secretName, agentId: instance.id },
+                    })
+                    .catch(() => {});
                 }
               }
             } catch (secretErr) {
@@ -278,7 +292,7 @@ export class Orchestrator {
           },
           resolvedCapabilities,
           instance.id,
-          Object.keys(agentEnvSecrets).length > 0 ? agentEnvSecrets : undefined,
+          Object.keys(agentEnvSecrets).length > 0 ? agentEnvSecrets : undefined
         );
 
         // Zero out in-memory secret values after spawn (Story 16.9)
@@ -299,7 +313,11 @@ export class Orchestrator {
           actorId: 'system',
           actingContext: null,
           eventType: 'agent.spawned',
-          payload: { agentId: instance.id, agentName: instance.name, containerId: sandbox.containerId }
+          payload: {
+            agentId: instance.id,
+            agentName: instance.name,
+            containerId: sandbox.containerId,
+          },
         });
 
         logger.info(`Spawned container ${sandbox.containerId} for agent ${instance.name}`);
@@ -313,7 +331,11 @@ export class Orchestrator {
           actorId: 'system',
           actingContext: null,
           eventType: 'agent.crashed',
-          payload: { agentId: instance.id, agentName: instance.name, error: (err as Error).message }
+          payload: {
+            agentId: instance.id,
+            agentName: instance.name,
+            error: (err as Error).message,
+          },
         });
 
         logger.error(`Failed to start agent ${instance.name}:`, err);
@@ -361,7 +383,7 @@ export class Orchestrator {
       actorId: 'system',
       actingContext: null,
       eventType: 'agent.stopped',
-      payload: { agentId: instanceId }
+      payload: { agentId: instanceId },
     });
 
     this.agents.delete(instanceId);
@@ -406,9 +428,9 @@ export class Orchestrator {
       for (const instance of [...stopped, ...errored]) {
         const updatedAt = new Date(instance.updated_at);
         if (updatedAt < cutoff) {
-          await this.sandboxManager.teardown(instance.id).catch(
-            err => logger.warn(`Cleanup: failed to teardown ${instance.id}:`, err),
-          );
+          await this.sandboxManager
+            .teardown(instance.id)
+            .catch((err) => logger.warn(`Cleanup: failed to teardown ${instance.id}:`, err));
           logger.info(`Cleanup job: removed stale container for instance ${instance.id}`);
         }
       }
@@ -440,7 +462,9 @@ export class Orchestrator {
     }
   }
 
-  public getUnhealthyInstances(timeoutMs: number = HEARTBEAT_STALE_MS): { instanceId: string; lastSeen: Date }[] {
+  public getUnhealthyInstances(
+    timeoutMs: number = HEARTBEAT_STALE_MS
+  ): { instanceId: string; lastSeen: Date }[] {
     const now = new Date();
     const unhealthy: { instanceId: string; lastSeen: Date }[] = [];
     for (const [instanceId, lastHeartbeat] of this.heartbeats.entries()) {
@@ -468,7 +492,9 @@ export class Orchestrator {
 
       // Log startup warning if no limit is set and agent has write access (Story 3.12)
       if (!limitGB && caps?.filesystem?.write) {
-        logger.warn(`Agent ${instance.name} has filesystem.write but no maxWorkspaceSizeGB — no quota enforced`);
+        logger.warn(
+          `Agent ${instance.name} has filesystem.write but no maxWorkspaceSizeGB — no quota enforced`
+        );
         continue;
       }
 
@@ -476,10 +502,13 @@ export class Orchestrator {
 
       let usedGB = 0;
       try {
-        const duOutput = execSync(`du -s --block-size=1G "${workspacePath}" 2>/dev/null || echo "0"`, {
-          encoding: 'utf-8',
-          shell: '/bin/sh',
-        });
+        const duOutput = execSync(
+          `du -s --block-size=1G "${workspacePath}" 2>/dev/null || echo "0"`,
+          {
+            encoding: 'utf-8',
+            shell: '/bin/sh',
+          }
+        );
         usedGB = parseInt(duOutput.split('\t')[0] ?? '0', 10) || 0;
       } catch {
         // du not available (Windows dev env) — skip
@@ -555,16 +584,18 @@ export class Orchestrator {
     type: string,
     instanceId: string,
     agentName?: string,
-    containerId?: string,
+    containerId?: string
   ): void {
     if (!this.intercom) return;
-    this.intercom.publish('system.agents', {
-      type,
-      agentId: instanceId,
-      agentName,
-      containerId,
-      timestamp: new Date().toISOString(),
-    }).catch(err => logger.error('Failed to publish lifecycle event:', err));
+    this.intercom
+      .publish('system.agents', {
+        type,
+        agentId: instanceId,
+        agentName,
+        containerId,
+        timestamp: new Date().toISOString(),
+      })
+      .catch((err) => logger.error('Failed to publish lifecycle event:', err));
   }
 
   // ── Template / Agent Management ─────────────────────────────────────────
@@ -602,7 +633,7 @@ export class Orchestrator {
   }
 
   public stopWatching(): void {
-    this.stop().catch(err => logger.error('Error stopping orchestrator:', err));
+    this.stop().catch((err) => logger.error('Error stopping orchestrator:', err));
   }
 
   public async stop(): Promise<void> {
@@ -624,7 +655,7 @@ export class Orchestrator {
       const agent = this.agents.get(this.primaryAgentName);
       if (agent) return agent;
       const found = Array.from(this.agents.values()).find(
-        a => a.getManifest().metadata.name === this.primaryAgentName,
+        (a) => a.getManifest().metadata.name === this.primaryAgentName
       );
       if (found) return found;
     }
@@ -632,7 +663,7 @@ export class Orchestrator {
   }
 
   public listAgents(): any[] {
-    const active = Array.from(this.agents.values()).map(a => ({
+    const active = Array.from(this.agents.values()).map((a) => ({
       id: a.agentInstanceId,
       name: a.getManifest().metadata.name,
       status: a.status,
@@ -666,7 +697,11 @@ export class Orchestrator {
     return result.finalOutput ?? 'No answer provided.';
   }
 
-  async executeWithProcess(type: ProcessType, tasks: ProcessTask[], managerAgentName?: string): Promise<ProcessRunResult> {
+  async executeWithProcess(
+    type: ProcessType,
+    tasks: ProcessTask[],
+    managerAgentName?: string
+  ): Promise<ProcessRunResult> {
     const managerAgent = managerAgentName ? this.agents.get(managerAgentName) : undefined;
     return this.processManager.run(type, tasks, this.agents, managerAgent);
   }

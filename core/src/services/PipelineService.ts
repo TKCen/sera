@@ -37,12 +37,13 @@ export class PipelineService {
 
   async create(type: Pipeline['type'], steps: PipelineStep[]): Promise<Pipeline> {
     const id = uuidv4();
-    const initialSteps: PipelineStep[] = steps.map(s => ({ ...s, status: 'pending' as const }));
+    const initialSteps: PipelineStep[] = steps.map((s) => ({ ...s, status: 'pending' as const }));
 
-    await query(
-      `INSERT INTO pipelines (id, type, status, steps) VALUES ($1, $2, 'pending', $3)`,
-      [id, type, JSON.stringify(initialSteps)],
-    );
+    await query(`INSERT INTO pipelines (id, type, status, steps) VALUES ($1, $2, 'pending', $3)`, [
+      id,
+      type,
+      JSON.stringify(initialSteps),
+    ]);
 
     logger.info(`Created pipeline ${id} (${type}, ${steps.length} steps)`);
     return this.get(id) as Promise<Pipeline>;
@@ -65,10 +66,10 @@ export class PipelineService {
 
   async updateStatus(id: string, status: Pipeline['status']): Promise<void> {
     if (status === 'completed' || status === 'failed') {
-      await query(
-        `UPDATE pipelines SET status = $1, completed_at = NOW() WHERE id = $2`,
-        [status, id],
-      );
+      await query(`UPDATE pipelines SET status = $1, completed_at = NOW() WHERE id = $2`, [
+        status,
+        id,
+      ]);
     } else {
       await query(`UPDATE pipelines SET status = $1 WHERE id = $2`, [status, id]);
     }

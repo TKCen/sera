@@ -24,19 +24,21 @@ vi.mock('../llm/LlmRouter.js', () => ({
         object: 'chat.completion',
         created: 1234567890,
         model: 'test-model',
-        choices: [{
-          index: 0,
-          message: { role: 'assistant', content: 'Hello from the LLM!' },
-          finish_reason: 'stop',
-        }],
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Hello from the LLM!' },
+            finish_reason: 'stop',
+          },
+        ],
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       },
       latencyMs: 100,
     }),
     chatCompletionStream: vi.fn(),
-    listModels: vi.fn().mockResolvedValue([
-      { id: 'test-model', object: 'model', owned_by: 'lmstudio' },
-    ]),
+    listModels: vi
+      .fn()
+      .mockResolvedValue([{ id: 'test-model', object: 'model', owned_by: 'lmstudio' }]),
     addModel: vi.fn(),
     deleteModel: vi.fn(),
     testModel: vi.fn(),
@@ -49,9 +51,11 @@ vi.mock('../llm/LlmRouter.js', () => ({
 vi.mock('../llm/CircuitBreakerService.js', () => ({
   CircuitBreakerService: vi.fn().mockImplementation((client: any) => ({
     client,
-    call: vi.fn().mockImplementation((req: any, agentId: any, latencyStart: any) =>
-      client.chatCompletion(req, agentId, latencyStart)
-    ),
+    call: vi
+      .fn()
+      .mockImplementation((req: any, agentId: any, latencyStart: any) =>
+        client.chatCompletion(req, agentId, latencyStart)
+      ),
     getState: vi.fn().mockReturnValue([]),
     getProviderState: vi.fn().mockReturnValue(null),
   })),
@@ -74,13 +78,15 @@ import { createAuthMiddleware } from '../auth/authMiddleware.js';
 
 const TEST_SECRET = 'test-secret-for-proxy-tests';
 
-async function createTestSetup(budgetOverride?: Partial<{
-  allowed: boolean;
-  hourlyUsed: number;
-  hourlyQuota: number;
-  dailyUsed: number;
-  dailyQuota: number;
-}>) {
+async function createTestSetup(
+  budgetOverride?: Partial<{
+    allowed: boolean;
+    hourlyUsed: number;
+    hourlyQuota: number;
+    dailyUsed: number;
+    dailyQuota: number;
+  }>
+) {
   const identityService = new IdentityService(TEST_SECRET);
   const meteringService = new MeteringService();
   const llmRouter = new LlmRouter({} as any);
@@ -152,7 +158,9 @@ function getHandler(router: any, method: string, path: string) {
 async function executeHandlers(handlers: Function[], req: Request, res: Response) {
   for (const handler of handlers) {
     let nextCalled = false;
-    const next: NextFunction = () => { nextCalled = true; };
+    const next: NextFunction = () => {
+      nextCalled = true;
+    };
     await handler(req, res, next);
     if (!nextCalled) break;
   }
@@ -176,7 +184,7 @@ describe('LLM Proxy Router', () => {
 
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: expect.stringContaining('Missing') }),
+        expect.objectContaining({ error: expect.stringContaining('Missing') })
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -220,7 +228,15 @@ describe('LLM Proxy Router', () => {
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
-        agentIdentity: { agentId: 'test-agent', circleId: 'test-circle', scope: 'agent', capabilities: [], agentName: 'test-agent', iat: 0, exp: 9999999999 },
+        agentIdentity: {
+          agentId: 'test-agent',
+          circleId: 'test-circle',
+          scope: 'agent',
+          capabilities: [],
+          agentName: 'test-agent',
+          iat: 0,
+          exp: 9999999999,
+        },
         body: {
           model: 'test-model',
           messages: [{ role: 'user', content: 'Hello' }],
@@ -245,7 +261,7 @@ describe('LLM Proxy Router', () => {
             completion_tokens: 5,
             total_tokens: 15,
           }),
-        }),
+        })
       );
     });
 
@@ -255,7 +271,15 @@ describe('LLM Proxy Router', () => {
 
       const { req, res } = createMockReqRes({
         headers: { authorization: `Bearer ${validToken}` },
-        agentIdentity: { agentId: 'test-agent', circleId: 'test-circle', scope: 'agent', capabilities: [], agentName: 'test-agent', iat: 0, exp: 9999999999 },
+        agentIdentity: {
+          agentId: 'test-agent',
+          circleId: 'test-circle',
+          scope: 'agent',
+          capabilities: [],
+          agentName: 'test-agent',
+          iat: 0,
+          exp: 9999999999,
+        },
         body: {
           messages: [{ role: 'user', content: 'Hello' }],
         },
@@ -264,7 +288,7 @@ describe('LLM Proxy Router', () => {
       await executeHandlers(handlers, req, res);
 
       // recordUsage is fire-and-forget, give it a tick
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(meteringService.recordUsage).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -273,7 +297,7 @@ describe('LLM Proxy Router', () => {
           completionTokens: 5,
           totalTokens: 15,
           status: 'success',
-        }),
+        })
       );
     });
 
@@ -315,7 +339,7 @@ describe('LLM Proxy Router', () => {
         expect.objectContaining({
           error: 'budget_exceeded',
           period: expect.stringMatching(/hourly|daily/),
-        }),
+        })
       );
     });
 
@@ -362,7 +386,7 @@ describe('LLM Proxy Router', () => {
 
       expect(res.status).toHaveBeenCalledWith(503);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'provider_unavailable', provider: 'lmstudio' }),
+        expect.objectContaining({ error: 'provider_unavailable', provider: 'lmstudio' })
       );
     });
   });
@@ -388,7 +412,7 @@ describe('LLM Proxy Router', () => {
               owned_by: 'lmstudio',
             }),
           ]),
-        }),
+        })
       );
     });
   });

@@ -82,12 +82,12 @@ export class LiteLLMClient {
   async chatCompletion(
     request: ChatCompletionRequest,
     agentId: string,
-    latencyStart: number = Date.now(),
+    latencyStart: number = Date.now()
   ): Promise<{ response: ChatCompletionResponse; latencyMs: number }> {
     const requestBody = { ...request, stream: false };
 
     logger.debug(
-      `LiteLLM request | agent=${agentId} model=${request.model} messages=${request.messages.length}`,
+      `LiteLLM request | agent=${agentId} model=${request.model} messages=${request.messages.length}`
     );
 
     const axiosResponse: AxiosResponse<ChatCompletionResponse> = await this.http.post(
@@ -97,7 +97,7 @@ export class LiteLLMClient {
         headers: {
           'X-SERA-Agent-Id': agentId,
         },
-      },
+      }
     );
 
     const latencyMs = Date.now() - latencyStart;
@@ -110,7 +110,7 @@ export class LiteLLMClient {
    */
   async chatCompletionStream(
     request: ChatCompletionRequest,
-    agentId: string,
+    agentId: string
   ): Promise<IncomingMessage> {
     const requestBody = { ...request, stream: true };
 
@@ -134,7 +134,7 @@ export class LiteLLMClient {
       // LiteLLM returns { data: [...] } or a custom format
       const data = response.data as Record<string, unknown>;
       if (Array.isArray(data.data)) {
-        return (data.data as Record<string, unknown>[]).map(m => ({
+        return (data.data as Record<string, unknown>[]).map((m) => ({
           id: String(m['model_name'] ?? m['id'] ?? ''),
           object: 'model',
           owned_by: String(m['owned_by'] ?? 'litellm'),
@@ -174,7 +174,7 @@ export class LiteLLMClient {
           messages: [{ role: 'user', content: 'ping' }],
           max_tokens: 1,
         },
-        { headers: { 'X-SERA-Agent-Id': 'sera-core-test' } },
+        { headers: { 'X-SERA-Agent-Id': 'sera-core-test' } }
       );
       return { ok: true, latencyMs: Date.now() - start };
     } catch (err: any) {

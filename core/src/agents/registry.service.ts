@@ -1,5 +1,11 @@
 import type { Pool } from 'pg';
-import type { AgentTemplate, AgentInstance, NamedList, CapabilityPolicy, SandboxBoundary } from './schemas.js';
+import type {
+  AgentTemplate,
+  AgentInstance,
+  NamedList,
+  CapabilityPolicy,
+  SandboxBoundary,
+} from './schemas.js';
 import { ScheduleService } from '../services/ScheduleService.js';
 
 import { Logger } from '../lib/logger.js';
@@ -60,12 +66,14 @@ export class AgentRegistry {
     if (existing.builtin) throw new Error(`Cannot delete builtin template ${name}`);
 
     const instances = await this.listInstances();
-    const referenced = instances.some(i => i.template_ref === name);
+    const referenced = instances.some((i) => i.template_ref === name);
     if (referenced) {
       throw new Error(`Template ${name} is referenced by active instances`);
     }
 
-    const res = await this.pool.query('DELETE FROM agent_templates WHERE name = $1 RETURNING *', [name]);
+    const res = await this.pool.query('DELETE FROM agent_templates WHERE name = $1 RETURNING *', [
+      name,
+    ]);
     return res.rows[0];
   }
 
@@ -117,21 +125,23 @@ export class AgentRegistry {
     const manifestSchedules = template.spec.schedules;
 
     for (const s of manifestSchedules) {
-      await scheduleService.createSchedule({
-        agent_instance_id: instanceId,
-        agent_name: templateRef,
-        name: s.name,
-        description: s.description,
-        type: s.type,
-        expression: s.expression,
-        task: s.task,
-        source: 'manifest',
-      }).catch(err => {
-        // Ignore duplicates
-        if (!err.message.includes('unique constraint')) {
-          logger.error(`Failed to sync manifest schedule ${s.name}:`, err);
-        }
-      });
+      await scheduleService
+        .createSchedule({
+          agent_instance_id: instanceId,
+          agent_name: templateRef,
+          name: s.name,
+          description: s.description,
+          type: s.type,
+          expression: s.expression,
+          task: s.task,
+          source: 'manifest',
+        })
+        .catch((err) => {
+          // Ignore duplicates
+          if (!err.message.includes('unique constraint')) {
+            logger.error(`Failed to sync manifest schedule ${s.name}:`, err);
+          }
+        });
     }
   }
 
@@ -168,7 +178,7 @@ export class AgentRegistry {
   async updateLastHeartbeat(id: string) {
     await this.pool.query(
       'UPDATE agent_instances SET last_heartbeat_at = NOW(), updated_at = NOW() WHERE id = $1',
-      [id],
+      [id]
     );
   }
 
@@ -183,7 +193,12 @@ export class AgentRegistry {
     return res.rows[0];
   }
 
-  async updateInstanceConfig(id: string, overrides: any, resolvedConfig?: any, resolvedCapabilities?: any) {
+  async updateInstanceConfig(
+    id: string,
+    overrides: any,
+    resolvedConfig?: any,
+    resolvedCapabilities?: any
+  ) {
     const query = `
       UPDATE agent_instances
       SET overrides = $2, resolved_config = $3, resolved_capabilities = $4, updated_at = NOW()
@@ -195,7 +210,9 @@ export class AgentRegistry {
   }
 
   async deleteInstance(id: string) {
-    const res = await this.pool.query('DELETE FROM agent_instances WHERE id = $1 RETURNING *', [id]);
+    const res = await this.pool.query('DELETE FROM agent_instances WHERE id = $1 RETURNING *', [
+      id,
+    ]);
     return res.rows[0];
   }
 
@@ -260,7 +277,13 @@ export class AgentRegistry {
         updated_at = NOW()
       RETURNING *;
     `;
-    const res = await this.pool.query(query, [name, type, source, JSON.stringify(list.entries), alwaysEnforced ?? false]);
+    const res = await this.pool.query(query, [
+      name,
+      type,
+      source,
+      JSON.stringify(list.entries),
+      alwaysEnforced ?? false,
+    ]);
     return res.rows[0];
   }
 
@@ -389,7 +412,7 @@ export class AgentRegistry {
   async revokeCapabilityGrant(grantId: string) {
     const res = await this.pool.query(
       'UPDATE capability_grants SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL RETURNING *',
-      [grantId],
+      [grantId]
     );
     return res.rows[0];
   }
@@ -399,7 +422,7 @@ export class AgentRegistry {
   async updateWorkspaceUsage(instanceId: string, usedGB: number) {
     await this.pool.query(
       'UPDATE agent_instances SET workspace_used_gb = $2, updated_at = NOW() WHERE id = $1',
-      [instanceId, usedGB],
+      [instanceId, usedGB]
     );
   }
 }

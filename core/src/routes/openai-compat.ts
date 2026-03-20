@@ -7,7 +7,11 @@ import { IntercomService } from '../intercom/IntercomService.js';
 import type { ChatMessage } from '../agents/types.js';
 
 class SSEIntercom extends IntercomService {
-  constructor(private res: Response, private messageId: string, private model: string) {
+  constructor(
+    private res: Response,
+    private messageId: string,
+    private model: string
+  ) {
     super();
   }
 
@@ -15,7 +19,7 @@ class SSEIntercom extends IntercomService {
     agentId: string,
     token: string,
     done: boolean,
-    messageId: string,
+    messageId: string
   ): Promise<void> {
     if (messageId !== this.messageId) return;
 
@@ -70,7 +74,9 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
       return res.status(400).json({ error: { message: 'model is required' } });
     }
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: { message: 'messages array is required and cannot be empty' } });
+      return res
+        .status(400)
+        .json({ error: { message: 'messages array is required and cannot be empty' } });
     }
 
     // Attempt to resolve agent manifest by name (model)

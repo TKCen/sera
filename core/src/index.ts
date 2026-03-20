@@ -82,8 +82,7 @@ const app = express();
 const logger = new Logger('SERACore');
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
-const workspaceRoot = process.env.WORKSPACE_DIR
-  ?? path.resolve(import.meta.dirname, '..', '..');
+const workspaceRoot = process.env.WORKSPACE_DIR ?? path.resolve(import.meta.dirname, '..', '..');
 
 // Global instances
 const intercomService = new IntercomService();
@@ -121,7 +120,7 @@ const sessionStore = new SessionStore();
 const meteringService = new MeteringService();
 const meteringEngine = new MeteringEngine();
 const providerRegistry = new ProviderRegistry(
-  process.env.PROVIDERS_CONFIG_PATH ?? '/app/config/providers.json',
+  process.env.PROVIDERS_CONFIG_PATH ?? '/app/config/providers.json'
 );
 const llmRouter = new LlmRouter(providerRegistry);
 const circuitBreakerService = new CircuitBreakerService(llmRouter);
@@ -141,7 +140,9 @@ orchestrator.setIdentityService(identityService);
 
 registerBuiltinSkills(skillRegistry, memoryManager);
 
-const agentManifests = fs.existsSync(agentsDir) ? AgentManifestLoader.loadAllManifests(agentsDir) : [];
+const agentManifests = fs.existsSync(agentsDir)
+  ? AgentManifestLoader.loadAllManifests(agentsDir)
+  : [];
 circleRegistry.loadFromDirectory(circlesDir, agentManifests).catch(() => {});
 
 bridgeService.init(intercomService, circleRegistry);
@@ -149,13 +150,17 @@ intercomService.setBridgeService(bridgeService);
 
 // ── Setup Express App ────────────────────────────────────────────────────────
 app.use(cors());
-app.use(express.json({
-  verify: (req: any, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+app.use(
+  express.json({
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() }));
+app.get('/api/health', (req, res) =>
+  res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() })
+);
 
 // Mount Routers
 // Auth: public endpoints first (no authMiddleware), then protected
@@ -164,22 +169,34 @@ app.use('/api/auth', publicAuthRouter);
 app.use('/api/auth', authMiddleware, protectedAuthRouter);
 app.use('/api/secrets', authMiddleware, createSecretsRouter());
 
-const sandboxRouter = createSandboxRouter(sandboxManager, (name) => 
-  agentManifests.find(m => m.metadata.name === name));
+const sandboxRouter = createSandboxRouter(sandboxManager, (name) =>
+  agentManifests.find((m) => m.metadata.name === name)
+);
 app.use('/api/sandbox', sandboxRouter);
 
 const intercomRouter = createIntercomRouter(
-  intercomService, 
-  (name) => agentManifests.find(m => m.metadata.name === name), 
+  intercomService,
+  (name) => agentManifests.find((m) => m.metadata.name === name),
   bridgeService
 );
 app.use('/api/intercom', intercomRouter);
 
 app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
-app.use('/api/agents', createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService));
+app.use(
+  '/api/agents',
+  createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService)
+);
 app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
 
-app.use('/api/circles', createCircleRouter(circleRegistry, circlesDir, () => AgentManifestLoader.loadAllManifests(agentsDir), orchestrator));
+app.use(
+  '/api/circles',
+  createCircleRouter(
+    circleRegistry,
+    circlesDir,
+    () => AgentManifestLoader.loadAllManifests(agentsDir),
+    orchestrator
+  )
+);
 app.use('/api/circles', createCirclesDbRouter(orchestrator));
 app.use('/api/pipelines', createPipelinesRouter(orchestrator));
 app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator, pool));
@@ -187,7 +204,18 @@ app.use('/api/memory', createMemoryRouter(memoryManager));
 app.use('/api/sessions', createSessionRouter(sessionStore));
 app.use('/api', createChatRouter(sessionStore, orchestrator));
 
-app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService, llmRouter, circuitBreakerService, pool, orchestrator));
+app.use(
+  '/v1/llm',
+  createLlmProxyRouter(
+    identityService,
+    authService,
+    meteringService,
+    llmRouter,
+    circuitBreakerService,
+    pool,
+    orchestrator
+  )
+);
 app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));
 app.use('/api/providers', authMiddleware, createProvidersRouter(llmRouter, circuitBreakerService));
 app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
@@ -227,9 +255,12 @@ const startServer = async () => {
   await mcpRegistry.registerSeraCoreTools(seraMcpServer);
 
   mcpRegistry.onRegister((name) => {
-    skillRegistry.bridgeMCPToolsForServer(name, mcpRegistry).then(count => {
-      if (count > 0) logger.info(`Bridged ${count} new MCP tool(s) from "${name}"`);
-    }).catch(() => {});
+    skillRegistry
+      .bridgeMCPToolsForServer(name, mcpRegistry)
+      .then((count) => {
+        if (count > 0) logger.info(`Bridged ${count} new MCP tool(s) from "${name}"`);
+      })
+      .catch(() => {});
   });
 
   mcpRegistry.onUnregister((name) => {
@@ -237,7 +268,9 @@ const startServer = async () => {
     logger.info(`Removed bridged skills for MCP server "${name}"`);
   });
 
-  await mcpRegistry.loadFromDirectory(mcpServersDir).catch(err => logger.error('Failed to load MCP servers:', err));
+  await mcpRegistry
+    .loadFromDirectory(mcpServersDir)
+    .catch((err) => logger.error('Failed to load MCP servers:', err));
   mcpRegistry.watchDirectory(mcpServersDir);
 
   const manifests = orchestrator.getAllManifests();
@@ -263,80 +296,103 @@ const startServer = async () => {
 
   // Epic 11 — Initialize Audit Trail
   const auditService = AuditService.getInstance();
-  await auditService.initialize().catch(err =>
-    logger.error('Failed to initialize AuditService:', err),
-  );
+  await auditService
+    .initialize()
+    .catch((err) => logger.error('Failed to initialize AuditService:', err));
 
   // Epic 11 — Initialize Schedule Service
   if (process.env.DATABASE_URL) {
     const scheduleService = ScheduleService.getInstance();
     scheduleService.setOrchestrator(orchestrator);
-    await scheduleService.start(process.env.DATABASE_URL).catch(err =>
-      logger.error('Failed to start ScheduleService:', err),
-    );
+    await scheduleService
+      .start(process.env.DATABASE_URL)
+      .catch((err) => logger.error('Failed to start ScheduleService:', err));
   }
 
   // Story 6.2 — load skills from library
   const { SkillLibrary } = await import('./skills/SkillLibrary.js');
   const skillLibrary = SkillLibrary.getInstance(pool);
   skillLibrary.setIntercom(intercomService);
-  const skillStats = await skillLibrary.loadSkills().catch(err => {
+  const skillStats = await skillLibrary.loadSkills().catch((err) => {
     logger.error('Failed to load Skill Library:', err);
     return { updated: 0, skipped: 0, errors: [err.message] };
   });
-  logger.info(`Skill Library loaded: ${skillStats.updated} skills/packages, ${skillStats.skipped} skipped, ${skillStats.errors.length} errors`);
-  
+  logger.info(
+    `Skill Library loaded: ${skillStats.updated} skills/packages, ${skillStats.skipped} skipped, ${skillStats.errors.length} errors`
+  );
+
   skillLibrary.watchSkills();
 
   // Epic 8 — warm up embedding service and init system knowledge repo
   await EmbeddingService.getInstance().warmup();
-  await KnowledgeGitService.getInstance().initSystemRepo().catch(err =>
-    logger.warn('Failed to init system knowledge repo:', err),
-  );
+  await KnowledgeGitService.getInstance()
+    .initSystemRepo()
+    .catch((err) => logger.warn('Failed to init system knowledge repo:', err));
   if (process.env.DATABASE_URL) {
-    await MemoryCompactionService.getInstance().start(process.env.DATABASE_URL).catch(err =>
-      logger.warn('MemoryCompactionService failed to start:', err),
-    );
+    await MemoryCompactionService.getInstance()
+      .start(process.env.DATABASE_URL)
+      .catch((err) => logger.warn('MemoryCompactionService failed to start:', err));
   }
 
   await orchestrator.startDockerEventListener();
 
-  const channelOptions = { rateLimitWindow: config.channels.rateLimit.windowMs, maxMessagesPerWindow: config.channels.rateLimit.maxMessages };
+  const channelOptions = {
+    rateLimitWindow: config.channels.rateLimit.windowMs,
+    maxMessagesPerWindow: config.channels.rateLimit.maxMessages,
+  };
   if (config.channels.telegram.token) {
-    new TelegramAdapter(config.channels.telegram.token, orchestrator, sessionStore, channelOptions).start().catch(err => logger.error('Failed to start Telegram adapter:', err));
+    new TelegramAdapter(config.channels.telegram.token, orchestrator, sessionStore, channelOptions)
+      .start()
+      .catch((err) => logger.error('Failed to start Telegram adapter:', err));
   }
   if (config.channels.discord.token) {
-    new DiscordAdapter(config.channels.discord.token, orchestrator, sessionStore, channelOptions).start().catch(err => logger.error('Failed to start Discord adapter:', err));
+    new DiscordAdapter(config.channels.discord.token, orchestrator, sessionStore, channelOptions)
+      .start()
+      .catch((err) => logger.error('Failed to start Discord adapter:', err));
   }
   if (config.channels.whatsapp.token && config.channels.whatsapp.phoneNumberId) {
-    new WhatsAppAdapter(config.channels.whatsapp.token, config.channels.whatsapp.phoneNumberId, orchestrator, sessionStore, channelOptions).start().catch(err => logger.error('Failed to start WhatsApp adapter:', err));
+    new WhatsAppAdapter(
+      config.channels.whatsapp.token,
+      config.channels.whatsapp.phoneNumberId,
+      orchestrator,
+      sessionStore,
+      channelOptions
+    )
+      .start()
+      .catch((err) => logger.error('Failed to start WhatsApp adapter:', err));
   }
 
   if (process.env.NODE_ENV !== 'test') {
     const port = process.env.PORT || 3001;
     const bootstrapService = new BootstrapService(agentRegistry, resourceImporter, workspaceRoot);
-    await bootstrapService.ensureSeraInstantiated().catch(err => {
+    await bootstrapService.ensureSeraInstantiated().catch((err) => {
       logger.error('Sera auto-bootstrap failed:', err);
     });
 
-    pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));
-    setInterval(() => {
-      pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));
-    }, 60 * 60 * 1_000);
+    pruneOldTaskResults().catch((err) => logger.warn('Task result pruning error:', err));
+    setInterval(
+      () => {
+        pruneOldTaskResults().catch((err) => logger.warn('Task result pruning error:', err));
+      },
+      60 * 60 * 1_000
+    );
 
     // Epic 17 — Expire delegation tokens every 5 minutes
     expireOldDelegationTokens().catch(() => {});
-    setInterval(() => {
-      expireOldDelegationTokens().catch(() => {});
-    }, 5 * 60 * 1_000);
+    setInterval(
+      () => {
+        expireOldDelegationTokens().catch(() => {});
+      },
+      5 * 60 * 1_000
+    );
 
     // Epic 18 — Start notification service and wire permission hook
     if (process.env.DATABASE_URL) {
       const notificationService = NotificationService.getInstance();
       notificationService.setPermissionService(permissionService);
-      await notificationService.start(process.env.DATABASE_URL).catch((err: unknown) =>
-        logger.error('NotificationService failed to start:', err),
-      );
+      await notificationService
+        .start(process.env.DATABASE_URL)
+        .catch((err: unknown) => logger.error('NotificationService failed to start:', err));
 
       permissionService.setOnRequestCreated((req) => {
         notificationService.dispatchEvent(
@@ -344,8 +400,13 @@ const startServer = async () => {
           `Permission Request: ${req.dimension}=${req.value}`,
           `Agent **${req.agentName}** (${req.agentId}) requests ${req.dimension} access to \`${req.value}\`.\n${req.reason ?? ''}`,
           'warning',
-          { requestId: req.requestId, agentId: req.agentId, dimension: req.dimension, value: req.value },
-          { requestId: req.requestId, requestType: 'permission' },
+          {
+            requestId: req.requestId,
+            agentId: req.agentId,
+            dimension: req.dimension,
+            value: req.value,
+          },
+          { requestId: req.requestId, requestType: 'permission' }
         );
       });
     }
@@ -362,11 +423,12 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-const isMainModule = import.meta.url === `file://${process.argv[1]}` ||
-                   (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename));
+const isMainModule =
+  import.meta.url === `file://${process.argv[1]}` ||
+  (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename));
 
 if (process.env.NODE_ENV !== 'test' && isMainModule) {
-  startServer().catch(err => {
+  startServer().catch((err) => {
     logger.error('Failed to start server:', err);
     process.exit(1);
   });

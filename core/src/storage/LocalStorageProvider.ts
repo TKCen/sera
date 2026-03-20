@@ -54,7 +54,7 @@ export class LocalStorageProvider implements StorageProvider {
     agentId: string,
     containerPath: string,
     mode: FilesystemMode,
-    workspacePath?: string,
+    workspacePath?: string
   ): string {
     let hostPath = this.getHostPath(agentId, workspacePath);
     // On Windows, Docker Desktop prefers /c/path format for bind mounts to avoid colon confusion

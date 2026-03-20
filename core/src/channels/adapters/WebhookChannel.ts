@@ -19,7 +19,7 @@ export class WebhookChannel implements Channel {
   constructor(
     readonly id: string,
     readonly name: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ) {
     const secret = config['secret'];
     this.cfg = {
@@ -41,7 +41,7 @@ export class WebhookChannel implements Channel {
       const svc = ActionTokenService.getInstance();
       const { approveUrl, denyUrl } = svc.buildActionUrls(
         event.actions.approveToken,
-        event.actions.denyToken,
+        event.actions.denyToken
       );
       payload['approveUrl'] = approveUrl;
       payload['denyUrl'] = denyUrl;
@@ -51,10 +51,7 @@ export class WebhookChannel implements Channel {
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.cfg.secret) {
-      const sig = crypto
-        .createHmac('sha256', this.cfg.secret)
-        .update(bodyStr)
-        .digest('hex');
+      const sig = crypto.createHmac('sha256', this.cfg.secret).update(bodyStr).digest('hex');
       headers['X-Sera-Signature'] = `sha256=${sig}`;
     }
 

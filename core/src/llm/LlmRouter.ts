@@ -24,8 +24,19 @@
 
 import { PassThrough } from 'stream';
 import type { Readable } from 'stream';
-import type { Model, Api, Provider, Context, Message, AssistantMessage,
-  UserMessage, ToolResultMessage, TextContent, ToolCall, StreamOptions } from '@mariozechner/pi-ai';
+import type {
+  Model,
+  Api,
+  Provider,
+  Context,
+  Message,
+  AssistantMessage,
+  UserMessage,
+  ToolResultMessage,
+  TextContent,
+  ToolCall,
+  StreamOptions,
+} from '@mariozechner/pi-ai';
 import { streamOpenAICompletions } from '@mariozechner/pi-ai/openai-completions';
 import { streamAnthropic } from '@mariozechner/pi-ai/anthropic';
 import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
@@ -77,7 +88,11 @@ export interface ChatCompletionResponse {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 const ZERO_USAGE = {
-  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
@@ -120,7 +135,7 @@ function toContext(request: ChatCompletionRequest): Context {
             let parsedArgs: Record<string, unknown> = {};
             try {
               parsedArgs = tc['function']?.['arguments']
-                ? JSON.parse(tc['function']['arguments'] as string) as Record<string, unknown>
+                ? (JSON.parse(tc['function']['arguments'] as string) as Record<string, unknown>)
                 : {};
             } catch {
               parsedArgs = {};
@@ -169,15 +184,16 @@ function toContext(request: ChatCompletionRequest): Context {
   }
 
   // Convert OpenAI tool definitions to pi-mono Tool format.
-  const tools = Array.isArray(request.tools) && request.tools.length > 0
-    ? (request.tools as Record<string, any>[])
-        .filter(t => t['type'] === 'function')
-        .map(t => ({
-          name: t['function']?.['name'] ?? '',
-          description: t['function']?.['description'] ?? '',
-          parameters: t['function']?.['parameters'] ?? {},
-        }))
-    : undefined;
+  const tools =
+    Array.isArray(request.tools) && request.tools.length > 0
+      ? (request.tools as Record<string, any>[])
+          .filter((t) => t['type'] === 'function')
+          .map((t) => ({
+            name: t['function']?.['name'] ?? '',
+            description: t['function']?.['description'] ?? '',
+            parameters: t['function']?.['parameters'] ?? {},
+          }))
+      : undefined;
 
   return {
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -207,9 +223,8 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
         type: 'function',
         function: {
           name: block.name,
-          arguments: typeof block.arguments === 'string'
-            ? block.arguments
-            : JSON.stringify(block.arguments),
+          arguments:
+            typeof block.arguments === 'string' ? block.arguments : JSON.stringify(block.arguments),
         },
       });
     }
@@ -220,15 +235,17 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: modelName,
-    choices: [{
-      index: 0,
-      message: {
-        role: 'assistant',
-        content: textContent || null,
-        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: textContent || null,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: toFinishReason(msg.stopReason),
       },
-      finish_reason: toFinishReason(msg.stopReason),
-    }],
+    ],
     usage: {
       prompt_tokens: msg.usage.input,
       completion_tokens: msg.usage.output,
@@ -249,7 +266,7 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
  */
 function eventStreamToReadable(
   eventStream: AssistantMessageEventStream,
-  modelName: string,
+  modelName: string
 ): Readable {
   const passThrough = new PassThrough();
   const id = `chatcmpl-${Date.now()}`;
@@ -257,7 +274,10 @@ function eventStreamToReadable(
 
   const chunk = (delta: object, finishReason: string | null) =>
     `data: ${JSON.stringify({
-      id, object: 'chat.completion.chunk', created, model: modelName,
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model: modelName,
       choices: [{ index: 0, delta, finish_reason: finishReason }],
     })}\n\n`;
 
@@ -268,28 +288,33 @@ function eventStreamToReadable(
 
         if (event.type === 'text_delta') {
           passThrough.push(chunk({ content: event.delta }, null));
-
         } else if (event.type === 'toolcall_end') {
           const tc = event.toolCall;
-          passThrough.push(chunk({
-            tool_calls: [{
-              index: 0,
-              id: tc.id,
-              type: 'function',
-              function: {
-                name: tc.name,
-                arguments: typeof tc.arguments === 'string'
-                  ? tc.arguments
-                  : JSON.stringify(tc.arguments),
+          passThrough.push(
+            chunk(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                      name: tc.name,
+                      arguments:
+                        typeof tc.arguments === 'string'
+                          ? tc.arguments
+                          : JSON.stringify(tc.arguments),
+                    },
+                  },
+                ],
               },
-            }],
-          }, null));
-
+              null
+            )
+          );
         } else if (event.type === 'done') {
           passThrough.push(chunk({}, toFinishReason(event.reason)));
           passThrough.push('data: [DONE]\n\n');
           passThrough.push(null);
-
         } else if (event.type === 'error') {
           const errMsg = event.error.errorMessage ?? 'LLM provider error';
           passThrough.destroy(new Error(errMsg));
@@ -340,7 +365,7 @@ export class LlmRouter {
   private dispatch(
     config: ProviderConfig,
     context: Context,
-    extraOptions?: StreamOptions,
+    extraOptions?: StreamOptions
   ): AssistantMessageEventStream {
     const model = this.buildModel(config);
     const apiKey = this.resolveApiKey(config);
@@ -357,7 +382,9 @@ export class LlmRouter {
         return streamAnthropic(model as Model<'anthropic-messages'>, context, opts);
 
       default:
-        throw new Error(`Unsupported provider API '${String(config.api)}' for model '${config.modelName}'`);
+        throw new Error(
+          `Unsupported provider API '${String(config.api)}' for model '${config.modelName}'`
+        );
     }
   }
 
@@ -370,9 +397,11 @@ export class LlmRouter {
   async chatCompletion(
     request: ChatCompletionRequest,
     agentId: string,
-    latencyStart: number = Date.now(),
+    latencyStart: number = Date.now()
   ): Promise<{ response: ChatCompletionResponse; latencyMs: number }> {
-    logger.debug(`LlmRouter | agent=${agentId} model=${request.model} messages=${request.messages.length}`);
+    logger.debug(
+      `LlmRouter | agent=${agentId} model=${request.model} messages=${request.messages.length}`
+    );
 
     const config = this.registry.resolve(request.model);
     const context = toContext(request);
@@ -384,7 +413,9 @@ export class LlmRouter {
     const msg = await eventStream.result();
 
     const latencyMs = Date.now() - latencyStart;
-    logger.debug(`LlmRouter done | agent=${agentId} tokens=${msg.usage.totalTokens} latency=${latencyMs}ms`);
+    logger.debug(
+      `LlmRouter done | agent=${agentId} tokens=${msg.usage.totalTokens} latency=${latencyMs}ms`
+    );
 
     return { response: toCompletionResponse(msg, request.model), latencyMs };
   }
@@ -393,10 +424,7 @@ export class LlmRouter {
    * Start a streaming completion and return a Readable that emits OpenAI SSE.
    * The caller is responsible for piping the stream to the HTTP response.
    */
-  async chatCompletionStream(
-    request: ChatCompletionRequest,
-    agentId: string,
-  ): Promise<Readable> {
+  async chatCompletionStream(request: ChatCompletionRequest, agentId: string): Promise<Readable> {
     logger.debug(`LlmRouter stream | agent=${agentId} model=${request.model}`);
 
     const config = this.registry.resolve(request.model);
@@ -411,7 +439,7 @@ export class LlmRouter {
 
   /** List all explicitly registered providers as OpenAI-style model objects. */
   async listModels(): Promise<{ id: string; object: string; owned_by?: string }[]> {
-    return this.registry.list().map(cfg => ({
+    return this.registry.list().map((cfg) => ({
       id: cfg.modelName,
       object: 'model',
       owned_by: cfg.provider ?? 'custom',

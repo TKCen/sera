@@ -30,11 +30,13 @@ describe('CircuitBreakerService', () => {
       object: 'chat.completion' as const,
       created: 1234567890,
       model: 'gpt-4o-mini',
-      choices: [{
-        index: 0,
-        message: { role: 'assistant', content: 'hi' },
-        finish_reason: 'stop',
-      }],
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'hi' },
+          finish_reason: 'stop',
+        },
+      ],
       usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
     },
     latencyMs: 50,
@@ -62,7 +64,11 @@ describe('CircuitBreakerService', () => {
 
       const result = await service.call(request, 'agent-001');
 
-      expect(mockClient.chatCompletion).toHaveBeenCalledWith(request, 'agent-001', expect.any(Number));
+      expect(mockClient.chatCompletion).toHaveBeenCalledWith(
+        request,
+        'agent-001',
+        expect.any(Number)
+      );
       expect(result.response.object).toBe('chat.completion');
       expect(result.latencyMs).toBe(50);
     });
@@ -98,7 +104,7 @@ describe('CircuitBreakerService', () => {
       }
 
       const states = service.getState();
-      const providers = states.map(s => s.provider).sort();
+      const providers = states.map((s) => s.provider).sort();
       expect(providers).toContain('openai');
       expect(providers).toContain('anthropic');
       expect(providers).toContain('lmstudio');

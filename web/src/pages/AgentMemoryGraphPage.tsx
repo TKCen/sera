@@ -74,7 +74,7 @@ export default function AgentMemoryGraphPage() {
                   'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
                   scope === s
                     ? 'bg-sera-accent-soft text-sera-accent'
-                    : 'text-sera-text-muted hover:bg-sera-surface-hover',
+                    : 'text-sera-text-muted hover:bg-sera-surface-hover'
                 )}
               >
                 {s === '' ? 'All scopes' : s.charAt(0).toUpperCase() + s.slice(1)}
@@ -142,7 +142,10 @@ export default function AgentMemoryGraphPage() {
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {selectedBlock.tags.map((tag) => (
-                      <span key={tag} className="text-[10px] text-sera-text-dim bg-sera-surface-active px-1.5 py-0.5 rounded">
+                      <span
+                        key={tag}
+                        className="text-[10px] text-sera-text-dim bg-sera-surface-active px-1.5 py-0.5 rounded"
+                      >
                         {tag}
                       </span>
                     ))}
@@ -152,7 +155,9 @@ export default function AgentMemoryGraphPage() {
 
               {selectedBlock.content && (
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">Content</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">
+                    Content
+                  </div>
                   <p className="text-xs text-sera-text-muted leading-relaxed whitespace-pre-wrap">
                     {selectedBlock.content}
                   </p>

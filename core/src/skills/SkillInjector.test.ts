@@ -65,7 +65,7 @@ describe('SkillInjector', () => {
     // 100 tokens approx 400 chars
     const skill1 = { name: 's1', version: '1', content: 'A'.repeat(400), triggers: [] };
     const skill2 = { name: 's2', version: '1', content: 'B'.repeat(4000), triggers: [] };
-    
+
     libMock.getSkill.mockImplementation((name: string) => {
       if (name === 's1') return Promise.resolve(skill1);
       if (name === 's2') return Promise.resolve(skill2);

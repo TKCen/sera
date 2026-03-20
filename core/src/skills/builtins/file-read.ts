@@ -12,7 +12,12 @@ export const fileReadSkill: SkillDefinition = {
   description: 'Read a file from the filesystem and return its content.',
   source: 'builtin',
   parameters: [
-    { name: 'path', type: 'string', description: 'Absolute or relative path to the file', required: true },
+    {
+      name: 'path',
+      type: 'string',
+      description: 'Absolute or relative path to the file',
+      required: true,
+    },
   ],
   handler: async (params, context) => {
     const rawPath = params['path'];
@@ -35,17 +40,17 @@ export const fileReadSkill: SkillDefinition = {
         const relativePath = path.relative(rootPath, resolvedPath);
         const containerPath = path.posix.join('/workspace', relativePath.replace(/\\/g, '/'));
 
-        const result = await context.sandboxManager.exec(
-          context.manifest,
-          {
-            containerId: context.containerId,
-            agentName: context.agentName,
-            command: ['cat', containerPath],
-          },
-        );
+        const result = await context.sandboxManager.exec(context.manifest, {
+          containerId: context.containerId,
+          agentName: context.agentName,
+          command: ['cat', containerPath],
+        });
 
         if (result.exitCode !== 0) {
-          return { success: false, error: `Container exec failed (exit ${result.exitCode}): ${result.output}` };
+          return {
+            success: false,
+            error: `Container exec failed (exit ${result.exitCode}): ${result.output}`,
+          };
         }
         return { success: true, data: { path: containerPath, content: result.output } };
       }

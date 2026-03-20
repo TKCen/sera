@@ -111,13 +111,15 @@ export class EmbeddingService {
       return data.embedding;
     } catch (err) {
       if (attempt >= maxAttempts - 1) {
-        logger.error(`EmbeddingService: Ollama unreachable after ${maxAttempts} attempts — disabling RAG`);
+        logger.error(
+          `EmbeddingService: Ollama unreachable after ${maxAttempts} attempts — disabling RAG`
+        );
         this.available = false;
         throw err;
       }
       const delay = Math.min(1000 * 2 ** attempt, 30_000);
       logger.warn(`EmbeddingService: attempt ${attempt + 1} failed, retrying in ${delay}ms`, err);
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise((r) => setTimeout(r, delay));
       return this.callOllama(text, attempt + 1);
     }
   }
@@ -129,7 +131,9 @@ export class EmbeddingService {
    */
   async warmup(): Promise<void> {
     if (!OLLAMA_URL) {
-      logger.info('EmbeddingService: OLLAMA_URL not set — embeddings disabled. Set OLLAMA_URL to enable RAG.');
+      logger.info(
+        'EmbeddingService: OLLAMA_URL not set — embeddings disabled. Set OLLAMA_URL to enable RAG.'
+      );
       this.available = false;
       return;
     }
@@ -137,7 +141,9 @@ export class EmbeddingService {
       await this.callOllama('warmup');
       logger.info(`EmbeddingService ready (model: ${EMBEDDING_MODEL}, url: ${OLLAMA_URL})`);
     } catch {
-      logger.warn(`EmbeddingService: Ollama not reachable at ${OLLAMA_URL} — RAG disabled until Ollama comes online`);
+      logger.warn(
+        `EmbeddingService: Ollama not reachable at ${OLLAMA_URL} — RAG disabled until Ollama comes online`
+      );
       this.available = false;
     }
   }

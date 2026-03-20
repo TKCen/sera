@@ -2,8 +2,19 @@
 
 import { useState, useEffect } from 'react';
 import {
-  Zap, Save, CheckCircle, XCircle, RefreshCw, ChevronDown, ChevronUp,
-  Server, Cloud, Radio, Layers, Settings2, Sliders
+  Zap,
+  Save,
+  CheckCircle,
+  XCircle,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  Server,
+  Cloud,
+  Radio,
+  Layers,
+  Settings2,
+  Sliders,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,11 +50,7 @@ function TierBadge({ tier }: { tier: string }) {
     fast: 'bg-emerald-500/15 text-emerald-400',
     local: 'bg-amber-500/15 text-amber-400',
   };
-  return (
-    <span className={`sera-badge ${colors[tier] || colors.fast}`}>
-      {tier}
-    </span>
-  );
+  return <span className={`sera-badge ${colors[tier] || colors.fast}`}>{tier}</span>;
 }
 
 // ─── Provider Card ────────────────────────────────────────────────────────────
@@ -71,7 +78,7 @@ function ProviderCard({
     setTestStatus('testing');
     const result = await onTest(provider.id);
     setTestStatus(result.success ? 'success' : 'error');
-    setTestMessage(result.success ? 'Connection successful' : (result.error || 'Connection failed'));
+    setTestMessage(result.success ? 'Connection successful' : result.error || 'Connection failed');
   };
 
   const handleSave = async () => {
@@ -96,11 +103,13 @@ function ProviderCard({
         className="w-full p-4 flex items-center justify-between hover:bg-sera-surface-hover transition-colors"
       >
         <div className="flex items-center gap-3">
-          <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-            provider.category === 'local'
-              ? 'bg-amber-500/10 border border-amber-500/20'
-              : 'bg-sera-accent-soft border border-sera-border-active'
-          }`}>
+          <div
+            className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+              provider.category === 'local'
+                ? 'bg-amber-500/10 border border-amber-500/20'
+                : 'bg-sera-accent-soft border border-sera-border-active'
+            }`}
+          >
             {provider.category === 'local' ? (
               <Server size={16} className="text-amber-400" />
             ) : (
@@ -110,9 +119,7 @@ function ProviderCard({
           <div className="text-left">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-sera-text">{provider.name}</h3>
-              {provider.isActive && (
-                <span className="sera-badge-accent">Active</span>
-              )}
+              {provider.isActive && <span className="sera-badge-accent">Active</span>}
             </div>
             <p className="text-[11px] text-sera-text-muted mt-0.5">{provider.description}</p>
           </div>
@@ -126,7 +133,11 @@ function ProviderCard({
           ) : (
             <span className="w-2 h-2 rounded-full bg-sera-text-dim/30" />
           )}
-          {expanded ? <ChevronUp size={14} className="text-sera-text-dim" /> : <ChevronDown size={14} className="text-sera-text-dim" />}
+          {expanded ? (
+            <ChevronUp size={14} className="text-sera-text-dim" />
+          ) : (
+            <ChevronDown size={14} className="text-sera-text-dim" />
+          )}
         </div>
       </button>
 
@@ -135,7 +146,9 @@ function ProviderCard({
         <div className="border-t border-sera-border p-4 space-y-4 bg-sera-bg/50">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5 col-span-2">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">Base API URL</label>
+              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                Base API URL
+              </label>
               <input
                 type="text"
                 value={baseUrl}
@@ -145,7 +158,8 @@ function ProviderCard({
             </div>
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
-                API Key {!provider.requiresKey && <span className="text-sera-text-dim/50">(optional)</span>}
+                API Key{' '}
+                {!provider.requiresKey && <span className="text-sera-text-dim/50">(optional)</span>}
               </label>
               <input
                 type="password"
@@ -156,14 +170,18 @@ function ProviderCard({
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">Model</label>
+              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                Model
+              </label>
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 className="sera-input text-xs appearance-none"
               >
                 {provider.models.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
                 ))}
               </select>
             </div>
@@ -171,11 +189,13 @@ function ProviderCard({
 
           {/* Test result */}
           {testStatus !== 'idle' && testStatus !== 'testing' && (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
-              testStatus === 'success'
-                ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
-                : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
-            }`}>
+            <div
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
+                testStatus === 'success'
+                  ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
+                  : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
+              }`}
+            >
               {testStatus === 'success' ? <CheckCircle size={14} /> : <XCircle size={14} />}
               <span>{testMessage}</span>
             </div>
@@ -195,7 +215,11 @@ function ProviderCard({
               disabled={testStatus === 'testing'}
               className="sera-btn-ghost flex-1 border border-sera-border py-2.5 text-xs disabled:opacity-30"
             >
-              {testStatus === 'testing' ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} />}
+              {testStatus === 'testing' ? (
+                <RefreshCw className="animate-spin" size={14} />
+              ) : (
+                <Zap size={14} />
+              )}
               Test Connection
             </button>
             <button
@@ -233,7 +257,7 @@ export default function SettingsPage() {
     try {
       const [providersRes, llmRes] = await Promise.all([
         fetch('/api/core/providers'),
-        fetch('/api/core/config/llm')
+        fetch('/api/core/config/llm'),
       ]);
       const data = await providersRes.json();
       setProviders(data.providers);
@@ -247,9 +271,14 @@ export default function SettingsPage() {
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    fetchData();
+  }, []);
 
-  const handleSave = async (id: string, cfg: { baseUrl: string; apiKey: string; model: string }) => {
+  const handleSave = async (
+    id: string,
+    cfg: { baseUrl: string; apiKey: string; model: string }
+  ) => {
     await fetch(`/api/core/providers/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -275,9 +304,11 @@ export default function SettingsPage() {
     await fetchData();
   };
 
-  const localProviders = providers.filter(p => p.category === 'local');
-  const cloudProviders = providers.filter(p => p.category === 'cloud');
-  const allModels = providers.filter(p => p.configured).flatMap(p => p.models.map(m => ({ ...m, provider: p.name })));
+  const localProviders = providers.filter((p) => p.category === 'local');
+  const cloudProviders = providers.filter((p) => p.category === 'cloud');
+  const allModels = providers
+    .filter((p) => p.configured)
+    .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.name })));
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'providers', label: 'Providers', icon: <Layers size={14} /> },
@@ -291,21 +322,24 @@ export default function SettingsPage() {
       <div className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Settings</h1>
-          <p className="text-sm text-sera-text-muted mt-1">Configure providers, models, and system behavior</p>
+          <p className="text-sm text-sera-text-muted mt-1">
+            Configure providers, models, and system behavior
+          </p>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b border-sera-border mb-8">
-        {tabs.map(t => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-medium
               border-b-2 transition-colors duration-150
-              ${tab === t.id
-                ? 'border-sera-accent text-sera-accent'
-                : 'border-transparent text-sera-text-muted hover:text-sera-text'
+              ${
+                tab === t.id
+                  ? 'border-sera-accent text-sera-accent'
+                  : 'border-transparent text-sera-text-muted hover:text-sera-text'
               }`}
           >
             {t.icon}
@@ -336,8 +370,14 @@ export default function SettingsPage() {
                   </span>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {localProviders.map(p => (
-                    <ProviderCard key={p.id} provider={p} onSave={handleSave} onTest={handleTest} onSetActive={handleSetActive} />
+                  {localProviders.map((p) => (
+                    <ProviderCard
+                      key={p.id}
+                      provider={p}
+                      onSave={handleSave}
+                      onTest={handleTest}
+                      onSetActive={handleSetActive}
+                    />
                   ))}
                 </div>
               </section>
@@ -349,13 +389,17 @@ export default function SettingsPage() {
                   <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
                     Cloud Providers
                   </h2>
-                  <span className="text-[11px] text-sera-text-dim/60">
-                    — API key required
-                  </span>
+                  <span className="text-[11px] text-sera-text-dim/60">— API key required</span>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {cloudProviders.map(p => (
-                    <ProviderCard key={p.id} provider={p} onSave={handleSave} onTest={handleTest} onSetActive={handleSetActive} />
+                  {cloudProviders.map((p) => (
+                    <ProviderCard
+                      key={p.id}
+                      provider={p}
+                      onSave={handleSave}
+                      onTest={handleTest}
+                      onSetActive={handleSetActive}
+                    />
                   ))}
                 </div>
               </section>
@@ -386,15 +430,24 @@ export default function SettingsPage() {
                       </thead>
                       <tbody>
                         {allModels.map((m, i) => (
-                          <tr key={`${m.provider}-${m.id}-${i}`} className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors">
+                          <tr
+                            key={`${m.provider}-${m.id}-${i}`}
+                            className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                          >
                             <td className="py-3 px-3">
                               <span className="text-sera-text">{m.name}</span>
-                              <span className="text-sera-text-dim text-[10px] block font-mono">{m.id}</span>
+                              <span className="text-sera-text-dim text-[10px] block font-mono">
+                                {m.id}
+                              </span>
                             </td>
                             <td className="py-3 px-3 text-sera-text-muted">{m.provider}</td>
-                            <td className="py-3 px-3"><TierBadge tier={m.tier} /></td>
+                            <td className="py-3 px-3">
+                              <TierBadge tier={m.tier} />
+                            </td>
                             <td className="py-3 px-3 text-right text-sera-text-muted font-mono text-xs">
-                              {m.contextWindow >= 1000000 ? `${(m.contextWindow / 1000000).toFixed(1)}M` : `${(m.contextWindow / 1000).toFixed(0)}K`}
+                              {m.contextWindow >= 1000000
+                                ? `${(m.contextWindow / 1000000).toFixed(1)}M`
+                                : `${(m.contextWindow / 1000).toFixed(0)}K`}
                             </td>
                           </tr>
                         ))}
@@ -419,7 +472,9 @@ export default function SettingsPage() {
                       <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
                         Temperature
                       </label>
-                      <span className="text-xs text-sera-accent font-mono">{llmConfig?.temperature ?? 0.7}</span>
+                      <span className="text-xs text-sera-accent font-mono">
+                        {llmConfig?.temperature ?? 0.7}
+                      </span>
                     </div>
                     <input
                       type="range"

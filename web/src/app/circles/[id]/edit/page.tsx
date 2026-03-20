@@ -104,23 +104,30 @@ export default function CircleEditPage() {
   const addAgent = () => {
     const name = newAgent.trim();
     if (name && !form.agents.includes(name)) {
-      setForm(prev => ({ ...prev, agents: [...prev.agents, name] }));
+      setForm((prev) => ({ ...prev, agents: [...prev.agents, name] }));
       setNewAgent('');
     }
   };
 
   const removeAgent = (name: string) => {
-    setForm(prev => ({ ...prev, agents: prev.agents.filter(a => a !== name) }));
+    setForm((prev) => ({ ...prev, agents: prev.agents.filter((a) => a !== name) }));
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-full"><span className="text-sm text-sera-text-muted">Loading…</span></div>;
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-sm text-sera-text-muted">Loading…</span>
+      </div>
+    );
   }
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
       {/* Breadcrumb */}
-      <Link href={`/circles/${circleName}`} className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4">
+      <Link
+        href={`/circles/${circleName}`}
+        className="inline-flex items-center gap-1.5 text-xs text-sera-text-dim hover:text-sera-text transition-colors mb-4"
+      >
         <ArrowLeft size={14} /> Back to {circleName}
       </Link>
 
@@ -148,28 +155,43 @@ export default function CircleEditPage() {
       <div className="space-y-6">
         {/* Metadata */}
         <fieldset className="sera-card-static p-5">
-          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">Metadata</legend>
+          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">
+            Metadata
+          </legend>
           <div className="space-y-4 mt-2">
             <div>
               <label className="text-xs text-sera-text-muted mb-1 block">Display Name</label>
-              <input className="sera-input" value={form.displayName} onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))} />
+              <input
+                className="sera-input"
+                value={form.displayName}
+                onChange={(e) => setForm((prev) => ({ ...prev, displayName: e.target.value }))}
+              />
             </div>
             <div>
               <label className="text-xs text-sera-text-muted mb-1 block">Description</label>
-              <textarea className="sera-input min-h-[60px]" value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} />
+              <textarea
+                className="sera-input min-h-[60px]"
+                value={form.description}
+                onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+              />
             </div>
           </div>
         </fieldset>
 
         {/* Agents */}
         <fieldset className="sera-card-static p-5">
-          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">Agent Roster</legend>
+          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">
+            Agent Roster
+          </legend>
           <div className="mt-2">
             <div className="flex flex-wrap gap-2 mb-3">
               {form.agents.map((agent) => (
                 <span key={agent} className="inline-flex items-center gap-1 sera-badge-accent">
                   {agent}
-                  <button onClick={() => removeAgent(agent)} className="hover:text-sera-error transition-colors">
+                  <button
+                    onClick={() => removeAgent(agent)}
+                    className="hover:text-sera-error transition-colors"
+                  >
                     <Trash2 size={10} />
                   </button>
                 </span>
@@ -183,8 +205,8 @@ export default function CircleEditPage() {
                 className="sera-input flex-1"
                 placeholder="Add agent name…"
                 value={newAgent}
-                onChange={e => setNewAgent(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addAgent())}
+                onChange={(e) => setNewAgent(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addAgent())}
               />
               <button onClick={addAgent} className="sera-btn-ghost">
                 <Plus size={14} /> Add
@@ -195,26 +217,48 @@ export default function CircleEditPage() {
 
         {/* Party Mode */}
         <fieldset className="sera-card-static p-5">
-          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">Party Mode</legend>
+          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">
+            Party Mode
+          </legend>
           <div className="space-y-4 mt-2">
             <div className="flex items-center gap-3">
               <label className="text-xs text-sera-text-muted">Enabled</label>
               <button
-                onClick={() => setForm(prev => ({ ...prev, partyModeEnabled: !prev.partyModeEnabled }))}
+                onClick={() =>
+                  setForm((prev) => ({ ...prev, partyModeEnabled: !prev.partyModeEnabled }))
+                }
                 className={`w-10 h-5 rounded-full transition-colors relative ${form.partyModeEnabled ? 'bg-sera-accent' : 'bg-sera-surface-hover border border-sera-border'}`}
               >
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${form.partyModeEnabled ? 'left-5' : 'left-0.5'}`} />
+                <span
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${form.partyModeEnabled ? 'left-5' : 'left-0.5'}`}
+                />
               </button>
             </div>
             {form.partyModeEnabled && (
               <>
                 <div>
-                  <label className="text-xs text-sera-text-muted mb-1 block">Orchestrator Agent</label>
-                  <input className="sera-input" value={form.partyOrchestrator} onChange={e => setForm(prev => ({ ...prev, partyOrchestrator: e.target.value }))} />
+                  <label className="text-xs text-sera-text-muted mb-1 block">
+                    Orchestrator Agent
+                  </label>
+                  <input
+                    className="sera-input"
+                    value={form.partyOrchestrator}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, partyOrchestrator: e.target.value }))
+                    }
+                  />
                 </div>
                 <div>
-                  <label className="text-xs text-sera-text-muted mb-1 block">Selection Strategy</label>
-                  <select className="sera-input" value={form.selectionStrategy} onChange={e => setForm(prev => ({ ...prev, selectionStrategy: e.target.value }))}>
+                  <label className="text-xs text-sera-text-muted mb-1 block">
+                    Selection Strategy
+                  </label>
+                  <select
+                    className="sera-input"
+                    value={form.selectionStrategy}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, selectionStrategy: e.target.value }))
+                    }
+                  >
                     <option value="relevance">Relevance</option>
                     <option value="round-robin">Round Robin</option>
                     <option value="all">All</option>
@@ -227,13 +271,17 @@ export default function CircleEditPage() {
 
         {/* Project Context */}
         <fieldset className="sera-card-static p-5">
-          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">Project Context</legend>
+          <legend className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim px-2">
+            Project Context
+          </legend>
           <div className="mt-2">
-            <label className="text-xs text-sera-text-muted mb-1 block">project-context.md content</label>
+            <label className="text-xs text-sera-text-muted mb-1 block">
+              project-context.md content
+            </label>
             <textarea
               className="w-full bg-sera-bg border border-sera-border rounded-lg p-4 text-sm text-sera-text font-mono resize-y min-h-[200px] focus:outline-none focus:border-sera-border-active transition-colors"
               value={form.projectContext}
-              onChange={e => setForm(prev => ({ ...prev, projectContext: e.target.value }))}
+              onChange={(e) => setForm((prev) => ({ ...prev, projectContext: e.target.value }))}
               placeholder="# Project Context&#10;&#10;Write shared conventions, architecture decisions, and guidelines for this circle..."
               spellCheck={false}
             />

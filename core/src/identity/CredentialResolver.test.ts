@@ -66,13 +66,15 @@ describe('CredentialResolver', () => {
     it('resolves credential from active delegation token', async () => {
       // DB: delegation_tokens query returns a valid token
       mockQuery.mockResolvedValueOnce({
-        rows: [{
-          id: 'tok-1',
-          actor_agent_id: AGENT_ID,
-          scope: { service: 'github', permissions: ['repo:read'] },
-          grant_type: 'session',
-          credential_secret_name: 'gh-token',
-        }],
+        rows: [
+          {
+            id: 'tok-1',
+            actor_agent_id: AGENT_ID,
+            scope: { service: 'github', permissions: ['repo:read'] },
+            grant_type: 'session',
+            credential_secret_name: 'gh-token',
+          },
+        ],
       });
       // DB: UPDATE use_count
       mockQuery.mockResolvedValueOnce({ rows: [] });
@@ -83,7 +85,7 @@ describe('CredentialResolver', () => {
         'github',
         AGENT_ID,
         INSTANCE_ID,
-        makeDelegatedCtx('tok-1'),
+        makeDelegatedCtx('tok-1')
       );
 
       expect(result).not.toBeNull();
@@ -94,41 +96,55 @@ describe('CredentialResolver', () => {
 
     it('revokes one-time grant after use', async () => {
       mockQuery.mockResolvedValueOnce({
-        rows: [{
-          id: 'tok-ot',
-          actor_agent_id: AGENT_ID,
-          scope: { service: 'github', permissions: ['*'] },
-          grant_type: 'one-time',
-          credential_secret_name: 'gh-token',
-        }],
+        rows: [
+          {
+            id: 'tok-ot',
+            actor_agent_id: AGENT_ID,
+            scope: { service: 'github', permissions: ['*'] },
+            grant_type: 'one-time',
+            credential_secret_name: 'gh-token',
+          },
+        ],
       });
       mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE with revoked_at
       mockGet.mockResolvedValueOnce('ghp_one_time');
 
-      const result = await resolver.resolve('github', AGENT_ID, INSTANCE_ID, makeDelegatedCtx('tok-ot'));
+      const result = await resolver.resolve(
+        'github',
+        AGENT_ID,
+        INSTANCE_ID,
+        makeDelegatedCtx('tok-ot')
+      );
 
       expect(result!.sourceType).toBe('delegation');
       // Verify the UPDATE included revoked_at
       const updateCall = mockQuery.mock.calls[1]!;
-      expect((updateCall[0] as string)).toMatch(/revoked_at/);
+      expect(updateCall[0] as string).toMatch(/revoked_at/);
     });
 
     it('skips delegation token that does not match service', async () => {
       mockQuery.mockResolvedValueOnce({
-        rows: [{
-          id: 'tok-jira',
-          actor_agent_id: AGENT_ID,
-          scope: { service: 'jira', permissions: ['*'] },
-          grant_type: 'session',
-          credential_secret_name: 'jira-token',
-        }],
+        rows: [
+          {
+            id: 'tok-jira',
+            actor_agent_id: AGENT_ID,
+            scope: { service: 'jira', permissions: ['*'] },
+            grant_type: 'session',
+            credential_secret_name: 'jira-token',
+          },
+        ],
       });
       // Falls through to service-identity (empty)
       mockQuery.mockResolvedValueOnce({ rows: [] });
       // Falls through to secret (empty)
       mockList.mockResolvedValueOnce([]);
 
-      const result = await resolver.resolve('github', AGENT_ID, INSTANCE_ID, makeDelegatedCtx('tok-jira'));
+      const result = await resolver.resolve(
+        'github',
+        AGENT_ID,
+        INSTANCE_ID,
+        makeDelegatedCtx('tok-jira')
+      );
       expect(result).toBeNull();
     });
 
@@ -140,7 +156,12 @@ describe('CredentialResolver', () => {
       // Falls through to secret
       mockList.mockResolvedValueOnce([]);
 
-      const result = await resolver.resolve('github', AGENT_ID, INSTANCE_ID, makeDelegatedCtx('tok-rev'));
+      const result = await resolver.resolve(
+        'github',
+        AGENT_ID,
+        INSTANCE_ID,
+        makeDelegatedCtx('tok-rev')
+      );
       expect(result).toBeNull();
     });
   });
@@ -150,12 +171,14 @@ describe('CredentialResolver', () => {
       // No delegationTokenId in ctx → skip path 1
       // Service identity query returns a match
       mockQuery.mockResolvedValueOnce({
-        rows: [{
-          id: 'si-1',
-          agent_scope: INSTANCE_ID,
-          service: 'github',
-          credential_secret_name: 'gh-bot-token',
-        }],
+        rows: [
+          {
+            id: 'si-1',
+            agent_scope: INSTANCE_ID,
+            service: 'github',
+            credential_secret_name: 'gh-bot-token',
+          },
+        ],
       });
       mockGet.mockResolvedValueOnce('ghp_bot_token');
 
@@ -173,13 +196,15 @@ describe('CredentialResolver', () => {
       // Service identity: empty
       mockQuery.mockResolvedValueOnce({ rows: [] });
       // Secret list: returns a matching secret
-      mockList.mockResolvedValueOnce([{
-        id: 's-1',
-        name: 'my-github-secret',
-        allowedAgents: ['agt-1'],
-        tags: ['github'],
-        exposure: 'per-call',
-      }]);
+      mockList.mockResolvedValueOnce([
+        {
+          id: 's-1',
+          name: 'my-github-secret',
+          allowedAgents: ['agt-1'],
+          tags: ['github'],
+          exposure: 'per-call',
+        },
+      ]);
       mockGet.mockResolvedValueOnce('ghp_from_secret');
 
       const result = await resolver.resolve('github', AGENT_ID, INSTANCE_ID, makeAutonomousCtx());

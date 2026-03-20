@@ -43,7 +43,7 @@ export class CircleService {
       `INSERT INTO circles (id, name, display_name, description, constitution, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $6)
        RETURNING *`,
-      [id, data.name, data.displayName, data.description, data.constitution, now],
+      [id, data.name, data.displayName, data.description, data.constitution, now]
     );
 
     const row = result.rows[0];
@@ -74,10 +74,9 @@ export class CircleService {
   }
 
   async getCircle(idOrName: string): Promise<Circle | null> {
-    const result = await query(
-      `SELECT * FROM circles WHERE id::text = $1 OR name = $1`,
-      [idOrName],
-    );
+    const result = await query(`SELECT * FROM circles WHERE id::text = $1 OR name = $1`, [
+      idOrName,
+    ]);
 
     if (result.rows.length === 0) return null;
     const row = result.rows[0];
@@ -95,7 +94,7 @@ export class CircleService {
 
   async listCircles(): Promise<Circle[]> {
     const result = await query(`SELECT * FROM circles ORDER BY name ASC`);
-    return result.rows.map(row => ({
+    return result.rows.map((row) => ({
       id: row.id,
       name: row.name,
       displayName: row.display_name,
@@ -110,11 +109,13 @@ export class CircleService {
     // Check for active members
     const members = await query(
       `SELECT id FROM agent_instances WHERE circle_id = $1 AND status = 'running'`,
-      [id],
+      [id]
     );
 
     if (members.rows.length > 0) {
-      throw new Error(`Cannot delete circle "${id}": it has ${members.rows.length} active agent(s)`);
+      throw new Error(
+        `Cannot delete circle "${id}": it has ${members.rows.length} active agent(s)`
+      );
     }
 
     const circle = await this.getCircle(id);
@@ -141,10 +142,10 @@ export class CircleService {
     const circle = await this.getCircle(circleId);
     if (!circle) throw new Error(`Circle "${circleId}" not found`);
 
-    await query(
-      `UPDATE agent_instances SET circle_id = $1, updated_at = NOW() WHERE id = $2`,
-      [circle.id, agentInstanceId],
-    );
+    await query(`UPDATE agent_instances SET circle_id = $1, updated_at = NOW() WHERE id = $2`, [
+      circle.id,
+      agentInstanceId,
+    ]);
 
     await this.audit.record({
       actorType: 'system',
@@ -160,7 +161,7 @@ export class CircleService {
   async removeMember(circleId: string, agentInstanceId: string): Promise<void> {
     await query(
       `UPDATE agent_instances SET circle_id = NULL, updated_at = NOW() WHERE id = $1 AND circle_id = $2`,
-      [agentInstanceId, circleId],
+      [agentInstanceId, circleId]
     );
 
     await this.audit.record({
@@ -176,7 +177,7 @@ export class CircleService {
 
   async updateCircle(
     id: string,
-    data: { displayName?: string; description?: string; constitution?: string },
+    data: { displayName?: string; description?: string; constitution?: string }
   ): Promise<Circle | null> {
     const setParts: string[] = [];
     const values: unknown[] = [];
@@ -202,7 +203,7 @@ export class CircleService {
 
     const result = await query(
       `UPDATE circles SET ${setParts.join(', ')} WHERE id = $${paramIdx} RETURNING *`,
-      values,
+      values
     );
 
     if (result.rows.length === 0) return null;
@@ -230,9 +231,9 @@ export class CircleService {
   async getMembers(circleId: string): Promise<CircleMember[]> {
     const result = await query(
       `SELECT id, name, template_name, status, circle_id, lifecycle_mode FROM agent_instances WHERE circle_id = $1`,
-      [circleId],
+      [circleId]
     );
-    return result.rows.map(row => {
+    return result.rows.map((row) => {
       const lm = row.lifecycle_mode as string | undefined;
       const member: CircleMember = {
         id: row.id as string,
@@ -245,14 +246,11 @@ export class CircleService {
     });
   }
 
-  async createPartySession(data: {
-    circleId: string;
-    prompt: string;
-  }): Promise<PartySession> {
+  async createPartySession(data: { circleId: string; prompt: string }): Promise<PartySession> {
     const id = uuidv4();
     const result = await query(
       `INSERT INTO party_sessions (id, circle_id, prompt, rounds) VALUES ($1, $2, $3, '[]') RETURNING *`,
-      [id, data.circleId, data.prompt],
+      [id, data.circleId, data.prompt]
     );
     const row = result.rows[0];
     return {
@@ -265,24 +263,18 @@ export class CircleService {
   }
 
   async appendPartyRound(sessionId: string, round: PartyRound): Promise<void> {
-    await query(
-      `UPDATE party_sessions SET rounds = rounds || $1::jsonb WHERE id = $2`,
-      [JSON.stringify([round]), sessionId],
-    );
+    await query(`UPDATE party_sessions SET rounds = rounds || $1::jsonb WHERE id = $2`, [
+      JSON.stringify([round]),
+      sessionId,
+    ]);
   }
 
   async completePartySession(sessionId: string): Promise<void> {
-    await query(
-      `UPDATE party_sessions SET completed_at = NOW() WHERE id = $1`,
-      [sessionId],
-    );
+    await query(`UPDATE party_sessions SET completed_at = NOW() WHERE id = $1`, [sessionId]);
   }
 
   async getPartySession(sessionId: string): Promise<PartySession | null> {
-    const result = await query(
-      `SELECT * FROM party_sessions WHERE id = $1`,
-      [sessionId],
-    );
+    const result = await query(`SELECT * FROM party_sessions WHERE id = $1`, [sessionId]);
     if (result.rows.length === 0) return null;
     const row = result.rows[0];
     const completedAt = row.completed_at ? (row.completed_at as Date).toISOString() : undefined;

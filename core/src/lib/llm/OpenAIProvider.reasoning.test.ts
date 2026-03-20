@@ -20,16 +20,18 @@ import { describe, it, expect } from 'vitest';
 function makeCompletionResponse(
   content: string | null,
   reasoning_content?: string,
-  tool_calls?: unknown[],
+  tool_calls?: unknown[]
 ) {
   return {
-    choices: [{
-      message: {
-        content,
-        reasoning_content,
-        tool_calls,
+    choices: [
+      {
+        message: {
+          content,
+          reasoning_content,
+          tool_calls,
+        },
       },
-    }],
+    ],
     usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
   };
 }
@@ -39,7 +41,7 @@ function makeCompletionResponse(
  * Each element in `deltas` becomes one chunk from the fake stream.
  */
 async function* makeStreamResponse(
-  deltas: Array<{ content?: string; reasoning_content?: string }>,
+  deltas: Array<{ content?: string; reasoning_content?: string }>
 ) {
   for (const delta of deltas) {
     yield { choices: [{ delta }], usage: null };
@@ -59,8 +61,7 @@ async function* makeStreamResponse(
 
 function extractChatResult(message: any) {
   const content = message?.content || '';
-  const reasoning: string | undefined =
-    (message as any)?.reasoning_content || undefined;
+  const reasoning: string | undefined = (message as any)?.reasoning_content || undefined;
   return { content, reasoning };
 }
 
@@ -114,8 +115,8 @@ describe('chatStream() reasoning_content extraction', () => {
       if (chunk.token || chunk.reasoning) chunks.push(chunk);
     }
 
-    const reasoningChunk = chunks.find(c => c.reasoning);
-    const contentChunk   = chunks.find(c => c.token === 'Answer.');
+    const reasoningChunk = chunks.find((c) => c.reasoning);
+    const contentChunk = chunks.find((c) => c.token === 'Answer.');
 
     expect(reasoningChunk).toBeDefined();
     expect(reasoningChunk!.reasoning).toBe('Thinking…');
@@ -125,17 +126,15 @@ describe('chatStream() reasoning_content extraction', () => {
   it('does not produce reasoning chunks when reasoning_content is absent', async () => {
     const chunks: ReturnType<typeof extractStreamChunk>[] = [];
 
-    for await (const raw of makeStreamResponse([
-      { content: 'Hello world.' },
-    ])) {
+    for await (const raw of makeStreamResponse([{ content: 'Hello world.' }])) {
       const delta = (raw as any).choices[0]?.delta;
       if (delta === undefined) continue;
       const chunk = extractStreamChunk(delta);
       if (chunk.token || chunk.reasoning) chunks.push(chunk);
     }
 
-    const reasoningChunks = chunks.filter(c => c.reasoning);
+    const reasoningChunks = chunks.filter((c) => c.reasoning);
     expect(reasoningChunks).toHaveLength(0);
-    expect(chunks.find(c => c.token === 'Hello world.')).toBeDefined();
+    expect(chunks.find((c) => c.token === 'Hello world.')).toBeDefined();
   });
 });

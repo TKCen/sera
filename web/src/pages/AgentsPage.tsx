@@ -33,7 +33,11 @@ export default function AgentsPage() {
     if (!agents) return [];
     return agents.filter((a) => {
       const name = (a.metadata.displayName ?? a.metadata.name).toLowerCase();
-      if (search && !name.includes(search.toLowerCase()) && !a.metadata.name.includes(search.toLowerCase())) {
+      if (
+        search &&
+        !name.includes(search.toLowerCase()) &&
+        !a.metadata.name.includes(search.toLowerCase())
+      ) {
         return false;
       }
       if (filterCircle !== 'all' && a.metadata.circle !== filterCircle) return false;
@@ -78,7 +82,10 @@ export default function AgentsPage() {
       {/* Filters */}
       <div className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 max-w-xs">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none" />
+          <Search
+            size={13}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none"
+          />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -95,7 +102,9 @@ export default function AgentsPage() {
           >
             <option value="all">All circles</option>
             {circles.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c}>
+                {c}
+              </option>
             ))}
           </select>
         )}
@@ -135,7 +144,9 @@ export default function AgentsPage() {
           }
         />
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-sera-text-muted text-center py-12">No agents match your filters.</p>
+        <p className="text-sm text-sera-text-muted text-center py-12">
+          No agents match your filters.
+        </p>
       ) : (
         <div className="space-y-2">
           {filtered.map((agent) => {
@@ -143,10 +154,7 @@ export default function AgentsPage() {
             const tier = agent.spec?.sandboxBoundary ?? '';
 
             return (
-              <div
-                key={id}
-                className="sera-card relative flex items-center gap-4 px-4 py-3 group"
-              >
+              <div key={id} className="sera-card relative flex items-center gap-4 px-4 py-3 group">
                 <div className="h-9 w-9 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
                   <Bot size={16} className="text-sera-accent" />
                 </div>
@@ -160,9 +168,7 @@ export default function AgentsPage() {
                     {agent.metadata.circle && (
                       <Badge variant="default">{agent.metadata.circle}</Badge>
                     )}
-                    {tier && (
-                      <Badge variant="accent">{tier}</Badge>
-                    )}
+                    {tier && <Badge variant="accent">{tier}</Badge>}
                   </div>
                 </div>
 
@@ -171,7 +177,9 @@ export default function AgentsPage() {
                 {/* Quick actions */}
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
-                    onClick={(e) => { void handleStart(e, id); }}
+                    onClick={(e) => {
+                      void handleStart(e, id);
+                    }}
                     disabled={startAgent.isPending}
                     className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
                     title="Start"
@@ -179,7 +187,9 @@ export default function AgentsPage() {
                     <Play size={13} />
                   </button>
                   <button
-                    onClick={(e) => { void handleStop(e, id); }}
+                    onClick={(e) => {
+                      void handleStop(e, id);
+                    }}
                     disabled={stopAgent.isPending}
                     className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
                     title="Stop"

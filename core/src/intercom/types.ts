@@ -17,7 +17,14 @@ export type IntercomMessageType =
 
 // ── Thought Step Types ──────────────────────────────────────────────────────────
 
-export type ThoughtStepType = 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result' | 'reasoning';
+export type ThoughtStepType =
+  | 'observe'
+  | 'plan'
+  | 'act'
+  | 'reflect'
+  | 'tool-call'
+  | 'tool-result'
+  | 'reasoning';
 
 // ── Message Envelope ────────────────────────────────────────────────────────────
 
@@ -81,4 +88,4 @@ export const CHANNEL_PREFIXES = [
   'federation',
 ] as const;
 
-export type ChannelPrefix = typeof CHANNEL_PREFIXES[number];
+export type ChannelPrefix = (typeof CHANNEL_PREFIXES)[number];

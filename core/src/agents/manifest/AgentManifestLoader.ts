@@ -12,7 +12,7 @@ const logger = new Logger('AgentManifestLoader');
 export class ManifestValidationError extends Error {
   constructor(
     message: string,
-    public readonly field?: string,
+    public readonly field?: string
   ) {
     super(message);
     this.name = 'ManifestValidationError';
@@ -92,10 +92,7 @@ export class AgentManifestLoader {
     // ── Reject unknown top-level fields ───────────────────────────────────────
     for (const key of Object.keys(obj)) {
       if (!KNOWN_TOP_LEVEL_FIELDS.has(key)) {
-        throw new ManifestValidationError(
-          `Unknown top-level field: "${key}"${ctx}`,
-          key,
-        );
+        throw new ManifestValidationError(`Unknown top-level field: "${key}"${ctx}`, key);
       }
     }
 
@@ -105,7 +102,7 @@ export class AgentManifestLoader {
     if (obj['kind'] !== 'Agent') {
       throw new ManifestValidationError(
         `"kind" must be "Agent", got "${String(obj['kind'])}"${ctx}`,
-        'kind',
+        'kind'
       );
     }
 
@@ -113,7 +110,7 @@ export class AgentManifestLoader {
     AgentManifestLoader.requireObject(obj, 'metadata', ctx);
     const meta = obj['metadata'] as Record<string, unknown>;
     AgentManifestLoader.requireString(meta, 'name', `${ctx} metadata`);
-    
+
     if (meta['displayName'] !== undefined) {
       AgentManifestLoader.requireString(meta, 'displayName', `${ctx} metadata`);
     }
@@ -122,10 +119,13 @@ export class AgentManifestLoader {
     }
 
     if (meta['additionalCircles'] !== undefined) {
-      if (!Array.isArray(meta['additionalCircles']) || !meta['additionalCircles'].every(c => typeof c === 'string')) {
+      if (
+        !Array.isArray(meta['additionalCircles']) ||
+        !meta['additionalCircles'].every((c) => typeof c === 'string')
+      ) {
         throw new ManifestValidationError(
           `"additionalCircles" must be an array of strings${ctx}`,
-          'metadata.additionalCircles',
+          'metadata.additionalCircles'
         );
       }
     }
@@ -140,13 +140,13 @@ export class AgentManifestLoader {
     if (tier === undefined) {
       throw new ManifestValidationError(
         `Missing required field "tier" in metadata${ctx}`,
-        'metadata.tier',
+        'metadata.tier'
       );
     }
     if (!VALID_TIERS.includes(tier as SecurityTier)) {
       throw new ManifestValidationError(
         `Invalid security tier: ${String(tier)}. Must be one of: ${VALID_TIERS.join(', ')}${ctx}`,
-        'metadata.tier',
+        'metadata.tier'
       );
     }
 
@@ -169,7 +169,7 @@ export class AgentManifestLoader {
         if (typeof res['maxLlmTokensPerHour'] !== 'number' || res['maxLlmTokensPerHour'] <= 0) {
           throw new ManifestValidationError(
             `"maxLlmTokensPerHour" must be a positive number${ctx}`,
-            'resources.maxLlmTokensPerHour',
+            'resources.maxLlmTokensPerHour'
           );
         }
       }
@@ -181,33 +181,39 @@ export class AgentManifestLoader {
       if (perms['canExec'] !== undefined && typeof perms['canExec'] !== 'boolean') {
         throw new ManifestValidationError(
           `"canExec" must be a boolean${ctx}`,
-          'permissions.canExec',
+          'permissions.canExec'
         );
       }
-      if (perms['canSpawnSubagents'] !== undefined && typeof perms['canSpawnSubagents'] !== 'boolean') {
+      if (
+        perms['canSpawnSubagents'] !== undefined &&
+        typeof perms['canSpawnSubagents'] !== 'boolean'
+      ) {
         throw new ManifestValidationError(
           `"canSpawnSubagents" must be a boolean${ctx}`,
-          'permissions.canSpawnSubagents',
+          'permissions.canSpawnSubagents'
         );
       }
     }
 
     // ── capabilities ──────────────────────────────────────────────────────────
     if (obj['capabilities']) {
-      if (!Array.isArray(obj['capabilities']) || !obj['capabilities'].every(c => typeof c === 'string')) {
+      if (
+        !Array.isArray(obj['capabilities']) ||
+        !obj['capabilities'].every((c) => typeof c === 'string')
+      ) {
         throw new ManifestValidationError(
           `"capabilities" must be an array of strings`,
-          'capabilities',
+          'capabilities'
         );
       }
-      }
+    }
 
-      // ── schedules ─────────────────────────────────────────────────────────────
-      if (obj['schedules']) {
+    // ── schedules ─────────────────────────────────────────────────────────────
+    if (obj['schedules']) {
       if (!Array.isArray(obj['schedules'])) {
         throw new ManifestValidationError(
           `"schedules" must be an array of objects${ctx}`,
-          'schedules',
+          'schedules'
         );
       }
       for (let i = 0; i < obj['schedules'].length; i++) {
@@ -218,56 +224,36 @@ export class AgentManifestLoader {
         if (s['type'] !== 'cron' && s['type'] !== 'once') {
           throw new ManifestValidationError(
             `Schedule type must be "cron" or "once", got "${String(s['type'])}"${sCtx}`,
-            `schedules[${i}].type`,
+            `schedules[${i}].type`
           );
         }
         AgentManifestLoader.requireString(s, 'expression', sCtx);
         AgentManifestLoader.requireString(s, 'task', sCtx);
       }
-      }
+    }
 
-      // ── Construct validated manifest ──────────────────────────────────────────
+    // ── Construct validated manifest ──────────────────────────────────────────
 
     return obj as unknown as AgentManifest;
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  private static requireString(
-    obj: Record<string, unknown>,
-    field: string,
-    ctx: string,
-  ): void {
+  private static requireString(obj: Record<string, unknown>, field: string, ctx: string): void {
     if (obj[field] === undefined || obj[field] === null) {
-      throw new ManifestValidationError(
-        `Missing required field "${field}"${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Missing required field "${field}"${ctx}`, field);
     }
     if (typeof obj[field] !== 'string') {
-      throw new ManifestValidationError(
-        `Field "${field}" must be a string${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Field "${field}" must be a string${ctx}`, field);
     }
   }
 
-  private static requireObject(
-    obj: Record<string, unknown>,
-    field: string,
-    ctx: string,
-  ): void {
+  private static requireObject(obj: Record<string, unknown>, field: string, ctx: string): void {
     if (obj[field] === undefined || obj[field] === null) {
-      throw new ManifestValidationError(
-        `Missing required field "${field}"${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Missing required field "${field}"${ctx}`, field);
     }
     if (typeof obj[field] !== 'object' || Array.isArray(obj[field])) {
-      throw new ManifestValidationError(
-        `Field "${field}" must be an object${ctx}`,
-        field,
-      );
+      throw new ManifestValidationError(`Field "${field}" must be an object${ctx}`, field);
     }
   }
 }

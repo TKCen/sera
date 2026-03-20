@@ -29,9 +29,10 @@ export class Reflector {
   static async compactIfNeeded(
     memoryManager: MemoryManager,
     llmProvider: LLMProvider,
-    opts?: { threshold?: number; batchSize?: number },
+    opts?: { threshold?: number; batchSize?: number }
   ): Promise<MemoryEntry | null> {
-    const threshold = opts?.threshold ?? Reflector.compactionThreshold ?? Reflector.DEFAULT_THRESHOLD;
+    const threshold =
+      opts?.threshold ?? Reflector.compactionThreshold ?? Reflector.DEFAULT_THRESHOLD;
     const batchSize = opts?.batchSize ?? Reflector.DEFAULT_BATCH_SIZE;
 
     const coreBlock = await memoryManager.getBlock('core');
@@ -45,7 +46,7 @@ export class Reflector {
 
     // Build the summarisation prompt
     const contentForSummary = toCompact
-      .map(e => `## ${e.title}\n${e.content}`)
+      .map((e) => `## ${e.title}\n${e.content}`)
       .join('\n\n---\n\n');
 
     let summaryContent = '';
@@ -82,10 +83,10 @@ export class Reflector {
     }
 
     // Collect the IDs of compacted entries for the ref chain
-    const compactedIds = toCompact.map(e => e.id);
+    const compactedIds = toCompact.map((e) => e.id);
 
     // Create the summary entry in the archive block, referencing originals
-    const summaryTitle = `Summary — ${toCompact.map(e => e.title).join(', ')}`;
+    const summaryTitle = `Summary — ${toCompact.map((e) => e.title).join(', ')}`;
     const summaryEntry = await memoryManager.addEntry('archive', {
       title: summaryTitle.length > 120 ? summaryTitle.slice(0, 117) + '...' : summaryTitle,
       content: summaryContent,

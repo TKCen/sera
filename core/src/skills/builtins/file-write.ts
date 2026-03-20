@@ -12,8 +12,18 @@ export const fileWriteSkill: SkillDefinition = {
   description: 'Write content to a file, creating directories as needed.',
   source: 'builtin',
   parameters: [
-    { name: 'path', type: 'string', description: 'Absolute or relative path to the file', required: true },
-    { name: 'content', type: 'string', description: 'Content to write to the file', required: true },
+    {
+      name: 'path',
+      type: 'string',
+      description: 'Absolute or relative path to the file',
+      required: true,
+    },
+    {
+      name: 'content',
+      type: 'string',
+      description: 'Content to write to the file',
+      required: true,
+    },
   ],
   handler: async (params, context) => {
     const rawPath = params['path'];
@@ -45,17 +55,17 @@ export const fileWriteSkill: SkillDefinition = {
         const b64 = Buffer.from(content).toString('base64');
         const script = `mkdir -p "${dirPath}" && echo "${b64}" | base64 -d > "${containerPath}"`;
 
-        const result = await context.sandboxManager.exec(
-          context.manifest,
-          {
-            containerId: context.containerId,
-            agentName: context.agentName,
-            command: ['sh', '-c', script],
-          },
-        );
+        const result = await context.sandboxManager.exec(context.manifest, {
+          containerId: context.containerId,
+          agentName: context.agentName,
+          command: ['sh', '-c', script],
+        });
 
         if (result.exitCode !== 0) {
-          return { success: false, error: `Container exec failed (exit ${result.exitCode}): ${result.output}` };
+          return {
+            success: false,
+            error: `Container exec failed (exit ${result.exitCode}): ${result.output}`,
+          };
         }
         return { success: true, data: { path: containerPath, bytesWritten: content.length } };
       }

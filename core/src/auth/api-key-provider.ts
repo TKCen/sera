@@ -46,7 +46,7 @@ export class ApiKeyProvider implements AuthPlugin {
     );
 
     for (const row of result.rows) {
-      if (row.key_hash && await argon2.verify(row.key_hash, key)) {
+      if (row.key_hash && (await argon2.verify(row.key_hash, key))) {
         // Update last_used_at async
         query('UPDATE api_keys SET last_used_at = NOW() WHERE id = $1', [row.id]).catch(() => {});
 

@@ -48,7 +48,11 @@ export function createKnowledgeRouter(): Router {
       const { strategy } = req.body as { strategy: 'ours' | 'theirs' | 'llm' };
       // DECISION: LLM-assisted merge is a stub. 'ours'/'theirs' are accepted
       // but not yet implemented beyond acknowledgement.
-      res.json({ success: true, strategy, note: 'Resolution strategy acknowledged — operator action required to finalise' });
+      res.json({
+        success: true,
+        strategy,
+        note: 'Resolution strategy acknowledged — operator action required to finalise',
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

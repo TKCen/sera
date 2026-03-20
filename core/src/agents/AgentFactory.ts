@@ -16,7 +16,7 @@ export class AgentFactory {
   static createAgent(
     manifest: AgentManifest,
     agentInstanceId?: string,
-    intercom?: import('../intercom/IntercomService.js').IntercomService,
+    intercom?: import('../intercom/IntercomService.js').IntercomService
   ): BaseAgent {
     const provider = ProviderFactory.createFromManifest(manifest);
     const memOpts: { circleId?: string; agentId?: string } = {};
@@ -33,7 +33,7 @@ export class AgentFactory {
     templateName: string,
     name: string,
     workspacePath: string,
-    circleId?: string,
+    circleId?: string
   ): Promise<AgentInstance> {
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -45,7 +45,7 @@ export class AgentFactory {
     await query(
       `INSERT INTO agent_instances (id, template_name, name, workspace_path, status, created_at, updated_at, circle_id)
        VALUES ($1, $2, $3, $4, 'active', $5, $5, $6)`,
-      [id, templateName, name, finalWorkspacePath, now, circleId],
+      [id, templateName, name, finalWorkspacePath, now, circleId]
     );
 
     return {
@@ -67,7 +67,7 @@ export class AgentFactory {
     const result = await query(
       `SELECT id, template_name, name, workspace_path, container_id, status, created_at, updated_at, circle_id, lifecycle_mode, parent_instance_id
        FROM agent_instances WHERE id = $1`,
-      [id],
+      [id]
     );
 
     if (result.rows.length === 0) return null;
@@ -92,10 +92,10 @@ export class AgentFactory {
    * Update the container ID for an agent instance.
    */
   static async updateContainerId(id: string, containerId: string | null): Promise<void> {
-    await query(
-      `UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id = $2`,
-      [containerId, id],
-    );
+    await query(`UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id = $2`, [
+      containerId,
+      id,
+    ]);
   }
 
   /**
@@ -106,13 +106,13 @@ export class AgentFactory {
     if (templateName) {
       result = await query(
         `SELECT * FROM agent_instances WHERE template_name = $1 ORDER BY created_at DESC`,
-        [templateName],
+        [templateName]
       );
     } else {
       result = await query(`SELECT * FROM agent_instances ORDER BY created_at DESC`);
     }
 
-    return result.rows.map(row => ({
+    return result.rows.map((row) => ({
       id: row.id,
       templateName: row.template_name,
       name: row.name,
@@ -138,6 +138,6 @@ export class AgentFactory {
    */
   static loadTemplates(dirPath: string): Map<string, AgentManifest> {
     const manifests = AgentManifestLoader.loadAllManifests(dirPath);
-    return new Map(manifests.map(m => [m.metadata.name, m]));
+    return new Map(manifests.map((m) => [m.metadata.name, m]));
   }
 }

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
-import ForceGraph2D, { ForceGraphMethods } from "react-force-graph-2d";
-import { useNavigate } from "react-router";
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
+import { useNavigate } from 'react-router';
 
 export interface GraphNode {
   id: string;
@@ -12,7 +12,7 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;
   to: string;
-  kind: "ref" | "wikilink";
+  kind: 'ref' | 'wikilink';
 }
 
 export interface MemoryGraphData {
@@ -29,20 +29,20 @@ interface MemoryGraphProps {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  human: "#3b82f6",     // blue
-  persona: "#a855f7",   // purple
-  core: "#22c55e",      // green
-  archive: "#6b7280",   // gray
+  human: '#3b82f6', // blue
+  persona: '#a855f7', // purple
+  core: '#22c55e', // green
+  archive: '#6b7280', // gray
 };
 
-const DEFAULT_COLOR = "#9ca3af";
+const DEFAULT_COLOR = '#9ca3af';
 
 export default function MemoryGraph({
   data,
   onNodeClick,
   onNodeDoubleClick,
-  searchQuery = "",
-  className = ""
+  searchQuery = '',
+  className = '',
 }: MemoryGraphProps) {
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const navigate = useNavigate();
@@ -56,95 +56,109 @@ export default function MemoryGraph({
         const { clientWidth, clientHeight } = containerRef.current;
         setDimensions({
           width: clientWidth,
-          height: clientHeight || 600
+          height: clientHeight || 600,
         });
       }
     };
 
     updateDimensions();
-    window.addEventListener("resize", updateDimensions);
-    return () => window.removeEventListener("resize", updateDimensions);
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
   const lastClickRef = useRef<{ id: string; time: number } | null>(null);
 
-  const handleNodeDoubleClick = useCallback((node: any) => {
-    if (onNodeDoubleClick) {
-      onNodeDoubleClick(node as GraphNode);
-    } else {
-      void navigate(`/memory/${node.id as string}`);
-    }
-  }, [onNodeDoubleClick, navigate]);
-
-  const handleNodeClick = useCallback((node: any) => {
-    const now = Date.now();
-    if (lastClickRef.current && lastClickRef.current.id === node.id && now - lastClickRef.current.time < 300) {
-      // Double click
-      handleNodeDoubleClick(node);
-      lastClickRef.current = null;
-    } else {
-      // Single click
-      lastClickRef.current = { id: node.id, time: now };
-      if (onNodeClick) {
-        onNodeClick(node as GraphNode);
+  const handleNodeDoubleClick = useCallback(
+    (node: any) => {
+      if (onNodeDoubleClick) {
+        onNodeDoubleClick(node as GraphNode);
+      } else {
+        void navigate(`/memory/${node.id as string}`);
       }
-    }
-  }, [onNodeClick, handleNodeDoubleClick]);
+    },
+    [onNodeDoubleClick, navigate]
+  );
+
+  const handleNodeClick = useCallback(
+    (node: any) => {
+      const now = Date.now();
+      if (
+        lastClickRef.current &&
+        lastClickRef.current.id === node.id &&
+        now - lastClickRef.current.time < 300
+      ) {
+        // Double click
+        handleNodeDoubleClick(node);
+        lastClickRef.current = null;
+      } else {
+        // Single click
+        lastClickRef.current = { id: node.id, time: now };
+        if (onNodeClick) {
+          onNodeClick(node as GraphNode);
+        }
+      }
+    },
+    [onNodeClick, handleNodeDoubleClick]
+  );
 
   // Transform data to fit react-force-graph
   const graphData = useMemo(() => {
     return {
-      nodes: data.nodes.map(n => ({ ...n })),
-      links: data.edges.map(e => ({ source: e.from, target: e.to, kind: e.kind })),
+      nodes: data.nodes.map((n) => ({ ...n })),
+      links: data.edges.map((e) => ({ source: e.from, target: e.to, kind: e.kind })),
     };
   }, [data]);
 
   // Handle node rendering and coloring based on search and type
-  const nodeCanvasObject = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const label = node.title;
-    const fontSize = 12 / globalScale;
-    ctx.font = `${fontSize}px Sans-Serif`;
+  const nodeCanvasObject = useCallback(
+    (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const label = node.title;
+      const fontSize = 12 / globalScale;
+      ctx.font = `${fontSize}px Sans-Serif`;
 
-    const isMatched = searchQuery
-      ? label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (node.tags && node.tags.some((t: string) => t.toLowerCase().includes(searchQuery.toLowerCase())))
-      : true;
+      const isMatched = searchQuery
+        ? label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (node.tags &&
+            node.tags.some((t: string) => t.toLowerCase().includes(searchQuery.toLowerCase())))
+        : true;
 
-    const color = TYPE_COLORS[node.type] || DEFAULT_COLOR;
+      const color = TYPE_COLORS[node.type] || DEFAULT_COLOR;
 
-    // Draw node circle
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, 5, 0, 2 * Math.PI, false);
-    ctx.fillStyle = isMatched ? color : "#374151"; // highlight or dim
-    ctx.fill();
+      // Draw node circle
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, 5, 0, 2 * Math.PI, false);
+      ctx.fillStyle = isMatched ? color : '#374151'; // highlight or dim
+      ctx.fill();
 
-    // Node border for matches if searching
-    if (searchQuery && isMatched) {
-      ctx.lineWidth = 1.5 / globalScale;
-      ctx.strokeStyle = "#ffffff";
-      ctx.stroke();
-    }
+      // Node border for matches if searching
+      if (searchQuery && isMatched) {
+        ctx.lineWidth = 1.5 / globalScale;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+      }
 
-    // Draw text label
-    const textWidth = ctx.measureText(label).width;
-    const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2);
+      // Draw text label
+      const textWidth = ctx.measureText(label).width;
+      const bckgDimensions = [textWidth, fontSize].map((n) => n + fontSize * 0.2);
 
-    // Label background
-    if (isMatched) {
-      ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
-      ctx.fillRect(
-        node.x - bckgDimensions[0] / 2,
-        node.y + 6,
-        bckgDimensions[0],
-        bckgDimensions[1]
-      );
+      // Label background
+      if (isMatched) {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+        ctx.fillRect(
+          node.x - bckgDimensions[0] / 2,
+          node.y + 6,
+          bckgDimensions[0],
+          bckgDimensions[1]
+        );
 
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = "#e2e8f0";
-      ctx.fillText(label, node.x, node.y + 6 + fontSize / 2);
-    }
-  }, [searchQuery]);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillText(label, node.x, node.y + 6 + fontSize / 2);
+      }
+    },
+    [searchQuery]
+  );
 
   return (
     <div
@@ -159,9 +173,11 @@ export default function MemoryGraph({
         nodeLabel="title"
         nodeRelSize={5}
         nodeCanvasObject={nodeCanvasObject}
-        linkColor={(link: any) => link.kind === "wikilink" ? "rgba(100, 116, 139, 0.5)" : "rgba(148, 163, 184, 0.6)"}
-        linkWidth={(link: any) => link.kind === "wikilink" ? 1 : 1.5}
-        linkLineDash={(link: any) => link.kind === "wikilink" ? [2, 2] : null}
+        linkColor={(link: any) =>
+          link.kind === 'wikilink' ? 'rgba(100, 116, 139, 0.5)' : 'rgba(148, 163, 184, 0.6)'
+        }
+        linkWidth={(link: any) => (link.kind === 'wikilink' ? 1 : 1.5)}
+        linkLineDash={(link: any) => (link.kind === 'wikilink' ? [2, 2] : null)}
         onNodeClick={handleNodeClick}
         d3AlphaDecay={0.02}
         d3VelocityDecay={0.3}

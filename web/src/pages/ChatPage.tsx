@@ -39,7 +39,12 @@ function CodeBlock({ children, className }: { children?: React.ReactNode; classN
 
   return (
     <div className="relative group my-2">
-      <pre className={cn('bg-sera-bg border border-sera-border rounded-lg px-4 py-3 overflow-x-auto text-[0.8em] leading-relaxed', className)}>
+      <pre
+        className={cn(
+          'bg-sera-bg border border-sera-border rounded-lg px-4 py-3 overflow-x-auto text-[0.8em] leading-relaxed',
+          className
+        )}
+      >
         <code>{children}</code>
       </pre>
       <button
@@ -68,11 +73,9 @@ export default function ChatPage() {
   const streamingMsgId = useRef<string | null>(null);
   const historyInitializedForAgent = useRef('');
 
-  const tokenPayload = useChannel<TokenPayload>(
-    selectedAgent ? `tokens:${selectedAgent}` : '',
-  );
+  const tokenPayload = useChannel<TokenPayload>(selectedAgent ? `tokens:${selectedAgent}` : '');
   const thoughtPayload = useChannel<ThoughtPayload>(
-    selectedAgent ? `thoughts:${selectedAgent}` : '',
+    selectedAgent ? `thoughts:${selectedAgent}` : ''
   );
 
   // Load chat history once per agent selection — do not overwrite active session on refetch
@@ -82,10 +85,20 @@ export default function ChatPage() {
     const loaded: Message[] = [];
     for (const task of history) {
       if (task.input) {
-        loaded.push({ id: `${task.id}-in`, role: 'user', content: task.input, createdAt: task.createdAt ?? '' });
+        loaded.push({
+          id: `${task.id}-in`,
+          role: 'user',
+          content: task.input,
+          createdAt: task.createdAt ?? '',
+        });
       }
       if (task.output) {
-        loaded.push({ id: `${task.id}-out`, role: 'agent', content: task.output, createdAt: task.completedAt ?? task.createdAt ?? '' });
+        loaded.push({
+          id: `${task.id}-out`,
+          role: 'agent',
+          content: task.output,
+          createdAt: task.completedAt ?? task.createdAt ?? '',
+        });
       }
     }
     setMessages(loaded);
@@ -217,7 +230,7 @@ export default function ChatPage() {
                 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
                 showThoughts
                   ? 'bg-sera-accent-soft text-sera-accent'
-                  : 'text-sera-text-muted hover:bg-sera-surface-hover',
+                  : 'text-sera-text-muted hover:bg-sera-surface-hover'
               )}
             >
               <BrainCircuit size={13} />
@@ -234,13 +247,13 @@ export default function ChatPage() {
           {messages.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-sm text-sera-text-muted">
-                {selectedAgent ? 'Send a message to start the conversation.' : 'Select an agent above.'}
+                {selectedAgent
+                  ? 'Send a message to start the conversation.'
+                  : 'Select an agent above.'}
               </p>
             </div>
           ) : (
-            messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
-            ))
+            messages.map((msg) => <ChatMessage key={msg.id} message={msg} />)
           )}
           <div ref={messagesEndRef} />
         </div>
@@ -253,7 +266,11 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={streaming || !selectedAgent}
-              placeholder={streaming ? 'Agent is responding…' : 'Message agent… (Enter to send, Shift+Enter for newline)'}
+              placeholder={
+                streaming
+                  ? 'Agent is responding…'
+                  : 'Message agent… (Enter to send, Shift+Enter for newline)'
+              }
               rows={1}
               className="sera-input flex-1 resize-none min-h-[38px] max-h-32 overflow-y-auto"
               style={{ height: 'auto' }}
@@ -264,7 +281,9 @@ export default function ChatPage() {
               }}
             />
             <button
-              onClick={() => { void handleSend(); }}
+              onClick={() => {
+                void handleSend();
+              }}
               disabled={streaming || !input.trim() || !selectedAgent}
               className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
             >
@@ -307,7 +326,7 @@ function ChatMessage({ message }: { message: Message }) {
           'max-w-[75%] rounded-xl px-4 py-2.5 text-sm',
           isUser
             ? 'bg-sera-accent text-sera-bg'
-            : 'bg-sera-surface border border-sera-border text-sera-text',
+            : 'bg-sera-surface border border-sera-border text-sera-text'
         )}
       >
         {isUser ? (
@@ -322,7 +341,10 @@ function ChatMessage({ message }: { message: Message }) {
                   return isBlock ? (
                     <CodeBlock className={className}>{children}</CodeBlock>
                   ) : (
-                    <code className="text-sera-accent bg-sera-surface-active rounded px-1 py-0.5 font-mono text-[0.82em]" {...props}>
+                    <code
+                      className="text-sera-accent bg-sera-surface-active rounded px-1 py-0.5 font-mono text-[0.82em]"
+                      {...props}
+                    >
                       {children}
                     </code>
                   );

@@ -20,22 +20,22 @@ import type { TierLimits, SpawnRequest, ToolRunRequest } from './types.js';
 const TIER_LIMITS: Record<SecurityTier, TierLimits> = {
   1: {
     tier: 1,
-    cpuShares: 256,                    // Low priority
-    memoryBytes: 256 * 1024 * 1024,    // 256 Mi
+    cpuShares: 256, // Low priority
+    memoryBytes: 256 * 1024 * 1024, // 256 Mi
     networkMode: 'none',
     filesystemMode: 'ro',
   },
   2: {
     tier: 2,
-    cpuShares: 512,                    // Medium priority
-    memoryBytes: 512 * 1024 * 1024,    // 512 Mi
+    cpuShares: 512, // Medium priority
+    memoryBytes: 512 * 1024 * 1024, // 512 Mi
     networkMode: 'agent_net',
     filesystemMode: 'rw',
   },
   3: {
     tier: 3,
-    cpuShares: 1024,                   // High priority
-    memoryBytes: 1024 * 1024 * 1024,   // 1 Gi
+    cpuShares: 1024, // High priority
+    memoryBytes: 1024 * 1024 * 1024, // 1 Gi
     networkMode: 'bridge',
     filesystemMode: 'rw',
   },
@@ -47,7 +47,7 @@ export class PolicyViolationError extends Error {
   constructor(
     message: string,
     public readonly agentName: string,
-    public readonly violation: string,
+    public readonly violation: string
   ) {
     super(message);
     this.name = 'PolicyViolationError';
@@ -125,10 +125,7 @@ export class TierPolicy {
    * Validate that a spawn request is permitted by the agent's manifest.
    * Throws PolicyViolationError on failure.
    */
-  static validateSpawnPermission(
-    manifest: AgentManifest,
-    request: SpawnRequest,
-  ): void {
+  static validateSpawnPermission(manifest: AgentManifest, request: SpawnRequest): void {
     const agentName = manifest.metadata.name;
 
     // Subagent validation
@@ -137,7 +134,7 @@ export class TierPolicy {
         throw new PolicyViolationError(
           `Agent "${agentName}" is not permitted to spawn subagents`,
           agentName,
-          'spawn_not_permitted',
+          'spawn_not_permitted'
         );
       }
 
@@ -145,18 +142,18 @@ export class TierPolicy {
         throw new PolicyViolationError(
           `Subagent spawn request must specify a subagentRole`,
           agentName,
-          'missing_subagent_role',
+          'missing_subagent_role'
         );
       }
 
       const allowedSubagents = manifest.subagents?.allowed ?? [];
-      const entry = allowedSubagents.find(s => s.role === request.subagentRole);
+      const entry = allowedSubagents.find((s) => s.role === request.subagentRole);
 
       if (!entry) {
         throw new PolicyViolationError(
           `Agent "${agentName}" is not allowed to spawn subagent role "${request.subagentRole}"`,
           agentName,
-          'subagent_role_not_allowed',
+          'subagent_role_not_allowed'
         );
       }
     }
@@ -166,10 +163,7 @@ export class TierPolicy {
    * Validate that a tool run request is permitted by the agent's manifest.
    * Throws PolicyViolationError on failure.
    */
-  static validateToolPermission(
-    manifest: AgentManifest,
-    request: ToolRunRequest,
-  ): void {
+  static validateToolPermission(manifest: AgentManifest, request: ToolRunRequest): void {
     const agentName = manifest.metadata.name;
 
     // Check denied list first
@@ -177,7 +171,7 @@ export class TierPolicy {
       throw new PolicyViolationError(
         `Agent "${agentName}" is explicitly denied tool "${request.toolName}"`,
         agentName,
-        'tool_denied',
+        'tool_denied'
       );
     }
 
@@ -187,7 +181,7 @@ export class TierPolicy {
         throw new PolicyViolationError(
           `Agent "${agentName}" is not allowed tool "${request.toolName}"`,
           agentName,
-          'tool_not_allowed',
+          'tool_not_allowed'
         );
       }
     }
@@ -199,16 +193,16 @@ export class TierPolicy {
   static checkInstanceLimit(
     manifest: AgentManifest,
     subagentRole: string,
-    currentCount: number,
+    currentCount: number
   ): void {
-    const entry = manifest.subagents?.allowed?.find(s => s.role === subagentRole);
+    const entry = manifest.subagents?.allowed?.find((s) => s.role === subagentRole);
     if (!entry) return; // Already validated by validateSpawnPermission
 
     if (entry.maxInstances !== undefined && currentCount >= entry.maxInstances) {
       throw new PolicyViolationError(
         `Agent "${manifest.metadata.name}" has reached the max instance limit (${entry.maxInstances}) for subagent role "${subagentRole}"`,
         manifest.metadata.name,
-        'max_instances_exceeded',
+        'max_instances_exceeded'
       );
     }
   }
@@ -238,10 +232,14 @@ export class TierPolicy {
     const unit = match[2];
 
     switch (unit) {
-      case 'Ki': return Math.round(value * 1024);
-      case 'Mi': return Math.round(value * 1024 * 1024);
-      case 'Gi': return Math.round(value * 1024 * 1024 * 1024);
-      default:   return Math.round(value); // bytes
+      case 'Ki':
+        return Math.round(value * 1024);
+      case 'Mi':
+        return Math.round(value * 1024 * 1024);
+      case 'Gi':
+        return Math.round(value * 1024 * 1024 * 1024);
+      default:
+        return Math.round(value); // bytes
     }
   }
 }

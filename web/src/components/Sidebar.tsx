@@ -62,7 +62,12 @@ const navGroups: NavGroup[] = [
     title: 'System',
     items: [
       { label: 'Health', href: '/health', icon: <HeartPulse size={16} /> },
-      { label: 'Settings', href: '/settings', icon: <Settings size={16} />, requireRoles: ['admin', 'operator'] },
+      {
+        label: 'Settings',
+        href: '/settings',
+        icon: <Settings size={16} />,
+        requireRoles: ['admin', 'operator'],
+      },
     ],
   },
 ];
@@ -116,7 +121,7 @@ export function Sidebar() {
     <aside
       className={cn(
         'flex h-screen flex-col bg-sera-surface border-r border-sera-border flex-shrink-0 transition-all duration-200',
-        collapsed ? 'w-14' : 'w-60',
+        collapsed ? 'w-14' : 'w-60'
       )}
     >
       {/* Brand */}
@@ -141,9 +146,7 @@ export function Sidebar() {
           if (visibleItems.length === 0) return null;
           return (
             <div key={group.title}>
-              {!collapsed && (
-                <div className="sera-section-label">{group.title}</div>
-              )}
+              {!collapsed && <div className="sera-section-label">{group.title}</div>}
               <div className="space-y-0.5">
                 {visibleItems.map((item) => {
                   const active = isActive(item.href);
@@ -157,7 +160,7 @@ export function Sidebar() {
                         collapsed && 'justify-center px-0',
                         active
                           ? 'bg-sera-accent-soft text-sera-accent border-l-[3px] border-sera-accent'
-                          : 'text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover border-l-[3px] border-transparent',
+                          : 'text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover border-l-[3px] border-transparent'
                       )}
                     >
                       <span className={active ? 'text-sera-accent' : ''}>{item.icon}</span>
@@ -194,7 +197,9 @@ export function Sidebar() {
                 )}
               </div>
               <button
-                onClick={() => { void logout(); }}
+                onClick={() => {
+                  void logout();
+                }}
                 title="Sign out"
                 aria-label="Sign out"
                 className="flex-shrink-0 text-sera-text-muted hover:text-sera-error transition-colors"

@@ -37,7 +37,7 @@ export interface CircuitBreakerState {
 type LlmCallFn = (
   request: ChatCompletionRequest,
   agentId: string,
-  latencyStart: number,
+  latencyStart: number
 ) => Promise<{ response: ChatCompletionResponse; latencyMs: number }>;
 
 // ── Provider extraction ───────────────────────────────────────────────────────
@@ -65,7 +65,10 @@ export function providerFromModel(model: string): string {
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class CircuitBreakerService {
-  private readonly breakers = new Map<string, CircuitBreaker<Parameters<LlmCallFn>, Awaited<ReturnType<LlmCallFn>>>>();
+  private readonly breakers = new Map<
+    string,
+    CircuitBreaker<Parameters<LlmCallFn>, Awaited<ReturnType<LlmCallFn>>>
+  >();
   private readonly client: LlmRouter;
 
   private readonly options: CircuitBreaker.Options = {
@@ -81,7 +84,9 @@ export class CircuitBreakerService {
   }
 
   /** Get or create a circuit breaker for the given provider. */
-  private getBreakerForProvider(provider: string): CircuitBreaker<Parameters<LlmCallFn>, Awaited<ReturnType<LlmCallFn>>> {
+  private getBreakerForProvider(
+    provider: string
+  ): CircuitBreaker<Parameters<LlmCallFn>, Awaited<ReturnType<LlmCallFn>>> {
     let breaker = this.breakers.get(provider);
     if (!breaker) {
       const fn: LlmCallFn = (req, agentId, latencyStart) =>
@@ -114,7 +119,7 @@ export class CircuitBreakerService {
   async call(
     request: ChatCompletionRequest,
     agentId: string,
-    latencyStart: number = Date.now(),
+    latencyStart: number = Date.now()
   ): Promise<{ response: ChatCompletionResponse; latencyMs: number }> {
     const provider = providerFromModel(request.model);
     const breaker = this.getBreakerForProvider(provider);
@@ -123,7 +128,9 @@ export class CircuitBreakerService {
       return await breaker.fire(request, agentId, latencyStart);
     } catch (err: any) {
       if (err.code === 'EOPENBREAKER' || err.message?.includes('Breaker is open')) {
-        const circuitErr = new Error(`Provider ${provider} is currently unavailable (circuit open)`);
+        const circuitErr = new Error(
+          `Provider ${provider} is currently unavailable (circuit open)`
+        );
         (circuitErr as any).code = 'CIRCUIT_OPEN';
         (circuitErr as any).provider = provider;
         throw circuitErr;

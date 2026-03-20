@@ -31,7 +31,7 @@ export class WebSessionStore {
       accessToken?: string;
       refreshToken?: string;
       accessTokenExpiry?: Date;
-    },
+    }
   ): string {
     const id = `sess_${crypto.randomBytes(32).toString('hex')}`;
     const now = new Date();
@@ -40,7 +40,9 @@ export class WebSessionStore {
       identity,
       ...(tokens?.accessToken !== undefined ? { accessToken: tokens.accessToken } : {}),
       ...(tokens?.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
-      ...(tokens?.accessTokenExpiry !== undefined ? { accessTokenExpiry: tokens.accessTokenExpiry } : {}),
+      ...(tokens?.accessTokenExpiry !== undefined
+        ? { accessTokenExpiry: tokens.accessTokenExpiry }
+        : {}),
       createdAt: now,
       expiresAt: new Date(now.getTime() + this.maxAgeMs),
     };

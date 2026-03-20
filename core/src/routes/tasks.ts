@@ -87,15 +87,19 @@ export function createTasksRouter(intercom: IntercomService): Router {
       `INSERT INTO task_queue
          (id, agent_instance_id, task, context, priority, max_retries, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'queued')`,
-      [taskId, agentId, task, JSON.stringify(context ?? null), resolvedPriority, resolvedMaxRetries],
+      [taskId, agentId, task, JSON.stringify(context ?? null), resolvedPriority, resolvedMaxRetries]
     );
 
     const depth = await getQueueDepth(agentId);
-    await intercom.publish(`agent:${agentId}:status`, {
-      event: 'task.queued',
-      taskId,
-      queueDepth: depth,
-    }).catch(() => {/* best-effort */});
+    await intercom
+      .publish(`agent:${agentId}:status`, {
+        event: 'task.queued',
+        taskId,
+        queueDepth: depth,
+      })
+      .catch(() => {
+        /* best-effort */
+      });
 
     logger.info(`Task ${taskId} enqueued for agent ${agentId}`);
     return res.status(201).json({ taskId, status: 'queued', priority: resolvedPriority });
@@ -123,7 +127,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
     const rows = await pool.query<TaskRow>(
       `SELECT * FROM task_queue WHERE ${conditions.join(' AND ')}
        ORDER BY priority ASC, created_at ASC`,
-      params as any[],
+      params as any[]
     );
 
     return res.json(rows.rows.map(toPublicTask));
@@ -145,7 +149,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
 
       const running = await client.query<RunningRow>(
         `SELECT id FROM task_queue WHERE agent_instance_id = $1 AND status = 'running' LIMIT 1`,
-        [agentId],
+        [agentId]
       );
 
       if (running.rows.length > 0) {
@@ -162,7 +166,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
          ORDER BY priority ASC, created_at ASC
          LIMIT 1
          FOR UPDATE SKIP LOCKED`,
-        [agentId],
+        [agentId]
       );
 
       if (next.rows.length === 0) {
@@ -173,7 +177,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
       const task = next.rows[0]!;
       await client.query(
         `UPDATE task_queue SET status = 'running', started_at = now() WHERE id = $1`,
-        [task.id],
+        [task.id]
       );
       await client.query('COMMIT');
 
@@ -208,11 +212,15 @@ export function createTasksRouter(intercom: IntercomService): Router {
     await pool.query(`DELETE FROM task_queue WHERE id = $1`, [taskId]);
 
     const depth = await getQueueDepth(agentId);
-    await intercom.publish(`agent:${agentId}:status`, {
-      event: 'task.cancelled',
-      taskId,
-      queueDepth: depth,
-    }).catch(() => {/* best-effort */});
+    await intercom
+      .publish(`agent:${agentId}:status`, {
+        event: 'task.cancelled',
+        taskId,
+        queueDepth: depth,
+      })
+      .catch(() => {
+        /* best-effort */
+      });
 
     return res.json({ taskId, status: 'cancelled' });
   });
@@ -266,20 +274,23 @@ export function createTasksRouter(intercom: IntercomService): Router {
         `UPDATE task_queue
          SET status = 'queued', retry_count = $1, started_at = NULL, error = $2
          WHERE id = $3`,
-        [nextRetry, body.error ?? null, taskId],
+        [nextRetry, body.error ?? null, taskId]
       );
 
-      logger.info(`Task ${taskId} failed (attempt ${nextRetry}/${row.max_retries}) — retrying in ${backoffMs}ms`);
+      logger.info(
+        `Task ${taskId} failed (attempt ${nextRetry}/${row.max_retries}) — retrying in ${backoffMs}ms`
+      );
 
       // DECISION: simple setTimeout for retry scheduling; pg-boss would provide
       // persistence across restarts but requires additional setup.
       setTimeout(() => {
-        pool.query(
-          `UPDATE task_queue SET status = 'queued' WHERE id = $1 AND status = 'queued'`,
-          [taskId],
-        ).catch((err: unknown) => {
-          logger.error(`Failed to re-queue task ${taskId}:`, err);
-        });
+        pool
+          .query(`UPDATE task_queue SET status = 'queued' WHERE id = $1 AND status = 'queued'`, [
+            taskId,
+          ])
+          .catch((err: unknown) => {
+            logger.error(`Failed to re-queue task ${taskId}:`, err);
+          });
       }, backoffMs);
 
       return res.json({ taskId, status: 'retrying', retryCount: nextRetry });
@@ -288,26 +299,34 @@ export function createTasksRouter(intercom: IntercomService): Router {
     // Dead-letter: max retries exhausted on failure
     if (!succeeded && row.retry_count >= row.max_retries) {
       await updateTaskResult(taskId, 'failed', body);
-      await intercom.publish('system', {
-        event: 'system.task-dead-lettered',
-        taskId,
-        agentId,
-        error: body.error,
-        retryCount: row.retry_count,
-      }).catch(() => {/* best-effort */});
+      await intercom
+        .publish('system', {
+          event: 'system.task-dead-lettered',
+          taskId,
+          agentId,
+          error: body.error,
+          retryCount: row.retry_count,
+        })
+        .catch(() => {
+          /* best-effort */
+        });
       logger.warn(`Task ${taskId} dead-lettered after ${row.retry_count} retries`);
     } else {
       await updateTaskResult(taskId, newStatus, body);
     }
 
     const depth = await getQueueDepth(agentId);
-    await intercom.publish(`agent:${agentId}:status`, {
-      event: 'task.completed',
-      taskId,
-      status: newStatus,
-      completedAt: new Date().toISOString(),
-      queueDepth: depth,
-    }).catch(() => {/* best-effort */});
+    await intercom
+      .publish(`agent:${agentId}:status`, {
+        event: 'task.completed',
+        taskId,
+        status: newStatus,
+        completedAt: new Date().toISOString(),
+        queueDepth: depth,
+      })
+      .catch(() => {
+        /* best-effort */
+      });
 
     return res.json({ taskId, status: newStatus });
   });
@@ -360,7 +379,7 @@ export async function pruneOldTaskResults(): Promise<number> {
     `DELETE FROM task_queue
      WHERE status IN ('completed', 'failed')
        AND completed_at < now() - INTERVAL '1 day' * $1`,
-    [TASK_RESULT_RETENTION_DAYS],
+    [TASK_RESULT_RETENTION_DAYS]
   );
   const pruned = result.rowCount ?? 0;
   if (pruned > 0) {
@@ -372,17 +391,16 @@ export async function pruneOldTaskResults(): Promise<number> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getAgentRow(agentId: string): Promise<AgentRow | null> {
-  const r = await pool.query<AgentRow>(
-    `SELECT lifecycle_mode FROM agent_instances WHERE id = $1`,
-    [agentId],
-  );
+  const r = await pool.query<AgentRow>(`SELECT lifecycle_mode FROM agent_instances WHERE id = $1`, [
+    agentId,
+  ]);
   return r.rows[0] ?? null;
 }
 
 async function getTaskRow(taskId: string, agentId: string): Promise<TaskRow | null> {
   const r = await pool.query<TaskRow>(
     `SELECT * FROM task_queue WHERE id = $1 AND agent_instance_id = $2`,
-    [taskId, agentId],
+    [taskId, agentId]
   );
   return r.rows[0] ?? null;
 }
@@ -390,7 +408,7 @@ async function getTaskRow(taskId: string, agentId: string): Promise<TaskRow | nu
 async function getQueueDepth(agentId: string): Promise<number> {
   const r = await pool.query<{ count: string }>(
     `SELECT COUNT(*) as count FROM task_queue WHERE agent_instance_id = $1 AND status IN ('queued', 'running')`,
-    [agentId],
+    [agentId]
   );
   return parseInt(r.rows[0]?.count ?? '0', 10);
 }
@@ -404,7 +422,7 @@ async function updateTaskResult(
     usage?: unknown;
     thoughtStream?: unknown[];
     exitReason?: string;
-  },
+  }
 ): Promise<void> {
   const maxBytes = TASK_RESULT_MAX_SIZE_KB * 1024;
   let resultValue: unknown = body.result ?? null;
@@ -432,7 +450,7 @@ async function updateTaskResult(
       body.exitReason ?? null,
       truncated,
       taskId,
-    ],
+    ]
   );
 }
 

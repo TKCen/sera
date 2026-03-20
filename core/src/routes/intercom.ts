@@ -16,7 +16,7 @@ import type { BridgeService } from '../intercom/BridgeService.js';
 export function createIntercomRouter(
   intercom: IntercomService,
   resolveManifest: (agentName: string) => AgentManifest | undefined,
-  bridge?: BridgeService,
+  bridge?: BridgeService
 ): Router {
   const router = Router();
 
@@ -52,7 +52,7 @@ export function createIntercomRouter(
         channel,
         type as any,
         payload,
-        { securityTier: manifest.metadata.tier },
+        { securityTier: manifest.metadata.tier }
       );
 
       res.json({ success: true, message: msg });
@@ -118,10 +118,7 @@ export function createIntercomRouter(
         return res.status(400).json({ error: 'Query param "channel" is required' });
       }
 
-      const history = await intercom.getHistory(
-        channel,
-        limit ? parseInt(limit, 10) : undefined,
-      );
+      const history = await intercom.getHistory(channel, limit ? parseInt(limit, 10) : undefined);
 
       res.json({ channel, messages: history });
     } catch (err) {

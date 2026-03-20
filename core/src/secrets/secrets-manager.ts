@@ -1,8 +1,8 @@
-import type { 
-  SecretsProvider, 
-  SecretAccessContext, 
-  SecretMetadata, 
-  SecretFilter 
+import type {
+  SecretsProvider,
+  SecretAccessContext,
+  SecretMetadata,
+  SecretFilter,
 } from './interfaces.js';
 import { PostgresSecretsProvider } from './postgres-secrets-provider.js';
 import { Logger } from '../lib/logger.js';
@@ -31,19 +31,26 @@ export class SecretsManager {
 
   async get(name: string, context: SecretAccessContext): Promise<string | null> {
     const val = await this.provider.get(name, context);
-    
-    await AuditService.getInstance().record({
-      actorType: context.agentId ? 'agent' : 'operator',
-      actorId: context.agentId || context.operator?.sub || 'unknown',
-      actingContext: null,
-      eventType: 'secret.accessed',
-      payload: { secretName: name }
-    }).catch(err => logger.error('Audit record failed:', err));
+
+    await AuditService.getInstance()
+      .record({
+        actorType: context.agentId ? 'agent' : 'operator',
+        actorId: context.agentId || context.operator?.sub || 'unknown',
+        actingContext: null,
+        eventType: 'secret.accessed',
+        payload: { secretName: name },
+      })
+      .catch((err) => logger.error('Audit record failed:', err));
 
     return val;
   }
 
-  async set(name: string, value: string, context: SecretAccessContext, metadata?: Partial<SecretMetadata>): Promise<void> {
+  async set(
+    name: string,
+    value: string,
+    context: SecretAccessContext,
+    metadata?: Partial<SecretMetadata>
+  ): Promise<void> {
     // context is not strictly needed for set if we trust the router, but good for auditing
     return this.provider.set(name, value, metadata);
   }

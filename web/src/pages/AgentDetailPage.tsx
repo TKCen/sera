@@ -1,6 +1,19 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router';
-import { ArrowLeft, Play, Square, RotateCcw, Bot, ExternalLink, Calendar, Clock, Edit2, Check, X, RotateCw } from 'lucide-react';
+import {
+  ArrowLeft,
+  Play,
+  Square,
+  RotateCcw,
+  Bot,
+  ExternalLink,
+  Calendar,
+  Clock,
+  Edit2,
+  Check,
+  X,
+  RotateCw,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,
@@ -101,23 +114,17 @@ export default function AgentDetailPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { void handleLifecycle('start'); }}
+              onClick={() => {
+                void handleLifecycle('start');
+              }}
               disabled={startAgent.isPending}
             >
               <Play size={13} /> Start
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setConfirmAction('stop')}
-            >
+            <Button size="sm" variant="outline" onClick={() => setConfirmAction('stop')}>
               <Square size={13} /> Stop
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setConfirmAction('restart')}
-            >
+            <Button size="sm" variant="outline" onClick={() => setConfirmAction('restart')}>
               <RotateCcw size={13} /> Restart
             </Button>
             <Button size="sm" asChild variant="ghost">
@@ -136,7 +143,7 @@ export default function AgentDetailPage() {
                 'px-4 py-2 text-sm font-medium border-b-2 transition-colors',
                 tab === t
                   ? 'border-sera-accent text-sera-accent'
-                  : 'border-transparent text-sera-text-muted hover:text-sera-text',
+                  : 'border-transparent text-sera-text-muted hover:text-sera-text'
               )}
             >
               {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -158,9 +165,7 @@ export default function AgentDetailPage() {
       <Dialog open={confirmAction !== null} onOpenChange={(o) => !o && setConfirmAction(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              {confirmAction === 'stop' ? 'Stop agent' : 'Restart agent'}
-            </DialogTitle>
+            <DialogTitle>{confirmAction === 'stop' ? 'Stop agent' : 'Restart agent'}</DialogTitle>
             <DialogDescription>
               {confirmAction === 'stop'
                 ? `This will stop ${displayName}. Any running tasks will be interrupted.`
@@ -169,12 +174,16 @@ export default function AgentDetailPage() {
           </DialogHeader>
           <div className="flex gap-3 justify-end mt-4">
             <DialogClose asChild>
-              <Button variant="ghost" size="sm">Cancel</Button>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
             </DialogClose>
             <Button
               size="sm"
               variant={confirmAction === 'stop' ? 'danger' : 'outline'}
-              onClick={() => { void handleLifecycle(confirmAction!); }}
+              onClick={() => {
+                void handleLifecycle(confirmAction!);
+              }}
             >
               {confirmAction === 'stop' ? 'Stop' : 'Restart'}
             </Button>
@@ -206,7 +215,15 @@ function LogsTab({ id }: { id: string }) {
     <div className="p-6 flex flex-col gap-3 h-full">
       <div className="flex items-center justify-between">
         <span className="text-xs text-sera-text-muted">Auto-refreshes every 3s</span>
-        <Button size="sm" variant="ghost" onClick={() => { void refetch(); }}>Refresh</Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            void refetch();
+          }}
+        >
+          Refresh
+        </Button>
       </div>
       {isLoading ? (
         <TabLoading />
@@ -235,7 +252,7 @@ function MemoryTab({ id }: { id: string }) {
                 'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
                 scope === s
                   ? 'bg-sera-accent-soft text-sera-accent'
-                  : 'text-sera-text-muted hover:bg-sera-surface-hover',
+                  : 'text-sera-text-muted hover:bg-sera-surface-hover'
               )}
             >
               {s === '' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
@@ -271,7 +288,10 @@ function MemoryTab({ id }: { id: string }) {
                 {block.tags && block.tags.length > 0 && (
                   <div className="flex gap-1 flex-wrap mt-1">
                     {block.tags.map((tag) => (
-                      <span key={tag} className="text-[10px] text-sera-text-dim bg-sera-surface-active px-1.5 py-0.5 rounded">
+                      <span
+                        key={tag}
+                        className="text-[10px] text-sera-text-dim bg-sera-surface-active px-1.5 py-0.5 rounded"
+                      >
                         {tag}
                       </span>
                     ))}
@@ -396,10 +416,10 @@ function BudgetTab({ id }: { id: string }) {
   if (isLoading) return <TabLoading />;
 
   const hourPct = budget?.maxLlmTokensPerHour
-    ? ((budget.currentHourTokens / budget.maxLlmTokensPerHour) * 100)
+    ? (budget.currentHourTokens / budget.maxLlmTokensPerHour) * 100
     : 0;
   const dayPct = budget?.maxLlmTokensPerDay
-    ? ((budget.currentDayTokens / budget.maxLlmTokensPerDay) * 100)
+    ? (budget.currentDayTokens / budget.maxLlmTokensPerDay) * 100
     : 0;
   const exceeded = hourPct >= 100 || dayPct >= 100;
 
@@ -407,7 +427,8 @@ function BudgetTab({ id }: { id: string }) {
     <div className="p-6 space-y-6 max-w-xl">
       {exceeded && (
         <div className="px-4 py-3 rounded-lg bg-sera-error/10 border border-sera-error/30 text-sera-error text-sm font-medium">
-          Budget exceeded — agent requests are being rejected until the period resets or the budget is adjusted.
+          Budget exceeded — agent requests are being rejected until the period resets or the budget
+          is adjusted.
         </div>
       )}
 
@@ -417,7 +438,9 @@ function BudgetTab({ id }: { id: string }) {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => { void handleReset(); }}
+            onClick={() => {
+              void handleReset();
+            }}
             disabled={resetBudget.isPending}
           >
             <RotateCw size={13} />
@@ -428,11 +451,18 @@ function BudgetTab({ id }: { id: string }) {
         {/* Hourly */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-sera-text-muted uppercase tracking-wider">Hourly Limit</span>
+            <span className="text-xs font-medium text-sera-text-muted uppercase tracking-wider">
+              Hourly Limit
+            </span>
             {!editingHour ? (
-              <button onClick={startEditHour} className="flex items-center gap-1 text-xs text-sera-text-dim hover:text-sera-text transition-colors">
+              <button
+                onClick={startEditHour}
+                className="flex items-center gap-1 text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+              >
                 <Edit2 size={11} />
-                {budget?.maxLlmTokensPerHour !== undefined ? budget.maxLlmTokensPerHour.toLocaleString() : 'Unlimited'}
+                {budget?.maxLlmTokensPerHour !== undefined
+                  ? budget.maxLlmTokensPerHour.toLocaleString()
+                  : 'Unlimited'}
               </button>
             ) : (
               <div className="flex items-center gap-1">
@@ -444,8 +474,20 @@ function BudgetTab({ id }: { id: string }) {
                   className="sera-input text-xs w-32"
                   autoFocus
                 />
-                <button onClick={() => { void saveHour(); }} className="text-sera-success hover:opacity-80"><Check size={14} /></button>
-                <button onClick={() => setEditingHour(false)} className="text-sera-text-dim hover:text-sera-text"><X size={14} /></button>
+                <button
+                  onClick={() => {
+                    void saveHour();
+                  }}
+                  className="text-sera-success hover:opacity-80"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  onClick={() => setEditingHour(false)}
+                  className="text-sera-text-dim hover:text-sera-text"
+                >
+                  <X size={14} />
+                </button>
               </div>
             )}
           </div>
@@ -459,11 +501,18 @@ function BudgetTab({ id }: { id: string }) {
         {/* Daily */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-sera-text-muted uppercase tracking-wider">Daily Limit</span>
+            <span className="text-xs font-medium text-sera-text-muted uppercase tracking-wider">
+              Daily Limit
+            </span>
             {!editingDay ? (
-              <button onClick={startEditDay} className="flex items-center gap-1 text-xs text-sera-text-dim hover:text-sera-text transition-colors">
+              <button
+                onClick={startEditDay}
+                className="flex items-center gap-1 text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+              >
                 <Edit2 size={11} />
-                {budget?.maxLlmTokensPerDay !== undefined ? budget.maxLlmTokensPerDay.toLocaleString() : 'Unlimited'}
+                {budget?.maxLlmTokensPerDay !== undefined
+                  ? budget.maxLlmTokensPerDay.toLocaleString()
+                  : 'Unlimited'}
               </button>
             ) : (
               <div className="flex items-center gap-1">
@@ -475,8 +524,20 @@ function BudgetTab({ id }: { id: string }) {
                   className="sera-input text-xs w-32"
                   autoFocus
                 />
-                <button onClick={() => { void saveDay(); }} className="text-sera-success hover:opacity-80"><Check size={14} /></button>
-                <button onClick={() => setEditingDay(false)} className="text-sera-text-dim hover:text-sera-text"><X size={14} /></button>
+                <button
+                  onClick={() => {
+                    void saveDay();
+                  }}
+                  className="text-sera-success hover:opacity-80"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  onClick={() => setEditingDay(false)}
+                  className="text-sera-text-dim hover:text-sera-text"
+                >
+                  <X size={14} />
+                </button>
               </div>
             )}
           </div>
@@ -488,7 +549,12 @@ function BudgetTab({ id }: { id: string }) {
         </div>
       </div>
 
-      <button onClick={() => { void refetch(); }} className="text-xs text-sera-text-dim hover:text-sera-text transition-colors">
+      <button
+        onClick={() => {
+          void refetch();
+        }}
+        className="text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+      >
         Refresh usage counters
       </button>
     </div>

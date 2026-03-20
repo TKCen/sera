@@ -1,8 +1,15 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { type CallToolRequest, CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { v4 as uuidv4 } from "uuid";
 import type { Orchestrator } from "../agents/Orchestrator.js";
 import { Logger } from "../lib/logger.js";
 import { CircleService } from "../circles/CircleService.js";
+import { pool } from "../lib/database.js";
+import { AuditService } from "../audit/AuditService.js";
+import {
+  ActingContextBuilder,
+  type DelegationScope,
+} from "../identity/acting-context.js";
 
 const logger = new Logger('SeraMCPServer');
 
@@ -162,7 +169,7 @@ export class SeraMCPServer {
               required: ["circleId", "payload"],
             },
           },
-          // ── Subagent Spawning (Story 10.5 / 10.4) ──────────────────────────
+          // ── Subagent Spawning (Story 10.5 / 10.4 / 17.4) ──────────────────
           {
             name: "agents.spawn_subagent",
             description: "Spawn a subagent to handle a delegated subtask. Only available to agents with permissions.canSpawnSubagents.",
@@ -172,6 +179,27 @@ export class SeraMCPServer {
                 role: { type: "string", description: "Subagent role (must be in manifest subagents.allowed)" },
                 task: { type: "string", description: "Task description for the subagent" },
                 circle: { type: "string", description: "Circle to join. Pass 'none' to skip circle inheritance." },
+                parentAgentId: { type: "string", description: "Calling agent's instance ID (required for delegation passthrough)" },
+                delegations: {
+                  type: "array",
+                  description: "Delegation tokens to pass to the subagent. Each token must be owned by the calling agent. Child scope may be narrower but not broader than the parent token's scope.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      delegationTokenId: { type: "string" },
+                      narrowedScope: {
+                        type: "object",
+                        properties: {
+                          service: { type: "string" },
+                          permissions: { type: "array", items: { type: "string" } },
+                          resourceConstraints: { type: "object" },
+                        },
+                        required: ["service", "permissions"],
+                      },
+                    },
+                    required: ["delegationTokenId"],
+                  },
+                },
               },
               required: ["role", "task"],
             },
@@ -208,7 +236,7 @@ export class SeraMCPServer {
         case "circle.broadcast":
           return this.handleCircleBroadcast(args.circleId, args.payload);
         case "agents.spawn_subagent":
-          return this.handleSpawnSubagent(args.role, args.task, args.circle);
+          return this.handleSpawnSubagent(args.role, args.task, args.circle, args.parentAgentId, args.delegations);
         default:
           throw new Error(`Tool not found: ${name}`);
       }
@@ -290,11 +318,16 @@ export class SeraMCPServer {
     };
   }
 
-  private async handleSpawnSubagent(role: string, task: string, circle?: string) {
+  private async handleSpawnSubagent(
+    role: string,
+    task: string,
+    circle?: string,
+    parentAgentId?: string,
+    delegations?: Array<{ delegationTokenId: string; narrowedScope?: DelegationScope }>,
+  ) {
     if (!role || !task) throw new Error("role and task are required");
 
     const { AgentFactory } = await import("../agents/AgentFactory.js");
-    const { v4: uuidv4 } = await import("uuid");
 
     // Find a template matching the requested role
     const manifests = this.orchestrator.getAllManifests();
@@ -317,10 +350,95 @@ export class SeraMCPServer {
       circleId,
     );
 
+    // Story 17.4 — Agent-to-subagent delegation
+    const childDelegationIds: string[] = [];
+    if (delegations && delegations.length > 0 && parentAgentId) {
+      const childInstanceId = instance.id;
+      const issuedAt = new Date().toISOString();
+
+      for (const delegation of delegations) {
+        const { delegationTokenId, narrowedScope } = delegation;
+
+        // Verify the parent token exists and belongs to the calling agent
+        const { rows } = await pool.query(
+          `SELECT * FROM delegation_tokens
+           WHERE id = $1
+             AND (actor_agent_id = $2 OR actor_instance_id::text = $2)
+             AND revoked_at IS NULL
+             AND (expires_at IS NULL OR expires_at > now())`,
+          [delegationTokenId, parentAgentId],
+        );
+
+        const parentToken = rows[0];
+        if (!parentToken) {
+          throw new Error(
+            `CapabilityEscalationError: delegation token "${delegationTokenId}" not found or not accessible by agent "${parentAgentId}"`,
+          );
+        }
+
+        const parentScope = parentToken.scope as DelegationScope;
+        const childScope: DelegationScope = narrowedScope ?? parentScope;
+
+        // Scope intersection validation — child cannot exceed parent
+        const scopeError = ActingContextBuilder.validateScopeNarrowing(parentScope, childScope);
+        if (scopeError) {
+          throw new Error(`CapabilityEscalationError: ${scopeError}`);
+        }
+
+        // Issue child delegation token
+        const childId = uuidv4();
+        await pool.query(
+          `INSERT INTO delegation_tokens
+           (id, principal_type, principal_id, principal_name,
+            actor_agent_id, actor_instance_id, scope, grant_type,
+            credential_secret_name, issued_at, expires_at, parent_delegation_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [
+            childId,
+            parentToken.principal_type,
+            parentToken.principal_id,
+            parentToken.principal_name,
+            template.metadata.name,
+            childInstanceId,
+            JSON.stringify(childScope),
+            'session',
+            parentToken.credential_secret_name,
+            new Date(),
+            parentToken.expires_at,
+            delegationTokenId,
+          ],
+        );
+
+        childDelegationIds.push(childId);
+
+        // Audit
+        await AuditService.getInstance().record({
+          actorType: 'agent',
+          actorId: parentAgentId,
+          actingContext: null,
+          eventType: 'delegation.derived',
+          payload: {
+            parentDelegationId: delegationTokenId,
+            childDelegationId: childId,
+            childAgentId: childInstanceId,
+            narrowedScope: childScope,
+          },
+        }).catch(() => {});
+      }
+    }
+
     await this.orchestrator.startInstance(instance.id, undefined, task);
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ instanceId: instance.id, role, task }) }],
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          instanceId: instance.id,
+          role,
+          task,
+          childDelegationIds,
+        }),
+      }],
     };
   }
 }

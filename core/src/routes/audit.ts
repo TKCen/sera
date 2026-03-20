@@ -10,13 +10,44 @@ export const createAuditRouter = () => {
   const auditService = AuditService.getInstance();
 
   /**
-   * Story 11.5: GET /api/audit - List audit entries with filtering and pagination.
+   * Story 11.5 / 17.7: GET /api/audit - List audit entries with filtering and pagination.
+   * Supports: actorId, eventType, from, to, principalId, delegationId filters.
    * Requires admin role.
    */
   router.get('/', requireRole(['admin']), async (req, res) => {
     try {
-      const { actorId, eventType, from, to, limit, offset } = req.query;
-      
+      const { actorId, eventType, from, to, limit, offset, principalId, delegationId } = req.query;
+
+      // Delegation-specific filters use raw SQL via pool; otherwise use AuditService
+      if (principalId || delegationId) {
+        const { pool } = await import('../lib/database.js');
+        const conditions: string[] = [];
+        const params: any[] = [];
+
+        if (principalId) {
+          params.push(principalId as string);
+          conditions.push(`acting_context->>'principal'->>'id' = $${params.length}`);
+        }
+        if (delegationId) {
+          params.push(delegationId as string);
+          conditions.push(`acting_context->>'delegationTokenId' = $${params.length}`);
+        }
+
+        const whereClause = `WHERE ${conditions.join(' AND ')}`;
+        const limitVal = limit ? parseInt(limit as string, 10) : 50;
+        const offsetVal = offset ? parseInt(offset as string, 10) : 0;
+
+        const countRes = await pool.query(`SELECT COUNT(*) FROM audit_trail ${whereClause}`, params);
+        const total = parseInt(countRes.rows[0].count, 10);
+
+        const entriesRes = await pool.query(
+          `SELECT * FROM audit_trail ${whereClause} ORDER BY sequence DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+          [...params, limitVal, offsetVal],
+        );
+
+        return res.json({ entries: entriesRes.rows, total });
+      }
+
       const result = await auditService.getEntries({
         actorId: actorId as string,
         eventType: eventType as string,
@@ -25,7 +56,7 @@ export const createAuditRouter = () => {
         limit: limit ? parseInt(limit as string, 10) : 50,
         offset: offset ? parseInt(offset as string, 10) : 0,
       });
-      
+
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });

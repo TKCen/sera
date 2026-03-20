@@ -104,6 +104,33 @@ export const CircleMembershipChangedSchema = z.object({
   action: z.enum(['added', 'removed']),
 });
 
+export const DelegationCreatedSchema = z.object({
+  delegationId: z.string().uuid(),
+  agentId: z.string(),
+  service: z.string(),
+  grantType: z.string(),
+});
+
+export const DelegationRevokedSchema = z.object({
+  delegationId: z.string().uuid(),
+  cascade: z.boolean(),
+  childTokensRevoked: z.number(),
+  revokedBy: z.string(),
+});
+
+export const DelegationDerivedSchema = z.object({
+  parentDelegationId: z.string().uuid(),
+  childDelegationId: z.string().uuid(),
+  childAgentId: z.string(),
+  narrowedScope: z.any(),
+});
+
+export const CredentialResolutionDeniedSchema = z.object({
+  service: z.string(),
+  agentId: z.string(),
+  reason: z.string(),
+});
+
 /** Registry of schemas by event type */
 export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
   'agent.spawned': AgentSpawnedSchema,
@@ -124,6 +151,10 @@ export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
   'circle.created': CircleCreatedSchema,
   'circle.deleted': CircleDeletedSchema,
   'circle.membership_changed': CircleMembershipChangedSchema,
+  'delegation.created': DelegationCreatedSchema,
+  'delegation.revoked': DelegationRevokedSchema,
+  'delegation.derived': DelegationDerivedSchema,
+  'credential.resolution.denied': CredentialResolutionDeniedSchema,
 };
 
 /**

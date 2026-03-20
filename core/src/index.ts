@@ -74,6 +74,7 @@ import { MemoryCompactionService } from './memory/MemoryCompactionService.js';
 import { EmbeddingService } from './services/embedding.service.js';
 import { AuditService } from './audit/AuditService.js';
 import { ScheduleService } from './services/ScheduleService.js';
+import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -202,6 +203,11 @@ app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRe
 app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
 app.use('/api/knowledge', authMiddleware, createKnowledgeRouter());
 
+// Epic 17 — Delegation & Service Identity
+const delegationRouter = createDelegationRouter(intercomService);
+app.use('/api/delegation', authMiddleware, delegationRouter);
+app.use('/api', authMiddleware, delegationRouter);
+
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
 
@@ -308,6 +314,12 @@ const startServer = async () => {
     setInterval(() => {
       pruneOldTaskResults().catch(err => logger.warn('Task result pruning error:', err));
     }, 60 * 60 * 1_000);
+
+    // Epic 17 — Expire delegation tokens every 5 minutes
+    expireOldDelegationTokens().catch(() => {});
+    setInterval(() => {
+      expireOldDelegationTokens().catch(() => {});
+    }, 5 * 60 * 1_000);
 
     app.listen(port, () => logger.info(`SERA Core running on port ${port}`));
   }

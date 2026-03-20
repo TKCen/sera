@@ -1,6 +1,27 @@
 import { request } from './client';
 import type { ProviderConfig, ProvidersResponse, LLMConfig } from './types';
 
+export interface NewProviderPayload {
+  name: string;
+  type: 'local' | 'cloud';
+  baseUrl?: string;
+  apiKey?: string;
+  modelId: string;
+}
+
+export function createProvider(payload: NewProviderPayload): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>('/providers', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteProvider(name: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/providers/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+}
+
 export function getProviders(): Promise<ProvidersResponse> {
   return request<ProvidersResponse>('/providers');
 }

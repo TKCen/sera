@@ -263,3 +263,121 @@ export interface ToolInfo {
   description?: string;
   server?: string;
 }
+
+// Epic 14 — Observability types
+
+export interface UsageDataPoint {
+  timestamp: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cost?: number;
+}
+
+export interface AgentUsage {
+  agentName: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  pctOfTotal: number;
+}
+
+export interface ModelUsage {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface UsageSummary {
+  totalTokensToday: number;
+  totalTokensMonth: number;
+  estimatedCost?: number;
+  mostActiveAgent?: string;
+}
+
+export interface UsageResponse {
+  summary: UsageSummary;
+  timeSeries: UsageDataPoint[];
+  byAgent: AgentUsage[];
+  byModel: ModelUsage[];
+}
+
+export interface AuditEvent {
+  id: string;
+  sequence: number;
+  timestamp: string;
+  actorId: string;
+  actorType: 'agent' | 'operator';
+  actorName?: string;
+  eventType: string;
+  resourceType?: string;
+  resourceId?: string;
+  status: 'success' | 'failure';
+  payload?: Record<string, unknown>;
+  hash?: string;
+}
+
+export interface AuditResponse {
+  events: AuditEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AuditVerifyResult {
+  valid: boolean;
+  brokenAtSequence?: number;
+  checkedCount: number;
+}
+
+export interface ComponentHealth {
+  name: string;
+  status: 'healthy' | 'degraded' | 'unreachable';
+  message?: string;
+  latencyMs?: number;
+}
+
+export interface AgentStats {
+  total: number;
+  running: number;
+  stopped: number;
+  errored: number;
+}
+
+export interface HealthDetail {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  components: ComponentHealth[];
+  agentStats: AgentStats;
+  timestamp: string;
+}
+
+export interface CircuitBreakerState {
+  provider: string;
+  state: 'closed' | 'open' | 'half-open';
+  failures: number;
+  lastFailureAt?: string;
+  nextRetryAt?: string;
+}
+
+export interface Schedule {
+  id: string;
+  agentName: string;
+  name: string;
+  type: 'cron' | 'once';
+  expression: string;
+  taskPrompt?: string;
+  status: 'active' | 'paused';
+  source: 'manifest' | 'api';
+  lastRunAt?: string;
+  lastRunStatus?: 'success' | 'error' | 'missed';
+  lastRunOutput?: string;
+  nextRunAt?: string;
+}
+
+export interface AgentBudget {
+  maxLlmTokensPerHour?: number;
+  maxLlmTokensPerDay?: number;
+  currentHourTokens: number;
+  currentDayTokens: number;
+}

@@ -11,6 +11,8 @@ import {
   ChevronLeft,
   LogOut,
   Shield,
+  ScrollText,
+  HeartPulse,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
@@ -51,11 +53,13 @@ const navGroups: NavGroup[] = [
     title: 'Analytics',
     items: [
       { label: 'Insights', href: '/insights', icon: <BarChart3 size={16} /> },
+      { label: 'Audit', href: '/audit', icon: <ScrollText size={16} /> },
     ],
   },
   {
     title: 'System',
     items: [
+      { label: 'Health', href: '/health', icon: <HeartPulse size={16} /> },
       { label: 'Settings', href: '/settings', icon: <Settings size={16} />, requireRoles: ['admin', 'operator'] },
     ],
   },

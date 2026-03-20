@@ -18,6 +18,8 @@ import AgentNewPage from '@/pages/AgentNewPage';
 import CirclesPage from '@/pages/CirclesPage';
 import CircleDetailPage from '@/pages/CircleDetailPage';
 import InsightsPage from '@/pages/InsightsPage';
+import AuditPage from '@/pages/AuditPage';
+import HealthPage from '@/pages/HealthPage';
 import SchedulesPage from '@/pages/SchedulesPage';
 import SettingsPage from '@/pages/SettingsPage';
 import ToolsPage from '@/pages/ToolsPage';
@@ -58,6 +60,8 @@ createRoot(el).render(
                 <Route path="circles" element={<CirclesPage />} />
                 <Route path="circles/:id" element={<CircleDetailPage />} />
                 <Route path="insights" element={<InsightsPage />} />
+                <Route path="audit" element={<AuditPage />} />
+                <Route path="health" element={<HealthPage />} />
                 <Route path="schedules" element={<SchedulesPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="tools" element={<ToolsPage />} />

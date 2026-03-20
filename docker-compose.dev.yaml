@@ -46,6 +46,7 @@ services:
     environment:
       - NODE_ENV=development
       - VITE_API_URL=http://sera-core:3001
+      - VITE_DEV_API_KEY=sera_bootstrap_dev_123
 
 volumes:
   node_modules_core:

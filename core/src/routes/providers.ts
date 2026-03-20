@@ -21,7 +21,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import type { LiteLLMClient } from '../llm/LiteLLMClient.js';
+import type { LlmRouter } from '../llm/LlmRouter.js';
 import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { providerFromModel } from '../llm/CircuitBreakerService.js';
 import { requireRole } from '../auth/authMiddleware.js';
@@ -33,18 +33,20 @@ const logger = new Logger('ProvidersRoute');
 
 const AddProviderSchema = z.object({
   modelName: z.string().min(1),
-  litellmParams: z.object({
-    model: z.string().min(1),
-    apiBase: z.string().url().optional(),
-    apiKey: z.string().optional(),
-  }),
+  api: z.enum(['openai-completions', 'anthropic-messages']).default('openai-completions'),
+  provider: z.string().optional(),
+  baseUrl: z.string().url().optional(),
+  /** Literal API key — prefer apiKeyEnvVar. */
+  apiKey: z.string().optional(),
+  /** Name of the env var that holds the API key (read at request time). */
+  apiKeyEnvVar: z.string().optional(),
   description: z.string().optional(),
 });
 
 // ── Router factory ────────────────────────────────────────────────────────────
 
 export function createProvidersRouter(
-  liteLLMClient: LiteLLMClient,
+  llmRouter: LlmRouter,
   circuitBreakerService: CircuitBreakerService,
 ): Router {
   const router = Router();
@@ -55,11 +57,11 @@ export function createProvidersRouter(
    */
   router.get('/', async (_req: Request, res: Response) => {
     try {
-      const models = await liteLLMClient.listModels();
+      const models = await llmRouter.listModels();
       res.json({ providers: models });
     } catch (err: any) {
       logger.error('Failed to list providers:', err);
-      res.status(502).json({ error: 'Failed to retrieve provider list from LiteLLM' });
+      res.status(502).json({ error: 'Failed to retrieve provider list' });
     }
   });
 
@@ -78,21 +80,18 @@ export function createProvidersRouter(
       return;
     }
 
-    const { modelName, litellmParams, description } = parsed.data;
-
-    // Map SERA schema to LiteLLM schema
-    const liteLLMPayload: Record<string, unknown> = {
-      model_name: modelName,
-      litellm_params: {
-        model: litellmParams.model,
-        ...(litellmParams.apiBase ? { api_base: litellmParams.apiBase } : {}),
-        ...(litellmParams.apiKey ? { api_key: litellmParams.apiKey } : {}),
-      },
-      ...(description ? { model_info: { description } } : {}),
-    };
+    const { modelName, api, provider, baseUrl, apiKey, apiKeyEnvVar, description } = parsed.data;
 
     try {
-      const result = await liteLLMClient.addModel(liteLLMPayload);
+      const result = await llmRouter.addModel({
+        modelName,
+        api,
+        ...(provider ? { provider } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(apiKey ? { apiKey } : {}),
+        ...(apiKeyEnvVar ? { apiKeyEnvVar } : {}),
+        ...(description ? { description } : {}),
+      });
       logger.info(`Provider added | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`);
       res.status(201).json({ modelName, result });
     } catch (err: any) {
@@ -112,7 +111,7 @@ export function createProvidersRouter(
     async (req: Request, res: Response) => {
       const modelName = String(req.params['modelName']);
       try {
-        await liteLLMClient.deleteModel(modelName);
+        await llmRouter.deleteModel(modelName);
         logger.info(`Provider removed | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`);
         res.status(204).end();
       } catch (err: any) {
@@ -129,7 +128,7 @@ export function createProvidersRouter(
   router.post('/:modelName/test', async (req: Request, res: Response) => {
     const modelName = String(req.params['modelName']);
     try {
-      const result = await liteLLMClient.testModel(modelName);
+      const result = await llmRouter.testModel(modelName);
       res.status(result.ok ? 200 : 502).json(result);
     } catch (err: any) {
       res.status(502).json({ ok: false, error: err.message });

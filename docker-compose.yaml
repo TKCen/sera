@@ -29,8 +29,18 @@ services:
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api
       - QDRANT_URL=http://qdrant:6333
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://litellm:4000/v1}
-      - LLM_API_KEY=${LITELLM_MASTER_KEY:-lm-studio}
+      # ── LLM provider bootstrap ──────────────────────────────────────────────
+      # Provider routing is driven by core/config/providers.json.
+      # The env vars below bootstrap a single default provider when no entry in
+      # providers.json matches LLM_MODEL — handy for single-provider setups.
+      #
+      # Local LM Studio:  LLM_BASE_URL=http://host.docker.internal:1234/v1
+      # Local Ollama:     LLM_BASE_URL=http://host.docker.internal:11434/v1
+      # Cloud providers are auto-detected by model name prefix (gpt-*, claude-*,
+      # gemini-*, …) — set OPENAI_API_KEY / ANTHROPIC_API_KEY as needed.
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-lm-studio}
+      - LLM_MODEL=${LLM_MODEL:-lmstudio-local}
       - HOST_WORKSPACES_DIR=${PWD}/workspaces
       # Set OLLAMA_URL to enable local embeddings, e.g.:
       # - OLLAMA_URL=http://host.docker.internal:11434
@@ -50,8 +60,6 @@ services:
       sera-db:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
-      litellm:
         condition: service_healthy
 
   sera-web:
@@ -125,24 +133,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main-stable
-    container_name: sera-litellm
-    restart: unless-stopped
-    volumes:
-      - ./litellm/config.yaml:/app/config.yaml:ro
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
-    networks:
-      - sera_net
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(5); s.connect((\"127.0.0.1\", 4000))' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
 
 networks:
   sera_net:

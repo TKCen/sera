@@ -16,7 +16,7 @@
 
 import CircuitBreaker from 'opossum';
 import { Logger } from '../lib/logger.js';
-import type { LiteLLMClient, ChatCompletionRequest, ChatCompletionResponse } from './LiteLLMClient.js';
+import type { LlmRouter, ChatCompletionRequest, ChatCompletionResponse } from './LlmRouter.js';
 
 const logger = new Logger('CircuitBreakerService');
 
@@ -66,7 +66,7 @@ export function providerFromModel(model: string): string {
 
 export class CircuitBreakerService {
   private readonly breakers = new Map<string, CircuitBreaker<Parameters<LlmCallFn>, Awaited<ReturnType<LlmCallFn>>>>();
-  private readonly client: LiteLLMClient;
+  private readonly client: LlmRouter;
 
   private readonly options: CircuitBreaker.Options = {
     errorThresholdPercentage: 50,
@@ -76,7 +76,7 @@ export class CircuitBreakerService {
     timeout: 120_000,
   };
 
-  constructor(client: LiteLLMClient) {
+  constructor(client: LlmRouter) {
     this.client = client;
   }
 

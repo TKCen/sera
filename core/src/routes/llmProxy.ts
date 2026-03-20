@@ -17,13 +17,12 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { IncomingMessage } from 'http';
 import type { IdentityService } from '../auth/IdentityService.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 import type { AuthService } from '../auth/auth-service.js';
 import type { MeteringService } from '../metering/MeteringService.js';
 import { rateLimitStub } from '../middleware/rateLimitStub.js';
-import type { LiteLLMClient } from '../llm/LiteLLMClient.js';
+import type { LlmRouter } from '../llm/LlmRouter.js';
 import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { Logger } from '../lib/logger.js';
 import type { Pool } from 'pg';
@@ -66,7 +65,7 @@ export function createLlmProxyRouter(
   identityService: IdentityService,
   authService: AuthService,
   meteringService: MeteringService,
-  liteLLMClient: LiteLLMClient,
+  llmRouter: LlmRouter,
   circuitBreakerService: CircuitBreakerService,
   pool: Pool,
   orchestrator: Orchestrator
@@ -143,7 +142,7 @@ export function createLlmProxyRouter(
       if (stream === true) {
         try {
           logger.info(`Proxy stream | agent=${agentId} model=${modelName}`);
-          const streamRes: IncomingMessage = await circuitBreakerService['client'].chatCompletionStream(
+          const streamRes = await llmRouter.chatCompletionStream(
             { ...chatRequest, stream: true },
             agentId,
           );
@@ -241,11 +240,11 @@ export function createLlmProxyRouter(
 
   router.get('/models', authMiddleware, async (_req: Request, res: Response) => {
     try {
-      const models = await liteLLMClient.listModels();
+      const models = await llmRouter.listModels();
       res.json({ object: 'list', data: models });
     } catch (err: any) {
       logger.error('Failed to list models:', err);
-      res.status(502).json({ error: 'Failed to retrieve model list from LiteLLM' });
+      res.status(502).json({ error: 'Failed to retrieve model list' });
     }
   });
 

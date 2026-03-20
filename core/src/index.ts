@@ -62,7 +62,8 @@ import { BootstrapService } from './agents/bootstrap.service.js';
 import { createRegistryRouter } from './routes/registry.js';
 import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
-import { LiteLLMClient } from './llm/LiteLLMClient.js';
+import { ProviderRegistry } from './llm/ProviderRegistry.js';
+import { LlmRouter } from './llm/LlmRouter.js';
 import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
 import { createMeteringRouter } from './routes/metering.js';
@@ -116,8 +117,11 @@ const authMiddleware = createAuthMiddleware(identityService, authService, webSes
 const sessionStore = new SessionStore();
 const meteringService = new MeteringService();
 const meteringEngine = new MeteringEngine();
-const liteLLMClient = new LiteLLMClient();
-const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
+const providerRegistry = new ProviderRegistry(
+  process.env.PROVIDERS_CONFIG_PATH ?? '/app/config/providers.json',
+);
+const llmRouter = new LlmRouter(providerRegistry);
+const circuitBreakerService = new CircuitBreakerService(llmRouter);
 const agentScheduler = new AgentScheduler();
 const permissionService = new PermissionRequestService(agentRegistry, intercomService);
 const webhooksService = new WebhooksService(intercomService);
@@ -180,9 +184,9 @@ app.use('/api/memory', createMemoryRouter(memoryManager));
 app.use('/api/sessions', createSessionRouter(sessionStore));
 app.use('/api', createChatRouter(sessionStore, orchestrator));
 
-app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService, liteLLMClient, circuitBreakerService, pool, orchestrator));
+app.use('/v1/llm', createLlmProxyRouter(identityService, authService, meteringService, llmRouter, circuitBreakerService, pool, orchestrator));
 app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));
-app.use('/api/providers', authMiddleware, createProvidersRouter(liteLLMClient, circuitBreakerService));
+app.use('/api/providers', authMiddleware, createProvidersRouter(llmRouter, circuitBreakerService));
 app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
 app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
 app.use('/api/audit', authMiddleware, createAuditRouter());

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CircuitBreakerService, providerFromModel } from './CircuitBreakerService.js';
-import type { LiteLLMClient } from './LiteLLMClient.js';
+import type { LlmRouter } from './LlmRouter.js';
 
 describe('providerFromModel', () => {
   it.each([
@@ -21,7 +21,7 @@ describe('providerFromModel', () => {
 });
 
 describe('CircuitBreakerService', () => {
-  let mockClient: LiteLLMClient;
+  let mockClient: LlmRouter;
   let service: CircuitBreakerService;
 
   const mockResponse = {
@@ -48,7 +48,7 @@ describe('CircuitBreakerService', () => {
       addModel: vi.fn(),
       deleteModel: vi.fn(),
       testModel: vi.fn(),
-    } as unknown as LiteLLMClient;
+    } as unknown as LlmRouter;
 
     service = new CircuitBreakerService(mockClient);
   });

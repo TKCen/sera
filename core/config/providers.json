@@ -1,10 +1,12 @@
 {
-  "activeProvider": "lmstudio",
-  "providers": {
-    "lmstudio": {
+  "providers": [
+    {
+      "modelName": "lmstudio-local",
+      "api": "openai-completions",
+      "provider": "lmstudio",
       "baseUrl": "http://host.docker.internal:1234/v1",
-      "apiKey": "sk-lm-NkQPzwtp:rY9DQQQkmgMezQERTStC",
-      "model": "lmstudio-local"
+      "apiKey": "lm-studio",
+      "description": "Local LM Studio instance (host port 1234)"
     }
-  }
+  ]
 }

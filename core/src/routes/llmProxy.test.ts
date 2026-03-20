@@ -15,9 +15,9 @@ vi.mock('../lib/config.js', () => ({
   },
 }));
 
-// Mock the LiteLLMClient — default returns a successful response
-vi.mock('../llm/LiteLLMClient.js', () => ({
-  LiteLLMClient: vi.fn().mockImplementation(() => ({
+// Mock LlmRouter — default returns a successful response
+vi.mock('../llm/LlmRouter.js', () => ({
+  LlmRouter: vi.fn().mockImplementation(() => ({
     chatCompletion: vi.fn().mockResolvedValue({
       response: {
         id: 'chatcmpl-test',
@@ -37,7 +37,12 @@ vi.mock('../llm/LiteLLMClient.js', () => ({
     listModels: vi.fn().mockResolvedValue([
       { id: 'test-model', object: 'model', owned_by: 'lmstudio' },
     ]),
+    addModel: vi.fn(),
+    deleteModel: vi.fn(),
+    testModel: vi.fn(),
   })),
+  // ProviderRegistry mock (imported by LlmRouter consumers)
+  ProviderRegistry: vi.fn().mockImplementation(() => ({})),
 }));
 
 // Mock the CircuitBreakerService — default passes through to client.chatCompletion
@@ -61,7 +66,7 @@ import { createLlmProxyRouter } from './llmProxy.js';
 import { IdentityService } from '../auth/IdentityService.js';
 import { AuthService } from '../auth/auth-service.js';
 import { MeteringService } from '../metering/MeteringService.js';
-import { LiteLLMClient } from '../llm/LiteLLMClient.js';
+import { LlmRouter } from '../llm/LlmRouter.js';
 import { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 
@@ -78,8 +83,8 @@ async function createTestSetup(budgetOverride?: Partial<{
 }>) {
   const identityService = new IdentityService(TEST_SECRET);
   const meteringService = new MeteringService();
-  const liteLLMClient = new LiteLLMClient();
-  const circuitBreakerService = new CircuitBreakerService(liteLLMClient);
+  const llmRouter = new LlmRouter({} as any);
+  const circuitBreakerService = new CircuitBreakerService(llmRouter);
 
   vi.spyOn(meteringService, 'checkBudget').mockResolvedValue({
     allowed: true,
@@ -98,7 +103,7 @@ async function createTestSetup(budgetOverride?: Partial<{
     identityService,
     authService,
     meteringService,
-    liteLLMClient,
+    llmRouter,
     circuitBreakerService,
     pool,
     orchestrator
@@ -111,7 +116,7 @@ async function createTestSetup(budgetOverride?: Partial<{
     scope: 'agent',
   });
 
-  return { identityService, meteringService, liteLLMClient, circuitBreakerService, router, validToken };
+  return { identityService, meteringService, llmRouter, circuitBreakerService, router, validToken };
 }
 
 function createMockReqRes(overrides: Record<string, unknown> = {}) {
@@ -317,7 +322,7 @@ describe('LLM Proxy Router', () => {
     it('INVARIANT: no upstream call is made when budget is exceeded', async () => {
       // Story 4.3: budget must be checked BEFORE the upstream call — a failed
       // budget check must never result in an upstream call being placed.
-      const { router, liteLLMClient, validToken } = await createTestSetup({
+      const { router, llmRouter, validToken } = await createTestSetup({
         allowed: false,
         hourlyUsed: 99999,
         hourlyQuota: 100,
@@ -335,7 +340,7 @@ describe('LLM Proxy Router', () => {
 
       // Budget exceeded — upstream LiteLLM must NOT have been called
       expect(res.status).toHaveBeenCalledWith(429);
-      expect((liteLLMClient as any).chatCompletion).not.toHaveBeenCalled();
+      expect((llmRouter as any).chatCompletion).not.toHaveBeenCalled();
     });
 
     it('should return 503 when circuit breaker is open', async () => {

@@ -6,9 +6,9 @@
 ## Test plan
 <!-- How was this tested? -->
 
-- [ ] `npm run typecheck` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes
+- [ ] `bun run typecheck` passes
+- [ ] `bun run lint` passes
+- [ ] `bun run test` passes
 - [ ] New/changed behavior has test coverage
 
 ## Issue reference

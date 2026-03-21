@@ -12,7 +12,7 @@ These rules dictate how AI assistants should approach *developing* the SERA plat
 
 ## 🛠️ Development & Testing Workflow
 - **Small Increments**: Work in small, verifiable increments. Do not rewrite large swaths of undocumented code in one go.
-- **Testing**: We use **Vitest** for testing (unit and integration tests). Run tests within the respective service directory (e.g., `npm run test` inside `core/`). Be mindful of target environments and module transformations (e.g., top-level await compatibility).
+- **Testing**: We use **Vitest** for testing (unit and integration tests). Run tests within the respective service directory (e.g., `bun test` inside `core/`). Be mindful of target environments and module transformations (e.g., top-level await compatibility).
 - **Docker Infrastructure**: The platform runs as a multi-container stack via Docker Compose.
   - Ensure the Docker environment remains healthy.
   - If you change a Dockerfile or major system dependencies, remind the user to rebuild the containers (`docker compose build` / `docker compose up -d`).

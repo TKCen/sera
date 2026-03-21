@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
-import { Bot, Plus, Play, Square, ExternalLink, Search, Trash2 } from 'lucide-react';
+import { Bot, Plus, Play, Square, Trash2, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgents, useStartAgent, useStopAgent, useDeleteAgent } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/EmptyState';
 
 // TODO: virtualise if > 100 agents
 
-const STATUS_OPTIONS = ['all', 'running', 'stopped', 'error', 'unresponsive'] as const;
+const STATUS_OPTIONS = ['all', 'running', 'stopped', 'created', 'error', 'unresponsive'] as const;
 
 export default function AgentsPage() {
   const { data: agents, isLoading } = useAgents();
@@ -26,59 +26,60 @@ export default function AgentsPage() {
 
   const circles = useMemo(() => {
     if (!agents) return [];
-    const set = new Set(agents.map((a) => a.metadata.circle).filter(Boolean) as string[]);
+    const set = new Set(agents.map((a) => a.circle).filter(Boolean) as string[]);
     return Array.from(set);
   }, [agents]);
 
   const filtered = useMemo(() => {
     if (!agents) return [];
     return agents.filter((a) => {
-      const name = (a.metadata.displayName ?? a.metadata.name).toLowerCase();
+      const label = (a.display_name ?? a.name).toLowerCase();
       if (
         search &&
-        !name.includes(search.toLowerCase()) &&
-        !a.metadata.name.includes(search.toLowerCase())
+        !label.includes(search.toLowerCase()) &&
+        !a.name.includes(search.toLowerCase())
       ) {
         return false;
       }
-      if (filterCircle !== 'all' && a.metadata.circle !== filterCircle) return false;
+      if (filterStatus !== 'all' && a.status !== filterStatus) return false;
+      if (filterCircle !== 'all' && a.circle !== filterCircle) return false;
       return true;
     });
-  }, [agents, search, filterCircle]);
+  }, [agents, search, filterStatus, filterCircle]);
 
-  async function handleStart(e: React.MouseEvent, name: string) {
+  async function handleStart(e: React.MouseEvent, id: string) {
     e.preventDefault();
     e.stopPropagation();
     try {
-      await startAgent.mutateAsync(name);
-      toast.success(`Starting ${name}…`);
+      await startAgent.mutateAsync(id);
+      toast.success('Starting agent…');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start');
     }
   }
 
-  async function handleStop(e: React.MouseEvent, name: string) {
+  async function handleStop(e: React.MouseEvent, id: string) {
     e.preventDefault();
     e.stopPropagation();
     try {
-      await stopAgent.mutateAsync(name);
-      toast.success(`Stopping ${name}…`);
+      await stopAgent.mutateAsync(id);
+      toast.success('Stopping agent…');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to stop');
     }
   }
 
-  async function handleDelete(e: React.MouseEvent, name: string) {
+  async function handleDelete(e: React.MouseEvent, id: string, name: string) {
     e.preventDefault();
     e.stopPropagation();
     if (
       !window.confirm(
-        `Delete agent "${name}"? This will remove its YAML manifest from disk and cannot be undone.`
+        `Delete agent "${name}"? This will stop its container and remove the instance permanently.`
       )
     )
       return;
     try {
-      await deleteAgent.mutateAsync(name);
+      await deleteAgent.mutateAsync(id);
       toast.success(`Deleted ${name}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete');
@@ -154,7 +155,7 @@ export default function AgentsPage() {
         <EmptyState
           icon={<Bot size={24} />}
           title="No agents yet"
-          description="Create your first agent to get started."
+          description="Create your first agent from a template to get started."
           action={
             <Button asChild size="sm">
               <Link to="/agents/new">Create Agent</Link>
@@ -167,83 +168,75 @@ export default function AgentsPage() {
         </p>
       ) : (
         <div className="space-y-2">
-          {filtered.map((agent) => {
-            const id = agent.metadata.name;
-            const tier = agent.spec?.sandboxBoundary ?? '';
-
-            return (
-              <div key={id} className="sera-card relative flex items-center gap-4 px-4 py-3 group">
-                <div className="h-9 w-9 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
-                  <Bot size={16} className="text-sera-accent" />
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm text-sera-text truncate">
-                    {agent.metadata.displayName ?? id}
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs text-sera-text-dim truncate">{id}</span>
-                    {agent.metadata.circle && (
-                      <Badge variant="default">{agent.metadata.circle}</Badge>
-                    )}
-                    {tier && <Badge variant="accent">{tier}</Badge>}
-                  </div>
-                </div>
-
-                <div className="relative z-10">
-                  <AgentStatusBadge agentId={id} staticStatus={undefined} />
-                </div>
-
-                {/* Quick actions — relative + z-10 keeps these above the absolute overlay link */}
-                <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => {
-                      void handleStart(e, id);
-                    }}
-                    disabled={startAgent.isPending}
-                    className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
-                    title="Start"
-                  >
-                    <Play size={13} />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      void handleStop(e, id);
-                    }}
-                    disabled={stopAgent.isPending}
-                    className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
-                    title="Stop"
-                  >
-                    <Square size={13} />
-                  </button>
-                  <Link
-                    to={`/agents/${id}`}
-                    className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-accent hover:bg-sera-accent-soft transition-colors"
-                    title="View"
-                  >
-                    <ExternalLink size={13} />
-                  </Link>
-                  <button
-                    onClick={(e) => {
-                      void handleDelete(e, id);
-                    }}
-                    disabled={deleteAgent.isPending}
-                    className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-
-                {/* Row is clickable */}
-                <Link
-                  to={`/agents/${id}`}
-                  className="absolute inset-0 rounded-xl"
-                  aria-label={`View ${id}`}
-                />
+          {filtered.map((agent) => (
+            <div
+              key={agent.id}
+              className="sera-card relative flex items-center gap-4 px-4 py-3 group"
+            >
+              <div className="h-9 w-9 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
+                <Bot size={16} className="text-sera-accent" />
               </div>
-            );
-          })}
+
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm text-sera-text truncate">
+                  {agent.display_name ?? agent.name}
+                </div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-xs text-sera-text-dim truncate">{agent.name}</span>
+                  {agent.template_ref && <Badge variant="default">{agent.template_ref}</Badge>}
+                  {agent.circle && <Badge variant="default">{agent.circle}</Badge>}
+                  {agent.sandbox_boundary && (
+                    <Badge variant="accent">{agent.sandbox_boundary}</Badge>
+                  )}
+                </div>
+              </div>
+
+              <div className="relative z-10">
+                <AgentStatusBadge agentId={agent.id} staticStatus={agent.status} />
+              </div>
+
+              {/* Quick actions */}
+              <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => {
+                    void handleStart(e, agent.id);
+                  }}
+                  disabled={startAgent.isPending}
+                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
+                  title="Start"
+                >
+                  <Play size={13} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    void handleStop(e, agent.id);
+                  }}
+                  disabled={stopAgent.isPending}
+                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+                  title="Stop"
+                >
+                  <Square size={13} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    void handleDelete(e, agent.id, agent.name);
+                  }}
+                  disabled={deleteAgent.isPending}
+                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+
+              {/* Row is clickable */}
+              <Link
+                to={`/agents/${agent.id}`}
+                className="absolute inset-0 rounded-xl"
+                aria-label={`View ${agent.name}`}
+              />
+            </div>
+          ))}
         </div>
       )}
     </div>

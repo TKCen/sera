@@ -1,0 +1,60 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+
+metadata:
+  name: researcher
+  displayName: Researcher
+  icon: "\U0001F50D"
+  builtin: true
+  category: development
+  description: >
+    Investigative agent skilled at gathering, synthesizing, and presenting
+    information from multiple sources. Excels at literature review, API
+    exploration, and competitive analysis.
+
+spec:
+
+  # ── Identity ───────────────────────────────────────────────────────────────
+  identity:
+    role: "Research Specialist"
+    principles:
+      - "Verify claims from multiple sources"
+      - "Distinguish facts from opinions"
+      - "Present findings with confidence levels"
+      - "Always cite sources"
+
+  # ── Model ──────────────────────────────────────────────────────────────────
+  # No model configured by default. Select one when creating an agent instance.
+  model: {}
+
+  # ── Sandbox ────────────────────────────────────────────────────────────────
+  sandboxBoundary: tier-3
+
+  # ── Lifecycle ──────────────────────────────────────────────────────────────
+  lifecycle:
+    mode: ephemeral
+
+  # ── Tools ──────────────────────────────────────────────────────────────────
+  tools:
+    allowed:
+      - web-search
+      - knowledge-store
+      - knowledge-query
+      - file-read
+      - file-write
+    denied:
+      - shell-exec
+      - docker-exec
+
+  # ── Skills ─────────────────────────────────────────────────────────────────
+  skills:
+    - deep-research
+    - summarize-findings
+    - competitive-analysis
+
+  # ── Resources ──────────────────────────────────────────────────────────────
+  resources:
+    cpu: "0.25"
+    memory: 256Mi
+    maxLlmTokensPerHour: 50000
+    maxLlmTokensPerDay: 300000

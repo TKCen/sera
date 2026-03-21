@@ -37,6 +37,31 @@ export interface AgentManifest {
   overrides?: Record<string, unknown>;
 }
 
+export interface AgentInstance {
+  id: string;
+  name: string;
+  display_name?: string;
+  template_ref: string;
+  status: string;
+  circle?: string;
+  lifecycle_mode?: 'persistent' | 'ephemeral';
+  icon?: string;
+  sandbox_boundary?: string;
+  overrides?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateAgentInstanceParams {
+  templateRef: string;
+  name: string;
+  displayName?: string;
+  circle?: string;
+  overrides?: Record<string, unknown>;
+  lifecycleMode?: 'persistent' | 'ephemeral';
+  start?: boolean;
+}
+
 export interface AgentInfo {
   name: string;
   displayName?: string;
@@ -220,6 +245,8 @@ export interface AgentTemplate {
   name: string;
   displayName?: string;
   description?: string;
+  builtin?: boolean;
+  category?: string;
   spec?: Record<string, unknown>;
   lockedFields?: string[];
 }

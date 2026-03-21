@@ -259,7 +259,7 @@ app.use(
   '/api/agents',
   createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService)
 );
-app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
+app.use('/api/agents', createAgentRouter(orchestrator, agentRegistry));
 
 // ── Convenience routes for the web UI ────────────────────────────────────────
 // GET /api/tools — list all registered skills/tools (used by AgentForm)

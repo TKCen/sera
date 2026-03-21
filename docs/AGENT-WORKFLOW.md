@@ -74,19 +74,19 @@ Each agent, when starting work:
 
 ```bash
 # Step 1: Type safety
-npm run typecheck
+bun run typecheck
 # Must exit 0 with zero errors
 
 # Step 2: Lint
-npm run lint
+bun run lint
 # Must exit 0 with zero warnings
 
 # Step 3: Tests
-npm run test
+bun run test
 # Must exit 0, all tests pass
 
 # Step 4: (if touching e2e-relevant code) E2E smoke
-# npm run test --workspace=e2e
+# bun run test --workspace=e2e
 ```
 
 **Agents must not open a PR until all steps pass.** If a step fails, fix and re-run.

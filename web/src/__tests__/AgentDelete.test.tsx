@@ -31,16 +31,20 @@ vi.mock('@/hooks/useAgents', async (importOriginal) => {
     useAgents: vi.fn().mockReturnValue({
       data: [
         {
-          apiVersion: 'sera/v1',
-          kind: 'Agent',
-          metadata: { name: 'qwen-assistant', displayName: 'Qwen Assistant' },
-          spec: { sandboxBoundary: 'tier-2' },
+          id: 'inst-001',
+          name: 'qwen-assistant',
+          display_name: 'Qwen Assistant',
+          template_ref: 'sera',
+          status: 'stopped',
+          sandbox_boundary: 'tier-2',
         },
         {
-          apiVersion: 'sera/v1',
-          kind: 'Agent',
-          metadata: { name: 'writer', displayName: 'Writer', circle: 'general' },
-          spec: {},
+          id: 'inst-002',
+          name: 'writer',
+          display_name: 'Writer',
+          template_ref: 'developer',
+          status: 'stopped',
+          circle: 'general',
         },
       ],
       isLoading: false,
@@ -135,9 +139,13 @@ describe('AgentsPage — delete agent', () => {
     });
   });
 
-  it('does not render an agent named "sera" (bootstrap auto-creation disabled)', () => {
+  it('does not render an agent instance named "sera"', () => {
     renderPage();
-    expect(screen.queryByText('sera')).not.toBeInTheDocument();
+    // The mock data has template_ref: 'sera' which renders in a Badge.
+    // But no agent instance is *named* "sera" — the instance names are qwen-assistant and writer.
+    const agentNames = screen.getAllByText(/.+/, { selector: '.font-medium.text-sm' });
+    const nameTexts = agentNames.map((el) => el.textContent);
+    expect(nameTexts).not.toContain('sera');
   });
 
   // ── Confirm dialog ─────────────────────────────────────────────────────────
@@ -154,7 +162,7 @@ describe('AgentsPage — delete agent', () => {
     expect(confirmSpy).toHaveBeenCalledOnce();
     const firstCall = confirmSpy.mock.calls[0] as unknown as string[];
     expect(firstCall[0]).toMatch(/qwen-assistant/);
-    expect(firstCall[0]).toMatch(/cannot be undone/i);
+    expect(firstCall[0]).toMatch(/permanently/i);
   });
 
   it('confirms the dialog and calls deleteAgent with the correct agent name', async () => {
@@ -167,7 +175,7 @@ describe('AgentsPage — delete agent', () => {
 
     await waitFor(() => {
       expect(mockDeleteFn).toHaveBeenCalledOnce();
-      expect(mockDeleteFn).toHaveBeenCalledWith('qwen-assistant');
+      expect(mockDeleteFn).toHaveBeenCalledWith('inst-001');
     });
   });
 
@@ -224,7 +232,7 @@ describe('AgentsPage — delete agent', () => {
     await user.click(deleteButtons[1]!);
 
     await waitFor(() => {
-      expect(mockDeleteFn).toHaveBeenCalledWith('writer');
+      expect(mockDeleteFn).toHaveBeenCalledWith('inst-002');
     });
   });
 

@@ -26,6 +26,7 @@ import ToolsPage from '@/pages/ToolsPage';
 import MemoryDetailPage from '@/pages/MemoryDetailPage';
 import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
 import ChannelsPage from '@/pages/ChannelsPage';
+import TemplatesPage from '@/pages/TemplatesPage';
 import LoginPage from '@/pages/LoginPage';
 import AuthCallbackPage from '@/pages/AuthCallbackPage';
 import { ForbiddenView } from '@/views/ForbiddenView';
@@ -54,6 +55,7 @@ createRoot(el).render(
                 <Route index element={<Navigate to="/chat" replace />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="agents" element={<AgentsPage />} />
+                <Route path="templates" element={<TemplatesPage />} />
                 <Route path="agents/new" element={<AgentNewPage />} />
                 <Route path="agents/:id" element={<AgentDetailPage />} />
                 <Route path="agents/:id/edit" element={<AgentEditPage />} />

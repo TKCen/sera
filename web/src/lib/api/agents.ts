@@ -1,40 +1,52 @@
 import { request, requestText } from './client';
 import type {
+  AgentInstance,
   AgentManifest,
   AgentInfo,
   AgentTask,
   AgentSchedule,
   AgentMemoryBlock,
   ThoughtEvent,
+  CreateAgentInstanceParams,
 } from './types';
 
-export function listAgents(): Promise<AgentManifest[]> {
-  return request<AgentManifest[]>('/agents');
+// ── Instance-based endpoints ─────────────────────────────────────────────────
+
+export function listAgents(): Promise<AgentInstance[]> {
+  return request<AgentInstance[]>('/agents');
 }
+
+export function getAgentInstance(id: string): Promise<AgentInstance> {
+  return request<AgentInstance>(`/agents/instances/${encodeURIComponent(id)}`);
+}
+
+export function createAgentInstance(params: CreateAgentInstanceParams): Promise<AgentInstance> {
+  return request<AgentInstance>('/agents/instances', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function startAgent(id: string): Promise<AgentInstance> {
+  return request<AgentInstance>(`/agents/instances/${encodeURIComponent(id)}/start`, {
+    method: 'POST',
+  });
+}
+
+export function stopAgent(id: string): Promise<AgentInstance> {
+  return request<AgentInstance>(`/agents/instances/${encodeURIComponent(id)}/stop`, {
+    method: 'POST',
+  });
+}
+
+export function deleteAgent(id: string): Promise<void> {
+  return request<void>(`/agents/instances/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// ── Legacy endpoints (kept for compatibility) ───────────────────────────────
 
 export function getAgent(name: string): Promise<AgentInfo> {
   return request<AgentInfo>(`/agents/${encodeURIComponent(name)}`);
-}
-
-export function createAgent(manifest: AgentManifest): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/agents/${encodeURIComponent(manifest.metadata.name)}/manifest`,
-    { method: 'PUT', body: JSON.stringify(manifest) }
-  );
-}
-
-export function getAgentManifestRaw(name: string): Promise<string> {
-  return requestText(`/agents/${encodeURIComponent(name)}/manifest/raw`);
-}
-
-export function updateAgentManifest(
-  name: string,
-  manifest: AgentManifest
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/agents/${encodeURIComponent(name)}/manifest`, {
-    method: 'PUT',
-    body: JSON.stringify(manifest),
-  });
 }
 
 export function validateAgentManifest(
@@ -46,58 +58,34 @@ export function validateAgentManifest(
   });
 }
 
-export function reloadAgents(): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>('/agents/reload', { method: 'POST' });
+// ── Instance-scoped data endpoints ──────────────────────────────────────────
+
+export function getAgentLogs(id: string): Promise<string> {
+  return requestText(`/agents/${encodeURIComponent(id)}/logs`);
 }
 
-export function deleteAgent(name: string): Promise<void> {
-  return request<void>(`/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
-}
-
-export function startAgent(name: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/agents/${encodeURIComponent(name)}/start`, {
-    method: 'POST',
-  });
-}
-
-export function stopAgent(name: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/agents/${encodeURIComponent(name)}/stop`, {
-    method: 'POST',
-  });
-}
-
-export function restartAgent(name: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/agents/${encodeURIComponent(name)}/restart`, {
-    method: 'POST',
-  });
-}
-
-export function getAgentLogs(name: string): Promise<string> {
-  return requestText(`/agents/${encodeURIComponent(name)}/logs`);
-}
-
-export function getAgentMemory(name: string, scope?: string): Promise<AgentMemoryBlock[]> {
+export function getAgentMemory(id: string, scope?: string): Promise<AgentMemoryBlock[]> {
   const params = scope ? `?scope=${encodeURIComponent(scope)}` : '';
-  return request<AgentMemoryBlock[]>(`/agents/${encodeURIComponent(name)}/memory${params}`);
+  return request<AgentMemoryBlock[]>(`/agents/${encodeURIComponent(id)}/memory${params}`);
 }
 
-export function getAgentSchedules(name: string): Promise<AgentSchedule[]> {
-  return request<AgentSchedule[]>(`/agents/${encodeURIComponent(name)}/schedules`);
+export function getAgentSchedules(id: string): Promise<AgentSchedule[]> {
+  return request<AgentSchedule[]>(`/agents/${encodeURIComponent(id)}/schedules`);
 }
 
-export function getAgentTasks(name: string, type?: string): Promise<AgentTask[]> {
+export function getAgentTasks(id: string, type?: string): Promise<AgentTask[]> {
   const params = type ? `?type=${encodeURIComponent(type)}` : '';
-  return request<AgentTask[]>(`/agents/${encodeURIComponent(name)}/tasks${params}`);
+  return request<AgentTask[]>(`/agents/${encodeURIComponent(id)}/tasks${params}`);
 }
 
-export function createAgentTask(name: string, input: string): Promise<AgentTask> {
-  return request<AgentTask>(`/agents/${encodeURIComponent(name)}/tasks`, {
+export function createAgentTask(id: string, input: string): Promise<AgentTask> {
+  return request<AgentTask>(`/agents/${encodeURIComponent(id)}/tasks`, {
     method: 'POST',
     body: JSON.stringify({ type: 'chat', input }),
   });
 }
 
-export function getAgentThoughts(name: string, taskId?: string): Promise<ThoughtEvent[]> {
+export function getAgentThoughts(id: string, taskId?: string): Promise<ThoughtEvent[]> {
   const params = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
-  return request<ThoughtEvent[]>(`/agents/${encodeURIComponent(name)}/thoughts${params}`);
+  return request<ThoughtEvent[]>(`/agents/${encodeURIComponent(id)}/thoughts${params}`);
 }

@@ -168,7 +168,7 @@ export default function ChatPage() {
   // ── Auto-select first agent ──────────────────────────────────────────────────
   useEffect(() => {
     if (agents && agents.length > 0 && !selectedAgent) {
-      setSelectedAgent(agents[0]!.metadata.name);
+      setSelectedAgent(agents[0]!.name);
     }
   }, [agents, selectedAgent]);
 
@@ -684,8 +684,8 @@ export default function ChatPage() {
           >
             {!agents?.length && <option value="">No agents</option>}
             {agents?.map((a) => (
-              <option key={a.metadata.name} value={a.metadata.name}>
-                {a.metadata.displayName ?? a.metadata.name}
+              <option key={a.name} value={a.name}>
+                {a.display_name ?? a.name}
               </option>
             ))}
           </select>
@@ -811,7 +811,7 @@ export default function ChatPage() {
           <h2 className="text-xl font-semibold text-sera-text mb-2">How can I help you?</h2>
           <p className="text-sm text-sera-text-muted mb-8 text-center max-w-md">
             {selectedAgent
-              ? `Chatting with ${agents?.find((a) => a.metadata.name === selectedAgent)?.metadata.displayName ?? selectedAgent}`
+              ? `Chatting with ${agents?.find((a) => a.name === selectedAgent)?.display_name ?? selectedAgent}`
               : 'Select an agent from the sidebar to get started.'}
           </p>
           <div className="w-full max-w-2xl">{inputBar}</div>

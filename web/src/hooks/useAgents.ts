@@ -1,15 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '@/lib/api/agents';
-import type { AgentManifest } from '@/lib/api/types';
+import type { CreateAgentInstanceParams } from '@/lib/api/types';
 
 export const agentsKeys = {
   all: ['agents'] as const,
-  detail: (name: string) => ['agents', name] as const,
-  tasks: (name: string, type?: string) => ['agents', name, 'tasks', type] as const,
-  schedules: (name: string) => ['agents', name, 'schedules'] as const,
-  memory: (name: string, scope?: string) => ['agents', name, 'memory', scope] as const,
-  thoughts: (name: string, taskId?: string) => ['agents', name, 'thoughts', taskId] as const,
-  logs: (name: string) => ['agents', name, 'logs'] as const,
+  detail: (id: string) => ['agents', id] as const,
+  tasks: (id: string, type?: string) => ['agents', id, 'tasks', type] as const,
+  schedules: (id: string) => ['agents', id, 'schedules'] as const,
+  memory: (id: string, scope?: string) => ['agents', id, 'memory', scope] as const,
+  thoughts: (id: string, taskId?: string) => ['agents', id, 'thoughts', taskId] as const,
+  logs: (id: string) => ['agents', id, 'logs'] as const,
 };
 
 export function useAgents() {
@@ -19,80 +19,60 @@ export function useAgents() {
   });
 }
 
-export function useAgent(name: string) {
+export function useAgent(id: string) {
   return useQuery({
-    queryKey: agentsKeys.detail(name),
-    queryFn: () => agentsApi.getAgent(name),
-    enabled: name.length > 0,
+    queryKey: agentsKeys.detail(id),
+    queryFn: () => agentsApi.getAgentInstance(id),
+    enabled: id.length > 0,
   });
 }
 
-export function useAgentManifestRaw(name: string) {
+export function useAgentLogs(id: string) {
   return useQuery({
-    queryKey: [...agentsKeys.detail(name), 'raw'],
-    queryFn: () => agentsApi.getAgentManifestRaw(name),
-    enabled: name.length > 0,
-  });
-}
-
-export function useAgentLogs(name: string) {
-  return useQuery({
-    queryKey: agentsKeys.logs(name),
-    queryFn: () => agentsApi.getAgentLogs(name),
-    enabled: name.length > 0,
+    queryKey: agentsKeys.logs(id),
+    queryFn: () => agentsApi.getAgentLogs(id),
+    enabled: id.length > 0,
     refetchInterval: 3000,
   });
 }
 
-export function useAgentTasks(name: string, type?: string) {
+export function useAgentTasks(id: string, type?: string) {
   return useQuery({
-    queryKey: agentsKeys.tasks(name, type),
-    queryFn: () => agentsApi.getAgentTasks(name, type),
-    enabled: name.length > 0,
+    queryKey: agentsKeys.tasks(id, type),
+    queryFn: () => agentsApi.getAgentTasks(id, type),
+    enabled: id.length > 0,
   });
 }
 
-export function useAgentSchedules(name: string) {
+export function useAgentSchedules(id: string) {
   return useQuery({
-    queryKey: agentsKeys.schedules(name),
-    queryFn: () => agentsApi.getAgentSchedules(name),
-    enabled: name.length > 0,
+    queryKey: agentsKeys.schedules(id),
+    queryFn: () => agentsApi.getAgentSchedules(id),
+    enabled: id.length > 0,
   });
 }
 
-export function useAgentMemory(name: string, scope?: string) {
+export function useAgentMemory(id: string, scope?: string) {
   return useQuery({
-    queryKey: agentsKeys.memory(name, scope),
-    queryFn: () => agentsApi.getAgentMemory(name, scope),
-    enabled: name.length > 0,
+    queryKey: agentsKeys.memory(id, scope),
+    queryFn: () => agentsApi.getAgentMemory(id, scope),
+    enabled: id.length > 0,
   });
 }
 
-export function useAgentThoughts(name: string, taskId?: string) {
+export function useAgentThoughts(id: string, taskId?: string) {
   return useQuery({
-    queryKey: agentsKeys.thoughts(name, taskId),
-    queryFn: () => agentsApi.getAgentThoughts(name, taskId),
-    enabled: name.length > 0,
+    queryKey: agentsKeys.thoughts(id, taskId),
+    queryFn: () => agentsApi.getAgentThoughts(id, taskId),
+    enabled: id.length > 0,
   });
 }
 
 export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (manifest: AgentManifest) => agentsApi.createAgent(manifest),
+    mutationFn: (params: CreateAgentInstanceParams) => agentsApi.createAgentInstance(params),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.all });
-    },
-  });
-}
-
-export function useUpdateAgentManifest() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ name, manifest }: { name: string; manifest: AgentManifest }) =>
-      agentsApi.updateAgentManifest(name, manifest),
-    onSuccess: (_data, { name }) => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.detail(name) });
       void qc.invalidateQueries({ queryKey: agentsKeys.all });
     },
   });
@@ -101,9 +81,9 @@ export function useUpdateAgentManifest() {
 export function useStartAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => agentsApi.startAgent(name),
-    onSuccess: (_data, name) => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.detail(name) });
+    mutationFn: (id: string) => agentsApi.startAgent(id),
+    onSuccess: (_data, id) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.detail(id) });
       void qc.invalidateQueries({ queryKey: agentsKeys.all });
     },
   });
@@ -112,9 +92,9 @@ export function useStartAgent() {
 export function useStopAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => agentsApi.stopAgent(name),
-    onSuccess: (_data, name) => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.detail(name) });
+    mutationFn: (id: string) => agentsApi.stopAgent(id),
+    onSuccess: (_data, id) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.detail(id) });
       void qc.invalidateQueries({ queryKey: agentsKeys.all });
     },
   });
@@ -123,9 +103,12 @@ export function useStopAgent() {
 export function useRestartAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => agentsApi.restartAgent(name),
-    onSuccess: (_data, name) => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.detail(name) });
+    mutationFn: async (id: string) => {
+      await agentsApi.stopAgent(id);
+      return agentsApi.startAgent(id);
+    },
+    onSuccess: (_data, id) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.detail(id) });
       void qc.invalidateQueries({ queryKey: agentsKeys.all });
     },
   });
@@ -134,20 +117,10 @@ export function useRestartAgent() {
 export function useCreateAgentTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ name, input }: { name: string; input: string }) =>
-      agentsApi.createAgentTask(name, input),
-    onSuccess: (_data, { name }) => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.tasks(name, 'chat') });
-    },
-  });
-}
-
-export function useReloadAgents() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: agentsApi.reloadAgents,
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: agentsKeys.all });
+    mutationFn: ({ id, input }: { id: string; input: string }) =>
+      agentsApi.createAgentTask(id, input),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.tasks(id, 'chat') });
     },
   });
 }
@@ -155,7 +128,7 @@ export function useReloadAgents() {
 export function useDeleteAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => agentsApi.deleteAgent(name),
+    mutationFn: (id: string) => agentsApi.deleteAgent(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: agentsKeys.all });
     },

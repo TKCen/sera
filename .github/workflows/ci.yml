@@ -21,6 +21,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Tailwind v4 uses platform-specific native bindings (@tailwindcss/oxide)
+      # that npm ci may skip in workspaces (npm/cli#4828).
+      - name: Ensure Tailwind native bindings
+        working-directory: web
+        run: npm install --no-save @tailwindcss/oxide-linux-x64-gnu@4.2.1
+
       - name: Format check
         run: npm run format:check
 

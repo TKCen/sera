@@ -60,7 +60,17 @@ describe('ScheduleService', () => {
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // manual reconcile call
         .mockResolvedValueOnce({ rows: [{ name: '22222222-2222-4222-a222-222222222222' }] }); // stale job
 
-      await service.start('postgres://localhost/test');
+      // Mock PgBoss instance
+      const mockBoss = {
+        start: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        schedule: vi.fn().mockResolvedValue(undefined),
+        unschedule: vi.fn().mockResolvedValue(undefined),
+        work: vi.fn().mockResolvedValue(undefined),
+        createQueue: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.start(mockBoss as any);
       await service.reconcile();
 
       const boss = (

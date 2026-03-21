@@ -9,14 +9,20 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
 import type { BaseAgent } from '../agents/BaseAgent.js';
 
 const hasDb = !!process.env.DATABASE_URL;
 
 describe.skipIf(!hasDb)('Circles integration (Story 10.1 + 10.2)', () => {
   let circleId: string;
+  let tmpKnowledgeDir: string;
 
   beforeAll(async () => {
+    tmpKnowledgeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sera-kg-integ-'));
+    process.env['KNOWLEDGE_BASE_PATH'] = tmpKnowledgeDir;
     // initDb is called by server startup; for tests we call it directly
     const { initDb } = await import('../lib/database.js');
     await initDb();
@@ -82,6 +88,10 @@ describe.skipIf(!hasDb)('Circles integration (Story 10.1 + 10.2)', () => {
       const svc = CircleService.getInstance();
       await svc.deleteCircle(circleId).catch(() => {});
     }
+    if (tmpKnowledgeDir) {
+      await fs.rm(tmpKnowledgeDir, { recursive: true, force: true }).catch(() => {});
+    }
+    delete process.env['KNOWLEDGE_BASE_PATH'];
   });
 });
 

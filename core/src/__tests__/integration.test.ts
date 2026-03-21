@@ -172,7 +172,9 @@ describe('SERA Integration Tests', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
 
-      const names = res.body.map((a: any) => a.metadata?.name ?? a.name);
+      const names = res.body.map(
+        (a: { name?: string; metadata?: { name: string } }) => a.metadata?.name ?? a.name
+      );
       expect(names).toContain('architect-prime');
       expect(names).toContain('developer-prime');
       expect(names).toContain('researcher-prime');

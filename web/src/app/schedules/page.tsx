@@ -1,17 +1,6 @@
 'use client';
 
-import {
-  CalendarClock,
-  Plus,
-  Play,
-  Pause,
-  Trash2,
-  Edit2,
-  RefreshCw,
-  Search,
-  Bot,
-  AlertCircle,
-} from 'lucide-react';
+import { CalendarClock, Plus, Play, Pause, Trash2, Edit2, Bot } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';

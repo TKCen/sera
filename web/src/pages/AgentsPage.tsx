@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
-import { Bot, Plus, Play, Square, ExternalLink, Search } from 'lucide-react';
+import { Bot, Plus, Play, Square, ExternalLink, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAgents, useStartAgent, useStopAgent } from '@/hooks/useAgents';
+import { useAgents, useStartAgent, useStopAgent, useDeleteAgent } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,7 @@ export default function AgentsPage() {
   const { data: agents, isLoading } = useAgents();
   const startAgent = useStartAgent();
   const stopAgent = useStopAgent();
+  const deleteAgent = useDeleteAgent();
 
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -64,6 +65,23 @@ export default function AgentsPage() {
       toast.success(`Stopping ${name}…`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to stop');
+    }
+  }
+
+  async function handleDelete(e: React.MouseEvent, name: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (
+      !window.confirm(
+        `Delete agent "${name}"? This will remove its YAML manifest from disk and cannot be undone.`
+      )
+    )
+      return;
+    try {
+      await deleteAgent.mutateAsync(name);
+      toast.success(`Deleted ${name}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete');
     }
   }
 
@@ -172,10 +190,12 @@ export default function AgentsPage() {
                   </div>
                 </div>
 
-                <AgentStatusBadge agentId={id} staticStatus={undefined} />
+                <div className="relative z-10">
+                  <AgentStatusBadge agentId={id} staticStatus={undefined} />
+                </div>
 
-                {/* Quick actions */}
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {/* Quick actions — relative + z-10 keeps these above the absolute overlay link */}
+                <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={(e) => {
                       void handleStart(e, id);
@@ -203,6 +223,16 @@ export default function AgentsPage() {
                   >
                     <ExternalLink size={13} />
                   </Link>
+                  <button
+                    onClick={(e) => {
+                      void handleDelete(e, id);
+                    }}
+                    disabled={deleteAgent.isPending}
+                    className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
 
                 {/* Row is clickable */}

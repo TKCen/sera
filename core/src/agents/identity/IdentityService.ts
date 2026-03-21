@@ -63,9 +63,7 @@ export class IdentityService {
     // ── Role & Persona ────────────────────────────────────────────────────────
     const displayName = manifest.metadata.displayName ?? manifest.metadata.name;
     sections.push(
-      identity.role
-        ? `You are ${displayName}, a ${identity.role}.`
-        : `You are ${displayName}.`
+      identity.role ? `You are ${displayName}, a ${identity.role}.` : `You are ${displayName}.`
     );
 
     if (identity.description) {

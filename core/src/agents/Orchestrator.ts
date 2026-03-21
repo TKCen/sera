@@ -682,6 +682,18 @@ export class Orchestrator {
     return Array.from(this.agents.values())[0];
   }
 
+  public deregisterAgent(name: string): void {
+    // Remove manifest
+    this.manifests.delete(name);
+    // Remove all agent instances that belong to this manifest name
+    for (const [key, agent] of this.agents.entries()) {
+      if (agent.getManifest().metadata.name === name) {
+        this.agents.delete(key);
+      }
+    }
+    logger.info(`Deregistered agent "${name}"`);
+  }
+
   public listAgents(): { id?: string; name: string; status: string; startTime: Date }[] {
     const active = Array.from(this.agents.values()).map((a) => ({
       id: a.agentInstanceId || '',

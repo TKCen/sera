@@ -294,15 +294,65 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     }
   });
 
-  // ── List all running agents, enriched with manifest metadata ─────────────────
-  router.get('/', (req, res) => {
-    const enriched = orchestrator.listAgents().map((item) => {
-      const info = orchestrator.getAgentInfo(item.name);
-      if (!info) {
-        return { id: item.id, status: item.status, startTime: item.startTime, metadata: { name: item.name } };
+  // ── Delete an agent (YAML manifest + deregister) ─────────────────────────
+  /**
+   * Deletes a YAML agent: removes its manifest file from disk and deregisters
+   * it from the orchestrator's in-memory maps.
+   * DELETE /api/agents/:name
+   */
+  router.delete('/:name', (req, res) => {
+    const name = sanitizeAgentName(req.params.name);
+    const filePath = findManifestFile(agentsDir, name);
+
+    if (!filePath) {
+      return res.status(404).json({ error: `Agent "${name}" not found on disk` });
+    }
+
+    try {
+      // Delete the manifest file (and containing directory if it only held AGENT.yaml)
+      const dir = path.dirname(filePath);
+      fs.unlinkSync(filePath);
+
+      // If the parent dir is named after the agent and is now empty, remove it too
+      try {
+        const remaining = fs.readdirSync(dir);
+        if (remaining.length === 0) {
+          fs.rmdirSync(dir);
+        }
+      } catch {
+        // Non-fatal: directory may have other files
       }
-      return { id: item.id, status: item.status, startTime: item.startTime, ...normalizeManifestForApi(info.manifest) };
+
+      // Deregister from orchestrator in-memory state
+      orchestrator.deregisterAgent(name);
+
+      res.status(204).send();
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── List all agents (all manifests, enriched with live status) ───────────────
+  /**
+   * Returns every manifest known to the orchestrator.
+   * Agents that have been instantiated carry a live status from this.agents;
+   * manifests that were added via PUT but never instantiated are included too,
+   * reported as "stopped".
+   */
+  router.get('/', (req, res) => {
+    // Build a quick lookup of instantiated agent status by manifest name
+    const liveAgents = new Map(orchestrator.listAgents().map((item) => [item.name, item]));
+
+    const enriched = orchestrator.getAllManifests().map((manifest) => {
+      const live = liveAgents.get(manifest.metadata.name);
+      return {
+        id: live?.id ?? '',
+        status: live?.status ?? 'stopped',
+        startTime: live?.startTime ?? new Date(0),
+        ...normalizeManifestForApi(manifest),
+      };
     });
+
     res.json(enriched);
   });
 

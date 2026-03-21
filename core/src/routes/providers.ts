@@ -249,7 +249,6 @@ export function createProvidersRouter(
     res.json(state);
   });
 
-
   return router;
 }
 

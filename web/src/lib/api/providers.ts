@@ -119,8 +119,11 @@ export function testDynamicConnection(
   baseUrl: string,
   apiKey?: string
 ): Promise<{ success: boolean; models: string[]; error?: string }> {
-  return request<{ success: boolean; models: string[]; error?: string }>('/providers/dynamic/test', {
-    method: 'POST',
-    body: JSON.stringify({ baseUrl, apiKey }),
-  });
+  return request<{ success: boolean; models: string[]; error?: string }>(
+    '/providers/dynamic/test',
+    {
+      method: 'POST',
+      body: JSON.stringify({ baseUrl, apiKey }),
+    }
+  );
 }

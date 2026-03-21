@@ -32,7 +32,6 @@ import { Button } from '@/components/ui/button';
 
 type Tab = 'providers' | 'models' | 'general' | 'circuit-breakers';
 
-
 function DynamicProviderCard({
   provider,
   status,
@@ -306,7 +305,9 @@ export default function SettingsPage() {
                           className="sera-input text-xs font-mono"
                         />
                         <p className="text-[10px] text-sera-text-dim mt-0.5">
-                          Running in Docker? Use <code className="font-mono">host.docker.internal</code> instead of <code className="font-mono">localhost</code>
+                          Running in Docker? Use{' '}
+                          <code className="font-mono">host.docker.internal</code> instead of{' '}
+                          <code className="font-mono">localhost</code>
                         </p>
                       </div>
                       <div className="space-y-1.5 col-span-2">
@@ -384,7 +385,15 @@ export default function SettingsPage() {
                       </Button>
                       <Button
                         className="flex-1 text-xs bg-sera-accent hover:bg-sera-accent-hover text-sera-bg h-10"
-                        disabled={!(newDynamic.name && newDynamic.id && newDynamic.baseUrl && testResult?.success && !addDynamic.isPending)}
+                        disabled={
+                          !(
+                            newDynamic.name &&
+                            newDynamic.id &&
+                            newDynamic.baseUrl &&
+                            testResult?.success &&
+                            !addDynamic.isPending
+                          )
+                        }
                         onClick={() => {
                           addDynamic.mutate({
                             ...newDynamic,
@@ -442,7 +451,6 @@ export default function SettingsPage() {
                     )}
                 </div>
               </section>
-
             </div>
           )}
 

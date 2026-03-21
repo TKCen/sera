@@ -151,3 +151,13 @@ export function useReloadAgents() {
     },
   });
 }
+
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => agentsApi.deleteAgent(name),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.all });
+    },
+  });
+}

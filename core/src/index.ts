@@ -57,7 +57,6 @@ import { createSecretsRouter } from './routes/secrets.js';
 import { SecretsManager } from './secrets/secrets-manager.js';
 import { AgentRegistry } from './agents/registry.service.js';
 import { ResourceImporter } from './agents/importer.service.js';
-import { BootstrapService } from './agents/bootstrap.service.js';
 import { createRegistryRouter } from './routes/registry.js';
 import { createLifecycleRouter } from './routes/lifecycle.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
@@ -174,7 +173,12 @@ app.get('/api/health', (req, res) =>
 );
 
 app.get('/api/health/detail', async (_req, res) => {
-  const components: { name: string; status: 'healthy' | 'degraded' | 'unreachable'; message?: string; latencyMs?: number }[] = [];
+  const components: {
+    name: string;
+    status: 'healthy' | 'degraded' | 'unreachable';
+    message?: string;
+    latencyMs?: number;
+  }[] = [];
 
   // Database check
   const dbStart = Date.now();
@@ -191,11 +195,21 @@ app.get('/api/health/detail', async (_req, res) => {
   try {
     const ctrl = new AbortController();
     const centrifugoTimer = setTimeout(() => ctrl.abort(), 3000);
-    const centResp = await fetch(`${centrifugoUrl.replace(/\/api$/, '')}/health`, { signal: ctrl.signal });
+    const centResp = await fetch(`${centrifugoUrl.replace(/\/api$/, '')}/health`, {
+      signal: ctrl.signal,
+    });
     clearTimeout(centrifugoTimer);
-    components.push({ name: 'centrifugo', status: centResp.ok ? 'healthy' : 'degraded', latencyMs: Date.now() - centrifugoStart });
+    components.push({
+      name: 'centrifugo',
+      status: centResp.ok ? 'healthy' : 'degraded',
+      latencyMs: Date.now() - centrifugoStart,
+    });
   } catch {
-    components.push({ name: 'centrifugo', status: 'unreachable', latencyMs: Date.now() - centrifugoStart });
+    components.push({
+      name: 'centrifugo',
+      status: 'unreachable',
+      latencyMs: Date.now() - centrifugoStart,
+    });
   }
 
   // Agent stats
@@ -474,11 +488,6 @@ const startServer = async () => {
 
   if (process.env.NODE_ENV !== 'test') {
     const port = process.env.PORT || 3001;
-    const bootstrapService = new BootstrapService(agentRegistry, resourceImporter, workspaceRoot);
-    await bootstrapService.ensureSeraInstantiated().catch((err) => {
-      logger.error('Sera auto-bootstrap failed:', err);
-    });
-
     pruneOldTaskResults().catch((err) => logger.warn('Task result pruning error:', err));
     setInterval(
       () => {

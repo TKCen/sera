@@ -1,24 +1,57 @@
 import { OpenAIProvider } from './OpenAIProvider.js';
+import { LlmRouterProvider } from './LlmRouterProvider.js';
 import type { LLMProvider } from './types.js';
 import type { AgentManifest, ModelConfig } from '../../agents/manifest/types.js';
 import { config } from '../config.js';
+import type { LlmRouter } from '../../llm/LlmRouter.js';
 
 /**
  * ProviderFactory — creates LLMProvider instances from manifest model config.
  *
  * Resolves the `model` block in an AGENT.yaml to a concrete LLMProvider.
- * Currently all providers use the OpenAI-compatible protocol (which covers
- * LM Studio, Ollama, OpenAI, Anthropic via proxy, etc.).
+ * When an LlmRouter is supplied the factory returns an LlmRouterProvider backed
+ * by the new in-process pi-mono gateway; otherwise it falls back to OpenAIProvider
+ * (legacy path).
  */
 export class ProviderFactory {
   /**
    * Create an LLMProvider from a manifest's model block.
    *
-   * Looks up the provider ID in the saved providers.json config to resolve
-   * the baseUrl and apiKey. The model name and temperature come from the manifest.
+   * Supports both flat format (top-level `model`) and spec-wrapped format
+   * (`spec.model`). Falls back to the default global provider when neither
+   * is present or when the model name is absent.
+   *
+   * When `router` is provided the returned provider uses LlmRouter → pi-mono
+   * instead of the legacy OpenAIProvider + litellm chain.
    */
-  static createFromManifest(manifest: AgentManifest): LLMProvider {
-    return ProviderFactory.createFromModelConfig(manifest.model);
+  static createFromManifest(manifest: AgentManifest, router?: LlmRouter): LLMProvider {
+    // Prefer flat top-level model; fall back to spec.model for new-format manifests
+    const modelConfig: ModelConfig | undefined =
+      manifest.model ??
+      (manifest.spec?.model?.name
+        ? {
+            provider: manifest.spec.model.provider ?? '',
+            name: manifest.spec.model.name,
+            ...(manifest.spec.model.temperature !== undefined
+              ? { temperature: manifest.spec.model.temperature }
+              : {}),
+          }
+        : undefined);
+
+    if (!modelConfig?.name) {
+      // No model configured — return the default provider
+      return ProviderFactory.createDefault(router);
+    }
+
+    if (router) {
+      return new LlmRouterProvider(
+        router,
+        modelConfig.name,
+        ...(modelConfig.temperature !== undefined ? [modelConfig.temperature] : [])
+      );
+    }
+
+    return ProviderFactory.createFromModelConfig(modelConfig);
   }
 
   /**
@@ -52,7 +85,7 @@ export class ProviderFactory {
   /**
    * Create the default provider from the global config (no manifest).
    */
-  static createDefault(): LLMProvider {
+  static createDefault(_router?: LlmRouter): LLMProvider {
     return new OpenAIProvider();
   }
 }

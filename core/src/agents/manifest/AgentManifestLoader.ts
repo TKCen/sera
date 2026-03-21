@@ -135,32 +135,31 @@ export class AgentManifestLoader {
       meta['icon'] = '🤖';
     }
 
-    // Tier validation
+    // Tier validation — optional when using spec-wrapped format
     const tier = meta['tier'];
-    if (tier === undefined) {
-      throw new ManifestValidationError(
-        `Missing required field "tier" in metadata${ctx}`,
-        'metadata.tier'
-      );
-    }
-    if (!VALID_TIERS.includes(tier as SecurityTier)) {
+    if (tier !== undefined && !VALID_TIERS.includes(tier as SecurityTier)) {
       throw new ManifestValidationError(
         `Invalid security tier: ${String(tier)}. Must be one of: ${VALID_TIERS.join(', ')}${ctx}`,
         'metadata.tier'
       );
     }
 
-    // ── identity ──────────────────────────────────────────────────────────────
-    AgentManifestLoader.requireObject(obj, 'identity', ctx);
-    const identity = obj['identity'] as Record<string, unknown>;
-    AgentManifestLoader.requireString(identity, 'role', `${ctx} identity`);
-    AgentManifestLoader.requireString(identity, 'description', `${ctx} identity`);
+    // Detect format: spec-wrapped (new) vs flat (legacy)
+    const isSpecWrapped = obj['spec'] !== undefined && typeof obj['spec'] === 'object';
 
-    // ── model ─────────────────────────────────────────────────────────────────
-    AgentManifestLoader.requireObject(obj, 'model', ctx);
-    const model = obj['model'] as Record<string, unknown>;
-    AgentManifestLoader.requireString(model, 'provider', `${ctx} model`);
-    AgentManifestLoader.requireString(model, 'name', `${ctx} model`);
+    if (!isSpecWrapped) {
+      // ── identity (flat format only) ────────────────────────────────────────
+      AgentManifestLoader.requireObject(obj, 'identity', ctx);
+      const identity = obj['identity'] as Record<string, unknown>;
+      AgentManifestLoader.requireString(identity, 'role', `${ctx} identity`);
+      AgentManifestLoader.requireString(identity, 'description', `${ctx} identity`);
+
+      // ── model (flat format only) ───────────────────────────────────────────
+      AgentManifestLoader.requireObject(obj, 'model', ctx);
+      const model = obj['model'] as Record<string, unknown>;
+      AgentManifestLoader.requireString(model, 'provider', `${ctx} model`);
+      AgentManifestLoader.requireString(model, 'name', `${ctx} model`);
+    }
 
     // ── resources ─────────────────────────────────────────────────────────────
     if (obj['resources']) {

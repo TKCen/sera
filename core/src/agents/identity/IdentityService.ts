@@ -5,8 +5,34 @@ import type { AgentManifest } from '../manifest/types.js';
  *
  * Assembles the prompt from the agent's identity, tools, skills, and subagent
  * definitions so that each agent behaves consistently according to its AGENT.yaml.
+ * Supports both the flat legacy format (top-level `identity`) and the new
+ * spec-wrapped format (`spec.identity`).
  */
 export class IdentityService {
+  /**
+   * Resolve the effective identity from a manifest, supporting both formats.
+   */
+  private static resolveIdentity(manifest: AgentManifest): {
+    role: string;
+    description?: string;
+    communicationStyle?: string;
+    principles?: string[];
+  } {
+    // Spec-wrapped format takes precedence if present; fall back to flat format
+    if (manifest.spec?.identity) {
+      return {
+        role: manifest.spec.identity.role ?? '',
+        ...(manifest.spec.identity.principles !== undefined
+          ? { principles: manifest.spec.identity.principles }
+          : {}),
+      };
+    }
+    if (manifest.identity) {
+      return manifest.identity;
+    }
+    return { role: '' };
+  }
+
   /**
    * Generate a complete system prompt from an agent manifest.
    * Optionally injects circle project context and dynamic memory context into the prompt.
@@ -17,42 +43,66 @@ export class IdentityService {
     dynamicMemoryContext?: string
   ): string {
     const sections: string[] = [];
+    const identity = IdentityService.resolveIdentity(manifest);
+
+    // Resolve tools: flat format uses top-level `tools`, spec-wrapped uses `spec.tools`
+    const tools = manifest.spec?.tools ?? manifest.tools;
+
+    // Resolve skills: flat format uses top-level `skills`, spec-wrapped uses `spec.skills`
+    const skills = manifest.spec?.skills ?? manifest.skills;
+
+    // Resolve subagents
+    const subagents = manifest.subagents;
+
+    // Resolve sandbox tier label for display
+    const tierLabel =
+      manifest.metadata.tier != null
+        ? String(manifest.metadata.tier)
+        : (manifest.spec?.sandboxBoundary ?? 'unspecified');
 
     // ── Role & Persona ────────────────────────────────────────────────────────
-    sections.push(`You are ${manifest.metadata.displayName}, a ${manifest.identity.role}.`);
-    sections.push(manifest.identity.description.trim());
+    const displayName = manifest.metadata.displayName ?? manifest.metadata.name;
+    sections.push(
+      identity.role
+        ? `You are ${displayName}, a ${identity.role}.`
+        : `You are ${displayName}.`
+    );
+
+    if (identity.description) {
+      sections.push(identity.description.trim());
+    }
 
     // ── Communication Style ───────────────────────────────────────────────────
-    if (manifest.identity.communicationStyle) {
-      sections.push(`## Communication Style\n${manifest.identity.communicationStyle.trim()}`);
+    if (identity.communicationStyle) {
+      sections.push(`## Communication Style\n${identity.communicationStyle.trim()}`);
     }
 
     // ── Principles ────────────────────────────────────────────────────────────
-    if (manifest.identity.principles && manifest.identity.principles.length > 0) {
-      const principlesList = manifest.identity.principles.map((p) => `- ${p}`).join('\n');
+    if (identity.principles && identity.principles.length > 0) {
+      const principlesList = identity.principles.map((p) => `- ${p}`).join('\n');
       sections.push(`## Guiding Principles\n${principlesList}`);
     }
 
     // ── Available Tools ───────────────────────────────────────────────────────
-    if (manifest.tools?.allowed && manifest.tools.allowed.length > 0) {
-      const toolsList = manifest.tools.allowed.map((t) => `- ${t}`).join('\n');
+    if (tools?.allowed && tools.allowed.length > 0) {
+      const toolsList = tools.allowed.map((t) => `- ${t}`).join('\n');
       sections.push(`## Available Tools\n${toolsList}`);
     }
 
-    if (manifest.tools?.denied && manifest.tools.denied.length > 0) {
-      const deniedList = manifest.tools.denied.map((t) => `- ${t}`).join('\n');
+    if (tools?.denied && tools.denied.length > 0) {
+      const deniedList = tools.denied.map((t) => `- ${t}`).join('\n');
       sections.push(`## Denied Tools (never use these)\n${deniedList}`);
     }
 
     // ── Skills ────────────────────────────────────────────────────────────────
-    if (manifest.skills && manifest.skills.length > 0) {
-      const skillsList = manifest.skills.map((s) => `- ${s}`).join('\n');
+    if (skills && skills.length > 0) {
+      const skillsList = skills.map((s) => `- ${s}`).join('\n');
       sections.push(`## Available Skills\n${skillsList}`);
     }
 
     // ── Subagents ─────────────────────────────────────────────────────────────
-    if (manifest.subagents?.allowed && manifest.subagents.allowed.length > 0) {
-      const subList = manifest.subagents.allowed
+    if (subagents?.allowed && subagents.allowed.length > 0) {
+      const subList = subagents.allowed
         .map((s) => {
           let entry = `- ${s.role} (max ${s.maxInstances ?? '∞'} instances)`;
           if (s.requiresApproval) entry += ' [requires human approval]';
@@ -85,10 +135,12 @@ export class IdentityService {
     }
 
     // ── Circle Context ────────────────────────────────────────────────────────
-    sections.push(
-      `## Context\nYou belong to the "${manifest.metadata.circle}" circle. ` +
-        `Your security tier is ${manifest.metadata.tier}.`
-    );
+    if (manifest.metadata.circle) {
+      sections.push(
+        `## Context\nYou belong to the "${manifest.metadata.circle}" circle. ` +
+          `Your security tier is ${tierLabel}.`
+      );
+    }
 
     return sections.join('\n\n');
   }

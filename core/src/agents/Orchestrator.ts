@@ -6,6 +6,7 @@ import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest, ResolvedCapabilities } from './manifest/types.js';
+import type { LlmRouter } from '../llm/LlmRouter.js';
 import { Logger } from '../lib/logger.js';
 import { CapabilityResolver } from '../capability/resolver.js';
 import type { AgentRegistry } from './registry.service.js';
@@ -47,6 +48,7 @@ export class Orchestrator {
   private meteringEngine: MeteringEngine | undefined;
   private agentScheduler: AgentScheduler | undefined;
   private registry: AgentRegistry | undefined;
+  private llmRouter: LlmRouter | undefined;
   private heartbeatInterval: NodeJS.Timeout | undefined;
   private cleanupInterval: NodeJS.Timeout | undefined;
   private diskQuotaInterval: NodeJS.Timeout | undefined;
@@ -80,6 +82,10 @@ export class Orchestrator {
 
   public setRegistry(registry: AgentRegistry): void {
     this.registry = registry;
+  }
+
+  public setLlmRouter(router: LlmRouter): void {
+    this.llmRouter = router;
   }
 
   public setIntercom(intercom: IntercomService): void {
@@ -158,7 +164,7 @@ export class Orchestrator {
     const manifest = await this.registry.getTemplate(instance.template_ref);
     if (manifest) this.manifests.set(instance.template_ref, manifest as AgentManifest);
 
-    const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
+    const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom, this.llmRouter);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
     if (this.identityService) agent.setIdentityService(this.identityService);
     if (this.meteringEngine && this.agentScheduler) {
@@ -623,7 +629,11 @@ export class Orchestrator {
   }
 
   public registerAgent(agent: BaseAgent): void {
-    const id = agent.agentInstanceId ?? agent.name;
+    // Use the stable manifest name (metadata.name) as the key so that
+    // getAgent(manifestName) always resolves correctly. Fall back to the
+    // display name only when an instance ID is unavailable and the role
+    // is also missing (shouldn't happen in practice).
+    const id = agent.agentInstanceId ?? agent.role ?? agent.name;
     this.agents.set(id, agent);
   }
 

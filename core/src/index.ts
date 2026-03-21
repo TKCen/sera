@@ -63,6 +63,7 @@ import { createLifecycleRouter } from './routes/lifecycle.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { ProviderRegistry } from './llm/ProviderRegistry.js';
 import { LlmRouter } from './llm/LlmRouter.js';
+import { DynamicProviderManager } from './llm/DynamicProviderManager.js';
 import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
 import { createMeteringRouter } from './routes/metering.js';
@@ -76,6 +77,7 @@ import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
 import { createNotificationsRouter } from './routes/notifications.js';
 import { NotificationService } from './channels/NotificationService.js';
+import { PgBossService } from './lib/PgBossService.js';
 
 const app = express();
 const logger = new Logger('SERACore');
@@ -122,6 +124,10 @@ const providerRegistry = new ProviderRegistry(
   process.env.PROVIDERS_CONFIG_PATH ?? '/app/config/providers.json'
 );
 const llmRouter = new LlmRouter(providerRegistry);
+const dynamicProviderManager = new DynamicProviderManager(
+  providerRegistry,
+  process.env.DYNAMIC_PROVIDERS_CONFIG_PATH ?? '/app/config/dynamic_providers.json'
+);
 const circuitBreakerService = new CircuitBreakerService(llmRouter);
 const agentScheduler = new AgentScheduler();
 const permissionService = new PermissionRequestService(agentRegistry, intercomService);
@@ -136,6 +142,7 @@ orchestrator.setSandboxManager(sandboxManager);
 orchestrator.setRegistry(agentRegistry);
 orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
+orchestrator.setLlmRouter(llmRouter);
 
 registerBuiltinSkills(skillRegistry, memoryManager);
 
@@ -148,6 +155,11 @@ bridgeService.init(intercomService, circleRegistry);
 intercomService.setBridgeService(bridgeService);
 
 // ── Setup Express App ────────────────────────────────────────────────────────
+app.use((req, _res, next) => {
+  logger.info(`[REQUEST] ${req.method} ${req.url}`);
+  next();
+});
+
 app.use(cors());
 app.use(
   express.json({
@@ -160,6 +172,54 @@ app.use(
 app.get('/api/health', (req, res) =>
   res.json({ status: 'ok', service: 'sera-core', timestamp: new Date().toISOString() })
 );
+
+app.get('/api/health/detail', async (_req, res) => {
+  const components: { name: string; status: 'healthy' | 'degraded' | 'unreachable'; message?: string; latencyMs?: number }[] = [];
+
+  // Database check
+  const dbStart = Date.now();
+  try {
+    await pool.query('SELECT 1');
+    components.push({ name: 'database', status: 'healthy', latencyMs: Date.now() - dbStart });
+  } catch (err: unknown) {
+    components.push({ name: 'database', status: 'unreachable', message: (err as Error).message });
+  }
+
+  // Centrifugo check — ping the HTTP API
+  const centrifugoUrl = process.env['CENTRIFUGO_API_URL'] ?? 'http://centrifugo:8000/api';
+  const centrifugoStart = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const centrifugoTimer = setTimeout(() => ctrl.abort(), 3000);
+    const centResp = await fetch(`${centrifugoUrl.replace(/\/api$/, '')}/health`, { signal: ctrl.signal });
+    clearTimeout(centrifugoTimer);
+    components.push({ name: 'centrifugo', status: centResp.ok ? 'healthy' : 'degraded', latencyMs: Date.now() - centrifugoStart });
+  } catch {
+    components.push({ name: 'centrifugo', status: 'unreachable', latencyMs: Date.now() - centrifugoStart });
+  }
+
+  // Agent stats
+  let agentStats = { total: 0, running: 0, stopped: 0, errored: 0 };
+  try {
+    const instances = await agentRegistry.listInstances();
+    agentStats = {
+      total: instances.length,
+      running: instances.filter((i) => i.status === 'running').length,
+      stopped: instances.filter((i) => i.status === 'stopped').length,
+      errored: instances.filter((i) => i.status === 'error').length,
+    };
+  } catch {
+    // non-fatal
+  }
+
+  const overall = components.every((c) => c.status === 'healthy')
+    ? 'healthy'
+    : components.some((c) => c.status === 'unreachable')
+      ? 'unhealthy'
+      : 'degraded';
+
+  res.json({ status: overall, components, agentStats, timestamp: new Date().toISOString() });
+});
 
 // Mount Routers
 // Auth: public endpoints first (no authMiddleware), then protected
@@ -186,6 +246,38 @@ app.use(
   createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService)
 );
 app.use('/api/agents', createAgentRouter(orchestrator, agentsDir));
+
+// ── Convenience routes for the web UI ────────────────────────────────────────
+// GET /api/tools — list all registered skills/tools (used by AgentForm)
+app.get('/api/tools', (_req, res) => {
+  res.json(skillRegistry.listAll());
+});
+
+// GET /api/templates — list agent templates from the DB (used by AgentForm)
+app.get('/api/templates', async (_req, res) => {
+  try {
+    const templates = await agentRegistry.listTemplates();
+    res.json(templates);
+  } catch (err: unknown) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// GET /api/rt/token — issue a Centrifugo connection token for the web client
+app.get('/api/rt/token', async (_req, res) => {
+  try {
+    const token = await intercomService.generateConnectionToken('web-operator');
+    // Decode exp claim from the JWT payload (second segment, base64url-encoded)
+    const payloadB64 = token.split('.')[1] ?? '';
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8')) as {
+      exp?: number;
+    };
+    const expiresAt = payload.exp ?? Math.floor(Date.now() / 1000) + 86400;
+    res.json({ token, expiresAt });
+  } catch (err: unknown) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
 
 app.use(
   '/api/circles',
@@ -216,7 +308,11 @@ app.use(
   )
 );
 app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));
-app.use('/api/providers', authMiddleware, createProvidersRouter(llmRouter, circuitBreakerService));
+app.use(
+  '/api/providers',
+  authMiddleware,
+  createProvidersRouter(llmRouter, circuitBreakerService, dynamicProviderManager)
+);
 app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
 app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
 app.use('/api/audit', authMiddleware, createAuditRouter());
@@ -275,7 +371,7 @@ const startServer = async () => {
   const manifests = orchestrator.getAllManifests();
   for (const manifest of manifests) {
     const { AgentFactory } = await import('./agents/AgentFactory.js');
-    const agent = AgentFactory.createAgent(manifest, undefined, intercomService);
+    const agent = AgentFactory.createAgent(manifest, undefined, intercomService, llmRouter);
     agent.setIntercom(intercomService);
     agent.setToolExecutor(toolExecutor);
     orchestrator.registerAgent(agent);
@@ -293,18 +389,33 @@ const startServer = async () => {
     await initDb();
   }
 
+  // Start dynamic provider polling (file-based config, no DB needed but placed here
+  // for consistent startup ordering — after migrations, before service consumers)
+  await dynamicProviderManager.start();
+
   // Epic 11 — Initialize Audit Trail
   const auditService = AuditService.getInstance();
   await auditService
     .initialize()
     .catch((err) => logger.error('Failed to initialize AuditService:', err));
 
+  // Start shared pg-boss instance (used by ScheduleService, NotificationService,
+  // and optionally MemoryCompactionService — one connection pool, one polling loop)
+  const sharedBoss = process.env.DATABASE_URL
+    ? await PgBossService.getInstance()
+        .start(process.env.DATABASE_URL)
+        .catch((err: unknown) => {
+          logger.error('Failed to start PgBossService:', err);
+          return null;
+        })
+    : null;
+
   // Epic 11 — Initialize Schedule Service
-  if (process.env.DATABASE_URL) {
+  if (sharedBoss) {
     const scheduleService = ScheduleService.getInstance();
     scheduleService.setOrchestrator(orchestrator);
     await scheduleService
-      .start(process.env.DATABASE_URL)
+      .start(sharedBoss)
       .catch((err) => logger.error('Failed to start ScheduleService:', err));
   }
 
@@ -327,9 +438,9 @@ const startServer = async () => {
   await KnowledgeGitService.getInstance()
     .initSystemRepo()
     .catch((err) => logger.warn('Failed to init system knowledge repo:', err));
-  if (process.env.DATABASE_URL) {
+  if (sharedBoss && MemoryCompactionService.isEnabled()) {
     await MemoryCompactionService.getInstance()
-      .start(process.env.DATABASE_URL)
+      .start(sharedBoss)
       .catch((err) => logger.warn('MemoryCompactionService failed to start:', err));
   }
 
@@ -386,11 +497,11 @@ const startServer = async () => {
     );
 
     // Epic 18 — Start notification service and wire permission hook
-    if (process.env.DATABASE_URL) {
+    if (sharedBoss) {
       const notificationService = NotificationService.getInstance();
       notificationService.setPermissionService(permissionService);
       await notificationService
-        .start(process.env.DATABASE_URL)
+        .start(sharedBoss)
         .catch((err: unknown) => logger.error('NotificationService failed to start:', err));
 
       permissionService.setOnRequestCreated((req) => {
@@ -418,6 +529,7 @@ const shutdown = async () => {
   logger.info('Shutting down SERA Core...');
   orchestrator.stopWatching();
   await lspManager.stopAll();
+  await PgBossService.getInstance().stop();
 };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

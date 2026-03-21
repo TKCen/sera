@@ -13,11 +13,16 @@ services:
       - ./memory:/app/memory
       - ./core/config:/app/config
       - ./workspaces:/workspaces
-      - ./agents:/agents:ro
-      - ./circles:/circles:ro
+      - ./agents:/workspace/agents
+      - ./circles:/workspace/circles:ro
+      - ./templates:/workspace/templates:ro
+      - ./lists:/workspace/lists:ro
+      - ./capability-policies:/workspace/capability-policies:ro
+      - ./sandbox-boundaries:/workspace/sandbox-boundaries:ro
     entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
     command: ["npm", "run", "dev"]
     environment:
+      - WORKSPACE_DIR=/workspace
       - NODE_ENV=development
       - PORT=3001
       - SERA_BOOTSTRAP_API_KEY=sera_bootstrap_dev_123

@@ -204,6 +204,7 @@ export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'apiVersion',
   'kind',
   'metadata',
+  'spec',
   'identity',
   'model',
   'tools',

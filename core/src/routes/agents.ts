@@ -9,11 +9,52 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { AgentManifest } from '../agents/manifest/types.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AgentRouter');
+
+/**
+ * Normalises an AgentManifest for the web API response.
+ * Bridges old-format manifests (identity/model at top level) to the spec-wrapped
+ * shape the web client expects, without mutating the in-memory manifest.
+ */
+function normalizeManifestForApi(m: AgentManifest) {
+  const specModel =
+    m.spec?.model ??
+    (m.model
+      ? {
+          provider: m.model.provider,
+          name: m.model.name,
+          ...(m.model.temperature !== undefined ? { temperature: m.model.temperature } : {}),
+        }
+      : undefined);
+  const specIdentity =
+    m.spec?.identity ??
+    (m.identity
+      ? {
+          role: m.identity.role,
+          ...(m.identity.principles ? { principles: m.identity.principles } : {}),
+        }
+      : undefined);
+  return {
+    apiVersion: m.apiVersion,
+    kind: m.kind,
+    metadata: {
+      name: m.metadata.name,
+      displayName: m.metadata.displayName,
+      icon: m.metadata.icon,
+      ...(m.metadata.circle !== undefined ? { circle: m.metadata.circle } : {}),
+    },
+    spec: {
+      ...(m.spec ?? {}),
+      ...(specModel !== undefined ? { model: specModel } : {}),
+      ...(specIdentity !== undefined ? { identity: specIdentity } : {}),
+    },
+  };
+}
 
 export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string) {
   const router = Router();
@@ -197,6 +238,25 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     }
   });
 
+  // ── POST /api/agents/validate ────────────────────────────────────────────
+  /**
+   * Validate a manifest without persisting it.
+   * Returns { valid: true } or { valid: false, errors: string[] }.
+   */
+  router.post('/validate', (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object') {
+      return res.json({ valid: false, errors: ['Request body must be a JSON object'] });
+    }
+    try {
+      AgentManifestLoader.validateManifest(body, 'POST /api/agents/validate');
+      res.json({ valid: true });
+    } catch (err: unknown) {
+      const error = err as Error;
+      res.json({ valid: false, errors: [error.message] });
+    }
+  });
+
   // ── POST /api/agents/test-chat ───────────────────────────────────────────
   /**
    * Temporary "preview" chat with a non-persisted manifest.
@@ -234,9 +294,16 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     }
   });
 
-  // ── Legacy / Compatibility ──────────────────────────────────────────────────
+  // ── List all running agents, enriched with manifest metadata ─────────────────
   router.get('/', (req, res) => {
-    res.json(orchestrator.listAgents());
+    const enriched = orchestrator.listAgents().map((item) => {
+      const info = orchestrator.getAgentInfo(item.name);
+      if (!info) {
+        return { id: item.id, status: item.status, startTime: item.startTime, metadata: { name: item.name } };
+      }
+      return { id: item.id, status: item.status, startTime: item.startTime, ...normalizeManifestForApi(info.manifest) };
+    });
+    res.json(enriched);
   });
 
   // ── Get agent detail ───────────────────────────────────────────────────────

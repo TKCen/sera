@@ -1,0 +1,39 @@
+name: Bug Report
+description: Report a bug for an agent or human to fix
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What is happening vs what should happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the issue.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - "core"
+        - "web"
+        - "e2e"
+        - "infra"
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Suspected files
+      description: If you know which files are involved, list them.
+    validations:
+      required: false

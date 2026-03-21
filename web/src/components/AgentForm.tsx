@@ -11,6 +11,7 @@ import { useSkills } from '@/hooks/useSkills';
 import { useTools } from '@/hooks/useTools';
 import { useTemplates } from '@/hooks/useTemplates';
 import { useCreateAgent, useUpdateAgentManifest } from '@/hooks/useAgents';
+import { useProviders } from '@/hooks/useProviders';
 import { validateAgentManifest } from '@/lib/api/agents';
 import type { AgentManifest } from '@/lib/api/types';
 
@@ -69,6 +70,8 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
   const { data: skills = [] } = useSkills();
   const { data: tools = [] } = useTools();
   const { data: templates = [] } = useTemplates();
+  const { data: providersData } = useProviders();
+  const availableModels = providersData?.providers ?? [];
 
   const createAgent = useCreateAgent();
   const updateManifest = useUpdateAgentManifest();
@@ -348,28 +351,55 @@ export function AgentForm({ initial, isEdit = false }: AgentFormProps) {
       {/* Model */}
       <section className="sera-card-static p-4 space-y-4">
         <h3 className="text-sm font-semibold text-sera-text">Model</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-3">
           <div>
-            <FieldLabel label="Provider" field="model.provider" />
+            <FieldLabel label="Model" field="model.name" />
+            {isLocked('model.name') ? (
+              <LockedInput field="model.name" value={manifest.spec?.model?.name ?? ''} />
+            ) : availableModels.length > 0 ? (
+              <select
+                value={manifest.spec?.model?.name ?? ''}
+                onChange={(e) => {
+                  updateField(['spec', 'model', 'name'], e.target.value);
+                  const sel = availableModels.find((m) => m.modelName === e.target.value);
+                  if (sel?.provider) updateField(['spec', 'model', 'provider'], sel.provider);
+                }}
+                className="sera-input"
+              >
+                <option value="">— Select a model —</option>
+                {availableModels.map((m) => (
+                  <option key={m.modelName} value={m.modelName}>
+                    {m.description ?? m.modelName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="space-y-2">
+                <Input
+                  value={manifest.spec?.model?.name ?? ''}
+                  onChange={(e) => updateField(['spec', 'model', 'name'], e.target.value)}
+                  placeholder="No models configured — add a provider in Settings"
+                />
+                <p className="text-[11px] text-sera-text-muted">
+                  No models available. Configure an LLM provider in{' '}
+                  <a href="/settings" className="text-sera-accent hover:underline">
+                    Settings → Providers
+                  </a>
+                  .
+                </p>
+              </div>
+            )}
+          </div>
+          <div>
+            <FieldLabel label="Provider (auto-filled)" field="model.provider" />
             {isLocked('model.provider') ? (
               <LockedInput field="model.provider" value={manifest.spec?.model?.provider ?? ''} />
             ) : (
               <Input
                 value={manifest.spec?.model?.provider ?? ''}
                 onChange={(e) => updateField(['spec', 'model', 'provider'], e.target.value)}
-                placeholder="openai"
-              />
-            )}
-          </div>
-          <div>
-            <FieldLabel label="Model name" field="model.name" />
-            {isLocked('model.name') ? (
-              <LockedInput field="model.name" value={manifest.spec?.model?.name ?? ''} />
-            ) : (
-              <Input
-                value={manifest.spec?.model?.name ?? ''}
-                onChange={(e) => updateField(['spec', 'model', 'name'], e.target.value)}
-                placeholder="gpt-4o"
+                placeholder="auto"
+                className="text-xs"
               />
             )}
           </div>

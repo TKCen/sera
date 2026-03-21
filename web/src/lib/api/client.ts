@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import type { ErrorResponse } from './types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
+const API_BASE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL ?? '');
 
 type AuthHeaderGetter = () => string | null;
 

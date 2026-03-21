@@ -81,14 +81,9 @@ spec:
         agent, brief them properly rather than dumping raw user text at them.
 
   # ── Model ──────────────────────────────────────────────────────────────────
-  model:
-    provider: openai
-    model: gpt-4o
-    temperature: 0.4
-    fallback:
-      - provider: openai
-        model: gpt-4o-mini
-        maxComplexity: 2
+  # No model is configured by default. Add a provider via Settings → Providers,
+  # discover its models, then set the model for this template.
+  model: {}
 
   # ── Sandbox ────────────────────────────────────────────────────────────────
   sandboxBoundary: tier-2

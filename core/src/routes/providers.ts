@@ -26,6 +26,7 @@ import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { providerFromModel } from '../llm/CircuitBreakerService.js';
 import { requireRole } from '../auth/authMiddleware.js';
 import { Logger } from '../lib/logger.js';
+import type { DynamicProviderManager } from '../llm/DynamicProviderManager.js';
 
 const logger = new Logger('ProvidersRoute');
 
@@ -43,11 +44,23 @@ const AddProviderSchema = z.object({
   description: z.string().optional(),
 });
 
+const AddDynamicProviderSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.literal('lm-studio'),
+  baseUrl: z.string().url(),
+  apiKey: z.string().optional(),
+  enabled: z.boolean().default(true),
+  intervalMs: z.number().min(5000).default(60000),
+  description: z.string().optional(),
+});
+
 // ── Router factory ────────────────────────────────────────────────────────────
 
 export function createProvidersRouter(
   llmRouter: LlmRouter,
-  circuitBreakerService: CircuitBreakerService
+  circuitBreakerService: CircuitBreakerService,
+  dynamicProviderManager: DynamicProviderManager
 ): Router {
   const router = Router();
 
@@ -102,28 +115,99 @@ export function createProvidersRouter(
     }
   });
 
+  // ── Dynamic Providers ──────────────────────────────────────────────────────
+  // These specific subpaths must be defined BEFORE the parameterized /:modelName routes
+  // to avoid being shadowed.
+
   /**
-   * DELETE /api/providers/:modelName
-   * Removes a model from LiteLLM's live configuration.
-   * Requires operator role.
+   * GET /api/providers/dynamic
+   * Lists all configured dynamic providers.
    */
-  router.delete(
-    '/:modelName',
+  router.get('/dynamic', requireRole(['admin', 'operator']), (_req: Request, res: Response) => {
+    res.json({ dynamicProviders: dynamicProviderManager.listProviders() });
+  });
+
+  /**
+   * GET /api/providers/dynamic/statuses
+   * Returns the last check status for all dynamic providers.
+   */
+  router.get(
+    '/dynamic/statuses',
+    requireRole(['admin', 'operator']),
+    (_req: Request, res: Response) => {
+      res.json({ statuses: dynamicProviderManager.getStatuses() });
+    }
+  );
+
+  /**
+   * POST /api/providers/dynamic
+   * Adds or updates a dynamic provider configuration.
+   */
+  router.post(
+    '/dynamic',
     requireRole(['admin', 'operator']),
     async (req: Request, res: Response) => {
-      const modelName = String(req.params['modelName']);
+      const parsed = AddDynamicProviderSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res
+          .status(400)
+          .json({ error: 'Invalid dynamic provider config', details: parsed.error.flatten() });
+        return;
+      }
+
       try {
-        await llmRouter.deleteModel(modelName);
-        logger.info(
-          `Provider removed | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
-        );
-        res.status(204).end();
+        await dynamicProviderManager.addProvider(parsed.data);
+        res.status(201).json(parsed.data);
       } catch (err: unknown) {
-        logger.error(`Failed to remove provider ${modelName}:`, err);
-        res.status(502).json({ error: `Failed to remove provider: ${(err as Error).message}` });
+        logger.error('Failed to add dynamic provider:', err);
+        res.status(502).json({ error: (err as Error).message });
       }
     }
   );
+
+  /**
+   * DELETE /api/providers/dynamic/:id
+   * Removes a dynamic provider and its models.
+   */
+  router.delete(
+    '/dynamic/:id',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      const id = String(req.params['id']);
+      try {
+        await dynamicProviderManager.removeProvider(id);
+        res.status(204).end();
+      } catch (err: unknown) {
+        logger.error(`Failed to remove dynamic provider ${id}:`, err);
+        res.status(502).json({ error: (err as Error).message });
+      }
+    }
+  );
+
+  /**
+   * POST /api/providers/dynamic/test
+   * Tests a connection to a dynamic provider URL.
+   */
+  router.post(
+    '/dynamic/test',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      const { baseUrl, apiKey } = req.body;
+      if (!baseUrl) {
+        res.status(400).json({ error: 'baseUrl is required' });
+        return;
+      }
+
+      try {
+        const result = await dynamicProviderManager.testConnection(baseUrl, apiKey);
+        res.json(result);
+      } catch (err: unknown) {
+        res.status(502).json({ success: false, error: (err as Error).message });
+      }
+    }
+  );
+
+  // ── Static Providers ────────────────────────────────────────────────────────
 
   /**
    * POST /api/providers/:modelName/test
@@ -133,9 +217,13 @@ export function createProvidersRouter(
     const modelName = String(req.params['modelName']);
     try {
       const result = await llmRouter.testModel(modelName);
-      res.status(result.ok ? 200 : 502).json(result);
+      res.status(result.ok ? 200 : 502).json({
+        success: result.ok,
+        latencyMs: result.latencyMs,
+        ...(result.error !== undefined ? { error: result.error } : {}),
+      });
     } catch (err: unknown) {
-      res.status(502).json({ ok: false, error: (err as Error).message });
+      res.status(502).json({ success: false, error: (err as Error).message });
     }
   });
 
@@ -160,6 +248,7 @@ export function createProvidersRouter(
 
     res.json(state);
   });
+
 
   return router;
 }

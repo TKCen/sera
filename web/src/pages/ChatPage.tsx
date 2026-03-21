@@ -3,11 +3,12 @@ import { Bot, Send, BrainCircuit, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from 'sonner';
-import { useAgents, useAgentTasks, useCreateAgentTask } from '@/hooks/useAgents';
+import { useAgents } from '@/hooks/useAgents';
 import { useChannel } from '@/hooks/useChannel';
 import { ThoughtTimeline } from '@/components/ThoughtTimeline';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { sendChatStream } from '@/lib/api/chat';
 import type { ThoughtEvent } from '@/lib/api/types';
 
 interface TokenPayload {
@@ -66,44 +67,24 @@ export default function ChatPage() {
   const [thoughts, setThoughts] = useState<ThoughtEvent[]>([]);
   const [showThoughts, setShowThoughts] = useState(false);
 
-  const createTask = useCreateAgentTask();
-  const { data: history } = useAgentTasks(selectedAgent, 'chat');
+  const sessionIdRef = useRef<string | undefined>(undefined);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingMsgId = useRef<string | null>(null);
-  const historyInitializedForAgent = useRef('');
 
   const tokenPayload = useChannel<TokenPayload>(selectedAgent ? `tokens:${selectedAgent}` : '');
   const thoughtPayload = useChannel<ThoughtPayload>(
     selectedAgent ? `thoughts:${selectedAgent}` : ''
   );
 
-  // Load chat history once per agent selection — do not overwrite active session on refetch
+  // Reset conversation when agent changes
   useEffect(() => {
-    if (!history || historyInitializedForAgent.current === selectedAgent) return;
-    historyInitializedForAgent.current = selectedAgent;
-    const loaded: Message[] = [];
-    for (const task of history) {
-      if (task.input) {
-        loaded.push({
-          id: `${task.id}-in`,
-          role: 'user',
-          content: task.input,
-          createdAt: task.createdAt ?? '',
-        });
-      }
-      if (task.output) {
-        loaded.push({
-          id: `${task.id}-out`,
-          role: 'agent',
-          content: task.output,
-          createdAt: task.completedAt ?? task.createdAt ?? '',
-        });
-      }
-    }
-    setMessages(loaded);
+    setMessages([]);
     setThoughts([]);
-  }, [history, selectedAgent]);
+    setStreaming(false);
+    streamingMsgId.current = null;
+    sessionIdRef.current = undefined;
+  }, [selectedAgent]);
 
   // Handle incoming token stream
   useEffect(() => {
@@ -149,11 +130,6 @@ export default function ChatPage() {
 
   const handleAgentChange = useCallback((name: string) => {
     setSelectedAgent(name);
-    setMessages([]);
-    setThoughts([]);
-    setStreaming(false);
-    streamingMsgId.current = null;
-    historyInitializedForAgent.current = '';
   }, []);
 
   async function handleSend() {
@@ -182,7 +158,9 @@ export default function ChatPage() {
     streamingMsgId.current = agentMsgId;
 
     try {
-      await createTask.mutateAsync({ name: selectedAgent, input: text });
+      const { sessionId } = await sendChatStream(selectedAgent, text, sessionIdRef.current);
+      // Persist session ID so follow-up messages continue the same conversation
+      sessionIdRef.current = sessionId;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to send message');
       setMessages((prev) => prev.filter((m) => m.id !== agentMsgId));

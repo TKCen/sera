@@ -47,6 +47,7 @@ interface TaskRow {
 }
 
 interface AgentRow {
+  id: string;
   lifecycle_mode: string;
 }
 
@@ -87,10 +88,10 @@ export function createTasksRouter(intercom: IntercomService): Router {
       `INSERT INTO task_queue
          (id, agent_instance_id, task, context, priority, max_retries, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'queued')`,
-      [taskId, agentId, task, JSON.stringify(context ?? null), resolvedPriority, resolvedMaxRetries]
+      [taskId, agentRow.id, task, JSON.stringify(context ?? null), resolvedPriority, resolvedMaxRetries]
     );
 
-    const depth = await getQueueDepth(agentId);
+    const depth = await getQueueDepth(agentRow.id);
     await intercom
       .publish(`agent:${agentId}:status`, {
         event: 'task.queued',
@@ -117,7 +118,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
     }
 
     const conditions = ['agent_instance_id = $1'];
-    const params: unknown[] = [agentId];
+    const params: unknown[] = [agentRow.id];
 
     if (statusFilter) {
       params.push(statusFilter);
@@ -149,7 +150,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
 
       const running = await client.query<RunningRow>(
         `SELECT id FROM task_queue WHERE agent_instance_id = $1 AND status = 'running' LIMIT 1`,
-        [agentId]
+        [agentRow.id]
       );
 
       if (running.rows.length > 0) {
@@ -166,7 +167,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
          ORDER BY priority ASC, created_at ASC
          LIMIT 1
          FOR UPDATE SKIP LOCKED`,
-        [agentId]
+        [agentRow.id]
       );
 
       if (next.rows.length === 0) {
@@ -211,7 +212,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
 
     await pool.query(`DELETE FROM task_queue WHERE id = $1`, [taskId]);
 
-    const depth = await getQueueDepth(agentId);
+    const depth = await getQueueDepth(row.agent_instance_id);
     await intercom
       .publish(`agent:${agentId}:status`, {
         event: 'task.cancelled',
@@ -315,7 +316,7 @@ export function createTasksRouter(intercom: IntercomService): Router {
       await updateTaskResult(taskId, newStatus, body);
     }
 
-    const depth = await getQueueDepth(agentId);
+    const depth = await getQueueDepth(row.agent_instance_id);
     await intercom
       .publish(`agent:${agentId}:status`, {
         event: 'task.completed',
@@ -390,17 +391,29 @@ export async function pruneOldTaskResults(): Promise<number> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function getAgentRow(agentId: string): Promise<AgentRow | null> {
-  const r = await pool.query<AgentRow>(`SELECT lifecycle_mode FROM agent_instances WHERE id = $1`, [
-    agentId,
-  ]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Resolve an agent by UUID or by name, returning its row with the resolved `id`. */
+async function getAgentRow(nameOrId: string): Promise<AgentRow | null> {
+  const col = UUID_RE.test(nameOrId) ? 'id' : 'name';
+  const r = await pool.query<AgentRow>(
+    `SELECT id, lifecycle_mode FROM agent_instances WHERE ${col} = $1`,
+    [nameOrId]
+  );
   return r.rows[0] ?? null;
 }
 
-async function getTaskRow(taskId: string, agentId: string): Promise<TaskRow | null> {
+async function getTaskRow(taskId: string, nameOrId: string): Promise<TaskRow | null> {
+  // Resolve name → UUID if needed so the agent_instance_id FK comparison works
+  let agentUuid = nameOrId;
+  if (!UUID_RE.test(nameOrId)) {
+    const agentRow = await getAgentRow(nameOrId);
+    if (!agentRow) return null;
+    agentUuid = agentRow.id;
+  }
   const r = await pool.query<TaskRow>(
     `SELECT * FROM task_queue WHERE id = $1 AND agent_instance_id = $2`,
-    [taskId, agentId]
+    [taskId, agentUuid]
   );
   return r.rows[0] ?? null;
 }

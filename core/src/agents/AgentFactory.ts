@@ -8,17 +8,23 @@ import type { BaseAgent } from './BaseAgent.js';
 import type { AgentInstance } from './types.js';
 import { query } from '../lib/database.js';
 import { MemoryManager } from '../memory/manager.js';
+import type { LlmRouter } from '../llm/LlmRouter.js';
 
 export class AgentFactory {
   /**
    * Create a BaseAgent implementation from a manifest and instance ID.
+   *
+   * When `router` is supplied, the agent's LLM provider is backed by
+   * LlmRouter → pi-mono (new in-process gateway) instead of the legacy
+   * OpenAIProvider chain.
    */
   static createAgent(
     manifest: AgentManifest,
     agentInstanceId?: string,
-    intercom?: import('../intercom/IntercomService.js').IntercomService
+    intercom?: import('../intercom/IntercomService.js').IntercomService,
+    router?: LlmRouter
   ): BaseAgent {
-    const provider = ProviderFactory.createFromManifest(manifest);
+    const provider = ProviderFactory.createFromManifest(manifest, router);
     const memOpts: { circleId?: string; agentId?: string } = {};
     if (manifest.metadata.circle) memOpts.circleId = manifest.metadata.circle;
     if (agentInstanceId) memOpts.agentId = agentInstanceId;

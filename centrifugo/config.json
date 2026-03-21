@@ -1,13 +1,13 @@
 {
   "client": {
     "allowed_origins": ["*"],
-    "insecure": true
+    "insecure": true,
+    "token": {
+      "hmac_secret_key": "sera-token-secret"
+    }
   },
   "http_api": {
     "key": "sera-api-key"
-  },
-  "token": {
-    "hmac_secret_key": "sera-secret-key"
   },
   "channel": {
     "namespaces": [

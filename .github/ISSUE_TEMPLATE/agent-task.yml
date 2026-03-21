@@ -1,0 +1,97 @@
+name: Agent Task
+description: A well-defined task for an AI coding agent to pick up
+labels: ["agent-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to create tasks that AI agents can work on autonomously.
+        Be specific — agents are literalists and work best with clear acceptance criteria.
+
+  - type: input
+    id: epic
+    attributes:
+      label: Epic / Story reference
+      description: Which epic and story does this relate to?
+      placeholder: "Epic 8 / Story 8.3"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexity
+      options:
+        - "trivial (single file, < 30 min)"
+        - "small (1-2 files, well-defined)"
+        - "medium (3-5 files, needs arch docs)"
+        - "large (5+ files, needs planning)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - "core"
+        - "web"
+        - "e2e"
+        - "infra"
+        - "docs"
+        - "multiple"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Suggested agent
+      description: Which agent is best suited? Leave blank if unsure.
+      options:
+        - "claude (complex, multi-file)"
+        - "jules (async, isolated tasks)"
+        - "gemini (quick fixes, scripts)"
+        - "antigravity (UI, components)"
+        - "any"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Task description
+      description: What needs to be done? Be specific about the expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is done? List concrete, verifiable criteria.
+      placeholder: |
+        - [ ] New endpoint `GET /api/foo` returns expected shape
+        - [ ] Unit test covers happy path and error case
+        - [ ] Typecheck and lint pass
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Affected files / areas
+      description: Which files or directories will this touch? Helps prevent agent conflicts.
+      placeholder: |
+        - core/src/routes/foo.ts
+        - core/src/services/FooService.ts
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links to docs, related issues, or other context the agent needs.
+    validations:
+      required: false

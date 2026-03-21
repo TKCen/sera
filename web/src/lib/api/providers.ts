@@ -1,5 +1,5 @@
 import { request } from './client';
-import type { ProviderConfig, ProvidersResponse, LLMConfig } from './types';
+import type { ProvidersResponse, LLMConfig } from './types';
 
 export interface NewProviderPayload {
   name: string;
@@ -28,7 +28,7 @@ export function getProviders(): Promise<ProvidersResponse> {
 
 export function updateProvider(
   id: string,
-  config: Partial<Pick<ProviderConfig, 'baseUrl' | 'model'> & { apiKey?: string }>
+  config: Partial<{ baseUrl?: string; model?: string; apiKey?: string }>
 ): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`/providers/${encodeURIComponent(id)}`, {
     method: 'PUT',
@@ -71,4 +71,56 @@ export function testLLMConfig(): Promise<{
   error?: string;
 }> {
   return request('/config/llm/test', { method: 'POST' });
+}
+
+// ── Dynamic Providers ──────────────────────────────────────────────────────
+
+export interface DynamicProviderConfig {
+  id: string;
+  name: string;
+  type: 'lm-studio';
+  baseUrl: string;
+  apiKey?: string;
+  enabled: boolean;
+  intervalMs: number;
+  description?: string;
+}
+
+export interface DynamicProviderStatus {
+  id: string;
+  lastCheck?: string;
+  status: 'ok' | 'error';
+  error?: string;
+  discoveredModels: string[];
+}
+
+export function getDynamicProviders(): Promise<{ dynamicProviders: DynamicProviderConfig[] }> {
+  return request<{ dynamicProviders: DynamicProviderConfig[] }>('/providers/dynamic');
+}
+
+export function getDynamicProviderStatuses(): Promise<{ statuses: DynamicProviderStatus[] }> {
+  return request<{ statuses: DynamicProviderStatus[] }>('/providers/dynamic/statuses');
+}
+
+export function addDynamicProvider(config: DynamicProviderConfig): Promise<DynamicProviderConfig> {
+  return request<DynamicProviderConfig>('/providers/dynamic', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
+}
+
+export function removeDynamicProvider(id: string): Promise<void> {
+  return request<void>(`/providers/dynamic/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function testDynamicConnection(
+  baseUrl: string,
+  apiKey?: string
+): Promise<{ success: boolean; models: string[]; error?: string }> {
+  return request<{ success: boolean; models: string[]; error?: string }>('/providers/dynamic/test', {
+    method: 'POST',
+    body: JSON.stringify({ baseUrl, apiKey }),
+  });
 }

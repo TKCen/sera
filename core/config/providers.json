@@ -6,7 +6,15 @@
       "provider": "lmstudio",
       "baseUrl": "http://host.docker.internal:1234/v1",
       "apiKey": "lm-studio",
-      "description": "Local LM Studio instance (host port 1234)"
+      "description": "Local LM Studio instance (host port 1234) — generic alias"
+    },
+    {
+      "modelName": "qwen3.5-35b-a3b",
+      "api": "openai-completions",
+      "provider": "lmstudio",
+      "baseUrl": "http://host.docker.internal:1234/v1",
+      "apiKey": "lm-studio",
+      "description": "Qwen 3.5 35B A3B via LM Studio (host port 1234)"
     }
   ]
 }

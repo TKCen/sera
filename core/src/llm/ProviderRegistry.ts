@@ -44,19 +44,40 @@ export interface ProviderConfig {
   /** pi-mono API to route through. Default: 'openai-completions'. */
   api: ProviderApi;
   /** pi-mono provider name — used for env-var key resolution (e.g. 'openai', 'anthropic'). */
-  provider?: string;
+  provider?: string | undefined;
   /** Override endpoint URL — required for local/custom deployments. */
-  baseUrl?: string;
+  baseUrl?: string | undefined;
   /**
    * Literal API key.  Prefer apiKeyEnvVar for secrets management.
    * For providers that require no auth (e.g. local LM Studio) use any non-empty
    * placeholder (e.g. 'none').
    */
-  apiKey?: string;
+  apiKey?: string | undefined;
   /** Name of an env var to read the API key from at runtime. */
-  apiKeyEnvVar?: string;
+  apiKeyEnvVar?: string | undefined;
   /** Human-readable description shown in GET /api/providers. */
-  description?: string;
+  description?: string | undefined;
+  /** ID of the dynamic provider that registered this model (internal). */
+  dynamicProviderId?: string | undefined;
+}
+
+export interface DynamicProviderConfig {
+  id: string;
+  name: string;
+  type: 'lm-studio';
+  baseUrl: string;
+  apiKey?: string | undefined;
+  enabled: boolean;
+  intervalMs: number;
+  description?: string | undefined;
+}
+
+export interface DynamicProviderStatus {
+  id: string;
+  lastCheck?: string | undefined;
+  status: 'ok' | 'error';
+  error?: string | undefined;
+  discoveredModels: string[];
 }
 
 interface ConfigFile {
@@ -181,6 +202,33 @@ export class ProviderRegistry {
   /** Returns true if a provider was removed. */
   unregister(modelName: string): boolean {
     return this.configs.delete(modelName);
+  }
+
+  /** Register multiple models for a specific dynamic provider, cleaning up old ones. */
+  registerDynamicModels(providerId: string, models: ProviderConfig[]): void {
+    // Remove old models from this dynamic provider
+    for (const [name, cfg] of this.configs.entries()) {
+      if (cfg.dynamicProviderId === providerId) {
+        this.configs.delete(name);
+      }
+    }
+    // Add new ones
+    for (const model of models) {
+      this.configs.set(model.modelName, { ...model, dynamicProviderId: providerId });
+    }
+    logger.debug(`Registered ${models.length} model(s) for dynamic provider ${providerId}`);
+  }
+
+  /** Remove all models for a specific dynamic provider. */
+  unregisterDynamicModels(providerId: string): void {
+    let count = 0;
+    for (const [name, cfg] of this.configs.entries()) {
+      if (cfg.dynamicProviderId === providerId) {
+        this.configs.delete(name);
+        count++;
+      }
+    }
+    logger.debug(`Removed ${count} model(s) for dynamic provider ${providerId}`);
   }
 
   list(): ProviderConfig[] {

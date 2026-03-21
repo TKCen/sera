@@ -46,3 +46,7 @@ tui/debug.log
 
 # Agents
 .claude/
+
+# Test Results
+playwright-report/
+test-results/   

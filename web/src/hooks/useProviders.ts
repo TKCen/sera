@@ -1,79 +1,130 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import * as providersApi from '@/lib/api/providers';
-import type { LLMConfig, ProviderConfig } from '@/lib/api/types';
+import {
+  getProviders,
+  updateProvider,
+  setActiveProvider,
+  getLLMConfig,
+  updateLLMConfig,
+  getDynamicProviders,
+  getDynamicProviderStatuses,
+  addDynamicProvider,
+  removeDynamicProvider,
+  createProvider,
+  deleteProvider,
+  testLLMConfig,
+} from '../lib/api/providers';
 import type { NewProviderPayload } from '@/lib/api/providers';
 
 export const providersKeys = {
   all: ['providers'] as const,
   llmConfig: ['providers', 'llm-config'] as const,
+  dynamicProviders: ['dynamic-providers'] as const,
+  dynamicProviderStatuses: ['dynamic-provider-statuses'] as const,
 };
 
 export function useProviders() {
   return useQuery({
     queryKey: providersKeys.all,
-    queryFn: providersApi.getProviders,
+    queryFn: getProviders,
+  });
+}
+
+export function useDynamicProviders() {
+  return useQuery({
+    queryKey: providersKeys.dynamicProviders,
+    queryFn: getDynamicProviders,
+  });
+}
+
+export function useDynamicProviderStatuses() {
+  return useQuery({
+    queryKey: providersKeys.dynamicProviderStatuses,
+    queryFn: getDynamicProviderStatuses,
+    refetchInterval: 10000, // Refresh statuses every 10s
   });
 }
 
 export function useLLMConfig() {
   return useQuery({
     queryKey: providersKeys.llmConfig,
-    queryFn: providersApi.getLLMConfig,
+    queryFn: getLLMConfig,
   });
 }
 
 export function useUpdateProvider() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      id,
-      config,
-    }: {
-      id: string;
-      config: Partial<Pick<ProviderConfig, 'baseUrl' | 'model'> & { apiKey?: string }>;
-    }) => providersApi.updateProvider(id, config),
+    mutationFn: ({ id, config }: { id: string; config: Parameters<typeof updateProvider>[1] }) =>
+      updateProvider(id, config),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: providersKeys.all });
+      queryClient.invalidateQueries({ queryKey: providersKeys.all });
     },
   });
 }
 
 export function useSetActiveProvider() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (providerId: string) => providersApi.setActiveProvider(providerId),
+    mutationFn: (providerId: string) => setActiveProvider(providerId),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: providersKeys.all });
+      queryClient.invalidateQueries({ queryKey: providersKeys.llmConfig });
     },
   });
 }
 
 export function useUpdateLLMConfig() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (config: LLMConfig) => providersApi.updateLLMConfig(config),
+    mutationFn: updateLLMConfig,
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: providersKeys.llmConfig });
+      queryClient.invalidateQueries({ queryKey: providersKeys.llmConfig });
     },
   });
 }
 
 export function useCreateProvider() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: NewProviderPayload) => providersApi.createProvider(payload),
+    mutationFn: (payload: NewProviderPayload) => createProvider(payload),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: providersKeys.all });
+      queryClient.invalidateQueries({ queryKey: providersKeys.all });
     },
   });
 }
 
 export function useDeleteProvider() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => providersApi.deleteProvider(name),
+    mutationFn: (name: string) => deleteProvider(name),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: providersKeys.all });
+      queryClient.invalidateQueries({ queryKey: providersKeys.all });
     },
+  });
+}
+
+export function useAddDynamicProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: addDynamicProvider,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: providersKeys.dynamicProviders });
+    },
+  });
+}
+
+export function useRemoveDynamicProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: removeDynamicProvider,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: providersKeys.dynamicProviders });
+      queryClient.invalidateQueries({ queryKey: providersKeys.all });
+    },
+  });
+}
+
+export function useTestLLMConfig() {
+  return useMutation({
+    mutationFn: testLLMConfig,
   });
 }

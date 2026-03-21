@@ -1,0 +1,13 @@
+{
+  "dynamicProviders": [
+    {
+      "id": "agw",
+      "name": "af",
+      "type": "lm-studio",
+      "baseUrl": "http://host.docker.internal:1234/v1",
+      "apiKey": "",
+      "enabled": true,
+      "intervalMs": 60000
+    }
+  ]
+}

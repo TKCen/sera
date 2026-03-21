@@ -332,6 +332,18 @@ function eventStreamToReadable(
   return passThrough;
 }
 
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/** Sanitised model entry returned by GET /api/providers — no API keys. */
+export interface ModelListItem {
+  modelName: string;
+  api: string;
+  provider?: string;
+  baseUrl?: string;
+  description?: string;
+  dynamicProviderId?: string;
+}
+
 // ── LlmRouter ─────────────────────────────────────────────────────────────────
 
 export class LlmRouter {
@@ -441,13 +453,16 @@ export class LlmRouter {
     return eventStreamToReadable(eventStream, request.model);
   }
 
-  /** List all explicitly registered providers as OpenAI-style model objects. */
-  async listModels(): Promise<Array<{ id: string; object: string; owned_by?: string }>> {
-    return this.registry.list().map((cfg) => ({
-      id: cfg.modelName,
-      object: 'model',
-      owned_by: cfg.provider ?? 'custom',
-    }));
+  /** List all explicitly registered models with enough info for the UI. API keys are omitted. */
+  async listModels(): Promise<ModelListItem[]> {
+    return this.registry.list().map((cfg) => {
+      const item: ModelListItem = { modelName: cfg.modelName, api: cfg.api };
+      if (cfg.provider !== undefined) item.provider = cfg.provider;
+      if (cfg.baseUrl !== undefined) item.baseUrl = cfg.baseUrl;
+      if (cfg.description !== undefined) item.description = cfg.description;
+      if (cfg.dynamicProviderId !== undefined) item.dynamicProviderId = cfg.dynamicProviderId;
+      return item;
+    });
   }
 
   /** Register a new provider and persist to config file. */
@@ -466,6 +481,19 @@ export class LlmRouter {
     }
     await this.registry.save();
     logger.info(`Provider removed | model=${modelName}`);
+  }
+
+  /**
+   * Return the raw pi-mono AssistantMessageEventStream for a request.
+   * Used by LlmRouterProvider to implement the LLMProvider interface.
+   */
+  getEventStream(request: ChatCompletionRequest): AssistantMessageEventStream {
+    const cfg = this.registry.resolve(request.model);
+    const context = toContext(request);
+    const opts: StreamOptions = {
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    };
+    return this.dispatch(cfg, context, opts);
   }
 
   /** Send a minimal test completion to verify a model is reachable. */

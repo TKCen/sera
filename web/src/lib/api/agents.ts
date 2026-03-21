@@ -16,11 +16,11 @@ export function getAgent(name: string): Promise<AgentInfo> {
   return request<AgentInfo>(`/agents/${encodeURIComponent(name)}`);
 }
 
-export function createAgent(manifest: AgentManifest): Promise<AgentManifest> {
-  return request<AgentManifest>('/agents', {
-    method: 'POST',
-    body: JSON.stringify(manifest),
-  });
+export function createAgent(manifest: AgentManifest): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/agents/${encodeURIComponent(manifest.metadata.name)}/manifest`,
+    { method: 'PUT', body: JSON.stringify(manifest) }
+  );
 }
 
 export function getAgentManifestRaw(name: string): Promise<string> {

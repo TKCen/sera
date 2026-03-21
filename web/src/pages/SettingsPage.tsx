@@ -1,25 +1,28 @@
 import { useState } from 'react';
 import {
   Zap,
-  Save,
   CheckCircle,
   XCircle,
   RefreshCw,
   ChevronDown,
   ChevronUp,
-  Server,
-  Cloud,
   Radio,
   Layers,
   Settings2,
   Sliders,
   Activity,
+  Plus,
+  Trash2,
+  ExternalLink,
+  Save,
 } from 'lucide-react';
 import {
   useProviders,
-  useUpdateProvider,
-  useSetActiveProvider,
   useLLMConfig,
+  useDynamicProviders,
+  useDynamicProviderStatuses,
+  useAddDynamicProvider,
+  useRemoveDynamicProvider,
 } from '@/hooks/useProviders';
 import { useCircuitBreakers, useResetCircuitBreaker } from '@/hooks/useHealth';
 import * as providersApi from '@/lib/api/providers';
@@ -28,117 +31,58 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
 type Tab = 'providers' | 'models' | 'general' | 'circuit-breakers';
-type TestStatus = 'idle' | 'testing' | 'success' | 'error';
 
-interface ProviderModel {
-  id: string;
-  name: string;
-  tier: string;
-  contextWindow: number;
-}
 
-interface ProviderExtended {
-  id: string;
-  name: string;
-  category?: 'local' | 'cloud';
-  defaultBaseUrl?: string;
-  requiresKey?: boolean;
-  description?: string;
-  models?: ProviderModel[];
-  configured?: boolean;
-  isActive?: boolean;
-  savedConfig?: { baseUrl: string; apiKey: string; model: string } | null;
-}
-
-function TierBadge({ tier }: { tier: string }) {
-  const colors: Record<string, string> = {
-    frontier: 'bg-purple-500/15 text-purple-400',
-    smart: 'bg-cyan-500/15 text-cyan-400',
-    balanced: 'bg-blue-500/15 text-blue-400',
-    fast: 'bg-emerald-500/15 text-emerald-400',
-    local: 'bg-amber-500/15 text-amber-400',
-  };
-  return (
-    <span className={`sera-badge ${colors[tier] ?? 'bg-sera-surface-hover text-sera-text-muted'}`}>
-      {tier}
-    </span>
-  );
-}
-
-function ProviderCard({ provider }: { provider: ProviderExtended }) {
+function DynamicProviderCard({
+  provider,
+  status,
+  onRemove,
+}: {
+  provider: providersApi.DynamicProviderConfig;
+  status?: providersApi.DynamicProviderStatus;
+  onRemove: (id: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const [baseUrl, setBaseUrl] = useState(
-    provider.savedConfig?.baseUrl ?? provider.defaultBaseUrl ?? ''
-  );
-  const [apiKey, setApiKey] = useState(provider.savedConfig?.apiKey ?? '');
-  const [model, setModel] = useState(provider.savedConfig?.model ?? provider.models?.[0]?.id ?? '');
-  const [testStatus, setTestStatus] = useState<TestStatus>('idle');
-  const [testMessage, setTestMessage] = useState('');
-
-  const updateProvider = useUpdateProvider();
-  const setActive = useSetActiveProvider();
-
-  const handleTest = async () => {
-    setTestStatus('testing');
-    try {
-      const result = await providersApi.testProvider(provider.id);
-      setTestStatus(result.success ? 'success' : 'error');
-      setTestMessage(
-        result.success ? 'Connection successful' : (result.error ?? 'Connection failed')
-      );
-    } catch {
-      setTestStatus('error');
-      setTestMessage('Connection failed');
-    }
-  };
-
-  const handleSave = () => {
-    updateProvider.mutate({ id: provider.id, config: { baseUrl, apiKey, model } });
-  };
-
-  const borderClass = provider.isActive
-    ? 'border-sera-accent/40 shadow-[0_0_15px_rgba(0,229,255,0.08)]'
-    : provider.configured
-      ? 'border-sera-success/30'
-      : '';
+  const isHealthy = status?.status === 'ok';
 
   return (
-    <div className={`sera-card-static overflow-hidden ${borderClass}`}>
+    <div
+      className={`sera-card-static overflow-hidden ${
+        isHealthy
+          ? 'border-sera-success/30'
+          : 'border-sera-error/30 shadow-[0_0_15px_rgba(255,82,82,0.05)]'
+      }`}
+    >
       <button
         onClick={() => setExpanded((e) => !e)}
         className="w-full p-4 flex items-center justify-between hover:bg-sera-surface-hover transition-colors"
       >
         <div className="flex items-center gap-3">
-          <div
-            className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-              provider.category === 'local'
-                ? 'bg-amber-500/10 border border-amber-500/20'
-                : 'bg-sera-accent-soft border border-sera-border-active'
-            }`}
-          >
-            {provider.category === 'local' ? (
-              <Server size={16} className="text-amber-400" />
-            ) : (
-              <Cloud size={16} className="text-sera-accent" />
-            )}
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-amber-500/10 border border-amber-500/20">
+            <Radio size={16} className="text-amber-400" />
           </div>
           <div className="text-left">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-sera-text">{provider.name}</h3>
-              {provider.isActive && <span className="sera-badge-accent">Active</span>}
+              {isHealthy ? (
+                <Badge variant="success" className="text-[9px] px-1.5 py-0">
+                  Online
+                </Badge>
+              ) : (
+                <Badge variant="error" className="text-[9px] px-1.5 py-0">
+                  Offline
+                </Badge>
+              )}
             </div>
-            <p className="text-[11px] text-sera-text-muted mt-0.5">{provider.description}</p>
+            <p className="text-[11px] text-sera-text-muted mt-0.5 font-mono select-all">
+              {provider.baseUrl}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-[11px] text-sera-text-dim">
-            {provider.models?.length ?? 0} model{provider.models?.length !== 1 ? 's' : ''}
+          <span className="text-[11px] text-sera-text-dim px-2 py-0.5 rounded-full bg-sera-bg/80 border border-sera-border">
+            {status?.discoveredModels?.length ?? 0} models
           </span>
-          {provider.configured ? (
-            <span className="w-2 h-2 rounded-full bg-sera-success" />
-          ) : (
-            <span className="w-2 h-2 rounded-full bg-sera-text-dim/30" />
-          )}
           {expanded ? (
             <ChevronUp size={14} className="text-sera-text-dim" />
           ) : (
@@ -148,106 +92,63 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
       </button>
 
       {expanded && (
-        <div className="border-t border-sera-border p-4 space-y-4 bg-sera-bg/50">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5 col-span-2">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
-                Base API URL
-              </label>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                className="sera-input font-mono text-xs"
-              />
+        <div className="border-t border-sera-border p-4 space-y-4 bg-sera-bg/50 animate-in slide-in-from-top-2 duration-200">
+          <div className="space-y-3">
+            <div className="flex justify-between items-center px-1">
+              <span className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider flex items-center gap-1.5">
+                <Activity size={10} /> Discovery Status
+              </span>
+              <span className="text-[11px] text-sera-text-muted font-mono bg-sera-surface/80 px-2 py-0.5 rounded border border-sera-border">
+                {status?.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : 'Never'}
+              </span>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
-                API Key{' '}
-                {!provider.requiresKey && <span className="text-sera-text-dim/50">(optional)</span>}
-              </label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={provider.requiresKey ? 'Required' : 'Not required'}
-                className="sera-input text-xs"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
-                Model
-              </label>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="sera-input text-xs appearance-none"
-              >
-                {provider.models?.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+
+            {!isHealthy && status?.error && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-sera-error/5 border border-sera-error/20 text-sera-error text-[11px] leading-relaxed">
+                <XCircle size={14} className="mt-0.5 shrink-0" />
+                <span>{status.error}</span>
+              </div>
+            )}
+
+            {isHealthy && (
+              <div className="space-y-2">
+                <span className="text-[11px] text-sera-text-dim px-1 block">Live Models:</span>
+                <div className="flex flex-wrap gap-2 p-2 rounded-lg bg-sera-bg/30 border border-sera-border/50">
+                  {status?.discoveredModels?.map((m) => (
+                    <span
+                      key={m}
+                      className="px-2 py-1 rounded border border-sera-border bg-sera-surface/50 text-[10px] text-sera-text-muted font-mono hover:border-sera-accent/30 hover:text-sera-text transition-colors cursor-default"
+                    >
+                      {m}
+                    </span>
+                  ))}
+                  {status?.discoveredModels?.length === 0 && (
+                    <span className="text-[11px] text-sera-text-dim italic px-2 py-1">
+                      No models found — start them in LM Studio
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
-          {testStatus !== 'idle' && testStatus !== 'testing' && (
-            <div
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
-                testStatus === 'success'
-                  ? 'bg-sera-success/10 border-sera-success/30 text-sera-success'
-                  : 'bg-sera-error/10 border-sera-error/30 text-sera-error'
-              }`}
+          <div className="flex gap-2 border-t border-sera-border pt-4 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs h-9 bg-sera-error/5 hover:bg-sera-error/10 text-sera-error border-sera-error/20 gap-2"
+              onClick={() => onRemove(provider.id)}
             >
-              {testStatus === 'success' ? <CheckCircle size={14} /> : <XCircle size={14} />}
-              <span>{testMessage}</span>
-            </div>
-          )}
-
-          {updateProvider.isSuccess && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs border bg-sera-accent-soft border-sera-border-active text-sera-accent">
-              <CheckCircle size={14} />
-              <span>Configuration saved</span>
-            </div>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              onClick={() => {
-                void handleTest();
-              }}
-              disabled={testStatus === 'testing'}
-              className="sera-btn-ghost flex-1 border border-sera-border py-2.5 text-xs disabled:opacity-30"
+              <Trash2 size={13} /> Remove
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs h-9 gap-2"
+              onClick={() => window.open(provider.baseUrl, '_blank')}
             >
-              {testStatus === 'testing' ? (
-                <RefreshCw className="animate-spin" size={14} />
-              ) : (
-                <Zap size={14} />
-              )}
-              Test Connection
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={updateProvider.isPending}
-              className="sera-btn-primary flex-1 text-xs disabled:opacity-30"
-            >
-              {updateProvider.isPending ? (
-                <RefreshCw className="animate-spin" size={14} />
-              ) : (
-                <Save size={14} />
-              )}
-              Save Config
-            </button>
-            {!provider.isActive && provider.configured && (
-              <button
-                onClick={() => setActive.mutate(provider.id)}
-                className="inline-flex items-center gap-2 bg-sera-success/10 hover:bg-sera-success/20 text-sera-success border border-sera-success/30 py-2.5 px-4 rounded-lg text-xs transition-all"
-              >
-                <Radio size={14} />
-                Set Active
-              </button>
-            )}
+              <ExternalLink size={13} /> API Info
+            </Button>
           </div>
         </div>
       )}
@@ -257,17 +158,32 @@ function ProviderCard({ provider }: { provider: ProviderExtended }) {
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('providers');
-  const { data: providersData, isLoading } = useProviders();
+  const [showAddDynamic, setShowAddDynamic] = useState(false);
+  const [newDynamic, setNewDynamic] = useState({
+    id: '',
+    name: '',
+    baseUrl: 'http://host.docker.internal:1234/v1',
+    apiKey: '',
+  });
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    models: string[];
+    error?: string;
+  } | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+
+  const { data: providersData, isLoading: isLoadingProviders } = useProviders();
+  const { data: dynamicData, isLoading: isLoadingDynamic } = useDynamicProviders();
+  const { data: statusesData } = useDynamicProviderStatuses();
+  const addDynamic = useAddDynamicProvider();
+  const removeDynamic = useRemoveDynamicProvider();
   const { data: llmConfig } = useLLMConfig();
   const { data: circuitBreakers, refetch: refetchCB } = useCircuitBreakers();
   const resetCB = useResetCircuitBreaker();
 
-  const providers = (providersData?.providers ?? []) as ProviderExtended[];
-  const localProviders = providers.filter((p) => p.category === 'local');
-  const cloudProviders = providers.filter((p) => p.category === 'cloud');
-  const allModels = providers
-    .filter((p) => p.configured)
-    .flatMap((p) => (p.models ?? []).map((m) => ({ ...m, provider: p.name })));
+  const registeredModels = providersData?.providers ?? [];
+
+  const isLoading = isLoadingProviders || isLoadingDynamic;
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'providers', label: 'Providers', icon: <Layers size={14} /> },
@@ -311,77 +227,264 @@ export default function SettingsPage() {
       ) : (
         <>
           {tab === 'providers' && (
-            <div className="space-y-8">
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {/* Dynamic Providers Section */}
               <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Server size={14} className="text-amber-400" />
-                  <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
-                    Local Providers
-                  </h2>
-                  <span className="text-[11px] text-sera-text-dim/60">
-                    — Running on your homelab
-                  </span>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Radio size={14} className="text-amber-400" />
+                    <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
+                      Dynamic Discovery
+                    </h2>
+                    <span className="text-[11px] text-sera-text-dim/60">
+                      — LM Studio, Ollama, etc.
+                    </span>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="h-8 text-[11px] gap-1.5 bg-sera-accent/10 hover:bg-sera-accent/20 text-sera-accent border border-sera-accent/20"
+                    onClick={() => setShowAddDynamic(true)}
+                  >
+                    <Plus size={14} /> Add Provider
+                  </Button>
                 </div>
+
+                {showAddDynamic && (
+                  <div className="sera-card-static p-5 mb-4 border-sera-accent/30 bg-sera-accent/5 animate-in zoom-in-95 duration-200">
+                    <div className="flex justify-between items-start mb-4">
+                      <h3 className="text-sm font-semibold text-sera-text">
+                        Add LM Studio Instance
+                      </h3>
+                      <button
+                        onClick={() => setShowAddDynamic(false)}
+                        className="text-sera-text-dim hover:text-sera-text"
+                      >
+                        <XCircle size={16} />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                          Provider Name
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Local LM Studio"
+                          value={newDynamic.name}
+                          onChange={(e) => setNewDynamic({ ...newDynamic, name: e.target.value })}
+                          className="sera-input text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                          Unique ID
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. lmstudio-1"
+                          value={newDynamic.id}
+                          onChange={(e) =>
+                            setNewDynamic({
+                              ...newDynamic,
+                              id: e.target.value.toLowerCase().replace(/\s+/g, '-'),
+                            })
+                          }
+                          className="sera-input text-xs font-mono"
+                        />
+                      </div>
+                      <div className="space-y-1.5 col-span-2">
+                        <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                          Base URL (with /v1)
+                        </label>
+                        <input
+                          type="text"
+                          value={newDynamic.baseUrl}
+                          onChange={(e) =>
+                            setNewDynamic({ ...newDynamic, baseUrl: e.target.value })
+                          }
+                          className="sera-input text-xs font-mono"
+                        />
+                        <p className="text-[10px] text-sera-text-dim mt-0.5">
+                          Running in Docker? Use <code className="font-mono">host.docker.internal</code> instead of <code className="font-mono">localhost</code>
+                        </p>
+                      </div>
+                      <div className="space-y-1.5 col-span-2">
+                        <label className="text-[11px] font-medium text-sera-text-dim uppercase tracking-wider">
+                          API Key <span className="text-sera-text-dim/50">(optional)</span>
+                        </label>
+                        <input
+                          type="password"
+                          value={newDynamic.apiKey}
+                          onChange={(e) => setNewDynamic({ ...newDynamic, apiKey: e.target.value })}
+                          className="sera-input text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    {testResult && (
+                      <div
+                        className={`mb-4 overflow-hidden rounded-lg border text-xs ${
+                          testResult.success
+                            ? 'bg-sera-success/10 border-sera-success/20 text-sera-success'
+                            : 'bg-sera-error/10 border-sera-error/20 text-sera-error'
+                        }`}
+                      >
+                        <div className="p-3 flex items-start gap-2">
+                          {testResult.success ? <CheckCircle size={14} /> : <XCircle size={14} />}
+                          <div>
+                            <p className="font-semibold">
+                              {testResult.success ? 'Connection successful' : 'Connection failed'}
+                            </p>
+                            {!testResult.success && (
+                              <p className="mt-0.5 opacity-90">{testResult.error}</p>
+                            )}
+                            {testResult.success && (
+                              <p className="mt-1 opacity-90">
+                                Found {testResult.models.length} model(s):{' '}
+                                {testResult.models.join(', ')}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex gap-3">
+                      <Button
+                        variant="outline"
+                        className="flex-1 text-xs h-10"
+                        disabled={isTesting || !newDynamic.baseUrl}
+                        onClick={async () => {
+                          setIsTesting(true);
+                          setTestResult(null);
+                          try {
+                            const res = await providersApi.testDynamicConnection(
+                              newDynamic.baseUrl,
+                              newDynamic.apiKey
+                            );
+                            setTestResult(res);
+                          } catch (err: unknown) {
+                            setTestResult({
+                              success: false,
+                              models: [],
+                              error: err instanceof Error ? err.message : String(err),
+                            });
+                          } finally {
+                            setIsTesting(false);
+                          }
+                        }}
+                      >
+                        {isTesting ? (
+                          <RefreshCw className="animate-spin" size={14} />
+                        ) : (
+                          <Zap size={14} />
+                        )}
+                        Test & Discover
+                      </Button>
+                      <Button
+                        className="flex-1 text-xs bg-sera-accent hover:bg-sera-accent-hover text-sera-bg h-10"
+                        disabled={!(newDynamic.name && newDynamic.id && newDynamic.baseUrl && testResult?.success && !addDynamic.isPending)}
+                        onClick={() => {
+                          addDynamic.mutate({
+                            ...newDynamic,
+                            type: 'lm-studio',
+                            enabled: true,
+                            intervalMs: 60000,
+                          });
+                          setShowAddDynamic(false);
+                          setNewDynamic({
+                            id: '',
+                            name: '',
+                            baseUrl: 'http://host.docker.internal:1234/v1',
+                            apiKey: '',
+                          });
+                          setTestResult(null);
+                        }}
+                      >
+                        <Save size={14} /> Save Provider
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {localProviders.map((p) => (
-                    <ProviderCard key={p.id} provider={p} />
+                  {(dynamicData?.dynamicProviders ?? []).map((p) => (
+                    <DynamicProviderCard
+                      key={p.id}
+                      provider={p}
+                      status={statusesData?.statuses.find((s) => s.id === p.id)}
+                      onRemove={(id) => removeDynamic.mutate(id)}
+                    />
                   ))}
+                  {!isLoadingDynamic &&
+                    (dynamicData?.dynamicProviders ?? []).length === 0 &&
+                    !showAddDynamic && (
+                      <div className="col-span-full sera-card-static border-dashed border-sera-border p-10 text-center">
+                        <div className="w-12 h-12 rounded-full bg-sera-surface-hover flex items-center justify-center mx-auto mb-4">
+                          <Radio size={20} className="text-sera-text-dim" />
+                        </div>
+                        <h3 className="text-sm font-medium text-sera-text mb-1">
+                          No dynamic providers
+                        </h3>
+                        <p className="text-xs text-sera-text-muted mb-4">
+                          Add an LM Studio or Ollama instance to discover models automatically.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs gap-1.5"
+                          onClick={() => setShowAddDynamic(true)}
+                        >
+                          <Plus size={14} /> Configure Now
+                        </Button>
+                      </div>
+                    )}
                 </div>
               </section>
-              <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Cloud size={14} className="text-sera-accent" />
-                  <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
-                    Cloud Providers
-                  </h2>
-                  <span className="text-[11px] text-sera-text-dim/60">— API key required</span>
-                </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {cloudProviders.map((p) => (
-                    <ProviderCard key={p.id} provider={p} />
-                  ))}
-                </div>
-              </section>
+
             </div>
           )}
 
           {tab === 'models' && (
             <div className="sera-card-static p-5">
-              {allModels.length === 0 ? (
+              {registeredModels.length === 0 ? (
                 <div className="text-center py-12 text-sera-text-dim text-sm">
-                  No providers configured. Go to Providers tab to set up an LLM provider.
+                  No models registered. Add a provider in the Providers tab.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
-                        <th className="text-left py-3 px-3">Model</th>
+                        <th className="text-left py-3 px-3">Model name</th>
                         <th className="text-left py-3 px-3">Provider</th>
-                        <th className="text-left py-3 px-3">Tier</th>
-                        <th className="text-right py-3 px-3">Context</th>
+                        <th className="text-left py-3 px-3">API</th>
+                        <th className="text-left py-3 px-3">Base URL</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {allModels.map((m, i) => (
+                      {registeredModels.map((m) => (
                         <tr
-                          key={`${m.provider}-${m.id}-${i}`}
+                          key={m.modelName}
                           className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
                         >
                           <td className="py-3 px-3">
-                            <span className="text-sera-text">{m.name}</span>
-                            <span className="text-sera-text-dim text-[10px] block font-mono">
-                              {m.id}
-                            </span>
+                            <span className="text-sera-text font-mono text-xs">{m.modelName}</span>
+                            {m.description && (
+                              <span className="text-sera-text-dim text-[10px] block">
+                                {m.description}
+                              </span>
+                            )}
                           </td>
-                          <td className="py-3 px-3 text-sera-text-muted">{m.provider}</td>
-                          <td className="py-3 px-3">
-                            <TierBadge tier={m.tier} />
+                          <td className="py-3 px-3 text-sera-text-muted text-xs">
+                            {m.provider ?? '—'}
                           </td>
-                          <td className="py-3 px-3 text-right text-sera-text-muted font-mono text-xs">
-                            {m.contextWindow >= 1000000
-                              ? `${(m.contextWindow / 1000000).toFixed(1)}M`
-                              : `${(m.contextWindow / 1000).toFixed(0)}K`}
+                          <td className="py-3 px-3 text-sera-text-muted font-mono text-xs">
+                            {m.api}
+                          </td>
+                          <td className="py-3 px-3 text-sera-text-dim font-mono text-[10px]">
+                            {m.baseUrl ?? '—'}
                           </td>
                         </tr>
                       ))}

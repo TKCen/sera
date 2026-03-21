@@ -22,9 +22,14 @@ services:
       - ./memory:/app/memory
       - ./core/config:/app/config
       - ./workspaces:/workspaces
-      - ./agents:/agents:ro
-      - ./circles:/circles:ro
+      - ./agents:/workspace/agents:ro
+      - ./circles:/workspace/circles:ro
+      - ./templates:/workspace/templates:ro
+      - ./lists:/workspace/lists:ro
+      - ./capability-policies:/workspace/capability-policies:ro
+      - ./sandbox-boundaries:/workspace/sandbox-boundaries:ro
     environment:
+      - WORKSPACE_DIR=/workspace
       - NODE_ENV=development
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - CENTRIFUGO_API_URL=http://centrifugo:8000/api

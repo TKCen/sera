@@ -1,4 +1,4 @@
-import { PgBoss } from 'pg-boss';
+import type { PgBoss } from 'pg-boss';
 import { pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
@@ -42,11 +42,10 @@ export class ScheduleService {
     this.orchestrator = orchestrator;
   }
 
-  public async start(databaseUrl: string): Promise<void> {
+  public async start(boss: PgBoss): Promise<void> {
     if (this.initialized) return;
 
-    this.boss = new PgBoss(databaseUrl);
-    await this.boss.start();
+    this.boss = boss;
 
     // Ensure the queue exists before subscribing a worker (pg-boss v9+ requirement)
     await this.boss.createQueue('agent-schedule');
@@ -326,10 +325,9 @@ export class ScheduleService {
   }
 
   public async stop(): Promise<void> {
-    if (this.boss) {
-      await this.boss.stop();
-      this.boss = null;
-    }
+    // PgBoss lifecycle is managed by PgBossService singleton
+    this.boss = null;
+    this.initialized = false;
   }
 }
 

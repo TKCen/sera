@@ -178,16 +178,17 @@ export interface LLMConfig {
   model: string;
 }
 
+/** Sanitised model entry from GET /api/providers — no API keys. */
 export interface ProviderConfig {
-  id: string;
-  name: string;
+  modelName: string;
+  api: string;
+  provider?: string;
   baseUrl?: string;
-  model?: string;
-  active?: boolean;
+  description?: string;
+  dynamicProviderId?: string;
 }
 
 export interface ProvidersResponse {
-  activeProvider: string;
   providers: ProviderConfig[];
 }
 

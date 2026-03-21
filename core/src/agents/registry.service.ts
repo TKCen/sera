@@ -78,23 +78,30 @@ export class AgentRegistry {
     name: string;
     displayName?: string;
     templateRef: string;
+    workspacePath?: string;
     circle?: string;
     overrides?: Record<string, unknown>;
     lifecycleMode?: 'persistent' | 'ephemeral';
     parentInstanceId?: string;
   }) {
     const id = crypto.randomUUID();
+    // Derive workspace path if not provided (mirrors AgentFactory convention)
+    const workspacePath =
+      data.workspacePath ?? `/workspaces/${data.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
     const query = `
       INSERT INTO agent_instances (
-        id, name, display_name, template_ref, circle, lifecycle_mode, parent_instance_id, overrides, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created')
+        id, name, display_name, template_name, template_ref, workspace_path,
+        circle, lifecycle_mode, parent_instance_id, overrides, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'created')
       RETURNING *;
     `;
     const res = await this.pool.query(query, [
       id,
       data.name,
       data.displayName,
-      data.templateRef,
+      data.templateRef,   // template_name: legacy NOT NULL column, kept for backward compat with AgentFactory queries
+      data.templateRef,   // template_ref: canonical column used by registry and orchestrator
+      workspacePath,
       data.circle,
       data.lifecycleMode ?? 'persistent',
       data.parentInstanceId,

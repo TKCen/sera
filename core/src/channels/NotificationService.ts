@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { PgBoss } from 'pg-boss';
+import type { PgBoss } from 'pg-boss';
 import { pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 import { ChannelRouter } from './ChannelRouter.js';
@@ -44,14 +44,11 @@ export class NotificationService {
     this.permissionService = svc;
   }
 
-  async start(databaseUrl: string): Promise<void> {
+  async start(boss: PgBoss): Promise<void> {
     if (this.initialized) return;
 
-    this.boss = new PgBoss(databaseUrl);
-    this.boss.on('error', (err: unknown) => {
-      logger.warn('pg-boss error:', err);
-    });
-    await this.boss.start();
+    this.boss = boss;
+    await this.boss.createQueue(DISPATCH_JOB);
 
     await this.boss.work<{ eventJson: string; channelId: string; dispatchId: string }>(
       DISPATCH_JOB,
@@ -92,7 +89,7 @@ export class NotificationService {
   }
 
   async stop(): Promise<void> {
-    await this.boss?.stop();
+    // PgBoss lifecycle is managed by PgBossService singleton
     this.boss = null;
     this.initialized = false;
   }

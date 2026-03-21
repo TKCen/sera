@@ -9,7 +9,7 @@
  * Blocks are never deleted — only moved to {memoryRoot}/{agentId}/archive/.
  */
 
-import { PgBoss } from 'pg-boss';
+import type { PgBoss } from 'pg-boss';
 import { ScopedMemoryBlockStore } from './blocks/ScopedMemoryBlockStore.js';
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace } from '../services/vector.service.js';
@@ -43,11 +43,17 @@ export class MemoryCompactionService {
     return MemoryCompactionService.instance;
   }
 
-  /** Start pg-boss and register the daily compaction job. */
-  async start(databaseUrl: string): Promise<void> {
-    this.boss = new PgBoss(databaseUrl);
-    await this.boss.start();
+  /** Returns true when MEMORY_COMPACTION_ENABLED=true is set in the environment. */
+  static isEnabled(): boolean {
+    return process.env.MEMORY_COMPACTION_ENABLED === 'true';
+  }
 
+  /** Register the daily compaction job on the shared pg-boss instance. */
+  async start(boss: PgBoss): Promise<void> {
+    this.boss = boss;
+
+    // Queue must exist before scheduling
+    await this.boss.createQueue(JOB_NAME);
     // Run daily at 03:00
     await this.boss.schedule(JOB_NAME, '0 3 * * *', {});
     await this.boss.work<{ agentId?: string }>(JOB_NAME, async (jobs) => {
@@ -109,9 +115,7 @@ export class MemoryCompactionService {
   }
 
   async stop(): Promise<void> {
-    if (this.boss) {
-      await this.boss.stop();
-      this.boss = null;
-    }
+    // PgBoss lifecycle is managed by PgBossService singleton
+    this.boss = null;
   }
 }

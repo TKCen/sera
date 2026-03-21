@@ -23,6 +23,11 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # bun.lock records only the dev platform's optional deps (Windows).
+      # Ensure the Linux native binding for Tailwind CSS is present.
+      - name: Ensure Tailwind native bindings
+        run: bun add --no-save @tailwindcss/oxide-linux-x64-gnu@4.2.1
+
       - name: Format check
         run: bun run format:check
 

@@ -60,24 +60,22 @@ describe('ScheduleService', () => {
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // manual reconcile call
         .mockResolvedValueOnce({ rows: [{ name: '22222222-2222-4222-a222-222222222222' }] }); // stale job
 
-      const { PgBoss } = await import('pg-boss');
-      const bossInstance = new PgBoss('postgres://localhost/test');
-      await service.start(bossInstance);
+      await service.start('postgres://localhost/test');
       await service.reconcile();
 
-      const serviceBoss = (
+      const boss = (
         service as unknown as {
           boss: { schedule: import('vitest').Mock; unschedule: import('vitest').Mock };
         }
       ).boss;
 
       // Verify missing schedule was added
-      expect(serviceBoss.schedule).toHaveBeenCalledWith(mockDbSchedule.id, mockDbSchedule.expression, {
+      expect(boss.schedule).toHaveBeenCalledWith(mockDbSchedule.id, mockDbSchedule.expression, {
         scheduleId: mockDbSchedule.id,
       });
 
       // Verify stale schedule was removed
-      expect(serviceBoss.unschedule).toHaveBeenCalledWith('22222222-2222-4222-a222-222222222222');
+      expect(boss.unschedule).toHaveBeenCalledWith('22222222-2222-4222-a222-222222222222');
     });
   });
 });

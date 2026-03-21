@@ -70,7 +70,7 @@ describe('ScheduleService', () => {
         createQueue: vi.fn().mockResolvedValue(undefined),
       };
 
-      await service.start(mockBoss as any);
+      await service.start(mockBoss as unknown as import('pg-boss'));
       await service.reconcile();
 
       const boss = (

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ScheduleService } from './ScheduleService.js';
+import type PgBoss from 'pg-boss';
 import { pool } from '../lib/database.js';
 
 // Mock Database
@@ -60,7 +61,7 @@ describe('ScheduleService', () => {
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // manual reconcile call
         .mockResolvedValueOnce({ rows: [{ name: '22222222-2222-4222-a222-222222222222' }] }); // stale job
 
-      await service.start('postgres://localhost/test');
+      await service.start({ schedule: vi.fn(), unschedule: vi.fn(), createQueue: vi.fn(), work: vi.fn() } as unknown as PgBoss);
       await service.reconcile();
 
       const boss = (

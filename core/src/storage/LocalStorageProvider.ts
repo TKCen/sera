@@ -10,6 +10,7 @@
 
 import type { FilesystemMode } from '../sandbox/types.js';
 import type { StorageProvider, MountResult } from './StorageProvider.js';
+import { PlatformPath } from '../lib/PlatformPath.js';
 
 // ── LocalStorageProvider ────────────────────────────────────────────────────────
 
@@ -58,9 +59,7 @@ export class LocalStorageProvider implements StorageProvider {
   ): string {
     let hostPath = this.getHostPath(agentId, workspacePath);
     // On Windows, Docker Desktop prefers /c/path format for bind mounts to avoid colon confusion
-    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(hostPath)) {
-      hostPath = `/${hostPath[0]!.toLowerCase()}${hostPath.slice(2).replace(/\\/g, '/')}`;
-    }
+    hostPath = PlatformPath.normalizeWindowsPath(hostPath);
     return `${hostPath}:${containerPath}:${mode}`;
   }
 }

@@ -60,7 +60,10 @@ describe('ScheduleService', () => {
         .mockResolvedValueOnce({ rows: [mockDbSchedule] }) // manual reconcile call
         .mockResolvedValueOnce({ rows: [{ name: '22222222-2222-4222-a222-222222222222' }] }); // stale job
 
-      await service.start('postgres://localhost/test');
+      // Mock PgBoss dynamically to avoid importing it here which could cause other issues
+      const bossMock = new (vi.fn() as unknown as new () => import('pg-boss').PgBoss)();
+
+      await service.start(bossMock);
       await service.reconcile();
 
       const boss = (

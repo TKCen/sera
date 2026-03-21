@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuditService } from './AuditService.js';
 import { pool } from '../lib/database.js';
 import crypto from 'node:crypto';
-import type { PoolClient } from 'pg';
 
 // Mock Database
 vi.mock('../lib/database.js', () => ({
@@ -28,7 +27,9 @@ describe('AuditService', () => {
   describe('record and Merkle chain', () => {
     it('creates a genesis record if empty', async () => {
       // Mock empty DB
-      (pool.connect as import('vitest').Mock).mockResolvedValueOnce({
+      (
+        vi.mocked(pool.connect) as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      ).mockResolvedValueOnce({
         query: vi
           .fn()
           .mockResolvedValueOnce({ rows: [] }) // Check if any records exist
@@ -38,7 +39,9 @@ describe('AuditService', () => {
       });
 
       // Verification mock (called inside initialize)
-      (pool.query as import('vitest').Mock).mockResolvedValueOnce({ rows: [] });
+      (
+        vi.mocked(pool.query) as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      ).mockResolvedValueOnce({ rows: [] });
 
       await service.initialize();
 
@@ -50,7 +53,9 @@ describe('AuditService', () => {
         query: vi.fn(),
         release: vi.fn(),
       };
-      (pool.connect as import('vitest').Mock).mockResolvedValue(clientMock);
+      vi.mocked(pool.connect).mockResolvedValue(
+        clientMock as unknown as Awaited<ReturnType<typeof pool.connect>>
+      );
 
       // Setup for record()
       clientMock.query
@@ -102,7 +107,9 @@ describe('AuditService', () => {
       const hash1 = computeHash('1', null);
       const hash2 = computeHash('2', hash1);
 
-      (pool.query as import('vitest').Mock).mockResolvedValueOnce({
+      (
+        vi.mocked(pool.query) as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      ).mockResolvedValueOnce({
         rows: [
           {
             sequence: '2',
@@ -133,7 +140,9 @@ describe('AuditService', () => {
 
     it('detects tampering when a record hash is invalid', async () => {
       const timestamp = new Date();
-      (pool.query as import('vitest').Mock).mockResolvedValueOnce({
+      (
+        vi.mocked(pool.query) as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      ).mockResolvedValueOnce({
         rows: [
           {
             sequence: '1',
@@ -171,7 +180,9 @@ describe('AuditService', () => {
       const originalComputeHash = serviceObj.computeHash;
       serviceObj.computeHash = vi.fn().mockReturnValueOnce('hash-1').mockReturnValueOnce('hash-2');
 
-      (pool.query as import('vitest').Mock).mockResolvedValueOnce({
+      (
+        vi.mocked(pool.query) as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      ).mockResolvedValueOnce({
         rows: [
           {
             sequence: '2',

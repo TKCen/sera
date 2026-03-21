@@ -1,0 +1,23 @@
+
+> lint:core
+> npm run lint --workspace=core
+
+
+> core@1.0.0 lint
+> eslint src
+
+
+D:\projects\homelab\sera\core\src\routes\llmProxy.test.ts
+  169:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\secrets\postgres-secrets-provider.test.ts
+  50:83  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  62:52  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  64:81  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\sessions\SessionStore.test.ts
+  156:50  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  266:91  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+Ô£û 6 problems (0 errors, 6 warnings)
+

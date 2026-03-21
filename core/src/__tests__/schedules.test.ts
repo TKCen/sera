@@ -9,9 +9,9 @@ import type { QueryResult } from 'pg';
 // Mock the database
 vi.mock('../lib/database.js', () => ({
   pool: {
-    query: vi.fn<any>().mockResolvedValue({ rows: [] }),
+    query: vi.fn().mockResolvedValue({ rows: [] }),
   },
-  query: vi.fn<any>().mockResolvedValue({ rows: [] }),
+  query: vi.fn().mockResolvedValue({ rows: [] }),
 }));
 
 // Mock ScheduleService
@@ -39,9 +39,9 @@ describe('Schedules API', () => {
   });
 
   it('GET /api/schedules should list all schedules', async () => {
-    (pool.query as any).mockResolvedValueOnce({
+    (pool.query as unknown as import('vitest').Mock).mockResolvedValueOnce({
       rows: [{ id: '1', name: 'Task 1', cron: '* * * * *', agent_name: 'Agent 1' }],
-    } as unknown as QueryResult<any>);
+    } as unknown as QueryResult<{ id: string; name: string; cron: string; agent_name: string }>);
 
     const res = await request(app).get('/api/schedules');
     expect(res.status).toBe(200);
@@ -70,9 +70,9 @@ describe('Schedules API', () => {
   });
 
   it('DELETE /api/schedules/:id should delete a schedule', async () => {
-    (pool.query as any).mockResolvedValueOnce({
-      rows: [{ source: 'api' }],
-    } as unknown as QueryResult<any>);
+    (pool.query as unknown as import('vitest').Mock).mockResolvedValueOnce({
+      rows: [{ id: '1', name: 'Task 1', cron: '* * * * *', agent_name: 'Agent 1' }],
+    } as unknown as QueryResult<{ id: string; name: string; cron: string; agent_name: string }>);
     vi.mocked(mockScheduleService.deleteSchedule).mockResolvedValueOnce(undefined);
 
     const res = await request(app).delete('/api/schedules/123');

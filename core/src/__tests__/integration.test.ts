@@ -5,7 +5,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Set WORKSPACE_DIR before importing app/index.ts
-process.env.WORKSPACE_DIR = path.resolve(__dirname, '..', '..', '..');
+vi.hoisted(() => {
+  process.env.WORKSPACE_DIR = '/';
+  process.env.SECRETS_MASTER_KEY = '0'.repeat(64);
+});
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';

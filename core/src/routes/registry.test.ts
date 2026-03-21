@@ -2,13 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createRegistryRouter } from './registry.js';
-import { AgentRegistry } from '../agents/registry.service.js';
-import { ResourceImporter } from '../agents/importer.service.js';
 
 describe('Registry Routes', () => {
-  let app: any;
-  let registryMock: any;
-  let importerMock: any;
+  let app!: express.Express;
+  let registryMock!: {
+    listTemplates: import('vitest').Mock;
+    getTemplate: import('vitest').Mock;
+    listInstances: import('vitest').Mock;
+    createInstance: import('vitest').Mock;
+    getInstance: import('vitest').Mock;
+  };
+  let importerMock!: {
+    importAll: import('vitest').Mock;
+  };
 
   beforeEach(() => {
     registryMock = {
@@ -23,7 +29,13 @@ describe('Registry Routes', () => {
     };
     app = express();
     app.use(express.json());
-    app.use('/api/registry', createRegistryRouter(registryMock, importerMock));
+    app.use(
+      '/api/registry',
+      createRegistryRouter(
+        registryMock as unknown as import('../agents/registry.service.js').AgentRegistry,
+        importerMock as unknown as import('../agents/importer.service.js').ResourceImporter
+      )
+    );
   });
 
   it('GET /api/registry/templates returns list', async () => {

@@ -92,7 +92,7 @@ export function createLlmProxyRouter(
       let budget;
       try {
         budget = await meteringService.checkBudget(agentId);
-      } catch (err: any) {
+      } catch (err: unknown) {
         logger.error('Budget check failed (allowing request):', err);
         // Fail-open: if metering DB is down, allow the request but log it
         budget = null;
@@ -115,8 +115,9 @@ export function createLlmProxyRouter(
       }
 
       // ── 2. Validate request body ───────────────────────────────────────────
-      const { model, temperature, tools, stream } = req.body as Record<string, any>;
-      let { messages } = req.body as Record<string, any>;
+      const body = req.body as Record<string, unknown>;
+      const { model, temperature, tools, stream } = body;
+      let messages = body['messages'] as import('../agents/types.js').ChatMessage[] | undefined;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         res
@@ -127,7 +128,12 @@ export function createLlmProxyRouter(
 
       // ── 2.1 Context Assembly (Story 6.3 / 8.4) ─────────────────────────────
       try {
-        messages = await contextAssembler.assemble(agentId, messages as any[]);
+        if (messages) {
+          messages = (await contextAssembler.assemble(
+            agentId,
+            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[]
+          )) as unknown as import('../agents/types.js').ChatMessage[];
+        }
       } catch (err) {
         logger.error('Context assembly failed (continuing without enrichment):', err);
       }
@@ -137,7 +143,7 @@ export function createLlmProxyRouter(
 
       const chatRequest = {
         model: modelName,
-        messages: messages as import('../llm/LiteLLMClient.js').ChatMessage[],
+        messages: messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
         ...(temperature !== undefined ? { temperature: temperature as number } : {}),
         ...(Array.isArray(tools) ? { tools: tools as unknown[] } : {}),
       };
@@ -159,18 +165,19 @@ export function createLlmProxyRouter(
           streamRes.pipe(res);
           streamRes.on('end', () => res.end());
           return;
-        } catch (err: any) {
-          if ((err as any).code === 'CIRCUIT_OPEN') {
+        } catch (err: unknown) {
+          const streamErr = err as { code?: string; provider?: string; message: string };
+          if (streamErr.code === 'CIRCUIT_OPEN') {
             res.status(503).json({
               error: 'provider_unavailable',
-              provider: (err as any).provider,
-              message: err.message,
+              provider: streamErr.provider,
+              message: streamErr.message,
             });
             return;
           }
           logger.error(`Stream proxy error | agent=${agentId}:`, err);
           res.status(502).json({
-            error: { message: `Upstream LLM error: ${err.message}`, type: 'upstream_error' },
+            error: { message: `Upstream LLM error: ${streamErr.message}`, type: 'upstream_error' },
           });
           return;
         }
@@ -178,7 +185,7 @@ export function createLlmProxyRouter(
 
       // ── 4. Non-streaming path — call through circuit breaker ───────────────
       logger.info(
-        `Proxy request | agent=${agentId} model=${modelName} messages=${(messages as any[]).length} ` +
+        `Proxy request | agent=${agentId} model=${modelName} messages=${messages?.length ?? 0} ` +
           `tools=${Array.isArray(tools) ? tools.length : 0}`
       );
 
@@ -187,14 +194,15 @@ export function createLlmProxyRouter(
 
       try {
         llmResponse = await circuitBreakerService.call(chatRequest, agentId, latencyStart);
-      } catch (err: any) {
+      } catch (err: unknown) {
         callStatus = 'error';
+        const cbErr = err as { code?: string; provider?: string; message: string };
 
-        if ((err as any).code === 'CIRCUIT_OPEN') {
+        if (cbErr.code === 'CIRCUIT_OPEN') {
           res.status(503).json({
             error: 'provider_unavailable',
-            provider: (err as any).provider,
-            message: err.message,
+            provider: cbErr.provider,
+            message: cbErr.message,
           });
           return;
         }
@@ -215,34 +223,35 @@ export function createLlmProxyRouter(
 
         logger.error(`LLM proxy error | agent=${agentId}:`, err);
         res.status(502).json({
-          error: { message: `Upstream LLM error: ${err.message}`, type: 'upstream_error' },
+          error: { message: `Upstream LLM error: ${cbErr.message}`, type: 'upstream_error' },
         });
         return;
       }
-
       // ── 5. Record metering async (Story 4.4) ──────────────────────────────
       // Non-blocking — does not add latency to the response path.
-      const usage = llmResponse.response.usage;
-      meteringService
-        .recordUsage({
-          agentId,
-          circleId,
-          model: modelName,
-          promptTokens: usage?.prompt_tokens ?? 0,
-          completionTokens: usage?.completion_tokens ?? 0,
-          totalTokens: usage?.total_tokens ?? 0,
-          latencyMs: llmResponse.latencyMs,
-          status: callStatus,
-        })
-        .catch((err) => logger.error('Failed to record metering:', err));
+      if (llmResponse) {
+        const usage = llmResponse.response.usage;
+        meteringService
+          .recordUsage({
+            agentId,
+            circleId,
+            model: modelName,
+            promptTokens: usage?.prompt_tokens ?? 0,
+            completionTokens: usage?.completion_tokens ?? 0,
+            totalTokens: usage?.total_tokens ?? 0,
+            latencyMs: llmResponse.latencyMs,
+            status: callStatus,
+          })
+          .catch((err) => logger.error('Failed to record metering:', err));
 
-      // ── 6. Return response ─────────────────────────────────────────────────
-      logger.debug(
-        `Proxy complete | agent=${agentId} model=${modelName} ` +
-          `tokens=${usage?.total_tokens ?? 0} latency=${llmResponse.latencyMs}ms`
-      );
+        // ── 6. Return response ─────────────────────────────────────────────────
+        logger.debug(
+          `Proxy complete | agent=${agentId} model=${modelName} ` +
+            `tokens=${usage?.total_tokens ?? 0} latency=${llmResponse.latencyMs}ms`
+        );
 
-      res.json(llmResponse.response);
+        res.json(llmResponse.response);
+      }
     }
   );
 
@@ -252,7 +261,7 @@ export function createLlmProxyRouter(
     try {
       const models = await llmRouter.listModels();
       res.json({ object: 'list', data: models });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('Failed to list models:', err);
       res.status(502).json({ error: 'Failed to retrieve model list' });
     }

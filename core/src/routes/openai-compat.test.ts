@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
+vi.hoisted(() => {
+  process.env.SECRETS_MASTER_KEY = '0'.repeat(64);
+});
 import { app } from '../index.js';
 
 vi.mock('../lib/llm/OpenAIProvider.js', () => ({

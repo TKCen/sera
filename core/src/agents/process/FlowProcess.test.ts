@@ -10,7 +10,7 @@ function createMockAgent(roleName: string, response: string) {
   return {
     name: `${roleName}-display`,
     role: roleName,
-    process: (vi.fn() as any).mockResolvedValue({
+    process: vi.fn().mockResolvedValue({
       thought: `Thinking about it`,
       finalAnswer: response,
     } satisfies AgentResponse),
@@ -48,7 +48,7 @@ describe('FlowProcess', () => {
     expect(result.results[1]!.taskId).toBe('t2');
 
     // Check context passing
-    const bCall = (agentB.process as any).mock.calls[0]![0] as string;
+    const bCall = vi.mocked(agentB.process).mock.calls[0]![0] as string;
     expect(bCall).toContain('[Task t1]: Output A');
   });
 
@@ -77,7 +77,7 @@ describe('FlowProcess', () => {
     const result = await manager.run('flow', tasks, agents);
 
     expect(result.results).toHaveLength(3);
-    const cCall = (agentC.process as any).mock.calls[0]![0] as string;
+    const cCall = vi.mocked(agentC.process).mock.calls[0]![0] as string;
     expect(cCall).toContain('[Task t1]: A');
     expect(cCall).toContain('[Task t2]: B');
   });

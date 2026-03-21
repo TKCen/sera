@@ -1,0 +1,40 @@
+
+> lint:core
+> npm run lint --workspace=core
+
+
+> core@1.0.0 lint
+> eslint src
+
+
+D:\projects\homelab\sera\core\src\routes\llmProxy.test.ts
+   62:20  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  101:52  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  102:72  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  115:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  116:97  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  158:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  159:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  384:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\routes\registry.test.ts
+  32:67  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  32:88  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\secrets\postgres-secrets-provider.test.ts
+  50:83  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  62:52  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  64:81  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\services\ScheduleService.test.ts
+  66:51  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\sessions\SessionStore.test.ts
+  152:50  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  260:91  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\projects\homelab\sera\core\src\skills\SkillInjector.test.ts
+  35:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+Ô£û 17 problems (0 errors, 17 warnings)
+

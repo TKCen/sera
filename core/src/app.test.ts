@@ -10,6 +10,9 @@ vi.mock('./services/vector.service.js', () => ({
     async deletePoints() {}
   },
 }));
+vi.hoisted(() => {
+  process.env.SECRETS_MASTER_KEY = '0'.repeat(64);
+});
 
 import { app } from './index.js';
 

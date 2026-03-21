@@ -47,7 +47,9 @@ describe('PostgresSecretsProvider', () => {
         if (sql.includes('INSERT INTO secrets')) {
           storedValue = params?.[1] as Buffer;
           storedIv = params?.[2] as Buffer;
-          return { rowCount: 1, rows: [] } as unknown as import('pg').QueryResult<any>;
+          return { rowCount: 1, rows: [] } as unknown as import('pg').QueryResult<
+            Record<string, unknown>
+          >;
         }
         if (sql.includes('SELECT encrypted_value')) {
           return {
@@ -59,9 +61,11 @@ describe('PostgresSecretsProvider', () => {
                 allowed_agents: ['test-agent'],
               },
             ],
-          } as unknown as import('pg').QueryResult<any>;
+          } as unknown as import('pg').QueryResult<Record<string, unknown>>;
         }
-        return { rowCount: 0, rows: [] } as unknown as import('pg').QueryResult<any>;
+        return { rowCount: 0, rows: [] } as unknown as import('pg').QueryResult<
+          Record<string, unknown>
+        >;
       });
 
       await provider.set(secretName, secretValue, { allowedAgents: ['test-agent'] });
@@ -85,7 +89,7 @@ describe('PostgresSecretsProvider', () => {
             allowed_agents: ['test-agent'],
           },
         ],
-      } as unknown as import('pg').QueryResult<any>);
+      } as unknown as import('pg').QueryResult<Record<string, unknown>>);
 
       await expect(provider.get(secretName, agentContext)).rejects.toThrow(
         'Secret decryption failed'
@@ -108,7 +112,7 @@ describe('PostgresSecretsProvider', () => {
             allowed_agents: ['authorized-agent'],
           },
         ],
-      } as unknown as import('pg').QueryResult<any>);
+      } as unknown as import('pg').QueryResult<Record<string, unknown>>);
 
       const value = await provider.get(secretName, agentContext);
       expect(value).toBeNull();
@@ -134,7 +138,7 @@ describe('PostgresSecretsProvider', () => {
             allowed_agents: ['*'],
           },
         ],
-      } as unknown as import('pg').QueryResult<any>);
+      } as unknown as import('pg').QueryResult<Record<string, unknown>>);
 
       const value = await provider.get('any-secret', { agentId: 'any', agentName: 'any' });
       expect(value).toBe(secretValue);
@@ -158,7 +162,9 @@ describe('PostgresSecretsProvider', () => {
           },
         ],
       };
-      vi.mocked(db.query).mockResolvedValue(mockResult as unknown as import('pg').QueryResult<any>);
+      vi.mocked(db.query).mockResolvedValue(
+        mockResult as unknown as import('pg').QueryResult<Record<string, unknown>>
+      );
 
       const context = {
         operator: {
@@ -197,7 +203,9 @@ describe('PostgresSecretsProvider', () => {
   describe('healthCheck', () => {
     it('should return true if DB is healthy', async () => {
       const provider = new PostgresSecretsProvider();
-      vi.mocked(db.query).mockResolvedValue({} as unknown as import('pg').QueryResult<any>);
+      vi.mocked(db.query).mockResolvedValue(
+        {} as unknown as import('pg').QueryResult<Record<string, unknown>>
+      );
       expect(await provider.healthCheck()).toBe(true);
     });
 

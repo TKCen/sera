@@ -10,6 +10,8 @@ vi.mock('../lib/database.js', () => ({
   },
 }));
 
+const logger = { info: console.log };
+
 describe('Audit Export Streaming', () => {
   let service: AuditService;
 
@@ -44,7 +46,9 @@ describe('Audit Export Streaming', () => {
       }),
       release: vi.fn(),
     };
-    vi.mocked(pool.connect).mockResolvedValue(clientMock as any);
+    vi.mocked(pool.connect).mockResolvedValue(
+      clientMock as unknown as Awaited<ReturnType<typeof pool.connect>>
+    );
 
     const memoryBefore = process.memoryUsage().heapUsed;
     let streamCount = 0;
@@ -65,5 +69,3 @@ describe('Audit Export Streaming', () => {
     logger.info(`Memory diff for 15k records export: ${memoryDiffMB.toFixed(2)} MB`);
   });
 });
-
-const logger = { info: console.log };

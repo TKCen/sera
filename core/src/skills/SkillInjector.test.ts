@@ -32,7 +32,7 @@ describe('SkillInjector', () => {
       content: 'Skill content',
       triggers: [],
     };
-    (libMock['getSkill'] as any).mockResolvedValue(skillDoc);
+    (libMock['getSkill'] as import('vitest').Mock).mockResolvedValue(skillDoc);
 
     const prompt = '## Guiding Principles\n- Be helpful.\n\n## Context';
     const result = await injector.inject(prompt, ['test-skill'], [], 'user message');
@@ -52,8 +52,8 @@ describe('SkillInjector', () => {
       version: '1.0.0',
       content: 'Git guidance',
     };
-    (libMock['listSkills'] as any).mockResolvedValue([skillInfo]);
-    (libMock['getSkill'] as any).mockResolvedValue(skillDoc);
+    (libMock['listSkills'] as import('vitest').Mock).mockResolvedValue([skillInfo]);
+    (libMock['getSkill'] as import('vitest').Mock).mockResolvedValue(skillDoc);
 
     const prompt = '## Guiding Principles\n- Be helpful.';
     const result = await injector.inject(prompt, [], [], 'I need to commit my changes');
@@ -67,7 +67,7 @@ describe('SkillInjector', () => {
     const skill1 = { name: 's1', version: '1', content: 'A'.repeat(400), triggers: [] };
     const skill2 = { name: 's2', version: '1', content: 'B'.repeat(4000), triggers: [] };
 
-    (libMock['getSkill'] as any).mockImplementation((name: string) => {
+    (libMock['getSkill'] as import('vitest').Mock).mockImplementation((name: string) => {
       if (name === 's1') return Promise.resolve(skill1);
       if (name === 's2') return Promise.resolve(skill2);
       return Promise.resolve(null);

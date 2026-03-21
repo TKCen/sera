@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { IntercomService } from './IntercomService.js';
-import { pool, query } from '../lib/database.js';
+import { pool } from '../lib/database.js';
 
 // ── Mocks ───────────────────────────────────────────────────────────────────────
 
 vi.mock('../lib/database.js', () => ({
   pool: {
-    query: vi.fn<any>().mockResolvedValue({ rows: [] }),
+    query: vi.fn().mockResolvedValue({ rows: [] }),
   },
-  query: vi.fn<any>().mockResolvedValue({ rows: [] }),
+  query: vi.fn().mockResolvedValue({ rows: [] }),
 }));
 
 vi.mock('axios', () => ({
@@ -61,7 +61,7 @@ describe('Story 9.7: Thought Stream Persistence', () => {
         iteration: 1,
       },
     ];
-    (query as any).mockResolvedValue({
+    (pool.query as unknown as import('vitest').Mock).mockResolvedValue({
       rows: mockRows,
     });
 

@@ -82,7 +82,10 @@ export class IdentityService {
       agentId,
       agentName: typeof agentName === 'string' ? agentName : agentId,
       circleId,
-      capabilities: Array.isArray(capabilities) ? (capabilities as string[]) : [],
+      capabilities:
+        Array.isArray(capabilities) || (typeof capabilities === 'object' && capabilities !== null)
+          ? (capabilities as string[] | Record<string, unknown>)
+          : [],
       scope: (scope === 'internal' ? 'internal' : 'agent') as 'agent' | 'internal',
       iat: typeof iat === 'number' ? iat : 0,
       exp: typeof exp === 'number' ? exp : 0,

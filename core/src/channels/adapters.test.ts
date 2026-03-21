@@ -38,8 +38,8 @@ describe('Channel Adapters', () => {
     it('should route messages to the primary agent and use deterministic session ID', async () => {
       const adapter = new TelegramAdapter(
         'fake-token',
-        mockOrchestrator as any,
-        mockSessionStore as any
+        mockOrchestrator as unknown as Orchestrator,
+        mockSessionStore as unknown as SessionStore
       );
 
       const chatId = '456';
@@ -71,8 +71,8 @@ describe('Channel Adapters', () => {
     it('should enforce rate limits and not call agent', async () => {
       const adapter = new TelegramAdapter(
         'fake-token',
-        mockOrchestrator as any,
-        mockSessionStore as any,
+        mockOrchestrator as unknown as Orchestrator,
+        mockSessionStore as unknown as SessionStore,
         {
           maxMessagesPerWindow: 2,
         }
@@ -105,8 +105,8 @@ describe('Channel Adapters', () => {
     it('should handle incoming messages', async () => {
       const adapter = new DiscordAdapter(
         'fake-token',
-        mockOrchestrator as any,
-        mockSessionStore as any
+        mockOrchestrator as unknown as Orchestrator,
+        mockSessionStore as unknown as SessionStore
       );
 
       vi.mocked(axios.post).mockResolvedValueOnce({ data: { id: 'msg-id' } });
@@ -134,8 +134,8 @@ describe('Channel Adapters', () => {
       const adapter = new WhatsAppAdapter(
         'fake-token',
         'phone-id',
-        mockOrchestrator as any,
-        mockSessionStore as any
+        mockOrchestrator as unknown as Orchestrator,
+        mockSessionStore as unknown as SessionStore
       );
 
       vi.mocked(axios.post).mockResolvedValueOnce({ data: { messaging_product: 'whatsapp' } });

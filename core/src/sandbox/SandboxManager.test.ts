@@ -196,8 +196,9 @@ describe('SandboxManager', () => {
       await expect(
         manager.exec(otherManifest, {
           containerId: 'container-abc123',
+          agentName: 'other-agent',
           command: ['cat', '/etc/passwd'],
-        } as any)
+        } as unknown as { containerId: string; agentName: string; command: string[] })
       ).rejects.toThrow(/cannot exec/);
     });
   });

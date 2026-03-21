@@ -19,26 +19,33 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
     try {
       const blocks = await memoryManager.getAllBlocks();
       res.json(blocks);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   router.get('/blocks/:type', async (req, res) => {
     try {
-      const block = await memoryManager.getBlock(req.params.type as any);
+      const { type } = req.params;
+      const block = await memoryManager.getBlock(
+        type as import('../memory/blocks/types.js').MemoryBlockType
+      );
       res.json(block);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   router.post('/blocks/:type', async (req, res) => {
     try {
-      const entry = await memoryManager.addEntry(req.params.type as any, req.body);
+      const { type } = req.params;
+      const entry = await memoryManager.addEntry(
+        type as import('../memory/blocks/types.js').MemoryBlockType,
+        req.body as import('../memory/blocks/types.js').CreateEntryOptions
+      );
       res.status(201).json(entry);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -47,8 +54,8 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       const entry = await memoryManager.getEntry(req.params.id);
       if (!entry) return res.status(404).json({ error: 'Entry not found' });
       res.json(entry);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -56,8 +63,8 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
     try {
       const graph = await memoryManager.getGraph();
       res.json(graph);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -80,8 +87,8 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
           personal: personalInfo ?? { vectorCount: 0 },
         },
       });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -89,15 +96,16 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
   router.get('/:agentId/blocks', async (req, res) => {
     try {
       const { agentId } = req.params;
-      const { type, tags, since } = req.query as Record<string, string | undefined>;
+      const query = req.query as Record<string, string | undefined>;
+      const { type, tags, since } = query;
       const blocks = await scopedStore.list(agentId, {
         ...(type ? { type: type as KnowledgeBlockType } : {}),
         ...(tags ? { tags: tags.split(',') } : {}),
         ...(since ? { since } : {}),
       });
       res.json(blocks);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -113,8 +121,8 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       }
       if (!block) return res.status(404).json({ error: 'Block not found' });
       res.json(block);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -124,8 +132,8 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       const { agentId } = req.params;
       const result = await MemoryCompactionService.getInstance().triggerCompaction(agentId);
       res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

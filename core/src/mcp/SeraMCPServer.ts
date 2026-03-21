@@ -6,6 +6,7 @@ import { CircleService } from '../circles/CircleService.js';
 import { pool } from '../lib/database.js';
 import { AuditService } from '../audit/AuditService.js';
 import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
+import type { ProcessTask } from '../agents/process/types.js';
 
 /**
  * SeraMCPServer — an embedded MCP server that exposes platform management tools.
@@ -237,13 +238,13 @@ export class SeraMCPServer {
             toolArgs['agentId'] as string
           );
         case 'orchestration.sequential':
-          return this.handleSequentialOrchestration(toolArgs['tasks'] as any[]);
+          return this.handleSequentialOrchestration(toolArgs['tasks'] as ProcessTask[]);
         case 'orchestration.parallel':
-          return this.handleParallelOrchestration(toolArgs['tasks'] as any[]);
+          return this.handleParallelOrchestration(toolArgs['tasks'] as ProcessTask[]);
         case 'orchestration.hierarchical':
           return this.handleHierarchicalOrchestration(
             toolArgs['managerAgent'] as string,
-            toolArgs['tasks'] as any[]
+            toolArgs['tasks'] as ProcessTask[]
           );
         case 'circle.broadcast':
           return this.handleCircleBroadcast(toolArgs['circleId'] as string, toolArgs['payload']);
@@ -253,7 +254,10 @@ export class SeraMCPServer {
             toolArgs['task'] as string,
             toolArgs['circle'] as string,
             toolArgs['parentAgentId'] as string,
-            toolArgs['delegations'] as any[]
+            toolArgs['delegations'] as Array<{
+              delegationTokenId: string;
+              narrowedScope?: DelegationScope;
+            }>
           );
         default:
           throw new Error(`Tool not found: ${name}`);
@@ -311,32 +315,22 @@ export class SeraMCPServer {
     };
   }
 
-  private async handleSequentialOrchestration(tasks: unknown[]) {
-    const result = await this.orchestrator.executeWithProcess(
-      'sequential',
-      tasks as import('../agents/process/types.js').ProcessTask[]
-    );
+  private async handleSequentialOrchestration(tasks: ProcessTask[]) {
+    const result = await this.orchestrator.executeWithProcess('sequential', tasks);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
-  private async handleParallelOrchestration(tasks: unknown[]) {
-    const result = await this.orchestrator.executeWithProcess(
-      'parallel',
-      tasks as import('../agents/process/types.js').ProcessTask[]
-    );
+  private async handleParallelOrchestration(tasks: ProcessTask[]) {
+    const result = await this.orchestrator.executeWithProcess('parallel', tasks);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
-  private async handleHierarchicalOrchestration(managerAgent: string, tasks: unknown[]) {
-    const result = await this.orchestrator.executeWithProcess(
-      'hierarchical',
-      tasks as import('../agents/process/types.js').ProcessTask[],
-      managerAgent
-    );
+  private async handleHierarchicalOrchestration(managerAgent: string, tasks: ProcessTask[]) {
+    const result = await this.orchestrator.executeWithProcess('hierarchical', tasks, managerAgent);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };

@@ -107,6 +107,53 @@ export interface AgentManifest {
   metadata: AgentMetadata;
   identity: AgentIdentity;
   model: ModelConfig;
+  spec?: {
+    identity?: {
+      role?: string;
+      principles?: string[];
+    };
+    model?: {
+      provider?: string;
+      name?: string;
+      temperature?: number;
+      fallback?: ModelFallback[];
+    };
+    sandboxBoundary?: string;
+    policyRef?: string;
+    capabilities?: Record<string, unknown>;
+    lifecycle?: {
+      mode: 'persistent' | 'ephemeral';
+    };
+    skills?: string[];
+    skillPackages?: string[];
+    tools?: {
+      allowed?: string[];
+      denied?: string[];
+    };
+    subagents?: {
+      allowed?: Array<{
+        templateRef: string;
+        maxInstances?: number;
+        lifecycle?: 'persistent' | 'ephemeral';
+        requiresApproval?: boolean;
+      }>;
+    };
+    resources?: {
+      cpu?: string;
+      memory?: string;
+      maxLlmTokensPerHour?: number;
+      maxLlmTokensPerDay?: number;
+    };
+    workspace?: Record<string, unknown>;
+    memory?: Record<string, unknown>;
+    schedules?: Array<{
+      name: string;
+      description?: string;
+      type: 'cron' | 'once';
+      expression: string;
+      task: string;
+    }>;
+  };
   tools?: ToolsConfig;
   skills?: Array<string | { name: string; version: string }>;
   skillPackages?: string[];
@@ -148,6 +195,7 @@ export interface ResolvedCapabilities {
     access?: string[];
   };
   capabilities?: string[];
+  skillPackages?: string[];
   [key: string]: unknown;
 }
 

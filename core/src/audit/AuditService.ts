@@ -138,7 +138,7 @@ export class AuditService {
         entry.actorType,
         entry.actorId,
         entry.eventType,
-        validatedPayload as any,
+        validatedPayload as Record<string, unknown>,
         prevHash
       );
 
@@ -192,7 +192,7 @@ export class AuditService {
         record.actor_type,
         record.actor_id,
         record.event_type,
-        record.payload as any,
+        record.payload as Record<string, unknown>,
         record.prev_hash
       );
 

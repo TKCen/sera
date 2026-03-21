@@ -5,7 +5,7 @@ import { AgentFactory } from './AgentFactory.js';
 import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
-import type { AgentManifest } from './manifest/types.js';
+import type { AgentManifest, ResolvedCapabilities } from './manifest/types.js';
 import { Logger } from '../lib/logger.js';
 import { CapabilityResolver } from '../capability/resolver.js';
 import type { AgentRegistry } from './registry.service.js';
@@ -156,7 +156,7 @@ export class Orchestrator {
     if (!instance) throw new Error(`Agent instance "${instanceId}" not found`);
 
     const manifest = await this.registry.getTemplate(instance.template_ref);
-    if (manifest) this.manifests.set(instance.template_ref, manifest as any);
+    if (manifest) this.manifests.set(instance.template_ref, manifest as AgentManifest);
 
     const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
@@ -167,7 +167,7 @@ export class Orchestrator {
 
     // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────
     const templateLifecycle =
-      (manifest as any).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
+      (manifest as AgentManifest).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
     const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle as
       | 'persistent'
       | 'ephemeral';
@@ -230,8 +230,10 @@ export class Orchestrator {
             {
               agentId: instance.id,
               agentName: manifest.metadata.name,
-              circleId: (resolvedCircleId || (manifest as any).metadata.circle || '') as string,
-              capabilities: resolvedCapabilities as any,
+              circleId: (resolvedCircleId ||
+                (manifest as AgentManifest).metadata.circle ||
+                '') as string,
+              capabilities: resolvedCapabilities as Record<string, unknown>,
               scope: 'agent',
             },
             '24h'
@@ -240,9 +242,9 @@ export class Orchestrator {
 
         // Story 16.9 — load agent-env secrets (exposure: agent-env only)
         const agentEnvSecrets: Record<string, string> = {};
-        const capabilities = resolvedCapabilities as any;
-        const limitGB = capabilities?.maxWorkspaceSizeGB || 5;
-        const canWrite = capabilities?.write !== false;
+        const capabilities = resolvedCapabilities as ResolvedCapabilities;
+        // const limitGB = capabilities?.filesystem?.maxWorkspaceSizeGB || 5;
+        const canWrite = capabilities?.filesystem?.write !== false;
 
         if (!canWrite) {
           // TODO: Implement read-only workspace
@@ -492,7 +494,7 @@ export class Orchestrator {
     const throttled = await this.registry.listInstances({ status: 'throttled' });
 
     for (const instance of [...running, ...throttled]) {
-      const caps = instance.resolved_capabilities as any;
+      const caps = instance.resolved_capabilities as ResolvedCapabilities;
       const limitGB: number | undefined = caps?.filesystem?.maxWorkspaceSizeGB;
 
       const workspacePath = instance.workspace_path;
@@ -535,7 +537,7 @@ export class Orchestrator {
         }
       } else if ((instance.status as string) === 'throttled') {
         // Usage dropped below limit — restore to running
-        await (this.registry as any).updateInstanceStatus(instance.id, 'running');
+        await this.registry.updateInstanceStatus(instance.id, 'running');
         this.publishLifecycleEvent('running', instance.id, instance.name);
         logger.info(`Agent ${instance.name} usage back within quota: ${usedGB}GB / ${limitGB}GB`);
       }

@@ -66,7 +66,7 @@ describe('OIDCAuthPlugin', () => {
         exp: 9999999999,
       },
       protectedHeader: { alg: 'RS256' },
-    } as any);
+    } as unknown as Awaited<ReturnType<typeof jwtVerify>>);
 
     const plugin = new OIDCAuthPlugin();
     const result = await plugin.authenticate(makeReq(FAKE_JWT) as Request);
@@ -91,7 +91,7 @@ describe('OIDCAuthPlugin', () => {
         exp: 9999999999,
       },
       protectedHeader: { alg: 'RS256' },
-    } as any);
+    } as unknown as Awaited<ReturnType<typeof jwtVerify>>);
 
     const plugin = new OIDCAuthPlugin();
     const result = await plugin.authenticate(makeReq(FAKE_JWT) as Request);
@@ -110,7 +110,7 @@ describe('OIDCAuthPlugin', () => {
         exp: 9999999999,
       },
       protectedHeader: { alg: 'RS256' },
-    } as any);
+    } as unknown as Awaited<ReturnType<typeof jwtVerify>>);
 
     const plugin = new OIDCAuthPlugin();
     const result = await plugin.authenticate(makeReq(FAKE_JWT) as Request);
@@ -151,7 +151,7 @@ describe('OIDCAuthPlugin', () => {
         exp: 9999999999,
       },
       protectedHeader: { alg: 'RS256' },
-    } as any);
+    } as unknown as Awaited<ReturnType<typeof jwtVerify>>);
 
     const plugin = new OIDCAuthPlugin();
     await plugin.authenticate(makeReq(FAKE_JWT) as Request);

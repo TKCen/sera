@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ProcessManager } from './ProcessManager.js';
 import type { ProcessTask } from './types.js';
 import type { AgentResponse } from '../types.js';
+import type { BaseAgent } from '../BaseAgent.js';
 
 // ── Mock Agent ──────────────────────────────────────────────────────────────────
 
@@ -14,7 +15,7 @@ function createMockAgent(roleName: string, response: string) {
       finalAnswer: response,
     } satisfies AgentResponse),
     updateLlmProvider: vi.fn(),
-  } as any;
+  } as unknown as BaseAgent;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
@@ -50,14 +51,14 @@ describe('ProcessManager', () => {
       expect(result.results[1]!.output).toBe('Result B');
 
       // Second agent should receive context from first
-      const secondCall = agentB.process.mock.calls[0]![0] as string;
+      const secondCall = vi.mocked(agentB.process).mock.calls[0]![0] as string;
       expect(secondCall).toContain('Result A');
       expect(secondCall).toContain('Second task');
     });
 
     it('should handle agent failures gracefully', async () => {
       const agent = createMockAgent('agent-a', '');
-      agent.process.mockRejectedValue(new Error('LLM unavailable'));
+      vi.mocked(agent.process).mockRejectedValue(new Error('LLM unavailable'));
       const agents = new Map([['agent-a', agent]]);
 
       const tasks: ProcessTask[] = [
@@ -108,7 +109,7 @@ describe('ProcessManager', () => {
       const mgr = createMockAgent('manager', 'APPROVED: looks good');
 
       // Second call: consolidation
-      mgr.process
+      vi.mocked(mgr.process)
         .mockResolvedValueOnce({ thought: '', finalAnswer: 'APPROVED: good' })
         .mockResolvedValueOnce({ thought: '', finalAnswer: 'Consolidated answer' });
 
@@ -122,7 +123,7 @@ describe('ProcessManager', () => {
       expect(result.processType).toBe('hierarchical');
       expect(result.results[0]!.status).toBe('completed');
       // Manager should have been called for review + consolidation
-      expect(mgr.process).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(mgr.process)).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -139,7 +140,7 @@ describe('ProcessManager', () => {
 
   describe('unknown type', () => {
     it('should throw for unknown process type', async () => {
-      await expect(manager.run('unknown' as any, [], new Map())).rejects.toThrow(
+      await expect(manager.run('unknown' as 'flow', [], new Map())).rejects.toThrow(
         /Unknown process type/
       );
     });

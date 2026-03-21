@@ -21,8 +21,9 @@ export function createSecretsRouter() {
         }
       );
       res.json(list);
-    } catch (err: any) {
-      res.status(err.message.includes('Unauthorized') ? 403 : 500).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
     }
   });
 
@@ -40,8 +41,9 @@ export function createSecretsRouter() {
         return;
       }
       res.json(secret);
-    } catch (err: any) {
-      res.status(err.message.includes('Unauthorized') ? 403 : 500).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
     }
   });
 
@@ -68,13 +70,14 @@ export function createSecretsRouter() {
           tags,
           allowedAgents: allowedAgents || [],
           allowedCircles: allowedCircles || [],
-          exposure: (req.body.exposure as any) || 'agent-env',
-        } as any
+          exposure: (req.body.exposure as 'per-call' | 'agent-env') || 'agent-env',
+        }
       );
 
       res.status(201).json({ message: 'Secret stored' });
-    } catch (err: any) {
-      res.status(err.message.includes('Unauthorized') ? 403 : 500).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
     }
   });
 
@@ -92,8 +95,9 @@ export function createSecretsRouter() {
         return;
       }
       res.json({ message: 'Secret deleted' });
-    } catch (err: any) {
-      res.status(err.message.includes('Unauthorized') ? 403 : 500).json({ error: err.message });
+    } catch (err: unknown) {
+      const error = err as Error;
+      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
     }
   });
 

@@ -198,11 +198,11 @@ function toContext(request: ChatCompletionRequest): Context {
           })
       : undefined;
 
-  const ctx: any = {
+  const ctx = {
     messages,
-    systemPrompt: systemPrompt || undefined,
-    tools: tools && tools.length > 0 ? tools : undefined,
-  };
+    systemPrompt: systemPrompt ?? '',
+    ...(tools && tools.length > 0 ? { tools: tools as Context['tools'] } : {}),
+  } as unknown as Context;
   return ctx;
 }
 
@@ -442,7 +442,7 @@ export class LlmRouter {
   }
 
   /** List all explicitly registered providers as OpenAI-style model objects. */
-  async listModels(): Promise<{ id: string; object: string; owned_by?: string }[]> {
+  async listModels(): Promise<Array<{ id: string; object: string; owned_by?: string }>> {
     return this.registry.list().map((cfg) => ({
       id: cfg.modelName,
       object: 'model',
@@ -451,7 +451,7 @@ export class LlmRouter {
   }
 
   /** Register a new provider and persist to config file. */
-  async addModel(config: ProviderConfig): Promise<Record<string, unknown>> {
+  async addModel(config: ProviderConfig): Promise<{ modelName: string; api: string }> {
     this.registry.register(config);
     await this.registry.save();
     logger.info(`Provider registered | model=${config.modelName} api=${config.api}`);

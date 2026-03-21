@@ -2,14 +2,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { CapabilityResolver } from './resolver.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 
-interface TestResolvedCapabilities {
-  network: { outbound: string[] };
-  fs: { read: boolean; write: boolean | string[] };
-  root: boolean;
-  exec: { commands: string[] };
-  net: boolean;
-}
-
 describe('CapabilityResolver', () => {
   let registryMock: Record<string, import('vitest').Mock>;
   let resolver: CapabilityResolver;
@@ -64,8 +56,8 @@ describe('CapabilityResolver', () => {
     });
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
-    expect(caps?.network?.outbound).toEqual(['google.com']);
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
+    expect((caps?.network as Record<string, unknown>)?.outbound).toEqual(['google.com']);
   });
 
   it('handles missing policy or inline overrides', async () => {
@@ -78,8 +70,8 @@ describe('CapabilityResolver', () => {
     });
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
-    expect(caps?.network?.outbound).toEqual(['a.com']);
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
+    expect((caps?.network as Record<string, unknown>)?.outbound).toEqual(['a.com']);
   });
 
   it('recursive intersection of objects and narrowing', async () => {
@@ -95,9 +87,9 @@ describe('CapabilityResolver', () => {
     });
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
-    expect(caps?.fs?.read).toBe(true);
-    expect(caps?.fs?.write).toBe(false);
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
+    expect((caps?.fs as Record<string, unknown>)?.read).toBe(true);
+    expect((caps?.fs as Record<string, unknown>)?.write).toBe(false);
   });
 
   it('handles boolean true/false in layers', async () => {
@@ -109,7 +101,7 @@ describe('CapabilityResolver', () => {
     registryMock['getInstance']!.mockResolvedValue({ template_ref: 'tpl' });
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
     expect(caps?.root).toBe(false);
   });
 
@@ -142,14 +134,17 @@ describe('CapabilityResolver', () => {
     registryMock['getInstance']!.mockResolvedValue({ template_ref: 'tpl' });
 
     registryMock['getNamedList']!.mockImplementation((name: string) => {
-      if (name === 'list1') return { entries: ['google.com', { $ref: 'list2' }] } as any;
-      if (name === 'list2') return { entries: ['github.com'] } as any;
-      return null as any;
+      if (name === 'list1') return { entries: ['google.com', { $ref: 'list2' }] };
+      if (name === 'list2') return { entries: ['github.com'] };
+      return null;
     });
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
-    expect(caps?.network?.outbound).toEqual(['google.com', 'github.com']);
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
+    expect((caps?.network as Record<string, unknown>)?.outbound).toEqual([
+      'google.com',
+      'github.com',
+    ]);
   });
 
   it('detects circular references in NamedLists', async () => {
@@ -166,9 +161,9 @@ describe('CapabilityResolver', () => {
     registryMock['getInstance']!.mockResolvedValue({ template_ref: 'tpl' });
 
     registryMock['getNamedList']!.mockImplementation((name: string) => {
-      if (name === 'l1') return { entries: [{ $ref: 'l2' }] } as any;
-      if (name === 'l2') return { entries: [{ $ref: 'l1' }] } as any;
-      return null as any;
+      if (name === 'l1') return { entries: [{ $ref: 'l2' }] };
+      if (name === 'l2') return { entries: [{ $ref: 'l1' }] };
+      return null;
     });
 
     await expect(resolver.resolve('id')).rejects.toThrow(/circular reference detected/i);
@@ -191,8 +186,8 @@ describe('CapabilityResolver', () => {
     ]);
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
-    expect(caps?.exec?.commands).toEqual(['git *']);
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
+    expect((caps?.exec as Record<string, unknown>)?.commands).toEqual(['git *']);
   });
 
   it('handles broadening of arrays (escalation)', async () => {
@@ -245,8 +240,8 @@ describe('CapabilityResolver', () => {
     });
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
-    expect(caps?.fs?.write).toBe(false);
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
+    expect((caps?.fs as Record<string, unknown>)?.write).toBe(false);
     expect(caps?.net).toBe(false);
   });
 
@@ -265,7 +260,7 @@ describe('CapabilityResolver', () => {
     ]);
 
     const result = await resolver.resolve('id');
-    const caps = result.resolvedCapabilities as any;
+    const caps = result.resolvedCapabilities as Record<string, unknown>;
     expect(caps?.root).toBe(true);
   });
 
@@ -304,7 +299,7 @@ describe('CapabilityResolver', () => {
     registryMock['getSandboxBoundary']!.mockResolvedValue({ capabilities: {} });
 
     const result = await resolver.resolve('id');
-    const spec = result.spec as any;
+    const spec = result.spec as Record<string, unknown>;
     expect(spec?.skills).toContain('base-skill');
     expect(spec?.skills).toContain('new-skill');
     expect(spec?.skills).not.toContain('old-skill');
@@ -330,7 +325,7 @@ describe('CapabilityResolver', () => {
     registryMock['getSandboxBoundary']!.mockResolvedValue({ capabilities: {} });
 
     const result = await resolver.resolve('id');
-    const spec = result.spec as any;
+    const spec = result.spec as Record<string, unknown>;
     expect(spec?.skills).toEqual(['scalar-skill']);
   });
 });

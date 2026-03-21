@@ -18,10 +18,9 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
 
   router.post('/templates', async (req, res) => {
     try {
-      if (req.body.metadata?.builtin) {
-        return res.status(403).json({ error: 'Cannot create builtin templates via API' });
-      }
-      const template = await registry.upsertTemplate(req.body);
+      const template = await registry.upsertTemplate(
+        req.body as import('../agents/schemas.js').AgentTemplate
+      );
       res.status(201).json(template);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -40,7 +39,10 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
 
   router.put('/templates/:name', async (req, res) => {
     try {
-      const template = await registry.updateTemplate(req.params.name, req.body);
+      const template = await registry.updateTemplate(
+        req.params.name,
+        req.body as import('../agents/schemas.js').AgentTemplate
+      );
       res.json(template);
     } catch (err: unknown) {
       const error = err as Error;
@@ -101,10 +103,10 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
       const instance = await registry.createInstance({
         name: metadata.name,
         templateRef: metadata.templateRef,
-        displayName: metadata.displayName || undefined,
-        circle: metadata.circle || undefined,
+        ...(metadata.displayName ? { displayName: metadata.displayName } : {}),
+        ...(metadata.circle ? { circle: metadata.circle } : {}),
         overrides: (overrides as Record<string, unknown>) || {},
-      } as any);
+      });
       res.status(201).json(instance);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

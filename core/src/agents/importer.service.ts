@@ -33,7 +33,7 @@ export class ResourceImporter {
     for (const type of types) {
       const dir = path.join(this.baseDir, 'lists', type);
       await this.importDir(dir, NamedListSchema, (data) =>
-        this.registry.upsertNamedList(data as any)
+        this.registry.upsertNamedList(data as import('./schemas.js').NamedList)
       );
     }
   }
@@ -56,15 +56,15 @@ export class ResourceImporter {
     // Builtin templates
     const builtinDir = path.join(this.baseDir, 'templates', 'builtin');
     await this.importDir(builtinDir, AgentTemplateSchema, (data) => {
-      (data.metadata as any).builtin = true;
-      return this.registry.upsertTemplate(data as any);
+      (data.metadata as { builtin: boolean }).builtin = true;
+      return this.registry.upsertTemplate(data as import('./schemas.js').AgentTemplate);
     });
 
     // Custom templates
     const customDir = path.join(this.baseDir, 'templates', 'custom');
     await this.importDir(customDir, AgentTemplateSchema, (data) => {
-      (data.metadata as any).builtin = false;
-      return this.registry.upsertTemplate(data as any);
+      (data.metadata as { builtin: boolean }).builtin = false;
+      return this.registry.upsertTemplate(data as import('./schemas.js').AgentTemplate);
     });
   }
 

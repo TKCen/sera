@@ -64,13 +64,13 @@ describe('ApiKeyProvider', () => {
           roles: ['operator'],
         },
       ],
-    } as unknown as import('pg').QueryResult<any>);
+    } as unknown as import('pg').QueryResult);
 
     // Mock the UPDATE last_used_at query
     vi.mocked(db.query).mockResolvedValueOnce({
       rowCount: 1,
       rows: [],
-    } as unknown as import('pg').QueryResult<any>);
+    } as unknown as import('pg').QueryResult);
 
     vi.mocked(argon2.verify).mockResolvedValue(true);
 
@@ -97,7 +97,12 @@ describe('ApiKeyProvider', () => {
           roles: ['operator'],
         },
       ],
-    } as unknown as import('pg').QueryResult<any>);
+    } as unknown as import('pg').QueryResult<{
+      id: string;
+      key_hash: string;
+      owner_sub: string;
+      roles: string[];
+    }>);
 
     vi.mocked(argon2.verify).mockResolvedValue(false);
 

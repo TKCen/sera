@@ -43,7 +43,7 @@ vi.mock('../lib/llm/ProviderFactory.js', () => ({
 vi.mock('../lib/llm/OpenAIProvider.js', () => {
   let baseURL: string | undefined;
   return {
-    OpenAIProvider: vi.fn().mockImplementation((override?: any) => {
+    OpenAIProvider: vi.fn().mockImplementation((override?: { baseUrl?: string }) => {
       baseURL = override?.baseUrl;
       return {
         chat: vi.fn().mockImplementation(async () => {

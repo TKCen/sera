@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PoolClient } from 'pg';
 import { ScheduleService } from '../services/ScheduleService.js';
 import { AuditService } from '../audit/AuditService.js';
 import { pool } from '../lib/database.js';
@@ -77,7 +76,9 @@ describe('Epic 11 Integration', () => {
       query: vi.fn().mockResolvedValue({ rows: [{ seq: '100', hash: 'some-hash' }] }),
       release: vi.fn(),
     };
-    vi.mocked(pool.connect).mockResolvedValue(clientMock as any);
+    vi.mocked(pool.connect).mockResolvedValue(
+      clientMock as unknown as Awaited<ReturnType<typeof pool.connect>>
+    );
 
     // Trigger the schedule
     await scheduleService.triggerSchedule(scheduleId);

@@ -94,7 +94,7 @@ export class WorkerAgent extends BaseAgent {
     try {
       const parsed = parseJson(response.content);
       if (parsed && typeof parsed === 'object') {
-        const result = parsed as any;
+        const result = parsed as AgentResponse;
         await this.reflect({ thought: result.thought, finalAnswer: result.finalAnswer });
         return result;
       }
@@ -104,7 +104,8 @@ export class WorkerAgent extends BaseAgent {
       };
       await this.reflect(result);
       return result;
-    } catch (error) {
+    } catch (err: unknown) {
+      const error = err as Error;
       this.logger.error('Failed to parse worker response:', error);
       return {
         thought: 'Error parsing response.',

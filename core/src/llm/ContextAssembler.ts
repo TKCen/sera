@@ -54,7 +54,7 @@ export class ContextAssembler {
     const skillsPrompt = await this.skillInjector.inject(
       systemMessage.content ?? '',
       manifest.skills ?? [],
-      ((manifest as any).skillPackages as string[]) ?? [],
+      manifest.skillPackages ?? [],
       currentMessage,
       instance?.circle_id
     );

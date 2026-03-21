@@ -17,15 +17,19 @@ describe('CapabilityResolver - NamedList & $ref', () => {
     };
     resolver = new CapabilityResolver(registryMock as unknown as AgentRegistry);
 
-    (registryMock['getInstance'] as any).mockResolvedValue({ template_ref: 'tpl' });
-    (registryMock['getTemplate'] as any).mockResolvedValue({ spec: { sandboxBoundary: 'b1' } });
+    (registryMock['getInstance'] as unknown as import('vitest').Mock).mockResolvedValue({
+      template_ref: 'tpl',
+    });
+    (registryMock['getTemplate'] as unknown as import('vitest').Mock).mockResolvedValue({
+      spec: { sandboxBoundary: 'b1' },
+    });
   });
 
   it('expands $ref in NamedLists', async () => {
-    (registryMock['getSandboxBoundary'] as any).mockResolvedValue({
+    (registryMock['getSandboxBoundary'] as unknown as import('vitest').Mock).mockResolvedValue({
       capabilities: { 'network-allowlist': [{ $ref: 'base-apis' }] },
     });
-    (registryMock['getNamedList'] as any).mockResolvedValue({
+    (registryMock['getNamedList'] as unknown as import('vitest').Mock).mockResolvedValue({
       entries: ['api.github.com', 'api.openai.com'],
     });
 
@@ -35,16 +39,18 @@ describe('CapabilityResolver - NamedList & $ref', () => {
   });
 
   it('detects circular references', async () => {
-    (registryMock['getSandboxBoundary'] as any).mockResolvedValue({
+    (registryMock['getSandboxBoundary'] as unknown as import('vitest').Mock).mockResolvedValue({
       capabilities: { 'network-allowlist': [{ $ref: 'list-a' }] },
     });
     // list-a -> list-b -> list-a
     // list-a -> list-b -> list-a
-    (registryMock['getNamedList'] as any).mockImplementation((name: string) => {
-      if (name === 'list-a') return Promise.resolve({ entries: [{ $ref: 'list-b' }] });
-      if (name === 'list-b') return Promise.resolve({ entries: [{ $ref: 'list-a' }] });
-      return Promise.resolve(null);
-    });
+    (registryMock['getNamedList'] as unknown as import('vitest').Mock).mockImplementation(
+      (name: string) => {
+        if (name === 'list-a') return Promise.resolve({ entries: [{ $ref: 'list-b' }] });
+        if (name === 'list-b') return Promise.resolve({ entries: [{ $ref: 'list-a' }] });
+        return Promise.resolve(null);
+      }
+    );
 
     await expect(resolver.resolve('id')).rejects.toThrow('Circular reference detected');
   });
@@ -53,23 +59,25 @@ describe('CapabilityResolver - NamedList & $ref', () => {
     // Boundary: github + openai
     // Policy: github + anthropic
     // Result: github
-    (registryMock['getSandboxBoundary'] as any).mockResolvedValue({
+    (registryMock['getSandboxBoundary'] as unknown as import('vitest').Mock).mockResolvedValue({
       capabilities: { 'network-allowlist': [{ $ref: 'boundary-list' }] },
     });
-    (registryMock['getCapabilityPolicy'] as any).mockResolvedValue({
+    (registryMock['getCapabilityPolicy'] as unknown as import('vitest').Mock).mockResolvedValue({
       capabilities: { 'network-allowlist': [{ $ref: 'policy-list' }] },
     });
-    (registryMock['getTemplate'] as any).mockResolvedValue({
+    (registryMock['getTemplate'] as unknown as import('vitest').Mock).mockResolvedValue({
       spec: { sandboxBoundary: 'b1', policyRef: 'p1' },
     });
 
-    (registryMock['getNamedList'] as any).mockImplementation((name: string) => {
-      if (name === 'boundary-list')
-        return Promise.resolve({ entries: ['github.com', 'openai.com'] });
-      if (name === 'policy-list')
-        return Promise.resolve({ entries: ['github.com', 'anthropic.com'] });
-      return Promise.resolve(null);
-    });
+    (registryMock['getNamedList'] as unknown as import('vitest').Mock).mockImplementation(
+      (name: string) => {
+        if (name === 'boundary-list')
+          return Promise.resolve({ entries: ['github.com', 'openai.com'] });
+        if (name === 'policy-list')
+          return Promise.resolve({ entries: ['github.com', 'anthropic.com'] });
+        return Promise.resolve(null);
+      }
+    );
 
     const result = await resolver.resolve('id');
     const caps = result.resolvedCapabilities as Record<string, unknown>;

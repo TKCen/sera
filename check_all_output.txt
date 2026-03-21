@@ -1,0 +1,1620 @@
+
+> check-all
+> npm run format && npm run lint && npm run typecheck && npm run test && npm run build
+
+
+> format
+> npm run format --workspaces --if-present
+
+
+> core@1.0.0 format
+> prettier --write --log-level warn src
+
+
+> sera-web@0.1.0 format
+> prettier --write --log-level warn src
+
+
+> lint
+> npm run lint --workspaces --if-present
+
+
+> core@1.0.0 lint
+> eslint src
+
+
+> sera-web@0.1.0 lint
+> eslint src --max-warnings 0
+
+
+> typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> core@1.0.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+
+> sera-web@0.1.0 typecheck
+> tsc --noEmit
+
+
+> test
+> npm run test --workspaces --if-present
+
+
+> core@1.0.0 test
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90mD:/projects/homelab/sera/core[39m
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > retries on HTTP failure and eventually rejects
+[EmbeddingService] EmbeddingService: attempt 1 failed, retrying in 0ms Error: Ollama HTTP 500: server error
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:101:15)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:24)
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > retries on HTTP failure and eventually rejects
+[EmbeddingService] EmbeddingService: attempt 2 failed, retrying in 0ms Error: Ollama HTTP 500: server error
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:101:15)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:24)
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > retries on HTTP failure and eventually rejects
+[EmbeddingService] EmbeddingService: attempt 3 failed, retrying in 0ms Error: Ollama HTTP 500: server error
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:101:15)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:24)
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > retries on HTTP failure and eventually rejects
+[EmbeddingService] EmbeddingService: attempt 4 failed, retrying in 0ms Error: Ollama HTTP 500: server error
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:101:15)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:24)
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > retries on HTTP failure and eventually rejects
+[EmbeddingService] EmbeddingService: Ollama unreachable after 5 attempts ÔÇö disabling RAG
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > marks unavailable after all retries exhausted
+[EmbeddingService] EmbeddingService: attempt 1 failed, retrying in 0ms Error: ECONNREFUSED
+    at D:/projects/homelab/sera/core/src/services/embedding.service.test.ts:62:33
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:2309:64
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > marks unavailable after all retries exhausted
+[EmbeddingService] EmbeddingService: attempt 2 failed, retrying in 0ms Error: ECONNREFUSED
+    at D:/projects/homelab/sera/core/src/services/embedding.service.test.ts:62:33
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:2309:64
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > marks unavailable after all retries exhausted
+[EmbeddingService] EmbeddingService: attempt 3 failed, retrying in 0ms Error: ECONNREFUSED
+    at D:/projects/homelab/sera/core/src/services/embedding.service.test.ts:62:33
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:2309:64
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > marks unavailable after all retries exhausted
+[EmbeddingService] EmbeddingService: attempt 4 failed, retrying in 0ms Error: ECONNREFUSED
+    at D:/projects/homelab/sera/core/src/services/embedding.service.test.ts:62:33
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:2309:64
+
+stderr | src/services/embedding.service.test.ts > EmbeddingService > marks unavailable after all retries exhausted
+[EmbeddingService] EmbeddingService: Ollama unreachable after 5 attempts ÔÇö disabling RAG
+
+ [32mÔ£ô[39m src/services/embedding.service.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 145[2mms[22m[39m
+ [32mÔ£ô[39m agent-runtime/src/__tests__/manifest.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+stderr | src/secrets/postgres-secrets-provider.test.ts > PostgresSecretsProvider > encryption/decryption round-trip > should throw if decryption fails (e.g. tampered data)
+[PostgresSecretsProvider] Failed to decrypt secret "tampered-secret": TypeError: Invalid authentication tag length: 4
+    at Decipheriv.setAuthTag (node:internal/crypto/cipher:211:22)
+    at PostgresSecretsProvider.decrypt (D:/projects/homelab/sera/core/src/secrets/postgres-secrets-provider.ts:53:14)
+    at PostgresSecretsProvider.get (D:/projects/homelab/sera/core/src/secrets/postgres-secrets-provider.ts:81:19)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5) {
+  code: 'ERR_CRYPTO_INVALID_AUTH_TAG'
+}
+
+stderr | src/secrets/postgres-secrets-provider.test.ts > PostgresSecretsProvider > authorization > should return null if agent is not allowed
+[PostgresSecretsProvider] Access denied to secret "restricted-secret" for agent "malicious-agent"
+
+ [32mÔ£ô[39m src/secrets/postgres-secrets-provider.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-read[2m > [22m[2mreads an existing file
+[22m[39m[2026-03-21T10:32:41.292Z] [agent-runtime] [DEBUG] tool=file-read agent=unknown status=success elapsed=1ms
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-read[2m > [22m[2mreturns error for missing file
+[22m[39m[2026-03-21T10:32:41.297Z] [agent-runtime] [DEBUG] tool=file-read agent=unknown status=success elapsed=0ms
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-read[2m > [22m[2mblocks path traversal
+[22m[39m[2026-03-21T10:32:41.299Z] [agent-runtime] [DEBUG] tool=file-read agent=unknown status=error elapsed=0ms
+
+[90mstdout[2m | src/agents/manifest/AgentManifestLoader.test.ts[2m > [22m[2mAgentManifestLoader[2m > [22m[2mloadAllManifests[2m > [22m[2mshould load all example manifests from the agents directory
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 5.455ms
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-write[2m > [22m[2mcreates a file with content
+[22m[39m[2026-03-21T10:32:41.302Z] [agent-runtime] [DEBUG] tool=file-write agent=unknown status=success elapsed=1ms
+
+ [32mÔ£ô[39m src/channels/ActionTokenService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+stderr | src/agents/manifest/AgentManifestLoader.test.ts > AgentManifestLoader > loadAllManifests > should load all example manifests from the agents directory
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-write[2m > [22m[2mcreates parent directories automatically
+[22m[39m[2026-03-21T10:32:41.306Z] [agent-runtime] [DEBUG] tool=file-write agent=unknown status=success elapsed=2ms
+
+[90mstdout[2m | src/agents/manifest/AgentManifestLoader.test.ts[2m > [22m[2mAgentManifestLoader[2m > [22m[2mloadAllManifests[2m > [22m[2mshould return empty array for non-existent directory
+[22m[39m[AgentManifestLoader] loadAllManifests: 0.128ms
+
+stderr | src/agents/manifest/AgentManifestLoader.test.ts > AgentManifestLoader > loadAllManifests > should return empty array for non-existent directory
+[AgentManifestLoader] Agents directory not found: /nonexistent/dir
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-list[2m > [22m[2mlists directory contents with type and size
+[22m[39m[2026-03-21T10:32:41.312Z] [agent-runtime] [DEBUG] tool=file-list agent=unknown status=success elapsed=1ms
+
+stderr | src/tools/ToolExecutor.test.ts > ToolExecutor > executeTool > should handle thrown exceptions in skill execution
+[ToolExecutor] Tool execution error for "test": Error: Unexpected crash
+    at D:/projects/homelab/sera/core/src/tools/ToolExecutor.test.ts:271:52
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1258:26
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1681:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1678:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:2309:64
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2mloadAllCircles[2m > [22m[2mshould load all example circles from the circles directory
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-list[2m > [22m[2mreturns error for non-existent directory
+[22m[39m[2026-03-21T10:32:41.314Z] [agent-runtime] [DEBUG] tool=file-list agent=unknown status=success elapsed=0ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2mloadAllCircles[2m > [22m[2mshould load all example circles from the circles directory
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-list[2m > [22m[2mreturns (empty directory) for empty dirs
+[22m[39m[2026-03-21T10:32:41.316Z] [agent-runtime] [DEBUG] tool=file-list agent=unknown status=success elapsed=0ms
+
+ [32mÔ£ô[39m src/agents/manifest/AgentManifestLoader.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+stderr | src/circles/CircleRegistry.test.ts > CircleRegistry > loadAllCircles > should return empty array for non-existent directory
+[CircleRegistry] Circles directory not found: /nonexistent/dir
+
+ [32mÔ£ô[39m src/tools/ToolExecutor.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-delete[2m > [22m[2mdeletes an existing file
+[22m[39m[2026-03-21T10:32:41.320Z] [agent-runtime] [DEBUG] tool=file-delete agent=unknown status=success elapsed=1ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 6.111ms
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-delete[2m > [22m[2mrefuses to delete non-empty directory without recursive:true
+[22m[39m[2026-03-21T10:32:41.323Z] [agent-runtime] [DEBUG] tool=file-delete agent=unknown status=success elapsed=0ms
+
+stderr | src/circles/CircleRegistry.test.ts > CircleRegistry > instance methods > should load circles and provide accessors
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-delete[2m > [22m[2mdeletes non-empty directory with recursive:true
+[22m[39m[2026-03-21T10:32:41.327Z] [agent-runtime] [DEBUG] tool=file-delete agent=unknown status=success elapsed=1ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö file-delete[2m > [22m[2mreturns error for non-existent path
+[22m[39m[2026-03-21T10:32:41.329Z] [agent-runtime] [DEBUG] tool=file-delete agent=unknown status=success elapsed=0ms
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load circles and provide accessors
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 3.379ms
+
+stderr | src/circles/CircleRegistry.test.ts > CircleRegistry > instance methods > should load project context for development circle
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould load project context for development circle
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 3.451ms
+
+stderr | src/circles/CircleRegistry.test.ts > CircleRegistry > instance methods > should return undefined for circle without project context
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+ [31mÔØ»[39m src/intercom/ThoughtPersistence.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 67[2mms[22m[39m
+     [32mÔ£ô[39m persists a thought to the database when published[32m 58[2mms[22m[39m
+[31m     [31m├ù[31m retrieves persisted thoughts with filtering[39m[32m 6[2mms[22m[39m
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+ [32mÔ£ô[39m src/skills/builtins/shell-exec.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 130[2mms[22m[39m
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould return undefined for circle without project context
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 2.663ms
+
+stderr | src/circles/CircleRegistry.test.ts > CircleRegistry > instance methods > should list circle summaries
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | src/circles/CircleRegistry.test.ts[2m > [22m[2mCircleRegistry[2m > [22m[2minstance methods[2m > [22m[2mshould list circle summaries
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+ [32mÔ£ô[39m src/circles/CircleRegistry.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+[90mstdout[2m | src/memory/MemoryCompactionService.test.ts[2m > [22m[2mMemoryCompactionService[2m > [22m[2marchives blocks older than threshold with importance <= 2
+[22m[39m[MemoryCompactionService] Compaction for agent compact-agent: archived=1, vectors_removed=1
+
+stderr | src/skills/SkillLibrary.test.ts > SkillLibrary > should return null for invalid front-matter
+[SkillLibrary] Invalid front-matter in C:\Users\TKC\AppData\Local\Temp\sera-skills-test-eachcw\invalid-skill.md: {
+  _errors: [],
+  name: { _errors: [ 'Required' ] },
+  version: { _errors: [ 'Required' ] },
+  description: { _errors: [ 'Required' ] },
+  triggers: { _errors: [ 'Required' ] }
+}
+
+[90mstdout[2m | src/memory/MemoryCompactionService.test.ts[2m > [22m[2mMemoryCompactionService[2m > [22m[2mdoes not archive high-importance blocks
+[22m[39m[MemoryCompactionService] Compaction for agent compact-agent: archived=0, vectors_removed=0
+
+[90mstdout[2m | src/skills/SkillLibrary.test.ts[2m > [22m[2mSkillLibrary[2m > [22m[2mshould watch for changes and reload skills
+[22m[39m[SkillLibrary] Watching skills directory for changes...
+
+[90mstdout[2m | src/memory/MemoryCompactionService.test.ts[2m > [22m[2mMemoryCompactionService[2m > [22m[2mdoes not archive recent low-importance blocks
+[22m[39m[MemoryCompactionService] Compaction for agent compact-agent: archived=0, vectors_removed=0
+
+ [32mÔ£ô[39m src/__tests__/schedules.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32mÔ£ô[39m src/intercom/IntercomService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstdout[2m | src/memory/MemoryCompactionService.test.ts[2m > [22m[2mMemoryCompactionService[2m > [22m[2mreturns zero counts for agent with no blocks
+[22m[39m[MemoryCompactionService] Compaction for agent no-such-agent: archived=0, vectors_removed=0
+
+[90mstdout[2m | src/routes/config.test.ts[2m > [22m[2mConfig Routes[2m > [22m[2mPOST /api/config/llm should update config
+[22m[39m[ConfigRouter] Legacy LLM configuration updated
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö shell-exec[2m > [22m[2mexecutes a simple command
+[22m[39m[2026-03-21T10:32:41.483Z] [agent-runtime] [DEBUG] tool=shell-exec agent=unknown status=success elapsed=153ms
+
+[90mstdout[2m | src/routes/config.test.ts[2m > [22m[2mConfig Routes[2m > [22m[2mPUT /api/providers/:id should update provider config
+[22m[39m[ConfigRouter] Provider configuration updated: openai
+
+ [32mÔ£ô[39m src/memory/MemoryCompactionService.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 178[2mms[22m[39m
+stderr | agent-runtime/src/__tests__/tools.test.ts > RuntimeToolExecutor > executeTool() ÔÇö shell-exec > executes a simple command
+Cleanup failed: Error: EBUSY: resource busy or locked, rmdir 'C:\Users\TKC\AppData\Local\Temp\sera-tools-test-42kSPp'
+    at rmdirSync (node:fs:1201:11)
+    at _rmdirSync (node:internal/fs/rimraf:236:5)
+    at rimrafSync (node:internal/fs/rimraf:194:7)
+    at Object.rmSync (node:fs:1247:10)
+    at D:/projects/homelab/sera/core/agent-runtime/src/__tests__/tools.test.ts:20:12
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at wrapper (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:683:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10) {
+  errno: -4082,
+  code: 'EBUSY',
+  syscall: 'rmdir',
+  path: 'C:\\Users\\TKC\\AppData\\Local\\Temp\\sera-tools-test-42kSPp'
+}
+
+[90mstdout[2m | src/routes/config.test.ts[2m > [22m[2mConfig Routes[2m > [22m[2mPOST /api/providers/active should set active provider
+[22m[39m[ConfigRouter] Active provider set to: lmstudio
+
+stderr | src/routes/config.test.ts > Config Routes > POST /api/providers/:id/test should return success/fail based on connection
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+ [32mÔ£ô[39m src/routes/config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 224[2mms[22m[39m
+stderr | src/memory/blocks/ScopedMemoryBlockStore.test.ts > ScopedMemoryBlockStore > skips malformed files without crashing
+[ScopedMemoryBlockStore] Failed to parse memory block at C:\Users\TKC\AppData\Local\Temp\sera-scoped-1BKYit\test-agent-001\fact\broken.md: YAMLException: unexpected end of the stream within a flow collection at line 3, column 1:
+    
+    ^
+    at generateError (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:183:10)
+    at throwError (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:189:9)
+    at readFlowCollection (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:786:3)
+    at composeNode (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1376:11)
+    at readBlockMapping (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1105:11)
+    at composeNode (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1375:12)
+    at readDocument (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1541:3)
+    at loadDocuments (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1604:5)
+    at load (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1630:19)
+    at Object.safeLoad (D:\projects\homelab\sera\core\node_modules\gray-matter\node_modules\js-yaml\lib\js-yaml\loader.js:1653:10) {
+  reason: 'unexpected end of the stream within a flow collection',
+  mark: Mark {
+    name: null,
+    buffer: '\nnot valid: [broken\n\x00',
+    position: 20,
+    line: 2,
+    column: 0
+  }
+}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould create and start a container with tier limits
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"inst-123","type":"tool","image":"alpine:latest"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mspawn[2m > [22m[2mshould apply tier 1 limits (read-only, no network)
+[22m[39m[SandboxManager] SPAWN | agent=readonly-agent | {"instanceId":"inst-ro","type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould execute a command in a running container
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"container-abc123","type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould execute a command in a running container
+[22m[39m[SandboxManager] EXEC | agent=test-agent | {"containerId":"container-abc123","command":["echo","hello"]}
+
+ [32mÔ£ô[39m src/memory/blocks/ScopedMemoryBlockStore.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 229[2mms[22m[39m
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mexec[2m > [22m[2mshould reject exec from a different agent
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"container-abc123","type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould stop and remove a container
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"container-abc123","type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mremove[2m > [22m[2mshould stop and remove a container
+[22m[39m[SandboxManager] REMOVE | agent=test-agent | {"containerId":"container-abc123"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mlistContainers[2m > [22m[2mshould list all containers
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"inst-1","type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mlistContainers[2m > [22m[2mshould filter by agent name
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"inst-1","type":"tool","image":"alpine"}
+
+[90mstdout[2m | src/sandbox/SandboxManager.test.ts[2m > [22m[2mSandboxManager[2m > [22m[2mcountSubagents[2m > [22m[2mshould count running subagents by role
+[22m[39m[SandboxManager] SPAWN | agent=test-agent | {"instanceId":"inst-sub","type":"subagent","image":"node:20"}
+
+ [31mÔØ»[39m src/sandbox/SandboxManager.test.ts [2m([22m[2m9 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 29[2mms[22m[39m
+       [32mÔ£ô[39m should create and start a container with tier limits[32m 7[2mms[22m[39m
+       [32mÔ£ô[39m should apply tier 1 limits (read-only, no network)[32m 1[2mms[22m[39m
+       [32mÔ£ô[39m should execute a command in a running container[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should reject exec from a different agent[39m[32m 11[2mms[22m[39m
+       [32mÔ£ô[39m should stop and remove a container[32m 2[2mms[22m[39m
+       [32mÔ£ô[39m should list all containers[32m 1[2mms[22m[39m
+       [32mÔ£ô[39m should filter by agent name[32m 1[2mms[22m[39m
+       [32mÔ£ô[39m should return container logs[32m 0[2mms[22m[39m
+       [32mÔ£ô[39m should count running subagents by role[32m 1[2mms[22m[39m
+[90mstdout[2m | src/__tests__/notifications.test.ts[2m > [22m[2mWebhook dispatch integration[2m > [22m[2mdispatches permission.requested event to a matching webhook channel
+[22m[39m[WebhookChannel] Webhook sent: permission.requested ÔåÆ https://example.com/webhook
+
+[90mstdout[2m | src/__tests__/notifications.test.ts[2m > [22m[2mWebhook dispatch integration[2m > [22m[2mincludes HMAC-SHA256 signature header on webhook payload
+[22m[39m[WebhookChannel] Webhook sent: permission.requested ÔåÆ https://example.com/webhook
+
+stderr | src/__tests__/notifications.test.ts > Webhook dispatch integration > does not crash when channel returns HTTP 5xx ÔÇö logs and marks failed
+[ChannelRouter] Channel wh-1 dispatch attempt 1/3 failed: HTTP 500
+
+[90mstdout[2m | src/__tests__/notifications.test.ts[2m > [22m[2mWebhook channel: actionable events include approve/deny URLs[2m > [22m[2msends approveUrl and denyUrl in payload for actionable events
+[22m[39m[WebhookChannel] Webhook sent: permission.requested ÔåÆ https://example.com/hook
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcountTokens()[2m > [22m[2mreturns 0 for empty string
+[22m[39m[2026-03-21T10:32:41.584Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+ [32mÔ£ô[39m src/__tests__/notifications.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32mÔ£ô[39m src/capability/resolver.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö shell-exec[2m > [22m[2mreturns exit code and stderr on failure
+[22m[39m[2026-03-21T10:32:41.656Z] [agent-runtime] [DEBUG] tool=shell-exec agent=unknown status=success elapsed=164ms
+
+stderr | agent-runtime/src/__tests__/tools.test.ts > RuntimeToolExecutor > executeTool() ÔÇö shell-exec > returns exit code and stderr on failure
+Cleanup failed: Error: EBUSY: resource busy or locked, rmdir 'C:\Users\TKC\AppData\Local\Temp\sera-tools-test-48FtW0'
+    at rmdirSync (node:fs:1201:11)
+    at _rmdirSync (node:internal/fs/rimraf:236:5)
+    at rimrafSync (node:internal/fs/rimraf:194:7)
+    at Object.rmSync (node:fs:1247:10)
+    at D:/projects/homelab/sera/core/agent-runtime/src/__tests__/tools.test.ts:20:12
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:296:11
+    at wrapper (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:683:10)
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1660:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1627:10) {
+  errno: -4082,
+  code: 'EBUSY',
+  syscall: 'rmdir',
+  path: 'C:\\Users\\TKC\\AppData\\Local\\Temp\\sera-tools-test-48FtW0'
+}
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö shell-exec[2m > [22m[2mis blocked on tier-1 agents
+[22m[39m[2026-03-21T10:32:41.658Z] [agent-runtime] [DEBUG] tool=shell-exec agent=unknown status=error elapsed=0ms
+
+[90mstdout[2m | agent-runtime/src/__tests__/tools.test.ts[2m > [22m[2mRuntimeToolExecutor[2m > [22m[2mexecuteTool() ÔÇö argument parsing[2m > [22m[2mhandles markdown-wrapped JSON arguments
+[22m[39m[2026-03-21T10:32:41.660Z] [agent-runtime] [DEBUG] tool=file-read agent=unknown status=success elapsed=0ms
+
+[90mstdout[2m | src/intercom/Federation.test.ts[2m > [22m[2mFederation Verification[2m > [22m[2mpasses a message from Instance A to Instance B
+[22m[39m[Bridge] Configured token auth for connection to circle-b
+
+ [32mÔ£ô[39m agent-runtime/src/__tests__/tools.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 379[2mms[22m[39m
+[90mstdout[2m | src/intercom/Federation.test.ts[2m > [22m[2mFederation Verification[2m > [22m[2mpasses a message from Instance A to Instance B
+[22m[39m[Bridge] Received inbound bridged message for channel bridge:dm:circle-a:circle-b:agent-a:agent-b
+
+[90mstdout[2m | src/intercom/Federation.test.ts[2m > [22m[2mFederation Verification[2m > [22m[2mpasses a message from Instance A to Instance B
+[22m[39m[Bridge] Forwarded message to circle-b on channel bridge:dm:circle-a:circle-b:agent-a:agent-b
+
+[90mstdout[2m | src/agents/importer.test.ts[2m > [22m[2mResourceImporter[2m > [22m[2mimports valid resources from directory structure
+[22m[39mImported D:\projects\homelab\sera\core\test-manifests\lists\network-allowlist\github.yaml
+
+[90mstdout[2m | src/agents/importer.test.ts[2m > [22m[2mResourceImporter[2m > [22m[2mimports valid resources from directory structure
+[22m[39mImported D:\projects\homelab\sera\core\test-manifests\capability-policies\default.yaml
+
+ [32mÔ£ô[39m src/llm/CircuitBreakerService.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32mÔ£ô[39m src/skills/SkillRegistry.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+[90mstdout[2m | src/agents/importer.test.ts[2m > [22m[2mResourceImporter[2m > [22m[2mskips invalid manifests
+[22m[39mImported D:\projects\homelab\sera\core\test-manifests\lists\network-allowlist\github.yaml
+
+[90mstdout[2m | src/agents/importer.test.ts[2m > [22m[2mResourceImporter[2m > [22m[2mskips invalid manifests
+[22m[39mImported D:\projects\homelab\sera\core\test-manifests\capability-policies\default.yaml
+
+stderr | src/agents/importer.test.ts > ResourceImporter > skips invalid manifests
+Error validating D:\projects\homelab\sera\core\test-manifests\capability-policies\invalid.yaml: { _errors: [ 'Expected object, received string' ] }
+
+ [32mÔ£ô[39m src/agents/importer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+[90mstdout[2m | src/audit/AuditExport.test.ts[2m > [22m[2mAudit Export Streaming[2m > [22m[2mstreams 10,000+ records with stable memory usage
+[22m[39mMemory diff for 15k records export: 8.03 MB
+
+ [32mÔ£ô[39m src/audit/AuditExport.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 18[2mms[22m[39m
+stderr | src/intercom/Messaging.test.ts > Epic 09: Real-Time Messaging > Story 9.8: Webhooks > rejects an expired timestamp
+[Webhooks] Webhook timestamp out of range: 1774088561792
+
+stderr | src/memory/Reflector.test.ts > Reflector > should not compact when under threshold
+[MemoryManager] Failed to index entry 860bb9eb-bc13-4e23-aa73-d6ea1998531f: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:33:5
+
+stderr | src/intercom/Messaging.test.ts > Epic 09: Real-Time Messaging > Story 9.8: Webhooks > rejects a replay (duplicate nonce)
+[Webhooks] Duplicate webhook nonce detected: nonce-123
+
+ [32mÔ£ô[39m src/intercom/Messaging.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32mÔ£ô[39m src/routes/registry.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 62695b42-fd29-4b92-bf60-3bd2e91fde92: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+[90mstdout[2m | src/metering/MeteringService.test.ts[2m > [22m[2mMeteringService[2m > [22m[2mrecordUsage[2m > [22m[2mshould insert into both token_usage and usage_events
+[22m[39m[MeteringService] Usage recorded | agent=agent-001 model=gpt-4 prompt=100 completion=50 cost=0.003000 latency=250ms
+
+[90mstdout[2m | src/metering/MeteringService.test.ts[2m > [22m[2mMeteringService[2m > [22m[2mrecordUsage[2m > [22m[2mshould default status to success when not provided
+[22m[39m[MeteringService] Usage recorded | agent=agent-001 model=gpt-4 prompt=10 completion=5 cost=n/a latency=n/ams
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 75765474-3de9-4d91-b7b8-3a1ae45d13a9: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+stderr | src/metering/MeteringService.test.ts > MeteringService > checkBudget > should deny when hourly usage exceeds quota
+[MeteringService] Audit record failed: Error: [vitest] No "pool" export is defined on the "../lib/database.js" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError (file:///D:/projects/homelab/sera/node_modules/vitest/dist/chunks/startVitestModuleRunner.C3ZR-4J3.js:62:17)
+    at Object.get (file:///D:/projects/homelab/sera/node_modules/vitest/dist/chunks/startVitestModuleRunner.C3ZR-4J3.js:310:16)
+    at AuditService.record (D:/projects/homelab/sera/core/src/audit/AuditService.ts:117:26)
+    at MeteringService.checkBudget (D:/projects/homelab/sera/core/src/metering/MeteringService.ts:138:10)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at D:/projects/homelab/sera/core/src/metering/MeteringService.test.ts:175:22
+    at file:///D:/projects/homelab/sera/node_modules/vitest/node_modules/@vitest/runner/dist/index.js:1258:20 {
+  codeFrame: 'vi.mock(import("../lib/database.js"), async (importOriginal) => {\n' +
+    '  const actual = await importOriginal()\n' +
+    '  return {\n' +
+    '    ...actual,\n' +
+    '    // your mocked methods\n' +
+    '  }\n' +
+    '})'
+}
+
+ [32mÔ£ô[39m src/metering/MeteringService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry bdbfa457-97e1-47fb-b578-ea533ed42040: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 619ee700-cc3c-4853-b4a2-17e6588451da: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcountTokens()[2m > [22m[2mreturns a positive count for non-empty text
+[22m[39m[2026-03-21T10:32:41.867Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry b61f0c8e-27ea-4570-b786-53144007e754: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+ [32mÔ£ô[39m src/auth/oidc-provider.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 1ea8eb1f-ce87-47e6-8331-fb5c5457a650: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+stderr | src/channels/ChannelRouter.test.ts > ChannelRouter > does not throw when the channel send fails
+[ChannelRouter] Channel c5 dispatch attempt 1/3 failed: network error
+
+ [32mÔ£ô[39m src/channels/ChannelRouter.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould remove empty messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 2 empty msgs removed, 0 consecutive msgs merged
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry c8bc1a0e-8e9a-4b67-9f6e-bfd872000e7e: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:45:7
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould remove orphaned tool messages
+[22m[39m[SessionRepair] Session repaired: 1 orphaned tool msgs removed, 0 empty msgs removed, 0 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould merge consecutive user messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 0 empty msgs removed, 1 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould merge consecutive assistant messages
+[22m[39m[SessionRepair] Session repaired: 0 orphaned tool msgs removed, 0 empty msgs removed, 2 consecutive msgs merged
+
+[90mstdout[2m | src/agents/stability/SessionRepair.test.ts[2m > [22m[2mSessionRepair[2m > [22m[2mshould handle all repair types simultaneously
+[22m[39m[SessionRepair] Session repaired: 1 orphaned tool msgs removed, 1 empty msgs removed, 1 consecutive msgs merged
+
+ [32mÔ£ô[39m src/agents/stability/SessionRepair.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32mÔ£ô[39m src/sandbox/TierPolicy.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+[90mstdout[2m | src/auth/api-key-provider.test.ts[2m > [22m[2mApiKeyProvider[2m > [22m[2mshould authenticate with bootstrap key
+[22m[39m[ApiKeyProvider] Bootstrap API key enabled
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 89ee9ac4-c11e-41ad-afcb-560b38dee127: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:90:26)
+
+[90mstdout[2m | src/auth/api-key-provider.test.ts[2m > [22m[2mApiKeyProvider[2m > [22m[2mshould return null if no authorization header
+[22m[39m[ApiKeyProvider] Bootstrap API key enabled
+
+[90mstdout[2m | src/auth/api-key-provider.test.ts[2m > [22m[2mApiKeyProvider[2m > [22m[2mshould return null if not Bearer token
+[22m[39m[ApiKeyProvider] Bootstrap API key enabled
+
+[90mstdout[2m | src/auth/api-key-provider.test.ts[2m > [22m[2mApiKeyProvider[2m > [22m[2mshould authenticate with a valid database API key
+[22m[39m[ApiKeyProvider] Bootstrap API key enabled
+
+[90mstdout[2m | src/auth/api-key-provider.test.ts[2m > [22m[2mApiKeyProvider[2m > [22m[2mshould throw if database key is invalid
+[22m[39m[ApiKeyProvider] Bootstrap API key enabled
+
+[90mstdout[2m | src/auth/api-key-provider.test.ts[2m > [22m[2mApiKeyProvider[2m > [22m[2mshould return null if key does not start with sera_
+[22m[39m[ApiKeyProvider] Bootstrap API key enabled
+
+ [32mÔ£ô[39m src/auth/api-key-provider.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 62695b42-fd29-4b92-bf60-3bd2e91fde92: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.archiveEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:302:7)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:100:7)
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry 75765474-3de9-4d91-b7b8-3a1ae45d13a9: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.archiveEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:302:7)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:100:7)
+
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/skills/SkillInjector.test.ts > SkillInjector > should drop skills when budget is exceeded
+[SkillInjector] Skill budget exceeded: dropped 1 skills. [thought:reflect: Skill budget exceeded, dropping context]
+
+[90mstdout[2m | agent-runtime/src/__tests__/llmClient.test.ts[2m > [22m[2mLLMClient[2m > [22m[2mchat()[2m > [22m[2mthrows BudgetExceededError on HTTP 429
+[22m[39m[2026-03-21T10:32:42.005Z] [agent-runtime] [ERROR] LLM proxy error: 429 ÔÇö {"error":{"message":"budget exceeded"}}
+
+[90mstdout[2m | agent-runtime/src/__tests__/llmClient.test.ts[2m > [22m[2mLLMClient[2m > [22m[2mchat()[2m > [22m[2mthrows ProviderUnavailableError on HTTP 503
+[22m[39m[2026-03-21T10:32:42.008Z] [agent-runtime] [ERROR] LLM proxy error: 503 ÔÇö {"error":{"message":"circuit open"}}
+
+ [32mÔ£ô[39m src/skills/SkillInjector.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should compact oldest entries when over threshold
+[MemoryManager] Failed to index entry bdbfa457-97e1-47fb-b578-ea533ed42040: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.archiveEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:302:7)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:100:7)
+
+[90mstdout[2m | src/memory/Reflector.test.ts[2m > [22m[2mReflector[2m > [22m[2mshould compact oldest entries when over threshold
+[22m[39m[Reflector] Compacted 3 core entries into 1 archive summary (ID: 89ee9ac4-c11e-41ad-afcb-560b38dee127). Title: "Summary ÔÇö Entry 0, Entry 1, Entry 2"
+
+ [32mÔ£ô[39m agent-runtime/src/__tests__/llmClient.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2msequential[2m > [22m[2mshould execute tasks in order with context chaining
+[22m[39m[ProcessManager] Running sequential process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2msequential[2m > [22m[2mshould handle agent failures gracefully
+[22m[39m[ProcessManager] Running sequential process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2mparallel[2m > [22m[2mshould execute all tasks concurrently
+[22m[39m[ProcessManager] Running parallel process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | src/circles/PartyMode.test.ts[2m > [22m[2mPartySessionManager[2m > [22m[2mshould create and retrieve sessions
+[22m[39m[PartyMode] Created session 2c76274b-c3f5-419e-b999-7bc7df907f95 for circle "test-circle" with 2 agents (strategy: all)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2mhierarchical[2m > [22m[2mshould have the manager review worker results
+[22m[39m[ProcessManager] Running hierarchical process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | src/circles/PartyMode.test.ts[2m > [22m[2mPartySessionManager[2m > [22m[2mshould end and remove sessions
+[22m[39m[PartyMode] Created session 47368bcf-2f08-4109-8250-df522cee19dd for circle "test-circle" with 2 agents (strategy: all)
+
+[90mstdout[2m | src/agents/process/ProcessManager.test.ts[2m > [22m[2mProcessManager[2m > [22m[2mrunSingle[2m > [22m[2mshould run a single task with one agent
+[22m[39m[ProcessManager] Running sequential process with 1 task(s) and 1 agent(s)
+
+[90mstdout[2m | src/circles/PartyMode.test.ts[2m > [22m[2mPartySessionManager[2m > [22m[2mshould list sessions filtered by circle
+[22m[39m[PartyMode] Created session 6c74d335-a756-41e9-bb28-1672d1915356 for circle "test-circle" with 2 agents (strategy: all)
+
+ [32mÔ£ô[39m src/circles/PartyMode.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32mÔ£ô[39m src/agents/process/ProcessManager.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | src/skills/SkillLibrary.test.ts[2m > [22m[2mSkillLibrary[2m > [22m[2mshould watch for changes and reload skills
+[22m[39m[SkillLibrary] Skill hot-reloaded: New Skill v1.1.0
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2minitCircleRepo creates a git repository with an initial commit
+[22m[39m[KnowledgeGitService] Initialised knowledge repo for circle "test-circle" at C:\Users\TKC\AppData\Local\Temp\sera-kg-xfM7MU\circles\test-circle
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry d2b13eac-ab2f-4a34-b6af-a9d9fb46e3e8: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:78:16
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry da0086c9-2291-4eec-b580-a005dc6d9757: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:79:16
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+[90mstdout[2m | src/audit/AuditService.test.ts[2m > [22m[2mAuditService[2m > [22m[2mrecord and Merkle chain[2m > [22m[2mcreates a genesis record if empty
+[22m[39m[AuditService] Initializing audit trail with genesis record
+
+[90mstdout[2m | src/audit/AuditService.test.ts[2m > [22m[2mAuditService[2m > [22m[2mrecord and Merkle chain[2m > [22m[2mcreates a genesis record if empty
+[22m[39m[AuditService] Audit trail integrity verified (last 100 records)
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry b2d6cd3e-fea0-4750-bbb4-96e834c6c6db: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:80:5
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+ [32mÔ£ô[39m src/audit/AuditService.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry 239a439a-69a4-4c2d-80ec-9a33a6029cd1: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:83:7
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry 453292d0-c8a0-4ecb-b3f2-681def0d1449: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:83:7
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry 8720f491-4786-4eaa-8009-b80b4aa3e087: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at D:/projects/homelab/sera/core/src/memory/Reflector.test.ts:83:7
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+ [32mÔ£ô[39m src/storage/StorageProvider.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry a148c537-94df-490e-8854-216ce8b9ef86: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.addEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:84:5)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:90:26)
+
+[90mstdout[2m | src/agents/AgentFactory.test.ts[2m > [22m[2mAgentFactory[2m > [22m[2mloadTemplates[2m > [22m[2mshould load all manifests from the agents directory
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 9.394ms
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/agents/AgentFactory.test.ts > AgentFactory > loadTemplates > should load all manifests from the agents directory
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+[90mstdout[2m | src/agents/AgentFactory.test.ts[2m > [22m[2mAgentFactory[2m > [22m[2mloadTemplates[2m > [22m[2mshould return empty map for a non-existent directory
+[22m[39m[AgentManifestLoader] loadAllManifests: 0.142ms
+
+stderr | src/agents/AgentFactory.test.ts > AgentFactory > loadTemplates > should return empty map for a non-existent directory
+[AgentManifestLoader] Agents directory not found: /nonexistent/dir
+
+ [32mÔ£ô[39m src/sessions/SessionStore.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry d2b13eac-ab2f-4a34-b6af-a9d9fb46e3e8: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.archiveEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:302:7)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:100:7)
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+ [32mÔ£ô[39m src/__tests__/Epic17.integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32mÔ£ô[39m src/identity/acting-context.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32mÔ£ô[39m src/intercom/Federation.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 565[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m passes a message from Instance A to Instance B [33m 562[2mms[22m[39m
+stderr | src/agents/AgentFactory.test.ts > AgentFactory > createAgent > should create an agent from a manifest
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+[90mstdout[2m | src/agents/AgentFactory.test.ts[2m > [22m[2mAgentFactory[2m > [22m[2mcreateAgent[2m > [22m[2mshould create an agent from a manifest
+[22m[39m[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 4.071ms
+
+ [32mÔ£ô[39m src/agents/AgentFactory.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry da0086c9-2291-4eec-b580-a005dc6d9757: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.archiveEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:302:7)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:100:7)
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Rate limit: More than 10 memory entries written in the last minute by global.
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should return "warn" at WARN_THRESHOLD (3) identical calls
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should return "block" at BLOCK_THRESHOLD (5) identical calls
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+[LoopGuard] WARNING: "web-search" called 4 times with same args (block at 5)
+[LoopGuard] BLOCKED duplicate tool call: "web-search" called 5 times with same args
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should track different calls independently
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should track different tool names independently
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+stderr | src/agents/stability/LoopGuard.test.ts > LoopGuard > should clear all state on reset
+[LoopGuard] WARNING: "web-search" called 3 times with same args (block at 5)
+
+ [32mÔ£ô[39m src/agents/stability/LoopGuard.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mÔ£ô[39m src/memory/scope-permissions.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcountTokens()[2m > [22m[2mcounts more tokens for longer text
+[22m[39m[2026-03-21T10:32:42.208Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+stderr | src/memory/Reflector.test.ts > Reflector > should preserve ref chain for traceability
+[MemoryManager] Failed to index entry b2d6cd3e-fea0-4750-bbb4-96e834c6c6db: Error: OLLAMA_URL not configured
+    at EmbeddingService.callOllama (D:/projects/homelab/sera/core/src/services/embedding.service.ts:90:28)
+    at EmbeddingService.drain (D:/projects/homelab/sera/core/src/services/embedding.service.ts:80:35)
+    at D:/projects/homelab/sera/core/src/services/embedding.service.ts:65:19
+    at new Promise (<anonymous>)
+    at EmbeddingService.embed (D:/projects/homelab/sera/core/src/services/embedding.service.ts:62:12)
+    at EmbeddingService.generateEmbedding (D:/projects/homelab/sera/core/src/services/embedding.service.ts:72:17)
+    at MemoryManager.indexEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:310:53)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at MemoryManager.archiveEntry (D:/projects/homelab/sera/core/src/memory/manager.ts:302:7)
+    at Function.compactIfNeeded (D:/projects/homelab/sera/core/src/memory/Reflector.ts:100:7)
+
+[90mstdout[2m | src/memory/Reflector.test.ts[2m > [22m[2mReflector[2m > [22m[2mshould preserve ref chain for traceability
+[22m[39m[Reflector] Compacted 3 core entries into 1 archive summary (ID: a148c537-94df-490e-8854-216ce8b9ef86). Title: "Summary ÔÇö E1, E2, E3"
+
+stderr | src/channels/adapters.test.ts > Channel Adapters > TelegramAdapter > should enforce rate limits and not call agent
+[Channel:Telegram] Rate limit exceeded for user 123
+
+ [32mÔ£ô[39m src/memory/Reflector.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 518[2mms[22m[39m
+ [32mÔ£ô[39m src/channels/adapters.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+[90mstdout[2m | src/agents/process/FlowProcess.test.ts[2m > [22m[2mFlowProcess[2m > [22m[2mshould execute tasks sequentially with dependency resolution
+[22m[39m[ProcessManager] Running flow process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | src/agents/process/FlowProcess.test.ts[2m > [22m[2mFlowProcess[2m > [22m[2mshould handle "and" routing (wait for all)
+[22m[39m[ProcessManager] Running flow process with 3 task(s) and 3 agent(s)
+
+[90mstdout[2m | src/agents/process/FlowProcess.test.ts[2m > [22m[2mFlowProcess[2m > [22m[2mshould handle "or" routing (wait for any)
+[22m[39m[ProcessManager] Running flow process with 2 task(s) and 2 agent(s)
+
+[90mstdout[2m | src/agents/process/FlowProcess.test.ts[2m > [22m[2mFlowProcess[2m > [22m[2mshould respect conditions
+[22m[39m[ProcessManager] Running flow process with 1 task(s) and 1 agent(s)
+
+ [32mÔ£ô[39m src/agents/process/FlowProcess.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mÔ£ô[39m src/capability/refs.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > Auth Middleware > should reject requests without Authorization header
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+[90mstdout[2m | src/__tests__/Epic11.integration.test.ts[2m > [22m[2mEpic 11 Integration[2m > [22m[2mfiring a scheduled task creates an audit record
+[22m[39m[ScheduleService] Triggering schedule test-schedule for agent test-agent
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > Auth Middleware > should reject requests with invalid token
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > Auth Middleware > should accept requests with valid token and populate identity
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should proxy a chat request and return OpenAI-format response
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+ [32mÔ£ô[39m src/__tests__/Epic11.integration.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mÔ£ô[39m src/identity/CredentialResolver.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should record metering after successful call
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should reject requests without messages
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should return 429 with budget_exceeded when budget is exceeded
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > INVARIANT: no upstream call is made when budget is exceeded
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should return 503 when circuit breaker is open
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+stderr | src/routes/llmProxy.test.ts > LLM Proxy Router > GET /models > should return model list from LiteLLM
+[vitest] The vi.fn() mock did not use 'function' or 'class' in its implementation, see https://vitest.dev/api/vi#vi-spyon for examples.
+
+ [31mÔØ»[39m src/routes/llmProxy.test.ts [2m([22m[2m10 tests[22m[2m | [22m[31m10 failed[39m[2m)[22m[32m 19[2mms[22m[39m
+[31m       [31m├ù[31m should reject requests without Authorization header[39m[32m 9[2mms[22m[39m
+[31m       [31m├ù[31m should reject requests with invalid token[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should accept requests with valid token and populate identity[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should proxy a chat request and return OpenAI-format response[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should record metering after successful call[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should reject requests without messages[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should return 429 with budget_exceeded when budget is exceeded[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m INVARIANT: no upstream call is made when budget is exceeded[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should return 503 when circuit breaker is open[39m[32m 1[2mms[22m[39m
+[31m       [31m├ù[31m should return model list from LiteLLM[39m[32m 1[2mms[22m[39m
+stderr | src/memory/blocks/MemoryBlockStore.test.ts > MemoryBlockStore > should skip malformed YAML frontmatter without crashing
+[MemoryBlockStore] Skipping entry with missing ID in broken.md
+
+ [32mÔ£ô[39m src/lib/llm/ProviderFactory.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mÔ£ô[39m src/intercom/ChannelNamespace.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+stderr | src/auth/IdentityService.test.ts > IdentityService > constructor fallback > should generate a random secret when no JWT_SECRET is set
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+
+ [32mÔ£ô[39m src/auth/IdentityService.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 1129[2mms[22m[39m
+       [33m[2mÔ£ô[22m[39m should reject an expired token [33m 1103[2mms[22m[39m
+ [32mÔ£ô[39m src/lib/json.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32mÔ£ô[39m src/lib/llm/OpenAIProvider.reasoning.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32mÔ£ô[39m src/capability/merge.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+[90mstdout[2m | src/services/ScheduleService.test.ts[2m > [22m[2mScheduleService[2m > [22m[2mreconcile[2m > [22m[2madds missing schedules to pg-boss and removes stale ones
+[22m[39m[ScheduleService] Reconciling schedules...
+
+[90mstdout[2m | src/services/ScheduleService.test.ts[2m > [22m[2mScheduleService[2m > [22m[2mreconcile[2m > [22m[2madds missing schedules to pg-boss and removes stale ones
+[22m[39m[ScheduleService] ScheduleService started and reconciled
+
+[90mstdout[2m | src/services/ScheduleService.test.ts[2m > [22m[2mScheduleService[2m > [22m[2mreconcile[2m > [22m[2madds missing schedules to pg-boss and removes stale ones
+[22m[39m[ScheduleService] Reconciling schedules...
+
+[90mstdout[2m | src/services/ScheduleService.test.ts[2m > [22m[2mScheduleService[2m > [22m[2mreconcile[2m > [22m[2madds missing schedules to pg-boss and removes stale ones
+[22m[39m[ScheduleService] Removing stale pg-boss schedule: 22222222-2222-4222-a222-222222222222
+
+ [32mÔ£ô[39m src/services/ScheduleService.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32mÔ£ô[39m src/skills/cycles.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcountMessageTokens()[2m > [22m[2mcounts tokens across multiple messages
+[22m[39m[2026-03-21T10:32:42.429Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+ [32mÔ£ô[39m src/routes/tasks.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [2m[90mÔåô[39m[22m src/__tests__/circles-integration.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m
+ [32mÔ£ô[39m src/skills/SkillLibrary.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1062[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m should watch for changes and reload skills [33m 1026[2mms[22m[39m
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mtruncateToolOutput()[2m > [22m[2mreturns short content unchanged
+[22m[39m[2026-03-21T10:32:42.593Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+[90mstdout[2m | src/intercom/BridgeService.test.ts[2m > [22m[2mBridgeService[2m > [22m[2mshould forward messages to remote circles
+[22m[39m[Bridge] Configured token auth for connection to remote
+
+[90mstdout[2m | src/intercom/BridgeService.test.ts[2m > [22m[2mBridgeService[2m > [22m[2mshould forward messages to remote circles
+[22m[39m[Bridge] Forwarded message to remote on channel bridge:local:remote:updates
+
+[90mstdout[2m | src/intercom/BridgeService.test.ts[2m > [22m[2mBridgeService[2m > [22m[2mshould handle incoming bridged messages
+[22m[39m[Bridge] Received inbound bridged message for channel bridge:local:remote:updates
+
+ [32mÔ£ô[39m src/intercom/BridgeService.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32mÔ£ô[39m src/memory/blocks/MemoryBlockStore.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 1375[2mms[22m[39m
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2minitCircleRepo is idempotent
+[22m[39m[KnowledgeGitService] Initialised knowledge repo for circle "idem-circle" at C:\Users\TKC\AppData\Local\Temp\sera-kg-JzK7cE\circles\idem-circle
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mtruncateToolOutput()[2m > [22m[2mtruncates and appends notice when over limit
+[22m[39m[2026-03-21T10:32:42.742Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2misNearLimit()[2m > [22m[2mreturns false for a small message set
+[22m[39m[2026-03-21T10:32:42.916Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2misNearLimit()[2m > [22m[2mreturns true when message tokens exceed high-water mark
+[22m[39m[2026-03-21T10:32:43.030Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mwrite() creates a file in the agent branch and commits
+[22m[39m[KnowledgeGitService] Initialised knowledge repo for circle "write-circle" at C:\Users\TKC\AppData\Local\Temp\sera-kg-8qQd3a\circles\write-circle
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2misNearLimit()[2m > [22m[2mreturns true when message tokens exceed high-water mark
+[22m[39m[2026-03-21T10:32:43.167Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=10 strategy=sliding-window
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcompact() ÔÇö sliding-window[2m > [22m[2malways preserves system message
+[22m[39m[2026-03-21T10:32:43.292Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcompact() ÔÇö sliding-window[2m > [22m[2malways preserves system message
+[22m[39m[2026-03-21T10:32:43.404Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=50 strategy=sliding-window
+[2026-03-21T10:32:43.405Z] [agent-runtime] [INFO] ContextManager: Context compacted: dropped 2 messages, retained 2 non-system messages (76 ÔåÆ 46 tokens)
+
+[90mstdout[2m | src/__tests__/integration.test.ts
+[22m[39m[AuthService] Registered auth plugin: api-key
+[ProviderRegistry] No providers config at /app/config/providers.json ÔÇö relying on env-var bootstrap and auto-detection
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 5.063ms
+
+stderr | src/__tests__/integration.test.ts
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+[SERACore] OIDC_ISSUER_URL not set ÔÇö running in API-key-only mode
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+ [31mÔØ»[39m src/__tests__/integration.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m[33m 2349[2mms[22m[39m
+       [2m[90mÔåô[39m[22m should register agents from AGENT.yaml manifests
+       [2m[90mÔåô[39m[22m should validate agent references against loaded manifests and load circles
+       [2m[90mÔåô[39m[22m should hit the orchestrator and use the loaded agent mock
+       [2m[90mÔåô[39m[22m should create a memory entry via POST /api/memory/blocks/:type
+       [2m[90mÔåô[39m[22m should retrieve the created memory entry via GET /api/memory/entries/:id
+       [2m[90mÔåô[39m[22m should have builtin skills registered after server boot
+[90mstdout[2m | src/routes/openai-compat.test.ts
+[22m[39m[AuthService] Registered auth plugin: api-key
+[ProviderRegistry] No providers config at /app/config/providers.json ÔÇö relying on env-var bootstrap and auto-detection
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 6.132ms
+[Orchestrator] Loaded 5 agent templates
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 2.426ms
+
+[90mstdout[2m | src/app.test.ts
+[22m[39m[AuthService] Registered auth plugin: api-key
+[ProviderRegistry] No providers config at /app/config/providers.json ÔÇö relying on env-var bootstrap and auto-detection
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 5.741ms
+[Orchestrator] Loaded 5 agent templates
+[AgentManifestLoader] Loaded: architect-prime (architect.agent.yaml)
+[AgentManifestLoader] Loaded: developer-prime (developer.agent.yaml)
+[AgentManifestLoader] Loaded: general-assistant (general-assistant\AGENT.yaml)
+[AgentManifestLoader] Loaded: researcher-prime (researcher.agent.yaml)
+[AgentManifestLoader] Loaded: writer (writer\AGENT.yaml)
+[AgentManifestLoader] loadAllManifests: 2.699ms
+
+stderr | src/routes/openai-compat.test.ts
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+[SERACore] OIDC_ISSUER_URL not set ÔÇö running in API-key-only mode
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+stderr | src/app.test.ts
+[IdentityService] JWT_SECRET not set ÔÇö using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+[SERACore] OIDC_ISSUER_URL not set ÔÇö running in API-key-only mode
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+[AgentManifestLoader] Failed to load D:\projects\homelab\sera\agents\example.agent.yaml: Missing required field "identity" (in D:\projects\homelab\sera\agents\example.agent.yaml)
+
+ [31mÔØ»[39m src/routes/openai-compat.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31mÔØ»[39m src/app.test.ts [2m([22m[2m0 test[22m[2m)[22m
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Loaded: development (development.circle.yaml)
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Loaded: operations (operations.circle.yaml)
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Loaded project context for "development"
+
+[90mstdout[2m | Logger.info (D:\projects\homelab\sera\core\src\lib\logger.ts:9:13)
+[22m[39m[CircleRegistry] Registered 2 circles
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcompact() ÔÇö sliding-window[2m > [22m[2mreturns compaction stats
+[22m[39m[2026-03-21T10:32:43.522Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=102400 strategy=sliding-window
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mwrite() creates a file in the agent branch and commits
+[22m[39m[KnowledgeGitService] KnowledgeGitService: committed block bd888f86-911d-4f23-8526-ec8cb3de5934 to knowledge/agent-agent-123 in circle "write-circle"
+
+[90mstdout[2m | agent-runtime/src/contextManager.test.ts[2m > [22m[2mContextManager[2m > [22m[2mcompact() ÔÇö sliding-window[2m > [22m[2mreturns compaction stats
+[22m[39m[2026-03-21T10:32:43.637Z] [agent-runtime] [INFO] ContextManager init: model=gpt-4o-mini window=128000 highWater=30 strategy=sliding-window
+[2026-03-21T10:32:43.637Z] [agent-runtime] [INFO] ContextManager: Context compacted: dropped 2 messages, retained 1 non-system messages (50 ÔåÆ 21 tokens)
+
+ [32mÔ£ô[39m agent-runtime/src/contextManager.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 2413[2mms[22m[39m
+       [33m[2mÔ£ô[22m[39m returns 0 for empty string [33m 361[2mms[22m[39m
+       [33m[2mÔ£ô[22m[39m counts more tokens for longer text [33m 338[2mms[22m[39m
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mwrite() commits with agent identity (verifiable via merge)
+[22m[39m[KnowledgeGitService] Initialised knowledge repo for circle "log-circle" at C:\Users\TKC\AppData\Local\Temp\sera-kg-VDZVXy\circles\log-circle
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mwrite() commits with agent identity (verifiable via merge)
+[22m[39m[KnowledgeGitService] KnowledgeGitService: committed block d9cfcced-baf7-4f3c-8c9e-efc9b4625f52 to knowledge/agent-agent-xyz in circle "log-circle"
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mwrite() commits with agent identity (verifiable via merge)
+[22m[39m[KnowledgeGitService] KnowledgeGitService: merged knowledge/agent-agent-xyz ÔåÆ main in circle "log-circle"
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mmergeToMain merges agent branch to main
+[22m[39m[KnowledgeGitService] Initialised knowledge repo for circle "merge-circle" at C:\Users\TKC\AppData\Local\Temp\sera-kg-iUNc8Z\circles\merge-circle
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mmergeToMain merges agent branch to main
+[22m[39m[KnowledgeGitService] KnowledgeGitService: committed block 3274c341-cd2a-4ae4-8340-1eae61ada8c1 to knowledge/agent-agent-abc in circle "merge-circle"
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mmergeToMain merges agent branch to main
+[22m[39m[KnowledgeGitService] KnowledgeGitService: merged knowledge/agent-agent-abc ÔåÆ main in circle "merge-circle"
+
+[90mstdout[2m | src/memory/KnowledgeGitService.test.ts[2m > [22m[2mKnowledgeGitService[2m > [22m[2mdiff() returns empty string before any writes
+[22m[39m[KnowledgeGitService] Initialised knowledge repo for circle "diff-circle" at C:\Users\TKC\AppData\Local\Temp\sera-kg-HXhP7e\circles\diff-circle
+
+ [32mÔ£ô[39m src/memory/KnowledgeGitService.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 4841[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m initCircleRepo creates a git repository with an initial commit [33m 1046[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m initCircleRepo is idempotent [33m 667[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m write() creates a file in the agent branch and commits [33m 873[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m write() commits with agent identity (verifiable via merge) [33m 937[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m mergeToMain merges agent branch to main [33m 915[2mms[22m[39m
+     [33m[2mÔ£ô[22m[39m diff() returns empty string before any writes [33m 403[2mms[22m[39m
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Suites 3 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  src/app.test.ts [ src/app.test.ts ]
+Error: SECRETS_MASTER_KEY must be a 32-byte hex string (64 characters)
+ ÔØ» new PostgresSecretsProvider src/secrets/postgres-secrets-provider.ts:28:13
+     26|     this.masterKey = Buffer.from(keyStr, 'hex');
+     27|     if (this.masterKey.length !== 32) {
+     28|       throw new Error('SECRETS_MASTER_KEY must be a 32-byte hex stringÔÇª
+       |             ^
+     29|     }
+     30|   }
+ ÔØ» new SecretsManager src/secrets/secrets-manager.ts:18:21
+ ÔØ» Function.getInstance src/secrets/secrets-manager.ts:23:33
+ ÔØ» createSecretsRouter src/routes/secrets.ts:7:34
+ ÔØ» src/index.ts:169:41
+ ÔØ» src/app.test.ts:14:1
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/15]ÔÄ»
+
+ FAIL  src/routes/openai-compat.test.ts [ src/routes/openai-compat.test.ts ]
+Error: SECRETS_MASTER_KEY must be a 32-byte hex string (64 characters)
+ ÔØ» new PostgresSecretsProvider src/secrets/postgres-secrets-provider.ts:28:13
+     26|     this.masterKey = Buffer.from(keyStr, 'hex');
+     27|     if (this.masterKey.length !== 32) {
+     28|       throw new Error('SECRETS_MASTER_KEY must be a 32-byte hex stringÔÇª
+       |             ^
+     29|     }
+     30|   }
+ ÔØ» new SecretsManager src/secrets/secrets-manager.ts:18:21
+ ÔØ» Function.getInstance src/secrets/secrets-manager.ts:23:33
+ ÔØ» createSecretsRouter src/routes/secrets.ts:7:34
+ ÔØ» src/index.ts:169:41
+ ÔØ» src/routes/openai-compat.test.ts:3:1
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[2/15]ÔÄ»
+
+ FAIL  src/__tests__/integration.test.ts [ src/__tests__/integration.test.ts ]
+Error: SECRETS_MASTER_KEY must be a 32-byte hex string (64 characters)
+ ÔØ» new PostgresSecretsProvider src/secrets/postgres-secrets-provider.ts:28:13
+     26|     this.masterKey = Buffer.from(keyStr, 'hex');
+     27|     if (this.masterKey.length !== 32) {
+     28|       throw new Error('SECRETS_MASTER_KEY must be a 32-byte hex stringÔÇª
+       |             ^
+     29|     }
+     30|   }
+ ÔØ» new SecretsManager src/secrets/secrets-manager.ts:18:21
+ ÔØ» Function.getInstance src/secrets/secrets-manager.ts:23:33
+ ÔØ» createSecretsRouter src/routes/secrets.ts:7:34
+ ÔØ» src/index.ts:169:41
+ ÔØ» src/__tests__/integration.test.ts:149:21
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[3/15]ÔÄ»
+
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 12 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  src/intercom/ThoughtPersistence.test.ts > Story 9.7: Thought Stream Persistence > retrieves persisted thoughts with filtering
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ÔØ» src/intercom/ThoughtPersistence.test.ts:76:22
+     74|       expect.arrayContaining([agentId, taskId])
+     75|     );
+     76|     expect(thoughts).toHaveLength(1);
+       |                      ^
+     77|     expect(thoughts[0]!.content).toBe('I have a plan');
+     78|   });
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[4/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > Auth Middleware > should reject requests without Authorization header
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:210:41
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[5/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > Auth Middleware > should reject requests with invalid token
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:225:41
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[6/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > Auth Middleware > should accept requests with valid token and populate identity
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:239:53
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[7/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should proxy a chat request and return OpenAI-format response
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:258:44
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[8/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should record metering after successful call
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:307:61
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[9/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should reject requests without messages
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:349:44
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[10/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should return 429 with budget_exceeded when budget is exceeded
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:369:44
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[11/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > INVARIANT: no upstream call is made when budget is exceeded
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:405:55
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[12/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > POST /chat/completions > should return 503 when circuit breaker is open
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:435:67
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[13/15]ÔÄ»
+
+ FAIL  src/routes/llmProxy.test.ts > LLM Proxy Router > GET /models > should return model list from LiteLLM
+TypeError: () => ({
+		chatCompletion: vi.fn().mockResolvedValue({
+			response: {
+				id: "chatcmpl-t...<omitted>...}) is not a constructor
+ ÔØ» createTestSetup src/routes/llmProxy.test.ts:105:21
+    103|   const identityService = new IdentityService(TEST_SECRET);
+    104|   const meteringService = new MeteringService();
+    105|   const llmRouter = new LlmRouter({} as unknown as ConstructorParameteÔÇª
+       |                     ^
+    106|   const circuitBreakerService = new CircuitBreakerService(
+    107|     llmRouter as unknown as import('../llm/CircuitBreakerService.js').ÔÇª
+ ÔØ» src/routes/llmProxy.test.ts:466:44
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[14/15]ÔÄ»
+
+ FAIL  src/sandbox/SandboxManager.test.ts > SandboxManager > exec > should reject exec from a different agent
+AssertionError: expected [Function] to throw error matching /cannot exec/ but got 'Container "undefined" not found in saÔÇª'
+
+- Expected:
+/cannot exec/
+
++ Received:
+"Container \"undefined\" not found in sandbox registry"
+
+ ÔØ» src/sandbox/SandboxManager.test.ts:200:8
+    198|           command: ['cat', '/etc/passwd'],
+    199|         } as unknown as { containerId: string; agentName: string; commÔÇª
+    200|       ).rejects.toThrow(/cannot exec/);
+       |        ^
+    201|     });
+    202|   });
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[15/15]ÔÄ»
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Unhandled Errors ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+Vitest caught 3 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ» Unhandled Rejection ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending
+This error originated in "src/routes/openai-compat.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ» Unhandled Rejection ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending
+This error originated in "src/routes/openai-compat.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ» Unhandled Rejection ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending
+This error originated in "src/routes/openai-compat.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+
+[2m Test Files [22m [1m[31m6 failed[39m[22m[2m | [22m[1m[32m61 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (68)[39m
+[2m      Tests [22m [1m[31m12 failed[39m[22m[2m | [22m[1m[32m547 passed[39m[22m[2m | [22m[33m12 skipped[39m[90m (571)[39m
+[2m     Errors [22m [1m[31m3 errors[39m[22m
+[2m   Start at [22m 11:32:40
+[2m   Duration [22m 5.26s[2m (transform 10.09s, setup 0ms, import 17.70s, tests 16.61s, environment 10ms)[22m
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path D:\projects\homelab\sera\core
+npm error workspace core@1.0.0
+npm error location D:\projects\homelab\sera\core
+npm error command failed
+npm error command C:\WINDOWS\system32\cmd.exe /d /s /c vitest run
+
+
+> sera-web@0.1.0 test
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.4 [39m[90mD:/projects/homelab/sera/web[39m
+
+ [32mÔ£ô[39m src/__tests__/BudgetUtilisation.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32mÔ£ô[39m src/__tests__/ThoughtTimeline.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32mÔ£ô[39m src/__tests__/AuditLogExport.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 180[2mms[22m[39m
+ [32mÔ£ô[39m src/__tests__/ChatStream.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 336[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m31 passed[39m[22m[90m (31)[39m
+[2m   Start at [22m 11:32:46
+[2m   Duration [22m 1.84s[2m (transform 288ms, setup 349ms, collect 1.16s, tests 676ms, environment 2.01s, prepare 610ms)[22m
+

@@ -79,8 +79,35 @@ export interface AgentInfo {
 
 export interface CircleSummary {
   name: string;
-  displayName?: string;
-  memberCount?: number;
+  displayName: string;
+  description?: string;
+  agents: string[];
+  hasProjectContext: boolean;
+  channelCount: number;
+}
+
+export interface CircleChannelConfig {
+  id?: string;
+  name: string;
+  type?: 'persistent' | 'ephemeral';
+  description?: string;
+}
+
+export interface CirclePartyModeConfig {
+  enabled: boolean;
+  orchestrator?: string;
+  selectionStrategy?: 'relevance' | 'round-robin' | 'all';
+}
+
+export interface CircleKnowledgeConfig {
+  qdrantCollection: string;
+  postgresSchema?: string;
+}
+
+export interface CircleConnectionConfig {
+  circle: string;
+  bridgeChannels?: string[];
+  auth?: 'internal' | Record<string, unknown>;
 }
 
 export interface CircleManifest {
@@ -88,23 +115,20 @@ export interface CircleManifest {
   kind?: string;
   metadata: {
     name: string;
-    displayName?: string;
+    displayName: string;
+    description?: string;
   };
-  spec?: {
-    constitution?: string;
-    members?: string[];
-  };
+  agents: string[];
+  channels?: CircleChannelConfig[];
+  knowledge?: CircleKnowledgeConfig;
+  partyMode?: CirclePartyModeConfig;
+  projectContext?: { path: string; autoLoad?: boolean };
+  connections?: CircleConnectionConfig[];
 }
 
-export interface CircleDetails {
-  name: string;
-  displayName?: string;
-  projectContext?: {
-    content?: string;
-    updatedAt?: string;
-  };
-  members?: string[];
-  spec?: Record<string, unknown>;
+/** Full manifest + resolved project context content from GET /circles/:name */
+export interface CircleDetails extends CircleManifest {
+  projectContext?: { path: string; autoLoad?: boolean; content?: string };
 }
 
 export interface PartySessionInfo {

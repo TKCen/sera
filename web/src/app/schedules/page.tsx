@@ -256,59 +256,61 @@ export default function SchedulesPage() {
               {group.items.map((schedule) => (
                 <li key={schedule.id}>
                   <Card className="p-5 group">
-                   <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-1">
-                        <h3 className="text-sm font-semibold text-sera-text">{schedule.name}</h3>
-                        <span
-                          className={`sera-badge-${schedule.status === 'active' ? 'accent' : 'muted'} text-[10px]`}
-                        >
-                          {schedule.status}
-                        </span>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-1">
+                          <h3 className="text-sm font-semibold text-sera-text">{schedule.name}</h3>
+                          <span
+                            className={`sera-badge-${schedule.status === 'active' ? 'accent' : 'muted'} text-[10px]`}
+                          >
+                            {schedule.status}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-4 text-xs text-sera-text-muted font-mono">
+                          <span className="flex items-center gap-1">
+                            <CalendarClock size={12} />
+                            {schedule.cron}
+                          </span>
+                          {schedule.last_run && (
+                            <span>Last run: {new Date(schedule.last_run).toLocaleString()}</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-4 text-xs text-sera-text-muted font-mono">
-                        <span className="flex items-center gap-1">
-                          <CalendarClock size={12} />
-                          {schedule.cron}
-                        </span>
-                        {schedule.last_run && (
-                          <span>Last run: {new Date(schedule.last_run).toLocaleString()}</span>
-                        )}
-                      </div>
-                    </div>
 
-                    <div className="flex items-center gap-2 opacity-0 focus-within:opacity-100 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => toggleStatus(schedule)}
-                        className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
-                        aria-label={schedule.status === 'active' ? 'Pause schedule' : 'Resume schedule'}
-                        title={schedule.status === 'active' ? 'Pause' : 'Resume'}
-                      >
-                        {schedule.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
-                      </button>
-                      <button
-                        onClick={() => openEditModal(schedule)}
-                        className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
-                        aria-label="Edit schedule"
-                        title="Edit"
-                      >
-                        <Edit2 size={16} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(schedule.id)}
-                        className="p-2 text-sera-text-dim hover:text-sera-error hover:bg-sera-error/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
-                        aria-label="Delete schedule"
-                        title="Delete"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center gap-2 opacity-0 focus-within:opacity-100 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => toggleStatus(schedule)}
+                          className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
+                          aria-label={
+                            schedule.status === 'active' ? 'Pause schedule' : 'Resume schedule'
+                          }
+                          title={schedule.status === 'active' ? 'Pause' : 'Resume'}
+                        >
+                          {schedule.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
+                        </button>
+                        <button
+                          onClick={() => openEditModal(schedule)}
+                          className="p-2 text-sera-text-dim hover:text-sera-accent hover:bg-sera-accent/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
+                          aria-label="Edit schedule"
+                          title="Edit"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(schedule.id)}
+                          className="p-2 text-sera-text-dim hover:text-sera-error hover:bg-sera-error/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
+                          aria-label="Delete schedule"
+                          title="Delete"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
-                   </div>
-                   {actionErrors[schedule.id] && (
-                     <Alert variant="error" className="mt-4">
-                       {actionErrors[schedule.id]}
-                     </Alert>
-                   )}
+                    {actionErrors[schedule.id] && (
+                      <Alert variant="error" className="mt-4">
+                        {actionErrors[schedule.id]}
+                      </Alert>
+                    )}
                   </Card>
                 </li>
               ))}
@@ -321,9 +323,7 @@ export default function SchedulesPage() {
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingSchedule ? 'Edit Schedule' : 'Create New Schedule'}</DialogTitle>
-            <DialogDescription>
-              Configure the automated task schedule.
-            </DialogDescription>
+            <DialogDescription>Configure the automated task schedule.</DialogDescription>
           </DialogHeader>
 
           {formError && (
@@ -336,7 +336,10 @@ export default function SchedulesPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="agentId" className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">
+              <label
+                htmlFor="agentId"
+                className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5"
+              >
                 Agent Instance
               </label>
               <select
@@ -357,7 +360,10 @@ export default function SchedulesPage() {
             </div>
 
             <div>
-              <label htmlFor="scheduleName" className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">
+              <label
+                htmlFor="scheduleName"
+                className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5"
+              >
                 Schedule Name
               </label>
               <input
@@ -372,7 +378,10 @@ export default function SchedulesPage() {
             </div>
 
             <div>
-              <label htmlFor="cron" className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">
+              <label
+                htmlFor="cron"
+                className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5"
+              >
                 Cron Expression
               </label>
               <input
@@ -391,7 +400,10 @@ export default function SchedulesPage() {
             </div>
 
             <div>
-              <label htmlFor="taskPayload" className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5">
+              <label
+                htmlFor="taskPayload"
+                className="block text-xs font-semibold uppercase tracking-wider text-sera-text-dim mb-1.5"
+              >
                 Task Payload (JSON)
               </label>
               <textarea

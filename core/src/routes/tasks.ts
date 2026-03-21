@@ -88,7 +88,14 @@ export function createTasksRouter(intercom: IntercomService): Router {
       `INSERT INTO task_queue
          (id, agent_instance_id, task, context, priority, max_retries, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'queued')`,
-      [taskId, agentRow.id, task, JSON.stringify(context ?? null), resolvedPriority, resolvedMaxRetries]
+      [
+        taskId,
+        agentRow.id,
+        task,
+        JSON.stringify(context ?? null),
+        resolvedPriority,
+        resolvedMaxRetries,
+      ]
     );
 
     const depth = await getQueueDepth(agentRow.id);

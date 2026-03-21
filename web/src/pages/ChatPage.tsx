@@ -275,9 +275,7 @@ export default function ChatPage() {
 
       setMessages((prev) =>
         prev.map((msg) =>
-          msg.id === streamingMsgId.current
-            ? { ...msg, thoughts: [...msg.thoughts, thought] }
-            : msg
+          msg.id === streamingMsgId.current ? { ...msg, thoughts: [...msg.thoughts, thought] } : msg
         )
       );
     });
@@ -435,7 +433,9 @@ export default function ChatPage() {
         >
           <Sparkles
             size={13}
-            className={msg.streaming && msg.thoughts.length > 0 ? 'animate-pulse text-sera-accent' : ''}
+            className={
+              msg.streaming && msg.thoughts.length > 0 ? 'animate-pulse text-sera-accent' : ''
+            }
           />
           <span>{msg.streaming ? 'Thinking…' : 'Thought process'}</span>
           <ChevronDown
@@ -497,7 +497,10 @@ export default function ChatPage() {
               if (thought.stepType === 'tool-call') {
                 const lines = thought.content.split('\n');
                 const toolName = (lines[0] ?? '').replace(/^Tool:\s*/, '');
-                const rawParams = lines.slice(1).join('\n').replace(/^Parameters:\s*/, '');
+                const rawParams = lines
+                  .slice(1)
+                  .join('\n')
+                  .replace(/^Parameters:\s*/, '');
                 let paramDisplay = rawParams;
                 try {
                   paramDisplay = JSON.stringify(JSON.parse(rawParams), null, 2);
@@ -558,7 +561,8 @@ export default function ChatPage() {
                           {STEP_ICONS['tool-result']}
                         </span>
                         <span className="text-[11px] font-semibold text-teal-300">
-                          {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''} fetched
+                          {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''}{' '}
+                          fetched
                         </span>
                       </div>
                       <div className="ml-4 space-y-1.5">
@@ -627,7 +631,9 @@ export default function ChatPage() {
             {msg.streaming && msg.thoughts.length === 0 && (
               <div className="flex items-center gap-2">
                 <Loader2 size={11} className="animate-spin text-sera-accent" />
-                <span className="text-[11px] text-sera-text-muted">Waiting for agent thoughts…</span>
+                <span className="text-[11px] text-sera-text-muted">
+                  Waiting for agent thoughts…
+                </span>
               </div>
             )}
           </div>
@@ -715,12 +721,14 @@ export default function ChatPage() {
                           : 'hover:bg-sera-surface border-transparent'
                       )}
                     >
-                      <MessageSquare size={13} className="text-sera-text-muted mt-0.5 flex-shrink-0" />
+                      <MessageSquare
+                        size={13}
+                        className="text-sera-text-muted mt-0.5 flex-shrink-0"
+                      />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-sera-text truncate">{s.title}</p>
                         <p className="text-[10px] text-sera-text-muted mt-0.5">
-                          {s.messageCount} messages ·{' '}
-                          {new Date(s.updatedAt).toLocaleDateString()}
+                          {s.messageCount} messages · {new Date(s.updatedAt).toLocaleDateString()}
                         </p>
                       </div>
                       <button

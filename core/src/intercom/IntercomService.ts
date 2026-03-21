@@ -200,8 +200,7 @@ export class IntercomService {
     // Story 9.7: Persist thought to database (non-blocking).
     // Skip persistence for YAML-loaded agents that use their manifest name (not a UUID)
     // as their agentId — inserting a non-UUID value into the uuid column crashes the query.
-    const UUID_RE =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const persistThought = async () => {
       if (!UUID_RE.test(agentId)) return; // not a DB-registered instance — skip
       try {

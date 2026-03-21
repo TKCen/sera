@@ -174,7 +174,12 @@ app.get('/api/health', (req, res) =>
 );
 
 app.get('/api/health/detail', async (_req, res) => {
-  const components: { name: string; status: 'healthy' | 'degraded' | 'unreachable'; message?: string; latencyMs?: number }[] = [];
+  const components: {
+    name: string;
+    status: 'healthy' | 'degraded' | 'unreachable';
+    message?: string;
+    latencyMs?: number;
+  }[] = [];
 
   // Database check
   const dbStart = Date.now();
@@ -191,11 +196,21 @@ app.get('/api/health/detail', async (_req, res) => {
   try {
     const ctrl = new AbortController();
     const centrifugoTimer = setTimeout(() => ctrl.abort(), 3000);
-    const centResp = await fetch(`${centrifugoUrl.replace(/\/api$/, '')}/health`, { signal: ctrl.signal });
+    const centResp = await fetch(`${centrifugoUrl.replace(/\/api$/, '')}/health`, {
+      signal: ctrl.signal,
+    });
     clearTimeout(centrifugoTimer);
-    components.push({ name: 'centrifugo', status: centResp.ok ? 'healthy' : 'degraded', latencyMs: Date.now() - centrifugoStart });
+    components.push({
+      name: 'centrifugo',
+      status: centResp.ok ? 'healthy' : 'degraded',
+      latencyMs: Date.now() - centrifugoStart,
+    });
   } catch {
-    components.push({ name: 'centrifugo', status: 'unreachable', latencyMs: Date.now() - centrifugoStart });
+    components.push({
+      name: 'centrifugo',
+      status: 'unreachable',
+      latencyMs: Date.now() - centrifugoStart,
+    });
   }
 
   // Agent stats

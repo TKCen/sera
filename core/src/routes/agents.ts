@@ -299,9 +299,19 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     const enriched = orchestrator.listAgents().map((item) => {
       const info = orchestrator.getAgentInfo(item.name);
       if (!info) {
-        return { id: item.id, status: item.status, startTime: item.startTime, metadata: { name: item.name } };
+        return {
+          id: item.id,
+          status: item.status,
+          startTime: item.startTime,
+          metadata: { name: item.name },
+        };
       }
-      return { id: item.id, status: item.status, startTime: item.startTime, ...normalizeManifestForApi(info.manifest) };
+      return {
+        id: item.id,
+        status: item.status,
+        startTime: item.startTime,
+        ...normalizeManifestForApi(info.manifest),
+      };
     });
     res.json(enriched);
   });

@@ -155,12 +155,13 @@ describe('AgentManifestLoader', () => {
       const agentsDir = path.resolve(import.meta.dirname, '..', '..', '..', '..', 'agents');
       const manifests = AgentManifestLoader.loadAllManifests(agentsDir);
 
-      expect(manifests.length).toBe(5);
+      expect(manifests.length).toBe(6);
       const names = manifests.map((m) => m.metadata.name).sort();
       expect(names).toEqual([
         'architect-prime',
         'developer-prime',
         'general-assistant',
+        'qwen-assistant',
         'researcher-prime',
         'writer',
       ]);

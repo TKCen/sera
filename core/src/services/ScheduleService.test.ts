@@ -65,7 +65,7 @@ describe('ScheduleService', () => {
         unschedule: vi.fn(),
         createQueue: vi.fn(),
         work: vi.fn(),
-      } as any);
+      } as unknown as import('pg-boss').PgBoss);
       await service.reconcile();
 
       const boss = (

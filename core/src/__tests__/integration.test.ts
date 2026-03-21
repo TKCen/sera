@@ -121,6 +121,10 @@ vi.mock('../agents/Orchestrator.js', () => {
           { name: 'developer-prime' },
           { name: 'researcher-prime' },
         ]);
+      getAgentInfo = vi.fn().mockImplementation((name) => ({
+        name,
+        manifest: { metadata: { name } },
+      }));
       listCircles = vi.fn().mockReturnValue([{ name: 'development' }, { name: 'operations' }]);
       getManifest = vi.fn();
       getAllManifests = vi.fn().mockReturnValue([]);
@@ -134,6 +138,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setRegistry = vi.fn();
       setMetering = vi.fn();
       setIdentityService = vi.fn();
+      setLlmRouter = vi.fn();
       init = vi.fn().mockResolvedValue(undefined);
     },
   };
@@ -167,7 +172,7 @@ describe('SERA Integration Tests', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
 
-      const names = res.body.map((a: { name: string }) => a.name); // Orchestrator.listAgents returns array of { name, ... }
+      const names = res.body.map((a: any) => a.metadata?.name ?? a.name);
       expect(names).toContain('architect-prime');
       expect(names).toContain('developer-prime');
       expect(names).toContain('researcher-prime');

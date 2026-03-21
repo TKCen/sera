@@ -30,7 +30,7 @@ describe('Story 9.7: Thought Stream Persistence', () => {
   });
 
   it('persists a thought to the database when published', async () => {
-    const agentId = 'test-agent';
+    const agentId = '11111111-2222-3333-4444-555555555555';
     const taskId = 'task-123';
 
     // Simulate non-blocking persistence
@@ -46,7 +46,7 @@ describe('Story 9.7: Thought Stream Persistence', () => {
   });
 
   it('retrieves persisted thoughts with filtering', async () => {
-    const agentId = 'test-agent';
+    const agentId = '11111111-2222-3333-4444-555555555555';
     const taskId = 'task-123';
 
     const mockRows = [

@@ -6,6 +6,46 @@ import { Reflector } from './Reflector.js';
 import { MemoryManager } from './manager.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 
+vi.mock('../services/vector.service.js', () => {
+  return {
+    VectorService: class {
+      ensureCollection() {
+        return Promise.resolve();
+      }
+      ensureCollectionByName() {
+        return Promise.resolve();
+      }
+      ensureNamespaceCollection() {
+        return Promise.resolve();
+      }
+      upsertPoints() {
+        return Promise.resolve();
+      }
+      upsert() {
+        return Promise.resolve();
+      }
+      searchLegacy() {
+        return Promise.resolve([]);
+      }
+      search() {
+        return Promise.resolve([]);
+      }
+      deletePoints() {
+        return Promise.resolve();
+      }
+      delete() {
+        return Promise.resolve();
+      }
+    },
+  };
+});
+
+vi.mock('../services/embedding.service.js', () => ({
+  EmbeddingService: {
+    getInstance: () => ({ generateEmbedding: async () => [], embed: async () => [] }),
+  },
+}));
+
 /** Create a mock LLM provider that returns a canned summary. */
 function createMockLLM(summary: string = 'Compacted summary of entries.'): LLMProvider {
   return {

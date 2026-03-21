@@ -13,7 +13,7 @@
   "dependencies": {
     "axios": "^1.7.0",
     "centrifuge": "^5.5.3",
-    "js-tiktoken": "^1.0.15",
+    "js-tiktoken": "^1.0.21",
     "js-yaml": "^4.1.1",
     "uuid": "^13.0.0"
   },

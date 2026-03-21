@@ -111,6 +111,11 @@ describe('KnowledgeGitService', () => {
     const svc = KnowledgeGitService.getInstance();
     await svc.initCircleRepo('log-circle');
 
+    // Force checkout of main to ensure git isn't left in a detached head state
+    const { simpleGit } = await import('simple-git');
+    const git = simpleGit(path.join(tmpDir, 'circles', 'log-circle'));
+    await git.checkout('main').catch(() => git.checkoutLocalBranch('main'));
+
     const { commitHash } = await svc.write('log-circle', 'agent-xyz', 'MyAgent', {
       content: 'Important fact.',
       type: 'insight',
@@ -135,6 +140,10 @@ describe('KnowledgeGitService', () => {
     const svc = KnowledgeGitService.getInstance();
     await svc.initCircleRepo('merge-circle');
 
+    const { simpleGit } = await import('simple-git');
+    const git = simpleGit(path.join(tmpDir, 'circles', 'merge-circle'));
+    await git.checkout('main').catch(() => git.checkoutLocalBranch('main'));
+
     await svc.write('merge-circle', 'agent-abc', 'MergeAgent', {
       content: 'Knowledge for merging.',
       type: 'memory',
@@ -145,10 +154,9 @@ describe('KnowledgeGitService', () => {
     await expect(svc.mergeToMain('merge-circle', 'agent-abc', 'operator-1')).resolves.not.toThrow();
 
     // After merge, the file should be on main
-    const { simpleGit } = await import('simple-git');
     const repoDir = path.join(tmpDir, 'circles', 'merge-circle');
-    const git = simpleGit(repoDir);
-    const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+    const git2 = simpleGit(repoDir);
+    const branch = (await git2.revparse(['--abbrev-ref', 'HEAD'])).trim();
     expect(branch).toBe('main');
   });
 

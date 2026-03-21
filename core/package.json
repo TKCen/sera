@@ -62,6 +62,7 @@
     "express": "^5.0.0",
     "gray-matter": "^4.0",
     "jose": "^6.2.2",
+    "js-tiktoken": "^1.0.21",
     "js-yaml": "^4.1",
     "jsonwebtoken": "^9.0",
     "node-pg-migrate": "^7.0",

@@ -14,7 +14,6 @@ import { PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 import { Logger } from '../lib/logger.js';
-import { PlatformPath } from '../lib/PlatformPath.js';
 
 const logger = new Logger('SandboxManager');
 
@@ -104,19 +103,25 @@ export class SandboxManager {
     // 2. Memory mount (Story 3.3)
     const memoryHostDir = process.env.HOST_MEMORY_DIR ?? '/memory';
     let memoryHostPath = `${memoryHostDir}/${finalInstanceId}`;
-    memoryHostPath = PlatformPath.normalizeWindowsPath(memoryHostPath);
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(memoryHostPath)) {
+      memoryHostPath = `/${memoryHostPath[0]!.toLowerCase()}${memoryHostPath.slice(2).replace(/\\/g, '/')}`;
+    }
     fs.mkdirSync(memoryHostPath, { recursive: true });
     binds.push(`${memoryHostPath}:/memory:rw`);
 
     // 3. Knowledge mounts (Story 3.3)
     const knowledgeHostDir = process.env.HOST_KNOWLEDGE_DIR ?? '/knowledge';
     let personalPath = `${knowledgeHostDir}/agents/${agentName}`;
-    personalPath = PlatformPath.normalizeWindowsPath(personalPath);
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(personalPath)) {
+      personalPath = `/${personalPath[0]!.toLowerCase()}${personalPath.slice(2).replace(/\\/g, '/')}`;
+    }
     fs.mkdirSync(personalPath, { recursive: true });
     binds.push(`${personalPath}:/knowledge/personal:ro`);
 
     let sharedPath = `${knowledgeHostDir}/shared`;
-    sharedPath = PlatformPath.normalizeWindowsPath(sharedPath);
+    if (process.platform === 'win32' && /^[a-zA-Z]:/.test(sharedPath)) {
+      sharedPath = `/${sharedPath[0]!.toLowerCase()}${sharedPath.slice(2).replace(/\\/g, '/')}`;
+    }
     fs.mkdirSync(sharedPath, { recursive: true });
     binds.push(`${sharedPath}:/knowledge/shared:ro`);
 

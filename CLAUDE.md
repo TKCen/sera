@@ -22,7 +22,7 @@ Load selectively based on your task — do not load everything upfront:
 
 - **Platform:** Windows 11 / bash shell — use Unix syntax (forward slashes) throughout
 - **Working directory:** `D:/projects/homelab/sera`
-- **Package manager:** npm workspaces (`core/` and `web/` are workspace packages)
+- **Package manager:** bun workspaces (`core/` and `web/` are workspace packages)
 - **`cd` does not persist between shell calls** — use absolute paths in every command
 
 ## Codebase map
@@ -75,17 +75,19 @@ Only record durable facts — environment quirks, library gotchas, architectural
 ## Docker Compose (dev)
 
 - **Dev start command:** `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d`
-- **Dev entrypoints:** `core/docker-entrypoint.dev.sh` and `web/docker-entrypoint.dev.sh` run `npm install` into the named volume on first boot — do not remove these
+- **Dev entrypoints:** `core/docker-entrypoint.dev.sh` and `web/docker-entrypoint.dev.sh` run `bun install` into the named volume on first boot — do not remove these
 - **Named volumes for node_modules:** The dev compose shadows `/app/node_modules` with named volumes (`node_modules_core`, `node_modules_web`). These start empty; the entrypoint scripts populate them. To force a fresh install: `docker compose ... down -v` then `up -d`
 - **Migrations run automatically:** `initDb()` in `core/src/index.ts` runs `node-pg-migrate` on startup — no manual migration step needed
 - **Shell scripts must use LF line endings:** Any `.sh` file mounted into a Linux container will break with CRLF. After creating shell scripts, run `sed -i 's/\r$//'` on them
 
 ## Learnings
 
-- **`npx` and `node_modules/.bin/` shims both fail in Git Bash**: The `.bin/` shims are bash scripts that Git Bash can't execute (`SyntaxError: missing ) after argument list`). Use the underlying Node entry points directly — e.g. `node web/node_modules/typescript/bin/tsc` and `node web/node_modules/vitest/vitest.mjs`. Always run from the workspace root with full paths.
+- **`bunx` replaces `npx`**: bun is the project package manager. Use `bunx` to run local binaries (e.g. `bunx vitest run`, `bunx tsc --noEmit`). The old `npx` and `node_modules/.bin/` shim workarounds are no longer needed.
 - **`cd` does not persist between shell calls**: Every Bash tool call starts in the default working directory — always use absolute paths.
 - **Git Bash mangles absolute Linux paths in `docker exec`**: Prefix with `MSYS_NO_PATHCONV=1` when passing paths like `/app/...` to `docker exec`.
-- **Dev dependency version alignment**: `vitest` and `@vitest/coverage-v8` must share the same major version — a mismatch breaks `npm install` in Docker builds.
+- **Dev dependency version alignment**: `vitest` and `@vitest/coverage-v8` must share the same major version — a mismatch breaks `bun install` in Docker builds.
+- **Core build uses tsup (esbuild)**: `core/package.json` build script runs `tsup` for fast file-per-file transpilation (~100ms). Type checking is separate via `tsc --noEmit`. The tsup config is in `core/tsup.config.ts`.
+- **Agent-runtime runs on bun**: `core/sandbox/Dockerfile.worker` uses `oven/bun:1-slim` as base image. No TypeScript build step — bun runs `.ts` files directly. Faster cold start and smaller image than Node.js.
 - **`simple-git` and `pg-boss` use named exports**: `import { simpleGit } from 'simple-git'` and `import { PgBoss } from 'pg-boss'` — default imports have no call signatures and fail tsc. See `core/CLAUDE.md` for further gotchas with each library.
 - **LiteLLM replaced by `@mariozechner/pi-ai` (in-process routing)**: The `litellm` sidecar container is gone. LLM calls now happen in-process via `LlmRouter` → `ProviderRegistry` → pi-mono provider functions. Provider config lives in `core/config/providers.json`. Cloud providers (gpt-*, claude-*, gemini-*) are auto-detected by model name and read their API keys from standard env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). Local providers (LM Studio, Ollama) are registered in `providers.json` with a `baseUrl`. `LLM_BASE_URL` + `LLM_MODEL` env vars bootstrap a single default provider without a config file. See `core/src/llm/ProviderRegistry.ts` and `core/src/llm/LlmRouter.ts`.
 - **pi-mono `Model<TApi>` has all fields required**: All of `id`, `name`, `api`, `provider`, `baseUrl`, `reasoning`, `input`, `cost`, `contextWindow`, `maxTokens` are non-optional. When constructing a model dynamically, provide sensible defaults (`''` for baseUrl, `false` for reasoning, `['text']` for input, zero cost, 128k context).

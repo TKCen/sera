@@ -1,33 +1,30 @@
-# ── Stage 1: Build the Agent Runtime ──────────────────────────────────────────
-FROM node:22-slim AS builder
+# ── Stage 1: Install dependencies ────────────────────────────────────────────
+FROM oven/bun:1-slim AS deps
 
 WORKDIR /build
 
-COPY agent-runtime/package.json agent-runtime/package-lock.json* ./
-RUN npm install --include=dev
+COPY agent-runtime/package.json agent-runtime/bun.lock* ./
+RUN bun install --frozen-lockfile
 
-COPY agent-runtime/ ./
-RUN node_modules/.bin/tsc --project tsconfig.json
-
-# ── Stage 2: Runtime Image ────────────────────────────────────────────────────
-FROM node:22-slim
+# ── Stage 2: Runtime Image ──────────────────────────────────────────────────
+FROM oven/bun:1-slim
 
 # Install standard tools needed by agents (tier-appropriate; no Docker CLI)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     bash \
     git \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user — uid 1001 is outside the default range used by node:22-slim
+# Non-root user — uid 1001 is outside the default range used by the base image
 RUN useradd -r -u 1001 -g users -m -s /bin/bash agent
 
-# Install agent runtime
+# Install agent runtime — no build step, bun runs TypeScript directly
 WORKDIR /opt/agent-runtime
-COPY --from=builder /build/dist ./dist
-COPY --from=builder /build/node_modules ./node_modules
-COPY --from=builder /build/package.json ./package.json
+COPY --from=deps /build/node_modules ./node_modules
+COPY agent-runtime/package.json ./
+COPY agent-runtime/src ./src
 
 # Workspace directory — bind-mounted at container start by SandboxManager
 RUN mkdir -p /workspace && chown agent:users /workspace
@@ -36,6 +33,6 @@ WORKDIR /workspace
 # Drop to non-root
 USER agent
 
-# DECISION: CMD uses node directly; no shell wrapper needed since the runtime
-# is the only process. SIGTERM is forwarded correctly this way.
-CMD ["node", "/opt/agent-runtime/dist/index.js"]
+# DECISION: CMD uses bun directly to run TypeScript source.
+# No tsc build step needed — bun transpiles on the fly.
+CMD ["bun", "run", "/opt/agent-runtime/src/index.ts"]

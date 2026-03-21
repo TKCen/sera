@@ -48,25 +48,25 @@ echo ""
 # Step 1: Typecheck
 echo "Step 1/3: Typecheck"
 if [ -n "$WORKSPACE" ]; then
-  run_step "typecheck:${WORKSPACE}" npm run "typecheck:${WORKSPACE}" --prefix "$ROOT"
+  run_step "typecheck:${WORKSPACE}" bun run --cwd "$ROOT" "typecheck:${WORKSPACE}"
 else
-  run_step "typecheck" npm run typecheck --prefix "$ROOT"
+  run_step "typecheck" bun run --cwd "$ROOT" typecheck
 fi
 
 # Step 2: Lint
 echo "Step 2/3: Lint"
 if [ -n "$WORKSPACE" ]; then
-  run_step "lint:${WORKSPACE}" npm run "lint:${WORKSPACE}" --prefix "$ROOT"
+  run_step "lint:${WORKSPACE}" bun run --cwd "$ROOT" "lint:${WORKSPACE}"
 else
-  run_step "lint" npm run lint --prefix "$ROOT"
+  run_step "lint" bun run --cwd "$ROOT" lint
 fi
 
 # Step 3: Test
 echo "Step 3/3: Test"
 if [ -n "$WORKSPACE" ]; then
-  run_step "test:${WORKSPACE}" npm run test --prefix "$ROOT" --workspace="$WORKSPACE"
+  run_step "test:${WORKSPACE}" bun run --cwd "$ROOT" "test:${WORKSPACE}"
 else
-  run_step "test" npm run test --prefix "$ROOT"
+  run_step "test" bun run --cwd "$ROOT" test
 fi
 
 echo ""

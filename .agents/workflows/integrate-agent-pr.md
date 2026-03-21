@@ -40,7 +40,7 @@ git rebase origin/main
 
 If conflicts occur, resolve them (or delegate to gemini):
 ```bash
-gemini --sandbox -y -p "Resolve the merge conflicts in this branch. Keep the intent of the PR changes while incorporating the latest main. Then run: npm run typecheck && npm run lint && npm run test"
+gemini --sandbox -y -p "Resolve the merge conflicts in this branch. Keep the intent of the PR changes while incorporating the latest main. Then run: bun run typecheck && bun run lint && bun run test"
 ```
 
 After resolving:
@@ -76,7 +76,7 @@ Errors:
 Rules:
 - Only fix the errors — don't change anything else
 - Read AGENTS.md for project conventions
-- Run the full validation when done: npm run typecheck && npm run lint && npm run test"
+- Run the full validation when done: bun run typecheck && bun run lint && bun run test"
 ```
 
 After Gemini finishes, re-run validation:

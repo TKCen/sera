@@ -28,7 +28,7 @@ This workflow guides Antigravity (or any collaborator) through the standard deve
 - Run builds and tests:
   ```powershell
   docker compose build
-  npm run test # in respective service directories
+  bun run test # in respective service directories
   ```
 - Verify real-time updates via Centrifugo.
 

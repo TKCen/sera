@@ -33,7 +33,7 @@ Read \`core/CLAUDE.md\` or \`web/CLAUDE.md\` for workspace rules.
 
 Run validation before opening the PR:
 \`\`\`bash
-npm run typecheck && npm run lint && npm run test
+bun run typecheck && bun run lint && bun run test
 \`\`\`"
 ```
 

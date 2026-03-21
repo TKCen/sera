@@ -6,20 +6,20 @@ End-to-end tests for SERA using Playwright.
 
 ```bash
 cd e2e
-npm install
-npx playwright install chromium
+bun install
+bunx playwright install chromium
 ```
 
 ## Running tests
 
 ```bash
 # Dev stack (default) — requires dev compose to be running
-npm test
+bun test
 
 # Explicit modes
-npm run test:dev       # docker-compose.yaml + docker-compose.dev.yaml
-npm run test:api-key   # docker-compose.yaml only (no OIDC, + port mapping needed)
-npm run test:oidc      # docker-compose.yaml + docker-compose.auth.yaml
+bun run test:dev       # docker-compose.yaml + docker-compose.dev.yaml
+bun run test:api-key   # docker-compose.yaml only (no OIDC, + port mapping needed)
+bun run test:oidc      # docker-compose.yaml + docker-compose.auth.yaml
 ```
 
 ## Key environment variables

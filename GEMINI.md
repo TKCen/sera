@@ -12,22 +12,22 @@
 
 - **Platform:** Windows 11 / bash shell — use Unix paths (forward slashes)
 - **Working directory:** `D:/projects/homelab/sera`
-- **Package manager:** npm workspaces — `core/` and `web/` are workspace packages
-- **Dev start:** `npm run dev:up` (Docker Compose)
+- **Package manager:** bun workspaces — `core/` and `web/` are workspace packages
+- **Dev start:** `bun run dev:up` (Docker Compose)
 
 ## Key commands
 
 ```bash
 # Validation loop — run all three before opening a PR
-npm run typecheck
-npm run lint
-npm run test
+bun run typecheck
+bun run lint
+bun test
 
 # Workspace-specific
-npm run typecheck:core
-npm run typecheck:web
-npm run test --workspace=core
-npm run test --workspace=web
+bun run typecheck:core
+bun run typecheck:web
+bun test --workspace=core
+bun test --workspace=web
 ```
 
 ## Architecture pointers
@@ -45,5 +45,5 @@ npm run test --workspace=web
 
 - `cd` does not persist between shell calls — always use absolute paths
 - Shell scripts mounted into Docker must use LF line endings
-- `npx` doesn't work in Git Bash — use direct node paths (e.g., `node web/node_modules/typescript/bin/tsc`)
+- `bunx` doesn't work in Git Bash — use direct node paths (e.g., `node web/node_modules/typescript/bin/tsc`)
 - Dev Docker uses named volumes for `node_modules` — run `docker compose ... down -v` to force fresh install

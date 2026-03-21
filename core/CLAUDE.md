@@ -19,17 +19,17 @@ Central API server, LLM proxy, orchestrator, and governance layer. See `docs/ARC
 
 ## Binary paths
 
-`npx` does not resolve local binaries in this environment. Always use full paths:
+Use `bunx` to run local binaries:
 
 ```bash
 # TypeScript — -p flag is required; omitting it causes tsc to print help and exit 1
-D:/projects/homelab/sera/core/node_modules/.bin/tsc --noEmit -p D:/projects/homelab/sera/core/tsconfig.json
+bunx tsc --noEmit -p D:/projects/homelab/sera/core/tsconfig.json
 
-# Vitest — pass file paths as positional args; --root flag is not supported
-D:/projects/homelab/sera/core/node_modules/.bin/vitest run core/src/path/to/file.test.ts
+# Vitest — pass file paths as positional args
+bunx vitest run core/src/path/to/file.test.ts
 
 # Run all tests
-D:/projects/homelab/sera/core/node_modules/.bin/vitest run
+bunx vitest run
 ```
 
 ## TypeScript strict flags (`core/tsconfig.json`)
@@ -105,7 +105,8 @@ Do not reorder steps 2-3 — the Docker event listener will crash if migrations 
 
 ## Learnings
 
-- **`npx` binary resolution is broken**: Always use the full `node_modules/.bin/` path (see Binary paths above).
+- **Build uses tsup (esbuild-based)**: `bun run build` runs tsup for fast file-per-file transpilation (~100ms). Type checking is separate via `tsc --noEmit`. Config in `tsup.config.ts`.
+- **`tsx watch` does not detect file changes inside Docker on Windows**: Same as the Vite HMR issue — Docker Desktop volume mounts don't propagate inotify events. Use `docker restart sera-core` to pick up source changes during dev.
 - **`tsc` without `-p` flag exits 1 and prints help**: Always pass `-p <path-to-tsconfig.json>` explicitly.
 - **Running tests from `dist/`**: Vitest targeting `dist/` paths runs compiled output, not source — always target `src/` paths.
 - **`vitest` and `@vitest/coverage-v8` must share major versions**: A mismatch (e.g. vitest@2 + coverage-v8@4) causes `npm install` to fail with peer dependency conflicts. Keep them aligned.

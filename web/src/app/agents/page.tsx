@@ -1,8 +1,9 @@
 'use client';
 
-import { Bot, Plus, Settings as SettingsIcon, Shield, RefreshCw, Trash2 } from 'lucide-react';
+import { Bot, Plus, Settings as SettingsIcon, Shield, RefreshCw, Trash2, Search } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { Input } from '@/components/ui/input';
 
 interface AgentTemplate {
   name: string;
@@ -38,6 +39,7 @@ export default function AgentsPage() {
   const [instanceName, setInstanceName] = useState('');
   const [isDeleting, setIsDeleting] = useState<AgentInstance | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchData = async () => {
     try {
@@ -122,6 +124,23 @@ export default function AgentsPage() {
     }
   };
 
+  const filteredInstances = instances.filter((instance) => {
+    const query = searchQuery.toLowerCase();
+    return (
+      instance.name.toLowerCase().includes(query) ||
+      instance.templateName.toLowerCase().includes(query)
+    );
+  });
+
+  const filteredTemplates = templates.filter((template) => {
+    const query = searchQuery.toLowerCase();
+    return (
+      template.name.toLowerCase().includes(query) ||
+      template.displayName.toLowerCase().includes(query) ||
+      template.role.toLowerCase().includes(query)
+    );
+  });
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       {/* Header */}
@@ -152,6 +171,18 @@ export default function AgentsPage() {
         </div>
       </div>
 
+      {/* Search Bar */}
+      <div className="mb-8 max-w-md relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-sera-text-muted" size={16} />
+        <Input
+          type="text"
+          placeholder="Search agents by name, role, or template..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-9"
+        />
+      </div>
+
       {/* Loading */}
       {loading && (
         <div className="flex items-center justify-center py-20">
@@ -173,11 +204,11 @@ export default function AgentsPage() {
       {!loading && (
         <section className="mb-12">
           <h2 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4">
-            Active Instances ({instances.length})
+            Active Instances ({filteredInstances.length})
           </h2>
-          {instances.length > 0 ? (
+          {filteredInstances.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {instances.map((instance) => (
+              {filteredInstances.map((instance) => (
                 <div
                   key={instance.id}
                   className="sera-card p-4 group border-sera-accent/20 flex flex-col justify-between"
@@ -226,7 +257,7 @@ export default function AgentsPage() {
           ) : (
             <div className="sera-card-static p-8 text-center border-dashed border-sera-border">
               <p className="text-sm text-sera-text-muted">
-                No active instances. Instantiate a template below to get started.
+                {searchQuery ? 'No instances match your search.' : 'No active instances. Instantiate a template below to get started.'}
               </p>
             </div>
           )}
@@ -237,43 +268,51 @@ export default function AgentsPage() {
       {!loading && templates.length > 0 && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-[0.1em] text-sera-text-dim mb-4">
-            Agent Templates ({templates.length})
+            Agent Templates ({filteredTemplates.length})
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {templates.map((template) => {
-              const tierInfo = TIER_LABELS[template.tier] || TIER_LABELS[1];
-              return (
-                <div key={template.name} className="sera-card p-4 flex flex-col">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-sera-surface flex items-center justify-center text-lg">
-                      {template.icon}
+          {filteredTemplates.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredTemplates.map((template) => {
+                const tierInfo = TIER_LABELS[template.tier] || TIER_LABELS[1];
+                return (
+                  <div key={template.name} className="sera-card p-4 flex flex-col">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-sera-surface flex items-center justify-center text-lg">
+                        {template.icon}
+                      </div>
+                      <span className={tierInfo.class}>
+                        <Shield size={10} className="inline mr-0.5" />
+                        {tierInfo.label}
+                      </span>
                     </div>
-                    <span className={tierInfo.class}>
-                      <Shield size={10} className="inline mr-0.5" />
-                      {tierInfo.label}
-                    </span>
-                  </div>
-                  <h3 className="text-sm font-semibold text-sera-text">{template.displayName}</h3>
-                  <p className="text-xs text-sera-text-muted mt-1 line-clamp-2 flex-1">
-                    {template.role}
-                  </p>
+                    <h3 className="text-sm font-semibold text-sera-text">{template.displayName}</h3>
+                    <p className="text-xs text-sera-text-muted mt-1 line-clamp-2 flex-1">
+                      {template.role}
+                    </p>
 
-                  <div className="mt-4 pt-4 border-t border-sera-border flex items-center justify-between">
-                    <span className="text-[10px] text-sera-text-dim font-mono">
-                      {template.name}
-                    </span>
-                    <button
-                      onClick={() => setIsInstantiating(template)}
-                      className="sera-badge-accent hover:scale-105 transition-transform cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus size={10} />
-                      Instantiate
-                    </button>
+                    <div className="mt-4 pt-4 border-t border-sera-border flex items-center justify-between">
+                      <span className="text-[10px] text-sera-text-dim font-mono">
+                        {template.name}
+                      </span>
+                      <button
+                        onClick={() => setIsInstantiating(template)}
+                        className="sera-badge-accent hover:scale-105 transition-transform cursor-pointer flex items-center gap-1"
+                      >
+                        <Plus size={10} />
+                        Instantiate
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="sera-card-static p-8 text-center border-dashed border-sera-border">
+              <p className="text-sm text-sera-text-muted">
+                {searchQuery ? 'No templates match your search.' : 'No templates found.'}
+              </p>
+            </div>
+          )}
         </section>
       )}
 
@@ -380,6 +419,7 @@ export default function AgentsPage() {
           </p>
         </div>
       )}
+
     </div>
   );
 }

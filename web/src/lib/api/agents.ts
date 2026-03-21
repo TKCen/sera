@@ -50,6 +50,10 @@ export function reloadAgents(): Promise<{ success: boolean }> {
   return request<{ success: boolean }>('/agents/reload', { method: 'POST' });
 }
 
+export function deleteAgent(name: string): Promise<void> {
+  return request<void>(`/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
 export function startAgent(name: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`/agents/${encodeURIComponent(name)}/start`, {
     method: 'POST',

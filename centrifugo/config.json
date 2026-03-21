@@ -1,4 +1,7 @@
 {
+  "health": {
+    "enabled": true
+  },
   "client": {
     "allowed_origins": ["*"],
     "insecure": true,

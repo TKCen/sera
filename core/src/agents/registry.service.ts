@@ -99,8 +99,8 @@ export class AgentRegistry {
       id,
       data.name,
       data.displayName,
-      data.templateRef,   // template_name: legacy NOT NULL column, kept for backward compat with AgentFactory queries
-      data.templateRef,   // template_ref: canonical column used by registry and orchestrator
+      data.templateRef, // template_name: legacy NOT NULL column, kept for backward compat with AgentFactory queries
+      data.templateRef, // template_ref: canonical column used by registry and orchestrator
       workspacePath,
       data.circle,
       data.lifecycleMode ?? 'persistent',

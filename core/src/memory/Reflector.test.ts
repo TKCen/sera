@@ -6,6 +6,33 @@ import { Reflector } from './Reflector.js';
 import { MemoryManager } from './manager.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 
+// Mock external services so tests don't need infrastructure
+vi.mock('../services/vector.service.js', () => ({
+  VectorService: class {
+    ensureCollection = vi.fn().mockResolvedValue(undefined);
+    upsertPoints = vi.fn().mockResolvedValue(undefined);
+    deletePoints = vi.fn().mockResolvedValue(undefined);
+    searchLegacy = vi.fn().mockResolvedValue([]);
+  },
+}));
+
+vi.mock('../services/embedding.service.js', () => ({
+  EmbeddingService: {
+    getInstance: () => ({
+      isAvailable: () => false,
+      generateEmbedding: vi.fn().mockResolvedValue([]),
+    }),
+  },
+}));
+
+vi.mock('../audit/AuditService.js', () => ({
+  AuditService: {
+    getInstance: () => ({
+      record: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
 /** Create a mock LLM provider that returns a canned summary. */
 function createMockLLM(summary: string = 'Compacted summary of entries.'): LLMProvider {
   return {

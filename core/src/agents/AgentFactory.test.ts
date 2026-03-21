@@ -11,13 +11,14 @@ describe('AgentFactory', () => {
     it('should load all manifests from the agents directory', () => {
       const templates = AgentFactory.loadTemplates(agentsDir);
 
-      expect(templates.size).toBe(5);
+      expect(templates.size).toBe(6);
 
       const names = Array.from(templates.keys()).sort();
       expect(names).toEqual([
         'architect-prime',
         'developer-prime',
         'general-assistant',
+        'qwen-assistant',
         'researcher-prime',
         'writer',
       ]);

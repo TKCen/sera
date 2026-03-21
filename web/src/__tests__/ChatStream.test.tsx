@@ -113,7 +113,7 @@ describe('ChatPage streaming', () => {
     expect(textarea).not.toBeDisabled();
   });
 
-  it('shows thought panel toggle button', async () => {
+  it('shows empty state with agent name before any messages', async () => {
     render(
       <TestWrapper>
         <ChatPage />
@@ -121,10 +121,10 @@ describe('ChatPage streaming', () => {
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
-    expect(screen.getByText('Thoughts')).toBeInTheDocument();
+    expect(screen.getByText('How can I help you?')).toBeInTheDocument();
   });
 
-  it('shows thought panel when toggle clicked', async () => {
+  it('shows chat input placeholder with agent name', async () => {
     render(
       <TestWrapper>
         <ChatPage />
@@ -132,16 +132,10 @@ describe('ChatPage streaming', () => {
     );
 
     await waitFor(() => screen.getByText('Test Agent'));
-
-    fireEvent.click(screen.getByText('Thoughts'));
-
-    // After clicking, thought timeline panel appears (No thoughts yet text)
-    await waitFor(() => {
-      expect(screen.getByText('No thoughts yet')).toBeInTheDocument();
-    });
+    expect(screen.getByPlaceholderText(/Message agent/i)).toBeInTheDocument();
   });
 
-  it('renders incoming tokens via tokens:{agentId} channel', async () => {
+  it('subscribes to thoughts and tokens channels', async () => {
     render(
       <TestWrapper>
         <ChatPage />
@@ -150,35 +144,13 @@ describe('ChatPage streaming', () => {
 
     await waitFor(() => screen.getByText('Test Agent'));
 
-    // Wait for channel subscription to be set up
+    // Wait for channel subscriptions to be set up
     await waitFor(() => {
       expect(mockSubscriptions.has('tokens:test-agent')).toBe(true);
     });
 
-    // Emit a thought via the thoughts channel to verify channel subscription works
     const thoughtListeners = mockSubscriptions.get('thoughts:test-agent');
     expect(thoughtListeners).toBeDefined();
-
-    // Click to show thoughts panel so we can observe thought arrival
-    fireEvent.click(screen.getByText('Thoughts'));
-    await waitFor(() => screen.getByText('No thoughts yet'));
-
-    // Emit a thought
-    act(() => {
-      const listeners = mockSubscriptions.get('thoughts:test-agent');
-      listeners?.forEach((fn) =>
-        fn({
-          stepType: 'observe',
-          content: 'I am observing',
-          agentId: 'test-agent',
-          timestamp: new Date().toISOString(),
-        })
-      );
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('I am observing')).toBeInTheDocument();
-    });
   });
 
   it('token stream updates message content without buffering', async () => {

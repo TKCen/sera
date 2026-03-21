@@ -91,6 +91,8 @@ export class KnowledgeGitService {
       await fs.writeFile(readmePath, `# Knowledge Base — ${circleId}\n`, 'utf8');
       await git.add('README.md');
       await git.commit(`chore: initialise knowledge repo for ${circleId}`);
+      // Ensure the branch is named 'main' regardless of system git config
+      await git.branch(['-M', 'main']);
       logger.info(`Initialised knowledge repo for circle "${circleId}" at ${repoDir}`);
     }
   }

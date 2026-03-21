@@ -30,10 +30,10 @@ describe('Story 9.7: Thought Stream Persistence', () => {
   });
 
   it('persists a thought to the database when published', async () => {
-    const agentId = 'test-agent';
+    const agentId = '11111111-1111-4111-a111-111111111111';
     const taskId = 'task-123';
 
-    // Simulate non-blocking persistence
+    // Simulate non-blocking persistence (agentId must be a UUID to trigger DB insert)
     await intercom.publishThought(agentId, 'Test Agent', 'reasoning', 'Thinking...', taskId);
 
     // Wait a tiny bit for the "fire and forget" async call

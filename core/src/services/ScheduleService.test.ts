@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ScheduleService } from './ScheduleService.js';
-import type PgBoss from 'pg-boss';
+import type { PgBoss } from 'pg-boss';
 import { pool } from '../lib/database.js';
 
 // Mock Database

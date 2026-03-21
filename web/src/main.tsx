@@ -12,9 +12,6 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 
 import ChatPage from '@/pages/ChatPage';
 import AgentsPage from '@/pages/AgentsPage';
-import AgentDetailPage from '@/pages/AgentDetailPage';
-import AgentEditPage from '@/pages/AgentEditPage';
-import AgentNewPage from '@/pages/AgentNewPage';
 import CirclesPage from '@/pages/CirclesPage';
 import CircleDetailPage from '@/pages/CircleDetailPage';
 import InsightsPage from '@/pages/InsightsPage';
@@ -54,9 +51,6 @@ createRoot(el).render(
                 <Route index element={<Navigate to="/chat" replace />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="agents" element={<AgentsPage />} />
-                <Route path="agents/new" element={<AgentNewPage />} />
-                <Route path="agents/:id" element={<AgentDetailPage />} />
-                <Route path="agents/:id/edit" element={<AgentEditPage />} />
                 <Route path="agents/:id/memory-graph" element={<AgentMemoryGraphPage />} />
                 <Route path="circles" element={<CirclesPage />} />
                 <Route path="circles/:id" element={<CircleDetailPage />} />

@@ -12,8 +12,40 @@ import {
   MessageSquare,
   Wrench,
   Users,
+  Play,
+  Square,
+  RotateCcw,
+  Calendar,
+  Clock,
+  Edit2,
+  Check,
+  X,
+  RotateCw,
 } from 'lucide-react';
 import Link from 'next/link';
+import { toast } from 'sonner';
+
+import {
+  useAgentLogs,
+  useAgentSchedules,
+  useStartAgent,
+  useStopAgent,
+  useRestartAgent,
+} from '@/hooks/useAgents';
+import { useAgentBudget, usePatchAgentBudget, useResetAgentBudget } from '@/hooks/useUsage';
+import { AgentStatusBadge } from '@/components/AgentStatusBadge';
+import { BudgetBar } from '@/components/BudgetBar';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 
 interface MemoryEntry {
   id: string;
@@ -70,7 +102,7 @@ interface AgentDetail {
   };
 }
 
-type Tab = 'overview' | 'tools' | 'intercom' | 'memory';
+type Tab = 'overview' | 'tools' | 'intercom' | 'memory' | 'logs' | 'schedules' | 'budget';
 
 const TIER_LABELS: Record<number, { label: string; class: string; desc: string }> = {
   1: {
@@ -99,6 +131,30 @@ export default function AgentDetailPage() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [memoryBlocks, setMemoryBlocks] = useState<MemoryBlock[]>([]);
   const [loadingMemory, setLoadingMemory] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | null>(null);
+
+  const startAgent = useStartAgent();
+  const stopAgent = useStopAgent();
+  const restartAgent = useRestartAgent();
+
+  async function handleLifecycle(action: 'start' | 'stop' | 'restart') {
+    try {
+      if (action === 'start') {
+        await startAgent.mutateAsync(agentName);
+        toast.success('Agent starting…');
+      } else if (action === 'stop') {
+        await stopAgent.mutateAsync(agentName);
+        toast.success('Agent stopping…');
+      } else {
+        await restartAgent.mutateAsync(agentName);
+        toast.success('Agent restarting…');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to ${action}`);
+    } finally {
+      setConfirmAction(null);
+    }
+  }
 
   useEffect(() => {
     fetch(`/api/core/agents/${agentName}`)
@@ -154,6 +210,9 @@ export default function AgentDetailPage() {
     { id: 'tools', label: 'Tools & Skills', icon: <Wrench size={15} /> },
     { id: 'intercom', label: 'Intercom', icon: <MessageSquare size={15} /> },
     { id: 'memory', label: 'Memory', icon: <BookOpen size={15} /> },
+    { id: 'logs', label: 'Logs', icon: <Bot size={15} /> },
+    { id: 'schedules', label: 'Schedules', icon: <Calendar size={15} /> },
+    { id: 'budget', label: 'Budget', icon: <Cpu size={15} /> },
   ];
 
   return (
@@ -187,14 +246,31 @@ export default function AgentDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Link href={`/chat?agent=${agent.name}`} className="sera-btn-primary">
-            <MessageSquare size={16} />
-            Chat with this agent
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <AgentStatusBadge agentId={agentName} />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void handleLifecycle('start');
+            }}
+            disabled={startAgent.isPending}
+          >
+            <Play size={13} /> Start
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setConfirmAction('stop')}>
+            <Square size={13} /> Stop
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setConfirmAction('restart')}>
+            <RotateCcw size={13} /> Restart
+          </Button>
+          <Link href={`/chat?agent=${agent.name}`} className="sera-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs">
+            <MessageSquare size={14} />
+            Chat
           </Link>
-          <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost">
-            <Settings size={16} />
-            Edit Manifest
+          <Link href={`/agents/${agent.name}/edit`} className="sera-btn-ghost flex items-center gap-1.5 px-3 py-1.5 text-xs">
+            <Settings size={14} />
+            Edit
           </Link>
         </div>
       </div>
@@ -553,6 +629,336 @@ export default function AgentDetailPage() {
           )}
         </div>
       )}
+
+      {/* Logs Tab */}
+      {activeTab === 'logs' && <LogsTab id={agentName} />}
+
+      {/* Schedules Tab */}
+      {activeTab === 'schedules' && <SchedulesTab id={agentName} />}
+
+      {/* Budget Tab */}
+      {activeTab === 'budget' && <BudgetTab id={agentName} />}
+
+      {/* Confirmation dialog */}
+      <Dialog
+        open={confirmAction !== null}
+        onOpenChange={(o: boolean) => !o && setConfirmAction(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{confirmAction === 'stop' ? 'Stop agent' : 'Restart agent'}</DialogTitle>
+            <DialogDescription>
+              {confirmAction === 'stop'
+                ? `This will stop ${agent.displayName}. Any running tasks will be interrupted.`
+                : `This will restart ${agent.displayName}. The agent will briefly go offline.`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end mt-4">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              size="sm"
+              variant={confirmAction === 'stop' ? 'danger' : 'outline'}
+              onClick={() => {
+                void handleLifecycle(confirmAction!);
+              }}
+            >
+              {confirmAction === 'stop' ? 'Stop' : 'Restart'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function LogsTab({ id }: { id: string }) {
+  const { data: logs, isLoading, refetch } = useAgentLogs(id);
+
+  return (
+    <div className="flex flex-col gap-3 h-full min-h-[500px]">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-sera-text-muted">Auto-refreshes every 3s</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            void refetch();
+          }}
+        >
+          Refresh
+        </Button>
+      </div>
+      {isLoading ? (
+        <TabLoading />
+      ) : (
+        <pre className="flex-1 sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-auto whitespace-pre">
+          {logs || 'No logs.'}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function SchedulesTab({ id }: { id: string }) {
+  const { data: schedules, isLoading } = useAgentSchedules(id);
+
+  if (isLoading) return <TabLoading />;
+
+  if (!schedules?.length) {
+    return (
+      <div className="">
+        <p className="text-sm text-sera-text-muted text-center py-8">No schedules configured.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {schedules.map((sched) => (
+        <div key={sched.id} className="sera-card-static p-4 flex items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-mono text-sm text-sera-accent">{sched.cron}</span>
+              {sched.description && (
+                <span className="text-sm text-sera-text">{sched.description}</span>
+              )}
+              <Badge variant={sched.enabled ? 'success' : 'default'}>
+                {sched.enabled ? 'enabled' : 'disabled'}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-4 text-xs text-sera-text-muted">
+              {sched.lastRunAt && (
+                <span className="flex items-center gap-1">
+                  <Clock size={10} /> Last: {new Date(sched.lastRunAt).toLocaleString()}
+                  {sched.lastRunStatus && (
+                    <Badge variant={sched.lastRunStatus === 'success' ? 'success' : 'error'}>
+                      {sched.lastRunStatus}
+                    </Badge>
+                  )}
+                </span>
+              )}
+              {sched.nextRunAt && (
+                <span className="flex items-center gap-1">
+                  <Calendar size={10} /> Next: {new Date(sched.nextRunAt).toLocaleString()}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BudgetTab({ id }: { id: string }) {
+  const { data: budget, isLoading, refetch } = useAgentBudget(id);
+  const patchBudget = usePatchAgentBudget(id);
+  const resetBudget = useResetAgentBudget(id);
+
+  const [editingHour, setEditingHour] = useState(false);
+  const [editingDay, setEditingDay] = useState(false);
+  const [hourVal, setHourVal] = useState('');
+  const [dayVal, setDayVal] = useState('');
+
+  const startEditHour = () => {
+    setHourVal(String(budget?.maxLlmTokensPerHour ?? ''));
+    setEditingHour(true);
+  };
+
+  const startEditDay = () => {
+    setDayVal(String(budget?.maxLlmTokensPerDay ?? ''));
+    setEditingDay(true);
+  };
+
+  const saveHour = async () => {
+    const val = hourVal === '' ? null : Number(hourVal);
+    try {
+      await patchBudget.mutateAsync({ maxLlmTokensPerHour: val });
+      toast.success('Hourly limit updated');
+    } catch {
+      toast.error('Failed to update hourly limit');
+    }
+    setEditingHour(false);
+  };
+
+  const saveDay = async () => {
+    const val = dayVal === '' ? null : Number(dayVal);
+    try {
+      await patchBudget.mutateAsync({ maxLlmTokensPerDay: val });
+      toast.success('Daily limit updated');
+    } catch {
+      toast.error('Failed to update daily limit');
+    }
+    setEditingDay(false);
+  };
+
+  const handleReset = async () => {
+    try {
+      await resetBudget.mutateAsync();
+      toast.success('Budget counters reset');
+    } catch {
+      toast.error('Failed to reset budget');
+    }
+  };
+
+  if (isLoading) return <TabLoading />;
+
+  const hourPct = budget?.maxLlmTokensPerHour
+    ? (budget.currentHourTokens / budget.maxLlmTokensPerHour) * 100
+    : 0;
+  const dayPct = budget?.maxLlmTokensPerDay
+    ? (budget.currentDayTokens / budget.maxLlmTokensPerDay) * 100
+    : 0;
+  const exceeded = hourPct >= 100 || dayPct >= 100;
+
+  return (
+    <div className="space-y-6 max-w-xl">
+      {exceeded && (
+        <div className="px-4 py-3 rounded-lg bg-sera-error/10 border border-sera-error/30 text-sera-error text-sm font-medium">
+          Budget exceeded — agent requests are being rejected until the period resets or the budget
+          is adjusted.
+        </div>
+      )}
+
+      <div className="sera-card-static p-5 space-y-5">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-sera-text">Token Budget</h3>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void handleReset();
+            }}
+            disabled={resetBudget.isPending}
+          >
+            <RotateCw size={13} />
+            Reset Counters
+          </Button>
+        </div>
+
+        {/* Hourly */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-sera-text-muted uppercase tracking-wider">
+              Hourly Limit
+            </span>
+            {!editingHour ? (
+              <button
+                onClick={startEditHour}
+                className="flex items-center gap-1 text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+              >
+                <Edit2 size={11} />
+                {budget?.maxLlmTokensPerHour !== undefined
+                  ? budget.maxLlmTokensPerHour.toLocaleString()
+                  : 'Unlimited'}
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={hourVal}
+                  onChange={(e) => setHourVal(e.target.value)}
+                  placeholder="unlimited"
+                  className="sera-input text-xs w-32"
+                  autoFocus
+                />
+                <button
+                  onClick={() => {
+                    void saveHour();
+                  }}
+                  className="text-sera-success hover:opacity-80"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  onClick={() => setEditingHour(false)}
+                  className="text-sera-text-dim hover:text-sera-text"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+          <BudgetBar
+            label="This hour"
+            current={budget?.currentHourTokens ?? 0}
+            limit={budget?.maxLlmTokensPerHour}
+          />
+        </div>
+
+        {/* Daily */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-sera-text-muted uppercase tracking-wider">
+              Daily Limit
+            </span>
+            {!editingDay ? (
+              <button
+                onClick={startEditDay}
+                className="flex items-center gap-1 text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+              >
+                <Edit2 size={11} />
+                {budget?.maxLlmTokensPerDay !== undefined
+                  ? budget.maxLlmTokensPerDay.toLocaleString()
+                  : 'Unlimited'}
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={dayVal}
+                  onChange={(e) => setDayVal(e.target.value)}
+                  placeholder="unlimited"
+                  className="sera-input text-xs w-32"
+                  autoFocus
+                />
+                <button
+                  onClick={() => {
+                    void saveDay();
+                  }}
+                  className="text-sera-success hover:opacity-80"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  onClick={() => setEditingDay(false)}
+                  className="text-sera-text-dim hover:text-sera-text"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+          <BudgetBar
+            label="Today"
+            current={budget?.currentDayTokens ?? 0}
+            limit={budget?.maxLlmTokensPerDay}
+          />
+        </div>
+      </div>
+
+      <button
+        onClick={() => {
+          void refetch();
+        }}
+        className="text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+      >
+        Refresh usage counters
+      </button>
+    </div>
+  );
+}
+
+function TabLoading() {
+  return (
+    <div className="space-y-3">
+      <Skeleton className="h-6 w-full" />
+      <Skeleton className="h-6 w-3/4" />
+      <Skeleton className="h-6 w-1/2" />
     </div>
   );
 }

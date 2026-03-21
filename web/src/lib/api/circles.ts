@@ -20,7 +20,7 @@ export function getCircle(name: string): Promise<CircleDetails> {
 
 export function updateCircle(
   name: string,
-  manifest: CircleManifest
+  manifest: Partial<CircleManifest>
 ): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`/circles/${encodeURIComponent(name)}`, {
     method: 'PUT',

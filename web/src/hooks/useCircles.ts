@@ -35,7 +35,7 @@ export function useCreateCircle() {
 export function useUpdateCircle() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ name, manifest }: { name: string; manifest: CircleManifest }) =>
+    mutationFn: ({ name, manifest }: { name: string; manifest: Partial<CircleManifest> }) =>
       circlesApi.updateCircle(name, manifest),
     onSuccess: (_data, { name }) => {
       void qc.invalidateQueries({ queryKey: circlesKeys.detail(name) });

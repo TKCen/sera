@@ -68,7 +68,7 @@ SERA's open source ambition requires a stable, well-documented surface for commu
 **So that** I have one tool for validating, managing, and developing SERA locally
 
 **Acceptance Criteria:**
-- [ ] `sera` CLI installable via `npm install -g @sera/cli` (package name reserved)
+- [ ] `sera` CLI installable via `bun add -g @sera/cli` (package name reserved)
 - [ ] Top-level commands: `sera manifest`, `sera skills`, `sera agents`, `sera version`
 - [ ] `sera version` prints CLI version and compatible sera-core API version
 - [ ] `--help` on every command and subcommand

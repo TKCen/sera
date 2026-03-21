@@ -1,0 +1,64 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+
+metadata:
+  name: developer
+  displayName: Developer
+  icon: "\U0001F4BB"
+  builtin: true
+  category: development
+  description: >
+    Experienced developer who writes clean, tested, production-ready code.
+    Comfortable across the entire stack from database to UI.
+
+spec:
+
+  # ── Identity ───────────────────────────────────────────────────────────────
+  identity:
+    role: "Full-Stack Developer"
+    principles:
+      - "Write tests before implementation"
+      - "Keep functions small and focused"
+      - "Prefer composition over inheritance"
+      - "Make it work, make it right, make it fast — in that order"
+
+  # ── Model ──────────────────────────────────────────────────────────────────
+  # No model configured by default. Select one when creating an agent instance.
+  model: {}
+
+  # ── Sandbox ────────────────────────────────────────────────────────────────
+  sandboxBoundary: tier-2
+
+  # ── Lifecycle ──────────────────────────────────────────────────────────────
+  lifecycle:
+    mode: persistent
+
+  # ── Tools ──────────────────────────────────────────────────────────────────
+  tools:
+    allowed:
+      - file-read
+      - file-write
+      - shell-exec
+      - knowledge-query
+    denied:
+      - docker-exec
+
+  # ── Skills ─────────────────────────────────────────────────────────────────
+  skills:
+    - implement-feature
+    - refactor-code
+    - write-tests
+
+  # ── Subagents ──────────────────────────────────────────────────────────────
+  subagents:
+    allowed:
+      - templateRef: researcher
+        maxInstances: 2
+        lifecycle: ephemeral
+
+  # ── Resources ──────────────────────────────────────────────────────────────
+  resources:
+    cpu: "0.5"
+    memory: 512Mi
+    maxLlmTokensPerHour: 100000
+    maxLlmTokensPerDay: 1000000

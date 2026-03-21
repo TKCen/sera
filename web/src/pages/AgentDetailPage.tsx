@@ -17,7 +17,6 @@ import {
 import { toast } from 'sonner';
 import {
   useAgent,
-  useAgentManifestRaw,
   useAgentLogs,
   useAgentSchedules,
   useAgentMemory,
@@ -81,7 +80,7 @@ export default function AgentDetailPage() {
     );
   }
 
-  const displayName = agent?.displayName ?? id;
+  const displayName = agent?.display_name ?? agent?.name ?? id;
 
   return (
     <div className="flex flex-col h-full">
@@ -103,8 +102,8 @@ export default function AgentDetailPage() {
               <h1 className="text-xl font-semibold text-sera-text leading-tight">{displayName}</h1>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-xs text-sera-text-dim">{id}</span>
+                {agent?.template_ref && <Badge variant="default">{agent.template_ref}</Badge>}
                 {agent?.circle && <Badge variant="default">{agent.circle}</Badge>}
-                {agent?.model?.name && <Badge variant="accent">{agent.model.name}</Badge>}
               </div>
             </div>
           </div>
@@ -198,14 +197,14 @@ export default function AgentDetailPage() {
 }
 
 function ManifestTab({ id }: { id: string }) {
-  const { data: raw, isLoading } = useAgentManifestRaw(id);
+  const { data: instance, isLoading } = useAgent(id);
 
   if (isLoading) return <TabLoading />;
 
   return (
     <div className="p-6">
       <pre className="sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-x-auto whitespace-pre">
-        {raw ?? 'No manifest found.'}
+        {instance ? JSON.stringify(instance, null, 2) : 'Instance not found.'}
       </pre>
     </div>
   );

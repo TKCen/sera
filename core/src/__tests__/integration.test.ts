@@ -134,6 +134,21 @@ vi.mock('../agents/Orchestrator.js', () => {
       setRegistry = vi.fn();
       setMetering = vi.fn();
       setIdentityService = vi.fn();
+      setLlmRouter = vi.fn();
+      setPrimaryAgent = vi.fn();
+      registerAgent = vi.fn();
+      watchAgentsDirectory = vi.fn();
+      startDockerEventListener = vi.fn().mockResolvedValue(undefined);
+      stopWatching = vi.fn();
+      reloadTemplates = vi.fn().mockReturnValue({ count: 0 });
+      getIntercom = vi.fn().mockReturnValue(undefined);
+      getToolExecutor = vi.fn().mockReturnValue(undefined);
+      getAgentInfo = vi.fn();
+      getManifestByInstanceId = vi.fn();
+      startInstance = vi.fn().mockResolvedValue(undefined);
+      stopInstance = vi.fn().mockResolvedValue(undefined);
+      restartAgent = vi.fn().mockResolvedValue(undefined);
+      deregisterAgent = vi.fn();
       init = vi.fn().mockResolvedValue(undefined);
     },
   };
@@ -161,16 +176,13 @@ afterAll(async () => {
 
 describe('SERA Integration Tests', () => {
   describe('a. Agent loading', () => {
-    it('should register agents from AGENT.yaml manifests', async () => {
+    it('should return empty agent instances on fresh install', async () => {
+      // GET /api/agents now returns DB instances (not YAML manifests).
+      // With a mocked empty DB, there are no instances yet.
       const res = await request(app).get('/api/agents');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBeGreaterThan(0);
-
-      const names = res.body.map((a: { name: string }) => a.name); // Orchestrator.listAgents returns array of { name, ... }
-      expect(names).toContain('architect-prime');
-      expect(names).toContain('developer-prime');
-      expect(names).toContain('researcher-prime');
+      expect(res.body.length).toBe(0);
     });
   });
 

@@ -322,7 +322,7 @@ export default function SchedulesPage() {
   });
   const { data: agents } = useAgents();
 
-  const agentNames = [...new Set((agents ?? []).map((a) => a.metadata.name))].sort();
+  const agentNames = [...new Set((agents ?? []).map((a) => a.name))].sort();
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-6">

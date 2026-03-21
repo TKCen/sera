@@ -31,7 +31,7 @@ The operator dashboard needs a solid technical foundation before feature work be
 **Acceptance Criteria:**
 - [ ] **Option A (migration):** Vite + React Router v6 + TypeScript replacing Next.js. Build output: static files served by nginx:alpine. Docker image target < 50MB.
 - [ ] **Option B (keep):** Next.js with `output: 'export'` (static export, no Node.js runtime in production). Eliminates the Node.js standalone image.
-- [ ] Either option: HMR works in dev, `npm run build` produces a deployable artifact
+- [ ] Either option: HMR works in dev, `bun run build` produces a deployable artifact
 - [ ] `tsconfig.json` strict mode, path alias `@/*` → `src/*`
 - [ ] ESLint + Prettier configured and run in CI
 - [ ] `docker-compose.dev.yaml` mounts source and runs dev server with HMR

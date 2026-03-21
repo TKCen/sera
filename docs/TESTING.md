@@ -54,7 +54,7 @@ Tests that start the full stack including sera-core, spawn a real Docker agent c
 
 **Infrastructure:** Full `docker-compose.yaml` stack. LiteLLM replaced with a mock HTTP server that returns scripted responses. A real Docker socket is required (CI must run with Docker available).
 
-**Framework:** Vitest + custom Docker lifecycle helpers. E2E tests tagged `@e2e` — excluded from standard `npm test`, run explicitly in CI via `npm run test:e2e`.
+**Framework:** Vitest + custom Docker lifecycle helpers. E2E tests tagged `@e2e` — excluded from standard `bun test`, run explicitly in CI via `bun run test:e2e`.
 
 ---
 

@@ -15,7 +15,7 @@
 | **Weekly (Mon)** | Type safety sweep | Catch `any` types, unsafe casts, missing return types |
 | **Weekly (Wed)** | Dead code & unused exports | Remove code that nothing imports |
 | **Weekly (Fri)** | Test coverage gaps | Add tests for uncovered files |
-| **Bi-weekly (1st Mon)** | Dependency audit | `npm audit` + outdated check + update |
+| **Bi-weekly (1st Mon)** | Dependency audit | `bun audit` + outdated check + update |
 | **Bi-weekly (2nd Mon)** | TODO/FIXME sweep | Address or triage accumulated tech debt markers |
 | **Monthly (1st)** | API docs sync | Ensure `docs/openapi.yaml` matches actual routes |
 | **Monthly (15th)** | Console.log cleanup | Replace raw logs with structured logger calls |
@@ -46,7 +46,7 @@ Read AGENTS.md in the project root for coding conventions.
 Task: Find and fix type safety issues across the codebase.
 
 Steps:
-1. Run `npm run typecheck` in the project root. If there are existing errors, fix them first.
+1. Run `bun run typecheck` in the project root. If there are existing errors, fix them first.
 
 2. Search for `any` types in core/src/ and web/src/:
    - grep -rn ': any' core/src/ web/src/
@@ -65,7 +65,7 @@ Steps:
 
 5. Add explicit return types to any exported functions that are missing them.
 
-6. Run the full validation: npm run typecheck && npm run lint && npm run test
+6. Run the full validation: bun run typecheck && bun run lint && bun run test
    Fix any failures.
 
 Rules:
@@ -99,7 +99,7 @@ Steps:
    in route files or lazy-loaded.
 
 3. Check for unused imports in all .ts and .tsx files:
-   The linter should catch most of these. Run: npm run lint
+   The linter should catch most of these. Run: bun run lint
    Fix any unused-import warnings.
 
 4. Check for unused dependencies:
@@ -114,7 +114,7 @@ Steps:
    - Unreachable code after return/throw statements
    - Commented-out code blocks (remove them — git has history)
 
-6. Run validation: npm run typecheck && npm run lint && npm run test
+6. Run validation: bun run typecheck && bun run lint && bun run test
    If removing an export breaks a test, the test may be testing dead code — remove both.
 
 Rules:
@@ -163,7 +163,7 @@ Steps:
    - Focus on hooks (web/src/hooks/) and utility functions (web/src/lib/)
    - Skip pure UI components unless they have complex logic
 
-5. Run: npm run test
+5. Run: bun run test
    All new and existing tests must pass.
 
 Rules:
@@ -186,32 +186,32 @@ Branch: jules/dependency-audit
 
 Read AGENTS.md in the project root for coding conventions.
 
-Task: Audit and update npm dependencies for security and freshness.
+Task: Audit and update dependencies for security and freshness.
 
 Steps:
 1. Run security audit:
-   cd core && npm audit --json > /tmp/core-audit.json
-   cd web && npm audit --json > /tmp/web-audit.json
+   cd core && bun audit --json > /tmp/core-audit.json
+   cd web && bun audit --json > /tmp/web-audit.json
 
    If there are high or critical vulnerabilities, fix them:
-   npm audit fix
+   bun audit fix
 
 2. Check for outdated packages:
-   cd core && npm outdated
-   cd web && npm outdated
+   cd core && bun outdated
+   cd web && bun outdated
 
 3. Update strategy:
-   - PATCH versions: update all (npm update)
+   - PATCH versions: update all (bun update)
    - MINOR versions: update all unless changelog mentions breaking behavior
    - MAJOR versions: do NOT update — just note them in the PR description
 
 4. After updating:
-   npm run typecheck    # in project root
-   npm run lint         # in project root
-   npm run test         # in project root
+   bun run typecheck    # in project root
+   bun run lint         # in project root
+   bun run test         # in project root
 
    If any test fails after an update, revert that specific package:
-   npm install <package>@<previous-version>
+   bun add <package>@<previous-version>
 
 5. In the PR description, list:
    - Packages updated (name, old version → new version)
@@ -221,8 +221,8 @@ Steps:
 Rules:
 - NEVER update typescript, vitest, or eslint major versions without checking compatibility
 - NEVER remove a dependency — only update
-- If npm audit fix would change many packages, do it in a separate commit
-- Keep package-lock.json changes in the same commit as package.json changes
+- If bun audit fix would change many packages, do it in a separate commit
+- Keep bun.lock changes in the same commit as package.json changes
 ```
 
 ---
@@ -257,7 +257,7 @@ Steps:
    - Verify the work was done (check git log or the current code)
    - Remove the stale comment
 
-5. Run validation: npm run typecheck && npm run lint && npm run test
+5. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - Maximum 10 TODOs addressed per PR
@@ -346,7 +346,7 @@ Steps:
    - console.error(err) → console.error('[ComponentName] description:', err)
    - console.log(JSON.stringify(x)) → remove (debugging artifact)
 
-5. Run validation: npm run typecheck && npm run lint && npm run test
+5. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - Do NOT introduce a new logging library unless one already exists
@@ -423,7 +423,7 @@ For the chosen page, check and fix ALL of the following:
    that match the eventual layout (cards → skeleton cards, lists → skeleton rows).
    Use the existing Skeleton component from web/src/components/ui/skeleton.tsx.
 
-6. Run validation: npm run typecheck && npm run lint && npm run test
+6. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - Fix ONE page per run — do not touch other pages
@@ -474,7 +474,7 @@ Steps:
    - web/src/app/insights/page.tsx (memory graph can crash on bad data)
 
 3. **Add a toast notification system** (if not done in a previous run):
-   - Install sonner (< 5KB gzipped): npm install sonner
+   - Install sonner (< 5KB gzipped): bun add sonner
    - Add <Toaster /> to web/src/app/layout.tsx
    - Create a thin wrapper: web/src/lib/toast.ts that exports toast.success(),
      toast.error(), etc.
@@ -487,7 +487,7 @@ Steps:
    For TanStack Query hooks, ensure the error state includes a "Retry" button
    that calls refetch().
 
-6. Run validation: npm run typecheck && npm run lint && npm run test
+6. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - ONE page per run (steps 2-4), but the global ErrorBoundary and toast setup (steps 1, 3)
@@ -564,12 +564,12 @@ Enhancement backlog (pick the first unimplemented one):
 For the chosen enhancement:
 1. Implement the feature
 2. Add it to the appropriate page(s)
-3. Run validation: npm run typecheck && npm run lint && npm run test
+3. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - ONE enhancement per PR
 - Use existing UI components where possible
-- If adding a new npm dependency, it must be < 20KB gzipped
+- If adding a new dependency, it must be < 20KB gzipped
 - Maximum 8 files changed per PR
 - Include a brief description of what was added in the PR body
 ```
@@ -617,7 +617,7 @@ Pick ONE page per run. For that page:
    - Pass callbacks for mutations (onSave, onDelete, onChange)
    - Do NOT use context for component-local state
 
-4. Run validation: npm run typecheck && npm run lint && npm run test
+4. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - ONE page per run
@@ -684,7 +684,7 @@ Pick ONE extraction per run. For that extraction:
 2. Create a new file in the same directory with a focused name.
 3. Move methods + private helpers. Keep the original as the public interface.
 4. Update all imports across the codebase (grep for the moved exports).
-5. Run validation: npm run typecheck && npm run lint && npm run test
+5. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - ONE extraction per run
@@ -730,7 +730,7 @@ Steps:
    - Check web/src/app/layout.tsx and any router config for stale references
    - Grep for the old file name across web/src/ to catch missed references
 
-5. Run validation: npm run typecheck && npm run lint && npm run test
+5. Run validation: bun run typecheck && bun run lint && bun run test
 
 Rules:
 - Maximum 3 pages per run

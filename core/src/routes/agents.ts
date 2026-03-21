@@ -1,80 +1,76 @@
 /**
  * Agent Management Routes
  *
- * CRUD operations for agent manifests + live reload support.
+ * Instance CRUD, lifecycle, and template listing.
  */
 
 import { Router } from 'express';
-import fs from 'fs';
-import path from 'path';
-import yaml from 'js-yaml';
 import type { Orchestrator } from '../agents/Orchestrator.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentRegistry } from '../agents/registry.service.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AgentRouter');
 
-/**
- * Normalises an AgentManifest for the web API response.
- * Bridges old-format manifests (identity/model at top level) to the spec-wrapped
- * shape the web client expects, without mutating the in-memory manifest.
- */
-function normalizeManifestForApi(m: AgentManifest) {
-  const specModel =
-    m.spec?.model ??
-    (m.model
-      ? {
-          provider: m.model.provider,
-          name: m.model.name,
-          ...(m.model.temperature !== undefined ? { temperature: m.model.temperature } : {}),
-        }
-      : undefined);
-  const specIdentity =
-    m.spec?.identity ??
-    (m.identity
-      ? {
-          role: m.identity.role,
-          ...(m.identity.principles ? { principles: m.identity.principles } : {}),
-        }
-      : undefined);
-  return {
-    apiVersion: m.apiVersion,
-    kind: m.kind,
-    metadata: {
-      name: m.metadata.name,
-      displayName: m.metadata.displayName,
-      icon: m.metadata.icon,
-      ...(m.metadata.circle !== undefined ? { circle: m.metadata.circle } : {}),
-    },
-    spec: {
-      ...(m.spec ?? {}),
-      ...(specModel !== undefined ? { model: specModel } : {}),
-      ...(specIdentity !== undefined ? { identity: specIdentity } : {}),
-    },
-  };
-}
-
-export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string) {
+export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: AgentRegistry) {
   const router = Router();
 
-  // ── List all agent templates ───────────────────────────────────────────────
+  // ── List all agent instances (primary endpoint for the web UI) ────────────
   /**
-   * Lists all loaded agent manifests (templates).
+   * Returns all agent instances from the DB, enriched with template metadata
+   * and live orchestrator status.
    */
-  router.get('/templates', (req, res) => {
-    res.json(orchestrator.listAgents());
+  router.get('/', async (_req, res) => {
+    try {
+      const instances = await agentRegistry.listInstances();
+      const liveAgents = new Map(orchestrator.listAgents().map((a) => [a.id, a]));
+
+      const enriched = await Promise.all(
+        instances.map(async (inst) => {
+          const template = await agentRegistry.getTemplate(inst.template_ref);
+          const live = liveAgents.get(inst.id);
+          return {
+            id: inst.id,
+            name: inst.name,
+            display_name: inst.display_name ?? template?.display_name,
+            template_ref: inst.template_ref,
+            status: live?.status ?? inst.status,
+            circle: inst.circle,
+            lifecycle_mode: inst.lifecycle_mode,
+            icon: template?.spec?.identity?.icon ?? template?.spec?.icon,
+            sandbox_boundary: template?.spec?.sandboxBoundary,
+            created_at: inst.created_at,
+            updated_at: inst.updated_at,
+          };
+        })
+      );
+
+      res.json(enriched);
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
-  // ── List all agent instances ───────────────────────────────────────────────
-  /**
-   * Lists all persistent agent instances from the database.
-   */
+  // ── List all agent templates ───────────────────────────────────────────────
+  router.get('/templates', async (_req, res) => {
+    try {
+      const templates = await agentRegistry.listTemplates();
+      res.json(templates);
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── List all agent instances (raw DB) ─────────────────────────────────────
   router.get('/instances', async (req, res) => {
     try {
-      const templateName = req.query.template as string | undefined;
-      const instances = await AgentFactory.listInstances(templateName);
+      const circle = req.query.circle as string | undefined;
+      const status = req.query.status as string | undefined;
+      const instances = await agentRegistry.listInstances({
+        ...(circle ? { circle } : {}),
+        ...(status ? { status } : {}),
+      });
       res.json(instances);
     } catch (err: unknown) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -83,103 +79,60 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
 
   // ── Create a new agent instance ────────────────────────────────────────────
   /**
-   * Creates a new persistent agent instance from a template and starts it.
-   * POST /api/agents/instances { templateName: string, name: string, workspacePath?: string }
+   * Creates a new agent instance from a template.
+   * POST /api/agents/instances
+   * { templateRef: string, name: string, displayName?: string, circle?: string,
+   *   overrides?: object, lifecycleMode?: string, start?: boolean }
    */
   router.post('/instances', async (req, res) => {
     try {
-      const { templateName, name, workspacePath } = req.body;
+      const { templateRef, name, displayName, circle, overrides, lifecycleMode, start } = req.body;
+
+      // Support legacy field name
+      const templateName = templateRef ?? req.body.templateName;
+
       if (!templateName || !name) {
-        return res.status(400).json({ error: 'templateName and name are required' });
+        return res.status(400).json({ error: 'templateRef and name are required' });
       }
 
-      // 1. Create instance in DB
-      const instance = await AgentFactory.createInstance(templateName, name, workspacePath);
-
-      // 2. Start it in Orchestrator (this will handle Docker instantiation if configured)
-      await orchestrator.startInstance(instance.id);
-
-      res.status(201).json(instance);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // ── Get agent thoughts ───────────────────────────────────────────────────
-  /**
-   * Gets persisted thoughts for a specific agent instance.
-   * Story 9.7 persistence.
-   */
-  router.get('/:id/thoughts', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { taskId, limit, offset } = req.query;
-
-      const intercom = orchestrator.getIntercom();
-      if (!intercom) {
-        return res.status(503).json({ error: 'Intercom service not available' });
+      // Verify template exists
+      const template = await agentRegistry.getTemplate(templateName);
+      if (!template) {
+        return res.status(404).json({ error: `Template "${templateName}" not found` });
       }
 
-      const thoughts = await intercom.getThoughts(id, {
-        taskId: taskId as string,
-        limit: limit ? parseInt(limit as string) : 50,
-        offset: offset ? parseInt(offset as string) : 0,
+      // Create instance in DB via registry (not AgentFactory, which may not have registry)
+      const instance = await agentRegistry.createInstance({
+        name,
+        displayName,
+        templateRef: templateName,
+        circle,
+        overrides,
+        lifecycleMode,
       });
 
-      res.json(thoughts);
+      // Optionally start the instance (spawn Docker container)
+      if (start !== false) {
+        try {
+          await orchestrator.startInstance(instance.id);
+        } catch (startErr) {
+          // Instance created but failed to start — return it with error status
+          logger.error(`Instance ${instance.id} created but failed to start:`, startErr);
+        }
+      }
+
+      // Re-fetch to get updated status
+      const updated = await agentRegistry.getInstance(instance.id);
+      res.status(201).json(updated ?? instance);
     } catch (err: unknown) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  /**
-   * Send a direct message to an agent instance (Story 9.3).
-   * POST /api/agents/:id/message
-   */
-  router.post('/:id/message', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { from, payload } = req.body as { from?: string; payload?: Record<string, unknown> };
-
-      if (!from || !payload) {
-        return res.status(400).json({ error: 'Required fields: from, payload' });
-      }
-
-      const intercom = orchestrator.getIntercom();
-      if (!intercom) {
-        return res.status(503).json({ error: 'Intercom service not available' });
-      }
-
-      // 1. Resolve sender manifest
-      let fromManifest = orchestrator.getManifest(from);
-      if (!fromManifest) {
-        // Try to get manifest by instance ID
-        fromManifest = orchestrator.getManifestByInstanceId(from);
-      }
-
-      if (!fromManifest) {
-        return res.status(404).json({ error: `Sender agent "${from}" not found` });
-      }
-
-      // 2. Send message
-      const msg = await intercom.sendDirectMessage(fromManifest, id, payload);
-      res.json({ success: true, message: msg });
-    } catch (err: unknown) {
-      const error = err as Error;
-      if (error.name === 'IntercomPermissionError') {
-        return res.status(403).json({ error: error.message });
-      }
-      res.status(500).json({ error: error.message });
     }
   });
 
   // ── Get agent instance detail ──────────────────────────────────────────────
-  /**
-   * Gets detailed information for a specific agent instance.
-   */
   router.get('/instances/:id', async (req, res) => {
     try {
-      const instance = await AgentFactory.getInstance(req.params.id);
+      const instance = await agentRegistry.getInstance(req.params.id);
       if (!instance) {
         return res.status(404).json({ error: `Agent instance "${req.params.id}" not found` });
       }
@@ -189,11 +142,59 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     }
   });
 
+  // ── Start an agent instance ────────────────────────────────────────────────
+  router.post('/instances/:id/start', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const instance = await agentRegistry.getInstance(id);
+      if (!instance) {
+        return res.status(404).json({ error: `Agent instance "${id}" not found` });
+      }
+
+      await orchestrator.startInstance(id);
+      const updated = await agentRegistry.getInstance(id);
+      res.json(updated);
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Stop an agent instance ─────────────────────────────────────────────────
+  router.post('/instances/:id/stop', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const instance = await agentRegistry.getInstance(id);
+      if (!instance) {
+        return res.status(404).json({ error: `Agent instance "${id}" not found` });
+      }
+
+      await orchestrator.stopInstance(id);
+      const updated = await agentRegistry.getInstance(id);
+      res.json(updated);
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Delete an agent instance ──────────────────────────────────────────────
+  router.delete('/instances/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id) return res.status(400).json({ error: 'Instance ID is required' });
+
+      // Stop the instance (cleans up Docker)
+      await orchestrator.stopInstance(id);
+
+      // Delete from DB
+      await agentRegistry.deleteInstance(id);
+
+      res.status(204).send();
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // ── Get agent thoughts ───────────────────────────────────────────────────
-  /**
-   * Gets persisted thoughts for a specific agent instance.
-   * Story 9.7 persistence.
-   */
   router.get('/instances/:id/thoughts', async (req, res) => {
     try {
       const { id } = req.params;
@@ -216,33 +217,65 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     }
   });
 
-  // ── Delete an agent instance ──────────────────────────────────────────────
-  /**
-   * Stops the agent container and deletes the instance from the database.
-   * DELETE /api/agents/instances/:id
-   */
-  router.delete('/instances/:id', async (req, res) => {
+  // ── Legacy: get thoughts by name (redirects to instance ID lookup) ────────
+  router.get('/:id/thoughts', async (req, res) => {
     try {
       const { id } = req.params;
-      if (!id) return res.status(400).json({ error: 'Instance ID is required' });
+      const { taskId, limit, offset } = req.query;
 
-      // 1. Stop the instance (cleans up Docker)
-      await orchestrator.stopInstance(id);
+      const intercom = orchestrator.getIntercom();
+      if (!intercom) {
+        return res.status(503).json({ error: 'Intercom service not available' });
+      }
 
-      // 2. Delete from DB
-      await AgentFactory.deleteInstance(id);
+      const thoughts = await intercom.getThoughts(id, {
+        taskId: taskId as string,
+        limit: limit ? parseInt(limit as string) : 50,
+        offset: offset ? parseInt(offset as string) : 0,
+      });
 
-      res.status(204).send();
+      res.json(thoughts);
     } catch (err: unknown) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
+  // ── Send a direct message to an agent instance (Story 9.3) ────────────────
+  router.post('/:id/message', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { from, payload } = req.body as { from?: string; payload?: Record<string, unknown> };
+
+      if (!from || !payload) {
+        return res.status(400).json({ error: 'Required fields: from, payload' });
+      }
+
+      const intercom = orchestrator.getIntercom();
+      if (!intercom) {
+        return res.status(503).json({ error: 'Intercom service not available' });
+      }
+
+      let fromManifest = orchestrator.getManifest(from);
+      if (!fromManifest) {
+        fromManifest = orchestrator.getManifestByInstanceId(from);
+      }
+
+      if (!fromManifest) {
+        return res.status(404).json({ error: `Sender agent "${from}" not found` });
+      }
+
+      const msg = await intercom.sendDirectMessage(fromManifest, id, payload);
+      res.json({ success: true, message: msg });
+    } catch (err: unknown) {
+      const error = err as Error;
+      if (error.name === 'IntercomPermissionError') {
+        return res.status(403).json({ error: error.message });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ── POST /api/agents/validate ────────────────────────────────────────────
-  /**
-   * Validate a manifest without persisting it.
-   * Returns { valid: true } or { valid: false, errors: string[] }.
-   */
   router.post('/validate', (req, res) => {
     const body = req.body;
     if (!body || typeof body !== 'object') {
@@ -258,9 +291,6 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
   });
 
   // ── POST /api/agents/test-chat ───────────────────────────────────────────
-  /**
-   * Temporary "preview" chat with a non-persisted manifest.
-   */
   router.post('/test-chat', async (req, res) => {
     try {
       const { manifest, message, history = [] } = req.body;
@@ -269,13 +299,9 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
         return res.status(400).json({ error: 'manifest and message are required' });
       }
 
-      // Validate manifest
       AgentManifestLoader.validateManifest(manifest, 'POST /api/agents/test-chat');
-
-      // Create a transient agent instance (not registered in Orchestrator's main map)
       const agent = AgentFactory.createAgent(manifest);
 
-      // If orchestrator has a tool executor, attach it
       const toolExecutor = orchestrator.getToolExecutor();
       if (toolExecutor) {
         agent.setToolExecutor(toolExecutor);
@@ -294,222 +320,5 @@ export function createAgentRouter(orchestrator: Orchestrator, agentsDir: string)
     }
   });
 
-  // ── Delete an agent (YAML manifest + deregister) ─────────────────────────
-  /**
-   * Deletes a YAML agent: removes its manifest file from disk and deregisters
-   * it from the orchestrator's in-memory maps.
-   * DELETE /api/agents/:name
-   */
-  router.delete('/:name', (req, res) => {
-    const name = sanitizeAgentName(req.params.name);
-    const filePath = findManifestFile(agentsDir, name);
-
-    if (!filePath) {
-      return res.status(404).json({ error: `Agent "${name}" not found on disk` });
-    }
-
-    try {
-      // Delete the manifest file (and containing directory if it only held AGENT.yaml)
-      const dir = path.dirname(filePath);
-      fs.unlinkSync(filePath);
-
-      // If the parent dir is named after the agent and is now empty, remove it too
-      try {
-        const remaining = fs.readdirSync(dir);
-        if (remaining.length === 0) {
-          fs.rmdirSync(dir);
-        }
-      } catch {
-        // Non-fatal: directory may have other files
-      }
-
-      // Deregister from orchestrator in-memory state
-      orchestrator.deregisterAgent(name);
-
-      res.status(204).send();
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // ── List all agents (all manifests, enriched with live status) ───────────────
-  /**
-   * Returns every manifest known to the orchestrator.
-   * Agents that have been instantiated carry a live status from this.agents;
-   * manifests that were added via PUT but never instantiated are included too,
-   * reported as "stopped".
-   */
-  router.get('/', (req, res) => {
-    // Build a quick lookup of instantiated agent status by manifest name
-    const liveAgents = new Map(orchestrator.listAgents().map((item) => [item.name, item]));
-
-    const enriched = orchestrator.getAllManifests().map((manifest) => {
-      const live = liveAgents.get(manifest.metadata.name);
-      return {
-        id: live?.id ?? '',
-        status: live?.status ?? 'stopped',
-        startTime: live?.startTime ?? new Date(0),
-        ...normalizeManifestForApi(manifest),
-      };
-    });
-
-    res.json(enriched);
-  });
-
-  // ── Get agent detail ───────────────────────────────────────────────────────
-  /**
-   * Gets detailed information for a specific agent.
-   * @param req Express request containing agent name in params
-   * @param res Express response
-   * @returns {void}
-   */
-  router.get('/:name', (req, res) => {
-    const name = sanitizeAgentName(req.params.name);
-    const info = orchestrator.getAgentInfo(name);
-    if (!info) {
-      return res.status(404).json({ error: `Agent "${name}" not found` });
-    }
-    res.json(info);
-  });
-
-  // ── Get raw YAML manifest ─────────────────────────────────────────────────
-  /**
-   * Retrieves the raw YAML manifest file for the agent.
-   * @param req Express request containing agent name in params
-   * @param res Express response
-   * @returns {void}
-   */
-  router.get('/:name/manifest/raw', (req, res) => {
-    const name = sanitizeAgentName(req.params.name);
-    const filePath = findManifestFile(agentsDir, name);
-    if (!filePath) {
-      return res.status(404).json({ error: `Manifest file for "${name}" not found` });
-    }
-
-    try {
-      const raw = fs.readFileSync(filePath, 'utf-8');
-      res.type('text/yaml').send(raw);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // ── Update agent manifest ─────────────────────────────────────────────────
-  /**
-   * Updates the agent's manifest (or creates it) and triggers a live reload.
-   * @param req Express request containing agent name in params and updated manifest in body
-   * @param res Express response
-   * @returns {void}
-   */
-  router.put('/:name/manifest', (req, res) => {
-    const name = sanitizeAgentName(req.params.name);
-    const body = req.body;
-
-    if (!body || typeof body !== 'object') {
-      return res.status(400).json({ error: 'Request body must be a JSON manifest object' });
-    }
-
-    try {
-      // Validate the manifest before writing
-      AgentManifestLoader.validateManifest(body, `PUT /api/agents/${name}/manifest`);
-
-      // Ensure metadata.name matches the URL param
-      if (body.metadata?.name !== name) {
-        return res.status(400).json({
-          error: `Manifest metadata.name "${body.metadata?.name}" does not match URL parameter "${name}"`,
-        });
-      }
-
-      // Serialize to YAML and write
-      const yamlStr = yaml.dump(body, { lineWidth: 120, noRefs: true, sortKeys: false });
-      let filePath = findManifestFile(agentsDir, name);
-
-      if (!filePath) {
-        // Create new directory for agent if it doesn't exist
-        const agentDir = path.join(agentsDir, name);
-        if (!fs.existsSync(agentDir)) {
-          fs.mkdirSync(agentDir, { recursive: true });
-        }
-        filePath = path.join(agentDir, 'AGENT.yaml');
-      }
-
-      fs.writeFileSync(filePath, yamlStr, 'utf-8');
-
-      // Trigger live reload
-      const result = orchestrator.reloadTemplates();
-
-      res.json({ success: true, ...result });
-    } catch (err: unknown) {
-      const error = err as Error;
-      if (error.name === 'ManifestValidationError') {
-        return res.status(400).json({
-          error: error.message,
-          field: (error as { field?: string }).field,
-        });
-      }
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // ── Force reload all manifests ────────────────────────────────────────────
-  /**
-   * Forces a full reload of all agent manifests from disk.
-   * @param req Express request
-   * @param res Express response
-   * @returns {void}
-   */
-  router.post('/reload', (req, res) => {
-    try {
-      const result = orchestrator.reloadTemplates();
-      res.json({ success: true, ...result });
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
   return router;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Basic agent name sanitization to prevent directory traversal.
- */
-function sanitizeAgentName(name: string): string {
-  return name.replace(/[..\\/]/g, '').toLowerCase();
-}
-
-/**
- * Find the YAML manifest file for a given agent name.
- * Searches for `<name>.agent.yaml` in the agents directory and AGENT.yaml in subdirectories.
- */
-function findManifestFile(agentsDir: string, agentName: string): string | undefined {
-  if (!fs.existsSync(agentsDir)) return undefined;
-
-  const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
-  for (const entry of entries) {
-    let filePath: string | undefined;
-
-    if (entry.isFile() && entry.name.endsWith('.agent.yaml')) {
-      filePath = path.join(agentsDir, entry.name);
-    } else if (entry.isDirectory()) {
-      const subDirAgentFile = path.join(agentsDir, entry.name, 'AGENT.yaml');
-      if (fs.existsSync(subDirAgentFile)) {
-        filePath = subDirAgentFile;
-      }
-    }
-
-    if (filePath) {
-      try {
-        const manifest = AgentManifestLoader.loadManifest(filePath);
-        if (manifest.metadata.name === agentName) {
-          return filePath;
-        }
-      } catch {
-        // Skip invalid manifests
-      }
-    }
-  }
-
-  return undefined;
 }

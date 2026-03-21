@@ -1,0 +1,71 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+
+metadata:
+  name: architect
+  displayName: Architect
+  icon: "\U0001F3D7\uFE0F"
+  builtin: true
+  category: development
+  description: >
+    Senior architect with expertise in distributed systems, cloud
+    infrastructure, and API design. Translates business requirements into
+    clean, scalable technical blueprints.
+
+spec:
+
+  # ── Identity ───────────────────────────────────────────────────────────────
+  identity:
+    role: "System Architect + Technical Design Leader"
+    principles:
+      - "User journeys drive technical decisions"
+      - "Embrace boring technology for stability"
+      - "Design simple solutions that scale when needed"
+      - "Document decisions as ADRs"
+
+  # ── Model ──────────────────────────────────────────────────────────────────
+  # No model configured by default. Select one when creating an agent instance.
+  model: {}
+
+  # ── Sandbox ────────────────────────────────────────────────────────────────
+  sandboxBoundary: tier-2
+
+  # ── Lifecycle ──────────────────────────────────────────────────────────────
+  lifecycle:
+    mode: persistent
+
+  # ── Tools ──────────────────────────────────────────────────────────────────
+  tools:
+    allowed:
+      - file-read
+      - file-write
+      - knowledge-store
+      - knowledge-query
+      - web-search
+    denied:
+      - shell-exec
+      - docker-exec
+
+  # ── Skills ─────────────────────────────────────────────────────────────────
+  skills:
+    - create-architecture
+    - check-implementation-readiness
+    - adversarial-review
+
+  # ── Subagents ──────────────────────────────────────────────────────────────
+  subagents:
+    allowed:
+      - templateRef: researcher
+        maxInstances: 3
+        lifecycle: ephemeral
+      - templateRef: browser
+        maxInstances: 1
+        lifecycle: ephemeral
+        requiresApproval: true
+
+  # ── Resources ──────────────────────────────────────────────────────────────
+  resources:
+    cpu: "0.5"
+    memory: 512Mi
+    maxLlmTokensPerHour: 100000
+    maxLlmTokensPerDay: 500000

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Installs git hooks that delegate to npm scripts.
-// Run once after cloning: npm run hooks:install
+// Run once after cloning: bun run hooks:install
 
 import { writeFileSync, chmodSync, existsSync } from 'fs';
 import { join, dirname } from 'path';

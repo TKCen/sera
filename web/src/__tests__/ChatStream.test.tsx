@@ -44,10 +44,12 @@ vi.mock('@/lib/api/agents', async (importOriginal) => {
     ...actual,
     listAgents: vi.fn().mockResolvedValue([
       {
-        apiVersion: 'sera.dev/v1',
-        kind: 'Agent',
-        metadata: { name: 'test-agent', displayName: 'Test Agent' },
-        spec: { lifecycle: { mode: 'persistent' } },
+        id: 'inst-test-1',
+        name: 'test-agent',
+        display_name: 'Test Agent',
+        template_ref: 'sera',
+        status: 'running',
+        lifecycle_mode: 'persistent',
       },
     ]),
     getAgentTasks: vi.fn().mockResolvedValue([]),

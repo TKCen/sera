@@ -715,7 +715,7 @@ metadata:
 entries:
   - "node *"
   - "npm *"
-  - "npx *"
+  - "bunx *"
   - "bun *"
 ```
 
@@ -1108,7 +1108,7 @@ Docker bind mounts cannot be added to a running container. Dynamic filesystem ac
 
 For `one-time` and `session` grants, file operations go through sera-core's host-side proxy — the agent calls `file-read("/home/user/projects/my-project/README.md")` and sera-core reads the file on the host and returns the contents. The path never needs to be inside the container.
 
-For agents that need **direct shell access** to a newly granted path (e.g. `cd /home/user/projects/my-project && npm test`), a persistent grant + container restart is required. sera-core presents this as a single operator action: "Persist this grant and restart the container now?"
+For agents that need **direct shell access** to a newly granted path (e.g. `cd /home/user/projects/my-project && bun test`), a persistent grant + container restart is required. sera-core presents this as a single operator action: "Persist this grant and restart the container now?"
 
 **Storage for grants:**
 

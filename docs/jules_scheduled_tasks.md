@@ -68,7 +68,7 @@ Task:
 
 4. Mock external services (LLM provider, Qdrant, PostgreSQL) — do NOT make real API calls.
 
-5. Run `npm test` in `core/` and ensure all existing + new tests pass.
+5. Run `bun test` in `core/` and ensure all existing + new tests pass.
 
 6. If any existing tests are broken, fix them before adding new ones.
 
@@ -115,7 +115,7 @@ Task:
 
 4. Ensure the Next.js API proxy at `web/src/app/api/` correctly forwards to sera-core.
 
-5. Test by running `npm run dev` in both `core/` and `web/` and sending messages.
+5. Test by running `bun run dev` in both `core/` and `web/` and sending messages.
    Verify the chat works with the architect-prime agent.
 
 Keep the existing UI design system (check `web/src/app/globals.css` and
@@ -163,7 +163,7 @@ Task:
 4. Do NOT change the CSS design system or overall layout/sidebar.
    Only modify the data fetching and display logic within each page.
 
-5. Verify by running `npm run dev` in `web/` and navigating to each page.
+5. Verify by running `bun run dev` in `web/` and navigating to each page.
    Confirm no console errors and that real data loads from the backend.
 ```
 
@@ -216,7 +216,7 @@ Task:
    - Test with very large content (>100KB)
    - Test with special characters in titles
 
-6. Run `npm test` in `core/` and ensure all tests pass.
+6. Run `bun test` in `core/` and ensure all tests pass.
 ```
 
 ---
@@ -313,7 +313,7 @@ Task:
    Use @param and @returns tags with TypeScript types.
 
 5. Verify the OpenAPI spec is valid by running:
-   `npx -y @redocly/cli lint docs/openapi.yaml`
+   `bunx -y @redocly/cli lint docs/openapi.yaml`
 
 Do NOT change any endpoint behavior. Documentation only.
 ```
@@ -364,7 +364,7 @@ Task:
    b. This should be non-blocking (fire-and-forget with error logging).
 
 5. Add a web UI component that subscribes to Centrifugo via WebSocket:
-   a. In the chat page, connect to Centrifugo using the `centrifuge-js` npm package.
+   a. In the chat page, connect to Centrifugo using the `centrifuge-js` package.
    b. Subscribe to the current agent's thought channel.
    c. Display thoughts in the existing thought panel.
 
@@ -422,7 +422,7 @@ Task:
 6. Use the existing design system from `web/src/app/globals.css` and match the
    style of other pages (dark theme, glass panels, etc.).
 
-7. Verify by running `npm run dev` in `web/`, navigating to an agent, clicking
+7. Verify by running `bun run dev` in `web/`, navigating to an agent, clicking
    Edit, modifying a field, saving, and confirming the YAML file was updated.
 ```
 
@@ -549,7 +549,7 @@ Task:
 1. Run a dead code analysis:
    a. Check for unused exports in `core/src/` — files that are never imported.
    b. Check for unused dependencies in `core/package.json` and `web/package.json`
-      using `npx depcheck`.
+      using `bunx depcheck`.
    c. Remove any dead code or unused dependencies found.
 
 2. Review performance hotspots:
@@ -562,7 +562,7 @@ Task:
 
 3. Review the TypeScript compilation:
    a. Check `core/tsconfig.json` for strict mode settings.
-   b. Run `npx tsc --noEmit` and fix any type errors.
+   b. Run `bunx tsc --noEmit` and fix any type errors.
    c. Enable `exactOptionalPropertyTypes` if not already enabled and fix resulting errors.
 
 4. Clean up console.log statements:
@@ -570,7 +570,7 @@ Task:
       all logs with `[ComponentName]` for traceability).
    b. Remove any debug-only logging.
 
-5. Run existing tests (`npm test` in `core/`) and ensure nothing is broken
+5. Run existing tests (`bun test` in `core/`) and ensure nothing is broken
    by the cleanup.
 ```
 
@@ -587,17 +587,17 @@ SERA Dependency Updates & Vulnerability Scan
 Repository: homelab (sera/ subdirectory)
 
 Context:
-SERA depends on several npm packages across core/ and web/. Regular updates prevent
+SERA depends on several packages across core/ and web/. Regular updates prevent
 security vulnerabilities and ensure compatibility.
 
 Task:
 1. Run vulnerability scans:
-   a. `cd core && npm audit` — document any findings.
-   b. `cd web && npm audit` — document any findings.
+   a. `cd core && bun audit` — document any findings.
+   b. `cd web && bun audit` — document any findings.
 
 2. Update dependencies:
-   a. Run `npm outdated` in both `core/` and `web/` to see available updates.
-   b. Update patch and minor versions: `npm update` in both directories.
+   a. Run `bun outdated` in both `core/` and `web/` to see available updates.
+   b. Update patch and minor versions: `bun update` in both directories.
    c. For major version updates, review the changelog for breaking changes before
       updating. Only update major versions if the breaking changes are manageable.
 
@@ -609,9 +609,9 @@ Task:
    - `react` / `react-dom` (web)
 
 4. After updates:
-   a. Run `npm run build` in `core/` — ensure TypeScript compilation succeeds.
-   b. Run `npm run build` in `web/` — ensure Next.js build succeeds.
-   c. Run `npm test` in `core/` — ensure all tests pass.
+   a. Run `bun run build` in `core/` — ensure TypeScript compilation succeeds.
+   b. Run `bun run build` in `web/` — ensure Next.js build succeeds.
+   c. Run `bun test` in `core/` — ensure all tests pass.
 
 5. If any tests fail after updates, investigate and fix or pin the problematic
    dependency to the last working version.

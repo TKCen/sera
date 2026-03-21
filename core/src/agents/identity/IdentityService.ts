@@ -161,9 +161,11 @@ export class IdentityService {
       dynamicMemoryContext
     );
 
-    // Replace the JSON response format with a natural-language instruction
+    // Replace the JSON response format with a natural-language instruction.
+    // The lookahead matches the next section header (\n## ) OR end of string ($) so
+    // that agents without a circle (no ## Context section) are handled correctly.
     const withFormat = base.replace(
-      /## Response Format[\s\S]*?(?=## Context)/,
+      /## Response Format[\s\S]*?(?=\n## |$)/,
       `## Response Format\n` +
         `Respond directly and naturally in markdown. Do NOT wrap your response in JSON.\n` +
         `Focus on providing a helpful, well-formatted answer to the user's question.\n\n`

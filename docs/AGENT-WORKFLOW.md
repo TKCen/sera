@@ -246,3 +246,12 @@ These workflows are designed for Antigravity's `// turbo` format but the steps w
 - Review open agent PRs weekly
 - Close stale issues/PRs older than 14 days
 - Audit label accuracy monthly
+
+### Jules recurring tasks
+Jules runs scheduled maintenance tasks that produce PRs automatically.
+See `docs/jules-recurring-tasks.md` for the full prompt library:
+- **Weekly:** type safety sweep, dead code cleanup, test coverage gaps
+- **Bi-weekly:** dependency audit, TODO/FIXME sweep
+- **Monthly:** API docs sync, console.log cleanup
+
+Review these PRs via `integrate-agent-pr` workflow — most are quick-review.

@@ -430,7 +430,11 @@ export abstract class BaseAgent {
         });
       }
 
-      if (this.intercom) {
+      // Only publish to the frontend when there is an actual token or the stream
+      // is done. Skipping empty-string tokens avoids flooding Centrifugo with
+      // hundreds of no-op HTTP requests during a thinking/reasoning phase
+      // (e.g. Qwen3 emits reasoning_content before any visible content).
+      if (this.intercom && (chunk.token !== '' || chunk.done)) {
         await this.intercom.publishToken(
           this.agentInstanceId || this.role,
           chunk.token,

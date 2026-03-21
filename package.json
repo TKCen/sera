@@ -4,53 +4,42 @@
   "type": "module",
   "workspaces": ["core", "web"],
   "scripts": {
-    "postinstall": "echo 'Run npm run hooks:install to set up git hooks'",
-
-    "dev:up":    "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d",
-    "dev:down":  "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml down",
-    "dev:logs":  "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml logs -f",
-
-    "prod:up":   "docker compose -f docker-compose.yaml up -d",
+    "postinstall": "echo 'Run bun run hooks:install to set up git hooks'",
+    "dev:up": "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d",
+    "dev:down": "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml down",
+    "dev:logs": "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml logs -f",
+    "prod:up": "docker compose -f docker-compose.yaml up -d",
     "prod:down": "docker compose -f docker-compose.yaml down",
     "prod:logs": "docker compose -f docker-compose.yaml logs -f",
-
-    "prod:auth:up":   "docker compose -f docker-compose.yaml -f docker-compose.auth.yaml up -d",
+    "prod:auth:up": "docker compose -f docker-compose.yaml -f docker-compose.auth.yaml up -d",
     "prod:auth:down": "docker compose -f docker-compose.yaml -f docker-compose.auth.yaml down",
     "prod:auth:logs": "docker compose -f docker-compose.yaml -f docker-compose.auth.yaml logs -f",
-
-    "typecheck":      "npm run typecheck --workspaces --if-present",
-    "typecheck:core": "npm run typecheck --workspace=core",
-    "typecheck:web":  "npm run typecheck --workspace=web",
-
-    "lint":      "npm run lint --workspaces --if-present",
-    "lint:core": "npm run lint --workspace=core",
-    "lint:web":  "npm run lint --workspace=web",
-
-    "format":            "npm run format --workspaces --if-present",
-    "format:core":       "npm run format --workspace=core",
-    "format:web":        "npm run format --workspace=web",
-    "format:check":      "npm run format:check --workspaces --if-present",
-    "format:check:core": "npm run format:check --workspace=core",
-    "format:check:web":  "npm run format:check --workspace=web",
-
-    "test":             "npm run test --workspaces --if-present",
-    "test:unit":        "npm run test:unit --workspaces --if-present",
-    "test:integration": "npm run test:integration --workspaces --if-present",
-    "test:core":        "npm run test --workspace=core",
-    "test:web":         "npm run test --workspace=web",
-    "test:tui":         "cd tui && go test ./...",
-
-    "build":      "npm run build --workspaces --if-present && npm run build:tui",
-    "build:core": "npm run build --workspace=core",
-    "build:web":  "npm run build --workspace=web",
-    "build:tui":  "cd tui && go build -o tui.exe .",
-
-    "check-all": "npm run format && npm run lint && npm run typecheck && npm run test && npm run build",
-    "ci":        "npm run format:check && npm run lint && npm run typecheck && npm run test:unit && npm run build",
-
-    "pre-commit":    "npm run typecheck && npm run lint && npm run test:web",
-
-    "hooks:install": "node scripts/install-hooks.js",
-    "tui:build":     "cd tui && go build -o tui.exe ."
+    "typecheck": "bun run --filter '*' typecheck",
+    "typecheck:core": "bun run --filter core typecheck",
+    "typecheck:web": "bun run --filter sera-web typecheck",
+    "lint": "bun run --filter '*' lint",
+    "lint:core": "bun run --filter core lint",
+    "lint:web": "bun run --filter sera-web lint",
+    "format": "bun run --filter '*' format",
+    "format:core": "bun run --filter core format",
+    "format:web": "bun run --filter sera-web format",
+    "format:check": "bun run --filter '*' format:check",
+    "format:check:core": "bun run --filter core format:check",
+    "format:check:web": "bun run --filter sera-web format:check",
+    "test": "bun run --filter '*' test",
+    "test:unit": "bun run --filter '*' test:unit",
+    "test:integration": "bun run --filter '*' test:integration",
+    "test:core": "bun run --filter core test",
+    "test:web": "bun run --filter sera-web test",
+    "test:tui": "cd tui && go test ./...",
+    "build": "bun run --filter '*' build && bun run build:tui",
+    "build:core": "bun run --filter core build",
+    "build:web": "bun run --filter sera-web build",
+    "build:tui": "cd tui && go build -o tui.exe .",
+    "check-all": "bun run format && bun run lint && bun run typecheck && bun run test && bun run build",
+    "ci": "bun run format:check && bun run lint && bun run typecheck && bun run test:unit && bun run build",
+    "pre-commit": "bun run typecheck && bun run lint && bun run test:web",
+    "hooks:install": "bun run scripts/install-hooks.js",
+    "tui:build": "cd tui && go build -o tui.exe ."
   }
 }

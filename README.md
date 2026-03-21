@@ -75,7 +75,7 @@ Most agentic frameworks treat the host system as a sandbox. SERA does not. Every
 
 ## Repository Layout
 
-This is an **npm workspace monorepo**. The `core/` and `web/` packages are npm workspaces; the TUI is a standalone Go module.
+This is a **bun workspace monorepo**. The `core/` and `web/` packages are bun workspaces; the TUI is a standalone Go module.
 
 ```
 sera/
@@ -116,7 +116,7 @@ cp .env.example .env
 # Edit .env — set your LLM provider URL and API keys
 
 # Start the stack (production)
-npm run prod:up
+bun run prod:up
 ```
 
 **Access points:**
@@ -133,75 +133,75 @@ On first start, sera-core prints a bootstrap API key to the log. Use it to confi
 
 ## Developer Commands
 
-All commands run from the repository root via `npm run <script>`.
+All commands run from the repository root via `bun run <script>`.
 
 ### Docker Compose
 
 | Command | Description |
 |---|---|
-| `npm run dev:up` | Start the full stack in **hot-reload dev mode** (core + web with live reload) |
-| `npm run dev:down` | Stop the dev stack |
-| `npm run dev:logs` | Tail dev stack logs |
-| `npm run prod:up` | Start the production stack |
-| `npm run prod:down` | Stop the production stack |
-| `npm run prod:logs` | Tail production logs |
-| `npm run prod:auth:up` | Start production stack **with Authentik** SSO |
-| `npm run prod:auth:down` | Stop the Authentik stack |
-| `npm run prod:auth:logs` | Tail Authentik stack logs |
+| `bun run dev:up` | Start the full stack in **hot-reload dev mode** (core + web with live reload) |
+| `bun run dev:down` | Stop the dev stack |
+| `bun run dev:logs` | Tail dev stack logs |
+| `bun run prod:up` | Start the production stack |
+| `bun run prod:down` | Stop the production stack |
+| `bun run prod:logs` | Tail production logs |
+| `bun run prod:auth:up` | Start production stack **with Authentik** SSO |
+| `bun run prod:auth:down` | Stop the Authentik stack |
+| `bun run prod:auth:logs` | Tail Authentik stack logs |
 
 ### Code Sanity
 
 | Command | Scope | Description |
 |---|---|---|
-| `npm run typecheck` | all | TypeScript type-check all workspaces |
-| `npm run typecheck:core` | core | |
-| `npm run typecheck:web` | web | |
-| `npm run lint` | all | ESLint all workspaces |
-| `npm run lint:core` | core | |
-| `npm run lint:web` | web | |
-| `npm run format` | all | Prettier write all workspaces |
-| `npm run format:core` | core | |
-| `npm run format:web` | web | |
-| `npm run format:check` | all | Prettier check (no writes — use in CI) |
-| `npm run format:check:core` | core | |
-| `npm run format:check:web` | web | |
+| `bun run typecheck` | all | TypeScript type-check all workspaces |
+| `bun run typecheck:core` | core | |
+| `bun run typecheck:web` | web | |
+| `bun run lint` | all | ESLint all workspaces |
+| `bun run lint:core` | core | |
+| `bun run lint:web` | web | |
+| `bun run format` | all | Prettier write all workspaces |
+| `bun run format:core` | core | |
+| `bun run format:web` | web | |
+| `bun run format:check` | all | Prettier check (no writes — use in CI) |
+| `bun run format:check:core` | core | |
+| `bun run format:check:web` | web | |
 
 ### Builds
 
 | Command | Scope | Description |
 |---|---|---|
-| `npm run build` | all | Build all workspaces + TUI |
-| `npm run build:core` | core | `tsc` |
-| `npm run build:web` | web | `tsc -b && vite build` |
-| `npm run build:tui` | tui | `go build` |
+| `bun run build` | all | Build all workspaces + TUI |
+| `bun run build:core` | core | `tsc` |
+| `bun run build:web` | web | `tsc -b && vite build` |
+| `bun run build:tui` | tui | `go build` |
 
 ### Tests
 
 | Command | Scope | Description |
 |---|---|---|
-| `npm run test` | all | Run all tests across workspaces |
-| `npm run test:unit` | all | Unit tests only (no DB / Docker required) |
-| `npm run test:integration` | all | Integration tests (requires running services) |
-| `npm run test:core` | core | All core tests |
-| `npm run test:web` | web | All web tests |
-| `npm run test:tui` | tui | Go tests |
+| `bun run test` | all | Run all tests across workspaces |
+| `bun run test:unit` | all | Unit tests only (no DB / Docker required) |
+| `bun run test:integration` | all | Integration tests (requires running services) |
+| `bun run test:core` | core | All core tests |
+| `bun run test:web` | web | All web tests |
+| `bun run test:tui` | tui | Go tests |
 
 ### Pre-commit
 
 ```bash
 # Install the git hook (one-time after cloning)
-npm run hooks:install
+bun run hooks:install
 
 # Run the pre-commit checks manually
-npm run pre-commit   # typecheck + lint + web tests
+bun run pre-commit   # typecheck + lint + web tests
 ```
 
-The pre-commit check runs: `typecheck → lint → test:web`. For a full end-to-end verification run `npm run check-all` (format → lint → typecheck → test → build). Integration tests are excluded because they require running services; run `npm run test:integration` separately in CI or against a live stack.
+The pre-commit check runs: `typecheck → lint → test:web`. For a full end-to-end verification run `bun run check-all` (format → lint → typecheck → test → build). Integration tests are excluded because they require running services; run `bun run test:integration` separately in CI or against a live stack.
 
 ### TUI
 
 ```bash
-npm run tui:build    # compiles tui/tui.exe
+bun run tui:build    # compiles tui/tui.exe
 ```
 
 ---

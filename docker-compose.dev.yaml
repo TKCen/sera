@@ -20,7 +20,7 @@ services:
       - ./capability-policies:/workspace/capability-policies:ro
       - ./sandbox-boundaries:/workspace/sandbox-boundaries:ro
     entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
-    command: ["npm", "run", "dev"]
+    command: ["bun", "run", "dev"]
     environment:
       - WORKSPACE_DIR=/workspace
       - NODE_ENV=development
@@ -47,7 +47,7 @@ services:
       - node_modules_web:/app/node_modules
       - /app/dist
     entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
-    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    command: ["bun", "run", "dev", "--", "--host", "0.0.0.0"]
     environment:
       - NODE_ENV=development
       - VITE_API_URL=http://sera-core:3001

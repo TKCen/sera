@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 
 # ─── Base stage (used by dev compose via `target: base`) ──────────────────────
-FROM node:20-alpine AS base
+FROM oven/bun:1-alpine AS base
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --ignore-scripts
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
 
 # ─── Builder (used by production builds) ─────────────────────────────────────
 FROM base AS builder
 COPY . .
-RUN npm run build
+RUN bun run build
 
 # ─── Production runner ────────────────────────────────────────────────────────
 FROM nginx:alpine AS runner

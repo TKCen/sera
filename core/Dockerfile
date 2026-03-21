@@ -1,17 +1,23 @@
 FROM node:22-slim AS base
 WORKDIR /app
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-COPY package*.json ./
-RUN npm install
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
 
 FROM base AS builder
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN bun run build
+# Reinstall production-only deps
+RUN rm -rf node_modules && bun install --production --frozen-lockfile
 
-FROM base AS runner
+FROM node:22-slim AS runner
+WORKDIR /app
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/dist ./dist
-# Re-install only production dependencies
-RUN npm prune --omit=dev
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
 EXPOSE 3001
 HEALTHCHECK CMD curl -f http://localhost:3001/api/health || exit 1
 CMD ["node", "dist/index.js"]

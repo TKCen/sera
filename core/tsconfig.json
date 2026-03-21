@@ -44,5 +44,5 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
   },
-  "exclude": ["dist", "agent-runtime", "node_modules", "vitest.config.ts", "eslint.config.mjs"]
+  "exclude": ["dist", "agent-runtime", "node_modules", "vitest.config.ts", "eslint.config.mjs", "tsup.config.ts"]
 }

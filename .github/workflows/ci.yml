@@ -13,34 +13,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+
+      # Node.js still needed: vitest runs on Node, tsc requires it
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
+          node-version: 22
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install
 
-      # Tailwind v4 uses platform-specific native bindings (@tailwindcss/oxide)
-      # that npm ci may skip in workspaces (npm/cli#4828).
+      # bun.lock records only the dev platform's optional deps (Windows).
+      # Ensure the Linux native binding for Tailwind CSS is present.
       - name: Ensure Tailwind native bindings
-        working-directory: web
-        run: npm install --no-save @tailwindcss/oxide-linux-x64-gnu@4.2.1
+        run: bun add --no-save @tailwindcss/oxide-linux-x64-gnu@4.2.1
 
       - name: Format check
-        run: npm run format:check
+        run: bun run format:check
 
       - name: Lint
-        run: npm run lint
+        run: bun run lint
 
       - name: Typecheck
-        run: npm run typecheck
+        run: bun run typecheck
 
       - name: Unit tests
-        run: npm run test:unit
+        run: bun run test:unit
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
   label-agent-pr:
     if: >-

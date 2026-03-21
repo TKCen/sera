@@ -5,8 +5,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "npx tsx watch src/index.ts",
-    "build": "tsc",
+    "dev": "bunx tsx watch src/index.ts",
+    "build": "tsup",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
@@ -42,6 +42,7 @@
     "ts-node": "^10.9",
     "tsx": "^4.0",
     "typescript": "^5.0",
+    "tsup": "^8.5.1",
     "typescript-eslint": "^8",
     "vitest": "^4.1.0"
   },

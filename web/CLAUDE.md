@@ -32,30 +32,30 @@ Load the relevant epic before implementing a feature area:
 ## Binary paths
 
 ```bash
-# From the workspace root — npm workspaces routes web commands correctly
-npm run dev --workspace=web
-npm run build --workspace=web
+# From the workspace root — bun workspaces routes web commands correctly
+bun run --filter sera-web dev
+bun run --filter sera-web build
 ```
 
-Or directly from the `web/` directory using the local node_modules if needed.
+Or directly from the `web/` directory using `bun run`.
 
 ## Docker
 
-- **`.dockerignore` is critical**: Without it, the build context includes `node_modules/` and `.next/` (~180 MB). The `.dockerignore` excludes `node_modules`, `.next`, `.env`, `.git`.
-- **Standalone output**: `next.config.ts` sets `output: 'standalone'` — the production Dockerfile copies from `.next/standalone` and `.next/static`.
+- **`.dockerignore` is critical**: Without it, the build context includes `node_modules/` (~180 MB). The `.dockerignore` excludes `node_modules`, `.env`, `.git`.
+- **Dockerfile uses `oven/bun`**: The builder stage uses `oven/bun:1-alpine` for fast installs. The production runner is nginx serving static files.
 
 ## Running tests
 
 Tests must be run from the `web/` directory (not workspace root) so that Vite's `@` alias resolves:
 
 ```bash
-node node_modules/vitest/vitest.mjs run src/__tests__/
+bunx vitest run src/__tests__/
 ```
 
 Type-check:
 
 ```bash
-node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+bunx tsc --noEmit -p tsconfig.json
 ```
 
 ## Centrifugo channel names (Epic 13 operator channels)

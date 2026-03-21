@@ -7,7 +7,7 @@
 
 SERA (Sandboxed Extensible Reasoning Agent) is a Docker-native multi-agent AI orchestration platform.
 - **Monorepo:** `core/` (Node/TypeScript API), `web/` (React/Vite dashboard), `tui/` (Go TUI), `e2e/` (Playwright)
-- **Package manager:** npm workspaces
+- **Package manager:** bun workspaces
 - **Runtime:** Docker Compose (Postgres, Centrifugo, sera-core, sera-web)
 
 ## Before you start
@@ -29,16 +29,16 @@ SERA (Sandboxed Extensible Reasoning Agent) is a Docker-native multi-agent AI or
 - **Unit tests** for pure logic (no I/O, < 5ms each)
 - **Integration tests** for DB/service interactions
 - **All new code must have tests** — see `docs/TESTING.md` for strategy
-- Run validation before marking work complete: `npm run typecheck && npm run lint && npm run test`
+- Run validation before marking work complete: `bun run typecheck && bun run lint && bun test`
 
 ## Validation loop (mandatory before PR)
 
 Every agent must run this sequence and confirm all steps pass:
 
 ```bash
-npm run typecheck        # Zero errors
-npm run lint             # Zero warnings (web: --max-warnings 0)
-npm run test             # All tests pass
+bun run typecheck        # Zero errors
+bun run lint             # Zero warnings (web: --max-warnings 0)
+bun test                 # All tests pass
 ```
 
 If any step fails, fix the issue and re-run. Do not open a PR with failing checks.
@@ -92,7 +92,7 @@ See `docs/AGENT-WORKFLOW.md` for the full coordination protocol.
 ## What NOT to do
 
 - Don't modify `docker-compose.yaml` or `docker-compose.dev.yaml` without explicit approval
-- Don't add new npm dependencies without checking if an existing one covers the need
+- Don't add new dependencies without checking if an existing one covers the need
 - Don't create new files when editing an existing one would work
 - Don't touch files outside the scope of your assigned issue
 - Don't push directly to `main` — always use a feature branch + PR

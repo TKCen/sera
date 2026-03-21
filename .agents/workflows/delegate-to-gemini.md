@@ -33,7 +33,7 @@ Files to modify:
 Acceptance criteria:
 - <criterion>
 
-When done, run: npm run typecheck && npm run lint && npm run test
+When done, run: bun run typecheck && bun run lint && bun run test
 Fix any failures before finishing."
 ```
 
@@ -61,7 +61,7 @@ gemini --sandbox -y -p "The validation failed. Here are the errors:
 
 <paste errors>
 
-Fix these issues. Then re-run: npm run typecheck && npm run lint && npm run test"
+Fix these issues. Then re-run: bun run typecheck && bun run lint && bun run test"
 ```
 
 Repeat steps 3-5 until validation passes (max 3 retries, then escalate to human).

@@ -26,9 +26,9 @@ bash scripts/validate.sh web
 
 ### What it checks
 
-1. **Typecheck** — `npm run typecheck` (zero errors)
-2. **Lint** — `npm run lint` (zero warnings; web uses `--max-warnings 0`)
-3. **Test** — `npm run test` (all pass)
+1. **Typecheck** — `bun run typecheck` (zero errors)
+2. **Lint** — `bun run lint` (zero warnings; web uses `--max-warnings 0`)
+3. **Test** — `bun run test` (all pass)
 
 All three steps run even if one fails — you see every failure at once.
 
@@ -42,5 +42,5 @@ gemini --sandbox -y -p "Fix these validation errors, then re-run validation:
 
 <paste errors>
 
-Run when done: npm run typecheck && npm run lint && npm run test"
+Run when done: bun run typecheck && bun run lint && bun run test"
 ```

@@ -214,10 +214,7 @@ export class SkillLibrary {
 
     const validation = SkillFrontMatterSchema.safeParse(data);
     if (!validation.success) {
-      console.warn(
-        `[SkillLibrary] Invalid front-matter in ${filePath}:`,
-        validation.error.format()
-      );
+      logger.warn(`Invalid front-matter in ${filePath}:`, validation.error.format());
       return null;
     }
 
@@ -234,7 +231,7 @@ export class SkillLibrary {
 
     const validation = SkillPackageSchema.safeParse(data);
     if (!validation.success) {
-      console.warn(`[SkillLibrary] Invalid package in ${filePath}:`, validation.error.format());
+      logger.warn(`Invalid package in ${filePath}:`, validation.error.format());
       return null;
     }
 

@@ -173,7 +173,7 @@ export default function AuditPage() {
       a.click();
       URL.revokeObjectURL(blobUrl);
     } catch (err) {
-      console.error('Export error', err);
+      console.error('[AuditPage] Export error', err);
     } finally {
       setExporting(false);
     }

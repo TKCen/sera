@@ -10,7 +10,7 @@ vi.mock('../lib/database.js', () => ({
   },
 }));
 
-const logger = { info: console.log };
+const logger = { info: (...args: unknown[]) => console.log('[AuditExportTest]', ...args) };
 
 describe('Audit Export Streaming', () => {
   let service: AuditService;

@@ -204,7 +204,7 @@ describe('SERA Integration Tests', () => {
       const res = await request(app).post('/api/chat').send({ message: 'Hello, world!' });
 
       if (res.status === 500) {
-        console.error('500 ERROR BODY:', res.body);
+        console.error('[IntegrationTest] 500 ERROR BODY:', res.body);
       }
 
       expect(res.status).toBe(200);

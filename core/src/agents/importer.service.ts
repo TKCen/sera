@@ -8,6 +8,9 @@ import {
   SandboxBoundarySchema,
 } from './schemas.js';
 import { AgentRegistry } from './registry.service.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('ResourceImporter');
 
 export class ResourceImporter {
   constructor(
@@ -83,17 +86,17 @@ export class ResourceImporter {
 
           const result = schema.safeParse(rawData);
           if (!result.success) {
-            console.error(`Error validating ${filePath}:`, result.error.format());
+            logger.error(`Error validating ${filePath}:`, result.error.format());
             continue;
           }
 
           await upsertFn(result.data);
-          console.log(`Imported ${filePath}`);
+          logger.info(`Imported ${filePath}`);
         }
       }
     } catch (err: unknown) {
       if ((err as { code?: string }).code !== 'ENOENT') {
-        console.error(`Error reading directory ${dir}:`, err);
+        logger.error(`Error reading directory ${dir}:`, err);
       }
     }
   }

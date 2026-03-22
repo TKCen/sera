@@ -124,3 +124,45 @@ Circles are named groups of agents that share a context, a communication channel
 - [ ] Session record stored: `{ sessionId, circleId, prompt, rounds: [{ agentId, response, timestamp }] }`
 - [ ] `GET /api/circles/:id/party/:sessionId` returns full session transcript
 - [ ] Session concludes with an optional synthesis step (designated agent summarises the discussion)
+
+---
+
+## DB Schema
+
+```sql
+-- Story 10.1: Circle definitions
+CREATE TABLE circles (
+  id              UUID PRIMARY KEY,
+  name            TEXT NOT NULL UNIQUE,
+  display_name    TEXT NOT NULL,
+  description     TEXT,
+  constitution    TEXT,
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX circles_name_idx ON circles (name);
+
+-- agent_instances gains a circle_id FK:
+ALTER TABLE agent_instances ADD COLUMN circle_id UUID REFERENCES circles ON DELETE SET NULL;
+
+-- Stories 10.3/10.4: Pipeline state for sequential and parallel orchestration
+CREATE TABLE pipelines (
+  id              UUID PRIMARY KEY,
+  type            TEXT NOT NULL,           -- 'sequential' | 'parallel'
+  status          TEXT NOT NULL DEFAULT 'pending',
+  steps           JSONB NOT NULL DEFAULT '[]',
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  completed_at    TIMESTAMPTZ
+);
+
+-- Story 10.6: Party mode sessions
+CREATE TABLE party_sessions (
+  id              UUID PRIMARY KEY,
+  circle_id       UUID NOT NULL REFERENCES circles ON DELETE CASCADE,
+  prompt          TEXT NOT NULL,
+  rounds          JSONB NOT NULL DEFAULT '[]',
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  completed_at    TIMESTAMPTZ
+);
+CREATE INDEX party_sessions_circle_idx ON party_sessions (circle_id);
+```

@@ -32,14 +32,14 @@ The agent runtime is the lightweight process that runs inside each agent Docker 
 - [ ] `Dockerfile` at `core/sandbox/Dockerfile.worker` builds the agent-runtime image
 - [ ] Image tagged `sera-agent-worker:latest`, built as part of `docker compose build`
 - [ ] Image is minimal — only the agent-runtime code and its direct dependencies, not all of sera-core
-- [ ] Node.js or Bun runtime included; TypeScript compiled to JS at build time (no ts-node in production image)
+- [ ] Bun runtime (`oven/bun:1-slim` base image); TypeScript executed directly — no build step needed
 - [ ] Image includes basic Unix tools needed for shell execution: `bash`, `git`, `curl` (tier-appropriate)
 - [ ] Image does not include Docker CLI or Docker socket access
 - [ ] Non-root user used inside the container
-- [ ] Image size documented — target < 400MB
+- [ ] Image size documented — target < 200MB (bun-slim base is significantly smaller than Node.js)
 
 **Technical Notes:**
-- Multi-stage build: build stage compiles TypeScript, runtime stage copies only dist/ and node_modules
+- No multi-stage build needed — bun runs `.ts` files directly, no tsc compilation required
 - The same image is used for all agents regardless of tier; tier policy is enforced by container configuration, not image differences
 
 ---
@@ -226,3 +226,35 @@ The agent runtime is the lightweight process that runs inside each agent Docker 
 **Technical Notes:**
 - The delimiter model is load-bearing; the detection layer is advisory on top. Both must be implemented together — detection without structural separation is insufficient.
 - The heuristic detector should cover: direct instruction override phrases ("ignore previous instructions", "disregard your system prompt"), role injection ("you are now", "act as"), and data exfiltration attempts ("send your system prompt to").
+
+---
+
+## DB Schema
+
+```sql
+-- Stories 5.8/5.9: Task queue for persistent agents
+CREATE TABLE task_queue (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_instance_id   UUID NOT NULL REFERENCES agent_instances ON DELETE CASCADE,
+  task                TEXT NOT NULL,
+  context             JSONB,
+  status              TEXT NOT NULL DEFAULT 'queued'
+                      CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+  priority            INT NOT NULL DEFAULT 100,
+  retry_count         INT NOT NULL DEFAULT 0,
+  max_retries         INT NOT NULL DEFAULT 3,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at          TIMESTAMPTZ,
+  completed_at        TIMESTAMPTZ,
+  result              JSONB,
+  error               TEXT,
+  usage               JSONB,
+  thought_stream      JSONB,
+  result_truncated    BOOLEAN NOT NULL DEFAULT false,
+  exit_reason         TEXT
+);
+CREATE INDEX task_queue_agent_status_priority_idx
+  ON task_queue (agent_instance_id, status, priority, created_at);
+CREATE INDEX task_queue_retry_idx
+  ON task_queue (status, retry_count);
+```

@@ -2,19 +2,19 @@
 
 ## Overview
 
-sera-core is the authoritative governance layer for all LLM usage. Every LLM call — regardless of which agent or component makes it — passes through the sera-core proxy. This enables per-agent metering, budget enforcement, key vaulting, circuit breaking, and audit recording in one place. LiteLLM sits downstream as a dumb routing socket; SERA owns policy.
+sera-core is the authoritative governance layer for all LLM usage. Every LLM call — regardless of which agent or component makes it — passes through the sera-core proxy. This enables per-agent metering, budget enforcement, key vaulting, circuit breaking, and audit recording in one place. LLM routing is handled in-process by `LlmRouter` → `ProviderRegistry` → `@mariozechner/pi-ai` (pi-mono); there is no external LLM sidecar.
 
 ## Context
 
-- See `docs/ARCHITECTURE.md` → LLM Routing, Provider Gateway: LiteLLM
+- See `docs/ARCHITECTURE.md` → LLM Routing
 - The proxy endpoint is `POST /v1/llm/chat/completions` (OpenAI-compatible)
 - All agents authenticate with JWT; the proxy validates identity and enforces budget before forwarding
-- LiteLLM features used: routing, load balancing, fallbacks, model management API
-- LiteLLM features explicitly NOT used: virtual keys, team budgets, usage dashboards — SERA owns these
+- `LlmRouter` handles provider routing, fallbacks, and model resolution in-process via pi-mono
+- Provider config lives in `core/config/providers.json`; cloud providers auto-detected by model name prefix
 
 ## Dependencies
 
-- Epic 01 (Infrastructure Foundation) — LiteLLM container running
+- Epic 01 (Infrastructure Foundation) — provider config and database running
 - Epic 02 (Agent Manifest & Registry) — agent identity, model configuration in manifest
 - Epic 03 (Docker Sandbox) — JWT issued at container spawn
 
@@ -33,13 +33,12 @@ sera-core is the authoritative governance layer for all LLM usage. Every LLM cal
 - [ ] Request body: `{ model, messages, tools?, temperature?, stream? }`
 - [ ] Response: OpenAI-compatible response with `choices`, `usage`
 - [ ] `Authorization: Bearer {JWT}` header required — 401 if absent or invalid
-- [ ] On success: response forwarded unchanged from LiteLLM to caller
-- [ ] `GET /v1/llm/models` returns available models from LiteLLM `GET /model/info`
-- [ ] Proxy adds `X-SERA-Agent-Id` header on forwarded requests for LiteLLM log correlation (but LiteLLM budget enforcement is disabled)
+- [ ] On success: response from `LlmRouter` forwarded to caller in OpenAI-compatible format
+- [ ] `GET /v1/llm/models` returns available models from `ProviderRegistry`
 - [ ] Request/response latency logged at DEBUG level
 
 **Technical Notes:**
-- The proxy is OpenAI-compatible so the same `LLMClient` works whether calling sera-core directly or (in testing) LiteLLM directly
+- The proxy is OpenAI-compatible so the same `LLMClient` works in all contexts
 - Streaming (`stream: true`) must be proxied correctly — server-sent events forwarded chunk by chunk
 
 ---
@@ -67,7 +66,7 @@ sera-core is the authoritative governance layer for all LLM usage. Every LLM cal
 **So that** a runaway agent cannot consume unlimited LLM tokens
 
 **Acceptance Criteria:**
-- [ ] Budget check runs before forwarding to LiteLLM — no upstream call if budget exceeded
+- [ ] Budget check runs before forwarding to `LlmRouter` — no upstream call if budget exceeded
 - [ ] Hourly budget (`maxLlmTokensPerHour`) and daily budget (`maxLlmTokensPerDay`) from manifest `resources`
 - [ ] Budget exceeded returns HTTP 429 with body: `{ error: 'budget_exceeded', period: 'hourly'|'daily', limit: N, used: N }`
 - [ ] Budgets checked against `token_usage` table aggregated by agent + time window
@@ -86,7 +85,7 @@ sera-core is the authoritative governance layer for all LLM usage. Every LLM cal
 **Acceptance Criteria:**
 - [ ] After each successful LLM response, record to `token_usage`: `agent_id`, `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `latency_ms`, `timestamp`
 - [ ] Usage recording is async (non-blocking) — does not add latency to the LLM response path
-- [ ] Failed LLM calls (4xx/5xx from LiteLLM) recorded with `status: error`, `total_tokens: 0`
+- [ ] Failed LLM calls (errors from upstream providers) recorded with `status: error`, `total_tokens: 0`
 - [ ] `GET /api/metering/usage?agentId=&from=&to=&groupBy=hour|day` returns aggregated usage data
 - [ ] `GET /api/metering/summary` returns total usage across all agents for the current day
 - [ ] Usage data retained for 90 days (configurable via `METERING_RETENTION_DAYS`)
@@ -97,20 +96,20 @@ sera-core is the authoritative governance layer for all LLM usage. Every LLM cal
 
 **As an** operator
 **I want** to add, remove, and list LLM providers through SERA's API
-**So that** LiteLLM remains an implementation detail I never interact with directly
+**So that** provider routing internals remain an implementation detail I never interact with directly
 
 **Acceptance Criteria:**
-- [ ] `GET /api/providers` lists all configured models/providers (proxies LiteLLM `GET /model/info`)
-- [ ] `POST /api/providers` adds a new model/provider (proxies LiteLLM `POST /model/new`) — requires `operator` scope
-- [ ] `DELETE /api/providers/:modelName` removes a model (proxies LiteLLM `DELETE /model/delete`) — requires `operator` scope
-- [ ] Request/response bodies use SERA's own schema — LiteLLM schema is not exposed to callers
-- [ ] SERA validates the provider config before forwarding to LiteLLM
+- [ ] `GET /api/providers` lists all configured models/providers from `ProviderRegistry`
+- [ ] `POST /api/providers` adds a new model/provider to `providers.json` and hot-reloads `ProviderRegistry` — requires `operator` scope
+- [ ] `DELETE /api/providers/:modelName` removes a model from registry — requires `operator` scope
+- [ ] Request/response bodies use SERA's own schema
+- [ ] SERA validates the provider config before applying
 - [ ] Provider add/remove events recorded in audit trail
 - [ ] `POST /api/providers/:modelName/test` sends a minimal test completion to verify the provider is reachable
 
 **Technical Notes:**
-- These endpoints call LiteLLM's model management API which supports live updates (no restart needed for adding models)
-- Routing strategy and fallback chain changes still require LiteLLM restart — document this clearly
+- `ProviderRegistry` supports live updates — no restart needed for adding or removing models
+- Provider config persisted to `core/config/providers.json` and hot-reloaded
 
 ---
 
@@ -129,7 +128,7 @@ sera-core is the authoritative governance layer for all LLM usage. Every LLM cal
 - [ ] Circuit events (open/close/half-open) logged and published to Centrifugo `system.providers` channel
 
 **Technical Notes:**
-- LiteLLM handles retries and fallbacks at the routing level; the circuit breaker in sera-core is the higher-level policy layer that can halt all calls to a provider regardless of LiteLLM's retry logic
+- `LlmRouter` handles retries and fallbacks at the routing level; the circuit breaker is the higher-level policy layer that can halt all calls to a provider regardless of the router's retry logic
 
 ---
 
@@ -151,3 +150,45 @@ sera-core is the authoritative governance layer for all LLM usage. Every LLM cal
 **Technical Notes:**
 - In-process state means rate limits reset on sera-core restart; acceptable for v1 homelab deployment
 - Distinguish from token budget (Epic 4.3): rate limiting is requests-per-minute; budgets are tokens-per-period
+
+---
+
+## DB Schema
+
+```sql
+-- Story 4.3/4.4: Token usage tracking (lightweight budget queries)
+CREATE TABLE token_usage (
+  id            SERIAL PRIMARY KEY,
+  agent_id      TEXT NOT NULL,
+  circle_id     TEXT,
+  model         TEXT NOT NULL,
+  prompt_tokens     INT NOT NULL DEFAULT 0,
+  completion_tokens INT NOT NULL DEFAULT 0,
+  total_tokens      INT NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX token_usage_agent_created_idx ON token_usage (agent_id, created_at DESC);
+
+-- Story 4.3: Per-agent budget limits
+CREATE TABLE token_quotas (
+  agent_id             TEXT PRIMARY KEY,
+  max_tokens_per_hour  INT NOT NULL DEFAULT 100000,
+  max_tokens_per_day   INT NOT NULL DEFAULT 1000000,
+  updated_at           TIMESTAMPTZ DEFAULT now()
+);
+
+-- Story 4.4: Full usage events (cost, latency, status)
+CREATE TABLE usage_events (
+  id            SERIAL PRIMARY KEY,
+  agent_id      TEXT NOT NULL,
+  model         TEXT NOT NULL,
+  prompt_tokens     INT NOT NULL DEFAULT 0,
+  completion_tokens INT NOT NULL DEFAULT 0,
+  total_tokens      INT NOT NULL DEFAULT 0,
+  cost_usd      NUMERIC(10,6),
+  latency_ms    INT,
+  status        TEXT NOT NULL DEFAULT 'success',
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX usage_events_agent_time_idx ON usage_events (agent_id, created_at DESC);
+```

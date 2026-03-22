@@ -127,10 +127,134 @@ The primary operator experience: managing agents, conversing with them, and watc
 
 **Acceptance Criteria:**
 - [ ] `/insights` or `/agents/:id/memory-graph` renders a force-directed graph of memory blocks
-- [ ] Nodes: memory blocks, sized by importance, coloured by type
-- [ ] Edges: `requires` relationships between blocks (if stored), and co-occurrence in the same retrieval context
+- [ ] Data source: `GET /api/memory/:agentId/graph` — returns `{ nodes, edges }` (see Epic 19 Story 19.4 for the canonical response schema)
+- [ ] Nodes: memory blocks, sized by importance, coloured by type (`episodic`/`semantic`/`procedural`/`summary`)
+- [ ] Edges: tag-link (blocks sharing a tag) and explicit-ref (blocks with `relatedIds`) — edge type shown as label or line style
 - [ ] Node hover: shows block type, tags, truncated content
 - [ ] Node click: navigates to `/memory/:id` for full block view
-- [ ] Filter by block type, circle scope, date range
+- [ ] Filter by block type, circle scope, date range, tag
 - [ ] Graph rendered using `react-force-graph-2d` (already in dependencies)
 - [ ] Empty state: clear message when agent has no memory blocks yet
+
+**Technical Notes:**
+- **Coordination with Epic 19:** The graph endpoint data model is defined in Story 19.4. If Epic 13 is implemented before Epic 19, build against the same `{ nodes, edges }` shape — both the legacy and scoped endpoints can serve this format. Do not build against the old `requires`/co-occurrence model — it will be removed.
+
+---
+
+### Story 13.7: Permission request approval UI
+
+**As an** operator
+**I want** to see pending permission requests from agents and approve or deny them from the dashboard
+**So that** the human-in-the-loop flow (Story 3.9) has a proper UI and I don't have to rely on the API alone
+
+**Acceptance Criteria:**
+- [ ] Notification badge on the sidebar when pending requests exist (count from `GET /api/permission-requests`)
+- [ ] Badge updates in real time via `system.permission-requests` Centrifugo channel
+- [ ] `/permissions` page (or modal triggered from sidebar badge) lists all pending requests
+- [ ] Each request shows: agent name + icon, requested dimension (`filesystem` / `network` / `exec.commands`), requested value (path, host, or command pattern), reason (if provided), requested at (relative time), timeout countdown
+- [ ] Approve button with grant type selector: `one-time` / `session` / `persistent`
+- [ ] Deny button with optional reason text
+- [ ] Decision calls `POST /api/permission-requests/:requestId/decision`
+- [ ] Approved/denied request animates out of the list
+- [ ] Toast confirmation: "Granted [dimension] access to [agentName]" or "Denied..."
+- [ ] History tab: recent decisions (last 50) for audit reference
+- [ ] If the request originated from a chat session, a "View conversation" link opens the relevant chat
+
+**Technical Notes:**
+- This is architecturally similar to a notification inbox — pending items arrive via Centrifugo, operator acts, items resolve
+- The timeout countdown should be visible so the operator knows urgency (default: 5 min auto-deny)
+
+---
+
+### Story 13.8: Capability grants viewer
+
+**As an** operator
+**I want** to see and manage all capability grants for an agent
+**So that** I can review what runtime permissions were granted and revoke them if needed
+
+**Acceptance Criteria:**
+- [ ] New "Grants" tab on the agent detail page (`/agents/:id`)
+- [ ] Lists all active grants: dimension, value, grant type (one-time / session / persistent), granted by, granted at, expires at
+- [ ] Session grants shown with a "session" badge — auto-removed on stop
+- [ ] Persistent grants show a "Revoke" button → `DELETE /api/agents/:id/grants/:grantId` with confirmation
+- [ ] If pending secret rotations exist, show a warning banner with "Restart to apply" action
+- [ ] Empty state: "No runtime grants — this agent is running with its base capabilities"
+
+---
+
+### Story 13.9: Circle management UI
+
+**As an** operator
+**I want** to create, edit, and manage circles from the dashboard
+**So that** I can organise agents into groups without editing YAML files
+
+**Acceptance Criteria:**
+- [ ] `/circles` page enhanced: "Create Circle" button opens a creation dialog
+- [ ] Creation dialog: name (slug), display name, description, constitution (textarea with markdown preview)
+- [ ] `/circles/:id` detail page shows: member agents (cards with status), constitution text, shared knowledge stats, active sessions
+- [ ] "Edit" button → inline editing of display name, description, constitution
+- [ ] "Add Member" → dropdown of available agents not in this circle → `POST /api/circles/:id/members`
+- [ ] "Remove Member" → confirmation → removes agent from circle
+- [ ] "Party Mode" button → opens dialog: prompt input, optional round count, start → `POST /api/circles/:id/party` → navigates to party session view
+- [ ] Party session view: rounds displayed as a threaded conversation, each agent's contribution as a separate card with agent icon and name, synthesis (if any) highlighted at the end
+- [ ] Delete circle with confirmation ("This will remove all members from this circle")
+
+---
+
+### Story 13.10: Secret entry modal
+
+**As an** operator
+**I want** a secure modal dialog for entering secrets when an agent requests one
+**So that** secret values never flow through the agent's LLM context
+
+**Acceptance Criteria:**
+- [ ] When `system.secret-entry-requests` Centrifugo event arrives: modal overlays the current page (non-dismissable without action)
+- [ ] Modal shows: requesting agent name + icon, secret name, description, and a password-type `<input>` field
+- [ ] "Store" button → `POST /api/secrets` directly from the browser (not via agent/chat) → resolves the agent's pending tool call
+- [ ] "Cancel" button → resolves the tool call with `{ stored: false, reason: 'cancelled' }`
+- [ ] Input field has a "show/hide" toggle for verification before storing
+- [ ] If multiple requests arrive concurrently: queue them as stacked modals (one at a time)
+- [ ] After storing: toast confirmation "Secret '{name}' stored successfully"
+- [ ] The secret value **never** appears in: any Centrifugo channel, the chat message history, browser localStorage, or URL parameters
+- [ ] Keyboard: Enter submits, Escape cancels
+
+**Technical Notes:**
+- The modal must be rendered at the app shell level (not inside a chat component) — it can appear during any page
+- Listen for the Centrifugo event in a global hook (e.g. `useSecretEntryRequests()` in `main.tsx` or `AppShell.tsx`)
+
+---
+
+### Story 13.11: Delegation management UI
+
+**As an** operator
+**I want** to view and manage delegation tokens and service identities for agents
+**So that** I can control what external credentials agents can use
+
+**Acceptance Criteria:**
+
+**Delegation tokens (on agent detail page, new "Delegation" tab):**
+- [ ] Lists inbound delegations for this agent: credential name, scope, grant type (one-time/session/persistent), granted by, expires at, status (active/expired/revoked)
+- [ ] "Issue Delegation" button → dialog: select credential (from `GET /api/secrets` metadata), set scope, set grant type, set expiry → `POST /api/delegation/issue`
+- [ ] "Revoke" button per delegation → `DELETE /api/delegation/:id` with cascade option
+- [ ] Child delegations shown as expandable tree (agent → subagent chain)
+
+**Service identities (on agent detail page, within "Delegation" tab):**
+- [ ] Lists service identities: service name, credential type, created at, last rotated
+- [ ] "Create Identity" button → dialog: service name, initial credential → `POST /api/agents/:id/service-identities`
+- [ ] "Rotate" button → `POST /api/agents/:id/service-identities/:id/rotate`
+- [ ] "Revoke" button → `DELETE /api/agents/:id/service-identities/:id`
+
+---
+
+### Story 13.12: Centrifugo connection indicator
+
+**As an** operator
+**I want** to see the real-time WebSocket connection status in the UI header
+**So that** I know whether live updates (thoughts, status changes, token streaming) are working
+
+**Acceptance Criteria:**
+- [ ] Connection indicator in the sidebar header or app shell toolbar
+- [ ] States: `connected` (green dot), `connecting` (amber pulse), `disconnected` (red dot + "Reconnecting..." text)
+- [ ] State sourced from `useCentrifugo()` hook — reflects actual WebSocket transport state
+- [ ] Click on disconnected indicator → manual reconnect attempt
+- [ ] The existing "Core: Online/Offline" health check in the sidebar is separate — this indicator is specifically for the Centrifugo WebSocket

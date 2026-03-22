@@ -1,1586 +1,779 @@
 openapi: 3.1.0
 info:
   title: SERA Core API
-  description: REST API for SERA Core service managing agents, circles, memory, skills, and sandbox environments.
-  version: 1.0.0
-servers:
-  - url: http://localhost:3001/api
-    description: Local Development
-  - url: http://sera-core:3001/api
-    description: Docker Deployment
+  description: |
+    Sandboxed Extensible Reasoning Agent — REST API for the sera-core orchestrator.
+    All endpoints are prefixed with the service base URL (default: http://localhost:3001).
+    Authentication: Bearer token (API key or session token) unless marked public.
+  version: 0.2.0
+  license:
+    name: MIT
 
-# Empty security array applies globally so security-defined passes,
-# as SERA Core doesn't appear to mandate global api key checks natively at this API level
-security: []
+servers:
+  - url: http://localhost:3001
+    description: Local development
+
+tags:
+  - name: agents
+    description: Agent instance management and lifecycle
+  - name: templates
+    description: Agent template management
+  - name: registry
+    description: Database-backed template and instance registry
+  - name: sandbox
+    description: Container spawning and execution
+  - name: lifecycle
+    description: Agent lifecycle operations (capabilities, worktrees, permissions)
+  - name: tasks
+    description: Per-agent task queue (Stories 5.8/5.9)
+  - name: auth
+    description: Authentication, API keys, OIDC
+  - name: secrets
+    description: Secret management (Epic 16)
+  - name: delegation
+    description: Agent identity and delegation (Epic 17)
+  - name: chat
+    description: Chat messaging and sessions
+  - name: intercom
+    description: Centrifugo pub/sub and real-time messaging
+  - name: circles
+    description: Circle management and coordination (Epic 10)
+  - name: knowledge
+    description: Git-backed circle knowledge (Story 8.8)
+  - name: memory
+    description: Memory blocks and scoped agent memory (Epic 8)
+  - name: llm
+    description: LLM proxy and model listing
+  - name: providers
+    description: LLM provider management
+  - name: budget
+    description: Token usage and budget enforcement
+  - name: metering
+    description: Usage aggregation and summaries
+  - name: audit
+    description: Merkle hash-chain audit trail (Epic 11)
+  - name: schedules
+    description: Cron and one-shot scheduling (Epic 11)
+  - name: skills
+    description: Skill and tool registry
+  - name: mcp
+    description: MCP server management
+  - name: pipelines
+    description: Sequential/parallel orchestration pipelines
+  - name: notifications
+    description: Notification channels and routing (Epic 18)
+  - name: channels
+    description: Integration channel management (Epic 18)
+  - name: webhooks
+    description: Inbound webhook triggers (Story 9.8)
+  - name: health
+    description: System health checks
+  - name: federation
+    description: Federation (stub)
+  - name: lsp
+    description: Language Server Protocol helpers
+  - name: openai-compat
+    description: OpenAI-compatible chat endpoint
 
 paths:
-  /health:
+  # ── Agents ─────────────────────────────────────────────────────────────────
+  /api/agents:
     get:
-      tags:
-        - System
-      summary: Health check
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                  service:
-                    type: string
-                  timestamp:
-                    type: string
-
-  /agents:
+      tags: [agents]
+      summary: List all agent instances (enriched with template + live status)
+  /api/agents/templates:
     get:
-      tags:
-        - Agents
-      summary: List all agents
-      responses:
-        '200':
-          description: List of agents
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AgentManifest'
-
-  /agents/{name}:
+      tags: [agents]
+      summary: List all agent templates
+  /api/agents/instances:
     get:
-      tags:
-        - Agents
-      summary: Get agent details
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Agent info
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AgentInfo'
-        '404':
-          description: Agent not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /agents/{name}/manifest/raw:
-    get:
-      tags:
-        - Agents
-      summary: Get raw YAML manifest
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Raw YAML manifest
-          content:
-            text/yaml:
-              schema:
-                type: string
-        '404':
-          description: Manifest not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /agents/{name}/manifest:
-    put:
-      tags:
-        - Agents
-      summary: Update agent manifest
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AgentManifest'
-      responses:
-        '200':
-          description: Manifest updated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-        '400':
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /agents/reload:
+      tags: [agents]
+      summary: List agent instances (filterable by circle/status)
     post:
-      tags:
-        - Agents
-      summary: Reload all agents
-      responses:
-        '200':
-          description: Agents reloaded successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /circles:
+      tags: [agents]
+      summary: Create new agent instance from template
+  /api/agents/instances/{id}:
     get:
-      tags:
-        - Circles
-      summary: List all circles
-      responses:
-        '200':
-          description: List of circles
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/CircleSummary'
-    post:
-      tags:
-        - Circles
-      summary: Create new circle
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CircleManifest'
-      responses:
-        '201':
-          description: Circle created
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  name:
-                    type: string
-        '400':
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: Circle already exists
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /circles/{name}:
-    get:
-      tags:
-        - Circles
-      summary: Get circle details
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Circle details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CircleDetails'
-        '404':
-          description: Circle not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-    put:
-      tags:
-        - Circles
-      summary: Update circle manifest
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CircleManifest'
-      responses:
-        '200':
-          description: Circle updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-        '404':
-          description: Circle not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+      tags: [agents]
+      summary: Get agent instance detail
     delete:
-      tags:
-        - Circles
+      tags: [agents]
+      summary: Delete agent instance
+  /api/agents/instances/{id}/start:
+    post:
+      tags: [agents]
+      summary: Start an agent instance
+  /api/agents/instances/{id}/stop:
+    post:
+      tags: [agents]
+      summary: Stop an agent instance
+  /api/agents/instances/{id}/thoughts:
+    get:
+      tags: [agents]
+      summary: Get agent thoughts/execution logs
+  /api/agents/{id}/message:
+    post:
+      tags: [agents]
+      summary: Send direct message to agent
+  /api/agents/validate:
+    post:
+      tags: [agents]
+      summary: Validate an agent manifest
+  /api/agents/test-chat:
+    post:
+      tags: [agents]
+      summary: Test-chat with agent manifest (no container spawn)
+
+  # ── Agent Lifecycle ────────────────────────────────────────────────────────
+  /api/agents/{id}/resolve-capabilities:
+    post:
+      tags: [lifecycle]
+      summary: Dry-run capability resolution (Story 3.2)
+  /api/agents/{id}/worktree/merge:
+    post:
+      tags: [lifecycle]
+      summary: Merge agent worktree to target branch (Story 3.4)
+  /api/agents/{id}/worktree:
+    delete:
+      tags: [lifecycle]
+      summary: Delete agent worktree (Story 3.4)
+  /api/agents/{id}/logs:
+    get:
+      tags: [lifecycle]
+      summary: Get container logs (Story 3.5)
+  /api/agents/{id}/cleanup:
+    post:
+      tags: [lifecycle]
+      summary: Cleanup stopped agent instance (Story 3.7)
+  /api/agents/{id}/subagents:
+    get:
+      tags: [lifecycle]
+      summary: List subagents spawned by this agent (Story 3.8)
+  /api/agents/{id}/permission-request:
+    post:
+      tags: [lifecycle]
+      summary: Request capability grant (Story 3.9)
+  /api/agents/{id}/grants:
+    get:
+      tags: [lifecycle]
+      summary: List capability grants for agent
+  /api/agents/{id}/grants/{grantId}:
+    delete:
+      tags: [lifecycle]
+      summary: Revoke capability grant
+  /api/agents/{id}/restart:
+    post:
+      tags: [lifecycle]
+      summary: Restart persistent agent
+  /api/permission-requests:
+    get:
+      tags: [lifecycle]
+      summary: List pending permission requests
+  /api/permission-requests/{requestId}/decision:
+    post:
+      tags: [lifecycle]
+      summary: Approve or deny permission request
+
+  # ── Agent Heartbeat ────────────────────────────────────────────────────────
+  /api/agents/{id}/heartbeat:
+    post:
+      tags: [agents]
+      summary: Agent container heartbeat (JWT auth)
+  /api/agents/health:
+    get:
+      tags: [agents]
+      summary: List unhealthy agent instances
+
+  # ── Tasks ──────────────────────────────────────────────────────────────────
+  /api/agents/{id}/tasks:
+    get:
+      tags: [tasks]
+      summary: List tasks for agent (filterable by status)
+    post:
+      tags: [tasks]
+      summary: Enqueue task for agent
+  /api/agents/{id}/tasks/next:
+    get:
+      tags: [tasks]
+      summary: Worker polls for next queued task
+  /api/agents/{id}/tasks/{taskId}:
+    get:
+      tags: [tasks]
+      summary: Get task detail
+    put:
+      tags: [tasks]
+      summary: Update task (result/error/status)
+
+  # ── Auth ───────────────────────────────────────────────────────────────────
+  /api/auth/oidc-config:
+    get:
+      tags: [auth]
+      summary: Get OIDC provider configuration (public)
+  /api/auth/login:
+    get:
+      tags: [auth]
+      summary: Redirect to OIDC authorization endpoint (public)
+  /api/auth/oidc/callback:
+    post:
+      tags: [auth]
+      summary: OIDC token exchange — PKCE flow (public)
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Logout and clear session (public)
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Get current operator identity
+  /api/auth/api-keys:
+    get:
+      tags: [auth]
+      summary: List operator's API keys
+    post:
+      tags: [auth]
+      summary: Create new API key
+  /api/auth/api-keys/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke API key
+
+  # ── Secrets ────────────────────────────────────────────────────────────────
+  /api/secrets:
+    get:
+      tags: [secrets]
+      summary: List secret metadata
+    post:
+      tags: [secrets]
+      summary: Create or update secret
+  /api/secrets/{key}:
+    get:
+      tags: [secrets]
+      summary: Get secret value
+    delete:
+      tags: [secrets]
+      summary: Delete secret (admin only)
+
+  # ── Delegation ─────────────────────────────────────────────────────────────
+  /api/delegation/issue:
+    post:
+      tags: [delegation]
+      summary: Issue delegation token to agent
+  /api/delegation:
+    get:
+      tags: [delegation]
+      summary: List operator's delegations
+  /api/delegation/{id}:
+    delete:
+      tags: [delegation]
+      summary: Revoke delegation (cascade optional)
+  /api/delegation/{id}/children:
+    get:
+      tags: [delegation]
+      summary: List child delegations
+  /api/delegation/{id}/audit:
+    get:
+      tags: [delegation]
+      summary: Audit trail for delegation token
+  /api/agents/{agentId}/service-identities:
+    get:
+      tags: [delegation]
+      summary: List service identities for agent
+    post:
+      tags: [delegation]
+      summary: Create service identity
+  /api/agents/{agentId}/service-identities/{identityId}:
+    delete:
+      tags: [delegation]
+      summary: Revoke service identity
+  /api/agents/{agentId}/service-identities/{identityId}/rotate:
+    post:
+      tags: [delegation]
+      summary: Rotate service identity credential
+  /api/agents/{agentId}/delegations:
+    get:
+      tags: [delegation]
+      summary: List inbound delegations for agent
+
+  # ── Chat & Sessions ────────────────────────────────────────────────────────
+  /api/chat:
+    post:
+      tags: [chat]
+      summary: Send chat message (sync response)
+  /api/chat/stream:
+    post:
+      tags: [chat]
+      summary: Send chat message (streaming via Centrifugo)
+  /api/sessions:
+    get:
+      tags: [chat]
+      summary: List chat sessions
+    post:
+      tags: [chat]
+      summary: Create new chat session
+  /api/sessions/{id}:
+    get:
+      tags: [chat]
+      summary: Get session with messages
+    put:
+      tags: [chat]
+      summary: Update session title
+    delete:
+      tags: [chat]
+      summary: Delete session
+
+  # ── Intercom ───────────────────────────────────────────────────────────────
+  /api/intercom/publish:
+    post:
+      tags: [intercom]
+      summary: Publish message to Centrifugo channel
+  /api/intercom/dm:
+    post:
+      tags: [intercom]
+      summary: Send direct message agent-to-agent
+  /api/intercom/history:
+    get:
+      tags: [intercom]
+      summary: Get channel message history
+  /api/intercom/channels:
+    get:
+      tags: [intercom]
+      summary: List agent's channels
+  /api/intercom/bridge/receive:
+    post:
+      tags: [intercom]
+      summary: Receive bridged message from remote instance
+  /api/intercom/centrifugo/token:
+    get:
+      tags: [intercom]
+      summary: Issue Centrifugo connection token
+  /api/intercom/centrifugo/subscription:
+    get:
+      tags: [intercom]
+      summary: Issue subscription token for channel
+  /api/rt/token:
+    get:
+      tags: [intercom]
+      summary: Issue Centrifugo connection token (web operator shorthand)
+
+  # ── Circles ────────────────────────────────────────────────────────────────
+  /api/circles:
+    get:
+      tags: [circles]
+      summary: List circles
+    post:
+      tags: [circles]
+      summary: Create circle
+  /api/circles/{id}:
+    get:
+      tags: [circles]
+      summary: Get circle detail with members
+    put:
+      tags: [circles]
+      summary: Update circle
+    delete:
+      tags: [circles]
       summary: Delete circle
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Circle deleted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-        '404':
-          description: Circle not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /circles/{name}/context:
+  /api/circles/{id}/members:
+    get:
+      tags: [circles]
+      summary: List circle members
+  /api/circles/{name}/context:
     put:
-      tags:
-        - Circles
-      summary: Update project context
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                content:
-                  type: string
-              required:
-                - content
-      responses:
-        '200':
-          description: Context updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /circles/{circleId}/party:
+      tags: [circles]
+      summary: Update circle project context markdown
+  /api/circles/{name}/broadcast:
     post:
-      tags:
-        - Party Mode
-      summary: Create party session
-      parameters:
-        - name: circleId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '201':
-          description: Session created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PartySessionInfo'
+      tags: [circles]
+      summary: Broadcast message to circle members
+  /api/circles/{id}/party:
+    post:
+      tags: [circles]
+      summary: Start multi-agent party session (Story 10.6, async 202)
+  /api/circles/{id}/party/{sessionId}:
     get:
-      tags:
-        - Party Mode
-      summary: List party sessions
-      parameters:
-        - name: circleId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: List of sessions
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/PartySessionInfo'
+      tags: [circles]
+      summary: Get party session status and rounds
 
-  /circles/{circleId}/party/{sessionId}:
-    post:
-      tags:
-        - Party Mode
-      summary: Send message to party session
-      parameters:
-        - name: circleId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: sessionId
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                message:
-                  type: string
-              required:
-                - message
-      responses:
-        '200':
-          description: Response received
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  sessionId:
-                    type: string
-                  responses:
-                    type: array
-                    items:
-                      type: object
-                  active:
-                    type: boolean
-    delete:
-      tags:
-        - Party Mode
-      summary: End party session
-      parameters:
-        - name: circleId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: sessionId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Session ended
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /chat:
-    post:
-      tags:
-        - Chat
-      summary: Send chat message
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                message:
-                  type: string
-                conversationId:
-                  type: string
-              required:
-                - message
-      responses:
-        '200':
-          description: Chat response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  conversationId:
-                    type: string
-                  reply:
-                    type: string
-                  thought:
-                    type: string
-
-  /execute:
-    post:
-      tags:
-        - Execution
-      summary: Execute task
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                prompt:
-                  type: string
-              required:
-                - prompt
-      responses:
-        '200':
-          description: Task result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  result:
-                    type: object
-
-  /memory/blocks:
+  # ── Knowledge ──────────────────────────────────────────────────────────────
+  /api/knowledge/circles/{id}/history:
     get:
-      tags:
-        - Memory
-      summary: Get all memory blocks
-      responses:
-        '200':
-          description: List of memory blocks
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/MemoryBlock'
-
-  /memory/blocks/{type}:
+      tags: [knowledge]
+      summary: Get git commit history for circle knowledge repo
+  /api/knowledge/circles/{id}/merge-requests:
     get:
-      tags:
-        - Memory
+      tags: [knowledge]
+      summary: List pending merge requests
+  /api/knowledge/circles/{id}/merge-requests/{requestId}/approve:
+    post:
+      tags: [knowledge]
+      summary: Approve merge request
+  /api/knowledge/circles/{id}/merge-requests/{requestId}/resolve:
+    post:
+      tags: [knowledge]
+      summary: Resolve merge conflict (strategy: ours|theirs|llm)
+
+  # ── Memory ─────────────────────────────────────────────────────────────────
+  /api/memory/blocks:
+    get:
+      tags: [memory]
+      summary: List all memory blocks
+  /api/memory/blocks/{type}:
+    get:
+      tags: [memory]
       summary: Get memory block by type
-      parameters:
-        - name: type
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Memory block
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MemoryBlock'
     post:
-      tags:
-        - Memory
-      summary: Add memory block entry
-      parameters:
-        - name: type
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                title:
-                  type: string
-                content:
-                  type: string
-                refs:
-                  type: array
-                  items:
-                    type: string
-                tags:
-                  type: array
-                  items:
-                    type: string
-                source:
-                  type: string
-              required:
-                - title
-                - content
-      responses:
-        '201':
-          description: Entry added
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MemoryEntry'
-
-  /memory/entries/{id}:
+      tags: [memory]
+      summary: Add entry to memory block
+  /api/memory/entries/{id}:
     get:
-      tags:
-        - Memory
-      summary: Get memory entry
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Memory entry
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MemoryEntry'
-    put:
-      tags:
-        - Memory
-      summary: Update memory entry
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                content:
-                  type: string
-              required:
-                - content
-      responses:
-        '200':
-          description: Entry updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MemoryEntry'
-    delete:
-      tags:
-        - Memory
-      summary: Delete memory entry
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Entry deleted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /memory/entries/{id}/refs:
-    post:
-      tags:
-        - Memory
-      summary: Add reference link
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                targetId:
-                  type: string
-              required:
-                - targetId
-      responses:
-        '200':
-          description: Link added
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /memory/entries/{id}/refs/{targetId}:
-    delete:
-      tags:
-        - Memory
-      summary: Remove reference link
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: targetId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Link removed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /memory/graph:
+      tags: [memory]
+      summary: Get memory entry detail
+  /api/memory/graph:
     get:
-      tags:
-        - Memory
+      tags: [memory]
       summary: Get memory graph
-      responses:
-        '200':
-          description: Memory graph
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MemoryGraph'
-
-  /memory/search:
+  /api/memory/{agentId}/stats:
     get:
-      tags:
-        - Memory
-      summary: Search memory
-      parameters:
-        - name: query
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Search results
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/SearchResult'
-
-  /ingest:
-    post:
-      tags:
-        - Vector Search
-      summary: Trigger codebase ingestion
-      responses:
-        '200':
-          description: Ingestion started
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-
-  /query:
-    post:
-      tags:
-        - Vector Search
-      summary: Query vector database
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                query:
-                  type: string
-                limit:
-                  type: integer
-              required:
-                - query
-      responses:
-        '200':
-          description: Query results
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    items:
-                      type: object
-
-  /skills:
+      tags: [memory]
+      summary: Memory stats (block count, vector count)
+  /api/memory/{agentId}/blocks:
     get:
-      tags:
-        - Skills
-      summary: List all skills
-      responses:
-        '200':
-          description: List of skills
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/SkillInfo'
-
-  /skills/agents/{name}/tools:
-    put:
-      tags:
-        - Skills
-      summary: Update allowed tools (Informational)
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                allowed:
-                  type: array
-                  items:
-                    type: string
-              required:
-                - allowed
-      responses:
-        '200':
-          description: Tool update validation
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  message:
-                    type: string
-                  currentAllowed:
-                    type: array
-                    items:
-                      type: string
-                  requested:
-                    type: array
-                    items:
-                      type: string
-
-  /sandbox:
+      tags: [memory]
+      summary: List scoped blocks (filterable by type, tags, since)
+  /api/memory/{agentId}/blocks/{id}:
     get:
-      tags:
-        - Sandbox
-      summary: List sandbox containers
-      parameters:
-        - name: agentName
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        '200':
-          description: List of containers
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ContainerInfo'
-
-  /sandbox/spawn:
+      tags: [memory]
+      summary: Get scoped block by ID
+  /api/memory/{agentId}/compact:
     post:
-      tags:
-        - Sandbox
-      summary: Spawn container
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                agentName:
-                  type: string
-                type:
-                  type: string
-                image:
-                  type: string
-                command:
-                  type: string
-                env:
-                  type: object
-                workDir:
-                  type: string
-                subagentRole:
-                  type: string
-                task:
-                  type: string
-              required:
-                - agentName
-                - type
-                - image
-      responses:
-        '201':
-          description: Container spawned
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ContainerResult'
-        '403':
-          description: Policy violation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+      tags: [memory]
+      summary: Trigger memory compaction (Story 8.7)
 
-  /sandbox/exec:
+  # ── LLM Proxy ──────────────────────────────────────────────────────────────
+  /v1/llm/chat/completions:
     post:
-      tags:
-        - Sandbox
-      summary: Execute command in container
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                agentName:
-                  type: string
-                containerId:
-                  type: string
-                command:
-                  type: string
-              required:
-                - agentName
-                - containerId
-                - command
-      responses:
-        '200':
-          description: Command execution result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExecResult'
+      tags: [llm]
+      summary: Chat completion (streaming + non-streaming, JWT auth, budget-gated)
+  /v1/chat/completions:
+    post:
+      tags: [openai-compat]
+      summary: OpenAI-compatible chat endpoint
 
-  /sandbox/{id}:
+  # ── Providers ──────────────────────────────────────────────────────────────
+  /api/providers:
+    get:
+      tags: [providers]
+      summary: List configured LLM providers
+    post:
+      tags: [providers]
+      summary: Add LLM provider (hot-reloadable)
+  /api/providers/dynamic:
+    get:
+      tags: [providers]
+      summary: List dynamic providers
+    post:
+      tags: [providers]
+      summary: Add/update dynamic provider
+  /api/providers/dynamic/statuses:
+    get:
+      tags: [providers]
+      summary: Get dynamic provider health statuses
+  /api/providers/{modelName}:
     delete:
-      tags:
-        - Sandbox
-      summary: Remove container
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: agentName
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Container removed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /sandbox/{id}/logs:
+      tags: [providers]
+      summary: Remove LLM provider
+  /api/providers/{modelName}/test:
+    post:
+      tags: [providers]
+      summary: Test provider connectivity
+  /api/providers/{modelName}/health:
     get:
-      tags:
-        - Sandbox
-      summary: Get container logs
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: tail
-          in: query
-          required: false
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Container logs
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  logs:
-                    type: string
-
-  /sandbox/tool:
-    post:
-      tags:
-        - Sandbox
-      summary: Run ephemeral tool container
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                agentName:
-                  type: string
-                toolName:
-                  type: string
-                command:
-                  type: string
-                image:
-                  type: string
-                timeoutSeconds:
-                  type: integer
-              required:
-                - agentName
-                - toolName
-                - command
-      responses:
-        '200':
-          description: Tool run result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ToolRunResult'
-
-  /sandbox/subagent:
-    post:
-      tags:
-        - Sandbox
-      summary: Spawn subagent container
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                agentName:
-                  type: string
-                subagentRole:
-                  type: string
-                task:
-                  type: string
-                image:
-                  type: string
-              required:
-                - agentName
-                - subagentRole
-                - task
-      responses:
-        '201':
-          description: Subagent spawned
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SubagentRunResult'
-
-  /intercom/publish:
-    post:
-      tags:
-        - Intercom
-      summary: Publish message
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                agent:
-                  type: string
-                channel:
-                  type: string
-                type:
-                  type: string
-                payload:
-                  type: object
-              required:
-                - agent
-                - channel
-                - type
-                - payload
-      responses:
-        '200':
-          description: Message published
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  message:
-                    $ref: '#/components/schemas/MessageObject'
-
-  /intercom/dm:
-    post:
-      tags:
-        - Intercom
-      summary: Direct message
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                from:
-                  type: string
-                to:
-                  type: string
-                payload:
-                  type: object
-              required:
-                - from
-                - to
-                - payload
-      responses:
-        '200':
-          description: Message sent
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  message:
-                    $ref: '#/components/schemas/MessageObject'
-
-  /intercom/history:
+      tags: [providers]
+      summary: Get circuit breaker state for provider
+  /api/system/circuit-breakers:
     get:
-      tags:
-        - Intercom
-      summary: Get channel history
-      parameters:
-        - name: channel
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Channel history
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  channel:
-                    type: string
-                  messages:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MessageObject'
+      tags: [providers]
+      summary: Get all circuit breaker states
 
-  /intercom/channels:
+  # ── Budget & Metering ──────────────────────────────────────────────────────
+  /api/budget:
     get:
-      tags:
-        - Intercom
-      summary: List agent channels
-      parameters:
-        - name: agent
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: List of channels
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: string
-
-  /lsp/definition:
-    post:
-      tags:
-        - LSP
-      summary: Get definition
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                filePath:
-                  type: string
-                line:
-                  type: integer
-                character:
-                  type: integer
-              required:
-                - filePath
-                - line
-                - character
-      responses:
-        '200':
-          description: Definition
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  definition:
-                    type: object
-
-  /lsp/references:
-    post:
-      tags:
-        - LSP
-      summary: Get references
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                filePath:
-                  type: string
-                line:
-                  type: integer
-                character:
-                  type: integer
-              required:
-                - filePath
-                - line
-                - character
-      responses:
-        '200':
-          description: References
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  references:
-                    type: array
-                    items:
-                      type: object
-
-  /lsp/symbols:
-    post:
-      tags:
-        - LSP
-      summary: Get document symbols
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                filePath:
-                  type: string
-              required:
-                - filePath
-      responses:
-        '200':
-          description: Symbols
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  symbols:
-                    type: array
-                    items:
-                      type: object
-
-  /config/llm:
+      tags: [budget]
+      summary: Global token usage (last 7 days by day)
+  /api/budget/agents:
     get:
-      tags:
-        - Configuration
-      summary: Get LLM config
-      responses:
-        '200':
-          description: LLM Config
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/LLMConfig'
-    post:
-      tags:
-        - Configuration
-      summary: Update LLM config
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LLMConfig'
-      responses:
-        '200':
-          description: Config updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-
-  /config/llm/test:
-    post:
-      tags:
-        - Configuration
-      summary: Test LLM config
-      responses:
-        '200':
-          description: Test result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  model:
-                    type: string
-                  response:
-                    type: string
-                  error:
-                    type: string
-
-  /providers:
+      tags: [budget]
+      summary: Per-agent token usage rankings
+  /api/budget/agents/{id}:
     get:
-      tags:
-        - Configuration
-      summary: Get providers catalog
-      responses:
-        '200':
-          description: Providers
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  activeProvider:
-                    type: string
-                  providers:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ProviderConfig'
+      tags: [budget]
+      summary: Single agent usage (last 7 days by day)
+  /api/budget/agents/{id}/budget:
+    get:
+      tags: [budget]
+      summary: Real-time hourly + daily budget status
+  /api/metering/usage:
+    get:
+      tags: [metering]
+      summary: Query usage (agentId, from, to, groupBy)
+  /api/metering/summary:
+    get:
+      tags: [metering]
+      summary: Total usage for today across all agents
 
-  /providers/{id}:
+  # ── Audit ──────────────────────────────────────────────────────────────────
+  /api/audit:
+    get:
+      tags: [audit]
+      summary: List audit entries (admin only, filterable)
+  /api/audit/export:
+    get:
+      tags: [audit]
+      summary: Stream audit trail as JSONL (admin only)
+
+  # ── Schedules ──────────────────────────────────────────────────────────────
+  /api/schedules:
+    get:
+      tags: [schedules]
+      summary: List schedules (filterable by agentId)
+    post:
+      tags: [schedules]
+      summary: Create schedule
+  /api/schedules/{id}:
+    get:
+      tags: [schedules]
+      summary: Get schedule by ID
+    patch:
+      tags: [schedules]
+      summary: Update schedule
+    delete:
+      tags: [schedules]
+      summary: Delete schedule
+  /api/schedules/{id}/trigger:
+    post:
+      tags: [schedules]
+      summary: Manually trigger schedule
+
+  # ── Skills & Tools ─────────────────────────────────────────────────────────
+  /api/tools:
+    get:
+      tags: [skills]
+      summary: List all registered skills/tools (public)
+  /api/templates:
+    get:
+      tags: [templates]
+      summary: List agent templates from DB (public)
+  /api/skills:
+    get:
+      tags: [skills]
+      summary: List executable + guidance skills
+  /api/skills/{name}:
+    get:
+      tags: [skills]
+      summary: Get guidance skill by name
+  /api/skills/agents/{name}/tools:
     put:
-      tags:
-        - Configuration
-      summary: Update provider config
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                baseUrl:
-                  type: string
-                apiKey:
-                  type: string
-                model:
-                  type: string
-      responses:
-        '200':
-          description: Config updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
+      tags: [skills]
+      summary: Update agent's allowed tools
 
-  /providers/{id}/test:
+  # ── Registry ───────────────────────────────────────────────────────────────
+  /api/registry/templates:
+    get:
+      tags: [registry]
+      summary: List templates (DB-backed)
     post:
-      tags:
-        - Configuration
-      summary: Test specific provider
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Test result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  provider:
-                    type: string
-                  response:
-                    type: string
-                  error:
-                    type: string
-
-  /providers/active:
+      tags: [registry]
+      summary: Upsert template
+  /api/registry/templates/{name}:
+    get:
+      tags: [registry]
+      summary: Get template by name
+    put:
+      tags: [registry]
+      summary: Update template
+    delete:
+      tags: [registry]
+      summary: Delete template
+  /api/registry/templates/{name}/instances:
+    get:
+      tags: [registry]
+      summary: List instances from template
+  /api/registry/instances:
+    get:
+      tags: [registry]
+      summary: List instances
     post:
-      tags:
-        - Configuration
-      summary: Set active provider
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                providerId:
-                  type: string
-              required:
-                - providerId
-      responses:
-        '200':
-          description: Active provider set
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  activeProvider:
-                    type: string
+      tags: [registry]
+      summary: Create instance
+  /api/registry/instances/{id}:
+    get:
+      tags: [registry]
+      summary: Get instance by ID
+  /api/registry/reload:
+    post:
+      tags: [registry]
+      summary: Reload registry from filesystem
 
-components:
-  schemas:
-    AgentManifest:
-      type: object
-      properties:
-        metadata:
-          type: object
-          properties:
-            name:
-              type: string
-        # Other agent fields omitted for brevity
-    AgentInfo:
-      type: object
-      properties:
-        name:
-          type: string
-    CircleSummary:
-      type: object
-      properties:
-        name:
-          type: string
-    CircleManifest:
-      type: object
-      properties:
-        metadata:
-          type: object
-          properties:
-            name:
-              type: string
-    CircleDetails:
-      type: object
-      properties:
-        name:
-          type: string
-        projectContext:
-          type: object
-    PartySessionInfo:
-      type: object
-      properties:
-        id:
-          type: string
-    MemoryBlock:
-      type: object
-      properties:
-        id:
-          type: string
-    MemoryEntry:
-      type: object
-      properties:
-        id:
-          type: string
-        title:
-          type: string
-        content:
-          type: string
-    MemoryGraph:
-      type: object
-      properties:
-        nodes:
-          type: array
-          items:
-            type: object
-        edges:
-          type: array
-          items:
-            type: object
-    SearchResult:
-      type: object
-      properties:
-        id:
-          type: string
-        score:
-          type: number
-    SkillInfo:
-      type: object
-      properties:
-        id:
-          type: string
-        usedBy:
-          type: array
-          items:
-            type: string
-    ContainerInfo:
-      type: object
-      properties:
-        id:
-          type: string
-    ContainerResult:
-      type: object
-      properties:
-        id:
-          type: string
-    ExecResult:
-      type: object
-      properties:
-        exitCode:
-          type: integer
-        stdout:
-          type: string
-        stderr:
-          type: string
-    ToolRunResult:
-      type: object
-      properties:
-        exitCode:
-          type: integer
-        output:
-          type: string
-    SubagentRunResult:
-      type: object
-      properties:
-        id:
-          type: string
-    MessageObject:
-      type: object
-      properties:
-        id:
-          type: string
-        agent:
-          type: string
-        payload:
-          type: object
-    LLMConfig:
-      type: object
-      properties:
-        baseUrl:
-          type: string
-        apiKey:
-          type: string
-        model:
-          type: string
-    ProviderConfig:
-      type: object
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-    ErrorResponse:
-      type: object
-      properties:
-        error:
-          type: string
+  # ── Sandbox ────────────────────────────────────────────────────────────────
+  /api/sandbox:
+    get:
+      tags: [sandbox]
+      summary: List active containers
+  /api/sandbox/spawn:
+    post:
+      tags: [sandbox]
+      summary: Spawn persistent container
+  /api/sandbox/exec:
+    post:
+      tags: [sandbox]
+      summary: Exec command in running container
+  /api/sandbox/tool:
+    post:
+      tags: [sandbox]
+      summary: Run ephemeral tool container
+  /api/sandbox/subagent:
+    post:
+      tags: [sandbox]
+      summary: Spawn subagent container
+  /api/sandbox/{id}:
+    delete:
+      tags: [sandbox]
+      summary: Stop and remove container
+  /api/sandbox/{id}/logs:
+    get:
+      tags: [sandbox]
+      summary: Get container logs
+
+  # ── MCP Servers ────────────────────────────────────────────────────────────
+  /api/mcp-servers:
+    post:
+      tags: [mcp]
+      summary: Register containerized MCP server
+  /api/mcp-servers/{name}:
+    delete:
+      tags: [mcp]
+      summary: Unregister MCP server
+
+  # ── Pipelines ──────────────────────────────────────────────────────────────
+  /api/pipelines:
+    post:
+      tags: [pipelines]
+      summary: Create pipeline (sequential|parallel|hierarchical, async 202)
+  /api/pipelines/{id}:
+    get:
+      tags: [pipelines]
+      summary: Get pipeline status and steps
+
+  # ── Notifications & Channels ───────────────────────────────────────────────
+  /api/notifications/action:
+    post:
+      tags: [notifications]
+      summary: Redeem action token (public, JWT-validated)
+  /api/notifications/routing:
+    get:
+      tags: [notifications]
+      summary: List routing rules
+    post:
+      tags: [notifications]
+      summary: Create routing rule (admin)
+  /api/notifications/routing/{id}:
+    patch:
+      tags: [notifications]
+      summary: Update routing rule (admin)
+    delete:
+      tags: [notifications]
+      summary: Delete routing rule (admin)
+  /api/channels:
+    get:
+      tags: [channels]
+      summary: List channels (config redacted)
+    post:
+      tags: [channels]
+      summary: Create channel (admin)
+  /api/channels/{id}:
+    delete:
+      tags: [channels]
+      summary: Delete channel (admin)
+  /api/channels/{id}/test:
+    post:
+      tags: [channels]
+      summary: Send test notification
+  /api/channels/{id}/health:
+    get:
+      tags: [channels]
+      summary: Channel health check
+  /api/channels/routes:
+    get:
+      tags: [channels]
+      summary: List inbound routes
+    post:
+      tags: [channels]
+      summary: Create inbound route
+  /api/channels/discord/user-mapping:
+    post:
+      tags: [channels]
+      summary: Map Discord user to SERA operator
+  /api/channels/slack/user-mapping:
+    post:
+      tags: [channels]
+      summary: Map Slack user to SERA operator
+  /api/channels/slack/interactions:
+    post:
+      tags: [channels]
+      summary: Slack interactive payload handler
+
+  # ── Webhooks ───────────────────────────────────────────────────────────────
+  /api/webhooks:
+    get:
+      tags: [webhooks]
+      summary: List webhooks
+    post:
+      tags: [webhooks]
+      summary: Register webhook
+  /api/webhooks/incoming/{slug}:
+    post:
+      tags: [webhooks]
+      summary: Trigger webhook (signature-validated, public)
+
+  # ── Health ─────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [health]
+      summary: Basic health check (public)
+  /api/health/detail:
+    get:
+      tags: [health]
+      summary: Detailed health with component status (public)
+
+  # ── Federation ─────────────────────────────────────────────────────────────
+  /api/federation/peers:
+    get:
+      tags: [federation]
+      summary: List federation peers (stub, returns empty)
+
+  # ── LSP ────────────────────────────────────────────────────────────────────
+  /api/lsp/definition:
+    post:
+      tags: [lsp]
+      summary: Get symbol definition
+  /api/lsp/references:
+    post:
+      tags: [lsp]
+      summary: Find symbol references
+  /api/lsp/symbols:
+    post:
+      tags: [lsp]
+      summary: List file symbols
+
+  # ── Legacy Config ──────────────────────────────────────────────────────────
+  /api/config/llm:
+    get:
+      tags: [providers]
+      summary: Get LLM config (legacy)
+    post:
+      tags: [providers]
+      summary: Update LLM config (legacy)
+  /api/config/llm/test:
+    post:
+      tags: [providers]
+      summary: Test LLM connection (legacy)

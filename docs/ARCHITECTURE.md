@@ -12,12 +12,13 @@ This document is the canonical technical reference covering system architecture,
 2. [Component Architecture](#component-architecture)
 3. [Agent Architecture](#agent-architecture)
 4. [LLM Routing](#llm-routing)
-5. [Provider Gateway: LiteLLM](#provider-gateway-litellm)
+5. [Provider Gateway: In-Process LLM Routing](#provider-gateway-in-process-llm-routing)
 6. [Docker Sandbox Model](#docker-sandbox-model)
 7. [Skills vs MCP Tools](#skills-vs-mcp-tools)
 8. [Memory & RAG](#memory--rag)
 9. [Real-Time Messaging](#real-time-messaging)
-10. [Extensibility Model](#extensibility-model)
+10. [Integration Channels](#integration-channels)
+11. [Extensibility Model](#extensibility-model)
 11. [Tech Stack: Current Choices & Alternatives](#tech-stack-current-choices--alternatives)
 12. [Open Source Ecosystem](#open-source-ecosystem)
 
@@ -73,6 +74,8 @@ The central intelligence and policy enforcement point.
 | `ToolExecutor` | Converts skill invocations to OpenAI tool-calling format |
 | `MCPRegistry` | Manages connections to MCP server processes |
 | `SandboxManager` | Docker container lifecycle via dockerode, tier policy enforcement |
+| `EgressAclManager` | Generates per-agent Squid ACL files from resolved network capabilities |
+| `EgressLogWatcher` | Tails egress proxy access log, feeds AuditService and MeteringService |
 | `MemoryManager` | Hybrid block store + vector indexing via Qdrant |
 | `MeteringService` | Token usage tracking, hourly/daily quota enforcement |
 | `AuditService` | Merkle hash-chain event log in PostgreSQL |
@@ -95,14 +98,16 @@ A minimal TypeScript process that runs **inside each agent container**. It is no
 
 Notably: the agent runtime does **not** call the upstream LLM directly. All LLM calls go through sera-core (see [LLM Routing](#llm-routing)).
 
+All outbound HTTP traffic from agent containers is routed through the egress proxy via `HTTP_PROXY`/`HTTPS_PROXY` environment variables injected at spawn time. `NO_PROXY` excludes `sera-core` and `centrifugo` so internal SERA traffic remains direct. See [Egress Proxy](#egress-proxy).
+
 ### sera-web
 
 The operator dashboard. A React SPA that communicates with sera-core via REST and subscribes to Centrifugo for real-time agent thought/token streams.
 
-**Current:** Next.js 16 with Tailwind v4
-**Character:** Pure client-side SPA — no SSR, no server actions, no server components in use. Next.js is used purely as a bundler/dev server.
+**Current:** Vite v6 + React Router v7 + React 19 + Tailwind v4
+**Character:** Pure client-side SPA — no SSR, no server-side data fetching. Vite is the bundler/dev server.
 
-See [Tech Stack](#tech-stack-current-choices--alternatives) for frontend options.
+See [Tech Stack](#tech-stack-current-choices--alternatives) for frontend details.
 
 ### Infrastructure services
 
@@ -111,6 +116,7 @@ See [Tech Stack](#tech-stack-current-choices--alternatives) for frontend options
 | Centrifugo | Real-time WebSocket pub/sub | Used for thought streaming, token streaming, agent-to-agent intercom |
 | PostgreSQL + pgvector | Relational data + vector embeddings | Chat history, agent instances, token usage, audit trail, schedules, 1536-dim embedding index |
 | Qdrant | Dedicated vector store | Semantic memory search; namespaced per agent/circle |
+| Squid (Egress Proxy) | Forward proxy for agent outbound traffic | SNI-based HTTPS filtering, per-agent ACLs, bandwidth rate limiting, structured access logging |
 
 ---
 
@@ -287,7 +293,7 @@ PERSISTENT agent:
          │
          ▼
   agent-runtime starts → ReasoningLoop
-  LLM calls → Core proxy → LiteLLM → upstream
+  LLM calls → Core proxy → LlmRouter → upstream
   Tools execute locally; out-of-scope requests → PermissionRequestService
   Thoughts → Centrifugo
          │
@@ -340,6 +346,15 @@ The sera-core MCP server is registered in `MCPRegistry` like any external MCP se
 | `skills.list` | `seraManagement.skills.read` |
 | `providers.list` | `seraManagement.providers.read` |
 | `providers.manage` | `seraManagement.providers.manage` — operator boundary only |
+| `secrets.list` | `seraManagement.secrets.read` — metadata only (name, description, tags, allowed agents); **never** returns secret values |
+| `secrets.requestEntry(name, description, allowedAgents)` | `seraManagement.secrets.requestEntry` — triggers an out-of-band secret entry dialog in the UI/CLI; agent never sees the value (see below) |
+| `channels.list`, `channels.get` | `seraManagement.channels.read` |
+| `channels.create(type, bindingMode, config)` | `seraManagement.channels.create` |
+| `channels.modify(id, updates)` | `seraManagement.channels.modify` (scope-checked) |
+| `channels.delete(id)` | `seraManagement.channels.delete` (scope-checked) |
+| `channels.test(id)` | `seraManagement.channels.read` |
+| `routingRules.list`, `routingRules.create`, `routingRules.delete` | `seraManagement.channels.modify` |
+| `alertRules.list`, `alertRules.create`, `alertRules.modify`, `alertRules.delete` | `seraManagement.channels.modify` |
 
 ### Sera — the primary agent
 
@@ -390,6 +405,13 @@ spec:
       providers:
         read: true
         manage: false
+      channels:
+        read: true
+        create: true
+        modify:
+          allow: [own, own-circle]
+        delete:
+          allow: [own]
 
   tools:
     allowed:
@@ -399,6 +421,9 @@ spec:
       - sera-core/schedules.create
       - sera-core/skills.list
       - sera-core/providers.list
+      - sera-core/channels.*
+      - sera-core/routingRules.*
+      - sera-core/alertRules.*
       - knowledge-store
       - knowledge-query
       - web-search
@@ -456,11 +481,11 @@ Agent container
 
 ---
 
-## Provider Gateway: LiteLLM
+## Provider Gateway: In-Process LLM Routing
 
 ### Role and governance boundary
 
-LiteLLM sits between sera-core and upstream LLM providers. Its role is narrow and deliberate: **provider routing and aggregation only**. All governance — budgets, metering, per-agent quotas, circuit breaking, audit — remains in sera-core.
+LLM routing is handled in-process by `LlmRouter` → `ProviderRegistry` → `@mariozechner/pi-ai` (pi-mono). There is no external LLM sidecar — all provider calls originate directly from sera-core. All governance — budgets, metering, per-agent quotas, circuit breaking, audit — remains in sera-core.
 
 ```
 Agent container
@@ -471,135 +496,52 @@ Agent container
                       ├── Audit record
                       │
                       ▼
-                  LiteLLM proxy  ← single internal master key from sera-core
+                  LlmRouter (in-process)
                       │
-                      ├── Routes by model name
-                      ├── Load balances across deployments
+                      ├── Resolves model name → provider via ProviderRegistry
                       ├── Handles retries and fallbacks
                       │
-                      ├──► LM Studio (local)
-                      ├──► Ollama (local)
-                      ├──► OpenAI
-                      ├──► Anthropic
+                      ├──► LM Studio (local, http://host.docker.internal:1234)
+                      ├──► Ollama (local, http://host.docker.internal:11434)
+                      ├──► OpenAI (cloud, auto-detected by model name)
+                      ├──► Anthropic (cloud, auto-detected by model name)
+                      ├──► Google Gemini (cloud, auto-detected by model name)
                       └──► Any OpenAI-compatible endpoint
 ```
 
-LiteLLM never sees agent identity. It receives calls from sera-core with one master key. From LiteLLM's perspective there is one caller. From SERA's perspective, LiteLLM is a smart socket.
+### Provider configuration
 
-**LiteLLM features to use:**
-- Model routing and load balancing across deployments
-- Fallback chains (primary → secondary → tertiary provider)
-- Retry logic with configurable backoff
-- Runtime model management API (add/remove providers without restart)
-- Routing strategies (latency-based, least-busy, cost-based)
+Provider config lives in `core/config/providers.json`. Cloud providers (model names starting with `gpt-*`, `claude-*`, `gemini-*`) are auto-detected and read their API keys from standard env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.). Local providers (LM Studio, Ollama) are registered in `providers.json` with a `baseUrl`.
 
-**LiteLLM features to ignore:**
-- Virtual keys, team/org hierarchy, per-key budgets — sera-core owns this
-- Built-in usage dashboards — sera-core's MeteringService owns this
-- Their callback/webhook system — SERA has its own audit and event pipeline
+**Bootstrap mode:** `LLM_BASE_URL` + `LLM_MODEL` env vars bootstrap a single default provider without a config file. This is the simplest way to get started.
 
-This boundary is important for the open source positioning: SERA's governance model must be self-contained and not depend on LiteLLM's specific implementation of budgets or access control.
+### Key components
 
-### Docker Compose integration
-
-```yaml
-# docker-compose.yaml addition
-litellm:
-  image: ghcr.io/berriai/litellm:main-stable   # use main-stable, not latest
-  container_name: sera-litellm
-  restart: unless-stopped
-  volumes:
-    - ./litellm/config.yaml:/app/config.yaml
-  environment:
-    - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}   # sera-core uses this key
-    - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
-    # Upstream provider keys — LiteLLM holds these, not agents
-    - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-  networks:
-    - sera_net
-  healthcheck:
-    test: ["CMD-SHELL", "curl -f http://localhost:4000/health || exit 1"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-```
-
-Update `sera-core` environment:
-```yaml
-sera-core:
-  environment:
-    - LLM_BASE_URL=http://litellm:4000/v1    # was: http://host.docker.internal:1234/v1
-    - LLM_API_KEY=${LITELLM_MASTER_KEY}
-```
-
-### Configuration file (`litellm/config.yaml`)
-
-```yaml
-model_list:
-  # Local providers (homelab-first defaults)
-  - model_name: lmstudio-default
-    litellm_params:
-      model: openai/local
-      api_base: http://host.docker.internal:1234/v1
-      api_key: lm-studio
-
-  - model_name: ollama-llama3
-    litellm_params:
-      model: ollama/llama3.1:8b
-      api_base: http://host.docker.internal:11434
-
-  # Cloud fallbacks (opt-in via env vars)
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: claude-haiku
-    litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-router_settings:
-  routing_strategy: latency-based-routing
-  num_retries: 2
-  timeout: 120
-  fallbacks:
-    - lmstudio-default: [ollama-llama3, gpt-4o-mini]
-
-litellm_settings:
-  drop_params: true        # silently drop unsupported params per model
-  request_timeout: 120
-  num_retries: 2
-```
-
-### Live configuration — what is and isn't hot-reloadable
-
-This is an important nuance. LiteLLM's hot-reload story is partial:
-
-| Change type | Hot-reloadable | Method |
+| Component | File | Responsibility |
 |---|---|---|
-| Add a new model/provider | **Yes** | `POST /model/new` API |
-| Remove a model | **Yes** | `DELETE /model/delete` API |
-| Update routing strategy | No | Requires restart |
-| Change fallback chains | No | Requires restart |
-| Update global settings | No | Requires restart |
+| `LlmRouter` | `core/src/llm/LlmRouter.ts` | Routes OpenAI-format requests to the correct provider function via pi-mono |
+| `ProviderRegistry` | `core/src/llm/ProviderRegistry.ts` | Model-name mapping, provider config, API key resolution |
+| `LlmRouterProvider` | `core/src/lib/llm/LlmRouterProvider.ts` | Agent integration layer — adapts `LlmRouter` to the agent tool-calling interface |
 
-**Practical implication for SERA:** Provider and model additions (the most common operation) are live via the management API. sera-core should expose its own provider management endpoints that call LiteLLM's model API under the hood, keeping LiteLLM as an implementation detail:
+### Provider management API
+
+sera-core exposes provider management endpoints that update `ProviderRegistry` in-process and persist to `providers.json`:
 
 ```
-POST /api/providers          → calls LiteLLM POST /model/new
-DELETE /api/providers/{name} → calls LiteLLM DELETE /model/delete
-GET  /api/providers          → calls LiteLLM GET /model/info
+POST /api/providers          → adds provider to registry + persists to providers.json
+DELETE /api/providers/{name} → removes provider from registry
+GET  /api/providers          → lists all configured models from ProviderRegistry
 ```
 
-This means the SERA operator never touches LiteLLM's API directly. Adding a new LLM provider is a SERA settings action, not a LiteLLM action. This abstraction also means a future SERA version could swap LiteLLM for a different router without changing the operator-facing API.
+All changes are hot-reloadable — no restart required. The SERA operator never touches `providers.json` directly; the API and dashboard UI are the primary interfaces.
 
-Routing strategy changes and fallback reconfiguration do require a LiteLLM container restart. These are infrequent, and a rolling restart of the `litellm` service is acceptable for a homelab. For future production deployments: these settings are essentially infrastructure config, not runtime config, and should be managed as such (GitOps, not live API).
+### Why not a sidecar?
 
-### Stability note
-
-Use `main-stable` tag (not `latest`). LiteLLM publishes a vetted stable build weekly after 3 days of production validation. The `latest` tag can include breaking changes. At high throughput (>100K req/day), LiteLLM's database logging layer degrades — but this is not a concern for homelab or early open source deployments.
+The LiteLLM sidecar was removed in favour of in-process routing for several reasons:
+- **Simpler deployment:** One fewer container to manage, no inter-container auth (master key)
+- **Lower latency:** No HTTP hop between sera-core and the router
+- **Better control:** pi-mono provider functions are called directly, giving full control over streaming, error handling, and token counting
+- **Smaller footprint:** LiteLLM's Python runtime and dependencies added ~500MB to the stack
 
 ---
 
@@ -643,11 +585,45 @@ Benefits:
 
 Network access is a first-class capability dimension, not a tier property. The resolved `network.outbound` capability determines the Docker network configuration at spawn time:
 
-- `allow: []` or not set → `--network none`
-- `allow: [specific hosts]` → custom bridge with iptables egress rules
-- `allow: ["*"]` → full outbound (only reachable if SandboxBoundary permits)
+- `allow: []` or not set → `--network none` (complete isolation)
+- `allow: [specific hosts]` or `allow: ["*"]` → `--network agent_net` with egress proxy enforcement
 
-Implementation: `SandboxManager` translates the resolved network capability into the appropriate Docker network configuration.
+All agents with any outbound access are connected to `agent_net` and routed through the [Egress Proxy](#egress-proxy). There is no direct `bridge` mode — even unrestricted agents (`allow: ["*"]`) go through the proxy so that all egress is audited and metered. Domain-level filtering is enforced at the proxy via SNI-based HTTPS inspection, not via iptables rules on the container.
+
+Implementation: `SandboxManager` translates the resolved network capability into Docker network mode and injects `HTTP_PROXY`/`HTTPS_PROXY` environment variables. `EgressAclManager` generates per-agent Squid ACL files from the resolved allowlist/denylist.
+
+### Egress Proxy
+
+A shared Squid forward proxy container (`sera-egress-proxy`) on `agent_net` acts as the single exit point for all agent outbound traffic. This centralises domain filtering, rate limiting, audit logging, and egress metering.
+
+```
+Agent Container                    sera-egress-proxy                Internet
+┌─────────────┐                   ┌──────────────────┐
+│ HTTP_PROXY ──┼──── agent_net ──►│ Squid            │
+│ HTTPS_PROXY  │                  │  SNI peek/splice │───► allowed
+│              │                  │  ACL per src IP  │
+└─────────────┘                   │  delay_pools     │──✕ denied
+                                  └──────────────────┘
+                                    ▲             │
+                              ACL files      access.log
+                              (from Core)    (to Core)
+```
+
+**How it works:**
+
+1. **SNI-based filtering (no TLS MITM):** Squid peeks at the TLS ClientHello SNI field to determine the destination domain, then splices the connection through without decryption. No CA cert is required. Plain HTTP is filtered via standard `http_access` ACLs.
+
+2. **Per-agent ACLs:** When `SandboxManager` spawns a container, `EgressAclManager` writes a Squid ACL file mapping the container's IP to its resolved `network-allowlist`/`network-denylist`. Squid is hot-reloaded (`squid -k reconfigure`) without dropping existing connections. On teardown, the ACL is removed and Squid is reconfigured.
+
+3. **Audit trail:** `EgressLogWatcher` in sera-core tails the Squid JSON access log, maps source IPs back to agent instance IDs, and writes `network.egress` events to `AuditService`. Denied requests are logged as `network.egress.denied`.
+
+4. **Egress metering:** Per-agent bytes and request counts are tracked in the `egress_usage` table alongside token usage, using the same dual-table pattern as `MeteringService`.
+
+5. **Rate limiting:** The `network.maxBandwidthKbps` capability dimension maps to Squid `delay_pools` (class 3, per-source-IP). Configured per agent via the standard capability resolution pipeline.
+
+6. **`web-fetch` skill:** Runs inside sera-core (not an agent container). sera-core gets a blanket allow in the proxy ACL. The skill performs its own allowlist check against the requesting agent's resolved capabilities before making the request.
+
+See `docs/epics/20-egress-proxy.md` for the full implementation specification.
 
 ---
 
@@ -974,7 +950,8 @@ For each capability dimension:
 | Dimension | Controls |
 |---|---|
 | `filesystem` | read / write / delete flags, path scope globs |
-| `network.outbound` | allow list (hosts/CIDRs/`*`), deny list — both support `$ref` |
+| `network.outbound` | allow list (hosts/CIDRs/`*`), deny list — both support `$ref`. Enforced at egress proxy via SNI filtering |
+| `network.maxBandwidthKbps` | per-agent bandwidth limit — maps to Squid `delay_pools` at egress proxy |
 | `network.inbound` | bool |
 | `exec.shell` | bool |
 | `exec.commands.allow` | glob patterns — supports `$ref` to NamedLists |
@@ -1045,6 +1022,16 @@ capabilities:
     providers:
       read: true
       manage: false               # operator boundary only — never agent-grantable
+    secrets:
+      read: true                  # metadata only — never values
+      requestEntry: true          # trigger out-of-band entry dialog; agent never sees the value
+    channels:
+      read: true
+      create: true
+      modify:
+        allow: [own]              # channels this agent created
+      delete:
+        allow: [own]
 ```
 
 **Scope inheritance for subagents:** An ephemeral subagent cannot be granted `seraManagement` permissions that exceed its parent's effective `seraManagement` grants. A parent with `modify: allow: [own-circle]` cannot spawn a subagent with `modify: allow: [global]`. This is enforced at spawn time.
@@ -1137,6 +1124,56 @@ Grants are fully audited — every grant and denial recorded in the audit trail 
 - `DELETE /api/agents/:id/grants/:grantId` — revoke a grant (persistent grants: sets `revoked_at`)
 - `GET /api/permission-requests` — list pending permission requests awaiting operator decision
 - `POST /api/permission-requests/:id/decision` — submit grant/deny decision programmatically
+
+### Out-of-band secret entry
+
+Secret values must **never** flow through agent context (LLM message history, tool call arguments, tool call results). When Sera or another agent needs a secret to be stored — for example, to set up a Discord channel — it uses the `secrets.requestEntry` MCP tool, which triggers an **out-of-band entry dialog** that bypasses the agent entirely.
+
+```
+Agent (Sera)                     sera-core                     Operator
+     │                                │                             │
+     │  secrets.requestEntry(          │                             │
+     │    name: "discord-ops-token",   │                             │
+     │    description: "Bot token for  │                             │
+     │      the ops Discord bot",      │                             │
+     │    allowedAgents: ["sera"])      │                             │
+     │ ───────────────────────────────►│                             │
+     │                                │  Publishes event to          │
+     │                                │  system.secret-entry-requests│
+     │                                │ ───────────────────────────►│
+     │                                │                             │
+     │                                │        UI shows a secure    │
+     │                                │        input dialog:        │
+     │                                │        ┌──────────────────┐ │
+     │                                │        │ Sera requests:   │ │
+     │                                │        │ "discord-ops-    │ │
+     │                                │        │  token"          │ │
+     │                                │        │ [••••••••••••]   │ │
+     │                                │        │ [Store] [Cancel] │ │
+     │                                │        └──────────────────┘ │
+     │                                │                             │
+     │                                │◄──── POST /api/secrets      │
+     │                                │      (direct, not via agent)│
+     │                                │                             │
+     │  Tool result:                  │                             │
+     │  { stored: true,               │                             │
+     │    secretName: "discord-ops-   │                             │
+     │    token" }                    │                             │
+     │◄───────────────────────────────│                             │
+     │                                │                             │
+     │  (Sera knows the secret EXISTS │                             │
+     │   but never sees its value)    │                             │
+```
+
+**Key invariants:**
+- The tool call arguments contain only the secret **name**, description, and access list — never the value
+- The tool result confirms success/failure — never contains the value
+- The secret value travels operator → sera-core REST API → `SecretsProvider` encrypted storage. It never enters any Centrifugo channel, agent message history, or LLM context.
+- The UI dialog is rendered client-side and POSTs directly to the REST API — the agent's chat/thought stream is not involved
+- In CLI/TUI mode: the equivalent is a secure prompt (`readline` with hidden input) that POSTs to the same endpoint
+- In Discord/Slack: the bot posts a message with a link to the SERA web UI secret entry page (secrets cannot be entered via chat platforms — too easy to leak in channel history)
+
+**After storage**, Sera can reference the secret by name in channel configs (`botTokenSecret: "discord-ops-token"`) without ever handling the actual token.
 
 ---
 
@@ -1634,6 +1671,46 @@ IntercomMessage { source: string; target: string; payload: unknown; correlationI
 
 ---
 
+## Integration Channels
+
+SERA uses a unified **Channel** model for all ingress and egress communication. Every message entering or leaving the system — Discord chat, schedule fires, agent-to-agent DMs, REST API calls, webhooks — flows through the same interface with the same routing model.
+
+```
+                    ┌──────────────────────────┐
+  Discord ──────┐   │      ChannelManager       │   ┌──── Discord embed
+  Slack ────────┤   │                            │   ├──── Slack message
+  Webhook ──────┤──►│  IngressRouter             │   ├──── Email
+  Schedule ─────┤   │    → resolve binding mode  │   ├──── Webhook POST
+  Intercom ─────┤   │    → dispatch to agent or  │   │
+  REST API ─────┘   │      circle chat/task      │   │
+                    │                            │   │
+                    │  EgressRouter              │──►│
+                    │    → evaluate routing rules │   │
+                    │    → channel.send()         │   │
+                    └──────────────────────────┘
+```
+
+### Binding modes
+
+Every channel has a **binding mode** that determines where inbound messages are routed:
+
+| Mode | Routing | Example |
+|------|---------|---------|
+| `agent` | All messages → specific agent | Discord DM bot for `developer-prime` |
+| `circle` | All messages → circle (responder determined by circle config) | `#engineering` Discord channel → engineering circle |
+| `notification` | Egress only — inbound ignored | Ops alert channel, email |
+| `dynamic` | Target resolved per-message from payload | Built-in API and webhook channels |
+
+### Built-in vs external channels
+
+**Built-in channels** are thin wrappers around existing services — they don't replace `IntercomService` or `ScheduleService`, they expose them through the channel interface so routing rules and audit trail work uniformly. They are registered at startup and not stored in the DB.
+
+**External channels** (Discord, Slack, email, webhook-outbound) are operator-configured, stored in the `notification_channels` table, and can have multiple instances of the same type (e.g. three Discord bots with different tokens and bindings).
+
+See `docs/epics/18-integration-channels.md` for the full specification including the `Channel` TypeScript interface, `IngressEvent`/`ChannelEvent` types, and DB schema.
+
+---
+
 ## Extensibility Model
 
 ### Adding new agents
@@ -1723,7 +1800,7 @@ These are definitive choices. Where alternatives were considered, the rationale 
 | Docker API | **dockerode** | latest | Only serious Node.js Docker API client. |
 | Git operations | **simple-git** | latest | `KnowledgeGitService` and `WorktreeManager` both use this. |
 | MCP protocol | **@modelcontextprotocol/sdk** | latest | Anthropic's official SDK. Used for the sera-core MCP server (Story 7.7) and as the base for `@sera/mcp-sdk`. |
-| LLM routing | **LiteLLM** | `main-stable` | Dumb routing socket only — SERA owns governance. `main-stable` tag published weekly after 3-day validation. |
+| LLM routing | **@mariozechner/pi-ai** (pi-mono) | latest | In-process provider routing via `LlmRouter` → `ProviderRegistry`. No external sidecar. |
 | Encryption | Node.js `crypto` (built-in) | — | AES-256-GCM for secrets. No external library needed. |
 | Password hashing | **argon2** | latest | For API key hashing. More secure than bcrypt for new implementations. |
 
@@ -1745,7 +1822,7 @@ These are definitive choices. Where alternatives were considered, the rationale 
 | Database | `pgvector/pgvector:pg16` | PostgreSQL 16 + pgvector extension |
 | Vector store | `qdrant/qdrant:latest` (pin version) | Primary semantic search. pgvector dropped — Qdrant covers all vector use cases with better namespace isolation. |
 | Real-time | `centrifugo/centrifugo:latest` (pin version) | Pub/sub, history, presence. No Redis needed. |
-| LLM gateway | `ghcr.io/berriai/litellm:main-stable` | Dumb routing socket. |
+| LLM routing | In-process (`@mariozechner/pi-ai`) | No sidecar — `LlmRouter` calls provider APIs directly from sera-core. |
 | Local LLM | **Ollama** | `http://host.docker.internal:11434` — serves both LLM and embedding models. |
 | Embeddings | **Ollama** (`nomic-embed-text` or `mxbai-embed-large`) | Replaces in-process `@xenova/transformers`. Uses infrastructure already present. No memory overhead in sera-core process. |
 | Identity provider | **Authentik** (opt-in overlay) | `ghcr.io/goauthentik/server:latest` (pin version). Added via `docker-compose.auth.yaml`. Not in base stack. |
@@ -1754,22 +1831,22 @@ These are definitive choices. Where alternatives were considered, the rationale 
 
 | Concern | Choice |
 |---|---|
-| Runtime | Node.js 22 LTS (same as sera-core — one runtime to maintain) |
-| Base image | `node:22-alpine` — minimal, non-root user |
-| Build | Multi-stage: TypeScript compiled in build stage; only `dist/` + `node_modules` in runtime stage |
-| Target size | < 300 MB |
+| Runtime | Bun (`oven/bun:1-slim`) — runs TypeScript directly, no build step |
+| Base image | `oven/bun:1-slim` — minimal, non-root user |
+| Build | No build needed — bun executes `.ts` files natively |
+| Target size | < 200 MB |
 
 ### Library decisions log
 
 | Decision | Choice | Rejected | Reason |
 |---|---|---|---|
-| HTTP framework | Fastify v5 | Express 5 | Express 5 in RC for 3+ years; Fastify plugin system maps to SERA's module structure |
+| HTTP framework | **Express 5** (current) | Fastify v5 (planned) | Express 5 is live; Fastify migration planned for plugin architecture benefits |
 | Embeddings | Ollama models | @xenova/transformers | Ollama already in stack; removes in-process WASM model loading from sera-core memory |
 | Vector store | Qdrant only | Qdrant + pgvector | Two vector stores for one use case; Qdrant covers all cases with better namespace support |
 | Job queue | pg-boss | BullMQ (Redis) | No new infrastructure; PostgreSQL already present |
 | JWT | jose | jsonwebtoken | jsonwebtoken CVE history; jose actively maintained, ES module native |
 | API key hashing | argon2 | bcrypt | Better security characteristics for new implementations |
-| Bun | Rejected (revisit later) | Node.js 22 | Native addon risk (dockerode) outweighs startup performance gains at this stage |
+| Bun | **Adopted for agent-runtime** | Node.js 22 | Agent worker uses bun for faster cold start and smaller images. sera-core remains Node.js 20. |
 
 ---
 
@@ -1812,7 +1889,7 @@ Community extensions need a stable surface to build against. sera-core should ex
 
 - **Custom skill handlers** — register a skill with an ID, description, and handler
 - **Custom storage providers** — replace or augment the memory/workspace layer
-- **Custom LLM providers** — register a provider that isn't LiteLLM-compatible
+- **Custom LLM providers** — register a provider beyond what pi-mono supports
 - **Custom audit sinks** — route audit events to external systems (Splunk, DataDog, etc.)
 - **Custom auth providers** — replace JWT with OAuth, mTLS, etc. for multi-tenant deployments
 
@@ -1885,7 +1962,7 @@ The open source ambition makes it tempting to build a platform for everything. A
 - **A hosted cloud version** — this is Docker-native by design; someone else can build a hosting layer on top
 - **An agent IDE** — the YAML manifest is the definition; editors are plugins, not core
 - **A pre-built agent marketplace with code** — skills and agent templates yes, pre-built running agents no (security, trust, maintainability)
-- **LiteLLM replacement** — SERA's LLM governance layer is a policy/metering layer; routing is LiteLLM's job
+- **Building a custom LLM routing layer** — pi-mono handles provider routing; SERA owns governance only
 
 #### 7. Positioning summary
 
@@ -1900,7 +1977,7 @@ The homelab origin is a feature, not a limitation. It means SERA runs on hardwar
 | Decision | Choice | Rationale |
 |---|---|---|
 | LLM routing | Through Core proxy | Metering, key vaulting, circuit breaking, auditability |
-| Provider aggregation | LiteLLM (routing only) | Provider-agnostic, dumb socket — SERA owns governance |
+| Provider aggregation | In-process via pi-mono | No sidecar; `LlmRouter` calls providers directly — simpler, lower latency |
 | Agent isolation | Docker containers | True OS-level isolation, not process or WASM sandboxing |
 | Agent model | Template + Instance (two-tier) | Reusable blueprints separate from named deployments; instances mutable post-creation |
 | Lifecycle | Persistent vs Ephemeral (first-class) | Not inferred from tier; ephemeral agents cannot create persistent agents (hard guard) |

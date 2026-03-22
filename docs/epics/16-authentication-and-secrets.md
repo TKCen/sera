@@ -215,8 +215,9 @@ Two foundational concerns that must be right from the start: who the human opera
 - [ ] `agent-env` secrets that were previously `per-call` can be changed — takes effect on next agent restart
 
 **Technical Notes:**
-- `SECRETS_MASTER_KEY` should be a 32-byte (256-bit) random hex or base64 string
-- Key derivation: if the provided key is a passphrase rather than raw bytes, derive via PBKDF2-SHA256 with a stored salt
+- `SECRETS_MASTER_KEY` should be a 32-byte (256-bit) random hex or base64 string (e.g. `openssl rand -hex 32`)
+- Key derivation: if the provided key is a passphrase rather than raw bytes, derive via PBKDF2-SHA256 with 600,000 iterations (OWASP 2023 recommendation) and a random 16-byte salt. Salt stored in the `secrets` table as a `salt` column (hex-encoded), generated once per secret store init. All secrets share the same derived key — the salt is instance-wide, not per-secret.
+- Node.js built-in `crypto.pbkdf2` handles the derivation — no external library needed
 - Recovery: if master key is lost, all secrets must be re-entered. Document this prominently. Recommend operators store the master key in a password manager or physical safe.
 
 ---
@@ -270,3 +271,46 @@ Two foundational concerns that must be right from the start: who the human opera
   - `GET /api/agents/:id` includes `pendingSecretRotations: [secretName]` if the agent has stale `agent-env` secrets
 - [ ] `POST /api/agents/:id/restart?applySecretRotations=true` restarts the agent with current secret values
 - [ ] Audit record on rotation: `{ action: 'secret.rotated', secretName, affectedAgents: N, requiresRestart: N }`
+
+---
+
+### Story 16.12: Out-of-band secret entry (agent-requested, operator-entered)
+
+**As** Sera (or any agent with `seraManagement.secrets.requestEntry`)
+**I want** to ask the operator to enter a secret value through a secure UI dialog
+**So that** I can set up integrations that require credentials without the secret value ever entering my LLM context
+
+**Acceptance Criteria:**
+
+**MCP tool:**
+- [ ] `secrets.requestEntry(name, description, allowedAgents?, tags?)` — sera-core MCP server tool
+- [ ] Tool arguments contain **only metadata** — name, description, access list. Never a value field.
+- [ ] Tool **blocks** (with timeout, default 5 min) until the operator stores the secret or cancels
+- [ ] Tool result: `{ stored: true, secretName }` on success; `{ stored: false, reason: 'cancelled' | 'timeout' }` on failure
+- [ ] The tool result **never** contains the secret value
+
+**UI dialog (web):**
+- [ ] sera-core publishes `system.secret-entry-requests` Centrifugo event: `{ requestId, secretName, description, requestedBy: agentName, requestedAt }`
+- [ ] Web UI renders a modal dialog over the chat: agent name, description, a password-type `<input>`, and Store/Cancel buttons
+- [ ] The dialog `POST`s directly to `POST /api/secrets` from the browser — the value travels client → sera-core only, never through Centrifugo or agent message history
+- [ ] On store: sera-core resolves the pending `secrets.requestEntry` tool call with `{ stored: true }`
+- [ ] On cancel or timeout: tool call resolved with `{ stored: false }`
+
+**CLI/TUI dialog:**
+- [ ] CLI prompts with a secure hidden input (`readline` with `terminal: false` or equivalent)
+- [ ] Same direct `POST /api/secrets` flow — value never in agent context
+
+**External channel fallback (Discord/Slack):**
+- [ ] Agent posts a message: "I need a secret stored. Please enter it in the SERA UI: [link to /settings/secrets?request={requestId}]"
+- [ ] Secrets are **never** entered via chat platform messages — too easy to leak in channel history
+- [ ] Link opens the SERA web UI secret entry page pre-filled with the request metadata
+
+**Security invariants:**
+- [ ] Secret value never appears in: LLM message history, tool call arguments, tool call results, Centrifugo events, audit trail payloads, agent logs, or `resolved_capabilities`
+- [ ] Audit record: `{ action: 'secret.created', secretName, requestedBy: agentName, enteredBy: operatorSub }` — no value
+- [ ] The requesting agent can verify the secret exists via `secrets.list` (metadata only) but cannot read its value
+
+**Technical Notes:**
+- This is architecturally similar to `PermissionRequestService` — agent requests, operator decides, result returned to agent without sensitive data in the loop
+- The `secrets.requestEntry` tool is the **only** way an agent can trigger secret creation. Agents have no `secrets.create` tool — they cannot supply a value.
+- The operator can also create secrets proactively via the Settings UI or `POST /api/secrets` without any agent request — the entry dialog is just the agent-initiated path

@@ -1,6 +1,6 @@
 # SERA Implementation Order
 
-This document defines the recommended implementation sequence for the 18 epics. The phases reflect both technical dependency (you cannot spawn agents without infrastructure) and risk sequencing (foundational decisions should be validated before building on top of them).
+This document defines the recommended implementation sequence for the 20 epics. The phases reflect both technical dependency (you cannot spawn agents without infrastructure) and risk sequencing (foundational decisions should be validated before building on top of them).
 
 Each phase produces a meaningful, runnable milestone — not just a collection of stories.
 
@@ -39,10 +39,11 @@ Each phase produces a meaningful, runnable milestone — not just a collection o
 | **11 Scheduling & Audit** | 11.1–11.5 | Schedule engine + audit trail. Export (11.6) is convenience. |
 | **03 Docker Sandbox** | 3.9, 3.10, 3.11, 3.12 | Permission requests, dynamic mounts, recursion guard, disk quotas |
 | **05 Agent Runtime** | 5.8, 5.9 | Task queue + task result storage |
-| **13 sera-web Agent UX** | All (13.1–13.6) | Agent list/detail/create, chat, thought visualisation, memory graph |
+| **13 sera-web Agent UX** | 13.1–13.6 (Phase 2), 13.7–13.12 (Phase 3) | Core: agent list/detail/create, chat, thoughts, memory graph. Phase 3: permission approval UI, grants viewer, circle mgmt, secret entry modal, delegation UI, Centrifugo indicator |
 | **14 sera-web Observability** | 14.1–14.4 | Token usage, budget UI, audit log viewer, provider management |
+| **20 Egress Proxy** | 20.1–20.7 | Squid forward proxy on agent_net, per-agent ACLs, audit integration, egress metering. Depends on 03 (3.1–3.2) and 11 (11.4). UI story 20.8 after Epic 14. |
 
-**Phase 2 milestone:** Multiple configured agents with skills and MCP tools, talking to each other through circles, with memory that persists across sessions, scheduled tasks running overnight, and a complete operator UI.
+**Phase 2 milestone:** Multiple configured agents with skills and MCP tools, talking to each other through circles, with memory that persists across sessions, scheduled tasks running overnight, network egress audited and metered through the proxy, and a complete operator UI.
 
 ---
 
@@ -52,11 +53,12 @@ Each phase produces a meaningful, runnable milestone — not just a collection o
 
 | Epic | Stories to implement | Notes |
 |---|---|---|
-| **16 Auth & Secrets** | 16.1, 16.2, 16.5, 16.6, 16.7, 16.9–16.11 | Full OIDC, Authentik, web UI auth flow, CLI device flow, secrets interface, injection, rotation |
+| **16 Auth & Secrets** | 16.1, 16.2, 16.5–16.12 | Full OIDC, Authentik, web UI auth flow, CLI device flow, secrets interface, injection, rotation, out-of-band secret entry (16.12) |
+| **13 sera-web Agent UX** | 13.7–13.12 | Permission approval UI, grants viewer, circle mgmt, secret entry modal, delegation UI, Centrifugo indicator |
 | **17 Agent Identity & Delegation** | All (17.1–17.9) | ActingContext, service identities, operator/agent delegation, credential resolver, audit chain |
 | **07 MCP Tool Registry** | 7.7 | sera-core as MCP server — Sera can now orchestrate the full instance |
 | **10 Circles & Coordination** | All (10.1–10.6) | Circle management, constitutions, orchestration patterns, party mode |
-| **18 Integration Channels** | All (18.1–18.8) | Discord/Slack/email/webhook, actionable HitL, alert rules |
+| **18 Integration Channels** | All (18.1–18.10) | Unified channel model (ingress+egress), Discord/Slack/email/webhook adapters, actionable HitL, alert rules, topology UI (18.9), activity dashboard (18.10) |
 | **15 Plugin SDK** | All (15.1–15.8) | Plugin interface, `@sera/mcp-sdk`, contributor docs, `sera` CLI |
 | **14 sera-web Observability** | 14.5–14.6 | System health, schedule management UI |
 | **09 Real-Time Messaging** | 9.6, 9.8 | Federation stub, webhooks |

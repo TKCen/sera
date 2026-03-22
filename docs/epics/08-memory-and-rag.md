@@ -19,7 +19,7 @@ Agents need persistent, semantically searchable memory to maintain context acros
 
 - Epic 01 (Infrastructure) — PostgreSQL + pgvector, Qdrant running
 - Epic 02 (Agent Manifest) — `memory` block in manifest
-- Epic 04 (LLM Proxy) — context assembly runs before forwarding to LiteLLM
+- Epic 04 (LLM Proxy) — context assembly runs before forwarding to `LlmRouter`
 
 ---
 
@@ -140,6 +140,22 @@ Agents need persistent, semantically searchable memory to maintain context acros
 
 ---
 
+### Story 8.7: Memory compaction and archival
+
+**As an** operator
+**I want** old or low-importance memory blocks archived automatically
+**So that** the active memory collection stays focused and retrieval quality doesn't degrade over time
+
+**Acceptance Criteria:**
+- [ ] Background job runs daily: identifies blocks older than `MEMORY_ARCHIVE_AFTER_DAYS` (default: 30) with `importance <= 2`
+- [ ] Archived blocks: moved to `memory/{agentId}/archive/` directory, removed from Qdrant index
+- [ ] Archived blocks still readable via `GET /api/memory/:agentId/blocks/:id` but not returned in semantic search
+- [ ] `POST /api/memory/:agentId/compact` triggers manual compaction
+- [ ] Compaction summary logged: blocks archived, vectors removed, space reclaimed
+- [ ] Compaction never deletes blocks — only moves to archive (human can recover)
+
+---
+
 ### Story 8.8: Git-backed circle knowledge service
 
 **As** sera-core
@@ -162,16 +178,23 @@ Agents need persistent, semantically searchable memory to maintain context acros
 
 ---
 
-### Story 8.7: Memory compaction and archival
+## DB Schema
 
-**As an** operator
-**I want** old or low-importance memory blocks archived automatically
-**So that** the active memory collection stays focused and retrieval quality doesn't degrade over time
-
-**Acceptance Criteria:**
-- [ ] Background job runs daily: identifies blocks older than `MEMORY_ARCHIVE_AFTER_DAYS` (default: 30) with `importance <= 2`
-- [ ] Archived blocks: moved to `memory/{agentId}/archive/` directory, removed from Qdrant index
-- [ ] Archived blocks still readable via `GET /api/memory/:agentId/blocks/:id` but not returned in semantic search
-- [ ] `POST /api/memory/:agentId/compact` triggers manual compaction
-- [ ] Compaction summary logged: blocks archived, vectors removed, space reclaimed
-- [ ] Compaction never deletes blocks — only moves to archive (human can recover)
+```sql
+-- Story 8.8: Knowledge merge requests for circle git repos
+CREATE TABLE knowledge_merge_requests (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  circle_id           TEXT NOT NULL,
+  agent_instance_id   TEXT NOT NULL,
+  agent_name          TEXT NOT NULL,
+  branch              TEXT NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'pending',
+  approved_by         TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  diff_summary        TEXT,
+  conflict_details    JSONB
+);
+CREATE INDEX kmr_circle_status_idx ON knowledge_merge_requests (circle_id, status);
+CREATE INDEX kmr_agent_idx         ON knowledge_merge_requests (agent_instance_id);
+```

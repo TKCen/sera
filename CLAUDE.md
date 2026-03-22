@@ -14,8 +14,7 @@ Load selectively based on your task — do not load everything upfront:
 | `docs/IMPLEMENTATION-ORDER.md` | Starting an epic — epic dependencies and build sequence |
 | `docs/TESTING.md` | Writing tests — strategy, patterns, coverage requirements |
 | `docs/epics/{n}-{name}.md` | Implementing stories — acceptance criteria and DB schema for that epic |
-| `docs/openapi.yaml` | Adding or modifying API endpoints |
-| `docs/API_SCHEMAS.md` | Working with request/response shapes |
+| `docs/openapi.yaml` | Adding or modifying API endpoints — path-level spec for all ~190 endpoints |
 | `docs/AGENT-WORKFLOW.md` | Multi-agent coordination — agent roles, issue flow, validation loops |
 
 ## Environment

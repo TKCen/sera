@@ -2,13 +2,13 @@
 
 ## Overview
 
-Establish the complete Docker Compose stack that all other epics build on. Every service — sera-core, sera-web, Centrifugo, PostgreSQL, Qdrant, and LiteLLM — must be wired together with correct networking, health checks, environment management, and a friction-free local development experience. This is the foundation everything else runs on.
+Establish the complete Docker Compose stack that all other epics build on. Every service — sera-core, sera-web, Centrifugo, PostgreSQL, and Qdrant — must be wired together with correct networking, health checks, environment management, and a friction-free local development experience. This is the foundation everything else runs on.
 
 ## Context
 
-- See `docs/ARCHITECTURE.md` → System Overview, Provider Gateway: LiteLLM
+- See `docs/ARCHITECTURE.md` → System Overview, LLM Routing
 - Two Docker networks: `sera_net` (internal services) and `agent_net` (agent containers + MCP servers)
-- LiteLLM is a dumb routing socket; sera-core holds all governance
+- LLM routing is in-process via `LlmRouter` → `ProviderRegistry` → `@mariozechner/pi-ai`; no external LLM sidecar
 - Local-first defaults: LM Studio and Ollama should work out of the box without any cloud API keys
 
 ## Dependencies
@@ -26,7 +26,7 @@ None. This epic has no upstream dependencies.
 **So that** I can have a fully running system without manual configuration steps
 
 **Acceptance Criteria:**
-- [ ] `docker-compose.yaml` defines: `sera-core`, `sera-web`, `centrifugo`, `sera-db` (PostgreSQL + pgvector), `qdrant`, `litellm`
+- [ ] `docker-compose.yaml` defines: `sera-core`, `sera-web`, `centrifugo`, `sera-db` (PostgreSQL + pgvector), `qdrant`
 - [ ] All services connect to `sera_net` bridge network
 - [ ] `agent_net` is declared as an external network (created separately, used by spawned agent containers)
 - [ ] All services have `restart: unless-stopped`
@@ -42,46 +42,24 @@ None. This epic has no upstream dependencies.
 
 ---
 
-### Story 1.2: LiteLLM provider gateway container
+### Story 1.2: LLM provider configuration (local-first defaults)
 
 **As an** operator
-**I want** LiteLLM running as a managed service in the stack
-**So that** sera-core can route LLM calls to any provider without managing API keys or provider-specific SDKs
-
-**Acceptance Criteria:**
-- [ ] `litellm` service uses `ghcr.io/berriai/litellm:main-stable` (not `latest`)
-- [ ] Configuration loaded from `./litellm/config.yaml` volume mount
-- [ ] `LITELLM_MASTER_KEY` environment variable set from `.env` — this is the only key sera-core uses
-- [ ] Upstream provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) passed as optional env vars — services start without them
-- [ ] LiteLLM shares `sera-db` PostgreSQL instance (separate database `litellm_db`)
-- [ ] Health check on `GET /health`
-- [ ] sera-core `LLM_BASE_URL` points to `http://litellm:4000/v1`
-
-**Technical Notes:**
-- Use `main-stable` tag — published weekly after 3-day production validation
-- LiteLLM's own governance features (virtual keys, team budgets) are intentionally not used; sera-core owns governance
-- LiteLLM should be treated as an internal implementation detail; operators interact with providers via SERA's API
-
----
-
-### Story 1.3: LiteLLM base configuration (local-first defaults)
-
-**As an** operator
-**I want** LiteLLM pre-configured for local LLM providers (LM Studio, Ollama)
+**I want** LLM providers pre-configured for local inference (LM Studio, Ollama) with optional cloud fallback
 **So that** SERA works out of the box on a homelab without requiring cloud API keys
 
 **Acceptance Criteria:**
-- [ ] `litellm/config.yaml` committed to repository with working defaults
-- [ ] Default model list includes: LM Studio (`http://host.docker.internal:1234/v1`), Ollama (`http://host.docker.internal:11434`)
-- [ ] Cloud providers (OpenAI, Anthropic) defined but gated on env var presence — no error if key is absent
-- [ ] `routing_strategy: latency-based-routing` set as default
-- [ ] Fallback chain defined: local → cloud if local is unavailable
-- [ ] `num_retries: 2`, `timeout: 120` set globally
-- [ ] `drop_params: true` set to handle model-specific param differences silently
+- [ ] `core/config/providers.json` committed to repository with working defaults
+- [ ] Default provider list includes: LM Studio (`http://host.docker.internal:1234/v1`), Ollama (`http://host.docker.internal:11434`)
+- [ ] Cloud providers (OpenAI, Anthropic, Google) auto-detected by model name prefix (`gpt-*`, `claude-*`, `gemini-*`) and read standard env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
+- [ ] System starts cleanly without any cloud API keys — local providers used by default
+- [ ] `LLM_BASE_URL` + `LLM_MODEL` env vars bootstrap a single default provider without a config file
+- [ ] Provider health checked via `LlmRouter` — unhealthy providers skipped during routing
 
 **Technical Notes:**
-- Cloud provider entries should use `os.environ/OPENAI_API_KEY` syntax so LiteLLM skips them when the var is unset
-- The config file is the source of truth for routing strategy; model additions/removals happen via API at runtime
+- LLM routing is in-process via `LlmRouter` → `ProviderRegistry` → `@mariozechner/pi-ai` (pi-mono). No external LLM sidecar (LiteLLM was removed).
+- Provider config is a JSON file, not YAML — matches the pi-mono API
+- Cloud providers need no entry in `providers.json` — they are auto-detected by model name prefix
 
 ---
 
@@ -100,7 +78,7 @@ None. This epic has no upstream dependencies.
 - [ ] `README.md` contains a "Getting Started" section referencing `.env.example`
 
 **Technical Notes:**
-- Key variables: `LITELLM_MASTER_KEY`, `JWT_SECRET`, `DATABASE_URL`, `OPENAI_API_KEY` (optional), `ANTHROPIC_API_KEY` (optional), `LM_STUDIO_URL` (optional override), `NEXT_PUBLIC_CENTRIFUGO_URL`
+- Key variables: `JWT_SECRET`, `DATABASE_URL`, `OPENAI_API_KEY` (optional), `ANTHROPIC_API_KEY` (optional), `LLM_BASE_URL` (optional local provider override), `LLM_MODEL` (optional default model), `VITE_CENTRIFUGO_URL`
 - Default DB credentials in `.env.example` should be obviously insecure placeholders
 
 ---
@@ -130,8 +108,8 @@ None. This epic has no upstream dependencies.
 **Acceptance Criteria:**
 - [ ] `docker-compose.dev.yaml` override file that mounts source directories and runs services in watch/hot-reload mode
 - [ ] sera-core runs with `ts-node --watch` (or equivalent) in dev mode — code changes restart the process without image rebuild
-- [ ] sera-web runs with Vite dev server (or Next.js dev) with HMR
-- [ ] Infra services (DB, Qdrant, Centrifugo, LiteLLM) run from pre-built images — only application code is mounted
+- [ ] sera-web runs with Vite dev server with HMR
+- [ ] Infra services (DB, Qdrant, Centrifugo) run from pre-built images — only application code is mounted
 - [ ] `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up` documented in README
 - [ ] `agent_net` creation documented — `docker network create agent_net` as a prerequisite step
 

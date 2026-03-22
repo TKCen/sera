@@ -35,7 +35,7 @@ SERA's open source ambition requires a stable, well-documented surface for commu
   - `AuditSinkPlugin`: `{ id, onEvent: (event: AuditEvent) => Promise<void> }` (receives audit events)
   - `AuthPlugin`: `{ id, verify: (token: string) => Promise<AgentIdentity | null> }` (replaces JWT verification)
 - [ ] `PluginContext` type: `{ logger, config, agentRegistry, circleRegistry }` — what plugins receive
-- [ ] Plugins do NOT receive: Docker socket, database connection, LiteLLM client — these are internal
+- [ ] Plugins do NOT receive: Docker socket, database connection, LLM router internals — these are internal
 - [ ] Plugin interface versioned with `@sera/sdk` package version
 
 **Technical Notes:**
@@ -184,7 +184,7 @@ SERA's open source ambition requires a stable, well-documented surface for commu
 
 | Epic | Area | Priority | Key Deliverable |
 |---|---|---|---|
-| 01 | Infrastructure | P0 | Running stack with LiteLLM |
+| 01 | Infrastructure | P0 | Running stack with in-process LLM routing |
 | 02 | Core | P0 | AGENT.yaml v1 spec + loader |
 | 03 | Core | P0 | Docker sandbox + tiers |
 | 04 | Core | P0 | LLM proxy + governance |

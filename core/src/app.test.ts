@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import request from 'supertest';
 
 vi.mock('./services/vector.service.js', () => ({
@@ -17,6 +17,11 @@ vi.hoisted(() => {
 import { app } from './index.js';
 
 describe('SERA Core API', () => {
+  // Allow pending async operations (circle loading, etc.) to settle
+  // before vitest tears down the worker, preventing EnvironmentTeardownError.
+  afterAll(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
   it('GET /api/health should return 200 and status ok', async () => {
     const response = await request(app).get('/api/health');
 

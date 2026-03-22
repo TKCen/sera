@@ -27,6 +27,7 @@ import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { sendChatStream } from '@/lib/api/chat';
 import { request } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,8 +140,8 @@ function CodeBlock({ children, className }: { children?: React.ReactNode; classN
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 
-export default function ChatPage() {
-  const { data: agents, isLoading: agentsLoading } = useAgents();
+function ChatPageContent() {
+  const { data: agents, isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useAgents();
   const { client: centrifugoClient } = useCentrifugoContext();
 
   const [selectedAgent, setSelectedAgent] = useState<string>('');
@@ -313,8 +314,10 @@ export default function ChatPage() {
       setMessages(uiMessages);
       streamingMsgId.current = null;
       messageIdRef.current = null;
-    } catch {
-      // Non-fatal
+    } catch (err) {
+      // Non-fatal but should notify user
+      const errMsg = err instanceof Error ? err.message : 'Failed to load session';
+      import('@/lib/toast').then(({ toast }) => toast.error(errMsg));
     }
   }, []);
 
@@ -335,8 +338,10 @@ export default function ChatPage() {
         await request(`/sessions/${id}`, { method: 'DELETE' });
         setSessions((prev) => prev.filter((s) => s.id !== id));
         if (sessionId === id) startNewSession();
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        // Non-fatal but should notify user
+        const errMsg = err instanceof Error ? err.message : 'Failed to delete session';
+        import('@/lib/toast').then(({ toast }) => toast.error(errMsg));
       }
     },
     [sessionId, startNewSession]
@@ -394,6 +399,7 @@ export default function ChatPage() {
       messageIdRef.current = messageId;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to send message';
+      import('@/lib/toast').then(({ toast }) => toast.error(errMsg));
       setMessages((prev) =>
         prev.map((m) =>
           m.id === agentMsgId ? { ...m, content: `Error: ${errMsg}`, streaming: false } : m
@@ -686,6 +692,16 @@ export default function ChatPage() {
       <div className="px-3 py-2 border-b border-sera-border">
         {agentsLoading ? (
           <div className="h-6 bg-sera-surface rounded animate-pulse" />
+        ) : agentsError ? (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-sera-error">Failed to load agents</span>
+            <button
+              onClick={() => void refetchAgents()}
+              className="text-xs px-2 py-1 bg-sera-surface border border-sera-border rounded hover:bg-sera-surface-hover"
+            >
+              Retry
+            </button>
+          </div>
         ) : (
           <select
             value={selectedAgent}
@@ -945,5 +961,13 @@ export default function ChatPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <ErrorBoundary fallbackMessage="The chat interface encountered an error.">
+      <ChatPageContent />
+    </ErrorBoundary>
   );
 }

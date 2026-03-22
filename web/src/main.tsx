@@ -9,6 +9,7 @@ import { CentrifugoProvider } from '@/contexts/CentrifugoContext';
 import { Toaster } from 'sonner';
 import { AppShell } from '@/components/AppShell';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 import ChatPage from '@/pages/ChatPage';
 import AgentsPage from '@/pages/AgentsPage';
@@ -48,7 +49,9 @@ createRoot(el).render(
               <Route
                 element={
                   <ProtectedRoute>
-                    <AppShell />
+                    <ErrorBoundary fallbackMessage="An unexpected error occurred in the application.">
+                      <AppShell />
+                    </ErrorBoundary>
                   </ProtectedRoute>
                 }
               >

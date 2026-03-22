@@ -77,3 +77,38 @@ export interface SkillInfo {
   source: SkillSource;
   requires?: string[];
 }
+
+// ── Enriched Tool Info (executable tools with security metadata) ─────────────────
+
+/** Enriched tool info for API responses — includes security metadata. */
+export interface ToolInfoResponse {
+  id: string;
+  description: string;
+  parameters: SkillParameter[];
+  source: SkillSource;
+  server?: string;
+  minTier: 1 | 2 | 3;
+  capabilityRequired?: string;
+  usedBy?: string[];
+}
+
+/** Minimum tier requirements for known builtin tools. */
+export const TOOL_TIER_REQUIREMENTS: Record<string, { minTier: 1 | 2 | 3; capability?: string }> = {
+  'shell-exec': { minTier: 2 },
+};
+
+// ── Guidance Skill Info (text documents with content metadata) ───────────────────
+
+/** Guidance skill info for API responses. */
+export interface GuidanceSkillResponse {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  category?: string;
+  tags?: string[];
+  triggers?: string[];
+  maxTokens?: number;
+  source?: string;
+  usedBy?: string[];
+}

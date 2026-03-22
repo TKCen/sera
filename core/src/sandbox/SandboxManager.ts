@@ -15,6 +15,7 @@ import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 import { Logger } from '../lib/logger.js';
 import type { EgressAclManager } from './EgressAclManager.js';
+import type { AgentRegistry } from '../agents/registry.service.js';
 
 const logger = new Logger('SandboxManager');
 
@@ -29,6 +30,8 @@ export class SandboxManager {
   private storageFactory: StorageProviderFactory;
   /** Optional egress ACL manager — set via setEgressAclManager() after construction */
   private egressAclManager?: EgressAclManager;
+  /** Optional agent registry — set via setAgentRegistry() for Story 3.10 persistent grants */
+  private agentRegistry?: AgentRegistry;
 
   constructor(docker?: Docker, storageFactory?: StorageProviderFactory) {
     this.docker =
@@ -52,6 +55,11 @@ export class SandboxManager {
   /** Wire up the EgressAclManager after construction (avoids circular deps) */
   setEgressAclManager(mgr: EgressAclManager): void {
     this.egressAclManager = mgr;
+  }
+
+  /** Wire up the AgentRegistry for persistent grant bind mounts (Story 3.10) */
+  setAgentRegistry(registry: AgentRegistry): void {
+    this.agentRegistry = registry;
   }
 
   // ── Container Spawn ─────────────────────────────────────────────────────────
@@ -138,6 +146,28 @@ export class SandboxManager {
       for (const m of manifest.mounts) {
         const mode = m.mode === 'rw' ? 'rw' : 'ro';
         binds.push(`${m.hostPath}:${m.containerPath}:${mode}`);
+      }
+    }
+
+    // 5. Persistent filesystem grants (Story 3.10)
+    if (this.agentRegistry) {
+      try {
+        const grants = await this.agentRegistry.getActiveFilesystemGrants(finalInstanceId);
+        for (const grant of grants) {
+          if (grant.grant_type === 'persistent') {
+            // Canonicalise to prevent path traversal
+            const grantPath = fs.existsSync(grant.value)
+              ? fs.realpathSync(grant.value)
+              : grant.value;
+            // host path = container path = grant value (rw access)
+            binds.push(`${grantPath}:${grantPath}:rw`);
+            logger.info(
+              `Persistent grant bind mount: ${grantPath} for instance ${finalInstanceId}`
+            );
+          }
+        }
+      } catch (err: unknown) {
+        logger.error('Failed to load persistent filesystem grants:', err);
       }
     }
 

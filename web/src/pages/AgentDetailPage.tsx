@@ -13,6 +13,9 @@ import {
   Check,
   X,
   RotateCw,
+  Plus,
+  Trash2,
+  Shield,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -20,6 +23,9 @@ import {
   useAgentLogs,
   useAgentSchedules,
   useAgentMemory,
+  useAgentGrants,
+  useCreateGrant,
+  useRevokeGrant,
   useStartAgent,
   useStopAgent,
   useRestartAgent,
@@ -29,6 +35,7 @@ import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { BudgetBar } from '@/components/BudgetBar';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Dialog,
@@ -40,11 +47,11 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
-type Tab = 'manifest' | 'logs' | 'memory' | 'schedules' | 'budget';
+type Tab = 'overview' | 'grants' | 'logs' | 'memory' | 'schedules' | 'budget';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
-  const [tab, setTab] = useState<Tab>('manifest');
+  const [tab, setTab] = useState<Tab>('overview');
   const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | null>(null);
 
   const { data: agent, isLoading } = useAgent(id);
@@ -134,7 +141,7 @@ export default function AgentDetailPage() {
 
         {/* Tabs */}
         <div className="flex gap-0 mt-4">
-          {(['manifest', 'logs', 'memory', 'schedules', 'budget'] as const).map((t) => (
+          {(['overview', 'grants', 'logs', 'memory', 'schedules', 'budget'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -153,7 +160,8 @@ export default function AgentDetailPage() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
-        {tab === 'manifest' && <ManifestTab id={id} />}
+        {tab === 'overview' && <ManifestTab id={id} />}
+        {tab === 'grants' && <GrantsTab id={id} />}
         {tab === 'logs' && <LogsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} />}
@@ -198,14 +206,389 @@ export default function AgentDetailPage() {
 
 function ManifestTab({ id }: { id: string }) {
   const { data: instance, isLoading } = useAgent(id);
+  const [showRaw, setShowRaw] = useState(false);
+
+  if (isLoading) return <TabLoading />;
+  if (!instance) return <div className="p-6 text-sm text-sera-text-muted">Instance not found.</div>;
+
+  const inst = instance as unknown as Record<string, unknown>;
+  const overrides = (inst.overrides ?? {}) as Record<string, unknown>;
+  const modelOv = overrides.model as Record<string, unknown> | undefined;
+  const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
+  const resolvedCaps = (inst.resolved_capabilities ?? {}) as Record<string, unknown>;
+  const permissions = overrides.permissions as Record<string, unknown> | undefined;
+  const tools = overrides.tools as Record<string, unknown> | undefined;
+  const skills = (overrides.skills as string[] | undefined) ?? [];
+
+  return (
+    <div className="p-6 space-y-4 max-w-3xl">
+      {/* Identity */}
+      <section className="sera-card-static p-4">
+        <h3 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-3">
+          Identity
+        </h3>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs">
+          <Field label="Name" value={inst.name as string} />
+          <Field label="Display Name" value={(inst.display_name as string) || '—'} />
+          <Field
+            label="Template"
+            value={(inst.template_ref as string) || (inst.template_name as string)}
+          />
+          <Field label="Circle" value={(inst.circle as string) || '—'} />
+          <Field label="Lifecycle" value={(inst.lifecycle_mode as string) || 'persistent'} />
+          <Field label="Workspace" value={(inst.workspace_path as string) || '—'} mono />
+        </div>
+      </section>
+
+      {/* Model & Sandbox */}
+      <section className="sera-card-static p-4">
+        <h3 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-3">
+          Model &amp; Sandbox
+        </h3>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs">
+          <Field label="Model" value={(modelOv?.name as string) || 'default'} mono />
+          <Field label="Provider" value={(modelOv?.provider as string) || '—'} />
+          <Field label="Temperature" value={String(modelOv?.temperature ?? '0.7')} />
+          <Field
+            label="Sandbox Boundary"
+            value={
+              (overrides.sandboxBoundary as string) || (inst.sandbox_boundary as string) || '—'
+            }
+          />
+        </div>
+      </section>
+
+      {/* Resources */}
+      <section className="sera-card-static p-4">
+        <h3 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-3">
+          Resources
+        </h3>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs">
+          <Field
+            label="Tokens / Hour"
+            value={
+              resourcesOv?.maxLlmTokensPerHour
+                ? (resourcesOv.maxLlmTokensPerHour as number).toLocaleString()
+                : '—'
+            }
+          />
+          <Field
+            label="Tokens / Day"
+            value={
+              resourcesOv?.maxLlmTokensPerDay
+                ? (resourcesOv.maxLlmTokensPerDay as number).toLocaleString()
+                : '—'
+            }
+          />
+        </div>
+      </section>
+
+      {/* Permissions & Tools */}
+      {(permissions || tools || skills.length > 0) && (
+        <section className="sera-card-static p-4">
+          <h3 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-3">
+            Permissions &amp; Tools
+          </h3>
+          <div className="space-y-2 text-xs">
+            {permissions?.canExec !== undefined && (
+              <Field
+                label="Can Execute"
+                value={String(permissions.canExec) === 'true' ? 'Yes' : 'No'}
+              />
+            )}
+            {permissions?.canSpawnSubagents !== undefined && (
+              <Field
+                label="Can Spawn Subagents"
+                value={String(permissions.canSpawnSubagents) === 'true' ? 'Yes' : 'No'}
+              />
+            )}
+            {Array.isArray(tools?.allowed) && (tools.allowed as string[]).length > 0 && (
+              <div>
+                <span className="text-sera-text-muted">Tools Allowed: </span>
+                <span className="text-sera-text font-mono">
+                  {(tools.allowed as string[]).join(', ')}
+                </span>
+              </div>
+            )}
+            {Array.isArray(tools?.denied) && (tools.denied as string[]).length > 0 && (
+              <div>
+                <span className="text-sera-text-muted">Tools Denied: </span>
+                <span className="text-sera-text font-mono">
+                  {(tools.denied as string[]).join(', ')}
+                </span>
+              </div>
+            )}
+            {skills.length > 0 && (
+              <div>
+                <span className="text-sera-text-muted">Skills: </span>
+                <span className="text-sera-text font-mono">{skills.join(', ')}</span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Resolved Capabilities */}
+      {Object.keys(resolvedCaps).length > 0 && (
+        <section className="sera-card-static p-4">
+          <h3 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-3">
+            Resolved Capabilities
+          </h3>
+          <div className="space-y-1 text-xs">
+            {Object.entries(resolvedCaps).map(([key, value]) => (
+              <div key={key} className="flex items-start gap-2">
+                <span className="text-sera-text-muted min-w-[160px]">{key}</span>
+                <span className="text-sera-text font-mono break-all">
+                  {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Container / Runtime */}
+      <section className="sera-card-static p-4">
+        <h3 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider mb-3">
+          Runtime
+        </h3>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs">
+          <Field label="Status" value={(inst.status as string) || '—'} />
+          <Field
+            label="Container ID"
+            value={(inst.container_id as string)?.slice(0, 12) || '—'}
+            mono
+          />
+          <Field
+            label="Created"
+            value={inst.created_at ? new Date(inst.created_at as string).toLocaleString() : '—'}
+          />
+          <Field
+            label="Updated"
+            value={inst.updated_at ? new Date(inst.updated_at as string).toLocaleString() : '—'}
+          />
+          {typeof inst.last_heartbeat_at === 'string' && (
+            <Field
+              label="Last Heartbeat"
+              value={new Date(inst.last_heartbeat_at as string).toLocaleString()}
+            />
+          )}
+        </div>
+      </section>
+
+      {/* Raw JSON toggle */}
+      <div>
+        <button
+          onClick={() => setShowRaw((p) => !p)}
+          className="text-xs text-sera-text-dim hover:text-sera-text transition-colors"
+        >
+          {showRaw ? 'Hide' : 'Show'} raw JSON
+        </button>
+        {showRaw && (
+          <pre className="sera-card-static p-4 mt-2 text-xs font-mono text-sera-text leading-relaxed overflow-x-auto whitespace-pre">
+            {JSON.stringify(instance, null, 2)}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-sera-text-muted min-w-[120px]">{label}</span>
+      <span className={cn('text-sera-text', mono && 'font-mono')}>{value}</span>
+    </div>
+  );
+}
+
+function GrantsTab({ id }: { id: string }) {
+  const { data, isLoading } = useAgentGrants(id);
+  const createGrant = useCreateGrant();
+  const revokeGrant = useRevokeGrant();
+  const [showAdd, setShowAdd] = useState(false);
+  const [dimension, setDimension] = useState('filesystem');
+  const [value, setValue] = useState('');
+  const [grantType, setGrantType] = useState<'session' | 'persistent'>('persistent');
 
   if (isLoading) return <TabLoading />;
 
+  const allGrants = [
+    ...(data?.persistent ?? []).map((g) => ({ ...g, source: 'persistent' as const })),
+    ...(data?.session ?? []).map((g) => ({ ...g, source: 'session' as const })),
+  ];
+  const activeGrants = allGrants.filter((g) => !g.revoked_at);
+  const revokedGrants = allGrants.filter((g) => g.revoked_at);
+
+  async function handleCreate() {
+    if (!value.trim()) return;
+    try {
+      await createGrant.mutateAsync({
+        id,
+        params: { dimension, value: value.trim(), grantType },
+      });
+      setValue('');
+      setShowAdd(false);
+    } catch {
+      // error handled by mutation
+    }
+  }
+
   return (
-    <div className="p-6">
-      <pre className="sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-x-auto whitespace-pre">
-        {instance ? JSON.stringify(instance, null, 2) : 'Instance not found.'}
-      </pre>
+    <div className="p-6 space-y-4 max-w-3xl">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+          <Shield size={14} className="text-sera-accent" />
+          Capability Grants
+        </h3>
+        <Button size="sm" variant="outline" onClick={() => setShowAdd((p) => !p)}>
+          <Plus size={13} /> Add Grant
+        </Button>
+      </div>
+
+      {/* Add Grant form */}
+      {showAdd && (
+        <div className="sera-card-static p-4 space-y-3 border-sera-accent/30">
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-sera-text-muted mb-1">
+                Dimension
+              </label>
+              <select
+                value={dimension}
+                onChange={(e) => setDimension(e.target.value)}
+                className="sera-input text-xs"
+              >
+                <option value="filesystem">Filesystem</option>
+                <option value="network">Network</option>
+                <option value="exec.commands">Exec Commands</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sera-text-muted mb-1">Value</label>
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={
+                  dimension === 'filesystem'
+                    ? '/path/to/directory'
+                    : dimension === 'network'
+                      ? 'api.example.com'
+                      : 'git'
+                }
+                className="text-xs"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sera-text-muted mb-1">Type</label>
+              <select
+                value={grantType}
+                onChange={(e) => setGrantType(e.target.value as 'session' | 'persistent')}
+                className="sera-input text-xs"
+              >
+                <option value="persistent">Persistent</option>
+                <option value="session">Session</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                void handleCreate();
+              }}
+              disabled={!value.trim() || createGrant.isPending}
+            >
+              {createGrant.isPending ? 'Creating…' : 'Create Grant'}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Active grants */}
+      {activeGrants.length === 0 ? (
+        <div className="sera-card-static p-8 text-center text-sm text-sera-text-muted">
+          No active grants. Grants are created when agents request additional permissions or when
+          operators add them manually.
+        </div>
+      ) : (
+        <div className="sera-card-static overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-sera-border text-[10px] uppercase tracking-wider text-sera-text-dim">
+                <th className="text-left py-2.5 px-3">Dimension</th>
+                <th className="text-left py-2.5 px-3">Value</th>
+                <th className="text-left py-2.5 px-3">Type</th>
+                <th className="text-left py-2.5 px-3">Granted</th>
+                <th className="py-2.5 px-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {activeGrants.map((g) => (
+                <tr
+                  key={g.id}
+                  className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                >
+                  <td className="py-2.5 px-3">
+                    <Badge variant="accent">{g.dimension}</Badge>
+                  </td>
+                  <td className="py-2.5 px-3 font-mono text-sera-text">{g.value}</td>
+                  <td className="py-2.5 px-3">
+                    <Badge variant={g.source === 'persistent' ? 'default' : 'warning'}>
+                      {g.grant_type}
+                    </Badge>
+                  </td>
+                  <td className="py-2.5 px-3 text-sera-text-muted">
+                    {g.created_at ? new Date(g.created_at).toLocaleString() : '—'}
+                  </td>
+                  <td className="py-2.5 px-3 text-right">
+                    <button
+                      onClick={() => {
+                        void revokeGrant.mutateAsync({ id, grantId: g.id });
+                      }}
+                      className="text-sera-text-dim hover:text-sera-error transition-colors p-1"
+                      title="Revoke grant"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Revoked grants */}
+      {revokedGrants.length > 0 && (
+        <details className="text-xs">
+          <summary className="text-sera-text-dim cursor-pointer hover:text-sera-text transition-colors py-2">
+            {revokedGrants.length} revoked grant(s)
+          </summary>
+          <div className="sera-card-static overflow-hidden mt-2 opacity-60">
+            <table className="w-full text-xs">
+              <tbody>
+                {revokedGrants.map((g) => (
+                  <tr key={g.id} className="border-b border-sera-border/30">
+                    <td className="py-2 px-3 text-sera-text-dim">{g.dimension}</td>
+                    <td className="py-2 px-3 font-mono text-sera-text-dim line-through">
+                      {g.value}
+                    </td>
+                    <td className="py-2 px-3 text-sera-text-dim">{g.grant_type}</td>
+                    <td className="py-2 px-3 text-sera-text-dim">
+                      Revoked {g.revoked_at ? new Date(g.revoked_at).toLocaleString() : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

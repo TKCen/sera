@@ -190,6 +190,38 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
     }
   });
 
+  // ── Update an agent instance (overrides, name, display_name, etc.) ───────
+  router.patch('/instances/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const instance = await agentRegistry.getInstance(id);
+      if (!instance) {
+        return res.status(404).json({ error: `Agent instance "${id}" not found` });
+      }
+
+      const { name, displayName, circle, lifecycleMode, overrides } = req.body as {
+        name?: string;
+        displayName?: string;
+        circle?: string;
+        lifecycleMode?: string;
+        overrides?: Record<string, unknown>;
+      };
+
+      await agentRegistry.updateInstance(id, {
+        ...(name !== undefined ? { name } : {}),
+        ...(displayName !== undefined ? { display_name: displayName } : {}),
+        ...(circle !== undefined ? { circle } : {}),
+        ...(lifecycleMode !== undefined ? { lifecycle_mode: lifecycleMode } : {}),
+        ...(overrides !== undefined ? { overrides } : {}),
+      });
+
+      const updated = await agentRegistry.getInstance(id);
+      res.json(updated);
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // ── Delete an agent instance ──────────────────────────────────────────────
   router.delete('/instances/:id', async (req, res) => {
     try {

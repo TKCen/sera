@@ -178,11 +178,38 @@ export interface SearchResult {
   entry?: MemoryEntry;
 }
 
-export interface SkillInfo {
+export interface GuidanceSkillInfo {
   id: string;
-  name?: string;
+  name: string;
+  version?: string;
   description?: string;
+  category?: string;
+  tags?: string[];
+  triggers?: string[];
+  maxTokens?: number;
+  source?: string;
   usedBy?: string[];
+}
+
+export interface CreateSkillParams {
+  name: string;
+  version: string;
+  description: string;
+  triggers: string[];
+  category?: string;
+  tags?: string[];
+  maxTokens?: number;
+  content: string;
+}
+
+export interface ExternalSkillEntry {
+  id: string;
+  name: string;
+  description: string;
+  author?: string;
+  version?: string;
+  tags?: string[];
+  source: string;
 }
 
 export interface ContainerInfo {
@@ -311,9 +338,36 @@ export interface AgentMemoryBlock {
 
 export interface ToolInfo {
   id: string;
-  name?: string;
   description?: string;
+  parameters?: Array<{ name: string; type: string; description: string; required: boolean }>;
+  source: 'builtin' | 'mcp' | 'custom';
   server?: string;
+  minTier?: 1 | 2 | 3;
+  capabilityRequired?: string;
+  usedBy?: string[];
+}
+
+// Capability Grants
+
+export interface CapabilityGrant {
+  id: string;
+  agent_instance_id: string;
+  dimension: string;
+  value: string;
+  grant_type: 'one-time' | 'session' | 'persistent';
+  granted_by?: string;
+  granted_by_email?: string;
+  granted_by_name?: string;
+  expires_at?: string;
+  revoked_at?: string;
+  created_at: string;
+}
+
+export interface CreateGrantParams {
+  dimension: string;
+  value: string;
+  grantType: 'one-time' | 'session' | 'persistent';
+  expiresAt?: string;
 }
 
 // Epic 14 — Observability types

@@ -243,16 +243,16 @@ describe('SERA Integration Tests', () => {
     });
   });
 
-  describe('e. Skills flow', () => {
-    it('should have builtin skills registered after server boot', async () => {
-      const res = await request(app).get('/api/skills');
+  describe('e. Tools flow', () => {
+    it('should have builtin tools registered after server boot', async () => {
+      const res = await request(app).get('/api/tools');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
 
-      const skillIds = res.body.map((s: { id: string }) => s.id);
-      expect(skillIds).toContain('file-read');
-      expect(skillIds).toContain('file-write');
+      const toolIds = res.body.map((t: { id: string }) => t.id);
+      expect(toolIds).toContain('file-read');
+      expect(toolIds).toContain('file-write');
     });
   });
 });

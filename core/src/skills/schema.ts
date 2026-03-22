@@ -21,5 +21,5 @@ export type SkillFrontMatter = z.infer<typeof SkillFrontMatterSchema>;
 
 export interface SkillDocument extends SkillFrontMatter {
   content: string;
-  source: 'bundled' | 'external';
+  source: string;
 }

@@ -144,6 +144,100 @@ describe('RuntimeToolExecutor', () => {
     });
   });
 
+  describe('proxy-aware resolution (Story 3.10)', () => {
+    it('attempts proxy when file-read targets a path outside workspace', () => {
+      // Set up env vars for proxy
+      const origUrl = process.env['SERA_CORE_URL'];
+      const origToken = process.env['SERA_IDENTITY_TOKEN'];
+      process.env['SERA_CORE_URL'] = 'http://sera-core:3001';
+      process.env['SERA_IDENTITY_TOKEN'] = 'test-jwt-token';
+
+      try {
+        // Create a fresh executor so it picks up the env vars
+        const proxyExecutor = new RuntimeToolExecutor(tempDir, 2);
+        const result = proxyExecutor.executeTool(
+          makeCall('file-read', { path: '/outside/workspace/file.txt' }),
+        );
+
+        // Should attempt proxy (curl will fail in test env, but shouldn't throw PermissionDeniedError)
+        expect(result.role).toBe('tool');
+        // The result will be an error from proxy failure (curl not finding sera-core), not a path traversal error
+        expect(result.content).not.toContain('Path traversal blocked');
+      } finally {
+        if (origUrl !== undefined) process.env['SERA_CORE_URL'] = origUrl;
+        else delete process.env['SERA_CORE_URL'];
+        if (origToken !== undefined) process.env['SERA_IDENTITY_TOKEN'] = origToken;
+        else delete process.env['SERA_IDENTITY_TOKEN'];
+      }
+    });
+
+    it('shell-exec returns path_requires_restart for outside-workspace paths', () => {
+      const origUrl = process.env['SERA_CORE_URL'];
+      const origToken = process.env['SERA_IDENTITY_TOKEN'];
+      process.env['SERA_CORE_URL'] = 'http://sera-core:3001';
+      process.env['SERA_IDENTITY_TOKEN'] = 'test-jwt-token';
+
+      try {
+        const proxyExecutor = new RuntimeToolExecutor(tempDir, 2);
+        const result = proxyExecutor.executeTool(
+          makeCall('shell-exec', { command: 'cat /outside/secret.txt' }),
+        );
+
+        expect(result.role).toBe('tool');
+        const parsed = JSON.parse(result.content);
+        expect(parsed.error).toBe('path_requires_restart');
+        expect(parsed.hint).toContain('persistent grant');
+      } finally {
+        if (origUrl !== undefined) process.env['SERA_CORE_URL'] = origUrl;
+        else delete process.env['SERA_CORE_URL'];
+        if (origToken !== undefined) process.env['SERA_IDENTITY_TOKEN'] = origToken;
+        else delete process.env['SERA_IDENTITY_TOKEN'];
+      }
+    });
+
+    it('shell-exec runs normally for workspace-only commands when proxy is available', () => {
+      const origUrl = process.env['SERA_CORE_URL'];
+      const origToken = process.env['SERA_IDENTITY_TOKEN'];
+      process.env['SERA_CORE_URL'] = 'http://sera-core:3001';
+      process.env['SERA_IDENTITY_TOKEN'] = 'test-jwt-token';
+
+      try {
+        const proxyExecutor = new RuntimeToolExecutor(tempDir, 2);
+        const result = proxyExecutor.executeTool(
+          makeCall('shell-exec', { command: 'echo hello' }),
+        );
+
+        expect(result.role).toBe('tool');
+        expect(result.content.trim()).toBe('hello');
+      } finally {
+        if (origUrl !== undefined) process.env['SERA_CORE_URL'] = origUrl;
+        else delete process.env['SERA_CORE_URL'];
+        if (origToken !== undefined) process.env['SERA_IDENTITY_TOKEN'] = origToken;
+        else delete process.env['SERA_IDENTITY_TOKEN'];
+      }
+    });
+
+    it('still blocks path traversal when proxy is NOT available', () => {
+      // Ensure no proxy env vars
+      const origUrl = process.env['SERA_CORE_URL'];
+      const origToken = process.env['SERA_IDENTITY_TOKEN'];
+      delete process.env['SERA_CORE_URL'];
+      delete process.env['SERA_IDENTITY_TOKEN'];
+
+      try {
+        const noProxyExecutor = new RuntimeToolExecutor(tempDir, 2);
+        const result = noProxyExecutor.executeTool(
+          makeCall('file-read', { path: '/outside/workspace/file.txt' }),
+        );
+
+        expect(result.content).toContain('Path traversal blocked');
+      } finally {
+        if (origUrl !== undefined) process.env['SERA_CORE_URL'] = origUrl;
+        if (origToken !== undefined) process.env['SERA_IDENTITY_TOKEN'] = origToken;
+      }
+    });
+  });
+
   describe('getToolDefinitions()', () => {
     it('returns all 5 built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();

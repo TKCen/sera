@@ -26,11 +26,17 @@ export function sendChat(message: string, conversationId?: string): Promise<Chat
 export function sendChatStream(
   agentName: string,
   message: string,
-  sessionId?: string
+  sessionId?: string,
+  agentInstanceId?: string
 ): Promise<ChatStreamResponse> {
   return request<ChatStreamResponse>('/chat/stream', {
     method: 'POST',
-    body: JSON.stringify({ agentName, message, ...(sessionId ? { sessionId } : {}) }),
+    body: JSON.stringify({
+      agentName,
+      message,
+      ...(sessionId ? { sessionId } : {}),
+      ...(agentInstanceId ? { agentInstanceId } : {}),
+    }),
   });
 }
 

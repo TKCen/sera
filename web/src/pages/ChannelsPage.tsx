@@ -22,9 +22,10 @@ import {
 } from '@/hooks/useNotifications';
 import type { NotificationChannel, CreateChannelPayload } from '@/lib/api/notifications';
 import { useAuth } from '@/hooks/useAuth';
+import { useAgents } from '@/hooks/useAgents';
 import { ForbiddenView } from '@/views/ForbiddenView';
 
-const CHANNEL_TYPES = ['webhook', 'email', 'discord', 'slack'] as const;
+const CHANNEL_TYPES = ['webhook', 'email', 'discord', 'discord-chat', 'slack'] as const;
 type ChannelType = (typeof CHANNEL_TYPES)[number];
 
 const SEVERITY_OPTIONS = ['info', 'warning', 'critical'] as const;
@@ -57,6 +58,27 @@ const CONFIG_FIELDS: Record<
     { key: 'botToken', label: 'Bot Token (optional)', type: 'password' },
     { key: 'approvalChannelId', label: 'Approval Channel ID (optional)' },
   ],
+  'discord-chat': [
+    {
+      key: 'botToken',
+      label: 'Discord Bot Token',
+      type: 'password',
+      placeholder: 'Bot token from discord.dev',
+    },
+    { key: 'targetAgentId', label: 'Target Agent', type: 'agent-select' },
+    {
+      key: 'allowedGuilds',
+      label: 'Allowed Guild IDs (comma-separated)',
+      placeholder: 'Leave empty to allow all guilds',
+    },
+    {
+      key: 'allowedUsers',
+      label: 'Allowed User IDs (comma-separated)',
+      placeholder: 'Leave empty to allow all users',
+    },
+    { key: 'allowDMs', label: 'Allow Direct Messages', type: 'checkbox' },
+    { key: 'allowMentions', label: 'Respond to @Mentions in Guilds', type: 'checkbox' },
+  ],
   slack: [
     {
       key: 'webhookUrl',
@@ -70,10 +92,11 @@ const CONFIG_FIELDS: Record<
 };
 
 function typeBadge(type: string) {
-  const colors: Record<string, 'default' | 'success' | 'warning'> = {
+  const colors: Record<string, 'default' | 'success' | 'warning' | 'accent'> = {
     webhook: 'default',
     email: 'default',
     discord: 'success',
+    'discord-chat': 'accent',
     slack: 'warning',
   };
   return <Badge variant={colors[type] ?? 'default'}>{type}</Badge>;
@@ -86,6 +109,7 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [type, setType] = useState<ChannelType>('webhook');
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const create = useCreateChannel();
+  const { data: agents } = useAgents();
 
   function setField(key: string, value: string) {
     setConfigValues((prev) => ({ ...prev, [key]: value }));
@@ -95,10 +119,27 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
     const cfg: Record<string, unknown> = {};
     for (const field of CONFIG_FIELDS[type]) {
       const v = configValues[field.key];
+      if (field.type === 'checkbox') {
+        cfg[field.key] = v === 'true';
+        continue;
+      }
       if (!v) continue;
       if (field.key === 'smtpPort') cfg[field.key] = parseInt(v, 10);
-      else if (field.key === 'to') cfg[field.key] = v.split(',').map((s) => s.trim());
-      else cfg[field.key] = v;
+      else if (
+        field.key === 'to' ||
+        field.key === 'allowedGuilds' ||
+        field.key === 'allowedUsers'
+      ) {
+        cfg[field.key] = v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } else cfg[field.key] = v;
+    }
+    // Default checkbox values for discord-chat
+    if (type === 'discord-chat') {
+      if (!('allowDMs' in cfg)) cfg['allowDMs'] = true;
+      if (!('allowMentions' in cfg)) cfg['allowMentions'] = true;
     }
     return cfg;
   }
@@ -152,13 +193,43 @@ function CreateChannelDialog({ open, onClose }: { open: boolean; onClose: () => 
 
           {CONFIG_FIELDS[type].map((field) => (
             <div key={field.key}>
-              <label className="sera-label">{field.label}</label>
-              <Input
-                type={field.type ?? 'text'}
-                placeholder={field.placeholder}
-                value={configValues[field.key] ?? ''}
-                onChange={(e) => setField(field.key, e.target.value)}
-              />
+              {field.type === 'checkbox' ? (
+                <label className="flex items-center gap-2 py-1 cursor-pointer text-sm text-sera-text">
+                  <input
+                    type="checkbox"
+                    checked={(configValues[field.key] ?? 'true') === 'true'}
+                    onChange={(e) => setField(field.key, String(e.target.checked))}
+                    className="accent-sera-accent"
+                  />
+                  {field.label}
+                </label>
+              ) : field.type === 'agent-select' ? (
+                <>
+                  <label className="sera-label">{field.label}</label>
+                  <select
+                    value={configValues[field.key] ?? ''}
+                    onChange={(e) => setField(field.key, e.target.value)}
+                    className="sera-input text-sm"
+                  >
+                    <option value="">Select an agent…</option>
+                    {agents?.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.display_name ?? a.name} ({a.id.substring(0, 8)})
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label className="sera-label">{field.label}</label>
+                  <Input
+                    type={field.type ?? 'text'}
+                    placeholder={field.placeholder}
+                    value={configValues[field.key] ?? ''}
+                    onChange={(e) => setField(field.key, e.target.value)}
+                  />
+                </>
+              )}
             </div>
           ))}
         </div>

@@ -59,6 +59,7 @@ import { AgentRegistry } from './agents/registry.service.js';
 import { ResourceImporter } from './agents/importer.service.js';
 import { createRegistryRouter } from './routes/registry.js';
 import { createLifecycleRouter } from './routes/lifecycle.js';
+import { createToolProxyRouter } from './routes/toolProxy.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { ProviderRegistry } from './llm/ProviderRegistry.js';
 import { LlmRouter } from './llm/LlmRouter.js';
@@ -139,6 +140,7 @@ orchestrator.setIntercom(intercomService);
 orchestrator.setToolExecutor(toolExecutor);
 orchestrator.setSandboxManager(sandboxManager);
 orchestrator.setRegistry(agentRegistry);
+sandboxManager.setAgentRegistry(agentRegistry);
 orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
 orchestrator.setLlmRouter(llmRouter);
@@ -260,11 +262,27 @@ app.use(
   createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService)
 );
 app.use('/api/agents', createAgentRouter(orchestrator, agentRegistry));
+app.use(
+  '/v1/tools',
+  createToolProxyRouter(identityService, authService, permissionService, agentRegistry)
+);
 
 // ── Convenience routes for the web UI ────────────────────────────────────────
-// GET /api/tools — list all registered skills/tools (used by AgentForm)
+// GET /api/tools — list executable tools with security metadata (used by AgentForm)
 app.get('/api/tools', (_req, res) => {
-  res.json(skillRegistry.listAll());
+  const tools = skillRegistry.listTools();
+  const manifests = orchestrator.getAllManifests();
+  const enriched = tools.map((tool) => {
+    const usedBy: string[] = [];
+    for (const manifest of manifests) {
+      const allowed = manifest.tools?.allowed ?? [];
+      if (allowed.includes(tool.id) || allowed.includes('*')) {
+        usedBy.push(manifest.metadata.name);
+      }
+    }
+    return { ...tool, usedBy };
+  });
+  res.json(enriched);
 });
 
 // GET /api/templates — list agent templates from the DB (used by AgentForm)
@@ -307,7 +325,7 @@ app.use('/api/pipelines', createPipelinesRouter(orchestrator));
 app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator, pool));
 app.use('/api/memory', createMemoryRouter(memoryManager));
 app.use('/api/sessions', createSessionRouter(sessionStore));
-app.use('/api', createChatRouter(sessionStore, orchestrator));
+app.use('/api', createChatRouter(sessionStore, orchestrator, agentRegistry));
 
 app.use(
   '/v1/llm',
@@ -509,6 +527,8 @@ const startServer = async () => {
     if (sharedBoss) {
       const notificationService = NotificationService.getInstance();
       notificationService.setPermissionService(permissionService);
+      notificationService.setOrchestrator(orchestrator);
+      notificationService.setSessionStore(sessionStore);
       await notificationService
         .start(sharedBoss)
         .catch((err: unknown) => logger.error('NotificationService failed to start:', err));

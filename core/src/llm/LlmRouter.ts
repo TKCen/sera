@@ -349,6 +349,11 @@ export interface ModelListItem {
 export class LlmRouter {
   constructor(private readonly registry: ProviderRegistry) {}
 
+  /** Expose the underlying registry for default-model management. */
+  getRegistry(): ProviderRegistry {
+    return this.registry;
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────────
 
   private buildModel(config: ProviderConfig): Model<Api> {

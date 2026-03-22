@@ -144,6 +144,7 @@ export default function ChatPage() {
   const { client: centrifugoClient } = useCentrifugoContext();
 
   const [selectedAgent, setSelectedAgent] = useState<string>('');
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -169,6 +170,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (agents && agents.length > 0 && !selectedAgent) {
       setSelectedAgent(agents[0]!.name);
+      setSelectedAgentId(agents[0]!.id);
     }
   }, [agents, selectedAgent]);
 
@@ -202,8 +204,9 @@ export default function ChatPage() {
   // Bypasses the useChannel→useState→useEffect chain which loses tokens when
   // React batches rapid state updates from the same WebSocket frame.
   useEffect(() => {
-    if (!centrifugoClient || !selectedAgent) return;
-    const channel = `tokens:${selectedAgent}`;
+    const channelKey = selectedAgentId || selectedAgent;
+    if (!centrifugoClient || !channelKey) return;
+    const channel = `tokens:${channelKey}`;
 
     const existing = centrifugoClient.getSubscription(channel);
     if (existing) {
@@ -248,12 +251,13 @@ export default function ChatPage() {
       sub.removeAllListeners();
       centrifugoClient.removeSubscription(sub);
     };
-  }, [centrifugoClient, selectedAgent, fetchSessions]);
+  }, [centrifugoClient, selectedAgent, selectedAgentId, fetchSessions]);
 
   // ── Thought stream — direct subscription ────────────────────────────────────
   useEffect(() => {
-    if (!centrifugoClient || !selectedAgent) return;
-    const channel = `thoughts:${selectedAgent}`;
+    const channelKey = selectedAgentId || selectedAgent;
+    if (!centrifugoClient || !channelKey) return;
+    const channel = `thoughts:${channelKey}`;
 
     const existing = centrifugoClient.getSubscription(channel);
     if (existing) {
@@ -286,7 +290,7 @@ export default function ChatPage() {
       sub.removeAllListeners();
       centrifugoClient.removeSubscription(sub);
     };
-  }, [centrifugoClient, selectedAgent]);
+  }, [centrifugoClient, selectedAgent, selectedAgentId]);
 
   // ── Session actions ──────────────────────────────────────────────────────────
 
@@ -383,7 +387,8 @@ export default function ChatPage() {
       const { sessionId: newSessionId, messageId } = await sendChatStream(
         selectedAgent,
         text,
-        sessionId ?? undefined
+        sessionId ?? undefined,
+        selectedAgentId || undefined
       );
       setSessionId(newSessionId);
       messageIdRef.current = messageId;
@@ -398,7 +403,7 @@ export default function ChatPage() {
       streamingMsgId.current = null;
       messageIdRef.current = null;
     }
-  }, [input, selectedAgent, streaming, sessionId]);
+  }, [input, selectedAgent, selectedAgentId, streaming, sessionId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -407,9 +412,14 @@ export default function ChatPage() {
     }
   };
 
-  const handleAgentChange = useCallback((name: string) => {
-    setSelectedAgent(name);
-  }, []);
+  const handleAgentChange = useCallback(
+    (name: string) => {
+      setSelectedAgent(name);
+      const agent = agents?.find((a) => a.name === name);
+      setSelectedAgentId(agent?.id ?? '');
+    },
+    [agents]
+  );
 
   // ── Render per-message thinking block ────────────────────────────────────────
 

@@ -10,7 +10,7 @@ export type SandboxType = 'agent' | 'subagent' | 'tool' | 'mcp-server';
 
 // ── Tier Limits ─────────────────────────────────────────────────────────────────
 
-export type NetworkMode = 'none' | 'agent_net' | 'bridge';
+export type NetworkMode = 'none' | 'agent_net';
 export type FilesystemMode = 'ro' | 'rw';
 
 export interface TierLimits {
@@ -83,6 +83,10 @@ export interface SandboxInfo {
   parentAgent?: string;
   subagentRole?: string;
   lifecycleMode?: 'persistent' | 'ephemeral';
+  /** Whether outbound traffic routes through the egress proxy (Story 20.3) */
+  proxyEnabled?: boolean;
+  /** Container IP on agent_net — used by EgressAclManager for per-agent ACLs (Story 20.2) */
+  containerIp?: string;
 }
 
 // ── Docker Event ─────────────────────────────────────────────────────────────────

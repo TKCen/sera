@@ -20,6 +20,7 @@ import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
 import type { HealthResponse } from '@/lib/api/types';
 import { useAuth } from '@/hooks/useAuth';
+import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -74,11 +75,51 @@ const navGroups: NavGroup[] = [
   },
 ];
 
+function WsIndicator({
+  state,
+  onReconnect,
+}: {
+  state: 'connecting' | 'connected' | 'disconnected' | 'error';
+  onReconnect: () => void;
+}) {
+  const color =
+    state === 'connected'
+      ? 'text-sera-success'
+      : state === 'connecting'
+        ? 'text-sera-warning'
+        : 'text-sera-error';
+  const label =
+    state === 'connected' ? 'Connected' : state === 'connecting' ? 'Connecting…' : 'Disconnected';
+  const isDown = state === 'disconnected' || state === 'error';
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <CircleIcon
+        size={8}
+        className={cn('fill-current', color, state === 'connecting' && 'animate-pulse')}
+      />
+      <span className="text-sera-text-dim">Live:</span>
+      {isDown ? (
+        <button
+          onClick={onReconnect}
+          className={cn(color, 'hover:underline cursor-pointer')}
+          title="Click to reconnect"
+        >
+          {label}
+        </button>
+      ) : (
+        <span className={color}>{label}</span>
+      )}
+    </div>
+  );
+}
+
 export function Sidebar() {
   const location = useLocation();
   const { user, roles, logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [coreStatus, setCoreStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const { client: centrifugoClient, connectionState: wsState } = useCentrifugoContext();
 
   useEffect(() => {
     const check = () => {
@@ -227,12 +268,13 @@ export function Sidebar() {
         </button>
 
         {!collapsed && (
-          <div className="px-5 py-3">
+          <div className="px-5 py-3 space-y-1">
             <div className="flex items-center gap-2 text-xs">
               <CircleIcon size={8} className={cn('fill-current', statusColor)} />
               <span className="text-sera-text-dim">Core:</span>
               <span className={statusColor}>{statusLabel}</span>
             </div>
+            <WsIndicator state={wsState} onReconnect={() => centrifugoClient?.connect()} />
           </div>
         )}
       </div>

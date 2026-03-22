@@ -136,7 +136,21 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       if (!instance) {
         return res.status(404).json({ error: `Agent instance "${req.params.id}" not found` });
       }
-      res.json(instance);
+      // Story 3.11: include lineage depth for subagent tree visibility
+      const lineageDepth = instance.parent_instance_id
+        ? await agentRegistry.getLineageDepth(instance.id)
+        : 0;
+      // Story 3.12: surface workspace quota fields at top level
+      const caps = instance.resolved_capabilities as
+        | Record<string, Record<string, unknown>>
+        | undefined;
+      const workspaceLimitGB = caps?.filesystem?.maxWorkspaceSizeGB as number | undefined;
+      res.json({
+        ...instance,
+        lineageDepth,
+        workspaceUsageGB: instance.workspace_used_gb ?? null,
+        workspaceLimitGB: workspaceLimitGB ?? null,
+      });
     } catch (err: unknown) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

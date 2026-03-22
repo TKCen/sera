@@ -19,6 +19,7 @@ services:
       - ./lists:/workspace/lists:ro
       - ./capability-policies:/workspace/capability-policies:ro
       - ./sandbox-boundaries:/workspace/sandbox-boundaries:ro
+      - ./egress-proxy/acls:/egress/acls
     entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
     command: ["bun", "run", "dev"]
     environment:
@@ -28,6 +29,7 @@ services:
       - SERA_BOOTSTRAP_API_KEY=sera_bootstrap_dev_123
       - SECRETS_MASTER_KEY=f6e5d4c3b2a1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
+      - EGRESS_PROXY_URL=http://sera-egress-proxy:3128
       # Uncomment to enable local embeddings (Ollama on host):
       # - OLLAMA_URL=http://host.docker.internal:11434
     extra_hosts:
@@ -52,6 +54,9 @@ services:
       - NODE_ENV=development
       - VITE_API_URL=http://sera-core:3001
       - VITE_DEV_API_KEY=sera_bootstrap_dev_123
+
+  # Egress proxy — no dev overrides, uses base definition from docker-compose.yaml
+  sera-egress-proxy: {}
 
 volumes:
   node_modules_core:

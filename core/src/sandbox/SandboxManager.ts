@@ -14,6 +14,7 @@ import { PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 import { Logger } from '../lib/logger.js';
+import type { EgressAclManager } from './EgressAclManager.js';
 
 const logger = new Logger('SandboxManager');
 
@@ -26,6 +27,8 @@ export class SandboxManager {
   /** Reverse map: instanceId → containerId (for fast teardown lookup) */
   private instanceToContainer: Map<string, string> = new Map();
   private storageFactory: StorageProviderFactory;
+  /** Optional egress ACL manager — set via setEgressAclManager() after construction */
+  private egressAclManager?: EgressAclManager;
 
   constructor(docker?: Docker, storageFactory?: StorageProviderFactory) {
     this.docker =
@@ -44,6 +47,11 @@ export class SandboxManager {
         new LocalStorageProvider('/workspaces', process.env.HOST_WORKSPACES_DIR)
       );
     }
+  }
+
+  /** Wire up the EgressAclManager after construction (avoids circular deps) */
+  setEgressAclManager(mgr: EgressAclManager): void {
+    this.egressAclManager = mgr;
   }
 
   // ── Container Spawn ─────────────────────────────────────────────────────────
@@ -137,15 +145,28 @@ export class SandboxManager {
     const cpuShares = caps.resources?.cpu_shares || 0;
     const memoryBytes = (caps.resources?.memory_limit || 0) * 1024 * 1024;
 
-    // ── Network Mode (Story 3.2) ─────────────────────────────────────────────
+    // ── Network Mode (Story 3.2, 20.3) ──────────────────────────────────────
+    // All agents with any outbound access use agent_net — even unrestricted
+    // agents (outbound: ['*']). The egress proxy is the single exit point
+    // for all outbound traffic, ensuring audit and metering coverage.
     const outbound = caps.network?.outbound || [];
     let networkMode: string;
     if (outbound.length === 0) {
       networkMode = 'none';
-    } else if (outbound.includes('*')) {
-      networkMode = 'bridge';
     } else {
       networkMode = 'agent_net';
+    }
+
+    // ── Egress Proxy (Story 20.3) ─────────────────────────────────────────
+    // Inject proxy env vars so all outbound HTTP traffic routes through the
+    // egress proxy. Only active when EGRESS_PROXY_URL is set (graceful
+    // degradation if proxy not deployed).
+    const egressProxyUrl = process.env.EGRESS_PROXY_URL;
+    const proxyEnabled = networkMode === 'agent_net' && !!egressProxyUrl;
+    if (proxyEnabled) {
+      env.push(`HTTP_PROXY=${egressProxyUrl}`);
+      env.push(`HTTPS_PROXY=${egressProxyUrl}`);
+      env.push('NO_PROXY=sera-core,centrifugo,localhost,127.0.0.1');
     }
 
     // ── Linux Capabilities (Story 3.2) ──────────────────────────────────────
@@ -220,6 +241,12 @@ export class SandboxManager {
 
     const info = await container.inspect();
 
+    // Extract container IP on agent_net for per-agent ACL mapping (Story 20.2)
+    const containerIp =
+      networkMode === 'agent_net'
+        ? info.NetworkSettings?.Networks?.['agent_net']?.IPAddress || undefined
+        : undefined;
+
     const sandboxInfo: SandboxInfo = {
       containerId: info.Id,
       agentName,
@@ -230,10 +257,20 @@ export class SandboxManager {
       tier,
       instanceId: finalInstanceId,
       ...(request.lifecycleMode !== undefined ? { lifecycleMode: request.lifecycleMode } : {}),
+      ...(proxyEnabled ? { proxyEnabled } : {}),
+      ...(containerIp ? { containerIp } : {}),
     };
 
     this.containers.set(info.Id, sandboxInfo);
     this.instanceToContainer.set(finalInstanceId, info.Id);
+
+    // Story 20.2 — generate per-agent ACL for the egress proxy
+    if (this.egressAclManager && containerIp && outbound.length > 0) {
+      this.egressAclManager
+        .onSpawn(finalInstanceId, containerIp, { outbound })
+        .catch((err: unknown) => logger.error('Failed to write egress ACL:', err));
+    }
+
     return sandboxInfo;
   }
 
@@ -265,6 +302,13 @@ export class SandboxManager {
       await container.remove({ force: false });
     } catch {
       // Auto-removed ephemeral containers will already be gone
+    }
+
+    // Story 20.2 — remove per-agent ACL from the egress proxy
+    if (this.egressAclManager) {
+      this.egressAclManager
+        .onTeardown(instanceId)
+        .catch((err: unknown) => logger.error('Failed to remove egress ACL:', err));
     }
 
     this.containers.delete(containerId);

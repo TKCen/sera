@@ -44,9 +44,9 @@ describe('TierPolicy', () => {
       expect(limits.filesystemMode).toBe('rw');
     });
 
-    it('should correctly enforce Tier 3 boundaries: bridge network, rw filesystem', () => {
+    it('should correctly enforce Tier 3 boundaries: agent_net network, rw filesystem', () => {
       const limits = TierPolicy.getTierLimits(3);
-      expect(limits.networkMode).toBe('bridge');
+      expect(limits.networkMode).toBe('agent_net');
       expect(limits.filesystemMode).toBe('rw');
     });
   });
@@ -159,7 +159,7 @@ describe('TierPolicy', () => {
     it('should return correct limits for tier 3 (Executive)', () => {
       const limits = TierPolicy.getTierLimits(3);
       expect(limits.tier).toBe(3);
-      expect(limits.networkMode).toBe('bridge');
+      expect(limits.networkMode).toBe('agent_net');
       expect(limits.filesystemMode).toBe('rw');
       expect(limits.cpuShares).toBe(1024);
       expect(limits.memoryBytes).toBe(1024 * 1024 * 1024);

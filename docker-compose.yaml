@@ -28,6 +28,8 @@ services:
       - ./lists:/workspace/lists:ro
       - ./capability-policies:/workspace/capability-policies:ro
       - ./sandbox-boundaries:/workspace/sandbox-boundaries:ro
+      - ./egress-proxy/acls:/egress/acls
+      - egress_logs:/egress/logs:ro
     environment:
       - WORKSPACE_DIR=/workspace
       - NODE_ENV=development
@@ -47,6 +49,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-lm-studio}
       - LLM_MODEL=${LLM_MODEL:-lmstudio-local}
       - HOST_WORKSPACES_DIR=${PWD}/workspaces
+      - EGRESS_PROXY_URL=http://sera-egress-proxy:3128
       # Set OLLAMA_URL to enable local embeddings, e.g.:
       # - OLLAMA_URL=http://host.docker.internal:11434
     extra_hosts:
@@ -139,14 +142,40 @@ services:
       retries: 3
       start_period: 5s
 
+  # ── Egress Proxy ───────────────────────────────────────────────────────────
+  # Squid forward proxy on agent_net — enforces per-agent domain allowlists
+  # via SNI-based HTTPS filtering (no TLS MITM). See docs/epics/20-egress-proxy.md.
+  sera-egress-proxy:
+    build:
+      context: ./egress-proxy
+      dockerfile: Dockerfile
+    container_name: sera-egress-proxy
+    restart: unless-stopped
+    volumes:
+      - ./egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+      - ./egress-proxy/acls:/etc/squid/acls
+      - egress_logs:/var/log/squid
+    networks:
+      - sera_net
+      - agent_net
+    labels:
+      sera.proxy: egress
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
 networks:
   sera_net:
     name: sera_net
     driver: bridge
   agent_net:
     name: agent_net
-    external: true
+    driver: bridge
 
 volumes:
   sera_db_data:
   qdrant_data:
+  egress_logs:

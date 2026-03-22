@@ -9,6 +9,13 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 // TODO: virtualise if > 100 agents
 
@@ -23,6 +30,7 @@ export default function AgentsPage() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCircle, setFilterCircle] = useState<string>('all');
+  const [agentToDelete, setAgentToDelete] = useState<{ id: string; name: string } | null>(null);
 
   const circles = useMemo(() => {
     if (!agents) return [];
@@ -72,23 +80,24 @@ export default function AgentsPage() {
   async function handleDelete(e: React.MouseEvent, id: string, name: string) {
     e.preventDefault();
     e.stopPropagation();
-    if (
-      !window.confirm(
-        `Delete agent "${name}"? This will stop its container and remove the instance permanently.`
-      )
-    )
-      return;
+    setAgentToDelete({ id, name });
+  }
+
+  async function confirmDelete() {
+    if (!agentToDelete) return;
     try {
-      await deleteAgent.mutateAsync(id);
-      toast.success(`Deleted ${name}`);
+      await deleteAgent.mutateAsync(agentToDelete.id);
+      toast.success(`Deleted ${agentToDelete.name}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete');
+    } finally {
+      setAgentToDelete(null);
     }
   }
 
   return (
-    <div className="p-6">
-      <div className="sera-page-header">
+    <main className="p-6">
+      <header className="sera-page-header">
         <h1 className="sera-page-title">Agents</h1>
         <Button asChild size="sm">
           <Link to="/agents/new">
@@ -96,10 +105,10 @@ export default function AgentsPage() {
             New Agent
           </Link>
         </Button>
-      </div>
+      </header>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-4">
+      <section aria-label="Filters" className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 max-w-xs">
           <Search
             size={13}
@@ -118,6 +127,7 @@ export default function AgentsPage() {
             value={filterCircle}
             onChange={(e) => setFilterCircle(e.target.value)}
             className="sera-input h-9 py-0 w-auto text-xs"
+            aria-label="Filter by circle"
           >
             <option value="all">All circles</option>
             {circles.map((c) => (
@@ -128,7 +138,7 @@ export default function AgentsPage() {
           </select>
         )}
 
-        <div className="flex items-center gap-1">
+        <nav aria-label="Filter by status" className="flex items-center gap-1">
           {STATUS_OPTIONS.map((s) => (
             <button
               key={s}
@@ -142,34 +152,46 @@ export default function AgentsPage() {
               {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
             </button>
           ))}
-        </div>
-      </div>
+        </nav>
+      </section>
 
       {isLoading ? (
-        <div className="space-y-3">
+        <div className="space-y-3" role="status" aria-live="polite" aria-label="Loading agents">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-16 rounded-xl" />
+            <div key={i} className="sera-card flex items-center gap-4 px-4 py-3">
+              <Skeleton className="h-9 w-9 rounded-lg flex-shrink-0" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-48" />
+                <div className="flex gap-2">
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="h-3 w-16" />
+                </div>
+              </div>
+              <Skeleton className="h-5 w-20 rounded-full" />
+            </div>
           ))}
         </div>
       ) : !agents?.length ? (
-        <EmptyState
-          icon={<Bot size={24} />}
-          title="No agents yet"
-          description="Create your first agent from a template to get started."
-          action={
-            <Button asChild size="sm">
-              <Link to="/agents/new">Create Agent</Link>
-            </Button>
-          }
-        />
+        <div role="status" aria-live="polite">
+          <EmptyState
+            icon={<Bot size={24} />}
+            title="No agents yet"
+            description="Create your first agent from a template to get started."
+            action={
+              <Button asChild size="sm">
+                <Link to="/agents/new">Create Agent</Link>
+              </Button>
+            }
+          />
+        </div>
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-sera-text-muted text-center py-12">
+        <p className="text-sm text-sera-text-muted text-center py-12" role="status" aria-live="polite">
           No agents match your filters.
         </p>
       ) : (
-        <div className="space-y-2">
+        <ul className="space-y-2" aria-label="Agents list">
           {filtered.map((agent) => (
-            <div
+            <li
               key={agent.id}
               className="sera-card relative flex items-center gap-4 px-4 py-3 group"
             >
@@ -178,8 +200,13 @@ export default function AgentsPage() {
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm text-sera-text truncate">
-                  {agent.display_name ?? agent.name}
+                <div className="font-medium text-sm text-sera-text truncate relative z-10">
+                  <Link
+                    to={`/agents/${agent.id}`}
+                    className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent focus-visible:ring-offset-2 rounded"
+                  >
+                    {agent.display_name ?? agent.name}
+                  </Link>
                 </div>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="text-xs text-sera-text-dim truncate">{agent.name}</span>
@@ -196,14 +223,15 @@ export default function AgentsPage() {
               </div>
 
               {/* Quick actions */}
-              <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                 <button
                   onClick={(e) => {
                     void handleStart(e, agent.id);
                   }}
                   disabled={startAgent.isPending}
-                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
+                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
                   title="Start"
+                  aria-label={`Start ${agent.name}`}
                 >
                   <Play size={13} />
                 </button>
@@ -212,8 +240,9 @@ export default function AgentsPage() {
                     void handleStop(e, agent.id);
                   }}
                   disabled={stopAgent.isPending}
-                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
                   title="Stop"
+                  aria-label={`Stop ${agent.name}`}
                 >
                   <Square size={13} />
                 </button>
@@ -222,23 +251,47 @@ export default function AgentsPage() {
                     void handleDelete(e, agent.id, agent.name);
                   }}
                   disabled={deleteAgent.isPending}
-                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sera-accent"
                   title="Delete"
+                  aria-label={`Delete ${agent.name}`}
                 >
                   <Trash2 size={13} />
                 </button>
               </div>
 
-              {/* Row is clickable */}
+              {/* Row is clickable (presentational overlay) */}
               <Link
                 to={`/agents/${agent.id}`}
                 className="absolute inset-0 rounded-xl"
-                aria-label={`View ${agent.name}`}
+                aria-hidden="true"
+                tabIndex={-1}
               />
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
-    </div>
+      <Dialog open={!!agentToDelete} onOpenChange={(open) => !open && setAgentToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Agent</DialogTitle>
+            <DialogDescription>
+              Delete agent "{agentToDelete?.name}"? This will stop its container and remove the instance permanently.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-3 mt-4">
+            <Button variant="outline" onClick={() => setAgentToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={confirmDelete}
+              disabled={deleteAgent.isPending}
+            >
+              {deleteAgent.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </main>
   );
 }

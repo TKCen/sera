@@ -1,15 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router';
-import {
-  ArrowLeft,
-  Play,
-  Square,
-  RotateCcw,
-  Bot,
-  Plus,
-  Trash2,
-  Shield,
-} from 'lucide-react';
+import { ArrowLeft, Play, Square, RotateCcw, Bot, Plus, Trash2, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,

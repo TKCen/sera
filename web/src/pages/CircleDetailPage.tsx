@@ -78,7 +78,7 @@ export default function CircleDetailPage() {
   const knowledge = circle.knowledge;
   const projectContent =
     typeof circle.projectContext === 'object' && circle.projectContext !== null
-      ? (circle.projectContext as Record<string, unknown>).content as string | undefined
+      ? ((circle.projectContext as Record<string, unknown>).content as string | undefined)
       : undefined;
 
   async function handleDelete() {
@@ -166,7 +166,9 @@ export default function CircleDetailPage() {
                   autoFocus
                 />
                 <button
-                  onClick={() => { void handleSaveDescription(); }}
+                  onClick={() => {
+                    void handleSaveDescription();
+                  }}
                   className="p-1 rounded text-sera-success hover:bg-sera-success/10"
                 >
                   <Check size={14} />
@@ -410,7 +412,9 @@ export default function CircleDetailPage() {
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
-                  onClick={() => { void handleSaveContext(); }}
+                  onClick={() => {
+                    void handleSaveContext();
+                  }}
                   disabled={savingContext}
                 >
                   <Save size={13} />
@@ -468,8 +472,8 @@ export default function CircleDetailPage() {
           <DialogHeader>
             <DialogTitle>Delete Circle</DialogTitle>
             <DialogDescription>
-              This will permanently remove the circle manifest from disk. Agents will be
-              unaffected but will lose their circle membership.
+              This will permanently remove the circle manifest from disk. Agents will be unaffected
+              but will lose their circle membership.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2 pt-2">
@@ -479,7 +483,9 @@ export default function CircleDetailPage() {
             <Button
               variant="danger"
               size="sm"
-              onClick={() => { void handleDelete(); }}
+              onClick={() => {
+                void handleDelete();
+              }}
               disabled={deleteCircle.isPending}
             >
               <Trash2 size={13} />

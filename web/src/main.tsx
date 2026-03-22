@@ -10,9 +10,9 @@ import { Toaster } from 'sonner';
 import { AppShell } from '@/components/AppShell';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 
-import ChatPage from '@/app/chat/page';
-import AgentsPage from '@/app/agents/page';
-import AgentDetailPage from '@/app/agents/[id]/page';
+import ChatPage from '@/pages/ChatPage';
+import AgentsPage from '@/pages/AgentsPage';
+import AgentDetailPage from '@/pages/AgentDetailPage';
 import AgentEditPage from '@/pages/AgentEditPage';
 import AgentNewPage from '@/pages/AgentNewPage';
 import CirclesPage from '@/pages/CirclesPage';

@@ -2,7 +2,7 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router';
-import ChatPage from '@/app/chat/page';
+import ChatPage from '@/pages/ChatPage';
 
 // Mock Centrifugo context — capture subscriptions so tests can push tokens
 const mockSubscriptions = new Map<string, Array<(data: unknown) => void>>();

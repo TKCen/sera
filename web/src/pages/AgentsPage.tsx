@@ -185,7 +185,11 @@ export default function AgentsPage() {
           />
         </div>
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-sera-text-muted text-center py-12" role="status" aria-live="polite">
+        <p
+          className="text-sm text-sera-text-muted text-center py-12"
+          role="status"
+          aria-live="polite"
+        >
           No agents match your filters.
         </p>
       ) : (
@@ -275,18 +279,15 @@ export default function AgentsPage() {
           <DialogHeader>
             <DialogTitle>Delete Agent</DialogTitle>
             <DialogDescription>
-              Delete agent "{agentToDelete?.name}"? This will stop its container and remove the instance permanently.
+              Delete agent "{agentToDelete?.name}"? This will stop its container and remove the
+              instance permanently.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-3 mt-4">
             <Button variant="outline" onClick={() => setAgentToDelete(null)}>
               Cancel
             </Button>
-            <Button
-              variant="danger"
-              onClick={confirmDelete}
-              disabled={deleteAgent.isPending}
-            >
+            <Button variant="danger" onClick={confirmDelete} disabled={deleteAgent.isPending}>
               {deleteAgent.isPending ? 'Deleting...' : 'Delete'}
             </Button>
           </div>

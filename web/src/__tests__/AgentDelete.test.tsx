@@ -143,7 +143,7 @@ describe('AgentsPage — delete agent', () => {
     renderPage();
     // The mock data has template_ref: 'sera' which renders in a Badge.
     // But no agent instance is *named* "sera" — the instance names are qwen-assistant and writer.
-    const agentNames = screen.getAllByRole('link', { name: /Qwen Assistant|Writer/ });
+    const agentNames = screen.getAllByText(/.+/, { selector: '.font-medium.text-sm' });
     const nameTexts = agentNames.map((el) => el.textContent);
     expect(nameTexts).not.toContain('sera');
   });
@@ -152,29 +152,26 @@ describe('AgentsPage — delete agent', () => {
 
   it('clicking Delete shows a confirmation dialog mentioning the agent name', async () => {
     const user = userEvent.setup();
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirmSpy);
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete qwen-assistant/);
-    await user.click(deleteButtons[0]!);
+    const [firstDelete] = screen.getAllByTitle('Delete');
+    await user.click(firstDelete!);
 
-    const dialogTitle = await screen.findByText('Delete Agent');
-    expect(dialogTitle).toBeInTheDocument();
-
-    // Radix Dialog renders the description slightly differently, matching text across elements
-    const textElements = await screen.findAllByText(/qwen-assistant/i);
-    const hasPermanently = textElements.some((el) => el.textContent?.match(/permanently/i));
-    expect(hasPermanently).toBe(true);
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    const firstCall = confirmSpy.mock.calls[0] as unknown as string[];
+    expect(firstCall[0]).toMatch(/qwen-assistant/);
+    expect(firstCall[0]).toMatch(/permanently/i);
   });
 
   it('confirms the dialog and calls deleteAgent with the correct agent name', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('confirm', () => true);
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete qwen-assistant/);
-    await user.click(deleteButtons[0]!);
-
-    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
-    await user.click(confirmButton);
+    const [firstDelete] = screen.getAllByTitle('Delete');
+    await user.click(firstDelete!);
 
     await waitFor(() => {
       expect(mockDeleteFn).toHaveBeenCalledOnce();
@@ -184,35 +181,26 @@ describe('AgentsPage — delete agent', () => {
 
   it('cancelling the confirmation does NOT call deleteAgent', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('confirm', () => false);
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete qwen-assistant/);
-    await user.click(deleteButtons[0]!);
-
-    const cancelButton = await screen.findByRole('button', { name: 'Cancel' });
-    await user.click(cancelButton);
+    const [firstDelete] = screen.getAllByTitle('Delete');
+    await user.click(firstDelete!);
 
     // Give any async mutations a chance to fire
     await new Promise((r) => setTimeout(r, 50));
     expect(mockDeleteFn).not.toHaveBeenCalled();
-
-    // Dialog should close
-    await waitFor(() => {
-      expect(screen.queryByText('Delete Agent')).not.toBeInTheDocument();
-    });
   });
 
   // ── Success / error feedback ───────────────────────────────────────────────
 
   it('shows a success toast after confirmed deletion', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('confirm', () => true);
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete qwen-assistant/);
-    await user.click(deleteButtons[0]!);
-
-    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
-    await user.click(confirmButton);
+    const [firstDelete] = screen.getAllByTitle('Delete');
+    await user.click(firstDelete!);
 
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/qwen-assistant/));
@@ -221,14 +209,12 @@ describe('AgentsPage — delete agent', () => {
 
   it('shows an error toast when deleteAgent rejects', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('confirm', () => true);
     mockDeleteFn.mockRejectedValueOnce(new Error('Network error'));
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete qwen-assistant/);
-    await user.click(deleteButtons[0]!);
-
-    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
-    await user.click(confirmButton);
+    const [firstDelete] = screen.getAllByTitle('Delete');
+    await user.click(firstDelete!);
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Network error');
@@ -239,13 +225,11 @@ describe('AgentsPage — delete agent', () => {
 
   it('deletes the correct agent when the second Delete button is clicked', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('confirm', () => true);
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete writer/);
-    await user.click(deleteButtons[0]!);
-
-    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
-    await user.click(confirmButton);
+    const deleteButtons = screen.getAllByTitle('Delete');
+    await user.click(deleteButtons[1]!);
 
     await waitFor(() => {
       expect(mockDeleteFn).toHaveBeenCalledWith('inst-002');
@@ -256,13 +240,11 @@ describe('AgentsPage — delete agent', () => {
 
   it('Delete button click does not navigate to the agent detail page', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('confirm', () => false); // cancel so no API call, just checking nav
     renderPage();
 
-    const deleteButtons = screen.getAllByLabelText(/Delete qwen-assistant/);
-    await user.click(deleteButtons[0]!);
-
-    const cancelButton = await screen.findByRole('button', { name: 'Cancel' });
-    await user.click(cancelButton);
+    const [firstDelete] = screen.getAllByTitle('Delete');
+    await user.click(firstDelete!);
 
     // URL should remain on /agents (BrowserRouter starts at /)
     expect(window.location.pathname).not.toMatch(/\/agents\/qwen-assistant/);

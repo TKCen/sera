@@ -613,5 +613,3 @@ function LogsTab({ id }: { id: string }) {
     </div>
   );
 }
-
-

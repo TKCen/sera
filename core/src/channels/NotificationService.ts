@@ -9,8 +9,12 @@ import { WebhookChannel } from './adapters/WebhookChannel.js';
 import { EmailChannel } from './adapters/EmailChannel.js';
 import { DiscordChannel } from './adapters/DiscordChannel.js';
 import { SlackChannel } from './adapters/SlackChannel.js';
+import { DiscordChatAdapter } from './adapters/DiscordChatAdapter.js';
+import type { DiscordChatConfig } from './adapters/DiscordChatAdapter.js';
 import { AuditService } from '../audit/AuditService.js';
 import type { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { SessionStore } from '../sessions/SessionStore.js';
 
 const logger = new Logger('NotificationService');
 
@@ -29,6 +33,9 @@ export class NotificationService {
   private static instance: NotificationService;
   private boss: PgBoss | null = null;
   private permissionService: PermissionRequestService | null = null;
+  private orchestrator: Orchestrator | null = null;
+  private sessionStore: SessionStore | null = null;
+  private chatAdapters = new Map<string, DiscordChatAdapter>();
   private initialized = false;
 
   private constructor() {}
@@ -42,6 +49,14 @@ export class NotificationService {
 
   setPermissionService(svc: PermissionRequestService): void {
     this.permissionService = svc;
+  }
+
+  setOrchestrator(orchestrator: Orchestrator): void {
+    this.orchestrator = orchestrator;
+  }
+
+  setSessionStore(sessionStore: SessionStore): void {
+    this.sessionStore = sessionStore;
   }
 
   async start(boss: PgBoss): Promise<void> {
@@ -106,8 +121,12 @@ export class NotificationService {
 
       for (const row of rows) {
         try {
-          const channel = this.buildAdapter(row.id, row.name, row.type, row.config);
-          if (channel) ChannelRouter.getInstance().register(channel);
+          if (row.type === 'discord-chat') {
+            this.startChatAdapter(row.id, row.config);
+          } else {
+            const channel = this.buildAdapter(row.id, row.name, row.type, row.config);
+            if (channel) ChannelRouter.getInstance().register(channel);
+          }
         } catch (err) {
           logger.warn(`Failed to build adapter for channel ${row.id} (${row.type}):`, err);
         }
@@ -146,9 +165,75 @@ export class NotificationService {
         if (!webhookUrl || typeof webhookUrl !== 'string') return null;
         return new SlackChannel(id, name, config);
       }
+      case 'discord-chat':
+        // Handled separately — this is a bidirectional chat adapter, not a notification channel
+        return null;
       default:
         logger.warn(`Unknown channel type: ${type}`);
         return null;
+    }
+  }
+
+  /**
+   * Start a DiscordChatAdapter for a discord-chat channel config.
+   */
+  private startChatAdapter(channelId: string, config: Record<string, unknown>): void {
+    if (!this.orchestrator || !this.sessionStore) {
+      logger.warn('Cannot start discord-chat adapter: orchestrator/sessionStore not set');
+      return;
+    }
+
+    const botToken = config['botToken'];
+    const targetAgentId = config['targetAgentId'];
+    if (typeof botToken !== 'string' || typeof targetAgentId !== 'string') {
+      logger.warn(`Invalid discord-chat config for channel ${channelId}`);
+      return;
+    }
+
+    const chatConfig: DiscordChatConfig = {
+      botToken,
+      targetAgentId,
+      ...(Array.isArray(config['allowedGuilds'])
+        ? { allowedGuilds: config['allowedGuilds'] as string[] }
+        : {}),
+      ...(Array.isArray(config['allowedUsers'])
+        ? { allowedUsers: config['allowedUsers'] as string[] }
+        : {}),
+      ...(typeof config['allowDMs'] === 'boolean' ? { allowDMs: config['allowDMs'] } : {}),
+      ...(typeof config['allowMentions'] === 'boolean'
+        ? { allowMentions: config['allowMentions'] }
+        : {}),
+      ...(typeof config['responsePrefix'] === 'string'
+        ? { responsePrefix: config['responsePrefix'] }
+        : {}),
+    };
+
+    const adapter = new DiscordChatAdapter(
+      channelId,
+      chatConfig,
+      this.orchestrator,
+      this.sessionStore
+    );
+    this.chatAdapters.set(channelId, adapter);
+    adapter
+      .start()
+      .catch((err: unknown) =>
+        logger.error(`Failed to start discord-chat adapter ${channelId}:`, err)
+      );
+  }
+
+  /**
+   * Stop a DiscordChatAdapter by channel ID.
+   */
+  private stopChatAdapter(channelId: string): void {
+    const adapter = this.chatAdapters.get(channelId);
+    if (adapter) {
+      adapter
+        .stop()
+        .catch((err: unknown) =>
+          logger.error(`Failed to stop discord-chat adapter ${channelId}:`, err)
+        );
+      this.chatAdapters.delete(channelId);
     }
   }
 
@@ -178,8 +263,12 @@ export class NotificationService {
 
     const row = rows[0]!;
 
-    const channel = this.buildAdapter(row.id, row.name, row.type, row.config);
-    if (channel) ChannelRouter.getInstance().register(channel);
+    if (row.type === 'discord-chat') {
+      this.startChatAdapter(row.id, row.config);
+    } else {
+      const channel = this.buildAdapter(row.id, row.name, row.type, row.config);
+      if (channel) ChannelRouter.getInstance().register(channel);
+    }
 
     return {
       id: row.id,
@@ -193,6 +282,7 @@ export class NotificationService {
 
   async deleteChannel(id: string): Promise<boolean> {
     ChannelRouter.getInstance().unregister(id);
+    this.stopChatAdapter(id);
     await pool.query('DELETE FROM notification_routing_rules WHERE $1 = ANY(channel_ids)', [id]);
     const { rowCount } = await pool.query('DELETE FROM notification_channels WHERE id = $1', [id]);
     return (rowCount ?? 0) > 0;

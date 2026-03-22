@@ -127,3 +127,18 @@ export function testDynamicConnection(
     }
   );
 }
+
+// ── Default Model ────────────────────────────────────────────────────────────
+
+export function getDefaultModel(): Promise<{ defaultModel: string | null }> {
+  return request<{ defaultModel: string | null }>('/providers/default-model');
+}
+
+export function setDefaultModel(
+  modelName: string
+): Promise<{ success: boolean; defaultModel: string }> {
+  return request<{ success: boolean; defaultModel: string }>('/providers/default-model', {
+    method: 'PUT',
+    body: JSON.stringify({ modelName }),
+  });
+}

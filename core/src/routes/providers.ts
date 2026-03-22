@@ -249,6 +249,29 @@ export function createProvidersRouter(
     res.json(state);
   });
 
+  // ── Default Model ──────────────────────────────────────────────────────────
+
+  /** GET /api/providers/default-model — get the current default model name. */
+  router.get('/default-model', (_req: Request, res: Response) => {
+    const registry = llmRouter.getRegistry();
+    res.json({ defaultModel: registry.getDefaultModel() });
+  });
+
+  /** PUT /api/providers/default-model — set the default model name. */
+  router.put('/default-model', (req: Request, res: Response) => {
+    try {
+      const { modelName } = req.body as { modelName: string };
+      if (!modelName) {
+        return res.status(400).json({ error: 'modelName is required' });
+      }
+      const registry = llmRouter.getRegistry();
+      registry.setDefaultModel(modelName);
+      res.json({ success: true, defaultModel: modelName });
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   return router;
 }
 

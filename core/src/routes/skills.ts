@@ -9,43 +9,28 @@ import type { Pool } from 'pg';
 import type { SkillRegistry } from '../skills/SkillRegistry.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { SkillLibrary } from '../skills/SkillLibrary.js';
+import { SkillRegistryService } from '../skills/adapters/SkillRegistryService.js';
 
 export function createSkillsRouter(
-  skillRegistry: SkillRegistry,
+  _skillRegistry: SkillRegistry,
   orchestrator: Orchestrator,
   pool: Pool
 ) {
   const router = Router();
 
-  // ── List all skills ───────────────────────────────────────────────────────
+  // ── List guidance skills (text documents, not executable tools) ───────────
   /**
-   * Lists all registered skills (both executable and guidance docs).
+   * Returns only guidance skills from the SkillLibrary (markdown documents
+   * stored in the DB). Executable tools are served by GET /api/tools.
    */
-  router.get('/', async (req, res) => {
+  router.get('/', async (_req, res) => {
     try {
-      // 1. Get executable skills (builtin + MCP) from registry
-      const executableSkills = skillRegistry.listAll();
-
-      // 2. Get guidance skills from SkillLibrary (DB)
       const skillLibrary = SkillLibrary.getInstance(pool);
       const guidanceSkills = await skillLibrary.listSkills();
 
-      // Enrich executable skills with usage info
+      // Enrich with usage info
       const manifests = orchestrator.getAllManifests();
-      const enrichedExec = executableSkills.map((skill) => {
-        const usedBy: string[] = [];
-        for (const manifest of manifests) {
-          const skills = (manifest.skills ?? []).map((s) => (typeof s === 'string' ? s : s.name));
-          const agentSkills = new Set<string>([...skills, ...(manifest.tools?.allowed ?? [])]);
-          if (agentSkills.has(skill.id)) {
-            usedBy.push(manifest.metadata.name);
-          }
-        }
-        return { ...skill, type: 'executable', usedBy };
-      });
-
-      // Enrich guidance skills with usage info
-      const enrichedGuidance = guidanceSkills.map((skill) => {
+      const enriched = guidanceSkills.map((skill) => {
         const usedBy: string[] = [];
         for (const manifest of manifests) {
           const skills = (manifest.skills ?? []).map((s) => (typeof s === 'string' ? s : s.name));
@@ -53,10 +38,25 @@ export function createSkillsRouter(
             usedBy.push(manifest.metadata.name);
           }
         }
-        return { ...skill, id: skill.name, type: 'guidance', usedBy };
+        return { ...skill, id: skill.name, usedBy };
       });
 
-      res.json([...enrichedExec, ...enrichedGuidance]);
+      res.json(enriched);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Search external skill registries (must be before /:name) ─────────────
+  router.get('/registry/search', async (req, res) => {
+    try {
+      const query = (req.query.q as string) || '';
+      const source = req.query.source as string | undefined;
+
+      const registryService = SkillRegistryService.getInstance(pool);
+      const results = await registryService.search(query, source);
+
+      res.json(results);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -76,6 +76,84 @@ export function createSkillsRouter(
       }
 
       res.json(skill);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Create or update a guidance skill ────────────────────────────────────
+  router.post('/', async (req, res) => {
+    try {
+      const { name, version, description, triggers, category, tags, maxTokens, content } =
+        req.body as {
+          name?: string;
+          version?: string;
+          description?: string;
+          triggers?: string[];
+          category?: string;
+          tags?: string[];
+          maxTokens?: number;
+          content?: string;
+        };
+
+      if (!name || !version || !description || !content) {
+        return res
+          .status(400)
+          .json({ error: 'name, version, description, and content are required' });
+      }
+
+      const skillLibrary = SkillLibrary.getInstance(pool);
+      await skillLibrary.createSkill(
+        {
+          name,
+          version,
+          description,
+          triggers: triggers ?? [],
+          ...(category ? { category } : {}),
+          ...(tags ? { tags } : {}),
+          ...(maxTokens != null ? { maxTokens } : {}),
+        },
+        content
+      );
+
+      res.status(201).json({ message: `Skill "${name}" v${version} created` });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Delete a guidance skill ────────────────────────────────────────────────
+  router.delete('/:name', async (req, res) => {
+    try {
+      const { name } = req.params;
+      const { version } = req.query;
+
+      const skillLibrary = SkillLibrary.getInstance(pool);
+      const deleted = await skillLibrary.deleteSkill(name, version as string | undefined);
+
+      if (!deleted) {
+        return res.status(404).json({ error: `Skill "${name}" not found` });
+      }
+
+      res.json({ message: `Skill "${name}" deleted` });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Import a skill from an external registry ──────────────────────────────
+  router.post('/import', async (req, res) => {
+    try {
+      const { source, skillId } = req.body as { source?: string; skillId?: string };
+
+      if (!source || !skillId) {
+        return res.status(400).json({ error: 'source and skillId are required' });
+      }
+
+      const registryService = SkillRegistryService.getInstance(pool);
+      await registryService.importSkill(source, skillId);
+
+      res.status(201).json({ message: `Skill "${skillId}" imported from ${source}` });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

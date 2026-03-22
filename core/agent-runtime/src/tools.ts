@@ -211,6 +211,16 @@ export class RuntimeToolExecutor {
       this.logInvocation(toolName, 'success', Date.now() - start);
       return { role: 'tool', tool_call_id: id, content: this.truncate(result) };
     } catch (err) {
+      // Story 3.10: If a file tool path is outside workspace, try proxying
+      if (err instanceof PermissionDeniedError && this.isProxyAvailable()) {
+        const fileTools = new Set(['file-read', 'file-write', 'file-list', 'file-delete']);
+        if (fileTools.has(toolName)) {
+          // Parse args again (already parsed above but out of scope)
+          const params = parseJson(fn.arguments || '{}');
+          return this.executeProxiedTool(id, toolName, params, start);
+        }
+      }
+
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.logInvocation(toolName, 'error', Date.now() - start);
       return { role: 'tool', tool_call_id: id, content: `Error: ${errorMsg}` };
@@ -313,6 +323,16 @@ export class RuntimeToolExecutor {
       throw new NotPermittedError('shell-exec is not available for tier-1 agents');
     }
 
+    // Story 3.10: Check if shell command references paths outside workspace
+    // that would require a persistent grant + container restart
+    const outsidePath = this.checkShellPathRestriction(command);
+    if (outsidePath && this.isProxyAvailable()) {
+      return JSON.stringify({
+        error: 'path_requires_restart',
+        hint: `Path "${outsidePath}" is outside /workspace. Shell access to dynamically granted paths requires a persistent grant and container restart. Use POST /api/agents/:id/restart after granting persistent access.`,
+      });
+    }
+
     const timeout = timeoutMs ?? DEFAULT_SHELL_TIMEOUT_MS;
 
     const result = spawnSync('bash', ['-c', command], {
@@ -331,6 +351,93 @@ export class RuntimeToolExecutor {
     }
 
     return `Exit code: ${exitCode}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`;
+  }
+
+  // ── Proxy Support (Story 3.10) ────────────────────────────────────────────
+
+  /** Check if the sera-core proxy is available. Read env at call time for testability. */
+  private isProxyAvailable(): boolean {
+    return !!(process.env['SERA_CORE_URL'] && process.env['SERA_IDENTITY_TOKEN']);
+  }
+
+  /**
+   * Forward a file tool call to sera-core's /v1/tools/proxy endpoint.
+   * The proxy validates that the agent has an active grant for the path.
+   */
+  private executeProxiedTool(
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    startMs: number,
+  ): ChatMessage {
+    try {
+      // Use synchronous XMLHttpRequest pattern via spawnSync + curl for bun compat
+      // Bun supports top-level await but executeTool is sync — use spawnSync
+      const coreUrl = process.env['SERA_CORE_URL'] ?? '';
+      const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
+      const body = JSON.stringify({ tool: toolName, args });
+      const result = spawnSync('curl', [
+        '-s', '-X', 'POST',
+        `${coreUrl}/v1/tools/proxy`,
+        '-H', 'Content-Type: application/json',
+        '-H', `Authorization: Bearer ${token}`,
+        '-d', body,
+        '-w', '\n%{http_code}',
+      ], {
+        timeout: 30_000,
+        encoding: 'utf-8',
+        maxBuffer: 2 * 1024 * 1024,
+      });
+
+      const output = result.stdout ?? '';
+      const lines = output.trimEnd().split('\n');
+      const httpStatus = lines.pop() ?? '';
+      const responseBody = lines.join('\n');
+
+      if (httpStatus === '403') {
+        this.logInvocation(toolName, 'error', Date.now() - startMs);
+        return {
+          role: 'tool',
+          tool_call_id: toolCallId,
+          content: `Error: No active grant for this path. Request filesystem access first.`,
+        };
+      }
+
+      if (httpStatus !== '200') {
+        this.logInvocation(toolName, 'error', Date.now() - startMs);
+        return {
+          role: 'tool',
+          tool_call_id: toolCallId,
+          content: `Error: Proxy returned HTTP ${httpStatus}: ${responseBody}`,
+        };
+      }
+
+      const parsed = parseJson(responseBody);
+      const content = parsed['result'] as string | undefined ?? parsed['error'] as string | undefined ?? responseBody;
+      this.logInvocation(toolName, 'success', Date.now() - startMs);
+      return { role: 'tool', tool_call_id: toolCallId, content: this.truncate(String(content)) };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.logInvocation(toolName, 'error', Date.now() - startMs);
+      return { role: 'tool', tool_call_id: toolCallId, content: `Error: Proxy call failed: ${errorMsg}` };
+    }
+  }
+
+  /**
+   * Check if a shell command references a path that is outside /workspace
+   * and would require a persistent grant + restart for shell access.
+   */
+  private checkShellPathRestriction(command: string): string | undefined {
+    // Simple heuristic: check if the command contains absolute paths outside workspace
+    const absPathPattern = /(?:^|\s)(\/(?!workspace\b)[^\s]+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = absPathPattern.exec(command)) !== null) {
+      const matchedPath = match[1];
+      if (matchedPath && !matchedPath.startsWith(this.workspacePath)) {
+        return matchedPath;
+      }
+    }
+    return undefined;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

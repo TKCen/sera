@@ -161,8 +161,77 @@ export class Orchestrator {
     const instance = await AgentFactory.getInstance(instanceId);
     if (!instance) throw new Error(`Agent instance "${instanceId}" not found`);
 
-    const manifest = await this.registry.getTemplate(instance.template_ref);
-    if (manifest) this.manifests.set(instance.template_ref, manifest as AgentManifest);
+    const templateRow = await this.registry.getTemplate(instance.template_ref);
+    if (!templateRow) {
+      throw new Error(
+        `Template "${instance.template_ref}" not found for instance "${instance.name}" (${instanceId})`
+      );
+    }
+
+    // Convert the DB template row into an AgentManifest shape.
+    // getTemplate() returns a raw DB row ({ name, display_name, spec, ... })
+    // but AgentFactory.createAgent expects { metadata, identity, model, spec }.
+    const manifest: AgentManifest = {
+      apiVersion: 'sera/v1',
+      kind: 'Agent',
+      metadata: {
+        name: templateRow.name,
+        displayName: templateRow.display_name ?? templateRow.name,
+        icon: templateRow.spec?.identity?.icon ?? '',
+        circle: templateRow.spec?.circle ?? instance.circle,
+        tier:
+          templateRow.spec?.sandboxBoundary === 'tier-3'
+            ? 3
+            : templateRow.spec?.sandboxBoundary === 'tier-2'
+              ? 2
+              : 1,
+      },
+      identity: {
+        role: templateRow.spec?.identity?.role ?? templateRow.name,
+        description: templateRow.spec?.identity?.description ?? '',
+        communicationStyle: templateRow.spec?.identity?.communicationStyle,
+        principles: templateRow.spec?.identity?.principles,
+      },
+      model: {
+        provider: templateRow.spec?.model?.provider ?? 'default',
+        name: templateRow.spec?.model?.name ?? 'default',
+        temperature: templateRow.spec?.model?.temperature,
+        fallback: templateRow.spec?.model?.fallback,
+      },
+      spec: templateRow.spec ?? {},
+    };
+
+    // ── Apply instance overrides (model, sandboxBoundary, resources) ──────
+    const overrides = (instance.overrides ?? {}) as Record<string, unknown>;
+    const modelOv = overrides.model as Record<string, unknown> | undefined;
+    if (modelOv) {
+      if (modelOv.name) manifest.model.name = modelOv.name as string;
+      if (modelOv.provider) manifest.model.provider = modelOv.provider as string;
+      if (modelOv.temperature !== undefined) {
+        manifest.model.temperature = modelOv.temperature as number;
+      }
+    }
+    if (overrides.sandboxBoundary) {
+      manifest.spec = {
+        ...(manifest.spec ?? {}),
+        sandboxBoundary: overrides.sandboxBoundary as string,
+      };
+      // Also update metadata tier for consistency
+      const sb = overrides.sandboxBoundary as string;
+      manifest.metadata.tier = sb === 'tier-3' ? 3 : sb === 'tier-2' ? 2 : 1;
+    }
+    const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
+    if (resourcesOv) {
+      manifest.spec = {
+        ...(manifest.spec ?? {}),
+        resources: {
+          ...((manifest.spec?.resources as Record<string, unknown>) ?? {}),
+          ...resourcesOv,
+        },
+      };
+    }
+
+    this.manifests.set(instance.template_ref, manifest);
 
     const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom, this.llmRouter);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
@@ -173,7 +242,7 @@ export class Orchestrator {
 
     // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────
     const templateLifecycle =
-      (manifest as AgentManifest).spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
+      manifest.spec?.lifecycle?.mode ?? instance.lifecycle_mode ?? 'persistent';
     const resolvedLifecycle: 'persistent' | 'ephemeral' = templateLifecycle as
       | 'persistent'
       | 'ephemeral';
@@ -253,9 +322,7 @@ export class Orchestrator {
             {
               agentId: instance.id,
               agentName: manifest.metadata.name,
-              circleId: (resolvedCircleId ||
-                (manifest as AgentManifest).metadata.circle ||
-                '') as string,
+              circleId: (resolvedCircleId || manifest.metadata.circle || '') as string,
               capabilities: resolvedCapabilities as Record<string, unknown>,
               scope: 'agent',
             },

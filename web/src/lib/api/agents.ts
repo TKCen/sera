@@ -8,6 +8,8 @@ import type {
   AgentMemoryBlock,
   ThoughtEvent,
   CreateAgentInstanceParams,
+  CapabilityGrant,
+  CreateGrantParams,
 } from './types';
 
 // ── Instance-based endpoints ─────────────────────────────────────────────────
@@ -36,6 +38,22 @@ export function startAgent(id: string): Promise<AgentInstance> {
 export function stopAgent(id: string): Promise<AgentInstance> {
   return request<AgentInstance>(`/agents/instances/${encodeURIComponent(id)}/stop`, {
     method: 'POST',
+  });
+}
+
+export function updateAgentInstance(
+  id: string,
+  params: {
+    name?: string;
+    displayName?: string;
+    circle?: string;
+    lifecycleMode?: string;
+    overrides?: Record<string, unknown>;
+  }
+): Promise<AgentInstance> {
+  return request<AgentInstance>(`/agents/instances/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(params),
   });
 }
 
@@ -88,4 +106,27 @@ export function createAgentTask(id: string, input: string): Promise<AgentTask> {
 export function getAgentThoughts(id: string, taskId?: string): Promise<ThoughtEvent[]> {
   const params = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
   return request<ThoughtEvent[]>(`/agents/${encodeURIComponent(id)}/thoughts${params}`);
+}
+
+// ── Capability Grants ────────────────────────────────────────────────────────
+
+export function getAgentGrants(
+  id: string
+): Promise<{ session: CapabilityGrant[]; persistent: CapabilityGrant[] }> {
+  return request<{ session: CapabilityGrant[]; persistent: CapabilityGrant[] }>(
+    `/agents/${encodeURIComponent(id)}/grants`
+  );
+}
+
+export function createAgentGrant(id: string, params: CreateGrantParams): Promise<CapabilityGrant> {
+  return request<CapabilityGrant>(`/agents/${encodeURIComponent(id)}/grants`, {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function revokeAgentGrant(id: string, grantId: string): Promise<void> {
+  return request<void>(`/agents/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}`, {
+    method: 'DELETE',
+  });
 }

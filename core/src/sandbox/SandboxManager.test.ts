@@ -260,6 +260,94 @@ describe('SandboxManager', () => {
     });
   });
 
+  describe('persistent grant bind mounts (Story 3.10)', () => {
+    it('should include persistent filesystem grants as bind mounts', async () => {
+      const mockRegistry = {
+        getActiveFilesystemGrants: vi.fn().mockResolvedValue([
+          { id: 'grant-1', value: '/data/shared', grant_type: 'persistent' },
+          { id: 'grant-2', value: '/opt/models', grant_type: 'persistent' },
+        ]),
+      };
+      manager.setAgentRegistry(
+        mockRegistry as unknown as import('../agents/registry.service.js').AgentRegistry
+      );
+
+      const manifest = makeManifest();
+      const req: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      await manager.spawn(manifest, req, {}, 'inst-grants');
+
+      const createArgs = mockDocker.createContainer.mock.calls[0]![0];
+      const binds: string[] = createArgs.HostConfig.Binds;
+
+      expect(binds).toContain('/data/shared:/data/shared:rw');
+      expect(binds).toContain('/opt/models:/opt/models:rw');
+      expect(mockRegistry.getActiveFilesystemGrants).toHaveBeenCalledWith('inst-grants');
+    });
+
+    it('should skip non-persistent grants', async () => {
+      const mockRegistry = {
+        getActiveFilesystemGrants: vi
+          .fn()
+          .mockResolvedValue([{ id: 'grant-1', value: '/data/temp', grant_type: 'session' }]),
+      };
+      manager.setAgentRegistry(
+        mockRegistry as unknown as import('../agents/registry.service.js').AgentRegistry
+      );
+
+      const manifest = makeManifest();
+      const req: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      await manager.spawn(manifest, req, {}, 'inst-session-only');
+
+      const createArgs = mockDocker.createContainer.mock.calls[0]![0];
+      const binds: string[] = createArgs.HostConfig.Binds;
+
+      expect(binds.some((b: string) => b.includes('/data/temp'))).toBe(false);
+    });
+
+    it('should handle registry errors gracefully', async () => {
+      const mockRegistry = {
+        getActiveFilesystemGrants: vi.fn().mockRejectedValue(new Error('DB connection failed')),
+      };
+      manager.setAgentRegistry(
+        mockRegistry as unknown as import('../agents/registry.service.js').AgentRegistry
+      );
+
+      const manifest = makeManifest();
+      const req: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      // Should not throw — error is logged and spawn continues
+      const info = await manager.spawn(manifest, req, {}, 'inst-err');
+      expect(info.status).toBe('running');
+    });
+
+    it('should spawn normally when no registry is set', async () => {
+      // No setAgentRegistry call — agentRegistry is undefined
+      const manifest = makeManifest();
+      const req: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      const info = await manager.spawn(manifest, req, {}, 'inst-no-reg');
+      expect(info.status).toBe('running');
+    });
+  });
+
   describe('exec', () => {
     it('should execute a command in a running container', async () => {
       const manifest = makeManifest();

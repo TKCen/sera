@@ -148,10 +148,10 @@ describe('ChatPage streaming', () => {
 
     // Wait for channel subscriptions to be set up
     await waitFor(() => {
-      expect(mockSubscriptions.has('tokens:test-agent')).toBe(true);
+      expect(mockSubscriptions.has('tokens:inst-test-1')).toBe(true);
     });
 
-    const thoughtListeners = mockSubscriptions.get('thoughts:test-agent');
+    const thoughtListeners = mockSubscriptions.get('thoughts:inst-test-1');
     expect(thoughtListeners).toBeDefined();
   });
 
@@ -165,29 +165,29 @@ describe('ChatPage streaming', () => {
     await waitFor(() => screen.getByText('Test Agent'));
 
     // Wait for token channel subscription
-    await waitFor(() => expect(mockSubscriptions.has('tokens:test-agent')).toBe(true));
+    await waitFor(() => expect(mockSubscriptions.has('tokens:inst-test-1')).toBe(true));
 
     // Emit a token — triggers streaming state
     act(() => {
-      emitToken('test-agent', 'Hello');
+      emitToken('inst-test-1', 'Hello');
     });
 
     // The token payload should have been dispatched to useChannel
     // (state is set; even if the streaming guard returns early without a message, the token arrived)
 
     act(() => {
-      emitToken('test-agent', ' world');
+      emitToken('inst-test-1', ' world');
     });
 
     // Emit done token
     act(() => {
-      emitToken('test-agent', '', true);
+      emitToken('inst-test-1', '', true);
     });
 
     // After done, streaming should be reset (textarea re-enabled)
     // This confirms done handling works
     await waitFor(() => {
-      expect(mockSubscriptions.has('tokens:test-agent')).toBe(true);
+      expect(mockSubscriptions.has('tokens:inst-test-1')).toBe(true);
     });
   });
 

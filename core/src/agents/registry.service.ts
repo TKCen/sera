@@ -218,6 +218,25 @@ export class AgentRegistry {
     return res.rows[0];
   }
 
+  async updateInstance(id: string, fields: Record<string, unknown>) {
+    const allowed = ['name', 'display_name', 'circle', 'lifecycle_mode', 'overrides'];
+    const setClauses: string[] = [];
+    const values: unknown[] = [id];
+    let idx = 2;
+    for (const key of Object.keys(fields)) {
+      if (allowed.includes(key)) {
+        setClauses.push(`${key} = $${idx}`);
+        values.push(key === 'overrides' ? JSON.stringify(fields[key]) : fields[key]);
+        idx++;
+      }
+    }
+    if (setClauses.length === 0) return this.getInstance(id);
+    setClauses.push('updated_at = NOW()');
+    const queryText = `UPDATE agent_instances SET ${setClauses.join(', ')} WHERE id = $1 RETURNING *`;
+    const res = await this.pool.query(queryText, values);
+    return res.rows[0];
+  }
+
   async deleteInstance(id: string) {
     const res = await this.pool.query('DELETE FROM agent_instances WHERE id = $1 RETURNING *', [
       id,
@@ -416,6 +435,26 @@ export class AgentRegistry {
     query += ' ORDER BY created_at DESC';
     const res = await this.pool.query(query, [agentInstanceId]);
     return res.rows;
+  }
+
+  /**
+   * Get active (non-expired, non-revoked) filesystem grants for an agent instance.
+   * Used by Story 3.10 for persistent grant validation and bind mount assembly.
+   */
+  async getActiveFilesystemGrants(
+    agentInstanceId: string
+  ): Promise<Array<{ id: string; value: string; grant_type: string }>> {
+    const res = await this.pool.query(
+      `SELECT id, value, grant_type
+       FROM capability_grants
+       WHERE agent_instance_id = $1
+         AND dimension = 'filesystem'
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY created_at DESC`,
+      [agentInstanceId]
+    );
+    return res.rows as Array<{ id: string; value: string; grant_type: string }>;
   }
 
   async revokeCapabilityGrant(grantId: string) {

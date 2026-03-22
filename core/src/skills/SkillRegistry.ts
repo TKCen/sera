@@ -1,6 +1,7 @@
 import type { AgentManifest } from '../agents/manifest/types.js';
 import type { MCPRegistry } from '../mcp/registry.js';
-import type { SkillDefinition, SkillResult, SkillInfo } from './types.js';
+import type { SkillDefinition, SkillResult, SkillInfo, ToolInfoResponse } from './types.js';
+import { TOOL_TIER_REQUIREMENTS } from './types.js';
 
 /**
  * Central registry for all agent skills.
@@ -50,6 +51,25 @@ export class SkillRegistry {
   /** List all registered skills (without handler — safe for serialization). */
   listAll(): SkillInfo[] {
     return [...this.skills.values()].map(SkillRegistry.toInfo);
+  }
+
+  /** List executable tools with security metadata (for the /api/tools endpoint). */
+  listTools(): ToolInfoResponse[] {
+    return [...this.skills.values()].map((skill) => {
+      const server = skill.source === 'mcp' ? skill.id.split('/')[0] : undefined;
+      const tierReq = TOOL_TIER_REQUIREMENTS[skill.id];
+      const isSeraCoreManagement = server === 'sera-core';
+      return {
+        id: skill.id,
+        description: skill.description,
+        parameters: skill.parameters,
+        source: skill.source,
+        ...(server ? { server } : {}),
+        minTier: (tierReq?.minTier ?? (skill.source === 'mcp' ? 2 : 1)) as 1 | 2 | 3,
+        ...(isSeraCoreManagement ? { capabilityRequired: 'seraManagement' } : {}),
+        ...(tierReq?.capability ? { capabilityRequired: tierReq.capability } : {}),
+      };
+    });
   }
 
   /**

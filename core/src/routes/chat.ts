@@ -3,11 +3,16 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../lib/logger.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { SessionStore } from '../sessions/SessionStore.js';
+import type { AgentRegistry } from '../agents/registry.service.js';
 import type { ChatMessage } from '../agents/types.js';
 
 const logger = new Logger('ChatRouter');
 
-export function createChatRouter(sessionStore: SessionStore, orchestrator: Orchestrator) {
+export function createChatRouter(
+  sessionStore: SessionStore,
+  orchestrator: Orchestrator,
+  agentRegistry?: AgentRegistry
+) {
   const router = Router();
 
   /**
@@ -69,6 +74,17 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
         agentName = agent.role;
       } else if (incomingAgent) {
         agent = orchestrator.getAgent(incomingAgent);
+        if (!agent && agentRegistry) {
+          // Fallback: look up agent instance by name in the DB and start it
+          const instance = await agentRegistry.getInstanceByName(incomingAgent);
+          if (instance) {
+            try {
+              agent = await orchestrator.startInstance(instance.id);
+            } catch (startErr) {
+              logger.error(`Failed to start instance for agent "${incomingAgent}":`, startErr);
+            }
+          }
+        }
         if (!agent) {
           return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
         }
@@ -164,6 +180,16 @@ export function createChatRouter(sessionStore: SessionStore, orchestrator: Orche
         agentName = agent.role;
       } else if (incomingAgent) {
         agent = orchestrator.getAgent(incomingAgent);
+        if (!agent && agentRegistry) {
+          const instance = await agentRegistry.getInstanceByName(incomingAgent);
+          if (instance) {
+            try {
+              agent = await orchestrator.startInstance(instance.id);
+            } catch (startErr) {
+              logger.error(`Failed to start instance for agent "${incomingAgent}":`, startErr);
+            }
+          }
+        }
         if (!agent) {
           return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
         }

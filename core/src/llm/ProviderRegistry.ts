@@ -91,11 +91,13 @@ const DEFAULT_CONFIG_PATH = process.env.PROVIDERS_CONFIG_PATH ?? '/app/config/pr
 export class ProviderRegistry {
   private readonly configs = new Map<string, ProviderConfig>();
   private readonly configPath: string;
+  private defaultModelName: string | null = null;
 
   constructor(configPath: string = DEFAULT_CONFIG_PATH) {
     this.configPath = configPath;
     this.loadSync();
     this.bootstrapFromEnv();
+    this.initDefaultModel();
   }
 
   // ── Internal helpers ───────────────────────────────────────────────────────
@@ -175,19 +177,78 @@ export class ProviderRegistry {
     return null;
   }
 
+  /**
+   * Set the default model from DEFAULT_MODEL env var, or fall back to
+   * the first registered provider entry.
+   */
+  private initDefaultModel(): void {
+    const envDefault = process.env.DEFAULT_MODEL;
+    if (envDefault && this.configs.has(envDefault)) {
+      this.defaultModelName = envDefault;
+      logger.info(`Default model set from DEFAULT_MODEL env: ${envDefault}`);
+      return;
+    }
+    // Fall back to first registered provider
+    const first = this.configs.keys().next();
+    if (!first.done) {
+      this.defaultModelName = first.value;
+      logger.info(`Default model set to first registered provider: ${this.defaultModelName}`);
+    }
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────────
+
+  /** Get the current default model name. */
+  getDefaultModel(): string | null {
+    return this.defaultModelName;
+  }
+
+  /** Set the default model name. Must be a registered model. */
+  setDefaultModel(modelName: string): void {
+    if (!this.configs.has(modelName)) {
+      const auto = this.autoDetect(modelName);
+      if (!auto) {
+        throw new Error(`Cannot set default model: '${modelName}' is not registered`);
+      }
+    }
+    this.defaultModelName = modelName;
+    logger.info(`Default model updated to: ${modelName}`);
+  }
 
   /**
    * Resolve a model name to its provider config.
    * Tries explicit registry first, then auto-detects from the model name.
+   * Falls back to the default model when the name is 'default'.
    * Throws if no provider can be found.
    */
   resolve(modelName: string): ProviderConfig {
+    // Handle 'default' model alias
+    if (modelName === 'default') {
+      if (this.defaultModelName) {
+        const defaultCfg = this.configs.get(this.defaultModelName);
+        if (defaultCfg) return defaultCfg;
+        const autoDefault = this.autoDetect(this.defaultModelName);
+        if (autoDefault) return autoDefault;
+      }
+      throw new Error(
+        `No default model configured. Set DEFAULT_MODEL env var or configure one via Settings.`
+      );
+    }
+
     const explicit = this.configs.get(modelName);
     if (explicit) return explicit;
 
     const auto = this.autoDetect(modelName);
     if (auto) return auto;
+
+    // Last resort: try the default model
+    if (this.defaultModelName) {
+      logger.warn(
+        `Model '${modelName}' not found, falling back to default '${this.defaultModelName}'`
+      );
+      const fallback = this.configs.get(this.defaultModelName);
+      if (fallback) return fallback;
+    }
 
     throw new Error(
       `No provider registered for model '${modelName}'. ` +

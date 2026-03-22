@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -6,8 +6,12 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { useCircles } from '@/hooks/useCircles';
 import { useTemplates } from '@/hooks/useTemplates';
-import { useCreateAgent } from '@/hooks/useAgents';
+import { useCreateAgent, useUpdateAgent } from '@/hooks/useAgents';
 import { useProviders } from '@/hooks/useProviders';
+import { useTools } from '@/hooks/useTools';
+import { useSkills } from '@/hooks/useSkills';
+import { MultiSelectPicker } from '@/components/MultiSelectPicker';
+import type { PickerItem } from '@/components/MultiSelectPicker';
 
 const TIERS = [
   { value: '1', label: 'Tier 1', description: 'Unrestricted network + filesystem' },
@@ -15,33 +19,137 @@ const TIERS = [
   { value: '3', label: 'Tier 3', description: 'No network, no filesystem' },
 ];
 
-export function AgentForm() {
+export interface AgentFormInitialValues {
+  templateRef?: string;
+  name?: string;
+  displayName?: string;
+  circle?: string;
+  lifecycleMode?: 'persistent' | 'ephemeral';
+  modelName?: string;
+  modelProvider?: string;
+  temperature?: number;
+  sandboxBoundary?: string;
+  tokensPerHour?: number;
+  tokensPerDay?: number;
+  canExec?: boolean;
+  canSpawnSubagents?: boolean;
+  toolsAllowed?: string[];
+  toolsDenied?: string[];
+  skills?: string[];
+}
+
+interface AgentFormProps {
+  mode?: 'create' | 'edit';
+  instanceId?: string;
+  initialValues?: AgentFormInitialValues;
+}
+
+export function AgentForm({ mode = 'create', instanceId, initialValues }: AgentFormProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { data: circles = [] } = useCircles();
   const { data: templates = [] } = useTemplates();
   const { data: providersData } = useProviders();
+  const { data: toolsData, isLoading: toolsLoading } = useTools();
+  const { data: skillsData, isLoading: skillsLoading } = useSkills();
   const availableModels = providersData?.providers ?? [];
   const createAgent = useCreateAgent();
+  const updateAgent = useUpdateAgent();
 
-  // Pre-select template from query param
-  const [selectedTemplate, setSelectedTemplate] = useState(searchParams.get('template') ?? '');
-  const [name, setName] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [circle, setCircle] = useState('');
-  const [lifecycleMode, setLifecycleMode] = useState<'persistent' | 'ephemeral'>('persistent');
-  const [modelName, setModelName] = useState('');
-  const [modelProvider, setModelProvider] = useState('');
-  const [temperature, setTemperature] = useState(0.7);
-  const [sandboxBoundary, setSandboxBoundary] = useState('tier-2');
-  const [tokensPerHour, setTokensPerHour] = useState(100000);
-  const [tokensPerDay, setTokensPerDay] = useState(1000000);
+  const isEdit = mode === 'edit';
+
+  // Pre-select template from query param or initialValues
+  const [selectedTemplate, setSelectedTemplate] = useState(
+    initialValues?.templateRef ?? searchParams.get('template') ?? ''
+  );
+  const [name, setName] = useState(initialValues?.name ?? '');
+  const [displayName, setDisplayName] = useState(initialValues?.displayName ?? '');
+  const [circle, setCircle] = useState(initialValues?.circle ?? '');
+  const [lifecycleMode, setLifecycleMode] = useState<'persistent' | 'ephemeral'>(
+    initialValues?.lifecycleMode ?? 'persistent'
+  );
+  const [modelName, setModelName] = useState(initialValues?.modelName ?? '');
+  const [modelProvider, setModelProvider] = useState(initialValues?.modelProvider ?? '');
+  const [temperature, setTemperature] = useState(initialValues?.temperature ?? 0.7);
+  const [sandboxBoundary, setSandboxBoundary] = useState(
+    initialValues?.sandboxBoundary ?? 'tier-2'
+  );
+  const [tokensPerHour, setTokensPerHour] = useState(initialValues?.tokensPerHour ?? 100000);
+  const [tokensPerDay, setTokensPerDay] = useState(initialValues?.tokensPerDay ?? 1000000);
+  const [canExec, setCanExec] = useState(initialValues?.canExec ?? false);
+  const [canSpawnSubagents, setCanSpawnSubagents] = useState(
+    initialValues?.canSpawnSubagents ?? false
+  );
+  const [toolsAllowed, setToolsAllowed] = useState<string[]>(initialValues?.toolsAllowed ?? []);
+  const [toolsDenied, setToolsDenied] = useState<string[]>(initialValues?.toolsDenied ?? []);
+  const [skills, setSkills] = useState<string[]>(initialValues?.skills ?? []);
   const [autoStart, setAutoStart] = useState(true);
+
+  // Sync initialValues when they change (e.g. async load)
+  useEffect(() => {
+    if (!initialValues) return;
+    if (initialValues.templateRef) setSelectedTemplate(initialValues.templateRef);
+    if (initialValues.name) setName(initialValues.name);
+    if (initialValues.displayName !== undefined) setDisplayName(initialValues.displayName);
+    if (initialValues.circle !== undefined) setCircle(initialValues.circle);
+    if (initialValues.lifecycleMode) setLifecycleMode(initialValues.lifecycleMode);
+    if (initialValues.modelName) setModelName(initialValues.modelName);
+    if (initialValues.modelProvider) setModelProvider(initialValues.modelProvider);
+    if (initialValues.temperature !== undefined) setTemperature(initialValues.temperature);
+    if (initialValues.sandboxBoundary) setSandboxBoundary(initialValues.sandboxBoundary);
+    if (initialValues.tokensPerHour !== undefined) setTokensPerHour(initialValues.tokensPerHour);
+    if (initialValues.tokensPerDay !== undefined) setTokensPerDay(initialValues.tokensPerDay);
+    if (initialValues.canExec !== undefined) setCanExec(initialValues.canExec);
+    if (initialValues.canSpawnSubagents !== undefined)
+      setCanSpawnSubagents(initialValues.canSpawnSubagents);
+    if (initialValues.toolsAllowed) setToolsAllowed(initialValues.toolsAllowed);
+    if (initialValues.toolsDenied) setToolsDenied(initialValues.toolsDenied);
+    if (initialValues.skills) setSkills(initialValues.skills);
+  }, [initialValues]);
 
   // When template changes, pre-fill defaults from template spec
   const template = useMemo(
     () => templates.find((t) => t.name === selectedTemplate),
     [templates, selectedTemplate]
+  );
+
+  const currentTier = useMemo(() => {
+    const m = sandboxBoundary.match(/\d/);
+    return m ? parseInt(m[0]!, 10) : 2;
+  }, [sandboxBoundary]);
+
+  const toolPickerItems: PickerItem[] = useMemo(() => {
+    const tools = toolsData ?? [];
+    return [...tools]
+      .sort((a, b) => {
+        if (a.source === 'builtin' && b.source !== 'builtin') return -1;
+        if (a.source !== 'builtin' && b.source === 'builtin') return 1;
+        return (a.server ?? '').localeCompare(b.server ?? '');
+      })
+      .map((t) => {
+        const needsHigherTier = t.minTier != null && t.minTier > currentTier;
+        return {
+          id: t.id,
+          label: t.id,
+          description: t.description,
+          group: t.source === 'builtin' ? 'Builtin Tools' : `MCP: ${t.server ?? 'unknown'}`,
+          badge: t.source,
+          badgeVariant: (t.source === 'builtin' ? 'default' : 'accent') as 'default' | 'accent',
+          ...(needsHigherTier ? { warning: `Requires Tier ${t.minTier}+` } : {}),
+        };
+      });
+  }, [toolsData, currentTier]);
+
+  const skillPickerItems: PickerItem[] = useMemo(
+    () =>
+      (skillsData ?? []).map((s) => ({
+        id: s.id ?? s.name ?? '',
+        label: s.name ?? s.id ?? '',
+        description: s.description,
+        group: s.category ?? 'General',
+        ...(s.maxTokens != null ? { tokenCost: s.maxTokens } : {}),
+      })),
+    [skillsData]
   );
 
   function handleTemplateChange(templateName: string) {
@@ -60,7 +168,7 @@ export function AgentForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedTemplate) {
+    if (!isEdit && !selectedTemplate) {
       toast.error('Please select a template');
       return;
     }
@@ -72,33 +180,68 @@ export function AgentForm() {
       toast.error('Please select a model');
       return;
     }
+
+    const overrides: Record<string, unknown> = {
+      model: {
+        provider: modelProvider,
+        name: modelName,
+        temperature,
+      },
+      sandboxBoundary,
+      resources: {
+        maxLlmTokensPerHour: tokensPerHour,
+        maxLlmTokensPerDay: tokensPerDay,
+      },
+      permissions: {
+        canExec,
+        canSpawnSubagents,
+      },
+      ...(toolsAllowed.length > 0 || toolsDenied.length > 0
+        ? {
+            tools: {
+              ...(toolsAllowed.length > 0 ? { allowed: toolsAllowed } : {}),
+              ...(toolsDenied.length > 0 ? { denied: toolsDenied } : {}),
+            },
+          }
+        : {}),
+      ...(skills.length > 0 ? { skills } : {}),
+    };
+
     try {
-      await createAgent.mutateAsync({
-        templateRef: selectedTemplate,
-        name,
-        displayName: displayName || undefined,
-        circle: circle || undefined,
-        lifecycleMode,
-        start: autoStart,
-        overrides: {
-          model: {
-            provider: modelProvider,
-            name: modelName,
-            temperature,
+      if (isEdit && instanceId) {
+        await updateAgent.mutateAsync({
+          id: instanceId,
+          params: {
+            name,
+            displayName: displayName || undefined,
+            circle: circle || undefined,
+            lifecycleMode,
+            overrides,
           },
-          sandboxBoundary,
-          resources: {
-            maxLlmTokensPerHour: tokensPerHour,
-            maxLlmTokensPerDay: tokensPerDay,
-          },
-        },
-      });
-      toast.success(`Agent "${name}" created`);
-      void navigate('/agents');
+        });
+        toast.success(`Agent "${name}" updated`);
+        void navigate(`/agents/${instanceId}`);
+      } else {
+        await createAgent.mutateAsync({
+          templateRef: selectedTemplate,
+          name,
+          displayName: displayName || undefined,
+          circle: circle || undefined,
+          lifecycleMode,
+          start: autoStart,
+          overrides,
+        });
+        toast.success(`Agent "${name}" created`);
+        void navigate('/agents');
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create agent');
+      toast.error(
+        err instanceof Error ? err.message : `Failed to ${isEdit ? 'update' : 'create'} agent`
+      );
     }
   }
+
+  const isPending = isEdit ? updateAgent.isPending : createAgent.isPending;
 
   return (
     <form
@@ -107,34 +250,36 @@ export function AgentForm() {
       }}
       className="space-y-6 pb-8"
     >
-      {/* Template selector */}
-      <section className="sera-card-static p-4">
-        <h3 className="text-sm font-semibold text-sera-text mb-3">Template *</h3>
-        {templates.length === 0 ? (
-          <p className="text-xs text-sera-text-muted">
-            No templates available. Templates are loaded from <code>templates/builtin/</code> on
-            startup.
-          </p>
-        ) : (
-          <select
-            value={selectedTemplate}
-            onChange={(e) => handleTemplateChange(e.target.value)}
-            className="sera-input"
-            required
-          >
-            <option value="">— Select a template —</option>
-            {templates.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.displayName ?? t.name}
-                {t.description ? ` — ${t.description}` : ''}
-              </option>
-            ))}
-          </select>
-        )}
-        {template?.description && (
-          <p className="text-xs text-sera-text-dim mt-2">{template.description}</p>
-        )}
-      </section>
+      {/* Template selector — hidden in edit mode */}
+      {!isEdit && (
+        <section className="sera-card-static p-4">
+          <h3 className="text-sm font-semibold text-sera-text mb-3">Template *</h3>
+          {templates.length === 0 ? (
+            <p className="text-xs text-sera-text-muted">
+              No templates available. Templates are loaded from <code>templates/builtin/</code> on
+              startup.
+            </p>
+          ) : (
+            <select
+              value={selectedTemplate}
+              onChange={(e) => handleTemplateChange(e.target.value)}
+              className="sera-input"
+              required
+            >
+              <option value="">— Select a template —</option>
+              {templates.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.displayName ?? t.name}
+                  {t.description ? ` — ${t.description}` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          {template?.description && (
+            <p className="text-xs text-sera-text-dim mt-2">{template.description}</p>
+          )}
+        </section>
+      )}
 
       {/* Identity */}
       <section className="sera-card-static p-4 space-y-4">
@@ -250,7 +395,7 @@ export function AgentForm() {
               <p className="text-[11px] text-sera-text-muted">
                 No models available. Configure an LLM provider in{' '}
                 <a href="/settings" className="text-sera-accent hover:underline">
-                  Settings → Providers
+                  Settings &rarr; Providers
                 </a>
                 .
               </p>
@@ -300,23 +445,97 @@ export function AgentForm() {
         </div>
       </section>
 
-      {/* Options */}
-      <section className="sera-card-static p-4">
-        <label className="flex items-center gap-2 text-sm text-sera-text">
-          <input
-            type="checkbox"
-            checked={autoStart}
-            onChange={(e) => setAutoStart(e.target.checked)}
-            className="accent-sera-accent"
-          />
-          Start agent after creation
-        </label>
+      {/* Permissions */}
+      <section className="sera-card-static p-4 space-y-4">
+        <h3 className="text-sm font-semibold text-sera-text">Permissions</h3>
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-sera-text">
+            <input
+              type="checkbox"
+              checked={canExec}
+              onChange={(e) => setCanExec(e.target.checked)}
+              className="accent-sera-accent"
+            />
+            Can execute commands
+          </label>
+          <label className="flex items-center gap-2 text-sm text-sera-text">
+            <input
+              type="checkbox"
+              checked={canSpawnSubagents}
+              onChange={(e) => setCanSpawnSubagents(e.target.checked)}
+              className="accent-sera-accent"
+            />
+            Can spawn subagents
+          </label>
+        </div>
       </section>
+
+      {/* Tools & Skills */}
+      <section className="sera-card-static p-4 space-y-4">
+        <h3 className="text-sm font-semibold text-sera-text">Tools &amp; Skills</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-sera-text-muted mb-1.5">
+              Tools Allowed
+            </label>
+            <MultiSelectPicker
+              items={toolPickerItems}
+              selected={toolsAllowed}
+              onChange={setToolsAllowed}
+              placeholder="Search tools…"
+              loading={toolsLoading}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sera-text-muted mb-1.5">
+              Tools Denied
+            </label>
+            <MultiSelectPicker
+              items={toolPickerItems}
+              selected={toolsDenied}
+              onChange={setToolsDenied}
+              placeholder="Search tools…"
+              loading={toolsLoading}
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-sera-text-muted mb-1.5">Skills</label>
+          <MultiSelectPicker
+            items={skillPickerItems}
+            selected={skills}
+            onChange={setSkills}
+            placeholder="Search skills…"
+            loading={skillsLoading}
+          />
+        </div>
+      </section>
+
+      {/* Options — only show in create mode */}
+      {!isEdit && (
+        <section className="sera-card-static p-4">
+          <label className="flex items-center gap-2 text-sm text-sera-text">
+            <input
+              type="checkbox"
+              checked={autoStart}
+              onChange={(e) => setAutoStart(e.target.checked)}
+              className="accent-sera-accent"
+            />
+            Start agent after creation
+          </label>
+        </section>
+      )}
 
       {/* Submit */}
       <div className="flex items-center gap-3 pt-2">
-        <Button type="submit" disabled={createAgent.isPending}>
-          {createAgent.isPending ? 'Creating…' : 'Create Agent'}
+        <Button type="submit" disabled={isPending}>
+          {isPending
+            ? isEdit
+              ? 'Saving…'
+              : 'Creating…'
+            : isEdit
+              ? 'Save Changes'
+              : 'Create Agent'}
         </Button>
         <Button type="button" variant="ghost" onClick={() => navigate(-1)}>
           Cancel

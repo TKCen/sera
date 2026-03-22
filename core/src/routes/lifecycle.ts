@@ -184,6 +184,39 @@ export function createLifecycleRouter(
   };
   router.get('/:id/grants', listGrants as RequestHandler);
 
+  // ── Create a capability grant (operator-initiated) ─────────────────────────
+  const createGrant: RequestHandler<IdParam> = async (req, res) => {
+    try {
+      const instance = await registry.getInstance(req.params.id);
+      if (!instance) return void res.status(404).json({ error: 'Instance not found' });
+
+      const { dimension, value, grantType, expiresAt } = req.body as {
+        dimension?: string;
+        value?: string;
+        grantType?: 'one-time' | 'session' | 'persistent';
+        expiresAt?: string;
+      };
+
+      if (!dimension || !value) {
+        return void res.status(400).json({ error: 'dimension and value are required' });
+      }
+
+      const grant = await registry.createCapabilityGrant({
+        agentInstanceId: req.params.id,
+        dimension,
+        value,
+        grantType: grantType ?? 'persistent',
+        grantedBy: 'operator',
+        ...(expiresAt ? { expiresAt } : {}),
+      });
+
+      res.status(201).json(grant);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  };
+  router.post('/:id/grants', createGrant as RequestHandler);
+
   // ── Story 3.10: Dynamic filesystem + restart ──────────────────────────────
 
   const restart: RequestHandler<IdParam> = async (req, res) => {

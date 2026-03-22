@@ -342,9 +342,9 @@ export class SkillLibrary {
     };
   }
 
-  async listSkills(): Promise<SkillFrontMatter[]> {
+  async listSkills(): Promise<Array<SkillFrontMatter & { maxTokens?: number; source?: string }>> {
     const { rows } = await this.pool.query(
-      'SELECT name, version, description, triggers, category, tags FROM skills ORDER BY name, version DESC'
+      'SELECT name, version, description, triggers, category, tags, max_tokens, source FROM skills ORDER BY name, version DESC'
     );
     return rows.map((row) => ({
       name: row.name,
@@ -353,6 +353,8 @@ export class SkillLibrary {
       triggers: row.triggers,
       category: row.category,
       tags: row.tags,
+      ...(row.max_tokens != null ? { maxTokens: row.max_tokens as number } : {}),
+      ...(row.source ? { source: row.source as string } : {}),
     }));
   }
 
@@ -361,5 +363,38 @@ export class SkillLibrary {
       'SELECT name, version, description, skills FROM skill_packages ORDER BY name, version DESC'
     );
     return rows;
+  }
+
+  // ── Public CRUD (for API-driven skill creation) ────────────────────────────
+
+  /**
+   * Create or update a guidance skill from API input.
+   * Validates frontmatter against the schema before persisting.
+   */
+  async createSkill(
+    frontmatter: SkillFrontMatter,
+    content: string,
+    source?: string
+  ): Promise<void> {
+    const validation = SkillFrontMatterSchema.safeParse(frontmatter);
+    if (!validation.success) {
+      throw new Error(`Invalid skill frontmatter: ${validation.error.message}`);
+    }
+    await this.upsertSkill({ ...validation.data, content, source: source ?? 'external' });
+  }
+
+  /**
+   * Delete a guidance skill by name (and optionally version).
+   * Returns true if a row was deleted.
+   */
+  async deleteSkill(name: string, version?: string): Promise<boolean> {
+    let query = 'DELETE FROM skills WHERE name = $1';
+    const params: string[] = [name];
+    if (version) {
+      query += ' AND version = $2';
+      params.push(version);
+    }
+    const result = await this.pool.query(query, params);
+    return (result.rowCount ?? 0) > 0;
   }
 }

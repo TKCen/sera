@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '@/lib/api/agents';
-import type { CreateAgentInstanceParams } from '@/lib/api/types';
+import type { CreateAgentInstanceParams, CreateGrantParams } from '@/lib/api/types';
 
 export const agentsKeys = {
   all: ['agents'] as const,
@@ -10,6 +10,7 @@ export const agentsKeys = {
   memory: (id: string, scope?: string) => ['agents', id, 'memory', scope] as const,
   thoughts: (id: string, taskId?: string) => ['agents', id, 'thoughts', taskId] as const,
   logs: (id: string) => ['agents', id, 'logs'] as const,
+  grants: (id: string) => ['agents', id, 'grants'] as const,
 };
 
 export function useAgents() {
@@ -125,12 +126,61 @@ export function useCreateAgentTask() {
   });
 }
 
+export function useUpdateAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      params,
+    }: {
+      id: string;
+      params: Parameters<typeof agentsApi.updateAgentInstance>[1];
+    }) => agentsApi.updateAgentInstance(id, params),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.detail(id) });
+      void qc.invalidateQueries({ queryKey: agentsKeys.all });
+    },
+  });
+}
+
 export function useDeleteAgent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => agentsApi.deleteAgent(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: agentsKeys.all });
+    },
+  });
+}
+
+// ── Capability Grants ────────────────────────────────────────────────────────
+
+export function useAgentGrants(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.grants(id),
+    queryFn: () => agentsApi.getAgentGrants(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function useCreateGrant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, params }: { id: string; params: CreateGrantParams }) =>
+      agentsApi.createAgentGrant(id, params),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.grants(id) });
+    },
+  });
+}
+
+export function useRevokeGrant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, grantId }: { id: string; grantId: string }) =>
+      agentsApi.revokeAgentGrant(id, grantId),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.grants(id) });
     },
   });
 }

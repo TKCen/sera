@@ -69,15 +69,31 @@ Each phase produces a meaningful, runnable milestone — not just a collection o
 
 ---
 
-## Phase 4 — Consolidation: Technical debt, migrations, clean architecture
+## Phase 4 — Consolidation & Expansion: Clean architecture, IDE bridge, voice
 
-**Target state:** All legacy shims removed, one coherent memory model, fully tested internals. Safe to hand off to community contributors.
+**Target state:** All legacy shims removed, one coherent memory model, fully tested internals. IDE integration operational. Safe to hand off to community contributors.
 
 | Epic | Stories to implement | Notes |
 |---|---|---|
 | **19 Memory System Consolidation** | All (19.1–19.5) | Retire Letta-style memory; migrate BaseAgent/WorkerAgent to Epic 8 scoped model; remove MemoryManager, Reflector; on-disk migration for legacy files |
+| **21 ACP / IDE Bridge** | All | ACP stdio server, session mapping, multi-agent routing from IDE, sub-agent spawning, CWD injection, thinking level control |
+| **23 Voice Interface** | Initial stories | Voice input via Web Speech API, TTS output, voice-to-chat routing, push-to-talk in sera-web |
+| **24 A2A Federation Protocol** | All | Google A2A protocol (Linux Foundation standard) for external federation. Inbound A2A server, outbound client, Agent Card generation, instance pairing, capability gate. Internal comms stay on Centrifugo. |
 
-**Phase 4 milestone:** Zero references to the old Letta memory system; all agents read the same scoped memory; memory graph UI reflects real data.
+**Phase 4 milestone:** Zero references to the old Letta memory system; developers can work with SERA agent teams from their IDE via ACP; basic voice interaction in sera-web; SERA instances federate via industry-standard A2A protocol.
+
+---
+
+## Phase 5 — Agent-Driven UI: Canvas and advanced interaction
+
+**Target state:** Agents can push dynamic, interactive UI to the dashboard. Companion apps on the horizon.
+
+| Epic | Stories to implement | Notes |
+|---|---|---|
+| **22 Canvas / A2UI** | All | A2UI message format, canvas panel in sera-web, agent canvas tools, Centrifugo streaming, component catalog |
+| **23 Voice Interface** | Advanced stories | Wake words, continuous listening, companion app voice (deferred until mobile apps) |
+
+**Phase 5 milestone:** Agents render rich visual output (dashboards, forms, visualisations) in the sera-web canvas panel alongside chat.
 
 ---
 
@@ -100,6 +116,15 @@ Epic 15 (plugin SDK) → @sera/mcp-sdk (Story 15.8)
 Epic 08 (Memory & RAG) → Epic 19 (Memory Consolidation)
 Epic 05 (Agent Runtime) → Epic 19 (BaseAgent migration)
 Epic 13 (sera-web Agent UX) → Epic 19 (memory graph UI must be updated before old routes are removed)
+Epic 18 (Integration Channels) → Epic 21 (ACP is a channel type)
+Epic 09 (Real-Time Messaging) → Epic 21 (ACP uses WebSocket to sera-core)
+Epic 12/13 (sera-web) → Epic 22 (Canvas renders in sera-web)
+Epic 09 (Centrifugo) → Epic 22 (Canvas updates streamed via Centrifugo)
+Epic 18 (chat sessions) → Epic 23 (Voice routes to chat sessions)
+Epic 12/13 (sera-web) → Epic 23 (Voice UI in sera-web)
+Epic 09 (Real-Time Messaging) → Epic 24 (Federation uses intercom)
+Epic 16 (Auth) → Epic 24 (Instance authentication)
+Epic 17 (Agent Identity) → Epic 24 (Cross-instance agent identity)
 ```
 
 ---

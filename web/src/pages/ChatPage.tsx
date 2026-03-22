@@ -27,6 +27,7 @@ import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { sendChatStream } from '@/lib/api/chat';
 import { request } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -322,7 +323,7 @@ function ChatPageContent() {
     } catch (err) {
       // Non-fatal but should notify user
       const errMsg = err instanceof Error ? err.message : 'Failed to load session';
-      import('@/lib/toast').then(({ toast }) => toast.error(errMsg));
+      toast.error(errMsg);
     }
   }, []);
 
@@ -346,7 +347,7 @@ function ChatPageContent() {
       } catch (err) {
         // Non-fatal but should notify user
         const errMsg = err instanceof Error ? err.message : 'Failed to delete session';
-        import('@/lib/toast').then(({ toast }) => toast.error(errMsg));
+        toast.error(errMsg);
       }
     },
     [sessionId, startNewSession]
@@ -404,7 +405,7 @@ function ChatPageContent() {
       messageIdRef.current = messageId;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to send message';
-      import('@/lib/toast').then(({ toast }) => toast.error(errMsg));
+      toast.error(errMsg);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === agentMsgId ? { ...m, content: `Error: ${errMsg}`, streaming: false } : m

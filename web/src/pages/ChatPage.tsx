@@ -141,7 +141,12 @@ function CodeBlock({ children, className }: { children?: React.ReactNode; classN
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 
 function ChatPageContent() {
-  const { data: agents, isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useAgents();
+  const {
+    data: agents,
+    isLoading: agentsLoading,
+    isError: agentsError,
+    refetch: refetchAgents,
+  } = useAgents();
   const { client: centrifugoClient } = useCentrifugoContext();
 
   const [selectedAgent, setSelectedAgent] = useState<string>('');

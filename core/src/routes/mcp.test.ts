@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMCPRouter } from './mcp.js';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 
 vi.mock('express', () => {
   const expressRouterMock = {

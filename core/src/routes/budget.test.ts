@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createBudgetRouter } from './budget.js';
 import { query } from '../lib/database.js';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 
 vi.mock('../lib/database.js', () => ({
   query: vi.fn(),

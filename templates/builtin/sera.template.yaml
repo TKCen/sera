@@ -120,6 +120,16 @@ spec:
       providers:
         read: true
         manage: false
+      secrets:
+        read: true              # metadata only — never values
+        requestEntry: true      # trigger out-of-band secret entry dialog
+      channels:
+        read: true
+        create: true
+        modify:
+          allow: [own, own-circle]
+        delete:
+          allow: [own]
 
   # ── Tools ──────────────────────────────────────────────────────────────────
   tools:
@@ -144,6 +154,13 @@ spec:
       - sera-core/schedules.create
       - sera-core/skills.list
       - sera-core/providers.list
+      # Secrets (metadata only — agent never sees values)
+      - sera-core/secrets.list
+      - sera-core/secrets.requestEntry
+      # Channel management
+      - sera-core/channels.*
+      - sera-core/routingRules.*
+      - sera-core/alertRules.*
     denied:
       - file-write   # requires explicit permission request per session
 

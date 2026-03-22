@@ -36,7 +36,7 @@ Tests that require a real database or real infrastructure services but do not re
 - OIDC token validation against a mock JWKS endpoint
 - `CredentialResolver` against a real SecretsProvider
 
-**Infrastructure:** Docker Compose test profile (`docker-compose.test.yaml`) that starts PostgreSQL, Qdrant, and a mock OIDC server (see below). Does **not** start LiteLLM, Centrifugo, or agent containers.
+**Infrastructure:** Docker Compose test profile (`docker-compose.test.yaml`) that starts PostgreSQL, Qdrant, and a mock OIDC server (see below). Does **not** start Centrifugo or agent containers.
 
 **Database:** Separate `sera_test` database. Migrations run before test suite; truncated (not dropped) between tests for speed.
 
@@ -47,12 +47,12 @@ Tests that start the full stack including sera-core, spawn a real Docker agent c
 
 **What belongs here:**
 - Agent spawn → heartbeat → task execution → result → teardown
-- LLM proxy: JWT validation, budget enforcement (using a mock LiteLLM)
+- LLM proxy: JWT validation, budget enforcement (using mock LLM providers)
 - Permission request flow: agent requests → operator approves → agent unblocks
 - Secret injection: secret created → agent spawned → secret available in tool call
 - Webhook delivery: POST to `/webhooks/:id` → task enqueued for agent
 
-**Infrastructure:** Full `docker-compose.yaml` stack. LiteLLM replaced with a mock HTTP server that returns scripted responses. A real Docker socket is required (CI must run with Docker available).
+**Infrastructure:** Full `docker-compose.yaml` stack. LLM providers mocked in-process via a test `ProviderRegistry` configuration that returns scripted responses. A real Docker socket is required (CI must run with Docker available).
 
 **Framework:** Vitest + custom Docker lifecycle helpers. E2E tests tagged `@e2e` — excluded from standard `bun test`, run explicitly in CI via `bun run test:e2e`.
 
@@ -74,8 +74,8 @@ Use `@axa-fr/oidc-client-mock` or a lightweight custom JWKS endpoint (`jose` can
 
 Test key pair generated once per suite; `OIDC_ISSUER_URL` points to the mock server.
 
-### Mock LiteLLM
-A simple HTTP server (Fastify) that implements `POST /v1/chat/completions` and `GET /model/info`. Responses are scripted per test. Used in E2E tests only.
+### Mock LLM providers
+A test `ProviderRegistry` configuration that registers a mock provider returning scripted responses. Since LLM routing is in-process via `LlmRouter` → pi-mono, no separate HTTP mock server is needed — the mock provider is injected directly into `ProviderRegistry` at test setup. Responses are scripted per test. Used in integration and E2E tests.
 
 ### Docker in CI
 E2E tests require `DOCKER_SOCKET_PATH` to be available. CI must run on a host with Docker (not Docker-in-Docker for socket tests). GitHub Actions: use `ubuntu-latest` runners with Docker pre-installed.
@@ -117,7 +117,7 @@ Coverage enforced in CI via `--coverage --coverage-threshold` in Vitest config. 
 
 ## What NOT to test
 
-- The LiteLLM service itself — it is a dependency, not code we own
+- Upstream LLM provider APIs — they are external dependencies, not code we own
 - Centrifugo channel delivery — mock the `IntercomService.publish()` call at the boundary
 - Docker API calls in unit tests — mock `dockerode` using `vi.mock('dockerode')`; real Docker is only exercised in E2E
 - git operations in unit tests — mock `simple-git`; real git used in integration tests for `KnowledgeGitService`
@@ -148,7 +148,7 @@ sera-core/
     setup/
       database.ts               ← migration runner for test DB
       mock-oidc.ts
-      mock-litellm.ts
+      mock-llm-provider.ts
 ```
 
 Unit tests are colocated with source (`*.test.ts` alongside `*.ts`). Integration and E2E tests live in `test/`.

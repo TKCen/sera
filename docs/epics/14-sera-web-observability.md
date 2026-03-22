@@ -6,11 +6,11 @@ Operators need visibility into system health, resource consumption, and cost. Th
 
 ## Context
 
-- See `docs/ARCHITECTURE.md` → Provider Gateway: LiteLLM (provider management API abstraction)
+- See `docs/ARCHITECTURE.md` → LLM Routing (provider management via `ProviderRegistry`)
 - Metering data comes from `GET /api/metering/*` endpoints
 - Audit data comes from `GET /api/audit` endpoint
-- Provider management calls `POST|DELETE /api/providers` on sera-core (which proxies to LiteLLM)
-- Operators never interact with LiteLLM directly — SERA's UI is the only interface
+- Provider management calls `POST|DELETE /api/providers` on sera-core (which updates `ProviderRegistry` in-process)
+- Operators never interact with provider internals directly — SERA's UI is the only interface
 
 ## Dependencies
 
@@ -78,7 +78,7 @@ Operators need visibility into system health, resource consumption, and cost. Th
 
 **As an** operator
 **I want** to manage LLM providers through the SERA dashboard
-**So that** I can add, test, and remove providers without touching config files or the LiteLLM API directly
+**So that** I can add, test, and remove providers without touching config files directly
 
 **Acceptance Criteria:**
 - [ ] `/settings` page has a "Providers" section listing all configured models
@@ -99,7 +99,7 @@ Operators need visibility into system health, resource consumption, and cost. Th
 **So that** I can quickly confirm all SERA components are running correctly
 
 **Acceptance Criteria:**
-- [ ] `/settings` or dedicated `/health` page shows status of: sera-core, Centrifugo, PostgreSQL, Qdrant, LiteLLM, configured LLM providers
+- [ ] `/settings` or dedicated `/health` page shows status of: sera-core, Centrifugo, PostgreSQL, Qdrant, configured LLM providers
 - [ ] Each component: green (healthy), amber (degraded), red (unreachable)
 - [ ] Status fetched from `GET /api/health` (existing endpoint) — extend to include component-level status
 - [ ] Agent stats: total agents, running, stopped, errored — as summary numbers

@@ -10,7 +10,7 @@ The operator dashboard needs a solid technical foundation before feature work be
 - sera-web is a pure client-side SPA — no SSR, no server-side data fetching
 - All data comes from sera-core REST API (TanStack Query) or Centrifugo WebSocket (real-time)
 - The browser connects directly to Centrifugo for WebSocket — sera-core only issues tokens
-- Current stack: Next.js 16 + Tailwind v4. Migration to Vite + React Router is recommended but optional
+- Current stack: Vite v6 + React Router v7 + React 19 + Tailwind v4 (migration from Next.js complete)
 - Design system: "Aurora Cyber" — deep blacks, cyan/green accents, glassmorphism, high contrast
 
 ## Dependencies
@@ -29,17 +29,15 @@ The operator dashboard needs a solid technical foundation before feature work be
 **So that** local development iteration is fast and production builds are small and optimised
 
 **Acceptance Criteria:**
-- [ ] **Option A (migration):** Vite + React Router v6 + TypeScript replacing Next.js. Build output: static files served by nginx:alpine. Docker image target < 50MB.
-- [ ] **Option B (keep):** Next.js with `output: 'export'` (static export, no Node.js runtime in production). Eliminates the Node.js standalone image.
-- [ ] Either option: HMR works in dev, `bun run build` produces a deployable artifact
+- [ ] Vite + React Router v7 + TypeScript (migration from Next.js complete). Build output: static files served by nginx:alpine. Docker image target < 50MB.
+- [ ] HMR works in dev, `bun run build` produces a deployable artifact
 - [ ] `tsconfig.json` strict mode, path alias `@/*` → `src/*`
 - [ ] ESLint + Prettier configured and run in CI
 - [ ] `docker-compose.dev.yaml` mounts source and runs dev server with HMR
 
 **Technical Notes:**
-- If migrating to Vite: `vite.config.ts` `server.proxy` handles `/api/*` → `http://sera-core:3001` for dev
+- `vite.config.ts` `server.proxy` handles `/api/*` → `http://sera-core:3001` for dev
 - Production: nginx config proxies `/api/*` to sera-core, serves static files for everything else
-- The Next.js API routes (`/api/health`, `/api/core/[...path]`) become: a nginx proxy rule (for `/api/core`) and a static health endpoint
 
 ---
 
@@ -52,7 +50,7 @@ The operator dashboard needs a solid technical foundation before feature work be
 **Acceptance Criteria:**
 - [ ] `src/lib/api/` contains typed clients grouped by domain: `agents`, `circles`, `memory`, `providers`, `schedules`, `audit`, `metering`
 - [ ] Each client function returns a typed response — no `any` types
-- [ ] Shared base client handles: base URL (`VITE_API_URL` or `NEXT_PUBLIC_API_URL`), auth headers, error parsing
+- [ ] Shared base client handles: base URL (`VITE_API_URL`), auth headers, error parsing
 - [ ] API errors surfaced as typed `APIError` objects with `status`, `message`, `code`
 - [ ] 401 responses redirect to a login/setup page (or surface a reconnect prompt for local no-auth mode)
 - [ ] Types generated from the OpenAPI spec (`docs/openapi.yaml`) or maintained as hand-written TypeScript — one canonical source
@@ -92,7 +90,7 @@ The operator dashboard needs a solid technical foundation before feature work be
 - [ ] Subscriptions cleaned up on component unmount — no memory leaks
 
 **Technical Notes:**
-- Use the `centrifuge` npm package (already in dependencies) for the WebSocket client
+- Use the `centrifuge` package (already in dependencies) for the WebSocket client
 - A single shared Centrifugo client instance, managed via React Context
 
 ---

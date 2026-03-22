@@ -1,17 +1,19 @@
 # sera-web
 
-Operator dashboard for SERA. **Check `docs/ARCHITECTURE.md` → Tech Stack for the current migration status before writing any code** — the framework target has changed from Next.js.
+Operator dashboard for SERA — a pure client-side SPA.
 
-## Current vs target state
+## Tech stack
 
-| Concern | Current | Target |
-|---|---|---|
-| Framework | Next.js | Vite + React Router v7 |
-| Server state | — | TanStack Query |
-| Components | — | shadcn/ui + Radix UI + Tailwind v4 |
-| Auth flow | — | OIDC PKCE (Epic 16 Story 16.5) |
-
-Do not add new Next.js-specific features (SSR, server components, API routes) — the direction is a plain SPA. The `.next/` build cache can be ignored.
+| Concern | Choice |
+|---|---|
+| Build tool | Vite v6 |
+| Routing | React Router v7 |
+| UI framework | React 19 |
+| Server state | TanStack Query v5 |
+| Components | shadcn/ui + Radix UI |
+| Styling | Tailwind CSS v4 (Aurora Cyber theme) |
+| Real-time | Centrifugo JS client (WebSocket) |
+| Auth flow | OIDC PKCE (Epic 16 Story 16.5) |
 
 ## Epic references
 
@@ -77,7 +79,7 @@ The internal hooks (`useThoughtStream`, `useTokenStream`) use `internal:…` pre
 
 ## Learnings
 
-- **Multiple lockfiles warning**: Next.js 16 warns about detecting both root and `web/bun.lock`. Can be silenced with `turbopack.root` in `next.config.ts` if needed — currently harmless.
+- **Next.js fully removed**: Migration to Vite + React Router v7 is complete. The `src/app/` directory and `next.config.ts` have been deleted. All routing is in `src/main.tsx`.
 - **OIDC token storage architecture (Story 16.5)**: The OIDC access token must never reach client storage. The web stores only an opaque `sess_*` session token (from `WebSessionStore`) in `sessionStorage`. `AuthContext` exposes `setSessionAndUser(token, user)` for the callback page to call after `POST /api/auth/oidc/callback` returns `{ sessionToken, user }`. All API calls use `Bearer <sessionToken>` — the OIDC token stays server-side only.
 - **`scrollIntoView` not available in jsdom**: Guard with `if (el?.scrollIntoView)` before calling it, or the call will throw in tests.
 - **`vi.mock` factory is hoisted — no top-level variables**: Any variable referenced inside a `vi.mock(...)` factory must be defined with `vi.hoisted()` or inlined directly; referencing a `const` defined in the same file causes a ReferenceError at runtime.

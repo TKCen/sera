@@ -112,8 +112,20 @@ The result is that the two execution paths read from different memory stores:
 **Acceptance Criteria:**
 - [ ] Legacy `/api/memory/blocks`, `/api/memory/blocks/:type`, `/api/memory/entries/:id`, `/api/memory/graph` routes removed from `routes/memory.ts`
 - [ ] `/api/memory/:agentId/blocks` (already implemented in Epic 8) is the canonical list endpoint
-- [ ] A replacement graph endpoint `GET /api/memory/:agentId/graph` is added — returns nodes and edges derived from `ScopedMemoryBlockStore` using `tags` as implicit links (blocks sharing tags are connected) and explicit `refs`-style links via a `relatedIds` optional frontmatter field
-- [ ] Epic 13 memory graph UI updated to consume the new endpoint shape (coordinate with Epic 13 implementation)
+- [ ] A replacement graph endpoint `GET /api/memory/:agentId/graph` is added with this response shape:
+  ```json
+  {
+    "nodes": [
+      { "id": "uuid", "type": "episodic|semantic|procedural|summary", "tags": [], "importance": 3, "label": "truncated content", "createdAt": "ISO8601" }
+    ],
+    "edges": [
+      { "source": "uuid", "target": "uuid", "type": "tag-link|explicit-ref", "label": "shared-tag-name" }
+    ]
+  }
+  ```
+  - **Tag-link edges**: two blocks sharing the same tag are connected (implicit, computed at query time)
+  - **Explicit-ref edges**: blocks with a `relatedIds: [uuid, ...]` frontmatter field have direct edges
+- [ ] Epic 13 memory graph UI (Story 13.6) updated to consume this shape — the old `requires` and co-occurrence model is retired
 - [ ] `GET /api/memory/:agentId/stats` (already implemented) unchanged
 
 ---

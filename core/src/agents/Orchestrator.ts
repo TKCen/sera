@@ -188,6 +188,23 @@ export class Orchestrator {
       const childDepth = parentDepth + 1;
 
       if (childDepth >= SUBAGENT_MAX_DEPTH) {
+        // Record denial in audit trail
+        AuditService.getInstance()
+          ?.record({
+            actorType: 'agent',
+            actorId: effectiveParentId,
+            actingContext: null,
+            eventType: 'agent.spawn.denied',
+            payload: {
+              reason: 'recursion_limit',
+              callerAgentId: effectiveParentId,
+              targetInstanceId: instanceId,
+              depth: childDepth,
+              maxDepth: SUBAGENT_MAX_DEPTH,
+            },
+          })
+          .catch((e: unknown) => logger.warn('Failed to record recursion limit audit:', e));
+
         const err = new RecursionLimitError(childDepth, SUBAGENT_MAX_DEPTH);
         await this.registry.updateInstanceStatus(instanceId, 'error');
         throw err;

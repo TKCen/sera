@@ -1,13 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import {
-  Users,
-  Plus,
-  Search,
-  Radio,
-  Bot,
-  FileText,
-} from 'lucide-react';
+import { Users, Plus, Search, Radio, Bot, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCircles, useCreateCircle } from '@/hooks/useCircles';
 import { Button } from '@/components/ui/button';
@@ -58,9 +51,7 @@ export default function CirclesPage() {
         metadata: {
           name: newName.trim(),
           displayName: newDisplayName.trim() || newName.trim(),
-          ...(newDescription.trim()
-            ? { description: newDescription.trim() }
-            : {}),
+          ...(newDescription.trim() ? { description: newDescription.trim() } : {}),
         },
         agents: [],
       });
@@ -252,7 +243,9 @@ export default function CirclesPage() {
               </Button>
               <Button
                 size="sm"
-                onClick={() => { void handleCreate(); }}
+                onClick={() => {
+                  void handleCreate();
+                }}
                 disabled={createCircle.isPending || !newName.trim()}
               >
                 {createCircle.isPending ? 'Creating…' : 'Create'}

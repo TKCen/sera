@@ -7,7 +7,7 @@
  *
  * Tier 1 (Read Only)  — No network, read-only workspace
  * Tier 2 (Internal)   — sera_net only, read-write workspace
- * Tier 3 (Executive)  — Full internet, read-write + scratch volume
+ * Tier 3 (Executive)  — Full internet (via egress proxy), read-write + scratch volume
  *
  * @see sera/docs/reimplementation/agent-workspace-architecture.md § Security Tiers
  */
@@ -36,7 +36,7 @@ const TIER_LIMITS: Record<SecurityTier, TierLimits> = {
     tier: 3,
     cpuShares: 1024, // High priority
     memoryBytes: 1024 * 1024 * 1024, // 1 Gi
-    networkMode: 'bridge',
+    networkMode: 'agent_net',
     filesystemMode: 'rw',
   },
 };

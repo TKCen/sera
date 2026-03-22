@@ -143,6 +143,121 @@ describe('SandboxManager', () => {
       expect(workspaceBind).toBeDefined();
       expect(workspaceBind).toContain(':ro');
     });
+
+    it('should use agent_net for wildcard outbound (Story 20.3)', async () => {
+      const manifest = makeManifest();
+      const request: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      const resolved = {
+        network: { outbound: ['*'] },
+      };
+      await manager.spawn(manifest, request, resolved, 'inst-wildcard');
+
+      const createArgs = mockDocker.createContainer.mock.calls[0]![0];
+      // All outbound agents use agent_net (no more bridge mode)
+      expect(createArgs.HostConfig.NetworkMode).toBe('agent_net');
+    });
+
+    it('should inject proxy env vars when EGRESS_PROXY_URL is set (Story 20.3)', async () => {
+      process.env.EGRESS_PROXY_URL = 'http://sera-egress-proxy:3128';
+      try {
+        const manifest = makeManifest();
+        const request: SpawnRequest = {
+          agentName: 'test-agent',
+          type: 'agent',
+          image: 'sera-agent-worker:latest',
+        };
+
+        const resolved = {
+          network: { outbound: ['github.com'] },
+        };
+        await manager.spawn(manifest, request, resolved, 'inst-proxy');
+
+        const createArgs = mockDocker.createContainer.mock.calls[0]![0];
+        const env: string[] = createArgs.Env;
+        expect(env).toContain('HTTP_PROXY=http://sera-egress-proxy:3128');
+        expect(env).toContain('HTTPS_PROXY=http://sera-egress-proxy:3128');
+        expect(env).toContain('NO_PROXY=sera-core,centrifugo,localhost,127.0.0.1');
+      } finally {
+        delete process.env.EGRESS_PROXY_URL;
+      }
+    });
+
+    it('should not inject proxy env vars when EGRESS_PROXY_URL is not set', async () => {
+      delete process.env.EGRESS_PROXY_URL;
+      const manifest = makeManifest();
+      const request: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      const resolved = {
+        network: { outbound: ['github.com'] },
+      };
+      await manager.spawn(manifest, request, resolved, 'inst-no-proxy');
+
+      const createArgs = mockDocker.createContainer.mock.calls[0]![0];
+      const env: string[] = createArgs.Env;
+      expect(env.some((e: string) => e.startsWith('HTTP_PROXY='))).toBe(false);
+    });
+
+    it('should not inject proxy env vars for networkMode none', async () => {
+      process.env.EGRESS_PROXY_URL = 'http://sera-egress-proxy:3128';
+      try {
+        const manifest = makeManifest();
+        const request: SpawnRequest = {
+          agentName: 'test-agent',
+          type: 'tool',
+          image: 'alpine',
+        };
+
+        // Empty outbound = no network
+        const resolved = { network: { outbound: [] } };
+        await manager.spawn(manifest, request, resolved, 'inst-none');
+
+        const createArgs = mockDocker.createContainer.mock.calls[0]![0];
+        expect(createArgs.HostConfig.NetworkMode).toBe('none');
+        const env: string[] = createArgs.Env;
+        expect(env.some((e: string) => e.startsWith('HTTP_PROXY='))).toBe(false);
+      } finally {
+        delete process.env.EGRESS_PROXY_URL;
+      }
+    });
+
+    it('should capture container IP and set proxyEnabled in SandboxInfo', async () => {
+      process.env.EGRESS_PROXY_URL = 'http://sera-egress-proxy:3128';
+      try {
+        // Mock inspect to return network settings
+        mockDocker._container.inspect.mockResolvedValueOnce({
+          Id: 'container-net123',
+          NetworkSettings: {
+            Networks: {
+              agent_net: { IPAddress: '172.19.0.5' },
+            },
+          },
+        });
+
+        const manifest = makeManifest();
+        const request: SpawnRequest = {
+          agentName: 'test-agent',
+          type: 'agent',
+          image: 'sera-agent-worker:latest',
+        };
+
+        const resolved = { network: { outbound: ['api.openai.com'] } };
+        const info = await manager.spawn(manifest, request, resolved, 'inst-ip');
+
+        expect(info.proxyEnabled).toBe(true);
+        expect(info.containerIp).toBe('172.19.0.5');
+      } finally {
+        delete process.env.EGRESS_PROXY_URL;
+      }
+    });
   });
 
   describe('exec', () => {

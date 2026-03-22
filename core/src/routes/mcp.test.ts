@@ -14,7 +14,7 @@ vi.mock('express', () => {
     Router: RouterMock,
     default: {
       Router: RouterMock,
-    }
+    },
   };
 });
 
@@ -66,7 +66,9 @@ describe('MCP Route', () => {
       await handler(req as Request, res as Response);
 
       expect(mockMCPRegistry.registerContainerServer).toHaveBeenCalledWith(req.body);
-      expect(jsonMock).toHaveBeenCalledWith({ message: 'MCP server "test-server" registered successfully' });
+      expect(jsonMock).toHaveBeenCalledWith({
+        message: 'MCP server "test-server" registered successfully',
+      });
     });
 
     it('should return 400 for invalid manifest (missing body)', async () => {
@@ -98,7 +100,9 @@ describe('MCP Route', () => {
       const handler = routerMock.post.mock.calls.find((call: any[]) => call[0] === '/')[1];
 
       req.body = { metadata: { name: 'test-server' } };
-      mockMCPRegistry.registerContainerServer.mockRejectedValueOnce(new Error('Registration failed'));
+      mockMCPRegistry.registerContainerServer.mockRejectedValueOnce(
+        new Error('Registration failed')
+      );
 
       await handler(req as Request, res as Response);
 
@@ -118,7 +122,9 @@ describe('MCP Route', () => {
       await handler(req as Request, res as Response);
 
       expect(mockMCPRegistry.unregisterClient).toHaveBeenCalledWith('test-server');
-      expect(jsonMock).toHaveBeenCalledWith({ message: 'MCP server "test-server" unregistered successfully' });
+      expect(jsonMock).toHaveBeenCalledWith({
+        message: 'MCP server "test-server" unregistered successfully',
+      });
     });
 
     it('should return 404 if MCP server is not found', async () => {

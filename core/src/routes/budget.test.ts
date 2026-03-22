@@ -13,7 +13,7 @@ vi.mock('../lib/logger.js', () => {
       info = vi.fn();
       error = vi.fn();
       warn = vi.fn();
-    }
+    },
   };
 });
 
@@ -33,7 +33,7 @@ vi.mock('express', () => {
     default: {
       Router: RouterMock,
       json: vi.fn(),
-    }
+    },
   };
 });
 
@@ -85,7 +85,13 @@ describe('Budget Route', () => {
         { date: new Date('2023-10-01T00:00:00Z'), total_tokens: '1000' },
         { date: new Date('2023-10-02T00:00:00Z'), total_tokens: '1500' },
       ];
-      vi.mocked(query).mockResolvedValueOnce({ rows: mockRows, rowCount: 2, command: 'SELECT', oid: 0, fields: [] } as any);
+      vi.mocked(query).mockResolvedValueOnce({
+        rows: mockRows,
+        rowCount: 2,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as any);
 
       await handler(req as Request, res as Response);
 
@@ -120,7 +126,13 @@ describe('Budget Route', () => {
         { agent_id: 'agent-1', total_tokens: '5000' },
         { agent_id: 'agent-2', total_tokens: '3000' },
       ];
-      vi.mocked(query).mockResolvedValueOnce({ rows: mockRows, rowCount: 2, command: 'SELECT', oid: 0, fields: [] } as any);
+      vi.mocked(query).mockResolvedValueOnce({
+        rows: mockRows,
+        rowCount: 2,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as any);
 
       await handler(req as Request, res as Response);
 
@@ -144,7 +156,13 @@ describe('Budget Route', () => {
         { date: new Date('2023-10-01T00:00:00Z'), total_tokens: '200' },
         { date: new Date('2023-10-02T00:00:00Z'), total_tokens: '300' },
       ];
-      vi.mocked(query).mockResolvedValueOnce({ rows: mockRows, rowCount: 2, command: 'SELECT', oid: 0, fields: [] } as any);
+      vi.mocked(query).mockResolvedValueOnce({
+        rows: mockRows,
+        rowCount: 2,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as any);
 
       await handler(req as Request, res as Response);
 
@@ -162,7 +180,9 @@ describe('Budget Route', () => {
   describe('GET /api/budget/agents/:id/budget', () => {
     it('should return 503 if MeteringService is not available', async () => {
       createBudgetRouter();
-      const handler = routerMock.get.mock.calls.find((call: any[]) => call[0] === '/agents/:id/budget')[1];
+      const handler = routerMock.get.mock.calls.find(
+        (call: any[]) => call[0] === '/agents/:id/budget'
+      )[1];
 
       req.params = { id: 'agent-1' };
       await handler(req as Request, res as Response);
@@ -173,7 +193,9 @@ describe('Budget Route', () => {
 
     it('should return agent budget status', async () => {
       createBudgetRouter(mockMeteringService);
-      const handler = routerMock.get.mock.calls.find((call: any[]) => call[0] === '/agents/:id/budget')[1];
+      const handler = routerMock.get.mock.calls.find(
+        (call: any[]) => call[0] === '/agents/:id/budget'
+      )[1];
 
       req.params = { id: 'agent-1' };
       const mockStatus = { remaining: 1000, limit: 2000 };
@@ -187,7 +209,9 @@ describe('Budget Route', () => {
 
     it('should handle errors gracefully', async () => {
       createBudgetRouter(mockMeteringService);
-      const handler = routerMock.get.mock.calls.find((call: any[]) => call[0] === '/agents/:id/budget')[1];
+      const handler = routerMock.get.mock.calls.find(
+        (call: any[]) => call[0] === '/agents/:id/budget'
+      )[1];
 
       req.params = { id: 'agent-1' };
       mockMeteringService.checkBudget.mockRejectedValueOnce(new Error('Service Error'));

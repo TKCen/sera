@@ -263,7 +263,7 @@ app.get('/api/health/detail', async (_req, res) => {
   }
 
   // Squid egress proxy check
-  const squidHost = process.env['SQUID_HOST'] ?? 'squid';
+  const squidHost = process.env['SQUID_HOST'] ?? 'sera-egress-proxy';
   const squidPort = process.env['SQUID_PORT'] ?? '3128';
   const squidStart = Date.now();
   try {

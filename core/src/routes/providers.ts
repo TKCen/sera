@@ -210,6 +210,31 @@ export function createProvidersRouter(
   // ── Static Providers ────────────────────────────────────────────────────────
 
   /**
+   * DELETE /api/providers/:modelName
+   * Removes a model from the active provider registry and persists the change.
+   * For dynamic-provider models, delegates to DynamicProviderManager.
+   */
+  router.delete(
+    '/:modelName',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      const modelName = String(req.params['modelName']);
+      try {
+        await llmRouter.deleteModel(modelName);
+        logger.info(
+          `Provider deleted | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
+        );
+        res.status(204).end();
+      } catch (err: unknown) {
+        const msg = (err as Error).message;
+        const code =
+          msg.includes('not found') || msg.includes('No provider registered') ? 404 : 500;
+        res.status(code).json({ error: msg });
+      }
+    }
+  );
+
+  /**
    * POST /api/providers/:modelName/test
    * Sends a minimal test completion to verify the provider is reachable.
    */

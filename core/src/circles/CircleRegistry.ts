@@ -147,7 +147,10 @@ export class CircleRegistry {
       }
     }
 
-    return obj as unknown as CircleManifest;
+    // Cast through any to avoid mutating or rebuilding the original object,
+    // which breaks some runtime behaviors where missing fields were expected.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return obj as any as CircleManifest;
   }
 
   /**

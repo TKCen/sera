@@ -198,11 +198,14 @@ function toContext(request: ChatCompletionRequest): Context {
           })
       : undefined;
 
-  const ctx = {
+  const ctx: Context = {
     messages,
     systemPrompt: systemPrompt ?? '',
-    ...(tools && tools.length > 0 ? { tools: tools as Context['tools'] } : {}),
-  } as unknown as Context;
+  };
+  if (tools && tools.length > 0) {
+    // Assert NonNullable since we already checked tools is truthy
+    ctx.tools = tools as NonNullable<Context['tools']>;
+  }
   return ctx;
 }
 

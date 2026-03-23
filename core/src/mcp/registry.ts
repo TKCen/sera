@@ -246,7 +246,7 @@ export class MCPRegistry {
     // Create a shim that matches the MCPClient interface.
     // Since this is in-process, we bypass the real transport-based MCPClient
     // and call the server instance (or its wrapper) directly.
-    const mockClient = {
+    const mockClient: Partial<MCPClient> = {
       listTools: async () => {
         return {
           tools: [
@@ -269,14 +269,21 @@ export class MCPRegistry {
           ],
         };
       },
-      callTool: async (toolName: string, args: Record<string, unknown>) => {
-        return await seraMcp.callTool(toolName, args);
+      callTool: async (
+        toolName: string,
+        args: Record<string, unknown>,
+        meta?: Record<string, unknown>
+      ) => {
+        // callTool typically expects CallToolResult from the MCP sdk.
+        // We cast the output if needed since seraMcp returns a simpler object.
+        const result = await seraMcp.callTool(toolName, args);
+        return result as import('@modelcontextprotocol/sdk/types.js').CallToolResult;
       },
       disconnect: async () => {},
     };
 
     this.clients.set(name, {
-      client: mockClient as unknown as MCPClient,
+      client: mockClient as MCPClient,
       instanceId: 'local',
     });
 

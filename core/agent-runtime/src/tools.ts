@@ -138,6 +138,56 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'spawn-subagent',
+      description:
+        'Spawn a child agent to handle a delegated task. The subagent runs in its own container ' +
+        "and returns the result when complete. Requires the role to be in the parent manifest's allowed subagents.",
+      parameters: {
+        type: 'object',
+        properties: {
+          role: {
+            type: 'string',
+            description: "The subagent role to spawn (must be in the manifest's subagents.allowed list).",
+          },
+          task: {
+            type: 'string',
+            description: 'Task description for the subagent to execute.',
+          },
+        },
+        required: ['role', 'task'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run-tool',
+      description:
+        'Run an ephemeral tool in a short-lived container. The container executes the command ' +
+        'and returns stdout/stderr. Useful for running tools that need isolation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tool_name: {
+            type: 'string',
+            description: 'Name of the tool to run.',
+          },
+          command: {
+            type: 'string',
+            description: 'Shell command to execute inside the tool container.',
+          },
+          timeout_seconds: {
+            type: 'number',
+            description: 'Timeout in seconds (60-300). Defaults to 120.',
+          },
+        },
+        required: ['tool_name', 'command'],
+      },
+    },
+  },
 ];
 
 // ── Executor ──────────────────────────────────────────────────────────────────
@@ -202,6 +252,16 @@ export class RuntimeToolExecutor {
           result = this.shellExec(
             params['command'] as string,
             params['timeout_ms'] as number | undefined,
+          );
+          break;
+        case 'spawn-subagent':
+          result = this.spawnSubagent(params['role'] as string, params['task'] as string);
+          break;
+        case 'run-tool':
+          result = this.runTool(
+            params['tool_name'] as string,
+            params['command'] as string,
+            params['timeout_seconds'] as number | undefined,
           );
           break;
         default:
@@ -351,6 +411,116 @@ export class RuntimeToolExecutor {
     }
 
     return `Exit code: ${exitCode}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`;
+  }
+
+  // ── Sandbox API Tools (Story 3.11) ─────────────────────────────────────────
+
+  /**
+   * Spawn a subagent via sera-core's POST /api/sandbox/subagent endpoint.
+   * The subagent runs asynchronously — this returns the spawn result (container ID, status).
+   */
+  private spawnSubagent(role: string, task: string): string {
+    if (this.tier === 1) {
+      throw new NotPermittedError('spawn-subagent is not available for tier-1 agents');
+    }
+    if (!this.isProxyAvailable()) {
+      return 'Error: Cannot spawn subagent — SERA_CORE_URL not configured';
+    }
+
+    const agentName = process.env['AGENT_NAME'] ?? 'unknown';
+    const coreUrl = process.env['SERA_CORE_URL'] ?? '';
+    const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
+    const body = JSON.stringify({ agentName, subagentRole: role, task });
+
+    const result = spawnSync(
+      'curl',
+      [
+        '-s',
+        '-X',
+        'POST',
+        `${coreUrl}/api/sandbox/subagent`,
+        '-H',
+        'Content-Type: application/json',
+        '-H',
+        `Authorization: Bearer ${token}`,
+        '-d',
+        body,
+        '-w',
+        '\n%{http_code}',
+      ],
+      { timeout: 120_000, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 },
+    );
+
+    const output = (result.stdout ?? '').trimEnd();
+    const lines = output.split('\n');
+    const httpStatus = lines.pop() ?? '';
+    const responseBody = lines.join('\n');
+
+    if (httpStatus === '403') {
+      return `Error: Permission denied — ${responseBody}`;
+    }
+    if (httpStatus !== '201' && httpStatus !== '200') {
+      return `Error: Subagent spawn failed (HTTP ${httpStatus}): ${responseBody}`;
+    }
+
+    return responseBody;
+  }
+
+  /**
+   * Run an ephemeral tool via sera-core's POST /api/sandbox/tool endpoint.
+   * The tool runs in a short-lived container and returns its output.
+   */
+  private runTool(toolName: string, command: string, timeoutSeconds?: number): string {
+    if (this.tier === 1) {
+      throw new NotPermittedError('run-tool is not available for tier-1 agents');
+    }
+    if (!this.isProxyAvailable()) {
+      return 'Error: Cannot run tool — SERA_CORE_URL not configured';
+    }
+
+    const agentName = process.env['AGENT_NAME'] ?? 'unknown';
+    const coreUrl = process.env['SERA_CORE_URL'] ?? '';
+    const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
+    const body = JSON.stringify({
+      agentName,
+      toolName,
+      command,
+      ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    });
+
+    const curlTimeout = Math.min((timeoutSeconds ?? 120) + 10, 310);
+    const result = spawnSync(
+      'curl',
+      [
+        '-s',
+        '-X',
+        'POST',
+        `${coreUrl}/api/sandbox/tool`,
+        '-H',
+        'Content-Type: application/json',
+        '-H',
+        `Authorization: Bearer ${token}`,
+        '-d',
+        body,
+        '-w',
+        '\n%{http_code}',
+      ],
+      { timeout: curlTimeout * 1000, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 },
+    );
+
+    const output = (result.stdout ?? '').trimEnd();
+    const lines = output.split('\n');
+    const httpStatus = lines.pop() ?? '';
+    const responseBody = lines.join('\n');
+
+    if (httpStatus === '403') {
+      return `Error: Permission denied — ${responseBody}`;
+    }
+    if (httpStatus !== '200') {
+      return `Error: Tool execution failed (HTTP ${httpStatus}): ${responseBody}`;
+    }
+
+    return responseBody;
   }
 
   // ── Proxy Support (Story 3.10) ────────────────────────────────────────────

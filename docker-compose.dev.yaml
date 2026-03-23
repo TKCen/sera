@@ -24,6 +24,8 @@ services:
     command: ["bun", "run", "dev"]
     environment:
       - WORKSPACE_DIR=/workspace
+      - MEMORY_PATH=/app/memory
+      - HOST_MEMORY_DIR=${PWD}/memory
       - NODE_ENV=development
       - PORT=3001
       - SERA_BOOTSTRAP_API_KEY=sera_bootstrap_dev_123

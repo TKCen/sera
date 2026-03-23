@@ -120,9 +120,7 @@ export default function MemoryGraph({
       const isMatched = searchQuery
         ? label.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (node.tags &&
-            node.tags.some((t: string) =>
-              t.toLowerCase().includes(searchQuery.toLowerCase())
-            ))
+            node.tags.some((t: string) => t.toLowerCase().includes(searchQuery.toLowerCase())))
         : true;
 
       const color = TYPE_COLORS[node.type] || DEFAULT_COLOR;
@@ -178,7 +176,9 @@ export default function MemoryGraph({
         nodeRelSize={5}
         nodeCanvasObject={nodeCanvasObject}
         linkColor={(link: object) =>
-          (link as GraphEdge).kind === 'wikilink' ? 'rgba(100, 116, 139, 0.5)' : 'rgba(148, 163, 184, 0.6)'
+          (link as GraphEdge).kind === 'wikilink'
+            ? 'rgba(100, 116, 139, 0.5)'
+            : 'rgba(148, 163, 184, 0.6)'
         }
         linkWidth={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? 1 : 1.5)}
         linkLineDash={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? [2, 2] : null)}

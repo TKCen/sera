@@ -183,7 +183,9 @@ export class ResourceImporter {
                 logger.error(`Error validating ${filePath}:`, result.error.format());
                 continue;
               }
-              const res = await this.registry.upsertTemplate(result.data as import('./schemas.js').AgentTemplate);
+              const res = await this.registry.upsertTemplate(
+                result.data as import('./schemas.js').AgentTemplate
+              );
               allResults.push(res as { status: 'added' | 'updated'; name: string });
             }
           }

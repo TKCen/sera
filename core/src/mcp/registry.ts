@@ -269,7 +269,11 @@ export class MCPRegistry {
           ],
         };
       },
-      callTool: async (toolName: string, args: Record<string, unknown>, meta?: Record<string, unknown>) => {
+      callTool: async (
+        toolName: string,
+        args: Record<string, unknown>,
+        meta?: Record<string, unknown>
+      ) => {
         // callTool typically expects CallToolResult from the MCP sdk.
         // We cast the output if needed since seraMcp returns a simpler object.
         const result = await seraMcp.callTool(toolName, args);

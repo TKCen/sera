@@ -455,7 +455,7 @@ export function createDelegationRouter(intercomService?: IntercomService) {
 
   /**
    * GET /api/agents/:agentId/delegations
-   * List active inbound delegations for an agent.
+   * List active inbound delegations for an agent (Epic 17).
    */
   router.get(
     '/agents/:agentId/delegations',

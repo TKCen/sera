@@ -44,8 +44,9 @@ import { TabLoading } from '@/components/AgentDetailTabLoading';
 import { MemoryTab } from '@/components/AgentDetailMemoryTab';
 import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
 import { BudgetTab } from '@/components/AgentDetailBudgetTab';
+import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 
-type Tab = 'overview' | 'grants' | 'logs' | 'memory' | 'schedules' | 'budget';
+type Tab = 'overview' | 'grants' | 'delegations' | 'logs' | 'memory' | 'schedules' | 'budget';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -139,7 +140,9 @@ export default function AgentDetailPage() {
 
         {/* Tabs */}
         <div className="flex gap-0 mt-4">
-          {(['overview', 'grants', 'logs', 'memory', 'schedules', 'budget'] as const).map((t) => (
+          {(
+            ['overview', 'grants', 'delegations', 'logs', 'memory', 'schedules', 'budget'] as const
+          ).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -160,6 +163,7 @@ export default function AgentDetailPage() {
       <div className="flex-1 overflow-y-auto">
         {tab === 'overview' && <ManifestTab id={id} />}
         {tab === 'grants' && <GrantsTab id={id} />}
+        {tab === 'delegations' && <DelegationsTab id={id} />}
         {tab === 'logs' && <LogsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} />}

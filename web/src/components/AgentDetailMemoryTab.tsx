@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { Clock, ExternalLink } from 'lucide-react';
+import { Clock, ExternalLink, Database } from 'lucide-react';
 import { useAgentMemory } from '@/hooks/useAgents';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
+import { EmptyState } from '@/components/EmptyState';
 
 export function MemoryTab({ id }: { id: string }) {
   const [scope, setScope] = useState<string>('');
@@ -40,7 +41,11 @@ export function MemoryTab({ id }: { id: string }) {
       {isLoading ? (
         <TabLoading />
       ) : !blocks?.length ? (
-        <p className="text-sm text-sera-text-muted text-center py-8">No memory blocks.</p>
+        <EmptyState
+          icon={<Database size={24} />}
+          title="No memory blocks"
+          description="This agent currently has no memories recorded in the selected scope."
+        />
       ) : (
         <div className="space-y-2">
           {blocks.map((block) => (

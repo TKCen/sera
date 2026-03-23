@@ -1,0 +1,46 @@
+[IdentityService] JWT_SECRET not set — using a random ephemeral secret. Tokens will not survive server restarts. Set JWT_SECRET in production.
+[AuthService] Registered auth plugin: api-key
+[SERACore] OIDC_ISSUER_URL not set — running in API-key-only mode
+[ProviderRegistry] No providers config at /app/config/providers.json — relying on env-var bootstrap and auto-detection
+[DynamicProviderManager] No dynamic providers config at /app/config/dynamic_providers.json
+[AgentManifestLoader] Agents directory not found: /app/agents
+[AgentManifestLoader] loadAllManifests: 0.144ms
+[Orchestrator] Loaded 0 agent templates
+(node:7472) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Failed to obtain server version. Unable to check client-server compatibility. Set checkCompatibility=false to skip version check.
+Failed to obtain server version. Unable to check client-server compatibility. Set checkCompatibility=false to skip version check.
+Failed to obtain server version. Unable to check client-server compatibility. Set checkCompatibility=false to skip version check.
+Failed to obtain server version. Unable to check client-server compatibility. Set checkCompatibility=false to skip version check.
+Failed to obtain server version. Unable to check client-server compatibility. Set checkCompatibility=false to skip version check.
+Failed to obtain server version. Unable to check client-server compatibility. Set checkCompatibility=false to skip version check.
+[CircleRegistry] Loaded: development (development.circle.yaml)
+[CircleRegistry] Loaded: operations (operations.circle.yaml)
+[CircleRegistry] Circle "development" references unknown agents: architect-prime, developer-prime, researcher-prime
+[MCPRegistry] Registered embedded sera-core MCP tools
+[MCPServerManager] Spawning MCP server container: filesystem (mcp-filesystem-3776ea68)
+[SERACore] Failed to load MCP servers: Error: EACCES: permission denied, mkdir '/memory/mcp-filesystem-3776ea68'
+    at Object.mkdirSync (node:fs:1370:26)
+    at SandboxManager.spawn (/app/core/src/sandbox/SandboxManager.ts:125:8)
+    at MCPServerManager.spawnServer (/app/core/src/mcp/MCPServerManager.ts:68:44)
+    at MCPRegistry.registerContainerServer (/app/core/src/mcp/registry.ts:83:56)
+    at MCPRegistry.loadManifest (/app/core/src/mcp/registry.ts:173:16)
+    at MCPRegistry.loadFromDirectory (/app/core/src/mcp/registry.ts:124:20)
+    at startServer (/app/core/src/index.ts:473:6) {
+  errno: -13,
+  code: 'EACCES',
+  syscall: 'mkdir',
+  path: '/memory/mcp-filesystem-3776ea68'
+}
+[SERACore] Failed to start server: Error: ENOENT: no such file or directory, stat '/app/agents'
+    at Object.statSync (node:fs:1746:25)
+    at [kFSWatchStart] (node:internal/fs/recursive_watch:204:37)
+    at Object.watch (node:fs:2551:36)
+    at Orchestrator.watchAgentsDirectory (/app/core/src/agents/Orchestrator.ts:706:23)
+    at startServer (/app/core/src/index.ts:486:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'stat',
+  path: '/app/agents',
+  filename: '/app/agents'
+}

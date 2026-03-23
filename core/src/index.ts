@@ -442,6 +442,12 @@ app.use('/api/notifications', notifPublicRouter);
 app.use('/api/notifications', authMiddleware, notifProtectedRouter);
 app.use('/api/channels', authMiddleware, notifProtectedRouter);
 
+// Global Error Handler
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  logger.error(`[ERROR] ${req.method} ${req.url} - ${err.message}`, err);
+  res.status(500).json({ error: err.message || 'Internal Server Error' });
+});
+
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
 

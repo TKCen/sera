@@ -1,5 +1,13 @@
 import type { AgentRegistry } from '../agents/registry.service.js';
 
+/**
+ * Application-level capability dimensions that bypass sandbox escalation checks.
+ * These control what the agent can do within SERA's API (management, delegation, etc.),
+ * NOT what the container can do at the OS/network level. They are orthogonal to
+ * SandboxBoundary capabilities and should pass through without restriction from tiers.
+ */
+const APPLICATION_LEVEL_CAPABILITIES = new Set(['seraManagement', 'delegation']);
+
 export class CapabilityEscalationError extends Error {
   constructor(dimension: string, expected: unknown, actual: unknown) {
     const expectedStr = JSON.stringify(expected);
@@ -50,11 +58,36 @@ export class CapabilityResolver {
     // Resolve manifest capabilities fully expanded
     const manifestCapabilities = await this.expandCapabilities(spec.capabilities || {});
 
-    // Explicit escalation check: manifest overrides cannot be broader than base (Boundary ∩ Policy)
-    this.verifyNoEscalation(baseCapabilities, manifestCapabilities);
+    // Explicit escalation check: manifest overrides cannot be broader than base (Boundary ∩ Policy).
+    // Application-level capabilities (seraManagement, etc.) are orthogonal to sandbox boundaries
+    // and bypass the escalation check — they control what the agent can do within SERA's API,
+    // not what the container can do at the OS level.
+    const sandboxManifestCaps: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      (manifestCapabilities as Record<string, unknown>) || {}
+    )) {
+      if (!APPLICATION_LEVEL_CAPABILITIES.has(key)) {
+        sandboxManifestCaps[key] = value;
+      }
+    }
+    this.verifyNoEscalation(baseCapabilities, sandboxManifestCaps);
+
+    // Merge application-level capabilities into final result (bypass sandbox intersection)
+    const appLevelCaps: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      (manifestCapabilities as Record<string, unknown>) || {}
+    )) {
+      if (APPLICATION_LEVEL_CAPABILITIES.has(key)) {
+        appLevelCaps[key] = value;
+      }
+    }
+    const mergedCapabilities = {
+      ...((finalCapabilities as Record<string, unknown>) || {}),
+      ...appLevelCaps,
+    };
 
     // Final pass: Always-denied enforcement
-    const effectiveCapabilities = await this.applyAlwaysDenied(finalCapabilities);
+    const effectiveCapabilities = await this.applyAlwaysDenied(mergedCapabilities);
 
     return {
       spec,

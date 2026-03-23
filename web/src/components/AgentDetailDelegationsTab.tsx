@@ -34,7 +34,10 @@ export function DelegationsTab({ id }: { id: string }) {
 
       <div className="grid gap-4">
         {delegations.map((del) => (
-          <div key={del.id} className="sera-card-static p-4 hover:border-sera-accent/30 transition-colors">
+          <div
+            key={del.id}
+            className="sera-card-static p-4 hover:border-sera-accent/30 transition-colors"
+          >
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-3 flex-1">
                 {/* Header: Source & Status */}
@@ -44,12 +47,19 @@ export function DelegationsTab({ id }: { id: string }) {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-sera-text">{del.principal_name}</span>
-                      <Badge variant={del.status === 'active' ? 'accent' : 'default'} className="text-[10px] h-4">
+                      <span className="text-sm font-medium text-sera-text">
+                        {del.principal_name}
+                      </span>
+                      <Badge
+                        variant={del.status === 'active' ? 'accent' : 'default'}
+                        className="text-[10px] h-4"
+                      >
                         {del.status}
                       </Badge>
                     </div>
-                    <div className="text-[10px] text-sera-text-dim font-mono">{del.principal_id}</div>
+                    <div className="text-[10px] text-sera-text-dim font-mono">
+                      {del.principal_id}
+                    </div>
                   </div>
                 </div>
 
@@ -71,7 +81,9 @@ export function DelegationsTab({ id }: { id: string }) {
                   {del.scope.resourceConstraints &&
                     Object.keys(del.scope.resourceConstraints).length > 0 && (
                       <div className="mt-2 pt-2 border-t border-sera-border/30">
-                        <div className="text-[9px] uppercase text-sera-text-dim mb-1">Constraints</div>
+                        <div className="text-[9px] uppercase text-sera-text-dim mb-1">
+                          Constraints
+                        </div>
                         <div className="space-y-1">
                           {Object.entries(del.scope.resourceConstraints).map(
                             ([k, v]: [string, string[]]) => (
@@ -119,9 +131,7 @@ export function DelegationsTab({ id }: { id: string }) {
                 </div>
 
                 <div className="pt-2 border-t border-sera-border/30">
-                  <div className="text-[9px] text-sera-text-dim">
-                    Used {del.use_count} times
-                  </div>
+                  <div className="text-[9px] text-sera-text-dim">Used {del.use_count} times</div>
                   {del.last_used_at && (
                     <div className="text-[9px] text-sera-text-muted">
                       Last: {new Date(del.last_used_at).toLocaleDateString()}

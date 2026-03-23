@@ -4,10 +4,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Set WORKSPACE_DIR before importing app/index.ts
+// Set WORKSPACE_DIR and bootstrap API key before importing app/index.ts
 vi.hoisted(() => {
   process.env.WORKSPACE_DIR = '/';
   process.env.SECRETS_MASTER_KEY = '0'.repeat(64);
+  process.env.SERA_BOOTSTRAP_API_KEY = 'test-api-key';
 });
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -174,12 +175,22 @@ afterAll(async () => {
   }
 });
 
+const AUTH_HEADER = `Bearer ${process.env.SERA_BOOTSTRAP_API_KEY}`;
+
+/** Helper: supertest request with auth */
+function authed(expressApp: Express) {
+  return {
+    get: (url: string) => request(expressApp).get(url).set('Authorization', AUTH_HEADER),
+    post: (url: string) => request(expressApp).post(url).set('Authorization', AUTH_HEADER),
+  };
+}
+
 describe('SERA Integration Tests', () => {
   describe('a. Agent loading', () => {
     it('should return empty agent instances on fresh install', async () => {
       // GET /api/agents now returns DB instances (not YAML manifests).
       // With a mocked empty DB, there are no instances yet.
-      const res = await request(app).get('/api/agents');
+      const res = await authed(app).get('/api/agents');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBe(0);
@@ -188,7 +199,7 @@ describe('SERA Integration Tests', () => {
 
   describe('b. Circle loading', () => {
     it('should validate agent references against loaded manifests and load circles', async () => {
-      const res = await request(app).get('/api/circles');
+      const res = await authed(app).get('/api/circles');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
@@ -201,7 +212,7 @@ describe('SERA Integration Tests', () => {
 
   describe('c. Chat flow', () => {
     it('should hit the orchestrator and use the loaded agent mock', async () => {
-      const res = await request(app).post('/api/chat').send({ message: 'Hello, world!' });
+      const res = await authed(app).post('/api/chat').send({ message: 'Hello, world!' });
 
       if (res.status === 500) {
         console.error('[IntegrationTest] 500 ERROR BODY:', res.body);
@@ -209,11 +220,7 @@ describe('SERA Integration Tests', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('reply');
-      // Our mock returns 'Mocked response' but PrimaryAgent wraps it depending on structure
-      // Wait, primary agent extracts finalAnswer or thought, so let's just check it's defined
       expect(typeof res.body.reply).toBe('string');
-      // Our mock response doesn't have `<final_answer>` block so PrimaryAgent might extract it differently,
-      // but it should not crash.
     });
   });
 
@@ -221,7 +228,7 @@ describe('SERA Integration Tests', () => {
     let createdId: string;
 
     it('should create a memory entry via POST /api/memory/blocks/:type', async () => {
-      const res = await request(app)
+      const res = await authed(app)
         .post('/api/memory/blocks/core')
         .send({ title: 'Test Memory', content: 'This is a test memory content.' });
 
@@ -235,7 +242,7 @@ describe('SERA Integration Tests', () => {
 
     it('should retrieve the created memory entry via GET /api/memory/entries/:id', async () => {
       expect(createdId).toBeDefined();
-      const res = await request(app).get(`/api/memory/entries/${createdId}`);
+      const res = await authed(app).get(`/api/memory/entries/${createdId}`);
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(createdId);
       expect(res.body.title).toBe('Test Memory');
@@ -245,7 +252,7 @@ describe('SERA Integration Tests', () => {
 
   describe('e. Tools flow', () => {
     it('should have builtin tools registered after server boot', async () => {
-      const res = await request(app).get('/api/tools');
+      const res = await authed(app).get('/api/tools');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
@@ -253,6 +260,18 @@ describe('SERA Integration Tests', () => {
       const toolIds = res.body.map((t: { id: string }) => t.id);
       expect(toolIds).toContain('file-read');
       expect(toolIds).toContain('file-write');
+    });
+  });
+
+  describe('f. Auth enforcement', () => {
+    it('should reject unauthenticated requests to protected endpoints', async () => {
+      const res = await request(app).get('/api/agents');
+      expect(res.status).toBe(401);
+    });
+
+    it('should reject requests with invalid API key', async () => {
+      const res = await request(app).get('/api/agents').set('Authorization', 'Bearer invalid-key');
+      expect(res.status).toBe(401);
     });
   });
 });

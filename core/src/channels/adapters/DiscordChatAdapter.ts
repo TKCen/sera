@@ -72,11 +72,23 @@ export class DiscordChatAdapter {
 
   async start(): Promise<void> {
     this.running = true;
+
+    // Warn if both message paths are disabled — bot will appear online but be deaf
+    if (this.config.allowDMs === false && this.config.allowMentions === false) {
+      logger.warn(
+        `Discord chat adapter for agent ${this.config.targetAgentId}: ` +
+          `both allowDMs and allowMentions are false — no messages will reach the agent! ` +
+          `Set at least one to true.`
+      );
+    }
+
     this.connect();
     logger.info(
       `Discord chat adapter started for agent ${this.config.targetAgentId} ` +
         `(guilds: ${this.config.allowedGuilds?.length ?? 'all'}, ` +
-        `users: ${this.config.allowedUsers?.length ?? 'all'})`
+        `users: ${this.config.allowedUsers?.length ?? 'all'}, ` +
+        `DMs: ${this.config.allowDMs !== false ? 'yes' : 'no'}, ` +
+        `mentions: ${this.config.allowMentions !== false ? 'yes' : 'no'})`
     );
   }
 
@@ -197,10 +209,20 @@ export class DiscordChatAdapter {
       Array.isArray(msg.mentions) &&
       msg.mentions.some((m) => m.id === this.botUserId);
 
-    // Check if this message type is allowed
-    if (isDM && this.config.allowDMs === false) return;
+    // Check if this message type is allowed.
+    // Defaults: allowDMs=true, allowMentions=true (must explicitly disable)
+    const allowDMs = this.config.allowDMs !== false;
+    const allowMentions = this.config.allowMentions !== false;
+
+    if (isDM && !allowDMs) {
+      logger.debug(`Ignoring DM from ${msg.author.username} — allowDMs is false`);
+      return;
+    }
     if (!isDM && !isMentioned) return; // In guilds, only respond to @mentions
-    if (!isDM && this.config.allowMentions === false) return;
+    if (!isDM && !allowMentions) {
+      logger.debug(`Ignoring mention from ${msg.author.username} — allowMentions is false`);
+      return;
+    }
 
     // Security: guild + user allowlists
     if (!this.isAllowed(msg.guild_id, msg.author.id)) {

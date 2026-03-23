@@ -58,7 +58,7 @@ import { SecretsManager } from './secrets/secrets-manager.js';
 import { AgentRegistry } from './agents/registry.service.js';
 import { ResourceImporter } from './agents/importer.service.js';
 import { createRegistryRouter } from './routes/registry.js';
-import { createLifecycleRouter } from './routes/lifecycle.js';
+import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
 import { createToolProxyRouter } from './routes/toolProxy.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { ProviderRegistry } from './llm/ProviderRegistry.js';
@@ -348,6 +348,7 @@ app.use(
 app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
 app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
 app.use('/api/audit', authMiddleware, createAuditRouter());
+app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permissionService));
 app.use('/api', authMiddleware, createConfigRouter());
 app.use('/api/schedules', authMiddleware, createSchedulesRouter());
 app.use('/v1', createOpenAICompatRouter(orchestrator));

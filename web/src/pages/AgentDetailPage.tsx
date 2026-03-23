@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router';
-import { ArrowLeft, Play, Square, RotateCcw, Bot, Plus, Trash2, Shield } from 'lucide-react';
+import {
+  ArrowLeft,
+  Play,
+  Square,
+  RotateCcw,
+  Bot,
+  Plus,
+  Trash2,
+  Shield,
+  Check,
+  X,
+  AlertCircle,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,
@@ -8,6 +20,8 @@ import {
   useAgentGrants,
   useCreateGrant,
   useRevokeGrant,
+  usePermissionRequests,
+  useDecidePermission,
   useStartAgent,
   useStopAgent,
   useRestartAgent,
@@ -389,8 +403,10 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 
 function GrantsTab({ id }: { id: string }) {
   const { data, isLoading } = useAgentGrants(id);
+  const { data: pendingRequests } = usePermissionRequests(id);
   const createGrant = useCreateGrant();
   const revokeGrant = useRevokeGrant();
+  const decidePermission = useDecidePermission();
   const [showAdd, setShowAdd] = useState(false);
   const [dimension, setDimension] = useState('filesystem');
   const [value, setValue] = useState('');
@@ -489,6 +505,68 @@ function GrantsTab({ id }: { id: string }) {
             <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>
               Cancel
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Pending permission requests */}
+      {pendingRequests && pendingRequests.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-semibold text-sera-warning flex items-center gap-1.5">
+            <AlertCircle size={12} />
+            {pendingRequests.length} Pending Request{pendingRequests.length > 1 ? 's' : ''}
+          </h4>
+          <div className="sera-card-static overflow-hidden border-sera-warning/30">
+            {pendingRequests.map((req) => (
+              <div
+                key={req.requestId}
+                className="flex items-center justify-between gap-3 px-3 py-2.5 border-b border-sera-border/50 last:border-0"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="accent">{req.dimension}</Badge>
+                    <span className="font-mono text-sera-text truncate">{req.value}</span>
+                  </div>
+                  {req.reason && (
+                    <p className="text-[10px] text-sera-text-muted mt-0.5 truncate">
+                      {req.reason}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1 text-green-400 border-green-400/30 hover:bg-green-400/10"
+                    disabled={decidePermission.isPending}
+                    onClick={() => {
+                      void decidePermission.mutateAsync({
+                        requestId: req.requestId,
+                        agentId: id,
+                        params: { decision: 'grant', grantType: 'session' },
+                      });
+                    }}
+                  >
+                    <Check size={11} /> Grant
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1 text-sera-error border-sera-error/30 hover:bg-sera-error/10"
+                    disabled={decidePermission.isPending}
+                    onClick={() => {
+                      void decidePermission.mutateAsync({
+                        requestId: req.requestId,
+                        agentId: id,
+                        params: { decision: 'deny' },
+                      });
+                    }}
+                  >
+                    <X size={11} /> Deny
+                  </Button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

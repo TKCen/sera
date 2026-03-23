@@ -370,6 +370,25 @@ export interface CreateGrantParams {
   expiresAt?: string;
 }
 
+// Permission Requests
+
+export interface PermissionRequest {
+  requestId: string;
+  agentId: string;
+  agentName: string;
+  dimension: 'filesystem' | 'network' | 'exec.commands';
+  value: string;
+  reason?: string;
+  requestedAt: string;
+  status: 'pending' | 'granted' | 'denied' | 'expired';
+}
+
+export interface PermissionDecisionParams {
+  decision: 'grant' | 'deny';
+  grantType?: 'one-time' | 'session' | 'persistent';
+  expiresAt?: string;
+}
+
 // Epic 14 — Observability types
 
 export interface UsageDataPoint {

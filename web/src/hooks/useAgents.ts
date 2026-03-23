@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '@/lib/api/agents';
-import type { CreateAgentInstanceParams, CreateGrantParams } from '@/lib/api/types';
+import type { CreateAgentInstanceParams, CreateGrantParams, PermissionDecisionParams } from '@/lib/api/types';
 
 export const agentsKeys = {
   all: ['agents'] as const,
@@ -11,6 +11,7 @@ export const agentsKeys = {
   thoughts: (id: string, taskId?: string) => ['agents', id, 'thoughts', taskId] as const,
   logs: (id: string) => ['agents', id, 'logs'] as const,
   grants: (id: string) => ['agents', id, 'grants'] as const,
+  permissionRequests: (agentId?: string) => ['permission-requests', agentId] as const,
 };
 
 export function useAgents() {
@@ -181,6 +182,34 @@ export function useRevokeGrant() {
       agentsApi.revokeAgentGrant(id, grantId),
     onSuccess: (_data, { id }) => {
       void qc.invalidateQueries({ queryKey: agentsKeys.grants(id) });
+    },
+  });
+}
+
+// ── Permission Requests ─────────────────────────────────────────────────────
+
+export function usePermissionRequests(agentId?: string) {
+  return useQuery({
+    queryKey: agentsKeys.permissionRequests(agentId),
+    queryFn: () => agentsApi.listPermissionRequests(agentId),
+    refetchInterval: 5000,
+  });
+}
+
+export function useDecidePermission() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      requestId,
+      params,
+    }: {
+      requestId: string;
+      agentId: string;
+      params: PermissionDecisionParams;
+    }) => agentsApi.decidePermissionRequest(requestId, params),
+    onSuccess: (_data, { agentId }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.permissionRequests(agentId) });
+      void qc.invalidateQueries({ queryKey: agentsKeys.grants(agentId) });
     },
   });
 }

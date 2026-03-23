@@ -10,6 +10,8 @@ import type {
   CreateAgentInstanceParams,
   CapabilityGrant,
   CreateGrantParams,
+  PermissionRequest,
+  PermissionDecisionParams,
 } from './types';
 
 // ── Instance-based endpoints ─────────────────────────────────────────────────
@@ -129,4 +131,21 @@ export function revokeAgentGrant(id: string, grantId: string): Promise<void> {
   return request<void>(`/agents/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}`, {
     method: 'DELETE',
   });
+}
+
+// ── Permission Requests ─────────────────────────────────────────────────────
+
+export function listPermissionRequests(agentId?: string): Promise<PermissionRequest[]> {
+  const params = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
+  return request<PermissionRequest[]>(`/permission-requests${params}`);
+}
+
+export function decidePermissionRequest(
+  requestId: string,
+  params: PermissionDecisionParams
+): Promise<PermissionRequest> {
+  return request<PermissionRequest>(
+    `/permission-requests/${encodeURIComponent(requestId)}/decision`,
+    { method: 'POST', body: JSON.stringify(params) }
+  );
 }

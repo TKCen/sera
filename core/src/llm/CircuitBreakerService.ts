@@ -127,14 +127,14 @@ export class CircuitBreakerService {
     try {
       return await breaker.fire(request, agentId, latencyStart);
     } catch (err: unknown) {
-      const error = err as { code?: string; message?: string };
-      if (error.code === 'EOPENBREAKER' || error.message?.includes('Breaker is open')) {
-        const circuitErr = new Error(
-          `Provider ${provider} is currently unavailable (circuit open)`
+      if (
+        (err && typeof err === 'object' && 'code' in err && err.code === 'EOPENBREAKER') ||
+        (err instanceof Error && err.message.includes('Breaker is open'))
+      ) {
+        throw Object.assign(
+          new Error(`Provider ${provider} is currently unavailable (circuit open)`),
+          { code: 'CIRCUIT_OPEN', provider }
         );
-        (circuitErr as unknown as { code: string }).code = 'CIRCUIT_OPEN';
-        (circuitErr as unknown as { provider: string }).provider = provider;
-        throw circuitErr;
       }
       throw err;
     }

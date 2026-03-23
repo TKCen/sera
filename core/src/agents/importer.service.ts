@@ -142,21 +142,21 @@ export class ResourceImporter {
 
           if (filePath) {
             const content = await fs.readFile(filePath, 'utf8');
-            const raw = yaml.load(content) as any;
+            const raw = yaml.load(content) as Record<string, unknown> | null | undefined;
 
-            let template: any;
+            let template: Record<string, unknown> | undefined;
 
             // If kind is 'Agent', we need to map it to 'AgentTemplate' for the registry
-            if (raw?.kind === 'Agent') {
+            if (raw && raw.kind === 'Agent') {
               template = {
                 apiVersion: raw.apiVersion,
                 kind: 'AgentTemplate',
                 metadata: {
-                  ...raw.metadata,
+                  ...(raw.metadata as Record<string, unknown>),
                   builtin: false,
                 },
                 spec: {
-                  ...raw.spec,
+                  ...(raw.spec as Record<string, unknown>),
                   identity: raw.identity,
                   model: raw.model,
                   tools: raw.tools,
@@ -173,7 +173,7 @@ export class ResourceImporter {
                   mounts: raw.mounts,
                 },
               };
-            } else if (raw?.kind === 'AgentTemplate') {
+            } else if (raw && raw.kind === 'AgentTemplate') {
               template = raw;
             }
 
@@ -183,8 +183,8 @@ export class ResourceImporter {
                 logger.error(`Error validating ${filePath}:`, result.error.format());
                 continue;
               }
-              const res = await this.registry.upsertTemplate(result.data as any);
-              allResults.push(res as any);
+              const res = await this.registry.upsertTemplate(result.data as import('./schemas.js').AgentTemplate);
+              allResults.push(res as { status: 'added' | 'updated'; name: string });
             }
           }
         } catch (fileErr) {

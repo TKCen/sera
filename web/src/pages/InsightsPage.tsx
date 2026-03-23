@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import * as Recharts from 'recharts';
-const RC = Recharts as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const RC = Recharts as any;
 const {
   AreaChart,
   Area,

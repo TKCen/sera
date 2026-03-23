@@ -140,8 +140,8 @@ export class BridgeService {
       if (client) {
         try {
           // Avoid infinite loops by tagging the message or checking source
-          const source = message.source as unknown as Record<string, unknown>;
-          if (source.bridged) return;
+          const source = message.source as import('./types.js').MessageSource & { bridged?: boolean };
+          if (source && source.bridged) return;
 
           const bridgedMessage = {
             ...message,

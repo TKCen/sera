@@ -236,10 +236,16 @@ export class VectorService {
     const name = collectionName(namespace);
     try {
       const info = await this.client.getCollection(name);
-      const countValue =
-        (info as unknown as Record<string, number>).vectors_count ??
-        (info as unknown as Record<string, number>).points_count ??
-        0;
+
+      let countValue = 0;
+      if (info && typeof info === 'object') {
+        if ('vectors_count' in info && typeof info.vectors_count === 'number') {
+          countValue = info.vectors_count;
+        } else if ('points_count' in info && typeof info.points_count === 'number') {
+          countValue = info.points_count;
+        }
+      }
+
       return { vectorCount: countValue };
     } catch {
       return null;

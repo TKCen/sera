@@ -43,7 +43,7 @@ export default function MemoryGraph({
   onNodeDoubleClick,
   searchQuery = '',
   className = '',
-}: MemoryGraphProps) {
+}: MemoryGraphProps): React.JSX.Element {
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const navigate = useNavigate();
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -111,25 +111,25 @@ export default function MemoryGraph({
 
   // Handle node rendering and coloring based on search and type
   const nodeCanvasObject = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const label = (node.title as string) || '';
+    (nodeObj: object, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const node = nodeObj as GraphNode & { x?: number; y?: number };
+      const label = node.title || '';
       const fontSize = 12 / globalScale;
       ctx.font = `${fontSize}px Sans-Serif`;
 
       const isMatched = searchQuery
         ? label.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (node.tags &&
-            (node.tags as string[]).some((t: string) =>
+            node.tags.some((t: string) =>
               t.toLowerCase().includes(searchQuery.toLowerCase())
             ))
         : true;
 
-      const color = TYPE_COLORS[node.type as string] || DEFAULT_COLOR;
+      const color = TYPE_COLORS[node.type] || DEFAULT_COLOR;
 
       // Draw node circle
       ctx.beginPath();
-      ctx.arc((node.x as number) || 0, (node.y as number) || 0, 5, 0, 2 * Math.PI, false);
+      ctx.arc(node.x || 0, node.y || 0, 5, 0, 2 * Math.PI, false);
       ctx.fillStyle = isMatched ? color : '#374151'; // highlight or dim
       ctx.fill();
 
@@ -148,8 +148,8 @@ export default function MemoryGraph({
       if (isMatched) {
         ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
         ctx.fillRect(
-          ((node.x as number) || 0) - bckgDimensions[0] / 2,
-          ((node.y as number) || 0) + 6,
+          (node.x || 0) - bckgDimensions[0] / 2,
+          (node.y || 0) + 6,
           bckgDimensions[0],
           bckgDimensions[1]
         );
@@ -157,7 +157,7 @@ export default function MemoryGraph({
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#e2e8f0';
-        ctx.fillText(label, (node.x as number) || 0, ((node.y as number) || 0) + 6 + fontSize / 2);
+        ctx.fillText(label, node.x || 0, (node.y || 0) + 6 + fontSize / 2);
       }
     },
     [searchQuery]
@@ -177,16 +177,12 @@ export default function MemoryGraph({
         nodeLabel="title"
         nodeRelSize={5}
         nodeCanvasObject={nodeCanvasObject}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        linkColor={(link: any) =>
-          link.kind === 'wikilink' ? 'rgba(100, 116, 139, 0.5)' : 'rgba(148, 163, 184, 0.6)'
+        linkColor={(link: object) =>
+          (link as GraphEdge).kind === 'wikilink' ? 'rgba(100, 116, 139, 0.5)' : 'rgba(148, 163, 184, 0.6)'
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        linkWidth={(link: any) => (link.kind === 'wikilink' ? 1 : 1.5)}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        linkLineDash={(link: any) => (link.kind === 'wikilink' ? [2, 2] : null)}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        onNodeClick={handleNodeClick as any}
+        linkWidth={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? 1 : 1.5)}
+        linkLineDash={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? [2, 2] : null)}
+        onNodeClick={(node: object) => handleNodeClick(node as GraphNode)}
         d3AlphaDecay={0.02}
         d3VelocityDecay={0.3}
       />

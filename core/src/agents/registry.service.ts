@@ -14,6 +14,8 @@ export class AgentRegistry {
 
   async upsertTemplate(template: AgentTemplate) {
     const { name, displayName, builtin, category } = template.metadata;
+    // We check for existence first to return accurate status (added vs updated)
+    const existing = await this.getTemplate(name);
     const query = `
       INSERT INTO agent_templates (name, display_name, builtin, category, spec, updated_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
@@ -26,7 +28,11 @@ export class AgentRegistry {
       RETURNING *;
     `;
     const res = await this.pool.query(query, [name, displayName, builtin, category, template.spec]);
-    return res.rows[0];
+    return {
+      status: existing ? 'updated' : 'added',
+      name: res.rows[0].name,
+      record: res.rows[0],
+    };
   }
 
   async getTemplate(name: string) {
@@ -294,6 +300,7 @@ export class AgentRegistry {
 
   async upsertNamedList(list: NamedList, source: string = 'file') {
     const { name, type, alwaysEnforced } = list.metadata;
+    const existing = await this.getNamedList(name);
     const query = `
       INSERT INTO named_lists (name, type, source, entries, always_enforced, updated_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
@@ -312,11 +319,16 @@ export class AgentRegistry {
       JSON.stringify(list.entries),
       alwaysEnforced ?? false,
     ]);
-    return res.rows[0];
+    return {
+      status: existing ? 'updated' : 'added',
+      name: res.rows[0].name,
+      record: res.rows[0],
+    };
   }
 
   async upsertCapabilityPolicy(policy: CapabilityPolicy, source: string = 'file') {
     const { name } = policy.metadata;
+    const existing = await this.getCapabilityPolicy(name);
     const query = `
       INSERT INTO capability_policies (name, source, capabilities, updated_at)
       VALUES ($1, $2, $3, NOW())
@@ -327,11 +339,16 @@ export class AgentRegistry {
       RETURNING *;
     `;
     const res = await this.pool.query(query, [name, source, policy.capabilities]);
-    return res.rows[0];
+    return {
+      status: existing ? 'updated' : 'added',
+      name: res.rows[0].name,
+      record: res.rows[0],
+    };
   }
 
   async upsertSandboxBoundary(boundary: SandboxBoundary, source: string = 'file') {
     const { name } = boundary.metadata;
+    const existing = await this.getSandboxBoundary(name);
     const query = `
       INSERT INTO sandbox_boundaries (name, source, linux, capabilities, updated_at)
       VALUES ($1, $2, $3, $4, NOW())
@@ -343,7 +360,11 @@ export class AgentRegistry {
       RETURNING *;
     `;
     const res = await this.pool.query(query, [name, source, boundary.linux, boundary.capabilities]);
-    return res.rows[0];
+    return {
+      status: existing ? 'updated' : 'added',
+      name: res.rows[0].name,
+      record: res.rows[0],
+    };
   }
 
   async getNamedList(name: string): Promise<NamedList | null> {
@@ -472,5 +493,75 @@ export class AgentRegistry {
       'UPDATE agent_instances SET workspace_used_gb = $2, updated_at = NOW() WHERE id = $1',
       [instanceId, usedGB]
     );
+  }
+
+  // ── Cleanup Helpers ───────────────────────────────────────────────────────
+
+  async deleteTemplatesExcept(validNames: string[]) {
+    const all = await this.listTemplates();
+    const toRemove = all.filter((t) => !validNames.includes(t.name) && !t.builtin);
+    const removed: string[] = [];
+    const errors: string[] = [];
+
+    for (const t of toRemove) {
+      try {
+        await this.deleteTemplate(t.name);
+        removed.push(t.name);
+      } catch (err: unknown) {
+        errors.push(`${t.name}: ${(err as Error).message}`);
+      }
+    }
+    return { removed, errors };
+  }
+
+  async deleteNamedListsExcept(validNames: string[]) {
+    const res = await this.pool.query("SELECT name FROM named_lists WHERE source = 'file'");
+    const toRemove = res.rows.filter((r) => !validNames.includes(r.name));
+    const removed: string[] = [];
+    const errors: string[] = [];
+
+    for (const r of toRemove) {
+      try {
+        await this.pool.query('DELETE FROM named_lists WHERE name = $1', [r.name]);
+        removed.push(r.name);
+      } catch (err: unknown) {
+        errors.push(`${r.name}: ${(err as Error).message}`);
+      }
+    }
+    return { removed, errors };
+  }
+
+  async deleteCapabilityPoliciesExcept(validNames: string[]) {
+    const res = await this.pool.query("SELECT name FROM capability_policies WHERE source = 'file'");
+    const toRemove = res.rows.filter((r) => !validNames.includes(r.name));
+    const removed: string[] = [];
+    const errors: string[] = [];
+
+    for (const r of toRemove) {
+      try {
+        await this.pool.query('DELETE FROM capability_policies WHERE name = $1', [r.name]);
+        removed.push(r.name);
+      } catch (err: unknown) {
+        errors.push(`${r.name}: ${(err as Error).message}`);
+      }
+    }
+    return { removed, errors };
+  }
+
+  async deleteSandboxBoundariesExcept(validNames: string[]) {
+    const res = await this.pool.query("SELECT name FROM sandbox_boundaries WHERE source = 'file'");
+    const toRemove = res.rows.filter((r) => !validNames.includes(r.name));
+    const removed: string[] = [];
+    const errors: string[] = [];
+
+    for (const r of toRemove) {
+      try {
+        await this.pool.query('DELETE FROM sandbox_boundaries WHERE name = $1', [r.name]);
+        removed.push(r.name);
+      } catch (err: unknown) {
+        errors.push(`${r.name}: ${(err as Error).message}`);
+      }
+    }
+    return { removed, errors };
   }
 }

@@ -425,7 +425,11 @@ app.use('/api/lsp', lspRouter);
 app.use('/api/federation', createFederationRouter());
 app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
 
-app.use('/api/registry', authMiddleware, createRegistryRouter(agentRegistry, resourceImporter));
+app.use(
+  '/api/registry',
+  authMiddleware,
+  createRegistryRouter(agentRegistry, resourceImporter, orchestrator)
+);
 app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRegistry));
 app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
 app.use('/api/knowledge', authMiddleware, createKnowledgeRouter());

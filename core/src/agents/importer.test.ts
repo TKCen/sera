@@ -11,10 +11,14 @@ describe('ResourceImporter', () => {
 
   beforeEach(async () => {
     registryMock = {
-      upsertNamedList: vi.fn().mockResolvedValue({}),
-      upsertCapabilityPolicy: vi.fn().mockResolvedValue({}),
-      upsertSandboxBoundary: vi.fn().mockResolvedValue({}),
-      upsertTemplate: vi.fn().mockResolvedValue({}),
+      upsertNamedList: vi.fn().mockResolvedValue({ status: 'added', name: 'github-apis' }),
+      upsertCapabilityPolicy: vi.fn().mockResolvedValue({ status: 'added', name: 'standard' }),
+      upsertSandboxBoundary: vi.fn().mockResolvedValue({ status: 'added', name: 'sb1' }),
+      upsertTemplate: vi.fn().mockResolvedValue({ status: 'added', name: 't1' }),
+      deleteTemplatesExcept: vi.fn().mockResolvedValue({ removed: [], errors: [] }),
+      deleteNamedListsExcept: vi.fn().mockResolvedValue({ removed: [], errors: [] }),
+      deleteCapabilityPoliciesExcept: vi.fn().mockResolvedValue({ removed: [], errors: [] }),
+      deleteSandboxBoundariesExcept: vi.fn().mockResolvedValue({ removed: [], errors: [] }),
     };
     importer = new ResourceImporter(registryMock as unknown as AgentRegistry, baseDir);
 
@@ -23,6 +27,7 @@ describe('ResourceImporter', () => {
     await fs.mkdir(path.join(baseDir, 'capability-policies'), { recursive: true });
     await fs.mkdir(path.join(baseDir, 'sandbox-boundaries'), { recursive: true });
     await fs.mkdir(path.join(baseDir, 'templates', 'builtin'), { recursive: true });
+    await fs.mkdir(path.join(baseDir, 'agents'), { recursive: true });
 
     await fs.writeFile(
       path.join(baseDir, 'lists', 'network-allowlist', 'github.yaml'),
@@ -56,7 +61,7 @@ capabilities:
   });
 
   it('imports valid resources from directory structure', async () => {
-    await importer.importAll();
+    const report = await importer.importAll();
 
     expect(registryMock.upsertNamedList).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -68,6 +73,8 @@ capabilities:
         metadata: expect.objectContaining({ name: 'standard' }),
       })
     );
+    expect(report.added).toContain('github-apis');
+    expect(report.added).toContain('standard');
   });
 
   it('skips invalid manifests', async () => {
@@ -79,5 +86,39 @@ capabilities:
     await importer.importAll();
     // Should still have called for the valid one
     expect(registryMock.upsertCapabilityPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it('imports from agents directory', async () => {
+    await fs.mkdir(path.join(baseDir, 'agents', 'my-agent'), { recursive: true });
+    await fs.writeFile(
+      path.join(baseDir, 'agents', 'my-agent', 'AGENT.yaml'),
+      `
+apiVersion: sera/v1
+kind: Agent
+metadata:
+  name: my-agent
+identity:
+  role: bot
+  description: test
+model:
+  provider: openai
+  name: gpt-4
+spec:
+  lifecycle:
+    mode: ephemeral
+`
+    );
+    registryMock.upsertTemplate.mockResolvedValue({ status: 'added', name: 'my-agent' });
+
+    const report = await importer.importAll();
+    expect(registryMock.upsertTemplate).toHaveBeenCalled();
+    expect(report.added).toContain('my-agent');
+  });
+
+  it('handles removals', async () => {
+    registryMock.deleteTemplatesExcept.mockResolvedValue({ removed: ['old-template'], errors: [] });
+    const report = await importer.importAll();
+    expect(report.removed).toContain('old-template');
+    expect(registryMock.deleteTemplatesExcept).toHaveBeenCalled();
   });
 });

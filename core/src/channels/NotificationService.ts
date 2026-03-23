@@ -280,6 +280,68 @@ export class NotificationService {
     };
   }
 
+  async updateChannel(
+    id: string,
+    updates: { name?: string; config?: Record<string, unknown>; enabled?: boolean }
+  ): Promise<ChannelRecord | null> {
+    // Fetch existing channel (with full unredacted config)
+    const existing = await pool.query<{
+      id: string;
+      name: string;
+      type: string;
+      config: Record<string, unknown>;
+      enabled: boolean;
+      created_at: Date;
+    }>('SELECT * FROM notification_channels WHERE id = $1', [id]);
+
+    const row = existing.rows[0];
+    if (!row) return null;
+
+    // Merge config: new values override existing, but unmentioned keys are preserved
+    const mergedConfig =
+      updates.config !== undefined ? { ...row.config, ...updates.config } : row.config;
+    const mergedName = updates.name ?? row.name;
+    const mergedEnabled = updates.enabled ?? row.enabled;
+
+    const { rows } = await pool.query<{
+      id: string;
+      name: string;
+      type: string;
+      config: Record<string, unknown>;
+      enabled: boolean;
+      created_at: Date;
+    }>(
+      `UPDATE notification_channels
+         SET name = $2, config = $3, enabled = $4
+       WHERE id = $1
+       RETURNING *`,
+      [id, mergedName, JSON.stringify(mergedConfig), mergedEnabled]
+    );
+
+    const updated = rows[0]!;
+
+    // Restart the adapter with the new config
+    if (updated.type === 'discord-chat') {
+      this.stopChatAdapter(id);
+      if (updated.enabled) this.startChatAdapter(id, updated.config);
+    } else {
+      ChannelRouter.getInstance().unregister(id);
+      if (updated.enabled) {
+        const channel = this.buildAdapter(updated.id, updated.name, updated.type, updated.config);
+        if (channel) ChannelRouter.getInstance().register(channel);
+      }
+    }
+
+    return {
+      id: updated.id,
+      name: updated.name,
+      type: updated.type,
+      config: this.redactConfig(updated.type, updated.config),
+      enabled: updated.enabled,
+      createdAt: updated.created_at.toISOString(),
+    };
+  }
+
   async deleteChannel(id: string): Promise<boolean> {
     ChannelRouter.getInstance().unregister(id);
     this.stopChatAdapter(id);

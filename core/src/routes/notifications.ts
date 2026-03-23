@@ -111,6 +111,35 @@ export function createNotificationsRouter(): {
     }
   }) as RequestHandler);
 
+  /** PATCH /api/channels/:id — update channel name, config, or enabled status */
+  protectedRouter.patch('/:id', requireRole(['admin', 'operator']), (async (req, res) => {
+    const { id } = req.params as IdParam;
+    const { name, config, enabled } = req.body as {
+      name?: string;
+      config?: Record<string, unknown>;
+      enabled?: boolean;
+    };
+
+    if (name === undefined && config === undefined && enabled === undefined) {
+      return void res
+        .status(400)
+        .json({ error: 'No update fields provided (name, config, enabled)' });
+    }
+
+    try {
+      const updates: { name?: string; config?: Record<string, unknown>; enabled?: boolean } = {};
+      if (name !== undefined) updates.name = name;
+      if (config !== undefined) updates.config = config;
+      if (enabled !== undefined) updates.enabled = enabled;
+      const updated = await NotificationService.getInstance().updateChannel(id, updates);
+      if (!updated) return void res.status(404).json({ error: 'Channel not found' });
+      res.json(updated);
+    } catch (err: unknown) {
+      logger.error('Update channel error:', err);
+      res.status(500).json({ error: 'Failed to update channel' });
+    }
+  }) as RequestHandler);
+
   /** DELETE /api/channels/:id */
   protectedRouter.delete('/:id', requireRole(['admin']), (async (req, res) => {
     const { id } = req.params as IdParam;

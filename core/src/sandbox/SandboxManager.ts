@@ -125,12 +125,20 @@ export class SandboxManager {
       const wsInternalPath = provider.getPath(finalInstanceId, workspacePath);
       fs.mkdirSync(wsInternalPath, { recursive: true });
       const spec = (manifest.spec ?? {}) as Record<string, unknown>;
+      // Ensure model has a name — fall back to DEFAULT_MODEL or LLM_MODEL env var
+      const specModel = (spec.model ?? {}) as Record<string, unknown>;
+      const modelWithDefaults = {
+        ...specModel,
+        ...(specModel.name
+          ? {}
+          : { name: process.env.DEFAULT_MODEL ?? process.env.LLM_MODEL ?? 'default' }),
+      };
       const manifestYaml = yaml.dump({
         apiVersion: manifest.apiVersion ?? 'sera/v1',
         kind: manifest.kind ?? 'Agent',
         metadata: manifest.metadata,
         identity: spec.identity,
-        model: spec.model,
+        model: modelWithDefaults,
         tools: spec.tools,
         skills: spec.skills,
         intercom: spec.intercom,

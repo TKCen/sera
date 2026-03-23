@@ -236,6 +236,23 @@ export class SandboxManager {
     // ── Ephemeral auto-remove (Story 3.7) ───────────────────────────────────
     const isEphemeral = request.lifecycleMode === 'ephemeral' || request.type === 'tool';
 
+    // Remove any stale container with the same name (e.g. from a previous crashed run).
+    // Only act if inspect returns a real container with State info.
+    try {
+      const existing = this.docker.getContainer(containerName);
+      const info = await existing.inspect();
+      const state = (info as { State?: { Status?: string; Running?: boolean } }).State;
+      if (state) {
+        logger.info(
+          `Removing stale container ${containerName} (status: ${state.Status ?? 'unknown'})`
+        );
+        if (state.Running) await existing.stop().catch(() => {});
+        await existing.remove({ force: true }).catch(() => {});
+      }
+    } catch {
+      // Container doesn't exist — expected case
+    }
+
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,
       Image: request.image ?? 'sera-agent-worker:latest',

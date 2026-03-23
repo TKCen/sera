@@ -232,15 +232,18 @@ describe('SandboxManager', () => {
     it('should capture container IP and set proxyEnabled in SandboxInfo', async () => {
       process.env.EGRESS_PROXY_URL = 'http://sera-egress-proxy:3128';
       try {
-        // Mock inspect to return network settings
-        mockDocker._container.inspect.mockResolvedValueOnce({
-          Id: 'container-net123',
-          NetworkSettings: {
-            Networks: {
-              agent_net: { IPAddress: '172.19.0.5' },
+        // First inspect call is the stale container check (no State = skip cleanup),
+        // second inspect is post-create to get container IP.
+        mockDocker._container.inspect
+          .mockResolvedValueOnce({ Id: 'stale-check' })
+          .mockResolvedValueOnce({
+            Id: 'container-net123',
+            NetworkSettings: {
+              Networks: {
+                agent_net: { IPAddress: '172.19.0.5' },
+              },
             },
-          },
-        });
+          });
 
         const manifest = makeManifest();
         const request: SpawnRequest = {

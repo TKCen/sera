@@ -96,3 +96,18 @@ See `docs/AGENT-WORKFLOW.md` for the full coordination protocol.
 - Don't create new files when editing an existing one would work
 - Don't touch files outside the scope of your assigned issue
 - Don't push directly to `main` — always use a feature branch + PR
+- **Don't commit log files** (`*.log`, `backend*.log`) — they may contain internal paths and config
+- **Don't commit test-only artifacts** without the actual implementation they claim to support
+- **Don't apply patterns from other frameworks** (e.g. Next.js `app/` directory) — follow existing project conventions
+- **Don't create empty PRs** — verify your branch has actual changes before opening a PR
+
+## PR quality checklist (self-check before opening)
+
+Every PR must pass this checklist. If any item fails, fix it before opening:
+
+- [ ] `git diff --stat` shows the expected files — no log files, no unrelated changes
+- [ ] Changes match the PR title/description — no extra files snuck in
+- [ ] Code follows existing patterns in the file being edited (not patterns from other frameworks)
+- [ ] No `any` types introduced, no `@ts-ignore` without a comment explaining why
+- [ ] The implementation is complete — not just a test file or stub claiming to be a feature
+- [ ] `bun run typecheck && bun run lint && bun test` all pass

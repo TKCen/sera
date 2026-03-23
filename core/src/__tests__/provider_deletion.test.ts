@@ -1,4 +1,3 @@
-
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { LlmRouter } from '../llm/LlmRouter.js';
@@ -69,19 +68,21 @@ describe('Provider Deletion/Disabling', () => {
 
     // Initial state
     const models = await router.listModels();
-    expect(models.find(m => m.modelName === modelName)?.enabled).toBe(true);
+    expect(models.find((m) => m.modelName === modelName)?.enabled).toBe(true);
 
     // Unregister (static)
     await router.deleteModel(modelName);
 
     // Verify in registry
     const updatedModels = await router.listModels();
-    const staticModel = updatedModels.find(m => m.modelName === modelName);
+    const staticModel = updatedModels.find((m) => m.modelName === modelName);
     expect(staticModel).toBeDefined();
     expect(staticModel?.enabled).toBe(false);
 
     // Verify resolve throws
-    expect(() => registry.resolve(modelName)).toThrow(`Provider for model '${modelName}' is disabled.`);
+    expect(() => registry.resolve(modelName)).toThrow(
+      `Provider for model '${modelName}' is disabled.`
+    );
   });
 
   it('should fully delete dynamic providers', async () => {
@@ -89,14 +90,14 @@ describe('Provider Deletion/Disabling', () => {
 
     // Initial state
     const models = await router.listModels();
-    expect(models.find(m => m.modelName === modelName)).toBeDefined();
+    expect(models.find((m) => m.modelName === modelName)).toBeDefined();
 
     // Unregister (dynamic)
     await router.deleteModel(modelName);
 
     // Verify in registry
     const updatedModels = await router.listModels();
-    const dynamicModel = updatedModels.find(m => m.modelName === modelName);
+    const dynamicModel = updatedModels.find((m) => m.modelName === modelName);
     expect(dynamicModel).toBeUndefined();
   });
 

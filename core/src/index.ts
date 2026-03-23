@@ -432,7 +432,7 @@ app.use(
 );
 app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRegistry));
 app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
-app.use('/api/knowledge', authMiddleware, createKnowledgeRouter());
+app.use('/api/knowledge', authMiddleware, createKnowledgeRouter(llmRouter));
 
 // Epic 17 — Delegation & Service Identity
 const delegationRouter = createDelegationRouter(intercomService);

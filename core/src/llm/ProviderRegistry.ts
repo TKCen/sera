@@ -59,6 +59,8 @@ export interface ProviderConfig {
   description?: string | undefined;
   /** ID of the dynamic provider that registered this model (internal). */
   dynamicProviderId?: string | undefined;
+  /** Whether this provider is enabled. Defaults to true. */
+  enabled?: boolean | undefined;
 }
 
 export interface DynamicProviderConfig {
@@ -222,11 +224,18 @@ export class ProviderRegistry {
    * Throws if no provider can be found.
    */
   resolve(modelName: string): ProviderConfig {
+    const checkEnabled = (cfg: ProviderConfig | null): ProviderConfig | null => {
+      if (cfg && cfg.enabled === false) {
+        throw new Error(`Provider for model '${cfg.modelName}' is disabled.`);
+      }
+      return cfg;
+    };
+
     // Handle 'default' model alias
     if (modelName === 'default') {
       if (this.defaultModelName) {
         const defaultCfg = this.configs.get(this.defaultModelName);
-        if (defaultCfg) return defaultCfg;
+        if (defaultCfg) return checkEnabled(defaultCfg)!;
         const autoDefault = this.autoDetect(this.defaultModelName);
         if (autoDefault) return autoDefault;
       }
@@ -236,7 +245,7 @@ export class ProviderRegistry {
     }
 
     const explicit = this.configs.get(modelName);
-    if (explicit) return explicit;
+    if (explicit) return checkEnabled(explicit)!;
 
     const auto = this.autoDetect(modelName);
     if (auto) return auto;
@@ -247,7 +256,7 @@ export class ProviderRegistry {
         `Model '${modelName}' not found, falling back to default '${this.defaultModelName}'`
       );
       const fallback = this.configs.get(this.defaultModelName);
-      if (fallback) return fallback;
+      if (fallback) return checkEnabled(fallback)!;
     }
 
     throw new Error(
@@ -260,9 +269,19 @@ export class ProviderRegistry {
     this.configs.set(config.modelName, config);
   }
 
-  /** Returns true if a provider was removed. */
+  /** Returns true if a provider was removed or disabled. */
   unregister(modelName: string): boolean {
-    return this.configs.delete(modelName);
+    const config = this.configs.get(modelName);
+    if (!config) return false;
+
+    if (config.dynamicProviderId) {
+      // Dynamic models can be fully removed
+      return this.configs.delete(modelName);
+    } else {
+      // Static models are just disabled
+      config.enabled = false;
+      return true;
+    }
   }
 
   /** Register multiple models for a specific dynamic provider, cleaning up old ones. */

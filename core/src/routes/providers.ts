@@ -210,6 +210,46 @@ export function createProvidersRouter(
   // ── Static Providers ────────────────────────────────────────────────────────
 
   /**
+   * DELETE /api/providers/:modelName
+   * Removes a provider from the active registry.
+   * For static providers: marks as disabled.
+   * For dynamic providers: delegates to existing dynamic delete endpoint.
+   * Also stops health checks for removed providers.
+   */
+  router.delete(
+    '/:modelName',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      const modelName = String(req.params['modelName']);
+      try {
+        const models = await llmRouter.listModels();
+        const model = models.find((m) => m.modelName === modelName);
+
+        if (!model) {
+          res.status(404).json({ error: `Provider for model '${modelName}' not found` });
+          return;
+        }
+
+        if (model.dynamicProviderId) {
+          // It's a dynamic provider, delegate to DynamicProviderManager
+          await dynamicProviderManager.removeProvider(model.dynamicProviderId);
+        } else {
+          // It's a static provider, disable it in LlmRouter/Registry
+          await llmRouter.deleteModel(modelName);
+        }
+
+        // Stop health checks for the provider
+        circuitBreakerService.removeBreaker(model.provider ?? providerFromModel(modelName));
+
+        res.status(204).end();
+      } catch (err: unknown) {
+        logger.error(`Failed to delete provider ${modelName}:`, err);
+        res.status(502).json({ error: (err as Error).message });
+      }
+    }
+  );
+
+  /**
    * POST /api/providers/:modelName/test
    * Sends a minimal test completion to verify the provider is reachable.
    */

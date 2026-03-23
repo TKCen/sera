@@ -342,6 +342,7 @@ export interface ModelListItem {
   baseUrl?: string;
   description?: string;
   dynamicProviderId?: string;
+  enabled?: boolean;
 }
 
 // ── LlmRouter ─────────────────────────────────────────────────────────────────
@@ -466,6 +467,7 @@ export class LlmRouter {
       if (cfg.baseUrl !== undefined) item.baseUrl = cfg.baseUrl;
       if (cfg.description !== undefined) item.description = cfg.description;
       if (cfg.dynamicProviderId !== undefined) item.dynamicProviderId = cfg.dynamicProviderId;
+      if (cfg.enabled !== undefined) item.enabled = cfg.enabled;
       return item;
     });
   }

@@ -183,4 +183,17 @@ export class CircuitBreakerService {
       },
     };
   }
+
+  /**
+   * Remove the circuit breaker for a provider.
+   * Called when a provider is deleted or disabled.
+   */
+  removeBreaker(provider: string): void {
+    const breaker = this.breakers.get(provider);
+    if (breaker) {
+      breaker.shutdown();
+      this.breakers.delete(provider);
+      logger.info(`Circuit breaker removed for provider=${provider}`);
+    }
+  }
 }

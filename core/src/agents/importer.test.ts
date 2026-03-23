@@ -5,7 +5,16 @@ import path from 'path';
 import fs from 'fs/promises';
 
 describe('ResourceImporter', () => {
-  let registryMock: Record<string, import('vitest').Mock>;
+  let registryMock: {
+    upsertNamedList: import('vitest').Mock;
+    upsertCapabilityPolicy: import('vitest').Mock;
+    upsertSandboxBoundary: import('vitest').Mock;
+    upsertTemplate: import('vitest').Mock;
+    deleteTemplatesExcept: import('vitest').Mock;
+    deleteNamedListsExcept: import('vitest').Mock;
+    deleteCapabilityPoliciesExcept: import('vitest').Mock;
+    deleteSandboxBoundariesExcept: import('vitest').Mock;
+  };
   let importer: ResourceImporter;
   const baseDir = path.join(process.cwd(), 'test-manifests');
 

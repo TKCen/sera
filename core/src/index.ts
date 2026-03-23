@@ -328,9 +328,10 @@ app.use('/api/intercom', intercomRouter);
 app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
 app.use(
   '/api/agents',
+  authMiddleware,
   createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService)
 );
-app.use('/api/agents', createAgentRouter(orchestrator, agentRegistry));
+app.use('/api/agents', authMiddleware, createAgentRouter(orchestrator, agentRegistry));
 app.use(
   '/v1/tools',
   createToolProxyRouter(identityService, authService, permissionService, agentRegistry)
@@ -338,7 +339,7 @@ app.use(
 
 // ── Convenience routes for the web UI ────────────────────────────────────────
 // GET /api/tools — list executable tools with security metadata (used by AgentForm)
-app.get('/api/tools', (_req, res) => {
+app.get('/api/tools', authMiddleware, (_req, res) => {
   const tools = skillRegistry.listTools();
   const manifests = orchestrator.getAllManifests();
   const enriched = tools.map((tool) => {
@@ -355,7 +356,7 @@ app.get('/api/tools', (_req, res) => {
 });
 
 // GET /api/templates — list agent templates from the DB (used by AgentForm)
-app.get('/api/templates', async (_req, res) => {
+app.get('/api/templates', authMiddleware, async (_req, res) => {
   try {
     const templates = await agentRegistry.listTemplates();
     res.json(templates);
@@ -365,7 +366,7 @@ app.get('/api/templates', async (_req, res) => {
 });
 
 // GET /api/rt/token — issue a Centrifugo connection token for the web client
-app.get('/api/rt/token', async (_req, res) => {
+app.get('/api/rt/token', authMiddleware, async (_req, res) => {
   try {
     const token = await intercomService.generateConnectionToken('web-operator');
     // Decode exp claim from the JWT payload (second segment, base64url-encoded)
@@ -382,6 +383,7 @@ app.get('/api/rt/token', async (_req, res) => {
 
 app.use(
   '/api/circles',
+  authMiddleware,
   createCircleRouter(
     circleRegistry,
     circlesDir,
@@ -389,12 +391,12 @@ app.use(
     orchestrator
   )
 );
-app.use('/api/circles', createCirclesDbRouter(orchestrator));
-app.use('/api/pipelines', createPipelinesRouter(orchestrator));
-app.use('/api/skills', createSkillsRouter(skillRegistry, orchestrator, pool));
-app.use('/api/memory', createMemoryRouter(memoryManager));
-app.use('/api/sessions', createSessionRouter(sessionStore));
-app.use('/api', createChatRouter(sessionStore, orchestrator, agentRegistry));
+app.use('/api/circles', authMiddleware, createCirclesDbRouter(orchestrator));
+app.use('/api/pipelines', authMiddleware, createPipelinesRouter(orchestrator));
+app.use('/api/skills', authMiddleware, createSkillsRouter(skillRegistry, orchestrator, pool));
+app.use('/api/memory', authMiddleware, createMemoryRouter(memoryManager));
+app.use('/api/sessions', authMiddleware, createSessionRouter(sessionStore));
+app.use('/api', authMiddleware, createChatRouter(sessionStore, orchestrator, agentRegistry));
 
 app.use(
   '/v1/llm',

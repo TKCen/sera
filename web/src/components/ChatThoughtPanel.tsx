@@ -1,5 +1,16 @@
 import React from 'react';
-import { ChevronDown, Sparkles, Brain, Loader2, Eye, Map, Zap, RotateCcw, Wrench, CheckCircle2 } from 'lucide-react';
+import {
+  ChevronDown,
+  Sparkles,
+  Brain,
+  Loader2,
+  Eye,
+  Map,
+  Zap,
+  RotateCcw,
+  Wrench,
+  CheckCircle2,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface MessageThought {
@@ -46,7 +57,12 @@ interface ChatThoughtPanelProps {
   onToggleThoughts: (id: string) => void;
 }
 
-export function ChatThoughtPanel({ msg, showThinking, isExpanded, onToggleThoughts }: ChatThoughtPanelProps) {
+export function ChatThoughtPanel({
+  msg,
+  showThinking,
+  isExpanded,
+  onToggleThoughts,
+}: ChatThoughtPanelProps) {
   if (msg.role !== 'agent') return null;
   if (!showThinking) return null;
   if (msg.thoughts.length === 0 && !msg.streaming) return null;
@@ -192,8 +208,7 @@ export function ChatThoughtPanel({ msg, showThinking, isExpanded, onToggleThough
                         {STEP_ICONS['tool-result']}
                       </span>
                       <span className="text-[11px] font-semibold text-teal-300">
-                        {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''}{' '}
-                        fetched
+                        {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''} fetched
                       </span>
                     </div>
                     <div className="ml-4 space-y-1.5">
@@ -262,9 +277,7 @@ export function ChatThoughtPanel({ msg, showThinking, isExpanded, onToggleThough
           {msg.streaming && msg.thoughts.length === 0 && (
             <div className="flex items-center gap-2">
               <Loader2 size={11} className="animate-spin text-sera-accent" />
-              <span className="text-[11px] text-sera-text-muted">
-                Waiting for agent thoughts…
-              </span>
+              <span className="text-[11px] text-sera-text-muted">Waiting for agent thoughts…</span>
             </div>
           )}
         </div>

@@ -1,12 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import {
-  Loader2,
-  Bot,
-  User,
-  Brain,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react';
+import { Loader2, Bot, User, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { PublicationContext } from 'centrifuge';
@@ -20,7 +13,6 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { ChatInputBar } from '@/components/ChatInputBar';
 import { ChatThoughtPanel } from '@/components/ChatThoughtPanel';
-
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -403,9 +395,6 @@ function ChatPageContent() {
     [agents]
   );
 
-
-
-
   // ── Sidebar toggle button ─────────────────────────────────────────────────────
 
   const sidebarToggle = (
@@ -448,15 +437,17 @@ function ChatPageContent() {
               ? `Chatting with ${agents?.find((a) => a.name === selectedAgent)?.display_name ?? selectedAgent}`
               : 'Select an agent from the sidebar to get started.'}
           </p>
-          <div className="w-full max-w-2xl"><ChatInputBar
-            inputRef={inputRef}
-            input={input}
-            setInput={setInput}
-            handleKeyDown={handleKeyDown}
-            streaming={streaming}
-            selectedAgent={selectedAgent}
-            handleSend={() => void handleSend()}
-          /></div>
+          <div className="w-full max-w-2xl">
+            <ChatInputBar
+              inputRef={inputRef}
+              input={input}
+              setInput={setInput}
+              handleKeyDown={handleKeyDown}
+              streaming={streaming}
+              selectedAgent={selectedAgent}
+              handleSend={() => void handleSend()}
+            />
+          </div>
         </div>
       </div>
     );
@@ -467,19 +458,19 @@ function ChatPageContent() {
   return (
     <div className="flex h-full">
       <ChatSidebar
-          sessions={sessions}
-          agents={agents}
-          agentsLoading={agentsLoading}
-          agentsError={agentsError}
-          selectedAgent={selectedAgent}
-          sessionId={sessionId}
-          sidebarOpen={sidebarOpen}
-          onAgentChange={handleAgentChange}
-          onStartNewSession={startNewSession}
-          onLoadSession={(id) => void loadSession(id)}
-          onDeleteSession={(id, e) => void deleteSession(id, e)}
-          onRefetchAgents={() => void refetchAgents()}
-        />
+        sessions={sessions}
+        agents={agents}
+        agentsLoading={agentsLoading}
+        agentsError={agentsError}
+        selectedAgent={selectedAgent}
+        sessionId={sessionId}
+        sidebarOpen={sidebarOpen}
+        onAgentChange={handleAgentChange}
+        onStartNewSession={startNewSession}
+        onLoadSession={(id) => void loadSession(id)}
+        onDeleteSession={(id, e) => void deleteSession(id, e)}
+        onRefetchAgents={() => void refetchAgents()}
+      />
 
       <div className="flex-1 flex flex-col min-w-0 h-full">
         {/* Top bar */}
@@ -591,15 +582,17 @@ function ChatPageContent() {
 
         {/* Input */}
         <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">
-          <div className="max-w-3xl mx-auto"><ChatInputBar
-            inputRef={inputRef}
-            input={input}
-            setInput={setInput}
-            handleKeyDown={handleKeyDown}
-            streaming={streaming}
-            selectedAgent={selectedAgent}
-            handleSend={() => void handleSend()}
-          /></div>
+          <div className="max-w-3xl mx-auto">
+            <ChatInputBar
+              inputRef={inputRef}
+              input={input}
+              setInput={setInput}
+              handleKeyDown={handleKeyDown}
+              streaming={streaming}
+              selectedAgent={selectedAgent}
+              handleSend={() => void handleSend()}
+            />
+          </div>
         </div>
       </div>
     </div>

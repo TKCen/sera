@@ -47,6 +47,12 @@ tui/debug.log
 # Agents
 .claude/
 
+# Server/debug logs
+backend*.log
+
 # Test Results
 playwright-report/
-test-results/   
+test-results/
+
+# Local tooling indexes
+.gitnexus/   

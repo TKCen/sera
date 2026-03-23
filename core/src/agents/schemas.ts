@@ -142,13 +142,15 @@ export const SandboxBoundarySchema = z.object({
     name: z.string(),
     description: z.string().optional(),
   }),
-  linux: z.object({
-    capabilities: z.array(z.string()),
-    seccomp: z.string(),
-    readonlyRootfs: z.boolean().optional(),
-    runAsNonRoot: z.boolean().optional(),
+  spec: z.object({
+    linux: z.object({
+      capabilities: z.array(z.string()),
+      seccomp: z.string().optional(),
+      readOnlyRootfs: z.boolean().optional(),
+      runAsNonRoot: z.boolean().optional(),
+    }),
+    capabilities: z.record(z.any()),
   }),
-  capabilities: z.record(z.any()),
 });
 
 export type AgentTemplate = z.infer<typeof AgentTemplateSchema>;

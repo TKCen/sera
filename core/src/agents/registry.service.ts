@@ -359,7 +359,12 @@ export class AgentRegistry {
         updated_at = NOW()
       RETURNING *;
     `;
-    const res = await this.pool.query(query, [name, source, boundary.linux, boundary.capabilities]);
+    const res = await this.pool.query(query, [
+      name,
+      source,
+      boundary.spec.linux,
+      boundary.spec.capabilities,
+    ]);
     return {
       status: existing ? 'updated' : 'added',
       name: res.rows[0].name,

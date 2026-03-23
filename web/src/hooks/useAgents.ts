@@ -15,6 +15,7 @@ export const agentsKeys = {
   thoughts: (id: string, taskId?: string) => ['agents', id, 'thoughts', taskId] as const,
   logs: (id: string) => ['agents', id, 'logs'] as const,
   grants: (id: string) => ['agents', id, 'grants'] as const,
+  delegations: (id: string) => ['agents', id, 'delegations'] as const,
   permissionRequests: (agentId?: string) => ['permission-requests', agentId] as const,
 };
 
@@ -29,6 +30,14 @@ export function useAgent(id: string) {
   return useQuery({
     queryKey: agentsKeys.detail(id),
     queryFn: () => agentsApi.getAgentInstance(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function useAgentDelegations(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.delegations(id),
+    queryFn: () => agentsApi.getAgentDelegations(id),
     enabled: id.length > 0,
   });
 }

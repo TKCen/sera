@@ -12,6 +12,7 @@ import type {
   CreateGrantParams,
   PermissionRequest,
   PermissionDecisionParams,
+  AgentDelegation,
 } from './types';
 
 // ── Instance-based endpoints ─────────────────────────────────────────────────
@@ -108,6 +109,10 @@ export function createAgentTask(id: string, input: string): Promise<AgentTask> {
 export function getAgentThoughts(id: string, taskId?: string): Promise<ThoughtEvent[]> {
   const params = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
   return request<ThoughtEvent[]>(`/agents/${encodeURIComponent(id)}/thoughts${params}`);
+}
+
+export function getAgentDelegations(id: string): Promise<AgentDelegation[]> {
+  return request<AgentDelegation[]>(`/agents/${encodeURIComponent(id)}/delegations`);
 }
 
 // ── Capability Grants ────────────────────────────────────────────────────────

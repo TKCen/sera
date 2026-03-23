@@ -383,6 +383,23 @@ export interface PermissionRequest {
   status: 'pending' | 'granted' | 'denied' | 'expired';
 }
 
+export interface AgentDelegation {
+  id: string;
+  principal_id: string;
+  principal_name: string;
+  scope: {
+    service: string;
+    permissions: string[];
+    resourceConstraints?: Record<string, string[]>;
+  };
+  grant_type: 'one-time' | 'session' | 'persistent';
+  issued_at: string;
+  expires_at?: string;
+  last_used_at?: string;
+  use_count: number;
+  status: 'active' | 'revoked' | 'expired';
+}
+
 export interface PermissionDecisionParams {
   decision: 'grant' | 'deny';
   grantType?: 'one-time' | 'session' | 'persistent';

@@ -13,6 +13,9 @@ servers:
   - url: http://localhost:3001
     description: Local development
 
+security:
+  - bearerAuth: []
+
 tags:
   - name: agents
     description: Agent instance management and lifecycle
@@ -81,699 +84,4679 @@ paths:
     get:
       tags: [agents]
       summary: List all agent instances (enriched with template + live status)
+      operationId: listAgentsEnriched
+      responses:
+        '200':
+          description: List of enriched agent instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EnrichedAgentInstance'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/templates:
     get:
       tags: [agents]
       summary: List all agent templates
+      operationId: listAgentTemplates
+      responses:
+        '200':
+          description: List of agent templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentTemplateDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/instances:
     get:
       tags: [agents]
       summary: List agent instances (filterable by circle/status)
+      operationId: listAgentInstances
+      parameters:
+        - name: circle
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of agent instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [agents]
       summary: Create new agent instance from template
+      operationId: createAgentInstance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateRef, name]
+              properties:
+                templateRef:
+                  type: string
+                name:
+                  type: string
+                displayName:
+                  type: string
+                circle:
+                  type: string
+                overrides:
+                  type: object
+                lifecycleMode:
+                  type: string
+                  enum: [persistent, ephemeral]
+                start:
+                  type: boolean
+      responses:
+        '201':
+          description: Agent instance created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/instances/{id}:
     get:
       tags: [agents]
       summary: Get agent instance detail
+      operationId: getAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent instance detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    patch:
+      tags: [agents]
+      summary: Update an agent instance (overrides, name, display_name, etc.)
+      operationId: updateAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                displayName:
+                  type: string
+                circle:
+                  type: string
+                lifecycleMode:
+                  type: string
+                  enum: [persistent, ephemeral]
+                overrides:
+                  type: object
+      responses:
+        '200':
+          description: Agent instance updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [agents]
       summary: Delete agent instance
+      operationId: deleteAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Agent instance deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/agents/instances/{id}/start:
     post:
       tags: [agents]
       summary: Start an agent instance
+      operationId: startAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent instance started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/agents/instances/{id}/stop:
     post:
       tags: [agents]
       summary: Stop an agent instance
+      operationId: stopAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent instance stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/agents/instances/{id}/thoughts:
     get:
       tags: [agents]
       summary: Get agent thoughts/execution logs
+      operationId: getAgentThoughts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of thoughts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/message:
     post:
       tags: [agents]
       summary: Send direct message to agent
+      operationId: sendMessageToAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, payload]
+              properties:
+                from:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        '200':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/validate:
     post:
       tags: [agents]
       summary: Validate an agent manifest
+      operationId: validateAgentManifest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/test-chat:
     post:
       tags: [agents]
       summary: Test-chat with agent manifest (no container spawn)
+      operationId: testChatWithAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest, message]
+              properties:
+                manifest:
+                  $ref: '#/components/schemas/AgentManifest'
+                message:
+                  type: string
+                history:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                  thought:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Agent Lifecycle ────────────────────────────────────────────────────────
   /api/agents/{id}/resolve-capabilities:
     post:
       tags: [lifecycle]
       summary: Dry-run capability resolution (Story 3.2)
+      operationId: resolveAgentCapabilities
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Resolved capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '422':
+          description: Capability escalation error
   /api/agents/{id}/worktree/merge:
     post:
       tags: [lifecycle]
       summary: Merge agent worktree to target branch (Story 3.4)
+      operationId: mergeAgentWorktree
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repoPath]
+              properties:
+                repoPath:
+                  type: string
+                targetBranch:
+                  type: string
+      responses:
+        '200':
+          description: Worktree merged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  merged:
+                    type: boolean
+                  branch:
+                    type: string
+                  targetBranch:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/worktree:
     delete:
       tags: [lifecycle]
       summary: Delete agent worktree (Story 3.4)
+      operationId: deleteAgentWorktree
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repoPath]
+              properties:
+                repoPath:
+                  type: string
+      responses:
+        '200':
+          description: Worktree deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/logs:
     get:
       tags: [lifecycle]
       summary: Get container logs (Story 3.5)
+      operationId: getAgentContainerLogs
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tail
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Container logs
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/agents/{id}/cleanup:
     post:
       tags: [lifecycle]
       summary: Cleanup stopped agent instance (Story 3.7)
+      operationId: cleanupAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Instance cleaned up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleaned:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/subagents:
     get:
       tags: [lifecycle]
       summary: List subagents spawned by this agent (Story 3.8)
+      operationId: listAgentSubagents
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of subagents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/permission-request:
     post:
       tags: [lifecycle]
       summary: Request capability grant (Story 3.9)
+      operationId: requestAgentPermission
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dimension, value]
+              properties:
+                dimension:
+                  type: string
+                  enum: [filesystem, network, exec.commands]
+                value:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Permission request created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/grants:
     get:
       tags: [lifecycle]
       summary: List capability grants for agent
+      operationId: listAgentGrants
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of grants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    type: array
+                    items:
+                      type: object
+                  persistent:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CapabilityGrant'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    post:
+      tags: [lifecycle]
+      summary: Create a capability grant (operator-initiated)
+      operationId: createAgentGrant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dimension, value]
+              properties:
+                dimension:
+                  type: string
+                value:
+                  type: string
+                grantType:
+                  type: string
+                  enum: [one-time, session, persistent]
+                expiresAt:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: Grant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilityGrant'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/grants/{grantId}:
     delete:
       tags: [lifecycle]
       summary: Revoke capability grant
+      operationId: revokeAgentGrant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: grantId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Grant revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+                  type:
+                    type: string
+                    enum: [session, persistent]
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/restart:
     post:
       tags: [lifecycle]
       summary: Restart persistent agent
+      operationId: restartAgentInstance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent restarted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  restarted:
+                    type: boolean
+                  agentName:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          description: Only persistent agents can be restarted
   /api/permission-requests:
     get:
       tags: [lifecycle]
       summary: List pending permission requests
+      operationId: listPermissionRequests
+      parameters:
+        - name: agentId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of pending requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/permission-requests/{requestId}/decision:
     post:
       tags: [lifecycle]
       summary: Approve or deny permission request
+      operationId: decidePermissionRequest
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [grant, deny]
+                grantType:
+                  type: string
+                  enum: [one-time, session, persistent]
+                expiresAt:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Agent Heartbeat ────────────────────────────────────────────────────────
   /api/agents/{id}/heartbeat:
     post:
       tags: [agents]
       summary: Agent container heartbeat (JWT auth)
+      operationId: agentHeartbeat
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Heartbeat recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Token agentId does not match URL
   /api/agents/health:
     get:
       tags: [agents]
       summary: List unhealthy agent instances
+      operationId: listUnhealthyAgents
+      responses:
+        '200':
+          description: List of unhealthy instances
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unhealthy:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        instanceId:
+                          type: string
+                        lastSeen:
+                          type: string
+                          format: date-time
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Tasks ──────────────────────────────────────────────────────────────────
   /api/agents/{id}/tasks:
     get:
       tags: [tasks]
       summary: List tasks for agent (filterable by status)
+      operationId: listAgentTasks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [tasks]
       summary: Enqueue task for agent
+      operationId: enqueueAgentTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task]
+              properties:
+                task:
+                  type: string
+                context:
+                  type: object
+                priority:
+                  type: integer
+                maxRetries:
+                  type: integer
+      responses:
+        '201':
+          description: Task enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  status:
+                    type: string
+                  priority:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{id}/tasks/next:
     get:
       tags: [tasks]
       summary: Worker polls for next queued task
+      operationId: getNextTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Next task
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  task:
+                    type: string
+                  context:
+                    type: object
+                  priority:
+                    type: integer
+                  retryCount:
+                    type: integer
+                  maxRetries:
+                    type: integer
+        '204':
+          description: No task available
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          description: Agent already has a running task
   /api/agents/{id}/tasks/{taskId}:
     get:
       tags: [tasks]
       summary: Get task detail
-    put:
+      operationId: getTaskDetail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    patch:
       tags: [tasks]
-      summary: Update task (result/error/status)
+      summary: Update task priority
+      operationId: updateTaskPriority
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [priority]
+              properties:
+                priority:
+                  type: integer
+      responses:
+        '200':
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  priority:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [tasks]
+      summary: Cancel a queued task
+      operationId: cancelTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  status:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/agents/{id}/tasks/{taskId}/complete:
+    post:
+      tags: [tasks]
+      summary: Worker submits task result
+      operationId: completeTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                result:
+                  type: string
+                error:
+                  type: string
+                usage:
+                  type: object
+                thoughtStream:
+                  type: array
+                  items:
+                    type: object
+                exitReason:
+                  type: string
+      responses:
+        '200':
+          description: Result recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  status:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/agents/{id}/tasks/{taskId}/result:
+    get:
+      tags: [tasks]
+      summary: Get task result payload only
+      operationId: getTaskResult
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  status:
+                    type: string
+                  result:
+                    type: object
+                  error:
+                    type: string
+                  usage:
+                    type: object
+                  completedAt:
+                    type: string
+                    format: date-time
+                  truncated:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Auth ───────────────────────────────────────────────────────────────────
   /api/auth/oidc-config:
     get:
       tags: [auth]
       summary: Get OIDC provider configuration (public)
+      operationId: getOidcConfig
+      responses:
+        '200':
+          description: OIDC configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issuerUrl:
+                    type: string
+                  clientId:
+                    type: string
+        '503':
+          description: OIDC not configured
   /api/auth/login:
     get:
       tags: [auth]
       summary: Redirect to OIDC authorization endpoint (public)
+      operationId: authLogin
+      responses:
+        '302':
+          description: Redirect to IdP
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          description: OIDC not configured
   /api/auth/oidc/callback:
     post:
       tags: [auth]
       summary: OIDC token exchange — PKCE flow (public)
+      operationId: authOidcCallback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, codeVerifier, redirectUri]
+              properties:
+                code:
+                  type: string
+                codeVerifier:
+                  type: string
+                redirectUri:
+                  type: string
+                clientId:
+                  type: string
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/OperatorIdentity'
+                  sessionToken:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/auth/logout:
     post:
       tags: [auth]
       summary: Logout and clear session (public)
+      operationId: authLogout
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  loggedOut:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/auth/me:
     get:
       tags: [auth]
       summary: Get current operator identity
+      operationId: getAuthMe
+      responses:
+        '200':
+          description: Current identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorIdentity'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/auth/api-keys:
     get:
       tags: [auth]
       summary: List operator's API keys
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [auth]
       summary: Create new API key
+      operationId: createApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                roles:
+                  type: array
+                  items:
+                    type: string
+                expiresInDays:
+                  type: integer
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/auth/api-keys/{id}:
     delete:
       tags: [auth]
       summary: Revoke API key
+      operationId: revokeApiKey
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: API key revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Secrets ────────────────────────────────────────────────────────────────
   /api/secrets:
     get:
       tags: [secrets]
       summary: List secret metadata
+      operationId: listSecretsMetadata
+      responses:
+        '200':
+          description: List of secret metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [secrets]
       summary: Create or update secret
+      operationId: upsertSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Secret saved
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/secrets/{key}:
     get:
       tags: [secrets]
       summary: Get secret value
+      operationId: getSecretValue
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Secret value
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [secrets]
       summary: Delete secret (admin only)
+      operationId: deleteSecret
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Secret deleted
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Delegation ─────────────────────────────────────────────────────────────
   /api/delegation/issue:
     post:
       tags: [delegation]
       summary: Issue delegation token to agent
+      operationId: issueDelegationToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agentId, service, permissions, credentialSecretName]
+              properties:
+                agentId:
+                  type: string
+                service:
+                  type: string
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                resourceConstraints:
+                  type: object
+                credentialSecretName:
+                  type: string
+                grantType:
+                  type: string
+                  enum: [one-time, session, persistent]
+                expiresAt:
+                  type: string
+                  format: date-time
+                instanceScoped:
+                  type: boolean
+                instanceId:
+                  type: string
+      responses:
+        '201':
+          description: Delegation token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  signedToken:
+                    type: string
+                  scope:
+                    type: object
+                  grantType:
+                    type: string
+                  issuedAt:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/delegation:
     get:
       tags: [delegation]
       summary: List operator's delegations
+      operationId: listDelegations
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, revoked, expired]
+      responses:
+        '200':
+          description: List of delegations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/delegation/{id}:
     delete:
       tags: [delegation]
       summary: Revoke delegation (cascade optional)
+      operationId: revokeDelegation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cascade
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Delegation revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+                  cascade:
+                    type: boolean
+                  childTokensRevoked:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/delegation/{id}/children:
     get:
       tags: [delegation]
       summary: List child delegations
+      operationId: listChildDelegations
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of child delegations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/delegation/{id}/audit:
     get:
       tags: [delegation]
       summary: Audit trail for delegation token
+      operationId: getDelegationAudit
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Audit trail
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{agentId}/service-identities:
     get:
       tags: [delegation]
       summary: List service identities for agent
+      operationId: listAgentServiceIdentities
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of service identities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [delegation]
       summary: Create service identity
+      operationId: createAgentServiceIdentity
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service, credentialSecretName]
+              properties:
+                service:
+                  type: string
+                externalId:
+                  type: string
+                displayName:
+                  type: string
+                credentialSecretName:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                agentScope:
+                  type: string
+                expiresAt:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: Service identity created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/agents/{agentId}/service-identities/{identityId}:
     delete:
       tags: [delegation]
       summary: Revoke service identity
+      operationId: revokeAgentServiceIdentity
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: identityId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service identity revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/agents/{agentId}/service-identities/{identityId}/rotate:
     post:
       tags: [delegation]
       summary: Rotate service identity credential
+      operationId: rotateAgentServiceIdentityCredential
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: identityId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credentialSecretName]
+              properties:
+                credentialSecretName:
+                  type: string
+      responses:
+        '200':
+          description: Credential rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rotated:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/agents/{agentId}/delegations:
     get:
       tags: [delegation]
       summary: List inbound delegations for agent
+      operationId: listAgentInboundDelegations
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of inbound delegations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Chat & Sessions ────────────────────────────────────────────────────────
   /api/chat:
     post:
       tags: [chat]
       summary: Send chat message (sync response)
+      operationId: sendChatMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/chat/stream:
     post:
       tags: [chat]
       summary: Send chat message (streaming via Centrifugo)
+      operationId: sendChatMessageStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Stream initiated
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sessions:
     get:
       tags: [chat]
       summary: List chat sessions
+      operationId: listChatSessions
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [chat]
       summary: Create new chat session
+      operationId: createChatSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sessions/{id}:
     get:
       tags: [chat]
       summary: Get session with messages
+      operationId: getChatSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     put:
       tags: [chat]
       summary: Update session title
+      operationId: updateChatSessionTitle
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+      responses:
+        '200':
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [chat]
       summary: Delete session
+      operationId: deleteChatSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Session deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Intercom ───────────────────────────────────────────────────────────────
   /api/intercom/publish:
     post:
       tags: [intercom]
       summary: Publish message to Centrifugo channel
+      operationId: intercomPublish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Message published
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/intercom/dm:
     post:
       tags: [intercom]
       summary: Send direct message agent-to-agent
+      operationId: intercomDm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: DM sent
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/intercom/history:
     get:
       tags: [intercom]
       summary: Get channel message history
+      operationId: getIntercomHistory
+      parameters:
+        - name: channel
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Channel history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/intercom/channels:
     get:
       tags: [intercom]
       summary: List agent's channels
+      operationId: listIntercomChannels
+      responses:
+        '200':
+          description: List of channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/intercom/bridge/receive:
     post:
       tags: [intercom]
       summary: Receive bridged message from remote instance
+      operationId: intercomBridgeReceive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Message received
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/intercom/centrifugo/token:
     get:
       tags: [intercom]
       summary: Issue Centrifugo connection token
+      operationId: getCentrifugoToken
+      responses:
+        '200':
+          description: Connection token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/intercom/centrifugo/subscription:
     get:
       tags: [intercom]
       summary: Issue subscription token for channel
+      operationId: getCentrifugoSubscription
+      parameters:
+        - name: channel
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Subscription token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/rt/token:
     get:
       tags: [intercom]
       summary: Issue Centrifugo connection token (web operator shorthand)
+      operationId: getRtToken
+      responses:
+        '200':
+          description: Connection token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  expiresAt:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Circles ────────────────────────────────────────────────────────────────
   /api/circles:
     get:
       tags: [circles]
       summary: List circles
+      operationId: listCircles
+      responses:
+        '200':
+          description: List of circles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [circles]
       summary: Create circle
+      operationId: createCircle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Circle created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/circles/{id}:
     get:
       tags: [circles]
       summary: Get circle detail with members
+      operationId: getCircleDetail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Circle detail
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     put:
       tags: [circles]
       summary: Update circle
+      operationId: updateCircle
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Circle updated
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [circles]
       summary: Delete circle
+      operationId: deleteCircle
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Circle deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/circles/{id}/members:
     get:
       tags: [circles]
       summary: List circle members
+      operationId: listCircleMembers
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/circles/{name}/context:
     put:
       tags: [circles]
       summary: Update circle project context markdown
+      operationId: updateCircleContext
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: Context updated
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/circles/{name}/broadcast:
     post:
       tags: [circles]
       summary: Broadcast message to circle members
+      operationId: broadcastToCircle
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Message broadcast
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/circles/{id}/party:
     post:
       tags: [circles]
       summary: Start multi-agent party session (Story 10.6, async 202)
+      operationId: startPartySession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Party started
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/circles/{id}/party/{sessionId}:
     get:
       tags: [circles]
       summary: Get party session status and rounds
+      operationId: getPartySessionStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Party session status
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Knowledge ──────────────────────────────────────────────────────────────
   /api/knowledge/circles/{id}/history:
     get:
       tags: [knowledge]
       summary: Get git commit history for circle knowledge repo
+      operationId: getCircleKnowledgeHistory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Commit history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/knowledge/circles/{id}/merge-requests:
     get:
       tags: [knowledge]
       summary: List pending merge requests
+      operationId: listKnowledgeMergeRequests
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of merge requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/knowledge/circles/{id}/merge-requests/{requestId}/approve:
     post:
       tags: [knowledge]
       summary: Approve merge request
+      operationId: approveKnowledgeMergeRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Merge request approved
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/knowledge/circles/{id}/merge-requests/{requestId}/resolve:
     post:
       tags: [knowledge]
-      summary: Resolve merge conflict (strategy: ours|theirs|llm)
+      summary: "Resolve merge conflict (strategy: ours|theirs|llm)"
+      operationId: resolveKnowledgeMergeConflict
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [strategy]
+              properties:
+                strategy:
+                  type: string
+                  enum: [ours, theirs, llm]
+      responses:
+        '200':
+          description: Conflict resolved
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Memory ─────────────────────────────────────────────────────────────────
   /api/memory/blocks:
     get:
       tags: [memory]
       summary: List all memory blocks
+      operationId: listMemoryBlocks
+      responses:
+        '200':
+          description: List of memory blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/memory/blocks/{type}:
     get:
       tags: [memory]
       summary: Get memory block by type
+      operationId: getMemoryBlockByType
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Memory block detail
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [memory]
       summary: Add entry to memory block
+      operationId: addMemoryEntry
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Entry added
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/memory/entries/{id}:
     get:
       tags: [memory]
       summary: Get memory entry detail
+      operationId: getMemoryEntry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Entry detail
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/memory/graph:
     get:
       tags: [memory]
       summary: Get memory graph
+      operationId: getMemoryGraph
+      responses:
+        '200':
+          description: Memory graph
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/memory/{agentId}/stats:
     get:
       tags: [memory]
       summary: Memory stats (block count, vector count)
+      operationId: getAgentMemoryStats
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Memory stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blockCount:
+                    type: integer
+                  vectorCount:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/memory/{agentId}/blocks:
     get:
       tags: [memory]
       summary: List scoped blocks (filterable by type, tags, since)
+      operationId: listAgentMemoryBlocks
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of scoped blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/memory/{agentId}/blocks/{id}:
     get:
       tags: [memory]
       summary: Get scoped block by ID
+      operationId: getAgentMemoryBlock
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Scoped block detail
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/memory/{agentId}/compact:
     post:
       tags: [memory]
       summary: Trigger memory compaction (Story 8.7)
+      operationId: compactAgentMemory
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Compaction triggered
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── LLM Proxy ──────────────────────────────────────────────────────────────
   /v1/llm/chat/completions:
     post:
       tags: [llm]
       summary: Chat completion (streaming + non-streaming, JWT auth, budget-gated)
+      operationId: llmProxyChatCompletion
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          description: Budget exceeded
   /v1/chat/completions:
     post:
       tags: [openai-compat]
       summary: OpenAI-compatible chat endpoint
+      operationId: openAiCompatChatCompletion
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Providers ──────────────────────────────────────────────────────────────
   /api/providers:
     get:
       tags: [providers]
       summary: List configured LLM providers
+      operationId: listProviders
+      responses:
+        '200':
+          description: List of providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [providers]
       summary: Add LLM provider (hot-reloadable)
+      operationId: addProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddProvider'
+      responses:
+        '201':
+          description: Provider added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modelName:
+                    type: string
+                  result:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/providers/dynamic:
     get:
       tags: [providers]
       summary: List dynamic providers
+      operationId: listDynamicProviders
+      responses:
+        '200':
+          description: List of dynamic providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dynamicProviders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DynamicProvider'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [providers]
       summary: Add/update dynamic provider
+      operationId: addDynamicProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddDynamicProvider'
+      responses:
+        '201':
+          description: Dynamic provider added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddDynamicProvider'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/providers/dynamic/statuses:
     get:
       tags: [providers]
       summary: Get dynamic provider health statuses
+      operationId: getDynamicProviderStatuses
+      responses:
+        '200':
+          description: Dynamic provider statuses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  statuses:
+                    type: object
+                    additionalProperties:
+                      type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/providers/dynamic/{id}:
+    delete:
+      tags: [providers]
+      summary: Removes a dynamic provider and its models
+      operationId: deleteDynamicProvider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Dynamic provider removed
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/providers/dynamic/test:
+    post:
+      tags: [providers]
+      summary: Tests a connection to a dynamic provider URL
+      operationId: testDynamicProviderConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [baseUrl]
+              properties:
+                baseUrl:
+                  type: string
+                  format: uri
+                apiKey:
+                  type: string
+      responses:
+        '200':
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  error:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/providers/default-model:
+    get:
+      tags: [providers]
+      summary: Get the current default model name
+      operationId: getDefaultModel
+      responses:
+        '200':
+          description: Default model name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  defaultModel:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    put:
+      tags: [providers]
+      summary: Set the default model name
+      operationId: setDefaultModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [modelName]
+              properties:
+                modelName:
+                  type: string
+      responses:
+        '200':
+          description: Default model set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  defaultModel:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/providers/{modelName}:
     delete:
       tags: [providers]
       summary: Remove LLM provider
+      operationId: deleteProvider
+      parameters:
+        - name: modelName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Provider removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/providers/{modelName}/test:
     post:
       tags: [providers]
       summary: Test provider connectivity
+      operationId: testProviderConnection
+      parameters:
+        - name: modelName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connectivity test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  latencyMs:
+                    type: number
+                  error:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '502':
+          description: Provider test failed
   /api/providers/{modelName}/health:
     get:
       tags: [providers]
       summary: Get circuit breaker state for provider
+      operationId: getProviderHealth
+      parameters:
+        - name: modelName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Circuit breaker health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider:
+                    type: string
+                  state:
+                    type: string
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/system/circuit-breakers:
     get:
       tags: [providers]
       summary: Get all circuit breaker states
+      operationId: listCircuitBreakers
+      responses:
+        '200':
+          description: All circuit breaker states
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  circuitBreakers:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Budget & Metering ──────────────────────────────────────────────────────
   /api/budget:
     get:
       tags: [budget]
       summary: Global token usage (last 7 days by day)
+      operationId: getGlobalBudget
+      responses:
+        '200':
+          description: Global token usage
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/budget/agents:
     get:
       tags: [budget]
       summary: Per-agent token usage rankings
+      operationId: getAgentBudgetRankings
+      responses:
+        '200':
+          description: Per-agent rankings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/budget/agents/{id}:
     get:
       tags: [budget]
       summary: Single agent usage (last 7 days by day)
+      operationId: getSingleAgentBudget
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent usage data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/budget/agents/{id}/budget:
     get:
       tags: [budget]
       summary: Real-time hourly + daily budget status
+      operationId: getAgentBudgetStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Real-time budget status
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/metering/usage:
     get:
       tags: [metering]
       summary: Query usage (agentId, from, to, groupBy)
+      operationId: queryUsage
+      responses:
+        '200':
+          description: Usage data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/metering/summary:
     get:
       tags: [metering]
       summary: Total usage for today across all agents
+      operationId: getUsageSummary
+      responses:
+        '200':
+          description: Today's usage summary
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Audit ──────────────────────────────────────────────────────────────────
   /api/audit:
     get:
       tags: [audit]
       summary: List audit entries (admin only, filterable)
+      operationId: listAuditEntries
+      responses:
+        '200':
+          description: List of audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/audit/export:
     get:
       tags: [audit]
       summary: Stream audit trail as JSONL (admin only)
+      operationId: exportAuditTrail
+      responses:
+        '200':
+          description: JSONL audit trail
+          content:
+            application/x-jsonlines:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Schedules ──────────────────────────────────────────────────────────────
   /api/schedules:
     get:
       tags: [schedules]
       summary: List schedules (filterable by agentId)
+      operationId: listSchedules
+      responses:
+        '200':
+          description: List of schedules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [schedules]
       summary: Create schedule
+      operationId: createSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Schedule created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/schedules/{id}:
     get:
       tags: [schedules]
       summary: Get schedule by ID
+      operationId: getSchedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Schedule detail
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     patch:
       tags: [schedules]
       summary: Update schedule
+      operationId: updateSchedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Schedule updated
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [schedules]
       summary: Delete schedule
+      operationId: deleteSchedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Schedule deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/schedules/{id}/trigger:
     post:
       tags: [schedules]
       summary: Manually trigger schedule
+      operationId: triggerSchedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Schedule triggered
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Skills & Tools ─────────────────────────────────────────────────────────
   /api/tools:
     get:
       tags: [skills]
       summary: List all registered skills/tools (public)
+      operationId: listTools
+      responses:
+        '200':
+          description: List of tools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tool'
   /api/templates:
     get:
       tags: [templates]
       summary: List agent templates from DB (public)
+      operationId: listTemplatesPublic
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentTemplateDb'
   /api/skills:
     get:
       tags: [skills]
       summary: List executable + guidance skills
+      operationId: listSkills
+      responses:
+        '200':
+          description: List of skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GuidanceSkill'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    post:
+      tags: [skills]
+      summary: Create or update a guidance skill
+      operationId: createSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, version, description, content]
+              properties:
+                name:
+                  type: string
+                version:
+                  type: string
+                description:
+                  type: string
+                triggers:
+                  type: array
+                  items:
+                    type: string
+                category:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                maxTokens:
+                  type: integer
+                content:
+                  type: string
+      responses:
+        '201':
+          description: Skill created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/skills/{name}:
     get:
       tags: [skills]
       summary: Get guidance skill by name
+      operationId: getSkill
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuidanceSkill'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [skills]
+      summary: Delete a guidance skill
+      operationId: deleteSkill
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/skills/registry/search:
+    get:
+      tags: [skills]
+      summary: Search external skill registries
+      operationId: searchSkillRegistry
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/skills/import:
+    post:
+      tags: [skills]
+      summary: Import a skill from an external registry
+      operationId: importSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, skillId]
+              properties:
+                source:
+                  type: string
+                skillId:
+                  type: string
+      responses:
+        '201':
+          description: Skill imported
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/skills/agents/{name}/tools:
     put:
       tags: [skills]
       summary: Update agent's allowed tools
+      operationId: updateAgentTools
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allowed]
+              properties:
+                allowed:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Tools updated (but requires manifest update to persist)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  currentAllowed:
+                    type: array
+                    items:
+                      type: string
+                  requested:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Registry ───────────────────────────────────────────────────────────────
   /api/registry/templates:
     get:
       tags: [registry]
       summary: List templates (DB-backed)
+      operationId: listTemplatesRegistry
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentTemplateDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [registry]
       summary: Upsert template
+      operationId: upsertTemplateRegistry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTemplate'
+      responses:
+        '201':
+          description: Template upserted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTemplateDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/registry/templates/{name}:
     get:
       tags: [registry]
       summary: Get template by name
+      operationId: getTemplateRegistry
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTemplateDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     put:
       tags: [registry]
       summary: Update template
+      operationId: updateTemplateRegistry
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTemplate'
+      responses:
+        '200':
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTemplateDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [registry]
       summary: Delete template
+      operationId: deleteTemplateRegistry
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  template:
+                    $ref: '#/components/schemas/AgentTemplateDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/registry/templates/{name}/instances:
     get:
       tags: [registry]
       summary: List instances from template
+      operationId: listTemplateInstancesRegistry
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/registry/instances:
     get:
       tags: [registry]
       summary: List instances
+      operationId: listInstancesRegistry
+      responses:
+        '200':
+          description: List of instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [registry]
       summary: Create instance
+      operationId: createInstanceRegistry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentInstance'
+      responses:
+        '201':
+          description: Instance created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/registry/instances/{id}:
     get:
       tags: [registry]
       summary: Get instance by ID
+      operationId: getInstanceRegistry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Instance detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInstanceDb'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/registry/reload:
     post:
       tags: [registry]
       summary: Reload registry from filesystem
+      operationId: reloadRegistry
+      responses:
+        '200':
+          description: Registry reloaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Sandbox ────────────────────────────────────────────────────────────────
   /api/sandbox:
     get:
       tags: [sandbox]
       summary: List active containers
+      operationId: listSandboxContainers
+      responses:
+        '200':
+          description: List of containers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sandbox/spawn:
     post:
       tags: [sandbox]
       summary: Spawn persistent container
+      operationId: spawnSandboxContainer
+      responses:
+        '200':
+          description: Container spawned
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sandbox/exec:
     post:
       tags: [sandbox]
       summary: Exec command in running container
+      operationId: execSandboxCommand
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sandbox/tool:
     post:
       tags: [sandbox]
       summary: Run ephemeral tool container
+      operationId: runSandboxTool
+      responses:
+        '200':
+          description: Tool output
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sandbox/subagent:
     post:
       tags: [sandbox]
       summary: Spawn subagent container
+      operationId: spawnSandboxSubagent
+      responses:
+        '200':
+          description: Subagent container spawned
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/sandbox/{id}:
     delete:
       tags: [sandbox]
       summary: Stop and remove container
+      operationId: stopSandboxContainer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Container stopped
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/sandbox/{id}/logs:
     get:
       tags: [sandbox]
       summary: Get container logs
+      operationId: getSandboxContainerLogs
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Container logs
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── MCP Servers ────────────────────────────────────────────────────────────
   /api/mcp-servers:
     post:
       tags: [mcp]
       summary: Register containerized MCP server
+      operationId: registerMcpServer
+      responses:
+        '200':
+          description: Server registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/mcp-servers/{name}:
     delete:
       tags: [mcp]
       summary: Unregister MCP server
+      operationId: unregisterMcpServer
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Server unregistered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Pipelines ──────────────────────────────────────────────────────────────
   /api/pipelines:
     post:
       tags: [pipelines]
       summary: Create pipeline (sequential|parallel|hierarchical, async 202)
+      operationId: createPipeline
+      responses:
+        '202':
+          description: Pipeline created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/pipelines/{id}:
     get:
       tags: [pipelines]
       summary: Get pipeline status and steps
+      operationId: getPipelineStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pipeline status
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Notifications & Channels ───────────────────────────────────────────────
   /api/notifications/action:
     post:
       tags: [notifications]
       summary: Redeem action token (public, JWT-validated)
+      operationId: redeemActionToken
+      responses:
+        '200':
+          description: Action redeemed
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/notifications/routing:
     get:
       tags: [notifications]
       summary: List routing rules
+      operationId: listNotificationRoutingRules
+      responses:
+        '200':
+          description: List of routing rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [notifications]
       summary: Create routing rule (admin)
+      operationId: createNotificationRoutingRule
+      responses:
+        '201':
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/notifications/routing/{id}:
     patch:
       tags: [notifications]
       summary: Update routing rule (admin)
+      operationId: updateNotificationRoutingRule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rule updated
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [notifications]
       summary: Delete routing rule (admin)
+      operationId: deleteNotificationRoutingRule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Rule deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/channels:
     get:
       tags: [channels]
       summary: List channels (config redacted)
+      operationId: listChannels
+      responses:
+        '200':
+          description: List of channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [channels]
       summary: Create channel (admin)
+      operationId: createChannel
+      responses:
+        '201':
+          description: Channel created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/channels/{id}:
     delete:
       tags: [channels]
       summary: Delete channel (admin)
+      operationId: deleteChannel
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Channel deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/channels/{id}/test:
     post:
       tags: [channels]
       summary: Send test notification
+      operationId: testChannel
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test notification sent
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/channels/{id}/health:
     get:
       tags: [channels]
       summary: Channel health check
+      operationId: getChannelHealth
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /api/channels/routes:
     get:
       tags: [channels]
       summary: List inbound routes
+      operationId: listInboundRoutes
+      responses:
+        '200':
+          description: List of routes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [channels]
       summary: Create inbound route
+      operationId: createInboundRoute
+      responses:
+        '201':
+          description: Route created
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/channels/discord/user-mapping:
     post:
       tags: [channels]
       summary: Map Discord user to SERA operator
+      operationId: mapDiscordUser
+      responses:
+        '200':
+          description: User mapped
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/channels/slack/user-mapping:
     post:
       tags: [channels]
       summary: Map Slack user to SERA operator
+      operationId: mapSlackUser
+      responses:
+        '200':
+          description: User mapped
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/channels/slack/interactions:
     post:
       tags: [channels]
       summary: Slack interactive payload handler
+      operationId: handleSlackInteraction
+      responses:
+        '200':
+          description: Interaction handled
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Webhooks ───────────────────────────────────────────────────────────────
   /api/webhooks:
     get:
       tags: [webhooks]
       summary: List webhooks
+      operationId: listWebhooks
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [webhooks]
       summary: Register webhook
+      operationId: registerWebhook
+      responses:
+        '201':
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/webhooks/incoming/{slug}:
     post:
       tags: [webhooks]
       summary: Trigger webhook (signature-validated, public)
+      operationId: triggerWebhook
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook triggered
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   # ── Health ─────────────────────────────────────────────────────────────────
   /api/health:
     get:
       tags: [health]
       summary: Basic health check (public)
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
   /api/health/detail:
     get:
       tags: [health]
       summary: Detailed health with component status (public)
+      operationId: getHealthDetail
+      responses:
+        '200':
+          description: Detailed status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  components:
+                    type: array
+                    items:
+                      type: object
+                  agentStats:
+                    type: object
+                  timestamp:
+                    type: string
+                    format: date-time
 
   # ── Federation ─────────────────────────────────────────────────────────────
   /api/federation/peers:
     get:
       tags: [federation]
       summary: List federation peers (stub, returns empty)
+      operationId: listFederationPeers
+      x-not-implemented: true
+      responses:
+        '200':
+          description: List of peers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
 
   # ── LSP ────────────────────────────────────────────────────────────────────
   /api/lsp/definition:
     post:
       tags: [lsp]
       summary: Get symbol definition
+      operationId: getLspDefinition
+      responses:
+        '200':
+          description: Symbol definition
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/lsp/references:
     post:
       tags: [lsp]
       summary: Find symbol references
+      operationId: getLspReferences
+      responses:
+        '200':
+          description: Symbol references
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/lsp/symbols:
     post:
       tags: [lsp]
       summary: List file symbols
+      operationId: listLspSymbols
+      responses:
+        '200':
+          description: File symbols
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 
   # ── Legacy Config ──────────────────────────────────────────────────────────
   /api/config/llm:
     get:
       tags: [providers]
       summary: Get LLM config (legacy)
+      operationId: getLegacyLlmConfig
+      responses:
+        '200':
+          description: LLM config
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
     post:
       tags: [providers]
       summary: Update LLM config (legacy)
+      operationId: updateLegacyLlmConfig
+      responses:
+        '200':
+          description: Config updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /api/config/llm/test:
     post:
       tags: [providers]
       summary: Test LLM connection (legacy)
+      operationId: testLegacyLlmConnection
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  model:
+                    type: string
+                  response:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    UnauthorizedError:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFoundError:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequestError:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: object
+
+    OperatorIdentity:
+      type: object
+      properties:
+        sub:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+        authMethod:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+
+    EnrichedAgentInstance:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        display_name:
+          type: string
+        template_ref:
+          type: string
+        status:
+          type: string
+        circle:
+          type: string
+        lifecycle_mode:
+          type: string
+          enum: [persistent, ephemeral]
+        icon:
+          type: string
+        sandbox_boundary:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AgentInstanceDb:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        display_name:
+          type: string
+        template_ref:
+          type: string
+        status:
+          type: string
+        circle:
+          type: string
+        lifecycle_mode:
+          type: string
+          enum: [persistent, ephemeral]
+        overrides:
+          type: object
+        resolved_capabilities:
+          type: object
+        container_id:
+          type: string
+        workspace_used_gb:
+          type: number
+        parent_instance_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AgentManifest:
+      type: object
+      required: [apiVersion, kind, metadata]
+      properties:
+        apiVersion:
+          type: string
+          const: sera/v1
+        kind:
+          type: string
+          const: Agent
+        metadata:
+          type: object
+          required: [name, templateRef]
+          properties:
+            name:
+              type: string
+            displayName:
+              type: string
+            templateRef:
+              type: string
+            circle:
+              type: string
+        overrides:
+          type: object
+
+    AgentInstance:
+      $ref: '#/components/schemas/AgentManifest'
+
+    AgentTemplate:
+      type: object
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion:
+          type: string
+          const: sera/v1
+        kind:
+          type: string
+          const: AgentTemplate
+        metadata:
+          type: object
+          required: [name]
+          properties:
+            name:
+              type: string
+            displayName:
+              type: string
+            icon:
+              type: string
+            builtin:
+              type: boolean
+            category:
+              type: string
+            description:
+              type: string
+        spec:
+          type: object
+          required: [lifecycle]
+          properties:
+            identity:
+              type: object
+              properties:
+                role:
+                  type: string
+                principles:
+                  type: array
+                  items:
+                    type: string
+            model:
+              type: object
+              properties:
+                provider:
+                  type: string
+                name:
+                  type: string
+                temperature:
+                  type: number
+                fallback:
+                  type: array
+                  items:
+                    type: object
+                    required: [provider, name]
+                    properties:
+                      provider:
+                        type: string
+                      name:
+                        type: string
+                      maxComplexity:
+                        type: number
+            sandboxBoundary:
+              type: string
+            policyRef:
+              type: string
+            capabilities:
+              type: object
+            lifecycle:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [persistent, ephemeral]
+            skills:
+              type: array
+              items:
+                type: string
+            skillPackages:
+              type: array
+              items:
+                type: string
+            tools:
+              type: object
+              properties:
+                allowed:
+                  type: array
+                  items:
+                    type: string
+                denied:
+                  type: array
+                  items:
+                    type: string
+            subagents:
+              type: object
+              properties:
+                allowed:
+                  type: array
+                  items:
+                    type: object
+                    required: [templateRef]
+                    properties:
+                      templateRef:
+                        type: string
+                      maxInstances:
+                        type: number
+                      lifecycle:
+                        type: string
+                        enum: [persistent, ephemeral]
+                        default: ephemeral
+                      requiresApproval:
+                        type: boolean
+                        default: false
+            resources:
+              type: object
+              properties:
+                cpu:
+                  type: string
+                memory:
+                  type: string
+                maxLlmTokensPerHour:
+                  type: number
+                maxLlmTokensPerDay:
+                  type: number
+            workspace:
+              type: object
+            memory:
+              type: object
+
+    AgentTemplateDb:
+      type: object
+      properties:
+        name:
+          type: string
+        display_name:
+          type: string
+        builtin:
+          type: boolean
+        category:
+          type: string
+        spec:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AddProvider:
+      type: object
+      required: [modelName]
+      properties:
+        modelName:
+          type: string
+        api:
+          type: string
+          enum: [openai-completions, anthropic-messages]
+          default: openai-completions
+        provider:
+          type: string
+        baseUrl:
+          type: string
+          format: uri
+        apiKey:
+          type: string
+        apiKeyEnvVar:
+          type: string
+        description:
+          type: string
+
+    DynamicProvider:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        baseUrl:
+          type: string
+        apiKey:
+          type: string
+        enabled:
+          type: boolean
+        intervalMs:
+          type: integer
+        description:
+          type: string
+
+    AddDynamicProvider:
+      type: object
+      required: [id, name, type, baseUrl]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          const: lm-studio
+        baseUrl:
+          type: string
+          format: uri
+        apiKey:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+        intervalMs:
+          type: integer
+          minimum: 5000
+          default: 60000
+        description:
+          type: string
+
+    GuidanceSkill:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        maxTokens:
+          type: integer
+        usedBy:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+        content:
+          type: string
+
+    Tool:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        parameters:
+          type: object
+        usedBy:
+          type: array
+          items:
+            type: string
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        agentInstanceId:
+          type: string
+        task:
+          type: string
+        context:
+          type: object
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        priority:
+          type: integer
+        retryCount:
+          type: integer
+        maxRetries:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        result:
+          type: object
+        error:
+          type: string
+        usage:
+          type: object
+        thoughtStream:
+          type: array
+          items:
+            type: object
+        exitReason:
+          type: string
+        resultTruncated:
+          type: boolean
+
+    CapabilityGrant:
+      type: object
+      properties:
+        id:
+          type: string
+        agent_instance_id:
+          type: string
+        dimension:
+          type: string
+        value:
+          type: string
+        grant_type:
+          type: string
+          enum: [one-time, session, persistent]
+        granted_by:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        grantedBy:
+          type: object
+          properties:
+            sub:
+              type: string
+            email:
+              type: string
+            name:
+              type: string
+        grantedAt:
+          type: string
+          format: date-time

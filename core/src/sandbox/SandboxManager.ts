@@ -119,15 +119,26 @@ export class SandboxManager {
     const mode = writeAllowed ? 'rw' : 'ro';
     binds.push(provider.getBindMount(finalInstanceId, '/workspace', mode, workspacePath));
 
-    // Write AGENT.yaml to workspace so the agent-runtime can load its manifest
+    // Write AGENT.yaml to workspace so the agent-runtime can load its manifest.
+    // The runtime expects flat format (identity/model/tools at top level), not spec-wrapped.
     if (request.type !== 'mcp-server') {
       const wsInternalPath = provider.getPath(finalInstanceId, workspacePath);
       fs.mkdirSync(wsInternalPath, { recursive: true });
+      const spec = (manifest.spec ?? {}) as Record<string, unknown>;
       const manifestYaml = yaml.dump({
         apiVersion: manifest.apiVersion ?? 'sera/v1',
         kind: manifest.kind ?? 'Agent',
         metadata: manifest.metadata,
-        spec: manifest.spec,
+        identity: spec.identity,
+        model: spec.model,
+        tools: spec.tools,
+        skills: spec.skills,
+        intercom: spec.intercom,
+        resources: spec.resources,
+        workspace: spec.workspace,
+        memory: spec.memory,
+        capabilities: spec.capabilities,
+        sandboxBoundary: spec.sandboxBoundary,
       });
       fs.writeFileSync(path.join(wsInternalPath, 'AGENT.yaml'), manifestYaml, 'utf-8');
       logger.debug(`Wrote AGENT.yaml to workspace for ${containerName}`);

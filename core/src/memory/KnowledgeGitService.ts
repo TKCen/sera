@@ -38,6 +38,14 @@ export interface MergeRequest {
   diffSummary?: string;
 }
 
+export type MergeStrategy = 'ours' | 'theirs' | 'llm';
+
+export interface MergeResolution {
+  strategy: MergeStrategy;
+  filesResolved: string[];
+  commitHash: string;
+}
+
 export interface GitLogEntry {
   commitHash: string;
   authorName: string;
@@ -291,6 +299,122 @@ export class KnowledgeGitService {
       updatedAt: updatedAt instanceof Date ? updatedAt.toISOString() : String(updatedAt),
       ...(row['diff_summary'] ? { diffSummary: row['diff_summary'] as string } : {}),
     };
+  }
+
+  // ── Merge conflict resolution ──────────────────────────────────────────────
+
+  /**
+   * Resolve a merge conflict for a given merge request using one of three strategies:
+   *  - 'ours'   — keep main's version of conflicting files
+   *  - 'theirs' — keep the agent branch's version of conflicting files
+   *  - 'llm'    — use an LLM to produce a merged version of each conflicting file
+   *
+   * After resolution, the merge completes and the merge request status is updated.
+   *
+   * @param llmMergeFn  For 'llm' strategy: function that takes (ours, theirs, filePath)
+   *                    and returns the merged content. Injected by the route layer.
+   */
+  async resolveMergeConflict(
+    requestId: string,
+    strategy: MergeStrategy,
+    resolvedBy: string,
+    llmMergeFn?: (ours: string, theirs: string, filePath: string) => Promise<string>
+  ): Promise<MergeResolution> {
+    // 1. Fetch the merge request
+    const result = await query(
+      `SELECT * FROM knowledge_merge_requests
+       WHERE id=$1 AND status IN ('pending','conflict')`,
+      [requestId]
+    );
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) throw new Error(`Merge request ${requestId} not found or not in resolvable state`);
+
+    const circleId = row['circle_id'] as string;
+    const agentInstanceId = row['agent_instance_id'] as string;
+    const branch = row['branch'] as string;
+
+    const repoDir = this.repoPath(circleId);
+    const git = simpleGit(repoDir);
+
+    // 2. Attempt the merge to surface conflicts
+    await git.checkout('main');
+    let hasConflict = false;
+    try {
+      await git.merge([branch, '--no-ff', `--message=Merge ${branch} into main`]);
+      // No conflict — merge succeeded directly
+    } catch {
+      hasConflict = true;
+    }
+
+    const filesResolved: string[] = [];
+
+    if (hasConflict) {
+      // 3. Get list of conflicting files
+      const statusResult = await git.status();
+      const conflictedFiles = statusResult.conflicted;
+
+      if (conflictedFiles.length === 0) {
+        // Merge failed for a non-conflict reason — abort and re-throw
+        await git.merge(['--abort']).catch(() => {});
+        throw new Error(`Merge failed for ${branch} but no conflicting files detected`);
+      }
+
+      // 4. Resolve each conflicted file based on strategy
+      for (const file of conflictedFiles) {
+        const filePath = path.join(repoDir, file);
+
+        if (strategy === 'ours') {
+          await git.checkout(['--ours', '--', file]);
+          filesResolved.push(file);
+        } else if (strategy === 'theirs') {
+          await git.checkout(['--theirs', '--', file]);
+          filesResolved.push(file);
+        } else if (strategy === 'llm') {
+          if (!llmMergeFn) {
+            await git.merge(['--abort']).catch(() => {});
+            throw new Error('LLM merge function required for "llm" strategy');
+          }
+
+          // Extract ours and theirs versions
+          const oursContent = await git.show([`main:${file}`]).catch(() => '');
+          const theirsContent = await git.show([`${branch}:${file}`]).catch(() => '');
+
+          const mergedContent = await llmMergeFn(oursContent, theirsContent, file);
+          await fs.writeFile(filePath, mergedContent, 'utf-8');
+          filesResolved.push(file);
+        }
+
+        await git.add(file);
+      }
+
+      // 5. Complete the merge commit
+      await git.commit(`Resolve merge conflict (${strategy}): ${branch} into main`);
+    }
+
+    // 6. Get the resulting commit hash
+    const logResult = await git.log(['-1']);
+    const commitHash = logResult.latest?.hash ?? 'unknown';
+
+    // 7. Update merge request status
+    await query(
+      `UPDATE knowledge_merge_requests
+         SET status='merged', approved_by=$1, updated_at=now()
+       WHERE id=$2`,
+      [resolvedBy, requestId]
+    );
+
+    // 8. Re-index main branch
+    const namespace: MemoryNamespace =
+      circleId === SYSTEM_CIRCLE_ID ? 'global' : `circle:${circleId}`;
+    const store = new ScopedMemoryBlockStore(repoDir);
+    await this.vectorService.rebuildNamespace(namespace, repoDir, store, agentInstanceId);
+
+    logger.info(
+      `KnowledgeGitService: resolved conflict (${strategy}) for MR ${requestId}, ` +
+        `${filesResolved.length} files resolved, commit ${commitHash}`
+    );
+
+    return { strategy, filesResolved, commitHash };
   }
 
   // ── Diff ───────────────────────────────────────────────────────────────────

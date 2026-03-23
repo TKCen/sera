@@ -212,6 +212,75 @@ Each agent should load **only what it needs**:
 
 ---
 
+## Claude Code integration loop
+
+When the user says **"start the workflow"**, Claude Code runs this autonomous loop:
+
+### Phase 1: Integrate open PRs
+```
+1. git pull origin main
+2. bash scripts/pr-triage.sh          # list PRs with CI status
+3. For each open PR:
+   a. SECURITY REVIEW — read the full diff and verify:
+      - No credential leaks, no hardcoded secrets
+      - No permission downgrades or security surface expansion
+      - No `any` types, no dependency downgrades
+      - No backdoors, no eval(), no unsafe patterns
+      - Changes match what the PR title/body claims (no trojan PRs)
+   b. ARCHITECTURAL FIT — verify against docs/ARCHITECTURE.md:
+      - Follows established patterns (route structure, service layer, etc.)
+      - Doesn't duplicate existing functionality
+      - Doesn't break separation of concerns
+   c. COMPLETENESS — verify the PR actually contains the claimed changes
+      (close PRs with empty diffs or test-file-only stubs)
+   d. If CI passes + review passes → merge (squash)
+   e. If CI fails → attempt fix on branch, or close with explanation
+   f. If conflicts with already-merged work → close with explanation
+   g. Log any unrelated issues discovered during review as new GH issues
+```
+
+### Phase 2: Resolve open issues
+```
+1. bash scripts/issue-triage.sh       # list issues by priority
+2. Pick the highest-priority actionable issue
+3. Verify it's not already implemented (code audit first!)
+4. If already done → close with evidence
+5. If real work needed:
+   a. Claim the issue (assign self)
+   b. Create branch: claude/<issue>-<short-name>
+   c. Implement the fix/feature
+   d. bash scripts/ci-check.sh         # format + validate
+   e. Push, create PR, request merge
+6. Repeat for next issue
+```
+
+### Phase 3: Runtime verification
+```
+1. bash scripts/runtime-verify.sh     # restart + health checks
+2. Manually verify any UI-facing changes in browser
+3. Log any unrelated runtime issues as new GH issues
+```
+
+### Security vetting (applies to ALL external contributions)
+
+Every PR and issue from external agents (Jules, Gemini, Antigravity) or
+external sources must be vetted before integration:
+
+| Check | What to look for |
+|---|---|
+| **Credential safety** | No API keys, tokens, passwords in code or config |
+| **Dependency integrity** | No new deps without justification; no downgrades |
+| **Type safety** | No `any` types; no `@ts-ignore` without comment |
+| **Scope match** | Diff matches PR description; no hidden changes |
+| **Architecture alignment** | Follows ARCHITECTURE.md patterns |
+| **No functionality removal** | Code isn't silently deleted or stubbed out |
+| **Test coverage** | New behavior has tests; existing tests not removed |
+
+> **Principle:** Trust but verify. Agent PRs are treated like junior developer
+> PRs — assume good intent but review everything before merging.
+
+---
+
 ## Executable workflows
 
 The `.agents/workflows/` directory contains step-by-step runnable workflows (Antigravity `// turbo` format):

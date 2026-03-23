@@ -160,24 +160,47 @@ export function createSkillsRouter(
   });
 
   // ── Update an agent's tools.allowed list ──────────────────────────────────
-  router.put('/agents/:name/tools', (req, res) => {
-    const name = req.params.name;
-    const manifest = orchestrator.getManifest(name);
-    if (!manifest) {
-      return res.status(404).json({ error: `Agent "${name}" not found` });
-    }
+  router.put('/agents/:name/tools', async (req, res) => {
+    const name = req.params['name']!;
 
-    const { allowed } = req.body;
-    if (!Array.isArray(allowed)) {
+    const { allowed } = req.body as { allowed?: unknown };
+    if (!Array.isArray(allowed) || !allowed.every((a) => typeof a === 'string')) {
       return res.status(400).json({ error: 'allowed must be an array of skill/tool IDs' });
     }
 
-    res.json({
-      success: true,
-      message: 'Use PUT /api/agents/:name/manifest to persist tool changes',
-      currentAllowed: manifest.tools?.allowed ?? [],
-      requested: allowed,
-    });
+    try {
+      // Find instance by name
+      const { rows } = await pool.query<{ id: string; overrides: Record<string, unknown> }>(
+        'SELECT id, overrides FROM agent_instances WHERE name = $1',
+        [name]
+      );
+      if (rows.length === 0) {
+        return res.status(404).json({ error: `Agent instance "${name}" not found` });
+      }
+
+      const instance = rows[0]!;
+      const overrides = { ...instance.overrides, tools: { allowed } };
+
+      // Persist to database
+      await pool.query(
+        'UPDATE agent_instances SET overrides = $1, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(overrides), instance.id]
+      );
+
+      // Update in-memory manifest if loaded
+      const manifest = orchestrator.getManifest(name);
+      if (manifest) {
+        if (!manifest.tools) {
+          manifest.tools = { allowed };
+        } else {
+          manifest.tools.allowed = allowed as string[];
+        }
+      }
+
+      res.json({ success: true, allowed });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   return router;

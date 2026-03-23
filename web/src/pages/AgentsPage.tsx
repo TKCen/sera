@@ -87,8 +87,8 @@ export default function AgentsPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="sera-page-header">
+    <main className="p-6">
+      <header className="sera-page-header">
         <h1 className="sera-page-title">Agents</h1>
         <Button asChild size="sm">
           <Link to="/agents/new">
@@ -96,16 +96,18 @@ export default function AgentsPage() {
             New Agent
           </Link>
         </Button>
-      </div>
+      </header>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-4">
+      <section aria-label="Filters" className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 max-w-xs">
           <Search
             size={13}
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none"
           />
           <Input
+            id="search-agents"
+            aria-label="Search agents"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search agents…"
@@ -115,6 +117,7 @@ export default function AgentsPage() {
 
         {circles.length > 0 && (
           <select
+            aria-label="Filter by circle"
             value={filterCircle}
             onChange={(e) => setFilterCircle(e.target.value)}
             className="sera-input h-9 py-0 w-auto text-xs"
@@ -133,6 +136,7 @@ export default function AgentsPage() {
             <button
               key={s}
               onClick={() => setFilterStatus(s)}
+              aria-pressed={filterStatus === s}
               className={
                 filterStatus === s
                   ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
@@ -143,14 +147,16 @@ export default function AgentsPage() {
             </button>
           ))}
         </div>
-      </div>
+      </section>
 
       {isLoading ? (
-        <div className="space-y-3">
+        <ul aria-label="Loading agents" role="status" className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-16 rounded-xl" />
+            <li key={i}>
+              <Skeleton className="h-16 rounded-xl" />
+            </li>
           ))}
-        </div>
+        </ul>
       ) : !agents?.length ? (
         <EmptyState
           icon={<Bot size={24} />}
@@ -167,9 +173,9 @@ export default function AgentsPage() {
           No agents match your filters.
         </p>
       ) : (
-        <div className="space-y-2">
+        <ul aria-label="Agents list" aria-live="polite" className="space-y-2">
           {filtered.map((agent) => (
-            <div
+            <li
               key={agent.id}
               className="sera-card relative flex items-center gap-4 px-4 py-3 group"
             >
@@ -204,6 +210,7 @@ export default function AgentsPage() {
                   disabled={startAgent.isPending}
                   className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
                   title="Start"
+                  aria-label="Start agent"
                 >
                   <Play size={13} />
                 </button>
@@ -214,6 +221,7 @@ export default function AgentsPage() {
                   disabled={stopAgent.isPending}
                   className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
                   title="Stop"
+                  aria-label="Stop agent"
                 >
                   <Square size={13} />
                 </button>
@@ -224,6 +232,7 @@ export default function AgentsPage() {
                   disabled={deleteAgent.isPending}
                   className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
                   title="Delete"
+                  aria-label="Delete agent"
                 >
                   <Trash2 size={13} />
                 </button>
@@ -235,10 +244,10 @@ export default function AgentsPage() {
                 className="absolute inset-0 rounded-xl"
                 aria-label={`View ${agent.name}`}
               />
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
-    </div>
+    </main>
   );
 }

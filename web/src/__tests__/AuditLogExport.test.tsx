@@ -41,7 +41,7 @@ vi.mock('@/lib/api/audit', () => ({
 }));
 
 // Static import after mocks are declared (Vitest hoists vi.mock above imports)
-import AuditPage from '@/pages/AuditPage';
+import AuditPage from '@/app/audit/page';
 
 function TestWrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

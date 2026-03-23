@@ -1,6 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '@/lib/api/agents';
-import type { CreateAgentInstanceParams, CreateGrantParams, PermissionDecisionParams } from '@/lib/api/types';
+import type {
+  CreateAgentInstanceParams,
+  CreateGrantParams,
+  PermissionDecisionParams,
+} from '@/lib/api/types';
 
 export const agentsKeys = {
   all: ['agents'] as const,

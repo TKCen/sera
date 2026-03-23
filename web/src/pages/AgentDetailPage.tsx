@@ -528,9 +528,7 @@ function GrantsTab({ id }: { id: string }) {
                     <span className="font-mono text-sera-text truncate">{req.value}</span>
                   </div>
                   {req.reason && (
-                    <p className="text-[10px] text-sera-text-muted mt-0.5 truncate">
-                      {req.reason}
-                    </p>
+                    <p className="text-[10px] text-sera-text-muted mt-0.5 truncate">{req.reason}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">

@@ -493,6 +493,13 @@ export class SandboxManager {
     }
   }
 
+  // ── Health ───────────────────────────────────────────────────────────────────
+
+  /** Ping the Docker daemon to verify connectivity. */
+  async ping(): Promise<void> {
+    await this.docker.ping();
+  }
+
   // ── Query ────────────────────────────────────────────────────────────────────
 
   listContainers(agentName?: string): SandboxInfo[] {

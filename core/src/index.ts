@@ -214,6 +214,75 @@ app.get('/api/health/detail', async (_req, res) => {
     });
   }
 
+  // Docker check — ping the Docker daemon
+  const dockerStart = Date.now();
+  try {
+    await sandboxManager.ping();
+    components.push({ name: 'docker', status: 'healthy', latencyMs: Date.now() - dockerStart });
+  } catch {
+    components.push({
+      name: 'docker',
+      status: 'unreachable',
+      latencyMs: Date.now() - dockerStart,
+    });
+  }
+
+  // Qdrant check — ping the REST API
+  const qdrantUrl = process.env['QDRANT_URL'] ?? 'http://localhost:6333';
+  const qdrantStart = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const qdrantTimer = setTimeout(() => ctrl.abort(), 3000);
+    const qdResp = await fetch(`${qdrantUrl}/healthz`, { signal: ctrl.signal });
+    clearTimeout(qdrantTimer);
+    components.push({
+      name: 'qdrant',
+      status: qdResp.ok ? 'healthy' : 'degraded',
+      latencyMs: Date.now() - qdrantStart,
+    });
+  } catch {
+    components.push({
+      name: 'qdrant',
+      status: 'unreachable',
+      latencyMs: Date.now() - qdrantStart,
+    });
+  }
+
+  // pg-boss check — verify the job queue is running
+  const pgBossStart = Date.now();
+  try {
+    PgBossService.getInstance().getBoss();
+    components.push({ name: 'pg-boss', status: 'healthy', latencyMs: Date.now() - pgBossStart });
+  } catch {
+    components.push({
+      name: 'pg-boss',
+      status: 'unreachable',
+      message: 'pg-boss not started',
+      latencyMs: Date.now() - pgBossStart,
+    });
+  }
+
+  // Squid egress proxy check
+  const squidHost = process.env['SQUID_HOST'] ?? 'squid';
+  const squidPort = process.env['SQUID_PORT'] ?? '3128';
+  const squidStart = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const squidTimer = setTimeout(() => ctrl.abort(), 3000);
+    await fetch(`http://${squidHost}:${squidPort}`, { signal: ctrl.signal });
+    clearTimeout(squidTimer);
+    // Squid returns 400/403 for non-proxy requests, but a response means it's alive
+    components.push({ name: 'squid', status: 'healthy', latencyMs: Date.now() - squidStart });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.name : '';
+    // AbortError means timeout; ECONNREFUSED means down
+    components.push({
+      name: 'squid',
+      status: msg === 'AbortError' ? 'degraded' : 'unreachable',
+      latencyMs: Date.now() - squidStart,
+    });
+  }
+
   // Agent stats
   let agentStats = { total: 0, running: 0, stopped: 0, errored: 0 };
   try {

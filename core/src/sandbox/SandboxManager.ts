@@ -6,6 +6,8 @@
  */
 
 import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
 import Docker from 'dockerode';
 import { v4 as uuidv4 } from 'uuid';
 import type { AgentManifest, ResolvedCapabilities } from '../agents/manifest/types.js';
@@ -116,6 +118,20 @@ export class SandboxManager {
     const writeAllowed = caps.filesystem?.write ?? caps.fs?.write ?? false;
     const mode = writeAllowed ? 'rw' : 'ro';
     binds.push(provider.getBindMount(finalInstanceId, '/workspace', mode, workspacePath));
+
+    // Write AGENT.yaml to workspace so the agent-runtime can load its manifest
+    if (request.type !== 'mcp-server') {
+      const wsInternalPath = provider.getPath(finalInstanceId, workspacePath);
+      fs.mkdirSync(wsInternalPath, { recursive: true });
+      const manifestYaml = yaml.dump({
+        apiVersion: manifest.apiVersion ?? 'sera/v1',
+        kind: manifest.kind ?? 'Agent',
+        metadata: manifest.metadata,
+        spec: manifest.spec,
+      });
+      fs.writeFileSync(path.join(wsInternalPath, 'AGENT.yaml'), manifestYaml, 'utf-8');
+      logger.debug(`Wrote AGENT.yaml to workspace for ${containerName}`);
+    }
 
     // 2. Memory mount (Story 3.3)
     const memoryHostDir = process.env.HOST_MEMORY_DIR ?? '/memory';

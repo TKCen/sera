@@ -204,7 +204,7 @@ export class SandboxManager {
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,
       Image: request.image ?? 'sera-agent-worker:latest',
-      Cmd: request.command ?? (request.type === 'mcp-server' ? undefined : ['npm', 'start']),
+      Cmd: request.command ?? undefined,
       Env: env,
       AttachStdin: !!request.task,
       OpenStdin: !!request.task,

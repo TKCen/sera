@@ -18,9 +18,12 @@ This document is the canonical technical reference covering system architecture,
 8. [Memory & RAG](#memory--rag)
 9. [Real-Time Messaging](#real-time-messaging)
 10. [Integration Channels](#integration-channels)
-11. [Extensibility Model](#extensibility-model)
-11. [Tech Stack: Current Choices & Alternatives](#tech-stack-current-choices--alternatives)
-12. [Open Source Ecosystem](#open-source-ecosystem)
+11. [Advanced Interaction Surfaces](#advanced-interaction-surfaces)
+12. [Federation & Interoperability (A2A)](#federation--interoperability-a2a)
+13. [Extensibility Model](#extensibility-model)
+14. [Tech Stack: Current Choices & Alternatives](#tech-stack-current-choices--alternatives)
+15. [Open Source Ecosystem](#open-source-ecosystem)
+16. [Key Architectural Decisions Log](#key-architectural-decisions-log)
 
 ---
 
@@ -29,23 +32,22 @@ This document is the canonical technical reference covering system architecture,
 SERA is structured around a clear separation of concerns:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     sera-web (UI)                       │
-│          Next.js dashboard — operator interface         │
-└────────────────────────┬────────────────────────────────┘
-                         │ REST + WebSocket
-┌────────────────────────▼────────────────────────────────┐
-│                    sera-core (Mind)                     │
-│   Orchestrator · LLM Proxy · Skill Registry · Memory   │
-│   Metering · Audit · Schedule · MCP Registry           │
-└──────┬──────────────┬──────────────────┬───────────────┘
-       │              │                  │
-       │ Docker API   │ Centrifugo API   │ Postgres / Qdrant
-┌──────▼──────┐  ┌────▼────────┐  ┌─────▼──────────────┐
-│   Agent     │  │  Centrifugo │  │  PostgreSQL        │
-│  Containers │  │  (Pulse)    │  │  + pgvector        │
-│  (sandboxed)│  │             │  │  + Qdrant          │
-└──────┬──────┘  └─────────────┘  └────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           sera-web (UI)                                 │
+│    Vite SPA — operator interface · Canvas (A2UI) · Voice · ACP/IDE      │
+└──────────────┬──────────────────────────────────────────────────────────┘
+               │ REST + WebSocket
+┌──────────────▼──────────────────────────────────────────────────────────┐
+│                        sera-core (Mind)                                 │
+│      Orchestrator · LLM Proxy · Skill Registry · Memory · A2A Bridge    │
+│      Metering · Audit · Schedule · MCP Registry · Interaction Gateway   │
+└──────┬──────────────┬──────────────────┬─────────────────┬───────┬──────┘
+       │              │                  │                 │       │
+       │ Docker API   │ Centrifugo API   │ Qdrant API      │ SQL   │ A2A
+┌──────▼──────┐  ┌────▼────────┐  ┌─────▼──────────┐  ┌────▼───────▼──────┐
+│   Agent     │  │  Centrifugo │  │    Qdrant      │  │    Federated      │
+│  Containers │  │  (Pulse)    │  │  (Vector DB)   │  │    Agents/Nodes   │
+└──────┬──────┘  └─────────────┘  └────────────────┘  └───────────────────┘
        │ publishes thoughts/tokens
        └──────────────────────────► Browser (real-time)
 ```
@@ -1711,6 +1713,59 @@ See `docs/epics/18-integration-channels.md` for the full specification including
 
 ---
 
+## Advanced Interaction Surfaces
+
+While the primary operator interface is the `sera-web` dashboard, the architecture supports specialized surfaces for richer agent interaction.
+
+### ACP / IDE Bridge (Epic 21)
+
+The **Agent Control Protocol (ACP)** is a bi-directional bridge between the SERA Mind and developer IDEs. It allows agents to:
+- Sync workspace state in real-time with IDE buffers
+- Trigger IDE-native actions (e.g., "run tests", "go to definition")
+- Surface agent thoughts and plans directly within the code editor
+- Receive human feedback on proposed edits before they are written to disk
+
+### Canvas / Agent-Driven UI (A2UI) (Epic 22)
+
+The **Canvas** is a dynamic, agent-pushed UI surface within `sera-web`. Instead of static forms, agents can push custom UI components (React/Tailwind) to the operator to:
+- Visualize complex data structures or project state
+- Provide interactive decision trees
+- Present rich "previews" of agent-generated artifacts (e.g., diagrams, UI mockups)
+
+### Voice Interface (Epic 23)
+
+A low-latency voice interaction surface that enables:
+- "Always-on" ambient interaction with Sera (the primary agent)
+- Voice-to-thought streaming with real-time feedback
+- Speech-to-action for hands-free homelab orchestration
+
+---
+
+## Federation & Interoperability (A2A)
+
+SERA adopts a dual-tier federation model to balance performance with ecosystem interoperability.
+
+### Internal vs. External Federation
+
+| Concern | Internal (Centrifugo Intercom) | External (A2A Protocol) |
+|---|---|---|
+| **Scope** | Same SERA instance | Cross-instance or Cross-platform |
+| **Latency** | Sub-ms pub/sub | HTTP round-trips |
+| **Observability** | Core sees/audits everything | Agents are opaque by design |
+| **Budgeting** | Enforced by Core LLM Proxy | No built-in cross-instance metering |
+| **Security** | JWT within trusted network | A2A Agent Cards (OAuth2/mTLS) |
+
+### A2A Federation Protocol (Epic 24)
+
+For external federation, SERA implements the **Agent2Agent (A2A)** protocol (a Linux Foundation project). This ensures SERA agents can collaborate with agents running on other platforms (Salesforce, Atlassian, SAP) or other SERA instances.
+
+**Architecture:**
+- **A2A Inbound Server:** `sera-core` receives A2A tasks and bridges them to the internal Intercom.
+- **A2A Outbound Client:** Agents call the A2A bridge to delegate tasks to external agents.
+- **Agent Cards:** `sera-core` auto-generates discovery metadata at `/.well-known/agent.json`.
+
+---
+
 ## Extensibility Model
 
 ### Adding new agents
@@ -1870,6 +1925,8 @@ The current agentic AI landscape (LangChain, CrewAI, AutoGen, OpenDevin, etc.) i
 
 This is a real gap. The Docker-native, governance-first, local-first combination does not have a strong open source equivalent.
 
+See `docs/REFERENCE-ANALYSIS.md` for a detailed competitive context and competitive landscape analysis.
+
 ### What the ecosystem ambition requires architecturally
 
 #### 1. Stable, versioned public specifications
@@ -1992,6 +2049,7 @@ The homelab origin is a feature, not a limitation. It means SERA runs on hardwar
 | Memory | Hybrid: files + vector | Human-readable persistence + semantic retrieval |
 | Audit trail | Merkle hash-chain in PostgreSQL | Tamper-evident, supports compliance and debugging |
 | Multi-agent | Circles + federation | Grouping with inter-instance messaging planned |
+| Federation | A2A (External) + Centrifugo (Internal) | Balance sub-ms internal latency with LF-standard external interoperability |
 | Manifest format | Versioned YAML (`apiVersion: sera/v1`) | Public spec — stable, versionable, community-shareable |
 | Plugin surface | Minimal stable interface | Expand later; breaking plugins breaks the ecosystem |
 | Agent external identity | Service identities separate from secrets | Secrets are named values; service identities are an agent's account on a service — distinct lifecycle, rotation, and metadata |

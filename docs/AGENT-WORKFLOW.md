@@ -254,6 +254,16 @@ When the user says **"start the workflow"**, Claude Code runs this autonomous lo
 6. Repeat for next issue
 ```
 
+### Phase 2.5: Post-merge CI check
+```
+After merging multiple PRs in Phase 1, run CI on main to catch cross-PR conflicts:
+1. git pull origin main
+2. bash scripts/ci-check.sh           # format + full validate
+3. If failures → fix on main or revert the offending merge
+```
+This catches issues that individual PR CI wouldn't — e.g., two PRs that
+independently pass CI but conflict when both are on main.
+
 ### Phase 3: Runtime verification
 ```
 1. bash scripts/runtime-verify.sh     # restart + health checks

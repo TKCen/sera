@@ -55,4 +55,4 @@ playwright-report/
 test-results/
 
 # Local tooling indexes
-.gitnexus/   
+.gitnexus/   memory/

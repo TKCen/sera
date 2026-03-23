@@ -15,6 +15,9 @@ describe('Registry Routes', () => {
   let importerMock!: {
     importAll: import('vitest').Mock;
   };
+  let orchestratorMock!: {
+    reloadTemplates: import('vitest').Mock;
+  };
 
   beforeEach(() => {
     registryMock = {
@@ -27,13 +30,17 @@ describe('Registry Routes', () => {
     importerMock = {
       importAll: vi.fn(),
     };
+    orchestratorMock = {
+      reloadTemplates: vi.fn(),
+    };
     app = express();
     app.use(express.json());
     app.use(
       '/api/registry',
       createRegistryRouter(
         registryMock as unknown as import('../agents/registry.service.js').AgentRegistry,
-        importerMock as unknown as import('../agents/importer.service.js').ResourceImporter
+        importerMock as unknown as import('../agents/importer.service.js').ResourceImporter,
+        orchestratorMock as unknown as import('../agents/Orchestrator.js').Orchestrator
       )
     );
   });
@@ -69,11 +76,19 @@ describe('Registry Routes', () => {
     });
   });
 
-  it('POST /api/registry/reload triggers importer', async () => {
-    importerMock.importAll.mockResolvedValue(undefined);
+  it('POST /api/registry/reload triggers importer and orchestrator', async () => {
+    const importerReport = { added: ['t1'], updated: [], removed: [], errors: [] };
+    const orchestratorReport = { count: 1, added: ['t1'], updated: [], removed: [] };
+
+    importerMock.importAll.mockResolvedValue(importerReport);
+    orchestratorMock.reloadTemplates.mockReturnValue(orchestratorReport);
+
     const res = await request(app).post('/api/registry/reload');
     expect(res.status).toBe(200);
     expect(importerMock.importAll).toHaveBeenCalled();
+    expect(orchestratorMock.reloadTemplates).toHaveBeenCalled();
+    expect(res.body.importer).toEqual(importerReport);
+    expect(res.body.orchestrator).toEqual(orchestratorReport);
   });
 
   it('POST /api/registry/instances returns 400 for invalid manifest', async () => {

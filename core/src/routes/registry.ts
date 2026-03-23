@@ -2,8 +2,13 @@ import { Router } from 'express';
 import { AgentRegistry } from '../agents/registry.service.js';
 import { ResourceImporter } from '../agents/importer.service.js';
 import { AgentInstanceSchema } from '../agents/schemas.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
 
-export function createRegistryRouter(registry: AgentRegistry, importer: ResourceImporter) {
+export function createRegistryRouter(
+  registry: AgentRegistry,
+  importer: ResourceImporter,
+  orchestrator: Orchestrator
+) {
   const router = Router();
 
   // Templates
@@ -126,8 +131,15 @@ export function createRegistryRouter(registry: AgentRegistry, importer: Resource
   // Reload
   router.post('/reload', async (req, res) => {
     try {
-      await importer.importAll();
-      res.json({ status: 'ok', message: 'Registry reloaded from filesystem' });
+      const importerResults = await importer.importAll();
+      const orchestratorResults = orchestrator.reloadTemplates();
+
+      res.json({
+        status: 'ok',
+        message: 'Registry and Orchestrator reloaded from filesystem',
+        importer: importerResults,
+        orchestrator: orchestratorResults,
+      });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

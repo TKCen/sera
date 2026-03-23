@@ -729,11 +729,30 @@ export class Orchestrator {
     return Array.from(this.manifests.values());
   }
 
-  public reloadTemplates(): { count: number } {
+  public reloadTemplates(): {
+    count: number;
+    added: string[];
+    updated: string[];
+    removed: string[];
+  } {
     if (!this.agentsDir) throw new Error('No agents directory configured');
+    const oldKeys = new Set(this.manifests.keys());
     this.manifests = AgentFactory.loadTemplates(this.agentsDir);
-    logger.info(`Reloaded ${this.manifests.size} agent templates`);
-    return { count: this.manifests.size };
+    const newKeys = new Set(this.manifests.keys());
+
+    const added = Array.from(newKeys).filter((k) => !oldKeys.has(k));
+    const updated = Array.from(newKeys).filter((k) => oldKeys.has(k));
+    const removed = Array.from(oldKeys).filter((k) => !newKeys.has(k));
+
+    logger.info(
+      `Reloaded ${this.manifests.size} agent templates (added=${added.length}, updated=${updated.length}, removed=${removed.length})`
+    );
+    return {
+      count: this.manifests.size,
+      added,
+      updated,
+      removed,
+    };
   }
 
   public stopWatching(): void {

@@ -145,9 +145,7 @@ export function getProviderTemplates(): Promise<{ templates: ProviderTemplate[] 
   return request<{ templates: ProviderTemplate[] }>('/providers/templates');
 }
 
-export function discoverModels(
-  modelName: string
-): Promise<{ provider: string; models: string[] }> {
+export function discoverModels(modelName: string): Promise<{ provider: string; models: string[] }> {
   return request<{ provider: string; models: string[] }>(
     `/providers/${encodeURIComponent(modelName)}/discover`
   );

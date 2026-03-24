@@ -498,14 +498,22 @@ export default function SettingsPage() {
                             {m.api}
                           </td>
                           <td className="py-3 px-3">
-                            {(m as unknown as Record<string, unknown>).authStatus === 'configured' && (
-                              <Badge variant="success" className="text-[9px]">Active</Badge>
+                            {(m as unknown as Record<string, unknown>).authStatus ===
+                              'configured' && (
+                              <Badge variant="success" className="text-[9px]">
+                                Active
+                              </Badge>
                             )}
                             {(m as unknown as Record<string, unknown>).authStatus === 'missing' && (
-                              <Badge variant="warning" className="text-[9px]">Key missing</Badge>
+                              <Badge variant="warning" className="text-[9px]">
+                                Key missing
+                              </Badge>
                             )}
-                            {(m as unknown as Record<string, unknown>).authStatus === 'not-required' && (
-                              <Badge variant="default" className="text-[9px]">Local</Badge>
+                            {(m as unknown as Record<string, unknown>).authStatus ===
+                              'not-required' && (
+                              <Badge variant="default" className="text-[9px]">
+                                Local
+                              </Badge>
                             )}
                           </td>
                           <td className="py-3 px-3 text-sera-text-dim font-mono text-[10px]">

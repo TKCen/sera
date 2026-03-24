@@ -195,9 +195,7 @@ function TemplateCard({
                 />
               </div>
               <div className="flex items-center gap-2 text-[10px] text-sera-text-dim">
-                <span>
-                  Will register: {template.models.join(', ')}
-                </span>
+                <span>Will register: {template.models.join(', ')}</span>
               </div>
               <Button
                 className="w-full text-xs bg-sera-accent hover:bg-sera-accent-hover text-sera-bg h-9"
@@ -295,7 +293,9 @@ function TemplateCard({
                   <XCircle size={14} className="mt-0.5 shrink-0" />
                   <span>
                     Discovery failed:{' '}
-                    {discover.error instanceof Error ? discover.error.message : String(discover.error)}
+                    {discover.error instanceof Error
+                      ? discover.error.message
+                      : String(discover.error)}
                   </span>
                 </div>
               )}
@@ -339,9 +339,7 @@ export function CloudProviderSection() {
         <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
           Cloud Providers
         </h2>
-        <span className="text-[11px] text-sera-text-dim/60">
-          — OpenAI, Anthropic, Google, etc.
-        </span>
+        <span className="text-[11px] text-sera-text-dim/60">— OpenAI, Anthropic, Google, etc.</span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

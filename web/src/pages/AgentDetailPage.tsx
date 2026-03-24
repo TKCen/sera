@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
+import { request } from '@/lib/api/client';
 import {
   ArrowLeft,
   Play,
@@ -46,7 +48,7 @@ import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
 import { BudgetTab } from '@/components/AgentDetailBudgetTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 
-type Tab = 'overview' | 'grants' | 'delegations' | 'logs' | 'memory' | 'schedules' | 'budget';
+type Tab = 'overview' | 'grants' | 'delegations' | 'logs' | 'memory' | 'schedules' | 'budget' | 'prompt';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -168,6 +170,7 @@ export default function AgentDetailPage() {
         {tab === 'memory' && <MemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} />}
         {tab === 'budget' && <BudgetTab id={id} />}
+        {tab === 'prompt' && <SystemPromptTab id={id} />}
       </div>
 
       {/* Confirmation dialog */}
@@ -681,6 +684,29 @@ function LogsTab({ id }: { id: string }) {
           {logs || 'No logs.'}
         </pre>
       )}
+    </div>
+  );
+}
+
+function SystemPromptTab({ id }: { id: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['agent-system-prompt', id],
+    queryFn: () => request<{ prompt: string }>(`/agents/${encodeURIComponent(id)}/system-prompt`),
+    enabled: id.length > 0,
+  });
+
+  if (isLoading) return <TabLoading />;
+
+  return (
+    <div className="p-6 max-w-4xl">
+      <h3 className="text-sm font-semibold text-sera-text mb-3">Resolved System Prompt</h3>
+      <p className="text-xs text-sera-text-muted mb-4">
+        This is the full system prompt sent to the LLM on each request, built from the agent&apos;s
+        template identity, tools, and configuration.
+      </p>
+      <pre className="sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-auto whitespace-pre-wrap max-h-[70vh]">
+        {data?.prompt || 'Unable to generate system prompt.'}
+      </pre>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
+import { IdentityService } from '../agents/identity/IdentityService.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AgentRouter');
@@ -370,6 +371,54 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         reply: response.finalAnswer || response.thought || 'No response.',
         thought: response.thought,
       });
+    })
+  );
+
+  // ── System prompt preview ────────────────────────────────────────────────────
+
+  router.get(
+    '/:id/system-prompt',
+    asyncHandler(async (req, res) => {
+      const instanceId = req.params.id as string;
+      const instance = await agentRegistry.getInstance(instanceId);
+      if (!instance) {
+        res.status(404).json({ error: 'Agent instance not found' });
+        return;
+      }
+
+      const templateRow = await agentRegistry.getTemplate(instance.template_ref);
+      if (!templateRow) {
+        res.status(404).json({ error: 'Agent template not found' });
+        return;
+      }
+
+      // Build a minimal manifest from the template spec (mirrors Orchestrator.startInstance)
+      const spec = templateRow.spec ?? {};
+      const manifest = {
+        apiVersion: 'sera/v1' as const,
+        kind: 'Agent' as const,
+        metadata: {
+          name: templateRow.name,
+          displayName: templateRow.display_name ?? templateRow.name,
+          icon: spec.identity?.icon ?? '',
+          circle: spec.circle ?? instance.circle ?? '',
+          tier: (spec.sandboxBoundary === 'tier-3' ? 3 : spec.sandboxBoundary === 'tier-2' ? 2 : 1) as 1 | 2 | 3,
+        },
+        identity: {
+          role: spec.identity?.role ?? templateRow.name,
+          description: spec.identity?.description ?? '',
+          communicationStyle: spec.identity?.communicationStyle,
+          principles: spec.identity?.principles,
+        },
+        model: {
+          provider: spec.model?.provider ?? 'default',
+          name: spec.model?.name ?? 'default',
+        },
+        spec,
+      };
+      const prompt = IdentityService.generateSystemPrompt(manifest);
+
+      res.json({ prompt });
     })
   );
 

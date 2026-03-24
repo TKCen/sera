@@ -156,9 +156,10 @@ export function createProvidersRouter(
       let resolvedApiKey = apiKey;
       let resolvedBaseUrl = baseUrl;
       if (!resolvedApiKey && provider) {
-        const existing = llmRouter.getRegistry().list().find(
-          (c) => c.provider === provider && c.apiKey
-        );
+        const existing = llmRouter
+          .getRegistry()
+          .list()
+          .find((c) => c.provider === provider && c.apiKey);
         if (existing) {
           resolvedApiKey = existing.apiKey;
           if (!resolvedBaseUrl && existing.baseUrl) resolvedBaseUrl = existing.baseUrl;

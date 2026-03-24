@@ -447,8 +447,11 @@ function ChatPageContent() {
           <h2 className="text-xl font-semibold text-sera-text mb-2">How can I help you?</h2>
           {isAgentUnavailable && (
             <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
-              Agent is {agentStatus} — messages may not be delivered.
-              Try restarting from the <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">agent detail page</a>.
+              Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
+              <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
+                agent detail page
+              </a>
+              .
             </div>
           )}
           <p className="text-sm text-sera-text-muted mb-8 text-center max-w-md">

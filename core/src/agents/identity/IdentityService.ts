@@ -66,6 +66,9 @@ export class IdentityService {
       identity.role ? `You are ${displayName}, a ${identity.role}.` : `You are ${displayName}.`
     );
 
+    // ── Current datetime ─────────────────────────────────────────────────────
+    sections.push(`Current date and time: ${new Date().toISOString()}`);
+
     if (identity.description) {
       sections.push(identity.description.trim());
     }

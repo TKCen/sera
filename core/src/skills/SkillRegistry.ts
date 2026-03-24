@@ -300,7 +300,7 @@ export class SkillRegistry {
                   circleId: context.manifest.metadata.circle,
                   // Simplified credential resolution for Story 7.8
                   credentials:
-                    (context.manifest as unknown as Record<string, unknown>).secrets || {},
+                    ('secrets' in context.manifest ? context.manifest.secrets : {}) || {},
                 },
               };
 

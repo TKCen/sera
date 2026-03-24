@@ -156,7 +156,7 @@ function DynamicProviderCard({
   );
 }
 
-export default function SettingsPage() {
+export default function SettingsPage(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('providers');
   const [showAddDynamic, setShowAddDynamic] = useState(false);
   const [newDynamic, setNewDynamic] = useState({
@@ -498,13 +498,13 @@ export default function SettingsPage() {
                             {m.api}
                           </td>
                           <td className="py-3 px-3">
-                            {(m as unknown as Record<string, unknown>).authStatus === 'configured' && (
+                            {'authStatus' in m && m.authStatus === 'configured' && (
                               <Badge variant="success" className="text-[9px]">Active</Badge>
                             )}
-                            {(m as unknown as Record<string, unknown>).authStatus === 'missing' && (
+                            {'authStatus' in m && m.authStatus === 'missing' && (
                               <Badge variant="warning" className="text-[9px]">Key missing</Badge>
                             )}
-                            {(m as unknown as Record<string, unknown>).authStatus === 'not-required' && (
+                            {'authStatus' in m && m.authStatus === 'not-required' && (
                               <Badge variant="default" className="text-[9px]">Local</Badge>
                             )}
                           </td>

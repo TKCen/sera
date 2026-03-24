@@ -160,7 +160,7 @@ describe('AgentsPage — delete agent', () => {
     await user.click(firstDelete!);
 
     expect(confirmSpy).toHaveBeenCalledOnce();
-    const firstCall = confirmSpy.mock.calls[0] as unknown as string[];
+    const firstCall = confirmSpy.mock.calls[0] as string[];
     expect(firstCall[0]).toMatch(/qwen-assistant/);
     expect(firstCall[0]).toMatch(/permanently/i);
   });

@@ -50,7 +50,7 @@ import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 
 type Tab = 'overview' | 'grants' | 'delegations' | 'logs' | 'memory' | 'schedules' | 'budget' | 'prompt';
 
-export default function AgentDetailPage() {
+export default function AgentDetailPage(): React.JSX.Element {
   const { id = '' } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>('overview');
   const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | null>(null);
@@ -216,6 +216,9 @@ function ManifestTab({ id }: { id: string }) {
   if (isLoading) return <TabLoading />;
   if (!instance) return <div className="p-6 text-sm text-sera-text-muted">Instance not found.</div>;
 
+  // TODO: The 'AgentInstance' type does not perfectly match the raw JSON returned from the
+  // API which contains additional database fields enriched during resolution.
+  // Using Record<string, unknown> correctly represents the dynamic shape of the response.
   const inst = instance as unknown as Record<string, unknown>;
   const overrides = (inst.overrides ?? {}) as Record<string, unknown>;
   const modelOv = overrides.model as Record<string, unknown> | undefined;

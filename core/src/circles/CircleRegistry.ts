@@ -149,7 +149,7 @@ export class CircleRegistry {
 
     // Cast through any to avoid mutating or rebuilding the original object,
     // which breaks some runtime behaviors where missing fields were expected.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Safe as fields were explicitly validated
     return obj as any as CircleManifest;
   }
 

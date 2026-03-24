@@ -167,8 +167,7 @@ export default function MemoryGraph({
       className={`w-full h-[600px] border border-sera-border rounded-lg overflow-hidden bg-[#0a0a0a] relative ${className}`}
     >
       <ForceGraph2D
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ref={fgRef as any}
+        ref={fgRef}
         width={dimensions.width}
         height={dimensions.height}
         graphData={graphData}

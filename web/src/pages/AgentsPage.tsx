@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
-import { Bot, Plus, Play, Square, Trash2, Search } from 'lucide-react';
+import { Bot, Plus, Play, Square, Trash2, Search, AlertTriangle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgents, useStartAgent, useStopAgent, useDeleteAgent } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
@@ -9,13 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // TODO: virtualise if > 100 agents
 
 const STATUS_OPTIONS = ['all', 'running', 'stopped', 'created', 'error', 'unresponsive'] as const;
 
-export default function AgentsPage() {
-  const { data: agents, isLoading } = useAgents();
+function AgentsPageContent() {
+  const { data: agents, isLoading, isError, refetch } = useAgents();
   const startAgent = useStartAgent();
   const stopAgent = useStopAgent();
   const deleteAgent = useDeleteAgent();
@@ -149,7 +150,18 @@ export default function AgentsPage() {
         </div>
       </section>
 
-      {isLoading ? (
+      {isError ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <AlertTriangle size={32} className="text-sera-error mb-4" />
+          <h2 className="text-base font-medium text-sera-text mb-2">Failed to load agents</h2>
+          <p className="text-sm text-sera-text-muted mb-6 max-w-md">
+            There was an error connecting to the SERA backend. Ensure the core service is running.
+          </p>
+          <Button onClick={() => refetch()} variant="outline" className="gap-2">
+            <RefreshCw size={14} /> Retry
+          </Button>
+        </div>
+      ) : isLoading ? (
         <ul aria-label="Loading agents" role="status" className="space-y-3">
           {[1, 2, 3].map((i) => (
             <li key={i}>
@@ -249,5 +261,13 @@ export default function AgentsPage() {
         </ul>
       )}
     </main>
+  );
+}
+
+export default function AgentsPage() {
+  return (
+    <ErrorBoundary fallbackMessage="The agents list encountered an error.">
+      <AgentsPageContent />
+    </ErrorBoundary>
   );
 }

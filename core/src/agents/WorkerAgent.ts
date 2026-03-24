@@ -35,8 +35,14 @@ export class WorkerAgent extends BaseAgent {
     }
 
     let dynamicContext = '';
+    let memoryDegraded = false;
     if (this.memoryManager) {
-      dynamicContext = await this.memoryManager.assembleContext(input);
+      try {
+        dynamicContext = await this.memoryManager.assembleContext(input);
+      } catch {
+        memoryDegraded = true;
+        this.logger.warn('Memory context unavailable — embedding service may be down');
+      }
     }
 
     // Resolve circle project context
@@ -45,11 +51,15 @@ export class WorkerAgent extends BaseAgent {
     // Use the streaming (natural text) prompt for web chat — the JSON format
     // in generateSystemPrompt() causes LLMs to frequently fail parsing.
     // Container-based agents use the LLM proxy path which has its own context assembly.
-    const systemPrompt = IdentityService.generateStreamingSystemPrompt(
+    let systemPrompt = IdentityService.generateStreamingSystemPrompt(
       this.manifest,
       circleContext,
       dynamicContext
     );
+    if (memoryDegraded) {
+      systemPrompt += '\n\n**Note:** Knowledge search is currently unavailable (embedding service down). ' +
+        'Do not attempt to use knowledge-query or knowledge-store tools.';
+    }
 
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 

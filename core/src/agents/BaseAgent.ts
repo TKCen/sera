@@ -146,12 +146,24 @@ export abstract class BaseAgent {
     }
 
     let dynamicContext = '';
+    let memoryDegraded = false;
     if (this.memoryManager) {
-      dynamicContext = await this.memoryManager.assembleContext(input);
+      try {
+        dynamicContext = await this.memoryManager.assembleContext(input);
+      } catch {
+        memoryDegraded = true;
+        this.logger.warn('Memory context unavailable — embedding service may be down');
+      }
     }
 
     // Resolve circle project context (if agent belongs to a circle)
     const circleContext = this.circleContextResolver?.();
+
+    // Add degradation notice if memory is unavailable
+    const degradationNotice = memoryDegraded
+      ? '\n\n**Note:** Knowledge search is currently unavailable (embedding service down). ' +
+        'Do not attempt to use knowledge-query or knowledge-store tools.'
+      : '';
 
     const messages: ChatMessage[] = [
       {
@@ -160,7 +172,7 @@ export abstract class BaseAgent {
           this.manifest,
           circleContext,
           dynamicContext
-        ),
+        ) + degradationNotice,
       },
       ...cleanHistory,
       { role: 'user', content: input },

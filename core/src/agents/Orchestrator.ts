@@ -337,7 +337,17 @@ export class Orchestrator {
         const canWrite = capabilities?.filesystem?.write !== false;
 
         if (!canWrite) {
-          // TODO: Implement read-only workspace
+          capabilities.filesystem = capabilities.filesystem ?? {};
+          capabilities.filesystem.write = false;
+          logger.info(`Agent ${instance.name} spawned with read-only workspace`);
+
+          AuditService.getInstance().record({
+            actorType: 'system',
+            actorId: 'system',
+            actingContext: null,
+            eventType: 'agent.workspace.readonly',
+            payload: { agentId: instance.id },
+          }).catch(() => {});
         }
         const secretNames: string[] = Array.isArray(capabilities?.secrets?.access)
           ? (capabilities.secrets.access as string[])

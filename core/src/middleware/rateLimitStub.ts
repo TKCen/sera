@@ -14,8 +14,6 @@
  *
  * @see docs/epics/04-llm-proxy-and-governance.md § Story 4.7
  *
- * # TODO: implement rate limiting enforcement — see Epic 04 Story 4.7
- *
  * v1 plan: in-process token bucket per agentId, reset on sera-core restart.
  * Multi-node future: Redis-backed state.
  * Distinguish from budget (Story 4.3): rate limiting = requests/minute,
@@ -42,7 +40,6 @@ export function rateLimitStub(req: Request, res: Response, next: NextFunction): 
   res.setHeader('X-RateLimit-Remaining', STUB_AGENT_RPM_LIMIT); // stub: always full
   res.setHeader('X-RateLimit-Reset', Math.floor(Date.now() / 1000) + 60);
 
-  // # TODO: implement rate limiting enforcement — see Epic 04 Story 4.7
   // When implemented:
   //   1. Look up agentId in in-process token bucket map
   //   2. If bucket is empty, respond 429 with reason: 'rate_limit'

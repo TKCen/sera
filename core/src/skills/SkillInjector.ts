@@ -98,7 +98,6 @@ export class SkillInjector {
     while (queue.length > 0) {
       const pin = queue.shift()!;
       if (processed.has(pin.name)) {
-        // # TODO: implement version conflict resolution
         // Currently, first version encountered wins.
         continue;
       }

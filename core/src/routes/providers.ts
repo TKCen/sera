@@ -67,9 +67,63 @@ export function createProvidersRouter(
   const healthService = new ProviderHealthService();
 
   /**
+   * GET /api/providers/templates
+   * Returns available cloud provider templates that can be activated.
+   */
+  router.get('/templates', (_req: Request, res: Response) => {
+    res.json({
+      templates: [
+        {
+          provider: 'openai',
+          displayName: 'OpenAI',
+          api: 'openai-completions',
+          models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o4-mini', 'o3-pro'],
+          apiKeyEnvVar: 'OPENAI_API_KEY',
+          description: 'OpenAI GPT and reasoning models',
+        },
+        {
+          provider: 'anthropic',
+          displayName: 'Anthropic',
+          api: 'anthropic-messages',
+          models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+          apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+          description: 'Anthropic Claude models',
+        },
+        {
+          provider: 'google',
+          displayName: 'Google AI Studio',
+          api: 'openai-completions',
+          models: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+          apiKeyEnvVar: 'GOOGLE_API_KEY',
+          description: 'Google Gemini models via AI Studio (free tier available)',
+          supportsDiscovery: true,
+        },
+        {
+          provider: 'groq',
+          displayName: 'Groq',
+          api: 'openai-completions',
+          models: ['groq/llama-4-scout-17b', 'groq/llama-4-maverick-17b'],
+          baseUrl: 'https://api.groq.com/openai/v1',
+          apiKeyEnvVar: 'GROQ_API_KEY',
+          description: 'Groq inference (fast, free tier available)',
+        },
+        {
+          provider: 'mistral',
+          displayName: 'Mistral',
+          api: 'openai-completions',
+          models: ['mistral-large-latest', 'mistral-small-latest'],
+          baseUrl: 'https://api.mistral.ai/v1',
+          apiKeyEnvVar: 'MISTRAL_API_KEY',
+          description: 'Mistral AI models',
+        },
+      ],
+    });
+  });
+
+  /**
    * GET /api/providers
    * Lists all models/providers currently configured.
-   */
   router.get('/', async (_req: Request, res: Response) => {
     try {
       const models = await llmRouter.listModels();

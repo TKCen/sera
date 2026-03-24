@@ -118,7 +118,9 @@ describe('IdentityService', () => {
       } as unknown as AgentManifest;
 
       const prompt = IdentityService.generateSystemPrompt(manifest);
-      expect(prompt).toContain('## Subagents You Can Spawn\n- researcher (max 2 instances)\n- writer (max ∞ instances) [requires human approval]');
+      expect(prompt).toContain(
+        '## Subagents You Can Spawn\n- researcher (max 2 instances)\n- writer (max ∞ instances) [requires human approval]'
+      );
     });
 
     it('should include skills', () => {
@@ -138,8 +140,14 @@ describe('IdentityService', () => {
         metadata: { name: 'test-agent' },
       } as unknown as AgentManifest;
 
-      const prompt = IdentityService.generateSystemPrompt(manifest, 'Important project info.', 'Past interactions memory.');
-      expect(prompt).toContain('## Project Context\nThe following project context is shared by all agents in your circle:\n\nImportant project info.');
+      const prompt = IdentityService.generateSystemPrompt(
+        manifest,
+        'Important project info.',
+        'Past interactions memory.'
+      );
+      expect(prompt).toContain(
+        '## Project Context\nThe following project context is shared by all agents in your circle:\n\nImportant project info.'
+      );
       expect(prompt).toContain('Past interactions memory.');
     });
   });
@@ -155,7 +163,9 @@ describe('IdentityService', () => {
 
       const streamingPrompt = IdentityService.generateStreamingSystemPrompt(manifest);
 
-      expect(streamingPrompt).toContain('## Response Format\nRespond directly and naturally in markdown. Do NOT wrap your response in JSON.');
+      expect(streamingPrompt).toContain(
+        '## Response Format\nRespond directly and naturally in markdown. Do NOT wrap your response in JSON.'
+      );
       expect(streamingPrompt).not.toContain('You MUST respond in JSON format');
     });
 
@@ -167,15 +177,17 @@ describe('IdentityService', () => {
 
       const streamingPrompt = IdentityService.generateStreamingSystemPrompt(manifest);
       expect(streamingPrompt).toContain('## Stability Guidelines');
-      expect(streamingPrompt).toContain('- Do NOT call the same tool with the same arguments repeatedly.');
+      expect(streamingPrompt).toContain(
+        '- Do NOT call the same tool with the same arguments repeatedly.'
+      );
     });
 
     it('should preserve regular sections like tools or identity', () => {
-       const manifest = {
+      const manifest = {
         kind: 'Agent',
         metadata: { name: 'test-agent' },
         identity: { role: 'tester' },
-        tools: { allowed: ['test-tool'] }
+        tools: { allowed: ['test-tool'] },
       } as unknown as AgentManifest;
 
       const streamingPrompt = IdentityService.generateStreamingSystemPrompt(manifest);

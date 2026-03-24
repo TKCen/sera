@@ -50,7 +50,14 @@ describe('DynamicProviderManager', () => {
     it('should load config if file exists', () => {
       const mockData = {
         dynamicProviders: [
-          { id: 'test-1', name: 'Test 1', type: 'lm-studio', baseUrl: 'http://test', enabled: true, intervalMs: 1000 },
+          {
+            id: 'test-1',
+            name: 'Test 1',
+            type: 'lm-studio',
+            baseUrl: 'http://test',
+            enabled: true,
+            intervalMs: 1000,
+          },
         ],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -149,7 +156,9 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const testConnectionSpy = vi.spyOn(manager, 'testConnection').mockResolvedValue({ success: true, models: ['m1'] });
+      const testConnectionSpy = vi
+        .spyOn(manager, 'testConnection')
+        .mockResolvedValue({ success: true, models: ['m1'] });
 
       const config: DynamicProviderConfig = {
         id: 'new-id',
@@ -211,15 +220,31 @@ describe('DynamicProviderManager', () => {
     it('should start polling for enabled providers and clear timers on stop', async () => {
       const mockData = {
         dynamicProviders: [
-          { id: 't1', name: 'T1', type: 'lm-studio', baseUrl: 'http://t1', enabled: true, intervalMs: 1000 },
-          { id: 't2', name: 'T2', type: 'lm-studio', baseUrl: 'http://t2', enabled: false, intervalMs: 1000 },
+          {
+            id: 't1',
+            name: 'T1',
+            type: 'lm-studio',
+            baseUrl: 'http://t1',
+            enabled: true,
+            intervalMs: 1000,
+          },
+          {
+            id: 't2',
+            name: 'T2',
+            type: 'lm-studio',
+            baseUrl: 'http://t2',
+            enabled: false,
+            intervalMs: 1000,
+          },
         ],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockData));
 
       const manager = new DynamicProviderManager(mockRegistry, configPath);
-      const testConnectionSpy = vi.spyOn(manager, 'testConnection').mockResolvedValue({ success: true, models: [] });
+      const testConnectionSpy = vi
+        .spyOn(manager, 'testConnection')
+        .mockResolvedValue({ success: true, models: [] });
 
       await manager.start();
 
@@ -243,7 +268,12 @@ describe('DynamicProviderManager', () => {
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
       await manager.addProvider({
-        id: 't1', name: 'T1', type: 'lm-studio', baseUrl: 'http://t1', enabled: true, intervalMs: 1000
+        id: 't1',
+        name: 'T1',
+        type: 'lm-studio',
+        baseUrl: 'http://t1',
+        enabled: true,
+        intervalMs: 1000,
       });
 
       expect(manager.listProviders()).toHaveLength(1);
@@ -259,14 +289,19 @@ describe('DynamicProviderManager', () => {
   });
 
   describe('checkProvider / getStatuses', () => {
-     it('should update status to ok and register models on success', async () => {
+    it('should update status to ok and register models on success', async () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
       vi.spyOn(manager, 'testConnection').mockResolvedValue({ success: true, models: ['m1'] });
 
       await manager.addProvider({
-        id: 't1', name: 'T1', type: 'lm-studio', baseUrl: 'http://t1', enabled: true, intervalMs: 1000
+        id: 't1',
+        name: 'T1',
+        type: 'lm-studio',
+        baseUrl: 'http://t1',
+        enabled: true,
+        intervalMs: 1000,
       });
 
       // Let initial microtask finish
@@ -282,7 +317,7 @@ describe('DynamicProviderManager', () => {
         expect.objectContaining({
           modelName: 'dp-t1-m1',
           api: 'openai-completions',
-        })
+        }),
       ]);
 
       manager.stop();
@@ -292,10 +327,19 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      vi.spyOn(manager, 'testConnection').mockResolvedValue({ success: false, models: [], error: 'Failed' });
+      vi.spyOn(manager, 'testConnection').mockResolvedValue({
+        success: false,
+        models: [],
+        error: 'Failed',
+      });
 
       await manager.addProvider({
-        id: 't2', name: 'T2', type: 'lm-studio', baseUrl: 'http://t2', enabled: true, intervalMs: 1000
+        id: 't2',
+        name: 'T2',
+        type: 'lm-studio',
+        baseUrl: 'http://t2',
+        enabled: true,
+        intervalMs: 1000,
       });
 
       // Let initial microtask finish

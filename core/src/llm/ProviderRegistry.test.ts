@@ -42,9 +42,7 @@ describe('ProviderRegistry', () => {
   describe('constructor / loadSync', () => {
     it('should load config if file exists', () => {
       const mockData = {
-        providers: [
-          { modelName: 'test-model', api: 'openai-completions', provider: 'openai' },
-        ],
+        providers: [{ modelName: 'test-model', api: 'openai-completions', provider: 'openai' }],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockData));
@@ -91,7 +89,12 @@ describe('ProviderRegistry', () => {
     it('should not override if already in config', () => {
       const mockData = {
         providers: [
-          { modelName: 'env-model', api: 'openai-completions', provider: 'openai', baseUrl: 'http://existing' },
+          {
+            modelName: 'env-model',
+            api: 'openai-completions',
+            provider: 'openai',
+            baseUrl: 'http://existing',
+          },
         ],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -185,9 +188,7 @@ describe('ProviderRegistry', () => {
   describe('resolve', () => {
     it('should find registered explicit model', () => {
       const mockData = {
-        providers: [
-          { modelName: 'custom-model', api: 'openai-completions' },
-        ],
+        providers: [{ modelName: 'custom-model', api: 'openai-completions' }],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockData));
@@ -227,9 +228,7 @@ describe('ProviderRegistry', () => {
 
     it('should fallback to default model if requesting "default"', () => {
       const mockData = {
-        providers: [
-          { modelName: 'model1', api: 'openai-completions' },
-        ],
+        providers: [{ modelName: 'model1', api: 'openai-completions' }],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockData));
@@ -242,9 +241,7 @@ describe('ProviderRegistry', () => {
 
     it('should fallback to default model if requested model is not found', () => {
       const mockData = {
-        providers: [
-          { modelName: 'model1', api: 'openai-completions' },
-        ],
+        providers: [{ modelName: 'model1', api: 'openai-completions' }],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockData));
@@ -299,9 +296,9 @@ describe('ProviderRegistry', () => {
 
       const list = registry.list();
       expect(list).toHaveLength(3); // 1 manual + 2 new dynamic
-      expect(list.find(m => m.modelName === 'old-dyn-1')).toBeUndefined();
-      expect(list.find(m => m.modelName === 'manual-model')).toBeDefined();
-      expect(list.find(m => m.modelName === 'new-dyn-1')?.dynamicProviderId).toBe('dp1');
+      expect(list.find((m) => m.modelName === 'old-dyn-1')).toBeUndefined();
+      expect(list.find((m) => m.modelName === 'manual-model')).toBeDefined();
+      expect(list.find((m) => m.modelName === 'new-dyn-1')?.dynamicProviderId).toBe('dp1');
     });
 
     it('should unregister all models for a dynamic provider', () => {

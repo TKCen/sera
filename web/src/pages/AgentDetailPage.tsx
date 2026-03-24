@@ -48,7 +48,15 @@ import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
 import { BudgetTab } from '@/components/AgentDetailBudgetTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 
-type Tab = 'overview' | 'grants' | 'delegations' | 'logs' | 'memory' | 'schedules' | 'budget' | 'prompt';
+type Tab =
+  | 'overview'
+  | 'grants'
+  | 'delegations'
+  | 'logs'
+  | 'memory'
+  | 'schedules'
+  | 'budget'
+  | 'prompt';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();

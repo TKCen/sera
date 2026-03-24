@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link } from 'react-router';
+import { useParams, Link, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
 import {
@@ -27,6 +27,7 @@ import {
   useStartAgent,
   useStopAgent,
   useRestartAgent,
+  useDeleteAgent,
 } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
@@ -61,12 +62,14 @@ type Tab =
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>('overview');
-  const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | 'delete' | null>(null);
 
   const { data: agent, isLoading } = useAgent(id);
+  const navigate = useNavigate();
   const startAgent = useStartAgent();
   const stopAgent = useStopAgent();
   const restartAgent = useRestartAgent();
+  const deleteAgent = useDeleteAgent();
 
   async function handleLifecycle(action: 'start' | 'stop' | 'restart') {
     try {
@@ -148,6 +151,9 @@ export default function AgentDetailPage() {
             >
               Edit
             </Link>
+            <Button size="sm" variant="danger" onClick={() => setConfirmAction('delete')}>
+              <Trash2 size={13} /> Delete
+            </Button>
           </div>
         </div>
 
@@ -191,11 +197,15 @@ export default function AgentDetailPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{confirmAction === 'stop' ? 'Stop agent' : 'Restart agent'}</DialogTitle>
+            <DialogTitle>
+              {confirmAction === 'stop' ? 'Stop agent' : confirmAction === 'delete' ? 'Delete agent' : 'Restart agent'}
+            </DialogTitle>
             <DialogDescription>
               {confirmAction === 'stop'
                 ? `This will stop ${displayName}. Any running tasks will be interrupted.`
-                : `This will restart ${displayName}. The agent will briefly go offline.`}
+                : confirmAction === 'delete'
+                  ? `This will permanently delete ${displayName}. This cannot be undone.`
+                  : `This will restart ${displayName}. The agent will briefly go offline.`}
             </DialogDescription>
           </DialogHeader>
           <div className="flex gap-3 justify-end mt-4">
@@ -206,12 +216,19 @@ export default function AgentDetailPage() {
             </DialogClose>
             <Button
               size="sm"
-              variant={confirmAction === 'stop' ? 'danger' : 'outline'}
+              variant={confirmAction === 'stop' || confirmAction === 'delete' ? 'danger' : 'outline'}
               onClick={() => {
-                void handleLifecycle(confirmAction!);
+                if (confirmAction === 'delete') {
+                  void deleteAgent.mutateAsync(id).then(() => {
+                    toast.success(`Deleted ${displayName}`);
+                    void navigate('/agents');
+                  });
+                } else {
+                  void handleLifecycle(confirmAction!);
+                }
               }}
             >
-              {confirmAction === 'stop' ? 'Stop' : 'Restart'}
+              {confirmAction === 'stop' ? 'Stop' : confirmAction === 'delete' ? 'Delete' : 'Restart'}
             </Button>
           </div>
         </DialogContent>

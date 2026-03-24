@@ -16,7 +16,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       # Node.js still needed: vitest runs on Node, tsc requires it
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
 

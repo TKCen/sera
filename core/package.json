@@ -34,17 +34,17 @@
     "@types/uuid": "^10.0",
     "@types/ws": "^8.5",
     "@types/yargs": "^17.0.35",
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.1",
     "eslint": "^9",
     "nodemon": "^3.1",
     "prettier": "^3",
     "supertest": "^7.0",
     "ts-node": "^10.9",
+    "tsup": "^8.5.1",
     "tsx": "^4.0",
     "typescript": "^5.0",
-    "tsup": "^8.5.1",
     "typescript-eslint": "^8",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.1"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.61.0",

@@ -71,7 +71,7 @@ export class AgentFactory {
    */
   static async getInstance(id: string): Promise<AgentInstance | null> {
     const result = await query(
-      `SELECT id, template_name, name, workspace_path, container_id, status, created_at, updated_at, circle_id, lifecycle_mode, parent_instance_id
+      `SELECT id, template_name, name, workspace_path, container_id, status, created_at, updated_at, circle_id, lifecycle_mode, parent_instance_id, overrides, resolved_config, resolved_capabilities, sandbox_boundary, template_ref, display_name
        FROM agent_instances WHERE id = $1`,
       [id]
     );
@@ -81,8 +81,9 @@ export class AgentFactory {
 
     return {
       id: row.id,
-      template_ref: row.template_name,
+      template_ref: row.template_ref ?? row.template_name,
       name: row.name,
+      display_name: row.display_name,
       workspace_path: row.workspace_path,
       container_id: row.container_id,
       status: row.status as AgentInstance['status'],
@@ -91,6 +92,9 @@ export class AgentFactory {
       circle_id: row.circle_id,
       lifecycle_mode: row.lifecycle_mode,
       parent_instance_id: row.parent_instance_id,
+      overrides: row.overrides,
+      resolved_config: row.resolved_config,
+      resolved_capabilities: row.resolved_capabilities,
     };
   }
 

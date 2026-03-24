@@ -203,6 +203,10 @@ export class Orchestrator {
 
     // ── Apply instance overrides (model, sandboxBoundary, resources) ──────
     const overrides = (instance.overrides ?? {}) as Record<string, unknown>;
+    logger.info(
+      `Override application for ${instance.name}: overrides=${JSON.stringify(overrides)}, ` +
+      `templateModel=${JSON.stringify(manifest.model)}`
+    );
     const modelOv = overrides.model as Record<string, unknown> | undefined;
     if (modelOv) {
       if (modelOv.name) manifest.model.name = modelOv.name as string;

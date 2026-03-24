@@ -89,9 +89,61 @@ export class CapabilityResolver {
     // Final pass: Always-denied enforcement
     const effectiveCapabilities = await this.applyAlwaysDenied(mergedCapabilities);
 
+    // ── Populate structured capability fields from boundary + template ────
+    // SandboxManager expects these standard fields for container configuration.
+    // The intersection logic above handles list/boolean capabilities but doesn't
+    // produce the structured fields that SandboxManager reads.
+    const resolved = (effectiveCapabilities as Record<string, unknown>) || {};
+
+    // Filesystem: default to write=true unless boundary explicitly restricts
+    if (!resolved['filesystem']) {
+      resolved['filesystem'] = { write: true };
+    }
+
+    // Network outbound: populate from network-allowlist if present
+    const allowlist = resolved['network-allowlist'] as string[] | undefined;
+    if (allowlist && allowlist.length > 0 && !resolved['network']) {
+      resolved['network'] = { outbound: allowlist };
+    } else if (!resolved['network']) {
+      // No allowlist defined — agents still need internal network
+      resolved['network'] = { outbound: [] };
+    }
+
+    // Resources: populate from template spec.resources
+    const templateSpec = template.spec as Record<string, unknown> | undefined;
+    const templateResources = templateSpec?.resources as Record<string, unknown> | undefined;
+    if (templateResources && !resolved['resources']) {
+      const cpuStr = templateResources.cpu as string | undefined;
+      const memStr = templateResources.memory as string | undefined;
+      const cpuShares = cpuStr ? Math.round(parseFloat(cpuStr) * 1024) : 0;
+      const memoryMB = memStr
+        ? memStr.endsWith('Gi')
+          ? parseFloat(memStr) * 1024
+          : memStr.endsWith('Mi')
+            ? parseFloat(memStr)
+            : 0
+        : 0;
+      resolved['resources'] = {
+        cpu_shares: cpuShares,
+        memory_limit: memoryMB,
+      };
+    }
+
+    // Linux capabilities from boundary spec.linux
+    const boundarySpec = boundary.spec as Record<string, unknown> | undefined;
+    const linuxSpec = boundarySpec?.linux as Record<string, unknown> | undefined;
+    if (linuxSpec) {
+      if (linuxSpec.capabilities && !resolved['capabilities']) {
+        resolved['capabilities'] = linuxSpec.capabilities;
+      }
+      if (linuxSpec.readOnlyRootfs !== undefined) {
+        resolved['security'] = { readonlyRootfs: linuxSpec.readOnlyRootfs };
+      }
+    }
+
     return {
       spec,
-      resolvedCapabilities: effectiveCapabilities,
+      resolvedCapabilities: resolved,
     };
   }
 

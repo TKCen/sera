@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
@@ -21,8 +22,9 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
    * Returns all agent instances from the DB, enriched with template metadata
    * and live orchestrator status.
    */
-  router.get('/', async (_req, res) => {
-    try {
+  router.get(
+    '/',
+    asyncHandler(async (_req, res) => {
       const instances = await agentRegistry.listInstances();
       const liveAgents = new Map(orchestrator.listAgents().map((a) => [a.id, a]));
 
@@ -47,24 +49,22 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       );
 
       res.json(enriched);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── List all agent templates ───────────────────────────────────────────────
-  router.get('/templates', async (_req, res) => {
-    try {
+  router.get(
+    '/templates',
+    asyncHandler(async (_req, res) => {
       const templates = await agentRegistry.listTemplates();
       res.json(templates);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── List all agent instances (raw DB) ─────────────────────────────────────
-  router.get('/instances', async (req, res) => {
-    try {
+  router.get(
+    '/instances',
+    asyncHandler(async (req, res) => {
       const circle = req.query.circle as string | undefined;
       const status = req.query.status as string | undefined;
       const instances = await agentRegistry.listInstances({
@@ -72,10 +72,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         ...(status ? { status } : {}),
       });
       res.json(instances);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Create a new agent instance ────────────────────────────────────────────
   /**
@@ -84,21 +82,24 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
    * { templateRef: string, name: string, displayName?: string, circle?: string,
    *   overrides?: object, lifecycleMode?: string, start?: boolean }
    */
-  router.post('/instances', async (req, res) => {
-    try {
+  router.post(
+    '/instances',
+    asyncHandler(async (req, res) => {
       const { templateRef, name, displayName, circle, overrides, lifecycleMode, start } = req.body;
 
       // Support legacy field name
       const templateName = templateRef ?? req.body.templateName;
 
       if (!templateName || !name) {
-        return res.status(400).json({ error: 'templateRef and name are required' });
+        res.status(400).json({ error: 'templateRef and name are required' });
+        return;
       }
 
       // Verify template exists
       const template = await agentRegistry.getTemplate(templateName);
       if (!template) {
-        return res.status(404).json({ error: `Template "${templateName}" not found` });
+        res.status(404).json({ error: `Template "${templateName}" not found` });
+        return;
       }
 
       // Create instance in DB via registry (not AgentFactory, which may not have registry)
@@ -124,17 +125,17 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       // Re-fetch to get updated status
       const updated = await agentRegistry.getInstance(instance.id);
       res.status(201).json(updated ?? instance);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Get agent instance detail ──────────────────────────────────────────────
-  router.get('/instances/:id', async (req, res) => {
-    try {
-      const instance = await agentRegistry.getInstance(req.params.id);
+  router.get(
+    '/instances/:id',
+    asyncHandler(async (req, res) => {
+      const instance = await agentRegistry.getInstance(req.params.id as string);
       if (!instance) {
-        return res.status(404).json({ error: `Agent instance "${req.params.id}" not found` });
+        res.status(404).json({ error: `Agent instance "${req.params.id as string}" not found` });
+        return;
       }
       // Story 3.11: include lineage depth for subagent tree visibility
       const lineageDepth = instance.parent_instance_id
@@ -151,52 +152,52 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         workspaceUsageGB: instance.workspace_used_gb ?? null,
         workspaceLimitGB: workspaceLimitGB ?? null,
       });
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Start an agent instance ────────────────────────────────────────────────
-  router.post('/instances/:id/start', async (req, res) => {
-    try {
-      const { id } = req.params;
+  router.post(
+    '/instances/:id/start',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
       const instance = await agentRegistry.getInstance(id);
       if (!instance) {
-        return res.status(404).json({ error: `Agent instance "${id}" not found` });
+        res.status(404).json({ error: `Agent instance "${id}" not found` });
+        return;
       }
 
       await orchestrator.startInstance(id);
       const updated = await agentRegistry.getInstance(id);
       res.json(updated);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Stop an agent instance ─────────────────────────────────────────────────
-  router.post('/instances/:id/stop', async (req, res) => {
-    try {
-      const { id } = req.params;
+  router.post(
+    '/instances/:id/stop',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
       const instance = await agentRegistry.getInstance(id);
       if (!instance) {
-        return res.status(404).json({ error: `Agent instance "${id}" not found` });
+        res.status(404).json({ error: `Agent instance "${id}" not found` });
+        return;
       }
 
       await orchestrator.stopInstance(id);
       const updated = await agentRegistry.getInstance(id);
       res.json(updated);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Update an agent instance (overrides, name, display_name, etc.) ───────
-  router.patch('/instances/:id', async (req, res) => {
-    try {
-      const { id } = req.params;
+  router.patch(
+    '/instances/:id',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
       const instance = await agentRegistry.getInstance(id);
       if (!instance) {
-        return res.status(404).json({ error: `Agent instance "${id}" not found` });
+        res.status(404).json({ error: `Agent instance "${id}" not found` });
+        return;
       }
 
       const { name, displayName, circle, lifecycleMode, overrides } = req.body as {
@@ -217,16 +218,18 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
 
       const updated = await agentRegistry.getInstance(id);
       res.json(updated);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Delete an agent instance ──────────────────────────────────────────────
-  router.delete('/instances/:id', async (req, res) => {
-    try {
-      const { id } = req.params;
-      if (!id) return res.status(400).json({ error: 'Instance ID is required' });
+  router.delete(
+    '/instances/:id',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
+      if (!id) {
+        res.status(400).json({ error: 'Instance ID is required' });
+        return;
+      }
 
       // Stop the instance (cleans up Docker)
       await orchestrator.stopInstance(id);
@@ -235,20 +238,20 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       await agentRegistry.deleteInstance(id);
 
       res.status(204).send();
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Get agent thoughts ───────────────────────────────────────────────────
-  router.get('/instances/:id/thoughts', async (req, res) => {
-    try {
-      const { id } = req.params;
+  router.get(
+    '/instances/:id/thoughts',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
       const { taskId, limit, offset } = req.query;
 
       const intercom = orchestrator.getIntercom();
       if (!intercom) {
-        return res.status(503).json({ error: 'Intercom service not available' });
+        res.status(503).json({ error: 'Intercom service not available' });
+        return;
       }
 
       const thoughts = await intercom.getThoughts(id, {
@@ -258,20 +261,20 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       });
 
       res.json(thoughts);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Legacy: get thoughts by name (redirects to instance ID lookup) ────────
-  router.get('/:id/thoughts', async (req, res) => {
-    try {
-      const { id } = req.params;
+  router.get(
+    '/:id/thoughts',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
       const { taskId, limit, offset } = req.query;
 
       const intercom = orchestrator.getIntercom();
       if (!intercom) {
-        return res.status(503).json({ error: 'Intercom service not available' });
+        res.status(503).json({ error: 'Intercom service not available' });
+        return;
       }
 
       const thoughts = await intercom.getThoughts(id, {
@@ -281,51 +284,57 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       });
 
       res.json(thoughts);
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+    })
+  );
 
   // ── Send a direct message to an agent instance (Story 9.3) ────────────────
-  router.post('/:id/message', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { from, payload } = req.body as { from?: string; payload?: Record<string, unknown> };
+  router.post(
+    '/:id/message',
+    asyncHandler(async (req, res) => {
+      try {
+        const id = req.params.id as string;
+        const { from, payload } = req.body as { from?: string; payload?: Record<string, unknown> };
 
-      if (!from || !payload) {
-        return res.status(400).json({ error: 'Required fields: from, payload' });
-      }
+        if (!from || !payload) {
+          res.status(400).json({ error: 'Required fields: from, payload' });
+          return;
+        }
 
-      const intercom = orchestrator.getIntercom();
-      if (!intercom) {
-        return res.status(503).json({ error: 'Intercom service not available' });
-      }
+        const intercom = orchestrator.getIntercom();
+        if (!intercom) {
+          res.status(503).json({ error: 'Intercom service not available' });
+          return;
+        }
 
-      let fromManifest = orchestrator.getManifest(from);
-      if (!fromManifest) {
-        fromManifest = orchestrator.getManifestByInstanceId(from);
-      }
+        let fromManifest = orchestrator.getManifest(from);
+        if (!fromManifest) {
+          fromManifest = orchestrator.getManifestByInstanceId(from);
+        }
 
-      if (!fromManifest) {
-        return res.status(404).json({ error: `Sender agent "${from}" not found` });
-      }
+        if (!fromManifest) {
+          res.status(404).json({ error: `Sender agent "${from}" not found` });
+          return;
+        }
 
-      const msg = await intercom.sendDirectMessage(fromManifest, id, payload);
-      res.json({ success: true, message: msg });
-    } catch (err: unknown) {
-      const error = err as Error;
-      if (error.name === 'IntercomPermissionError') {
-        return res.status(403).json({ error: error.message });
+        const msg = await intercom.sendDirectMessage(fromManifest, id, payload);
+        res.json({ success: true, message: msg });
+      } catch (err: unknown) {
+        const error = err as Error;
+        if (error.name === 'IntercomPermissionError') {
+          res.status(403).json({ error: error.message });
+          return;
+        }
+        throw err;
       }
-      res.status(500).json({ error: error.message });
-    }
-  });
+    })
+  );
 
   // ── POST /api/agents/validate ────────────────────────────────────────────
   router.post('/validate', (req, res) => {
     const body = req.body;
     if (!body || typeof body !== 'object') {
-      return res.json({ valid: false, errors: ['Request body must be a JSON object'] });
+      res.json({ valid: false, errors: ['Request body must be a JSON object'] });
+      return;
     }
     try {
       AgentManifestLoader.validateManifest(body, 'POST /api/agents/validate');
@@ -337,12 +346,14 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
   });
 
   // ── POST /api/agents/test-chat ───────────────────────────────────────────
-  router.post('/test-chat', async (req, res) => {
-    try {
+  router.post(
+    '/test-chat',
+    asyncHandler(async (req, res) => {
       const { manifest, message, history = [] } = req.body;
 
       if (!manifest || !message) {
-        return res.status(400).json({ error: 'manifest and message are required' });
+        res.status(400).json({ error: 'manifest and message are required' });
+        return;
       }
 
       AgentManifestLoader.validateManifest(manifest, 'POST /api/agents/test-chat');
@@ -359,12 +370,8 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         reply: response.finalAnswer || response.thought || 'No response.',
         thought: response.thought,
       });
-    } catch (err: unknown) {
-      const error = err as Error;
-      logger.error('Preview chat error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
+    })
+  );
 
   return router;
 }

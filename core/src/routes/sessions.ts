@@ -137,10 +137,7 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
 
       const markdown = lines.join('\n');
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="session-${req.params.id}.md"`
-      );
+      res.setHeader('Content-Disposition', `attachment; filename="session-${req.params.id}.md"`);
       res.send(markdown);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

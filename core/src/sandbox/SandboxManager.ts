@@ -128,7 +128,10 @@ export class SandboxManager {
       const spec = (manifest.spec ?? {}) as Record<string, unknown>;
       // Use manifest.model (which has instance overrides applied by Orchestrator)
       // instead of spec.model (which is the raw template without overrides).
-      const flatModel = ((manifest.model as unknown) ?? spec.model ?? {}) as Record<string, unknown>;
+      const flatModel = ((manifest.model as unknown) ?? spec.model ?? {}) as Record<
+        string,
+        unknown
+      >;
       const modelWithDefaults = {
         ...flatModel,
         ...(flatModel.name

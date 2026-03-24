@@ -18,8 +18,8 @@ export class IngestionService {
     logger.info('Starting codebase ingestion...');
     const files = await this.recursiveReadDir(this.workspaceRoot);
 
-    // Ensure collection exists (MiniLM-L6-v2 produces 384 dimensional vectors)
-    await this.vectorService.ensureCollection(384);
+    // nomic-embed-text produces 768-dim vectors (not 384 as with MiniLM-L6-v2)
+    await this.vectorService.ensureCollection(768);
 
     for (const file of files) {
       if (this.shouldIgnore(file)) continue;

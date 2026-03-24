@@ -306,7 +306,8 @@ export class MemoryManager {
 
   private async indexEntry(entry: MemoryEntry): Promise<void> {
     try {
-      await this.vectorService.ensureCollection(384);
+      // nomic-embed-text produces 768-dim vectors
+      await this.vectorService.ensureCollection(768);
       const embedding = await this.embeddingService.generateEmbedding(
         `${entry.title}\n${entry.content}`
       );

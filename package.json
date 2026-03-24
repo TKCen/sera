@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "workspaces": ["core", "web"],
+  "overrides": {
+    "sharp": "^0.33.5"
+  },
   "scripts": {
     "postinstall": "echo 'Run bun run hooks:install to set up git hooks'",
     "dev:up": "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d",

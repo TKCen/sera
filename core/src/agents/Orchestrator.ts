@@ -737,6 +737,11 @@ export class Orchestrator {
     return this.agents.get(id);
   }
 
+  /** Get all running agents (for tools usedBy enrichment). */
+  public getRunningAgents(): Map<string, BaseAgent> {
+    return this.agents;
+  }
+
   public getAllManifests(): AgentManifest[] {
     return Array.from(this.manifests.values());
   }

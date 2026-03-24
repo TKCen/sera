@@ -51,8 +51,8 @@ export class IdentityService {
     // Resolve skills: flat format uses top-level `skills`, spec-wrapped uses `spec.skills`
     const skills = manifest.spec?.skills ?? manifest.skills;
 
-    // Resolve subagents
-    const subagents = manifest.subagents;
+    // Resolve subagents: flat format uses top-level `subagents`, spec-wrapped uses `spec.subagents`
+    const subagents = manifest.spec?.subagents ?? manifest.subagents;
 
     // Resolve sandbox tier label for display
     const tierLabel =
@@ -105,7 +105,9 @@ export class IdentityService {
     if (subagents?.allowed && subagents.allowed.length > 0) {
       const subList = subagents.allowed
         .map((s) => {
-          let entry = `- ${s.role} (max ${s.maxInstances ?? '∞'} instances)`;
+          // Handle both flat format (role) and spec-wrapped format (templateRef)
+          const name = 'role' in s ? s.role : 'templateRef' in s ? s.templateRef : 'unknown';
+          let entry = `- ${name} (max ${s.maxInstances ?? '∞'} instances)`;
           if (s.requiresApproval) entry += ' [requires human approval]';
           return entry;
         })

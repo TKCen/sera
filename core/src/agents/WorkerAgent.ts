@@ -42,7 +42,10 @@ export class WorkerAgent extends BaseAgent {
     // Resolve circle project context
     const circleContext = this.circleContextResolver?.();
 
-    const systemPrompt = IdentityService.generateSystemPrompt(
+    // Use the streaming (natural text) prompt for web chat — the JSON format
+    // in generateSystemPrompt() causes LLMs to frequently fail parsing.
+    // Container-based agents use the LLM proxy path which has its own context assembly.
+    const systemPrompt = IdentityService.generateStreamingSystemPrompt(
       this.manifest,
       circleContext,
       dynamicContext
@@ -121,27 +124,25 @@ export class WorkerAgent extends BaseAgent {
         this.logger.error('Failed to record audit entry:', auditErr);
       }
 
+      // Try JSON parse first (agent-to-agent structured responses),
+      // fall back to natural text (web chat)
       try {
         const parsed = parseJson(response.content);
-        if (parsed && typeof parsed === 'object') {
+        if (parsed && typeof parsed === 'object' && 'finalAnswer' in parsed) {
           const result = parsed as AgentResponse;
           await this.reflect({ thought: result.thought, finalAnswer: result.finalAnswer });
           return result;
         }
-        const result: AgentResponse = {
-          thought: `Completed task: ${input}`,
-          finalAnswer: response.content,
-        };
-        await this.reflect(result);
-        return result;
-      } catch (err: unknown) {
-        const error = err as Error;
-        this.logger.error('Failed to parse worker response:', error);
-        return {
-          thought: 'Error parsing response.',
-          finalAnswer: response.content,
-        };
+      } catch {
+        // Not JSON — expected for natural text responses
       }
+
+      const result: AgentResponse = {
+        thought: `Completed task: ${input}`,
+        finalAnswer: response.content,
+      };
+      await this.reflect(result);
+      return result;
     }
 
     // Exhausted tool iterations

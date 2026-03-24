@@ -389,13 +389,24 @@ app.use(
 
 // ── Convenience routes for the web UI ────────────────────────────────────────
 // GET /api/tools — list executable tools with security metadata (used by AgentForm)
-app.get('/api/tools', authMiddleware, (_req, res) => {
+app.get('/api/tools', authMiddleware, async (_req, res) => {
   const tools = skillRegistry.listTools();
-  const manifests = orchestrator.getAllManifests();
+  // Combine YAML manifests with DB-loaded agent manifests (from orchestrator's running agents)
+  const yamlManifests = orchestrator.getAllManifests();
+  const runningAgentManifests = Array.from(orchestrator.getRunningAgents().values())
+    .map((a) => a.getManifest());
+  const allManifests = [...yamlManifests, ...runningAgentManifests];
+  // Deduplicate by name
+  const seen = new Set<string>();
+  const manifests = allManifests.filter((m) => {
+    if (seen.has(m.metadata.name)) return false;
+    seen.add(m.metadata.name);
+    return true;
+  });
   const enriched = tools.map((tool) => {
     const usedBy: string[] = [];
     for (const manifest of manifests) {
-      const allowed = manifest.tools?.allowed ?? [];
+      const allowed = manifest.spec?.tools?.allowed ?? manifest.tools?.allowed ?? [];
       if (allowed.includes(tool.id) || allowed.includes('*')) {
         usedBy.push(manifest.metadata.name);
       }

@@ -156,14 +156,20 @@ function ChatPageContent() {
   // ── Fetch sessions whenever agent changes ────────────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
+      // Filter by instance ID (unambiguous) — agent_name in the DB is inconsistent
+      // (can be role name, instance name, or instance ID depending on how the session was created)
       const data = await request<SessionInfo[]>(
-        selectedAgent ? `/sessions?agent=${encodeURIComponent(selectedAgent)}` : '/sessions'
+        selectedAgentId
+          ? `/sessions?agentInstanceId=${encodeURIComponent(selectedAgentId)}`
+          : selectedAgent
+            ? `/sessions?agent=${encodeURIComponent(selectedAgent)}`
+            : '/sessions'
       );
       setSessions(data);
     } catch {
       // Non-fatal — session list is best-effort
     }
-  }, [selectedAgent]);
+  }, [selectedAgent, selectedAgentId]);
 
   useEffect(() => {
     void fetchSessions();
@@ -395,6 +401,13 @@ function ChatPageContent() {
     [agents]
   );
 
+  // ── Selected agent status ────────────────────────────────────────────────────
+  const selectedAgentData = agents?.find((a) => a.name === selectedAgent);
+  const agentStatus = (selectedAgentData as Record<string, unknown> | undefined)?.status as
+    | string
+    | undefined;
+  const isAgentUnavailable = agentStatus === 'error' || agentStatus === 'stopped';
+
   // ── Sidebar toggle button ─────────────────────────────────────────────────────
 
   const sidebarToggle = (
@@ -432,9 +445,15 @@ function ChatPageContent() {
             <Bot size={32} className="text-sera-accent" />
           </div>
           <h2 className="text-xl font-semibold text-sera-text mb-2">How can I help you?</h2>
+          {isAgentUnavailable && (
+            <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
+              Agent is {agentStatus} — messages may not be delivered.
+              Try restarting from the <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">agent detail page</a>.
+            </div>
+          )}
           <p className="text-sm text-sera-text-muted mb-8 text-center max-w-md">
             {selectedAgent
-              ? `Chatting with ${agents?.find((a) => a.name === selectedAgent)?.display_name ?? selectedAgent}`
+              ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
               : 'Select an agent from the sidebar to get started.'}
           </p>
           <div className="w-full max-w-2xl">

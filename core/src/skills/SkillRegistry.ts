@@ -80,6 +80,7 @@ export class SkillRegistry {
   listForAgent(manifest: AgentManifest): SkillInfo[] {
     const ids = new Set<string>();
 
+    // If manifest explicitly lists skills, use those
     if (manifest.skills) {
       for (const s of manifest.skills) {
         const id = typeof s === 'string' ? s : s.name;
@@ -89,9 +90,21 @@ export class SkillRegistry {
 
     if (manifest.tools?.allowed) {
       for (const id of manifest.tools.allowed) {
-        if (this.skills.has(id)) {
+        if (id === '*') {
+          // Wildcard — include all registered skills
+          for (const key of this.skills.keys()) {
+            ids.add(key);
+          }
+        } else if (this.skills.has(id)) {
           ids.add(id);
         }
+      }
+    }
+
+    // If neither skills nor tools are specified, include all skills (open access)
+    if (!manifest.skills && !manifest.tools?.allowed) {
+      for (const key of this.skills.keys()) {
+        ids.add(key);
       }
     }
 

@@ -31,6 +31,7 @@ export class LlmRouterProvider implements LLMProvider {
     const eventStream = this.router.getEventStream(request);
     const msg = await eventStream.result();
 
+
     let textContent = '';
     const toolCalls: LLMResponse['toolCalls'] = [];
 

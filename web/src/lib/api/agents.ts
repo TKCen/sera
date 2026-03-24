@@ -87,7 +87,7 @@ export function getAgentLogs(id: string): Promise<string> {
 
 export function getAgentMemory(id: string, scope?: string): Promise<AgentMemoryBlock[]> {
   const params = scope ? `?scope=${encodeURIComponent(scope)}` : '';
-  return request<AgentMemoryBlock[]>(`/agents/${encodeURIComponent(id)}/memory${params}`);
+  return request<AgentMemoryBlock[]>(`/memory/${encodeURIComponent(id)}/blocks${params}`);
 }
 
 export function getAgentSchedules(id: string): Promise<AgentSchedule[]> {

@@ -47,70 +47,107 @@ export class WorkerAgent extends BaseAgent {
 
     const fullHistory = [...history, { role: 'user', content: input } as ChatMessage];
 
-    const response = await this.llmProvider.chat([
+    // Get tool definitions if ToolExecutor is available
+    const tools = this.toolExecutor ? this.toolExecutor.getToolDefinitions(this.manifest) : [];
+
+    const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
       ...fullHistory,
-    ]);
-
-    // Record usage
-    if (response.usage && this.meteringEngine) {
-      await this.meteringEngine.record({
-        agentId: this.agentInstanceId || this.role,
-        model: this.manifest.model.name,
-        ...response.usage,
-      });
-    }
-
-    this.history = [
-      ...fullHistory,
-      { role: 'assistant', content: response.content } as ChatMessage,
     ];
 
-    if (response.toolCalls && response.toolCalls.length > 0 && this.toolExecutor) {
-      // ── Agentic Tool Loop ──────────────────────────────────────────────────
-      // Note: WorkerAgent.process currently doesn't implement the full tool loop
-      // like processStream does. This is a known limitation in the current core.
-      // However, if we ever add it, we should record audit entries.
-    }
+    // ── Agentic Tool Loop ──────────────────────────────────────────────────
+    const MAX_TOOL_ITERATIONS = 10;
+    let iterations = 0;
 
-    try {
-      await AuditService.getInstance().record({
-        actorType: 'agent',
-        actorId: this.agentInstanceId || this.name,
-        actingContext: null,
-        eventType: 'chat',
-        payload: {
-          input,
-          response:
-            response.content.length > 500
-              ? response.content.substring(0, 500) + '...'
-              : response.content,
-        },
-      });
-    } catch (auditErr) {
-      this.logger.error('Failed to record audit entry:', auditErr);
-    }
+    while (iterations < MAX_TOOL_ITERATIONS) {
+      iterations++;
+      const response = await this.llmProvider.chat(messages, tools.length > 0 ? tools : undefined);
 
-    try {
-      const parsed = parseJson(response.content);
-      if (parsed && typeof parsed === 'object') {
-        const result = parsed as AgentResponse;
-        await this.reflect({ thought: result.thought, finalAnswer: result.finalAnswer });
-        return result;
+      // Record usage
+      if (response.usage && this.meteringEngine) {
+        await this.meteringEngine.record({
+          agentId: this.agentInstanceId || this.role,
+          model: this.manifest.model.name,
+          ...response.usage,
+        });
       }
-      const result: AgentResponse = {
-        thought: `Completed task: ${input}`,
-        finalAnswer: response.content,
-      };
-      await this.reflect(result);
-      return result;
-    } catch (err: unknown) {
-      const error = err as Error;
-      this.logger.error('Failed to parse worker response:', error);
-      return {
-        thought: 'Error parsing response.',
-        finalAnswer: response.content,
-      };
+
+      if (response.toolCalls && response.toolCalls.length > 0 && this.toolExecutor) {
+        // Add assistant message with tool_calls to history
+        messages.push({
+          role: 'assistant',
+          content: response.content || '',
+          tool_calls: response.toolCalls,
+        });
+
+        // Execute tool calls
+        const toolResults = await this.toolExecutor.executeToolCalls(
+          response.toolCalls,
+          this.manifest,
+          this.agentInstanceId,
+          this.containerId,
+        );
+
+        // Add tool results to history
+        for (const result of toolResults) {
+          messages.push(result);
+        }
+
+        // Continue loop — LLM will see tool results and decide next action
+        continue;
+      }
+
+      // No tool calls — we have a final text response
+      this.history = [
+        ...fullHistory,
+        { role: 'assistant', content: response.content } as ChatMessage,
+      ];
+
+      try {
+        await AuditService.getInstance().record({
+          actorType: 'agent',
+          actorId: this.agentInstanceId || this.name,
+          actingContext: null,
+          eventType: 'chat',
+          payload: {
+            input,
+            response:
+              response.content.length > 500
+                ? response.content.substring(0, 500) + '...'
+                : response.content,
+          },
+        });
+      } catch (auditErr) {
+        this.logger.error('Failed to record audit entry:', auditErr);
+      }
+
+      try {
+        const parsed = parseJson(response.content);
+        if (parsed && typeof parsed === 'object') {
+          const result = parsed as AgentResponse;
+          await this.reflect({ thought: result.thought, finalAnswer: result.finalAnswer });
+          return result;
+        }
+        const result: AgentResponse = {
+          thought: `Completed task: ${input}`,
+          finalAnswer: response.content,
+        };
+        await this.reflect(result);
+        return result;
+      } catch (err: unknown) {
+        const error = err as Error;
+        this.logger.error('Failed to parse worker response:', error);
+        return {
+          thought: 'Error parsing response.',
+          finalAnswer: response.content,
+        };
+      }
     }
+
+    // Exhausted tool iterations
+    return {
+      thought: 'Reached maximum tool call iterations.',
+      finalAnswer: 'I was unable to complete the task within the allowed number of steps.',
+    };
   }
 }

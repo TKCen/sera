@@ -94,6 +94,7 @@ export class SandboxManager {
       `CENTRIFUGO_API_URL=${process.env.CENTRIFUGO_API_URL ?? 'http://centrifugo:8000/api'}`,
       `CENTRIFUGO_API_KEY=${process.env.CENTRIFUGO_API_KEY ?? ''}`,
       `AGENT_HEARTBEAT_INTERVAL_MS=${process.env.AGENT_HEARTBEAT_INTERVAL_MS ?? '30000'}`,
+      `AGENT_LIFECYCLE_MODE=${request.lifecycleMode ?? 'persistent'}`,
     ];
 
     // Story 3.1 — include identity JWT if provided
@@ -207,12 +208,17 @@ export class SandboxManager {
     const memoryBytes = (caps.resources?.memory_limit || 0) * 1024 * 1024;
 
     // ── Network Mode (Story 3.2, 20.3) ──────────────────────────────────────
-    // All agents with any outbound access use agent_net — even unrestricted
-    // agents (outbound: ['*']). The egress proxy is the single exit point
-    // for all outbound traffic, ensuring audit and metering coverage.
+    // Agent containers always need agent_net to reach sera-core (LLM proxy,
+    // task polling, heartbeat) and centrifugo (thought streaming) via the
+    // sera_net bridge added post-start. The egress proxy on agent_net is the
+    // single exit point for all external traffic.
+    // Only non-agent tool containers with no outbound access use 'none'.
     const outbound = caps.network?.outbound || [];
     let networkMode: string;
-    if (outbound.length === 0) {
+    if (request.type === 'agent') {
+      // Agents always need network for sera-core communication
+      networkMode = 'agent_net';
+    } else if (outbound.length === 0) {
       networkMode = 'none';
     } else {
       networkMode = 'agent_net';
@@ -315,6 +321,18 @@ export class SandboxManager {
       stream.end();
     } else {
       await container.start();
+    }
+
+    // Connect agent containers to sera_net so they can reach sera-core and
+    // centrifugo for task polling, LLM proxy, thought streaming, and heartbeats.
+    // The primary network (agent_net) remains for egress proxy routing.
+    if (networkMode === 'agent_net') {
+      try {
+        const seraNet = this.docker.getNetwork('sera_net');
+        await seraNet.connect({ Container: container.id });
+      } catch (netErr) {
+        logger.warn(`Failed to connect container to sera_net: ${(netErr as Error).message}`);
+      }
     }
 
     const info = await container.inspect();

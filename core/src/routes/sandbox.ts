@@ -20,7 +20,7 @@ import { PolicyViolationError } from '../sandbox/TierPolicy.js';
 
 export function createSandboxRouter(
   sandboxManager: SandboxManager,
-  resolveManifest: (agentName: string) => AgentManifest | undefined
+  resolveManifest: (agentName: string) => AgentManifest | undefined | Promise<AgentManifest | undefined>
 ): Router {
   const router = Router();
   const toolRunner = new ToolRunner(sandboxManager);
@@ -29,12 +29,12 @@ export function createSandboxRouter(
   /**
    * Helper: resolve manifest or return 404.
    */
-  function getManifestOrFail(agentName: string | undefined, res: Response): AgentManifest | null {
+  async function getManifestOrFail(agentName: string | undefined, res: Response): Promise<AgentManifest | null> {
     if (!agentName || typeof agentName !== 'string') {
       res.status(400).json({ error: 'agentName is required' });
       return null;
     }
-    const manifest = resolveManifest(agentName);
+    const manifest = await resolveManifest(agentName);
     if (!manifest) {
       res.status(404).json({ error: `Agent "${agentName}" not found` });
       return null;
@@ -52,7 +52,7 @@ export function createSandboxRouter(
    */
   router.post('/spawn', async (req, res) => {
     try {
-      const manifest = getManifestOrFail(req.body.agentName, res);
+      const manifest = await getManifestOrFail(req.body.agentName, res);
       if (!manifest) return;
 
       const { type, image, command, env, workDir, subagentRole, task } = req.body;
@@ -95,7 +95,7 @@ export function createSandboxRouter(
    */
   router.post('/exec', async (req, res) => {
     try {
-      const manifest = getManifestOrFail(req.body.agentName, res);
+      const manifest = await getManifestOrFail(req.body.agentName, res);
       if (!manifest) return;
 
       const { containerId, command } = req.body;
@@ -149,7 +149,7 @@ export function createSandboxRouter(
    */
   router.delete('/:id', async (req, res) => {
     try {
-      const manifest = getManifestOrFail(req.query.agentName as string, res);
+      const manifest = await getManifestOrFail(req.query.agentName as string, res);
       if (!manifest) return;
 
       await sandboxManager.remove(manifest, req.params.id!);
@@ -204,7 +204,7 @@ export function createSandboxRouter(
    */
   router.post('/tool', async (req, res) => {
     try {
-      const manifest = getManifestOrFail(req.body.agentName, res);
+      const manifest = await getManifestOrFail(req.body.agentName, res);
       if (!manifest) return;
 
       const { toolName, command, image, timeoutSeconds } = req.body;
@@ -240,7 +240,7 @@ export function createSandboxRouter(
    */
   router.post('/subagent', async (req, res) => {
     try {
-      const manifest = getManifestOrFail(req.body.agentName, res);
+      const manifest = await getManifestOrFail(req.body.agentName, res);
       if (!manifest) return;
 
       const { subagentRole, task, image } = req.body;

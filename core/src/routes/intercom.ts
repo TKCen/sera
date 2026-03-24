@@ -16,7 +16,7 @@ import type { BridgeService } from '../intercom/BridgeService.js';
 
 export function createIntercomRouter(
   intercom: IntercomService,
-  resolveManifest: (agentName: string) => AgentManifest | undefined,
+  resolveManifest: (agentName: string) => AgentManifest | undefined | Promise<AgentManifest | undefined>,
   bridge?: BridgeService
 ): Router {
   const router = Router();
@@ -42,7 +42,7 @@ export function createIntercomRouter(
         });
       }
 
-      const manifest = resolveManifest(agent);
+      const manifest = await resolveManifest(agent);
       if (!manifest) {
         return res.status(404).json({ error: `Agent "${agent}" not found` });
       }
@@ -86,7 +86,7 @@ export function createIntercomRouter(
         });
       }
 
-      const manifest = resolveManifest(from);
+      const manifest = await resolveManifest(from);
       if (!manifest) {
         return res.status(404).json({ error: `Agent "${from}" not found` });
       }
@@ -134,14 +134,14 @@ export function createIntercomRouter(
    * @param res Express response
    * @returns {void}
    */
-  router.get('/channels', (req, res) => {
+  router.get('/channels', async (req, res) => {
     const { agent } = req.query as { agent?: string };
 
     if (!agent) {
       return res.status(400).json({ error: 'Query param "agent" is required' });
     }
 
-    const manifest = resolveManifest(agent);
+    const manifest = await resolveManifest(agent);
     if (!manifest) {
       return res.status(404).json({ error: `Agent "${agent}" not found` });
     }

@@ -15,6 +15,7 @@ import { registerBuiltinSkills } from './skills/builtins/index.js';
 import { ToolExecutor } from './tools/ToolExecutor.js';
 import { CircleRegistry } from './circles/CircleRegistry.js';
 import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
+import type { AgentManifest } from './agents/manifest/types.js';
 import { createSandboxRouter } from './routes/sandbox.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { createAgentRouter } from './routes/agents.js';
@@ -314,16 +315,56 @@ app.use('/api/auth', publicAuthRouter);
 app.use('/api/auth', authMiddleware, protectedAuthRouter);
 app.use('/api/secrets', authMiddleware, createSecretsRouter());
 
-const sandboxRouter = createSandboxRouter(sandboxManager, (name) =>
-  agentManifests.find((m) => m.metadata.name === name)
-);
+// Unified manifest resolver: checks YAML manifests first, then DB instances + templates.
+async function resolveManifest(name: string): Promise<AgentManifest | undefined> {
+  // 1. YAML manifests (fast, in-memory)
+  const yaml = agentManifests.find((m) => m.metadata.name === name);
+  if (yaml) return yaml;
+
+  // 2. Orchestrator's in-memory agents (already started)
+  const info = orchestrator.getAgentInfo(name);
+  if (info) return info.manifest;
+
+  // 3. DB: look up instance by name → build manifest from template
+  try {
+    const instance = await agentRegistry.getInstanceByName(name);
+    if (instance) {
+      const template = await agentRegistry.getTemplate(instance.template_ref);
+      if (template) {
+        return {
+          apiVersion: 'sera/v1',
+          kind: 'Agent',
+          metadata: {
+            name: template.name,
+            displayName: template.display_name ?? template.name,
+            icon: template.spec?.identity?.icon ?? '',
+            circle: template.spec?.circle ?? instance.circle,
+            tier: template.spec?.sandboxBoundary === 'tier-3' ? 3
+              : template.spec?.sandboxBoundary === 'tier-2' ? 2 : 1,
+          },
+          identity: {
+            role: template.spec?.identity?.role ?? template.name,
+            description: template.spec?.identity?.description ?? '',
+          },
+          model: {
+            provider: template.spec?.model?.provider ?? 'default',
+            name: template.spec?.model?.name ?? 'default',
+          },
+          spec: template.spec ?? {},
+        };
+      }
+    }
+  } catch {
+    // DB not available yet — fall through
+  }
+
+  return undefined;
+}
+
+const sandboxRouter = createSandboxRouter(sandboxManager, resolveManifest);
 app.use('/api/sandbox', sandboxRouter);
 
-const intercomRouter = createIntercomRouter(
-  intercomService,
-  (name) => agentManifests.find((m) => m.metadata.name === name),
-  bridgeService
-);
+const intercomRouter = createIntercomRouter(intercomService, resolveManifest, bridgeService);
 app.use('/api/intercom', intercomRouter);
 
 app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));

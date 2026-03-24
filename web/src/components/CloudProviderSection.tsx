@@ -50,7 +50,7 @@ function TemplateCard({
 }: {
   template: ProviderTemplate;
   activeModels: Array<{ modelName: string; authStatus?: string }>;
-  onActivate: (models: AddProviderPayload[]) => void;
+  onActivate: (models: AddProviderPayload[]) => Promise<void>;
   onRemoveModel: (modelName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -65,30 +65,32 @@ function TemplateCard({
   const handleActivate = async () => {
     if (!apiKey) return;
     setSaving(true);
-    const payloads: AddProviderPayload[] = template.models.map((modelName) => ({
-      modelName,
-      api: template.api,
-      provider: template.provider,
-      apiKey,
-      ...(template.baseUrl ? { baseUrl: template.baseUrl } : {}),
-      description: `${template.displayName} — ${modelName}`,
-    }));
-    onActivate(payloads);
-    setSaving(false);
-    setApiKey('');
+    try {
+      const payloads: AddProviderPayload[] = template.models.map((modelName) => ({
+        modelName,
+        api: template.api,
+        provider: template.provider,
+        apiKey,
+        ...(template.baseUrl ? { baseUrl: template.baseUrl } : {}),
+        description: `${template.displayName} — ${modelName}`,
+      }));
+      await onActivate(payloads);
+      setApiKey('');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleAddCustomModel = () => {
+  const handleAddCustomModel = async () => {
     if (!customModel.trim()) return;
     const payload: AddProviderPayload = {
       modelName: customModel.trim(),
       api: template.api,
       provider: template.provider,
-      apiKey: apiKey || activeModels[0]?.modelName ? undefined : undefined,
       ...(template.baseUrl ? { baseUrl: template.baseUrl } : {}),
       description: `${template.displayName} — ${customModel.trim()}`,
     };
-    onActivate([payload]);
+    await onActivate([payload]);
     setCustomModel('');
   };
 

@@ -152,12 +152,25 @@ export function createProvidersRouter(
     const { modelName, api, provider, baseUrl, apiKey, apiKeyEnvVar, description } = parsed.data;
 
     try {
+      // If no API key provided, try to inherit from an existing model of the same provider
+      let resolvedApiKey = apiKey;
+      let resolvedBaseUrl = baseUrl;
+      if (!resolvedApiKey && provider) {
+        const existing = llmRouter.getRegistry().list().find(
+          (c) => c.provider === provider && c.apiKey
+        );
+        if (existing) {
+          resolvedApiKey = existing.apiKey;
+          if (!resolvedBaseUrl && existing.baseUrl) resolvedBaseUrl = existing.baseUrl;
+        }
+      }
+
       const result = await llmRouter.addModel({
         modelName,
         api,
         ...(provider ? { provider } : {}),
-        ...(baseUrl ? { baseUrl } : {}),
-        ...(apiKey ? { apiKey } : {}),
+        ...(resolvedBaseUrl ? { baseUrl: resolvedBaseUrl } : {}),
+        ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
         ...(apiKeyEnvVar ? { apiKeyEnvVar } : {}),
         ...(description ? { description } : {}),
       });

@@ -360,6 +360,18 @@ export class LlmRouter {
   // ── Internal ───────────────────────────────────────────────────────────────
 
   private buildModel(config: ProviderConfig): Model<Api> {
+    const isGoogleAIStudio =
+      config.provider === 'google' ||
+      (config.baseUrl ?? '').includes('generativelanguage.googleapis.com');
+
+    // Google AI Studio's OpenAI-compat endpoint rejects `store` and
+    // `developer` role.  Override pi-mono's auto-detection which marks
+    // every non-"isNonStandard" provider as supporting those features.
+    const compat =
+      config.api === 'openai-completions' && isGoogleAIStudio
+        ? { supportsStore: false, supportsDeveloperRole: false }
+        : undefined;
+
     return {
       id: config.modelName,
       name: config.description ?? config.modelName,
@@ -371,6 +383,7 @@ export class LlmRouter {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128_000,
       maxTokens: 4_096,
+      ...(compat ? { compat } : {}),
     };
   }
 

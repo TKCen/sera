@@ -513,6 +513,11 @@ const startServer = async () => {
     await initDb();
   }
 
+  // Hydrate provider API keys from encrypted secrets store (if SECRETS_MASTER_KEY is set)
+  await providerRegistry.hydrateSecrets().catch((err) => {
+    logger.warn('Could not hydrate provider secrets (SECRETS_MASTER_KEY may not be set):', err);
+  });
+
   // Start dynamic provider polling (file-based config, no DB needed but placed here
   // for consistent startup ordering — after migrations, before service consumers)
   await dynamicProviderManager.start();

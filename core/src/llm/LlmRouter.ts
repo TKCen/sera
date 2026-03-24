@@ -394,7 +394,12 @@ export class LlmRouter {
    */
   private resolveApiKey(config: ProviderConfig): string | undefined {
     if (config.apiKey) return config.apiKey;
-    if (config.apiKeyEnvVar) return process.env[config.apiKeyEnvVar];
+    if (config.apiKeyEnvVar) {
+      // sera-secret: refs are resolved at startup by hydrateSecrets() and placed in apiKey.
+      // If we reach here with a sera-secret: ref, hydration didn't run or failed — skip.
+      if (config.apiKeyEnvVar.startsWith('sera-secret:')) return undefined;
+      return process.env[config.apiKeyEnvVar];
+    }
     return undefined;
   }
 

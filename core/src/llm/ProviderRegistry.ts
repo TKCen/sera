@@ -310,9 +310,10 @@ export class ProviderRegistry {
       return 'configured';
     }
 
-    // Env var configured and resolves to a non-empty value
-    if (config.apiKeyEnvVar && process.env[config.apiKeyEnvVar]) {
-      return 'configured';
+    // Env var or sera-secret reference configured
+    if (config.apiKeyEnvVar) {
+      if (config.apiKeyEnvVar.startsWith('sera-secret:')) return 'configured';
+      if (process.env[config.apiKeyEnvVar]) return 'configured';
     }
 
     // pi-mono standard env var fallback (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
@@ -349,9 +350,120 @@ export class ProviderRegistry {
     }));
   }
 
+  /**
+   * Persist provider configs to disk.
+   * API keys that look like real secrets (not local placeholders) are
+   * stripped from the JSON file and stored in the encrypted secrets table
+   * instead, referenced via `apiKeyEnvVar: "sera-secret:provider-key:<provider>"`.
+   */
   async save(): Promise<void> {
-    const data: ConfigFile = { providers: [...this.configs.values()] };
+    const LOCAL_PLACEHOLDERS = new Set(['lm-studio', 'ollama', 'none', 'local', '']);
+    const providers: ProviderConfig[] = [];
+
+    for (const cfg of this.configs.values()) {
+      const clone = { ...cfg };
+
+      // Move real API keys to secrets store, keep only the reference in the config file
+      if (clone.apiKey && !LOCAL_PLACEHOLDERS.has(clone.apiKey)) {
+        const secretName = `provider-key:${clone.provider ?? clone.modelName}`;
+        try {
+          await ProviderRegistry.storeApiKeySecret(secretName, clone.apiKey);
+          clone.apiKeyEnvVar = `sera-secret:${secretName}`;
+          delete clone.apiKey;
+        } catch {
+          // Secrets store not available (no SECRETS_MASTER_KEY) — keep literal key
+          // but log a warning
+          logger.warn(
+            `Cannot store API key for ${clone.modelName} in secrets DB (SECRETS_MASTER_KEY not set). Key saved in plaintext.`
+          );
+        }
+      }
+
+      providers.push(clone);
+    }
+
+    const data: ConfigFile = { providers };
     await fs.promises.writeFile(this.configPath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
     logger.debug(`Saved ${this.configs.size} provider(s) to ${this.configPath}`);
+  }
+
+  /**
+   * Resolve the effective API key for a provider config.
+   * Resolution order: literal apiKey → apiKeyEnvVar (env or secrets) → standard env var.
+   */
+  async resolveApiKey(config: ProviderConfig): Promise<string | undefined> {
+    // 1. Literal key
+    if (config.apiKey) return config.apiKey;
+
+    // 2. Env var or sera-secret reference
+    if (config.apiKeyEnvVar) {
+      if (config.apiKeyEnvVar.startsWith('sera-secret:')) {
+        const secretName = config.apiKeyEnvVar.slice('sera-secret:'.length);
+        const val = await ProviderRegistry.getApiKeySecret(secretName);
+        if (val) return val;
+      }
+      const envVal = process.env[config.apiKeyEnvVar];
+      if (envVal) return envVal;
+    }
+
+    // 3. Standard provider env vars
+    if (config.provider) {
+      const standardEnvVars: Record<string, string> = {
+        openai: 'OPENAI_API_KEY',
+        anthropic: 'ANTHROPIC_API_KEY',
+        google: 'GOOGLE_API_KEY',
+        groq: 'GROQ_API_KEY',
+        mistral: 'MISTRAL_API_KEY',
+      };
+      const envVar = standardEnvVars[config.provider];
+      if (envVar && process.env[envVar]) return process.env[envVar];
+    }
+
+    return undefined;
+  }
+
+  /**
+   * On startup, hydrate in-memory configs with API keys from the secrets store.
+   * This runs after loadSync() so configs with `sera-secret:` references get their keys resolved.
+   */
+  async hydrateSecrets(): Promise<void> {
+    let hydrated = 0;
+    for (const [name, cfg] of this.configs.entries()) {
+      if (cfg.apiKeyEnvVar?.startsWith('sera-secret:')) {
+        const secretName = cfg.apiKeyEnvVar.slice('sera-secret:'.length);
+        try {
+          const val = await ProviderRegistry.getApiKeySecret(secretName);
+          if (val) {
+            cfg.apiKey = val;
+            hydrated++;
+          }
+        } catch {
+          logger.warn(`Failed to hydrate secret for provider ${name}`);
+        }
+      }
+    }
+    if (hydrated > 0) {
+      logger.info(`Hydrated ${hydrated} provider API key(s) from secrets store`);
+    }
+  }
+
+  // ── Secret helpers (static to avoid circular deps) ──────────────────────────
+
+  private static async storeApiKeySecret(name: string, value: string): Promise<void> {
+    // Lazy import to avoid circular dependency with SecretsManager
+    const { SecretsManager } = await import('../secrets/secrets-manager.js');
+    const mgr = SecretsManager.getInstance();
+    await mgr.set(
+      name,
+      value,
+      { operator: { sub: 'system', roles: ['admin'] } },
+      { description: `Provider API key: ${name}`, allowedAgents: ['*'], tags: ['provider-key'] }
+    );
+  }
+
+  private static async getApiKeySecret(name: string): Promise<string | null> {
+    const { SecretsManager } = await import('../secrets/secrets-manager.js');
+    const mgr = SecretsManager.getInstance();
+    return mgr.get(name, { operator: { sub: 'system', roles: ['admin'] } });
   }
 }

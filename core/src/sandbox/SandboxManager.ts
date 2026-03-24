@@ -126,11 +126,12 @@ export class SandboxManager {
       const wsInternalPath = provider.getPath(finalInstanceId, workspacePath);
       fs.mkdirSync(wsInternalPath, { recursive: true });
       const spec = (manifest.spec ?? {}) as Record<string, unknown>;
-      // Ensure model has a name — fall back to DEFAULT_MODEL or LLM_MODEL env var
-      const specModel = (spec.model ?? {}) as Record<string, unknown>;
+      // Use manifest.model (which has instance overrides applied by Orchestrator)
+      // instead of spec.model (which is the raw template without overrides).
+      const flatModel = ((manifest.model as unknown) ?? spec.model ?? {}) as Record<string, unknown>;
       const modelWithDefaults = {
-        ...specModel,
-        ...(specModel.name
+        ...flatModel,
+        ...(flatModel.name
           ? {}
           : { name: process.env.DEFAULT_MODEL ?? process.env.LLM_MODEL ?? 'default' }),
       };
@@ -138,7 +139,7 @@ export class SandboxManager {
         apiVersion: manifest.apiVersion ?? 'sera/v1',
         kind: manifest.kind ?? 'Agent',
         metadata: manifest.metadata,
-        identity: spec.identity,
+        identity: spec.identity ?? manifest.identity,
         model: modelWithDefaults,
         tools: spec.tools,
         skills: spec.skills,

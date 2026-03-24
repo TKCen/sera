@@ -448,6 +448,15 @@ app.use('/api/notifications', notifPublicRouter);
 app.use('/api/notifications', authMiddleware, notifProtectedRouter);
 app.use('/api/channels', authMiddleware, notifProtectedRouter);
 
+// Global Error Handler
+app.use((err: unknown, _req: import('express').Request, res: import('express').Response, _next: import('express').NextFunction) => {
+  logger.error('Unhandled API Error:', err);
+  const status = (err as { status?: number }).status || 500;
+  res.status(status).json({
+    error: err instanceof Error ? err.message : String(err)
+  });
+});
+
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
 

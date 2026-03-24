@@ -30,15 +30,27 @@ export const fileReadSkill: SkillDefinition = {
       const resolvedPath = path.resolve(workspaceDir, rawPath);
       const rootPath = path.resolve(workspaceDir);
 
-      if (resolvedPath !== rootPath && !resolvedPath.startsWith(rootPath + path.sep)) {
+      const normalizedRaw = rawPath.replace(/\\/g, '/');
+      const allowedRoots = context.allowedPaths ?? ['/workspace'];
+
+      const isInWorkspace =
+        resolvedPath === rootPath || resolvedPath.startsWith(rootPath + path.sep);
+      const isAllowedMount =
+        context.containerId &&
+        allowedRoots.some(
+          (root) => normalizedRaw === root || normalizedRaw.startsWith(root + '/')
+        );
+
+      if (!isInWorkspace && !isAllowedMount) {
         return { success: false, error: 'Path traversal detected' };
       }
 
       // ── Container Isolation ─────────────────────────────────────────────
       if (context.containerId && context.sandboxManager) {
-        // Map host path to container path
-        const relativePath = path.relative(rootPath, resolvedPath);
-        const containerPath = path.posix.join('/workspace', relativePath.replace(/\\/g, '/'));
+        // For allowed mount paths, use directly; for workspace paths, resolve relative
+        const containerPath = isAllowedMount
+          ? normalizedRaw
+          : path.posix.join('/workspace', path.relative(rootPath, resolvedPath).replace(/\\/g, '/'));
 
         const result = await context.sandboxManager.exec(context.manifest, {
           containerId: context.containerId,

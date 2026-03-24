@@ -38,6 +38,8 @@ export interface AgentContext {
   containerId: string | undefined;
   sessionId: string;
   sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
+  /** Container mount paths the agent can access (e.g. /memory, /knowledge/personal) */
+  allowedPaths?: string[];
 }
 
 // ── Skill Handler ───────────────────────────────────────────────────────────────

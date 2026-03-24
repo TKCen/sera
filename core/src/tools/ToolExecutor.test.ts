@@ -181,6 +181,7 @@ describe('ToolExecutor', () => {
           containerId: undefined,
           sessionId: 'default',
           sandboxManager: undefined,
+          allowedPaths: ['/workspace', '/memory', '/knowledge'],
         }
       );
     });

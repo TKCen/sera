@@ -447,7 +447,7 @@ export class SandboxManager {
     });
 
     const stream = await exec.start({ hijack: true, stdin: false });
-    const output = await SandboxManager.collectStream(stream);
+    const output = await SandboxManager.collectDemuxedStream(this.docker, stream);
     const inspectResult = await exec.inspect();
     return {
       exitCode: inspectResult.ExitCode ?? -1,
@@ -616,11 +616,37 @@ export class SandboxManager {
 
   // ── Internal Helpers ─────────────────────────────────────────────────────────
 
-  private static collectStream(stream: NodeJS.ReadableStream): Promise<string> {
+  /**
+   * Collect output from a Docker exec stream, stripping multiplexed frame
+   * headers. Docker hijack mode adds 8-byte headers (1 byte type + 3 padding
+   * + 4 byte big-endian length) before each frame of stdout/stderr data.
+   */
+  private static collectDemuxedStream(
+    _docker: Docker,
+    stream: NodeJS.ReadableStream
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+      stream.on('end', () => {
+        const raw = Buffer.concat(chunks);
+        // Demux: strip 8-byte frame headers from Docker multiplexed stream
+        const textChunks: Buffer[] = [];
+        let offset = 0;
+        while (offset + 8 <= raw.length) {
+          const frameLen = raw.readUInt32BE(offset + 4);
+          const frameEnd = offset + 8 + frameLen;
+          if (frameEnd > raw.length) break;
+          textChunks.push(raw.subarray(offset + 8, frameEnd));
+          offset = frameEnd;
+        }
+        // If no valid frames found, fall back to raw (non-multiplexed stream)
+        const result =
+          textChunks.length > 0
+            ? Buffer.concat(textChunks).toString('utf-8')
+            : raw.toString('utf-8');
+        resolve(result);
+      });
       stream.on('error', reject);
     });
   }

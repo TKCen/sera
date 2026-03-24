@@ -34,18 +34,35 @@ export const fileListSkill: SkillDefinition = {
       const resolvedPath = path.resolve(workspaceDir, rawPath);
       const rootPath = path.resolve(workspaceDir);
 
-      // Path traversal check
-      if (resolvedPath !== rootPath && !resolvedPath.startsWith(rootPath + path.sep)) {
+      // Check if path is within workspace
+      const isInWorkspace =
+        resolvedPath === rootPath || resolvedPath.startsWith(rootPath + path.sep);
+
+      // Check if path targets an allowed container mount (from agent grants)
+      const normalizedRaw = rawPath.replace(/\\/g, '/');
+      const allowedRoots = context.allowedPaths ?? ['/workspace'];
+      const isAllowedMount =
+        context.containerId &&
+        allowedRoots.some(
+          (root) => normalizedRaw === root || normalizedRaw.startsWith(root + '/')
+        );
+
+      if (!isInWorkspace && !isAllowedMount) {
         return { success: false, error: 'Path traversal detected' };
       }
 
       const entries = await (async () => {
         if (context.containerId && context.sandboxManager) {
-          const relativePathToRoot = path.relative(rootPath, resolvedPath);
-          const containerPath = path.posix.join(
-            '/workspace',
-            relativePathToRoot.replace(/\\/g, '/')
+          // For allowed mount paths, use the path directly; for workspace paths, resolve relative
+          const containerPath = isAllowedMount
+            ? normalizedRaw
+            : path.posix.join(
+                '/workspace',
+                path.relative(rootPath, resolvedPath).replace(/\\/g, '/')
           );
+          const relativePathToRoot = isAllowedMount
+            ? ''
+            : path.relative(rootPath, resolvedPath);
 
           const findCmd = recursive
             ? [

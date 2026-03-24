@@ -101,6 +101,9 @@ export class ToolExecutor {
 
     try {
       // Build AgentContext from Manifest
+      // Agents always have access to /workspace (rw), /memory (rw),
+      // /knowledge/personal (ro), and /knowledge/shared (ro) inside
+      // their containers — these are standard SERA mounts.
       const context: import('../skills/types.js').AgentContext = {
         agentName: manifest.metadata.name,
         workspacePath: manifest.workspace?.path || `workspaces/${manifest.metadata.name}`,
@@ -110,6 +113,7 @@ export class ToolExecutor {
         containerId,
         sessionId: sessionId || 'default',
         sandboxManager: this.sandboxManager,
+        allowedPaths: ['/workspace', '/memory', '/knowledge'],
       };
 
       // Parse arguments

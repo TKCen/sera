@@ -402,7 +402,11 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
           displayName: templateRow.display_name ?? templateRow.name,
           icon: spec.identity?.icon ?? '',
           circle: spec.circle ?? instance.circle ?? '',
-          tier: (spec.sandboxBoundary === 'tier-3' ? 3 : spec.sandboxBoundary === 'tier-2' ? 2 : 1) as 1 | 2 | 3,
+          tier: (spec.sandboxBoundary === 'tier-3'
+            ? 3
+            : spec.sandboxBoundary === 'tier-2'
+              ? 2
+              : 1) as 1 | 2 | 3,
         },
         identity: {
           role: spec.identity?.role ?? templateRow.name,

@@ -1,0 +1,63 @@
+version: 2
+updates:
+  # Root bun workspace (core/ + web/)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+      production-dependencies:
+        dependency-type: "production"
+
+  # Agent-runtime has its own package.json
+  - package-ecosystem: "npm"
+    directory: "/core/agent-runtime"
+    schedule:
+      interval: "weekly"
+
+  # Go modules — TUI
+  - package-ecosystem: "gomod"
+    directory: "/tui"
+    schedule:
+      interval: "weekly"
+
+  # Go modules — CLI
+  - package-ecosystem: "gomod"
+    directory: "/cli"
+    schedule:
+      interval: "weekly"
+
+  # Dockerfiles
+  - package-ecosystem: "docker"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/core/sandbox"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/egress-proxy"
+    schedule:
+      interval: "weekly"
+
+  # Docker Compose
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -76,10 +76,14 @@ export default function CircleDetailPage() {
   const connections = circle.connections ?? [];
   const partyMode = circle.partyMode;
   const knowledge = circle.knowledge;
+  // DB circles have `constitution`, YAML circles have `projectContext.content`
   const projectContent =
-    typeof circle.projectContext === 'object' && circle.projectContext !== null
+    (circle as unknown as Record<string, unknown>).constitution as string | undefined ??
+    (typeof circle.projectContext === 'object' && circle.projectContext !== null
       ? ((circle.projectContext as Record<string, unknown>).content as string | undefined)
-      : undefined;
+      : typeof circle.projectContext === 'string'
+        ? circle.projectContext
+        : undefined);
 
   async function handleDelete() {
     if (!id) return;

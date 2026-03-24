@@ -142,9 +142,12 @@ export default function AgentDetailPage() {
             <Button size="sm" variant="outline" onClick={() => setConfirmAction('restart')}>
               <RotateCcw size={13} /> Restart
             </Button>
-            <Button size="sm" asChild variant="ghost">
-              <Link to={`/agents/${id}/edit`}>Edit</Link>
-            </Button>
+            <Link
+              to={`/agents/${id}/edit`}
+              className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-md border border-sera-border hover:bg-sera-surface transition-colors text-sera-text"
+            >
+              Edit
+            </Link>
           </div>
         </div>
 
@@ -349,11 +352,22 @@ function ManifestTab({ id }: { id: string }) {
           </h3>
           <div className="space-y-1 text-xs">
             {Object.entries(resolvedCaps).map(([key, value]) => (
-              <div key={key} className="flex items-start gap-2">
-                <span className="text-sera-text-muted min-w-[160px]">{key}</span>
-                <span className="text-sera-text font-mono break-all">
-                  {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                </span>
+              <div key={key} className="mb-2">
+                <span className="text-sera-text-muted text-[11px] uppercase tracking-wider">{key}</span>
+                {typeof value === 'object' && value !== null ? (
+                  <div className="mt-1 ml-2 space-y-0.5">
+                    {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
+                      <div key={k} className="flex items-start gap-2">
+                        <span className="text-sera-text-dim min-w-[120px]">{k}:</span>
+                        <span className="text-sera-text font-mono break-all">
+                          {Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-sera-text font-mono ml-2">{String(value)}</span>
+                )}
               </div>
             ))}
           </div>

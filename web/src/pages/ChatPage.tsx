@@ -406,6 +406,10 @@ function ChatPageContent() {
       setSelectedAgent(name);
       const agent = agents?.find((a) => a.name === name);
       setSelectedAgentId(agent?.id ?? '');
+      // Reset session when switching agents — the useEffect on selectedAgent also does this,
+      // but explicitly clearing here ensures the UI updates immediately
+      setSessionId(null);
+      setMessages([]);
     },
     [agents]
   );

@@ -16,6 +16,8 @@ import { ToolExecutor } from './tools/ToolExecutor.js';
 import { CircleRegistry } from './circles/CircleRegistry.js';
 import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
 import type { AgentManifest } from './agents/manifest/types.js';
+import Docker from 'dockerode';
+import { EgressAclManager } from './sandbox/EgressAclManager.js';
 import { createSandboxRouter } from './routes/sandbox.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { createAgentRouter } from './routes/agents.js';
@@ -90,6 +92,11 @@ const workspaceRoot = process.env.WORKSPACE_DIR ?? path.resolve(import.meta.dirn
 const intercomService = new IntercomService();
 const bridgeService = new BridgeService();
 const sandboxManager = new SandboxManager();
+
+// Wire up egress ACL manager for per-agent network policies (Story 20.2)
+// EgressAclManager is imported at the top of the file
+const egressAclManager = new EgressAclManager(new Docker());
+sandboxManager.setEgressAclManager(egressAclManager);
 const orchestrator = new Orchestrator();
 const skillRegistry = new SkillRegistry();
 const agentsDir = path.join(workspaceRoot, 'agents');
@@ -362,10 +369,10 @@ async function resolveManifest(name: string): Promise<AgentManifest | undefined>
 }
 
 const sandboxRouter = createSandboxRouter(sandboxManager, resolveManifest);
-app.use('/api/sandbox', sandboxRouter);
+app.use('/api/sandbox', authMiddleware, sandboxRouter);
 
 const intercomRouter = createIntercomRouter(intercomService, resolveManifest, bridgeService);
-app.use('/api/intercom', intercomRouter);
+app.use('/api/intercom', authMiddleware, intercomRouter);
 
 app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
 app.use(
@@ -423,6 +430,9 @@ app.get('/api/rt/token', authMiddleware, async (_req, res) => {
   }
 });
 
+// DB-backed circle router first (handles CRUD without filesystem writes)
+app.use('/api/circles', authMiddleware, createCirclesDbRouter(orchestrator));
+// Legacy filesystem-based circle router (read-only fallback for YAML circles)
 app.use(
   '/api/circles',
   authMiddleware,
@@ -433,7 +443,6 @@ app.use(
     orchestrator
   )
 );
-app.use('/api/circles', authMiddleware, createCirclesDbRouter(orchestrator));
 app.use('/api/pipelines', authMiddleware, createPipelinesRouter(orchestrator));
 app.use('/api/skills', authMiddleware, createSkillsRouter(skillRegistry, orchestrator, pool));
 app.use('/api/memory', authMiddleware, createMemoryRouter(memoryManager));
@@ -475,7 +484,7 @@ app.use(
   createRegistryRouter(agentRegistry, resourceImporter, orchestrator)
 );
 app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRegistry));
-app.use('/api/agents/:id/tasks', createTasksRouter(intercomService));
+app.use('/api/agents/:id/tasks', authMiddleware, createTasksRouter(intercomService));
 app.use('/api/knowledge', authMiddleware, createKnowledgeRouter(llmRouter));
 
 // Epic 17 — Delegation & Service Identity

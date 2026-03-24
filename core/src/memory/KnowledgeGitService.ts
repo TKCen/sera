@@ -433,6 +433,8 @@ export class KnowledgeGitService {
   // ── Log ────────────────────────────────────────────────────────────────────
 
   async log(circleId: string, filePath?: string): Promise<GitLogEntry[]> {
+    // Ensure the repo exists before querying (auto-init on first access)
+    await this.initCircleRepo(circleId);
     const repoDir = this.repoPath(circleId);
     const git = simpleGit(repoDir);
     type LogEntry = {

@@ -22,7 +22,12 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
 
   router.post('/', async (req, res) => {
     try {
-      const { name, displayName, description, constitution } = req.body;
+      // Accept both flat format { name, displayName } and manifest format { metadata: { name, displayName } }
+      const meta = req.body.metadata as Record<string, string> | undefined;
+      const name = (req.body.name ?? meta?.name) as string | undefined;
+      const displayName = (req.body.displayName ?? meta?.displayName ?? name) as string | undefined;
+      const description = (req.body.description ?? meta?.description) as string | undefined;
+      const constitution = req.body.constitution as string | undefined;
       if (!name || !displayName) {
         return res.status(400).json({ error: 'name and displayName are required' });
       }

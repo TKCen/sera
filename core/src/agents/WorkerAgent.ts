@@ -50,10 +50,7 @@ export class WorkerAgent extends BaseAgent {
     // Get tool definitions if ToolExecutor is available
     const tools = this.toolExecutor ? this.toolExecutor.getToolDefinitions(this.manifest) : [];
 
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...fullHistory,
-    ];
+    const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...fullHistory];
 
     // ── Agentic Tool Loop ──────────────────────────────────────────────────
     const MAX_TOOL_ITERATIONS = 10;
@@ -85,7 +82,7 @@ export class WorkerAgent extends BaseAgent {
           response.toolCalls,
           this.manifest,
           this.agentInstanceId,
-          this.containerId,
+          this.containerId
         );
 
         // Add tool results to history

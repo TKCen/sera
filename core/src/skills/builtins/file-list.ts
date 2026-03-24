@@ -43,9 +43,7 @@ export const fileListSkill: SkillDefinition = {
       const allowedRoots = context.allowedPaths ?? ['/workspace'];
       const isAllowedMount =
         context.containerId &&
-        allowedRoots.some(
-          (root) => normalizedRaw === root || normalizedRaw.startsWith(root + '/')
-        );
+        allowedRoots.some((root) => normalizedRaw === root || normalizedRaw.startsWith(root + '/'));
 
       if (!isInWorkspace && !isAllowedMount) {
         return { success: false, error: 'Path traversal detected' };
@@ -59,10 +57,8 @@ export const fileListSkill: SkillDefinition = {
             : path.posix.join(
                 '/workspace',
                 path.relative(rootPath, resolvedPath).replace(/\\/g, '/')
-          );
-          const relativePathToRoot = isAllowedMount
-            ? ''
-            : path.relative(rootPath, resolvedPath);
+              );
+          const relativePathToRoot = isAllowedMount ? '' : path.relative(rootPath, resolvedPath);
 
           const findCmd = recursive
             ? [

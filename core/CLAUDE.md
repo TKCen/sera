@@ -105,6 +105,9 @@ Do not reorder steps 2-3 — the Docker event listener will crash if migrations 
 
 ## Learnings
 
+- **Express 5 does not match `router.get('/')` on mounted sub-routers**: When a router is mounted via `app.use('/api/foo', router)`, Express 5 does NOT match `router.get('/')` for `GET /api/foo`. Sub-paths like `router.get('/bar')` match fine. Workaround: use a named path like `router.get('/list')` instead of `/`. This was not an issue in Express 4.
+- **Stale `dist/` directory can shadow source in dev mode**: When running `tsx watch src/index.ts`, if a `dist/` directory exists with compiled `.js` files, tsx may resolve `import './foo.js'` to the dist version instead of the source `.ts`. Delete `dist/` in the container during dev: `docker exec sera-core rm -rf /app/dist`.
+- **Legacy `config.ts` route conflict**: The `createConfigRouter()` mounted at `app.use('/api', ...)` had `router.get('/providers')` which resolved to `/api/providers` and shadowed the dedicated `createProvidersRouter` at `app.use('/api/providers', ...)`. Always check for route prefix collisions when mounting routers at different levels.
 - **Build uses tsup (esbuild-based)**: `bun run build` runs tsup for fast file-per-file transpilation (~100ms). Type checking is separate via `tsc --noEmit`. Config in `tsup.config.ts`.
 - **`tsx watch` does not detect file changes inside Docker on Windows**: Same as the Vite HMR issue — Docker Desktop volume mounts don't propagate inotify events. Use `docker restart sera-core` to pick up source changes during dev.
 - **`tsc` without `-p` flag exits 1 and prints help**: Always pass `-p <path-to-tsconfig.json>` explicitly.

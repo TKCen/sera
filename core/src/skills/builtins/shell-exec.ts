@@ -5,7 +5,8 @@ import { TierPolicy } from '../../sandbox/TierPolicy.js';
 /**
  * Built-in skill: shell-exec
  *
- * Executes a shell command in the workspace directory.
+ * Executes a shell command in the agent's container (sandboxed) or
+ * falls back to local execution if no container is available.
  */
 export const shellExecSkill: SkillDefinition = {
   id: 'shell-exec',
@@ -30,6 +31,24 @@ export const shellExecSkill: SkillDefinition = {
     }
 
     try {
+      // ── Container Execution (preferred — sandboxed) ─────────────────────
+      if (context.containerId && context.sandboxManager) {
+        const result = await context.sandboxManager.exec(context.manifest, {
+          containerId: context.containerId,
+          agentName: context.agentName,
+          command: ['bash', '-c', command],
+        });
+
+        if (result.exitCode !== 0) {
+          return {
+            success: false,
+            error: `Command failed (exit ${result.exitCode}): ${result.output}`,
+          };
+        }
+        return { success: true, data: result.output };
+      }
+
+      // ── Local Execution (fallback — no container) ───────────────────────
       const output = execSync(command, {
         cwd: context.workspacePath,
         timeout: 30000,

@@ -28,6 +28,14 @@ import { cn } from '@/lib/utils';
 import { SkillEditorDialog } from '@/components/SkillEditorDialog';
 import { SkillImportDialog } from '@/components/SkillImportDialog';
 import { MCPServerDialog } from '@/components/MCPServerDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from '@/components/ui/dialog';
 
 type Tab = 'tools' | 'skills';
 
@@ -195,20 +203,22 @@ function SkillCard({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           <button
             onClick={() => onEdit(skill)}
             className="p-1 hover:text-sera-accent transition-colors"
             title="Edit skill"
+            aria-label={`Edit skill ${skill.name}`}
           >
-            <Edit2 size={11} />
+            <Edit2 size={11} aria-hidden="true" />
           </button>
           <button
             onClick={() => onDelete(skill.name)}
             className="p-1 hover:text-red-400 transition-colors"
             title="Delete skill"
+            aria-label={`Delete skill ${skill.name}`}
           >
-            <Trash2 size={11} />
+            <Trash2 size={11} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -241,6 +251,7 @@ export default function ToolsPage() {
   const [showImport, setShowImport] = useState(false);
   const [showMCP, setShowMCP] = useState(false);
   const [editingSkill, setEditingSkill] = useState<GuidanceSkillInfo | undefined>();
+  const [skillToDelete, setSkillToDelete] = useState<string | null>(null);
 
   function handleEditSkill(skill: GuidanceSkillInfo) {
     setEditingSkill(skill);
@@ -248,10 +259,15 @@ export default function ToolsPage() {
   }
 
   function handleDeleteSkill(name: string) {
-    if (!confirm(`Delete skill "${name}"?`)) return;
-    deleteSkill.mutate(name, {
-      onSuccess: () => toast.success(`Skill "${name}" deleted`),
+    setSkillToDelete(name);
+  }
+
+  function confirmDeleteSkill() {
+    if (!skillToDelete) return;
+    deleteSkill.mutate(skillToDelete, {
+      onSuccess: () => toast.success(`Skill "${skillToDelete}" deleted`),
       onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+      onSettled: () => setSkillToDelete(null),
     });
   }
 
@@ -343,8 +359,16 @@ export default function ToolsPage() {
 
       {/* Tabs + Search */}
       <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
-        <div className="flex items-center gap-1 bg-sera-surface rounded-lg p-1">
+        <div
+          className="flex items-center gap-1 bg-sera-surface rounded-lg p-1"
+          role="tablist"
+          aria-label="Tool Views"
+        >
           <button
+            id="tab-tools"
+            role="tab"
+            aria-selected={tab === 'tools'}
+            aria-controls="tools-panel"
             onClick={() => setTab('tools')}
             className={cn(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
@@ -353,11 +377,15 @@ export default function ToolsPage() {
                 : 'text-sera-text-muted hover:text-sera-text'
             )}
           >
-            <Wrench size={12} />
+            <Wrench size={12} aria-hidden="true" />
             Tools
             {tools && <span className="ml-1 text-[10px] opacity-70">{tools.length}</span>}
           </button>
           <button
+            id="tab-skills"
+            role="tab"
+            aria-selected={tab === 'skills'}
+            aria-controls="skills-panel"
             onClick={() => setTab('skills')}
             className={cn(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
@@ -366,19 +394,28 @@ export default function ToolsPage() {
                 : 'text-sera-text-muted hover:text-sera-text'
             )}
           >
-            <BookOpen size={12} />
+            <BookOpen size={12} aria-hidden="true" />
             Skills
             {skills && <span className="ml-1 text-[10px] opacity-70">{skills.length}</span>}
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => e.preventDefault()}
+          aria-label="Search Filter"
+        >
           <div className="relative">
+            <label htmlFor="search-input" className="sr-only">
+              Search {tab === 'tools' ? 'tools' : 'skills'}
+            </label>
             <Search
               size={13}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-sera-text-dim"
+              aria-hidden="true"
             />
             <input
+              id="search-input"
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -390,12 +427,12 @@ export default function ToolsPage() {
           {/* Action buttons */}
           {tab === 'tools' ? (
             <Button size="sm" variant="outline" onClick={() => setShowMCP(true)}>
-              <Plus size={12} /> MCP Server
+              <Plus size={12} aria-hidden="true" /> MCP Server
             </Button>
           ) : (
             <>
               <Button size="sm" variant="outline" onClick={() => setShowImport(true)}>
-                <Download size={12} /> Import
+                <Download size={12} aria-hidden="true" /> Import
               </Button>
               <Button
                 size="sm"
@@ -404,16 +441,16 @@ export default function ToolsPage() {
                   setShowEditor(true);
                 }}
               >
-                <Plus size={12} /> Create Skill
+                <Plus size={12} aria-hidden="true" /> Create Skill
               </Button>
             </>
           )}
-        </div>
+        </form>
       </div>
 
       {/* Tools Tab */}
       {tab === 'tools' && (
-        <>
+        <div id="tools-panel" role="tabpanel" aria-labelledby="tab-tools">
           {/* Stats */}
           {!toolsLoading && tools && tools.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -425,9 +462,28 @@ export default function ToolsPage() {
           )}
 
           {isLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+              aria-busy="true"
+              aria-live="polite"
+              role="status"
+            >
               {[1, 2, 3, 4, 5, 6].map((i) => (
-                <Skeleton key={i} className="h-32 rounded-xl" />
+                <div
+                  key={i}
+                  className="sera-card p-4 flex flex-col gap-2 border border-sera-border"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-24 rounded" />
+                        <Skeleton className="h-4 w-12 rounded" />
+                      </div>
+                      <Skeleton className="h-3 w-16 rounded mt-1" />
+                    </div>
+                  </div>
+                  <Skeleton className="h-8 w-full rounded mt-2" />
+                </div>
               ))}
             </div>
           ) : filteredTools.length === 0 ? (
@@ -462,12 +518,12 @@ export default function ToolsPage() {
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* Skills Tab */}
       {tab === 'skills' && (
-        <>
+        <div id="skills-panel" role="tabpanel" aria-labelledby="tab-skills">
           {/* Stats */}
           {!skillsLoading && skills && skills.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -488,9 +544,31 @@ export default function ToolsPage() {
           )}
 
           {isLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-32 rounded-xl" />
+            <div
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+              aria-busy="true"
+              aria-live="polite"
+              role="status"
+            >
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div
+                  key={i}
+                  className="sera-card p-4 flex flex-col gap-2 border border-sera-border"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-32 rounded" />
+                      </div>
+                      <Skeleton className="h-3 w-16 rounded mt-1" />
+                    </div>
+                  </div>
+                  <Skeleton className="h-8 w-full rounded mt-2" />
+                  <div className="flex items-center justify-between mt-auto pt-2">
+                    <Skeleton className="h-3 w-20 rounded" />
+                    <Skeleton className="h-3 w-12 rounded" />
+                  </div>
+                </div>
               ))}
             </div>
           ) : filteredSkills.length === 0 ? (
@@ -526,7 +604,7 @@ export default function ToolsPage() {
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* Dialogs */}
@@ -553,6 +631,37 @@ export default function ToolsPage() {
       />
       <SkillImportDialog open={showImport} onOpenChange={setShowImport} />
       <MCPServerDialog open={showMCP} onOpenChange={setShowMCP} />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={skillToDelete !== null}
+        onOpenChange={(open) => !open && setSkillToDelete(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Skill</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete the skill <strong>{skillToDelete}</strong>? This
+              action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-3 mt-4">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={confirmDeleteSkill}
+              disabled={deleteSkill.isPending}
+            >
+              {deleteSkill.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

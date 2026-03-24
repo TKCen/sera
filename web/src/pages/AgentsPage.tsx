@@ -9,14 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogClose,
-} from '@/components/ui/dialog';
 
 // TODO: virtualise if > 100 agents
 
@@ -31,7 +23,6 @@ export default function AgentsPage() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCircle, setFilterCircle] = useState<string>('all');
-  const [agentToDelete, setAgentToDelete] = useState<{ id: string; name: string } | null>(null);
 
   const circles = useMemo(() => {
     if (!agents) return [];
@@ -78,21 +69,20 @@ export default function AgentsPage() {
     }
   }
 
-  function handleDelete(e: React.MouseEvent, id: string, name: string) {
+  async function handleDelete(e: React.MouseEvent, id: string, name: string) {
     e.preventDefault();
     e.stopPropagation();
-    setAgentToDelete({ id, name });
-  }
-
-  async function confirmDelete() {
-    if (!agentToDelete) return;
+    if (
+      !window.confirm(
+        `Delete agent "${name}"? This will stop its container and remove the instance permanently.`
+      )
+    )
+      return;
     try {
-      await deleteAgent.mutateAsync(agentToDelete.id);
-      toast.success(`Deleted ${agentToDelete.name}`);
+      await deleteAgent.mutateAsync(id);
+      toast.success(`Deleted ${name}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete');
-    } finally {
-      setAgentToDelete(null);
     }
   }
 
@@ -109,15 +99,8 @@ export default function AgentsPage() {
       </header>
 
       {/* Filters */}
-      <form
-        aria-label="Filters"
-        className="flex items-center gap-3 mb-4"
-        onSubmit={(e) => e.preventDefault()}
-      >
+      <section aria-label="Filters" className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 max-w-xs">
-          <label htmlFor="search-agents" className="sr-only">
-            Search agents
-          </label>
           <Search
             size={13}
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none"
@@ -133,36 +116,25 @@ export default function AgentsPage() {
         </div>
 
         {circles.length > 0 && (
-          <div className="relative">
-            <label htmlFor="filter-circle" className="sr-only">
-              Filter by circle
-            </label>
-            <select
-              id="filter-circle"
-              aria-label="Filter by circle"
-              value={filterCircle}
-              onChange={(e) => setFilterCircle(e.target.value)}
-              className="sera-input h-9 py-0 w-auto text-xs"
-            >
-              <option value="all">All circles</option>
-              {circles.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            aria-label="Filter by circle"
+            value={filterCircle}
+            onChange={(e) => setFilterCircle(e.target.value)}
+            className="sera-input h-9 py-0 w-auto text-xs"
+          >
+            <option value="all">All circles</option>
+            {circles.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
         )}
 
-        <div
-          className="flex items-center gap-1"
-          role="group"
-          aria-label="Filter by status"
-        >
+        <div className="flex items-center gap-1">
           {STATUS_OPTIONS.map((s) => (
             <button
               key={s}
-              type="button"
               onClick={() => setFilterStatus(s)}
               aria-pressed={filterStatus === s}
               className={
@@ -175,18 +147,13 @@ export default function AgentsPage() {
             </button>
           ))}
         </div>
-      </form>
+      </section>
 
       {isLoading ? (
         <ul aria-label="Loading agents" role="status" className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <li key={i} className="flex items-center gap-4 px-4 py-3 rounded-xl border border-sera-border bg-sera-card">
-              <Skeleton className="h-9 w-9 rounded-lg flex-shrink-0" />
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-3 w-32" />
-              </div>
-              <Skeleton className="h-6 w-16 rounded-full" />
+            <li key={i}>
+              <Skeleton className="h-16 rounded-xl" />
             </li>
           ))}
         </ul>
@@ -235,7 +202,7 @@ export default function AgentsPage() {
               </div>
 
               {/* Quick actions */}
-              <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
+              <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
                   onClick={(e) => {
                     void handleStart(e, agent.id);
@@ -243,9 +210,9 @@ export default function AgentsPage() {
                   disabled={startAgent.isPending}
                   className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
                   title="Start"
-                  aria-label={`Start agent ${agent.display_name ?? agent.name}`}
+                  aria-label="Start agent"
                 >
-                  <Play size={13} aria-hidden="true" />
+                  <Play size={13} />
                 </button>
                 <button
                   onClick={(e) => {
@@ -254,9 +221,9 @@ export default function AgentsPage() {
                   disabled={stopAgent.isPending}
                   className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
                   title="Stop"
-                  aria-label={`Stop agent ${agent.display_name ?? agent.name}`}
+                  aria-label="Stop agent"
                 >
-                  <Square size={13} aria-hidden="true" />
+                  <Square size={13} />
                 </button>
                 <button
                   onClick={(e) => {
@@ -265,9 +232,9 @@ export default function AgentsPage() {
                   disabled={deleteAgent.isPending}
                   className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
                   title="Delete"
-                  aria-label={`Delete agent ${agent.display_name ?? agent.name}`}
+                  aria-label="Delete agent"
                 >
-                  <Trash2 size={13} aria-hidden="true" />
+                  <Trash2 size={13} />
                 </button>
               </div>
 
@@ -281,38 +248,6 @@ export default function AgentsPage() {
           ))}
         </ul>
       )}
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog
-        open={agentToDelete !== null}
-        onOpenChange={(o: boolean) => !o && setAgentToDelete(null)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Agent</DialogTitle>
-            <DialogDescription>
-              Delete agent <strong>{agentToDelete?.name}</strong>? This will stop its container and remove the instance permanently.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex gap-3 justify-end mt-4">
-            <DialogClose asChild>
-              <Button variant="ghost" size="sm">
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => {
-                void confirmDelete();
-              }}
-              disabled={deleteAgent.isPending}
-            >
-              {deleteAgent.isPending ? 'Deleting...' : 'Delete'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </main>
   );
 }

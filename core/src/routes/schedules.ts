@@ -21,7 +21,24 @@ export const createSchedulesRouter = () => {
       query += ' ORDER BY created_at DESC';
 
       const { rows } = await pool.query(query, params);
-      res.json(rows);
+      // Map snake_case DB columns to camelCase for the frontend
+      res.json(rows.map((r: Record<string, unknown>) => ({
+        id: r.id,
+        agentName: r.agent_name ?? r.agent_instance_id,
+        agentInstanceId: r.agent_instance_id,
+        name: r.name,
+        type: r.type ?? 'cron',
+        expression: r.cron_expression ?? r.expression,
+        taskPrompt: r.task_prompt,
+        status: r.status,
+        source: r.source ?? 'api',
+        lastRunAt: r.last_run_at,
+        lastRunStatus: r.last_run_status,
+        lastRunOutput: r.last_run_output,
+        nextRunAt: r.next_run_at,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

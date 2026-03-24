@@ -274,6 +274,13 @@ function ChatPageContent() {
       const data = await request<SessionDetail>(`/sessions/${id}`);
       setSessionId(data.id);
       if (data.agentName) setSelectedAgent(data.agentName);
+      if (data.agentInstanceId) {
+        setSelectedAgentId(data.agentInstanceId);
+      } else if (data.agentName && agents) {
+        // Fall back to looking up the instance ID from the agents list
+        const agent = agents.find((a) => a.name === data.agentName);
+        if (agent) setSelectedAgentId(agent.id);
+      }
 
       const uiMessages: Message[] = (data.messages ?? [])
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -293,7 +300,7 @@ function ChatPageContent() {
       const errMsg = err instanceof Error ? err.message : 'Failed to load session';
       toast.error(errMsg);
     }
-  }, []);
+  }, [agents]);
 
   const startNewSession = useCallback(() => {
     setSessionId(null);

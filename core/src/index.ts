@@ -289,7 +289,8 @@ app.get('/api/health/detail', async (_req, res) => {
     const instances = await agentRegistry.listInstances();
     agentStats = {
       total: instances.length,
-      running: instances.filter((i) => i.status === 'running').length,
+      // 'active' = in-process (no container), 'running' = has a running container
+      running: instances.filter((i) => i.status === 'running' || i.status === 'active').length,
       stopped: instances.filter((i) => i.status === 'stopped').length,
       errored: instances.filter((i) => i.status === 'error').length,
     };

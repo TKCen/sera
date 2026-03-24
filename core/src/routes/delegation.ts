@@ -224,6 +224,12 @@ export function createDelegationRouter(intercomService?: IntercomService) {
     const id = req.params['id'] as string;
     const cascade = req.query['cascade'] === 'true';
 
+    // Validate UUID format to prevent raw SQL errors leaking to clients
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(id)) {
+      return res.status(400).json({ error: 'Invalid delegation token ID' });
+    }
+
     // Fetch token (must belong to this operator)
     const { rows } = await pool.query(
       `SELECT * FROM delegation_tokens WHERE id = $1 AND principal_id = $2`,

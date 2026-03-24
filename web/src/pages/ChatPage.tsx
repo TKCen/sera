@@ -371,6 +371,8 @@ function ChatPageContent() {
       );
       setSessionId(newSessionId);
       messageIdRef.current = messageId;
+      // Refresh the session list so the sidebar shows the new/updated session
+      void fetchSessions();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to send message';
       toast.error(errMsg);
@@ -383,7 +385,7 @@ function ChatPageContent() {
       streamingMsgId.current = null;
       messageIdRef.current = null;
     }
-  }, [input, selectedAgent, selectedAgentId, streaming, sessionId]);
+  }, [input, selectedAgent, selectedAgentId, streaming, sessionId, fetchSessions]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {

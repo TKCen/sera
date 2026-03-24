@@ -232,13 +232,27 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         return;
       }
 
-      // Stop the instance (cleans up Docker)
+      // Validate UUID format
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!UUID_RE.test(id)) {
+        res.status(400).json({ error: 'Invalid instance ID format' });
+        return;
+      }
+
+      // Verify instance exists before deletion
+      const instance = await agentRegistry.getInstance(id);
+      if (!instance) {
+        res.status(404).json({ error: 'Agent instance not found' });
+        return;
+      }
+
+      // Stop the instance (cleans up Docker container)
       await orchestrator.stopInstance(id);
 
       // Delete from DB
       await agentRegistry.deleteInstance(id);
 
-      res.status(204).send();
+      res.json({ deleted: { id: instance.id, name: instance.name, circle_id: instance.circle_id } });
     })
   );
 

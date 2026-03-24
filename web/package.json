@@ -25,6 +25,7 @@
     "@radix-ui/react-tooltip": "^1.1.6",
     "@tanstack/react-query": "^5.74.4",
     "@tanstack/react-query-devtools": "^5.74.4",
+    "@vitest/browser": "^4.1.1",
     "centrifuge": "^5.5.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

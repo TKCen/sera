@@ -5,8 +5,9 @@ export function getHealthDetail(): Promise<HealthDetail> {
   return request<HealthDetail>('/health/detail');
 }
 
-export function getCircuitBreakers(): Promise<CircuitBreakerState[]> {
-  return request<CircuitBreakerState[]>('/system/circuit-breakers');
+export async function getCircuitBreakers(): Promise<CircuitBreakerState[]> {
+  const data = await request<{ circuitBreakers: CircuitBreakerState[] }>('/system/circuit-breakers');
+  return data.circuitBreakers ?? [];
 }
 
 export function resetCircuitBreaker(provider: string): Promise<{ success: boolean }> {

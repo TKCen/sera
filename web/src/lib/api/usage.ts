@@ -11,7 +11,7 @@ export function getUsage(params: {
   if (params.from) q.set('from', params.from);
   if (params.to) q.set('to', params.to);
   const qs = q.toString();
-  return request<UsageResponse>(`/usage${qs ? `?${qs}` : ''}`);
+  return request<UsageResponse>(`/metering/usage${qs ? `?${qs}` : ''}`);
 }
 
 export function getAgentBudget(agentName: string): Promise<{

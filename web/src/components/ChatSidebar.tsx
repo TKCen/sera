@@ -124,11 +124,19 @@ export function ChatSidebar({
                 </div>
                 <div className="space-y-0.5">
                   {agentSessions.map((s) => (
-                    <button
+                    <div
                       key={s.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => onLoadSession(s.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onLoadSession(s.id);
+                        }
+                      }}
                       className={cn(
-                        'w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors border-l-2',
+                        'w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors border-l-2 cursor-pointer',
                         sessionId === s.id
                           ? 'bg-sera-accent-soft border-sera-accent'
                           : 'hover:bg-sera-surface border-transparent'
@@ -151,7 +159,7 @@ export function ChatSidebar({
                       >
                         <Trash2 size={12} />
                       </button>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>

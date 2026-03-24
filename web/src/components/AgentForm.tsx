@@ -14,9 +14,9 @@ import { MultiSelectPicker } from '@/components/MultiSelectPicker';
 import type { PickerItem } from '@/components/MultiSelectPicker';
 
 const TIERS = [
-  { value: '1', label: 'Tier 1', description: 'Unrestricted network + filesystem' },
-  { value: '2', label: 'Tier 2', description: 'Restricted network, read-only filesystem' },
-  { value: '3', label: 'Tier 3', description: 'No network, no filesystem' },
+  { value: '1', label: 'Tier 1', description: 'No network, read-only filesystem (most restricted)' },
+  { value: '2', label: 'Tier 2', description: 'Restricted network via egress proxy, read-only root' },
+  { value: '3', label: 'Tier 3', description: 'Command-restricted, network via egress proxy' },
 ];
 
 export interface AgentFormInitialValues {

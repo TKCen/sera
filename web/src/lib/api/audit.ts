@@ -12,7 +12,7 @@ export interface AuditParams {
   pageSize?: number;
 }
 
-export function getAuditEvents(params: AuditParams = {}): Promise<AuditResponse> {
+export async function getAuditEvents(params: AuditParams = {}): Promise<AuditResponse> {
   const q = new URLSearchParams();
   if (params.actorId) q.set('actorId', params.actorId);
   if (params.eventType) q.set('eventType', params.eventType);
@@ -20,10 +20,22 @@ export function getAuditEvents(params: AuditParams = {}): Promise<AuditResponse>
   if (params.from) q.set('from', params.from);
   if (params.to) q.set('to', params.to);
   if (params.search) q.set('search', params.search);
-  if (params.page !== undefined) q.set('page', String(params.page));
-  if (params.pageSize !== undefined) q.set('pageSize', String(params.pageSize));
+
+  // Backend expects limit/offset, not page/pageSize
+  const pageSize = params.pageSize ?? 50;
+  const page = params.page ?? 1;
+  q.set('limit', String(pageSize));
+  q.set('offset', String((page - 1) * pageSize));
+
   const qs = q.toString();
-  return request<AuditResponse>(`/audit${qs ? `?${qs}` : ''}`);
+  // Backend returns { entries, total } but frontend expects { events, total, page, pageSize }
+  const raw = await request<{ entries: unknown[]; total: number }>(`/audit${qs ? `?${qs}` : ''}`);
+  return {
+    events: raw.entries as AuditResponse['events'],
+    total: raw.total,
+    page,
+    pageSize,
+  };
 }
 
 export function verifyAuditChain(): Promise<AuditVerifyResult> {

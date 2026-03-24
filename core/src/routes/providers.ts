@@ -122,9 +122,11 @@ export function createProvidersRouter(
   });
 
   /**
-   * GET /api/providers
+   * GET /api/providers/list
    * Lists all models/providers currently configured.
-  router.get('/', async (_req: Request, res: Response) => {
+   * Note: Express 5 doesn't match router.get('/') for mounted sub-routers.
+   */
+  router.get('/list', async (_req: Request, res: Response) => {
     try {
       const models = await llmRouter.listModels();
       res.json({ providers: models });

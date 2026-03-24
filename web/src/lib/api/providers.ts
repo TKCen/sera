@@ -23,7 +23,7 @@ export function deleteProvider(name: string): Promise<{ success: boolean }> {
 }
 
 export function getProviders(): Promise<ProvidersResponse> {
-  return request<ProvidersResponse>('/providers');
+  return request<ProvidersResponse>('/providers/list');
 }
 
 export function updateProvider(

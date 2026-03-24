@@ -80,37 +80,6 @@ describe('Config Routes', () => {
     expect(res.body.success).toBe(true);
   });
 
-  it('GET /api/providers should return providers list', async () => {
-    const res = await request(app).get('/api/providers');
-    expect(res.status).toBe(200);
-    expect(res.body.activeProvider).toBe('openai');
-    expect(Array.isArray(res.body.providers)).toBe(true);
-    const openai = res.body.providers.find((p: { id: string }) => p.id === 'openai');
-    expect(openai.configured).toBe(true);
-    expect(openai.isActive).toBe(true);
-  });
-
-  it('PUT /api/providers/:id should update provider config', async () => {
-    const res = await request(app).put('/api/providers/openai').send({ baseUrl: 'new-url' });
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-  });
-
-  it('POST /api/providers/active should set active provider', async () => {
-    const res = await request(app).post('/api/providers/active').send({ providerId: 'lmstudio' });
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.activeProvider).toBe('lmstudio');
-  });
-
-  it('POST /api/providers/:id/test should return success/fail based on connection', async () => {
-    // This will hit the catch block in the route because we are not mocking OpenAIProvider
-    // but the route should return success: false instead of 500.
-    const res = await request(app)
-      .post('/api/providers/openai/test')
-      .send({ baseUrl: 'http://invalid-url', apiKey: 'test-key', model: 'test-model' });
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(false);
-    expect(res.body).toHaveProperty('error');
-  });
+  // Provider management routes (GET/POST/DELETE /api/providers, templates, health,
+  // discover) have been moved to routes/providers.ts — see providers route tests.
 });

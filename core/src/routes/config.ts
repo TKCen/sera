@@ -2,9 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { config } from '../lib/config.js';
 import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
-import { PROVIDER_CATALOG } from '../lib/providers.js';
 import { Logger } from '../lib/logger.js';
-import { OpenAIProvider } from '../lib/llm/OpenAIProvider.js';
 
 const logger = new Logger('ConfigRouter');
 
@@ -59,93 +57,9 @@ export function createConfigRouter(): Router {
   });
 
   // ─── Provider Management ────────────────────────────────────────────────────
-
-  /** GET /api/providers — Lists all available provider configurations. */
-  router.get('/providers', (req: Request, res: Response) => {
-    const providersConfig = config.providers;
-    const providers = PROVIDER_CATALOG.map((p) => {
-      const savedConfig = providersConfig.providers[p.id] || null;
-      return {
-        ...p,
-        configured: !!savedConfig,
-        isActive: providersConfig.activeProvider === p.id,
-        savedConfig,
-      };
-    });
-    res.json({
-      activeProvider: providersConfig.activeProvider,
-      providers,
-    });
-  });
-
-  /** PUT /api/providers/:id — Updates settings for a specific provider. */
-  router.put('/providers/:id', (req: Request, res: Response) => {
-    const id = String(req.params.id);
-    try {
-      config.saveProviderConfig(id, req.body);
-      logger.info(`Provider configuration updated: ${id}`);
-      res.json({ success: true });
-    } catch (err: unknown) {
-      logger.error(`Failed to update provider config (${id}):`, err);
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  /** POST /api/providers/:id/test — Validates a specific provider connection. */
-  router.post('/providers/:id/test', async (req: Request, res: Response) => {
-    const id = String(req.params.id);
-    try {
-      const baseUrl = req.body.baseUrl ? String(req.body.baseUrl) : undefined;
-      const apiKey = req.body.apiKey ? String(req.body.apiKey) : undefined;
-      const model = req.body.model ? String(req.body.model) : undefined;
-
-      let provider;
-      if (baseUrl) {
-        // If parameters are passed in the body, test them directly
-        provider = new OpenAIProvider({
-          baseUrl,
-          apiKey: apiKey || 'not-needed',
-          model: model || 'model-identifier',
-        });
-      } else {
-        // Otherwise, use saved or catalog defaults
-        const providerConfig = config.getProviderConfig(id);
-        const catalogEntry = PROVIDER_CATALOG.find((p) => p.id === id);
-
-        provider = ProviderFactory.createFromModelConfig({
-          provider: id,
-          name: providerConfig?.model || catalogEntry?.models[0]?.id || 'model-identifier',
-        });
-      }
-
-      const response = await provider.chat([{ role: 'user', content: 'Hello' }]);
-      res.json({
-        success: true,
-        provider: id,
-        response: response.content,
-      });
-    } catch (err: unknown) {
-      // In tests, we might want to see the error, but we should not crash the test suite.
-      // The frontend expects success: false and the error message.
-      res.json({ success: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  /** POST /api/providers/active — Sets a specific provider as the globally active LLM provider. */
-  router.post('/providers/active', (req: Request, res: Response) => {
-    const providerId = req.body.providerId ? String(req.body.providerId) : undefined;
-    try {
-      if (!providerId) {
-        return res.status(400).json({ error: 'providerId is required' });
-      }
-      config.setActiveProvider(providerId);
-      logger.info(`Active provider set to: ${providerId}`);
-      res.json({ success: true, activeProvider: providerId });
-    } catch (err: unknown) {
-      logger.error(`Failed to set active provider (${providerId}):`, err);
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+  // NOTE: Provider CRUD routes (GET/POST/DELETE /api/providers, templates, health,
+  // discover) are in routes/providers.ts via createProvidersRouter.
+  // The legacy catalog-based routes below have been removed to avoid conflicts.
 
   return router;
 }

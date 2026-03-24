@@ -152,6 +152,7 @@ sandboxManager.setAgentRegistry(agentRegistry);
 orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
 orchestrator.setLlmRouter(llmRouter);
+orchestrator.setCircleContextResolver((circleName) => circleRegistry.getProjectContext(circleName));
 
 registerBuiltinSkills(skillRegistry, memoryManager);
 

@@ -49,6 +49,7 @@ export class Orchestrator {
   private agentScheduler: AgentScheduler | undefined;
   private registry: AgentRegistry | undefined;
   private llmRouter: LlmRouter | undefined;
+  private circleContextResolver: ((circleName: string) => string | undefined) | undefined;
   private heartbeatInterval: NodeJS.Timeout | undefined;
   private cleanupInterval: NodeJS.Timeout | undefined;
   private diskQuotaInterval: NodeJS.Timeout | undefined;
@@ -86,6 +87,10 @@ export class Orchestrator {
 
   public setLlmRouter(router: LlmRouter): void {
     this.llmRouter = router;
+  }
+
+  public setCircleContextResolver(resolver: (circleName: string) => string | undefined): void {
+    this.circleContextResolver = resolver;
   }
 
   public setIntercom(intercom: IntercomService): void {
@@ -238,6 +243,13 @@ export class Orchestrator {
     if (this.identityService) agent.setIdentityService(this.identityService);
     if (this.meteringEngine && this.agentScheduler) {
       agent.setMetering(this.meteringEngine, this.agentScheduler);
+    }
+
+    // Wire circle context resolver so agents can access their circle's shared context
+    if (this.circleContextResolver && manifest.metadata.circle) {
+      const circleName = manifest.metadata.circle;
+      const resolver = this.circleContextResolver;
+      agent.setCircleContextResolver(() => resolver(circleName));
     }
 
     // ── Determine lifecycle mode (Story 3.8) ─────────────────────────────

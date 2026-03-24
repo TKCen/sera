@@ -98,6 +98,14 @@ export abstract class BaseAgent {
     this.memoryManager = memoryManager;
   }
 
+  /** Optional resolver for circle project context. Set by Orchestrator on startup. */
+  protected circleContextResolver: (() => string | undefined) | undefined;
+
+  /** Attach a circle context resolver after construction. */
+  public setCircleContextResolver(resolver: () => string | undefined): void {
+    this.circleContextResolver = resolver;
+  }
+
   /** Attach an IdentityService after construction. */
   public setIdentityService(identityService: IdentityService): void {
     this.identityService = identityService;
@@ -142,12 +150,15 @@ export abstract class BaseAgent {
       dynamicContext = await this.memoryManager.assembleContext(input);
     }
 
+    // Resolve circle project context (if agent belongs to a circle)
+    const circleContext = this.circleContextResolver?.();
+
     const messages: ChatMessage[] = [
       {
         role: 'system',
         content: IdentityService.generateStreamingSystemPrompt(
           this.manifest,
-          undefined,
+          circleContext,
           dynamicContext
         ),
       },

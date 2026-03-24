@@ -39,9 +39,12 @@ export class WorkerAgent extends BaseAgent {
       dynamicContext = await this.memoryManager.assembleContext(input);
     }
 
+    // Resolve circle project context
+    const circleContext = this.circleContextResolver?.();
+
     const systemPrompt = IdentityService.generateSystemPrompt(
       this.manifest,
-      undefined,
+      circleContext,
       dynamicContext
     );
 

@@ -499,13 +499,19 @@ export default function SettingsPage(): React.JSX.Element {
                           </td>
                           <td className="py-3 px-3">
                             {'authStatus' in m && m.authStatus === 'configured' && (
-                              <Badge variant="success" className="text-[9px]">Active</Badge>
+                              <Badge variant="success" className="text-[9px]">
+                                Active
+                              </Badge>
                             )}
                             {'authStatus' in m && m.authStatus === 'missing' && (
-                              <Badge variant="warning" className="text-[9px]">Key missing</Badge>
+                              <Badge variant="warning" className="text-[9px]">
+                                Key missing
+                              </Badge>
                             )}
                             {'authStatus' in m && m.authStatus === 'not-required' && (
-                              <Badge variant="default" className="text-[9px]">Local</Badge>
+                              <Badge variant="default" className="text-[9px]">
+                                Local
+                              </Badge>
                             )}
                           </td>
                           <td className="py-3 px-3 text-sera-text-dim font-mono text-[10px]">

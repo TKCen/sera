@@ -230,7 +230,9 @@ function ManifestTab({ id }: { id: string }) {
   const inst = instance as unknown as Record<string, unknown>;
   const overrides = (inst.overrides ?? {}) as Record<string, unknown>;
   const modelOv = overrides.model as Record<string, unknown> | undefined;
-  const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
+  const resolvedConfig = (inst.resolved_config ?? {}) as Record<string, unknown>;
+  const specResources = (resolvedConfig.resources ?? (resolvedConfig.spec as Record<string, unknown> | undefined)?.resources ?? {}) as Record<string, unknown>;
+  const resourcesOv = (overrides.resources ?? specResources) as Record<string, unknown> | undefined;
   const resolvedCaps = (inst.resolved_capabilities ?? {}) as Record<string, unknown>;
   const permissions = overrides.permissions as Record<string, unknown> | undefined;
   const tools = overrides.tools as Record<string, unknown> | undefined;

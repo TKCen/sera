@@ -14,7 +14,103 @@
       "provider": "lmstudio",
       "baseUrl": "http://host.docker.internal:1234/v1",
       "apiKey": "lm-studio",
-      "description": "Qwen 3.5 35B A3B via LM Studio (host port 1234)"
+      "description": "Qwen 3.5 35B A3B via LM Studio"
+    },
+
+    {
+      "modelName": "gpt-4.1",
+      "api": "openai-completions",
+      "provider": "openai",
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "description": "OpenAI GPT-4.1"
+    },
+    {
+      "modelName": "gpt-4.1-mini",
+      "api": "openai-completions",
+      "provider": "openai",
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "description": "OpenAI GPT-4.1 Mini"
+    },
+    {
+      "modelName": "o4-mini",
+      "api": "openai-completions",
+      "provider": "openai",
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "description": "OpenAI o4-mini (reasoning)"
+    },
+
+    {
+      "modelName": "claude-sonnet-4-6",
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "apiKeyEnvVar": "ANTHROPIC_API_KEY",
+      "description": "Anthropic Claude Sonnet 4.6"
+    },
+    {
+      "modelName": "claude-opus-4-6",
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "apiKeyEnvVar": "ANTHROPIC_API_KEY",
+      "description": "Anthropic Claude Opus 4.6"
+    },
+    {
+      "modelName": "claude-haiku-4-5",
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "apiKeyEnvVar": "ANTHROPIC_API_KEY",
+      "description": "Anthropic Claude Haiku 4.5"
+    },
+
+    {
+      "modelName": "gemini-2.5-pro",
+      "api": "openai-completions",
+      "provider": "google",
+      "apiKeyEnvVar": "GOOGLE_API_KEY",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "description": "Google Gemini 2.5 Pro via AI Studio"
+    },
+    {
+      "modelName": "gemini-2.5-flash",
+      "api": "openai-completions",
+      "provider": "google",
+      "apiKeyEnvVar": "GOOGLE_API_KEY",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "description": "Google Gemini 2.5 Flash via AI Studio"
+    },
+
+    {
+      "modelName": "groq/llama-4-scout-17b",
+      "api": "openai-completions",
+      "provider": "groq",
+      "apiKeyEnvVar": "GROQ_API_KEY",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "description": "Groq Llama 4 Scout 17B"
+    },
+    {
+      "modelName": "groq/llama-4-maverick-17b",
+      "api": "openai-completions",
+      "provider": "groq",
+      "apiKeyEnvVar": "GROQ_API_KEY",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "description": "Groq Llama 4 Maverick 17B"
+    },
+
+    {
+      "modelName": "mistral-large-latest",
+      "api": "openai-completions",
+      "provider": "mistral",
+      "apiKeyEnvVar": "MISTRAL_API_KEY",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "description": "Mistral Large (latest)"
+    },
+
+    {
+      "modelName": "ollama-local",
+      "api": "openai-completions",
+      "provider": "ollama",
+      "baseUrl": "http://host.docker.internal:11434/v1",
+      "apiKey": "ollama",
+      "description": "Local Ollama instance (host port 11434) — generic alias"
     }
   ]
 }

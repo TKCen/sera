@@ -27,6 +27,7 @@ import { providerFromModel } from '../llm/CircuitBreakerService.js';
 import { requireRole } from '../auth/authMiddleware.js';
 import { Logger } from '../lib/logger.js';
 import type { DynamicProviderManager } from '../llm/DynamicProviderManager.js';
+import { ProviderHealthService } from '../llm/ProviderHealthService.js';
 
 const logger = new Logger('ProvidersRoute');
 
@@ -63,10 +64,11 @@ export function createProvidersRouter(
   dynamicProviderManager: DynamicProviderManager
 ): Router {
   const router = Router();
+  const healthService = new ProviderHealthService();
 
   /**
    * GET /api/providers
-   * Lists all models/providers currently configured in LiteLLM.
+   * Lists all models/providers currently configured.
    */
   router.get('/', async (_req: Request, res: Response) => {
     try {
@@ -294,6 +296,57 @@ export function createProvidersRouter(
       res.json({ success: true, defaultModel: modelName });
     } catch (err: unknown) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * GET /api/providers/health-all
+   * Batch health check all providers (cached 60s).
+   */
+  router.get('/health-all', async (_req: Request, res: Response) => {
+    try {
+      const registry = llmRouter.getRegistry();
+      const configs = registry.list();
+      // Deduplicate by provider+baseUrl to avoid redundant probes
+      const seen = new Set<string>();
+      const results: Record<string, unknown> = {};
+
+      for (const cfg of configs) {
+        const key = `${cfg.provider ?? 'unknown'}:${cfg.baseUrl ?? 'cloud'}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const status = await healthService.checkHealth(cfg);
+        results[cfg.modelName] = {
+          provider: cfg.provider,
+          ...status,
+        };
+      }
+
+      res.json({ health: results });
+    } catch (err: unknown) {
+      logger.error('Health check failed:', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/providers/:modelName/discover
+   * Discover models available at the provider's endpoint.
+   */
+  router.get('/:modelName/discover', async (req: Request, res: Response) => {
+    try {
+      const registry = llmRouter.getRegistry();
+      const config = registry.list().find((c) => c.modelName === req.params.modelName);
+      if (!config) {
+        return res.status(404).json({ error: `Provider '${req.params.modelName}' not found` });
+      }
+
+      const models = await healthService.discoverModels(config);
+      res.json({ provider: config.modelName, models });
+    } catch (err: unknown) {
+      logger.error('Model discovery failed:', err);
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

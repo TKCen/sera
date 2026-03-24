@@ -296,6 +296,59 @@ export class ProviderRegistry {
     return [...this.configs.values()];
   }
 
+  /** Determine auth status for a provider config. */
+  getAuthStatus(config: ProviderConfig): 'configured' | 'missing' | 'not-required' {
+    const LOCAL_PLACEHOLDERS = new Set(['lm-studio', 'ollama', 'none', 'local', '']);
+
+    // Local providers with placeholder keys don't need real auth
+    if (config.baseUrl && config.apiKey && LOCAL_PLACEHOLDERS.has(config.apiKey)) {
+      return 'not-required';
+    }
+
+    // Literal key present
+    if (config.apiKey && !LOCAL_PLACEHOLDERS.has(config.apiKey)) {
+      return 'configured';
+    }
+
+    // Env var configured and resolves to a non-empty value
+    if (config.apiKeyEnvVar && process.env[config.apiKeyEnvVar]) {
+      return 'configured';
+    }
+
+    // pi-mono standard env var fallback (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+    if (config.provider) {
+      const standardEnvVars: Record<string, string> = {
+        openai: 'OPENAI_API_KEY',
+        anthropic: 'ANTHROPIC_API_KEY',
+        google: 'GOOGLE_API_KEY',
+        groq: 'GROQ_API_KEY',
+        mistral: 'MISTRAL_API_KEY',
+      };
+      const envVar = standardEnvVars[config.provider];
+      if (envVar && process.env[envVar]) {
+        return 'configured';
+      }
+    }
+
+    // Local providers (no cloud API key needed)
+    const LOCAL_PROVIDERS = new Set(['lmstudio', 'ollama', 'vllm', 'local', 'default']);
+    if (config.baseUrl && config.provider && LOCAL_PROVIDERS.has(config.provider)) {
+      return 'not-required';
+    }
+
+    return 'missing';
+  }
+
+  /** List providers with auth status enrichment (for the UI). */
+  listWithStatus(): (ProviderConfig & { authStatus: 'configured' | 'missing' | 'not-required' })[] {
+    return this.list().map((cfg) => ({
+      ...cfg,
+      // Strip literal API keys from the response
+      apiKey: cfg.apiKey ? '***' : undefined,
+      authStatus: this.getAuthStatus(cfg),
+    }));
+  }
+
   async save(): Promise<void> {
     const data: ConfigFile = { providers: [...this.configs.values()] };
     await fs.promises.writeFile(this.configPath, JSON.stringify(data, null, 2) + '\n', 'utf-8');

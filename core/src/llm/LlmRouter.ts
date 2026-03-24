@@ -463,12 +463,13 @@ export class LlmRouter {
 
   /** List all explicitly registered models with enough info for the UI. API keys are omitted. */
   async listModels(): Promise<ModelListItem[]> {
-    return this.registry.list().map((cfg) => {
+    return this.registry.listWithStatus().map((cfg) => {
       const item: ModelListItem = { modelName: cfg.modelName, api: cfg.api };
       if (cfg.provider !== undefined) item.provider = cfg.provider;
       if (cfg.baseUrl !== undefined) item.baseUrl = cfg.baseUrl;
       if (cfg.description !== undefined) item.description = cfg.description;
       if (cfg.dynamicProviderId !== undefined) item.dynamicProviderId = cfg.dynamicProviderId;
+      (item as unknown as Record<string, unknown>).authStatus = cfg.authStatus;
       return item;
     });
   }

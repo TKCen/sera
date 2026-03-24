@@ -128,6 +128,59 @@ export function testDynamicConnection(
   );
 }
 
+// ── Cloud Provider Templates & Discovery ─────────────────────────────────────
+
+export interface ProviderTemplate {
+  provider: string;
+  displayName: string;
+  api: string;
+  models: string[];
+  baseUrl?: string;
+  apiKeyEnvVar: string;
+  description: string;
+  supportsDiscovery?: boolean;
+}
+
+export function getProviderTemplates(): Promise<{ templates: ProviderTemplate[] }> {
+  return request<{ templates: ProviderTemplate[] }>('/providers/templates');
+}
+
+export function discoverModels(
+  modelName: string
+): Promise<{ provider: string; models: string[] }> {
+  return request<{ provider: string; models: string[] }>(
+    `/providers/${encodeURIComponent(modelName)}/discover`
+  );
+}
+
+export function getHealthAll(): Promise<{
+  health: Record<
+    string,
+    { provider?: string; reachable: boolean; latencyMs: number; error?: string }
+  >;
+}> {
+  return request('/providers/health-all');
+}
+
+export interface AddProviderPayload {
+  modelName: string;
+  api: string;
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  apiKeyEnvVar?: string;
+  description?: string;
+}
+
+export function addProvider(
+  payload: AddProviderPayload
+): Promise<{ modelName: string; result: { modelName: string; api: string } }> {
+  return request('/providers', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 // ── Default Model ────────────────────────────────────────────────────────────
 
 export function getDefaultModel(): Promise<{ defaultModel: string | null }> {

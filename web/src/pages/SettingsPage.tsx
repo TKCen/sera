@@ -29,6 +29,7 @@ import * as providersApi from '@/lib/api/providers';
 import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CloudProviderSection } from '@/components/CloudProviderSection';
 
 type Tab = 'providers' | 'models' | 'general' | 'circuit-breakers';
 
@@ -452,6 +453,9 @@ export default function SettingsPage() {
                     )}
                 </div>
               </section>
+
+              {/* Cloud Providers Section */}
+              <CloudProviderSection />
             </div>
           )}
 
@@ -469,6 +473,7 @@ export default function SettingsPage() {
                         <th className="text-left py-3 px-3">Model name</th>
                         <th className="text-left py-3 px-3">Provider</th>
                         <th className="text-left py-3 px-3">API</th>
+                        <th className="text-left py-3 px-3">Status</th>
                         <th className="text-left py-3 px-3">Base URL</th>
                       </tr>
                     </thead>
@@ -491,6 +496,17 @@ export default function SettingsPage() {
                           </td>
                           <td className="py-3 px-3 text-sera-text-muted font-mono text-xs">
                             {m.api}
+                          </td>
+                          <td className="py-3 px-3">
+                            {(m as unknown as Record<string, unknown>).authStatus === 'configured' && (
+                              <Badge variant="success" className="text-[9px]">Active</Badge>
+                            )}
+                            {(m as unknown as Record<string, unknown>).authStatus === 'missing' && (
+                              <Badge variant="warning" className="text-[9px]">Key missing</Badge>
+                            )}
+                            {(m as unknown as Record<string, unknown>).authStatus === 'not-required' && (
+                              <Badge variant="default" className="text-[9px]">Local</Badge>
+                            )}
                           </td>
                           <td className="py-3 px-3 text-sera-text-dim font-mono text-[10px]">
                             {m.baseUrl ?? '—'}

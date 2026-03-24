@@ -12,14 +12,18 @@ import {
   createProvider,
   deleteProvider,
   testLLMConfig,
+  getProviderTemplates,
+  addProvider,
+  discoverModels,
 } from '../lib/api/providers';
-import type { NewProviderPayload } from '@/lib/api/providers';
+import type { NewProviderPayload, AddProviderPayload } from '@/lib/api/providers';
 
 export const providersKeys = {
   all: ['providers'] as const,
   llmConfig: ['providers', 'llm-config'] as const,
   dynamicProviders: ['dynamic-providers'] as const,
   dynamicProviderStatuses: ['dynamic-provider-statuses'] as const,
+  templates: ['provider-templates'] as const,
 };
 
 export function useProviders() {
@@ -126,5 +130,28 @@ export function useRemoveDynamicProvider() {
 export function useTestLLMConfig() {
   return useMutation({
     mutationFn: testLLMConfig,
+  });
+}
+
+export function useProviderTemplates() {
+  return useQuery({
+    queryKey: providersKeys.templates,
+    queryFn: getProviderTemplates,
+  });
+}
+
+export function useAddProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: AddProviderPayload) => addProvider(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: providersKeys.all });
+    },
+  });
+}
+
+export function useDiscoverModels() {
+  return useMutation({
+    mutationFn: (modelName: string) => discoverModels(modelName),
   });
 }

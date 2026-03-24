@@ -93,5 +93,59 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
     }
   });
 
+  /**
+   * Export a session as markdown or JSON.
+   * GET /api/sessions/:id/export?format=markdown|json
+   */
+  router.get('/:id/export', async (req, res) => {
+    try {
+      const session = await sessionStore.getSession(req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      const messages = await sessionStore.getMessages(req.params.id);
+      const format = (req.query.format as string) || 'markdown';
+
+      if (format === 'json') {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="session-${req.params.id}.json"`
+        );
+        return res.json({ ...session, messages });
+      }
+
+      // Markdown export
+      const lines: string[] = [
+        `# ${session.title || 'Untitled Session'}`,
+        '',
+        `**Agent:** ${session.agentName}  `,
+        `**Created:** ${session.createdAt}  `,
+        `**Messages:** ${messages.length}`,
+        '',
+        '---',
+        '',
+      ];
+
+      for (const msg of messages) {
+        const role = msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'Agent' : msg.role;
+        lines.push(`### ${role}`);
+        lines.push('');
+        lines.push(msg.content || '*(empty)*');
+        lines.push('');
+      }
+
+      const markdown = lines.join('\n');
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="session-${req.params.id}.md"`
+      );
+      res.send(markdown);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
 }

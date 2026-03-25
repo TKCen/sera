@@ -110,8 +110,10 @@ export function createKnowledgeQuerySkill(): SkillDefinition {
         const f = filterRaw as Record<string, unknown>;
         if (typeof f['type'] === 'string') filter.type = f['type'];
         if (Array.isArray(f['tags'])) filter.tags = f['tags'] as string[];
+        if (Array.isArray(f['excludeTags'])) filter.excludeTags = f['excludeTags'] as string[];
         if (typeof f['since'] === 'string') filter.since = f['since'];
         if (typeof f['author'] === 'string') filter.author = f['author'];
+        if (typeof f['minImportance'] === 'number') filter.minImportance = f['minImportance'];
       }
 
       const start = Date.now();

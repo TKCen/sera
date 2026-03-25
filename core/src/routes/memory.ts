@@ -97,11 +97,13 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
     try {
       const { agentId } = req.params;
       const query = req.query as Record<string, string | undefined>;
-      const { type, tags, since } = query;
+      const { type, tags, excludeTags, since, minImportance } = query;
       const blocks = await scopedStore.list(agentId, {
         ...(type ? { type: type as KnowledgeBlockType } : {}),
         ...(tags ? { tags: tags.split(',') } : {}),
+        ...(excludeTags ? { excludeTags: excludeTags.split(',') } : {}),
         ...(since ? { since } : {}),
+        ...(minImportance ? { minImportance: parseInt(minImportance, 10) } : {}),
       });
       res.json(blocks);
     } catch (err: unknown) {

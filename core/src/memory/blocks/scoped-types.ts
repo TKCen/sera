@@ -52,6 +52,8 @@ export interface KnowledgeBlockCreateOpts {
 export interface KnowledgeBlockListFilters {
   type?: KnowledgeBlockType;
   tags?: string[];
+  excludeTags?: string[];
   since?: string;
   before?: string;
+  minImportance?: number;
 }

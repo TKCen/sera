@@ -185,8 +185,12 @@ export class ScopedMemoryBlockStore {
         if (filters?.tags && filters.tags.length > 0) {
           if (!filters.tags.some((t) => block.tags.includes(t))) continue;
         }
+        if (filters?.excludeTags && filters.excludeTags.length > 0) {
+          if (filters.excludeTags.some((t) => block.tags.includes(t))) continue;
+        }
         if (filters?.since && block.timestamp < filters.since) continue;
         if (filters?.before && block.timestamp >= filters.before) continue;
+        if (filters?.minImportance !== undefined && block.importance < filters.minImportance) continue;
 
         results.push(block);
       }

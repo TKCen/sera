@@ -47,8 +47,10 @@ export interface SearchResult {
 export interface SearchFilter {
   type?: string;
   tags?: string[];
+  excludeTags?: string[];
   since?: string;
   author?: string;
+  minImportance?: number;
 }
 
 // ── VectorService ─────────────────────────────────────────────────────────────
@@ -296,6 +298,7 @@ export class VectorService {
 function buildQdrantFilter(filter?: SearchFilter): object | undefined {
   if (!filter) return undefined;
   const must: object[] = [];
+  const must_not: object[] = [];
 
   if (filter.type) {
     must.push({ key: 'type', match: { value: filter.type } });
@@ -305,12 +308,24 @@ function buildQdrantFilter(filter?: SearchFilter): object | undefined {
       must.push({ key: 'tags', match: { value: tag } });
     }
   }
+  if (filter.excludeTags && filter.excludeTags.length > 0) {
+    for (const tag of filter.excludeTags) {
+      must_not.push({ key: 'tags', match: { value: tag } });
+    }
+  }
   if (filter.since) {
     must.push({ key: 'created_at', range: { gte: filter.since } });
   }
   if (filter.author) {
     must.push({ key: 'agent_id', match: { value: filter.author } });
   }
+  if (filter.minImportance !== undefined) {
+    must.push({ key: 'importance', range: { gte: filter.minImportance } });
+  }
 
-  return must.length > 0 ? { must } : undefined;
+  if (must.length === 0 && must_not.length === 0) return undefined;
+  const result: Record<string, object[]> = {};
+  if (must.length > 0) result.must = must;
+  if (must_not.length > 0) result.must_not = must_not;
+  return result;
 }

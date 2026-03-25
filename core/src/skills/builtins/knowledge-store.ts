@@ -134,6 +134,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
               type: block.type,
               title: block.title,
               content: block.content,
+              importance: block.importance,
               namespace,
             });
           } catch (err) {

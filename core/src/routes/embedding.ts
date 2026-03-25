@@ -4,7 +4,6 @@ import { Logger } from '../lib/logger.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { EmbeddingRouter as EmbeddingRouterService } from '../services/embedding-router.js';
 import {
-  loadEmbeddingConfig,
   saveEmbeddingConfig,
   maskConfig,
   KNOWN_EMBEDDING_MODELS,

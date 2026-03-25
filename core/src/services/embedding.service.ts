@@ -128,7 +128,6 @@ export class EmbeddingService {
    */
   async warmup(): Promise<void> {
     if (!this.router.isConfigured()) {
-      const config = this.router.getConfig();
       logger.info(
         `EmbeddingService: no baseUrl configured — embeddings disabled. Configure an embedding provider to enable RAG.`
       );
@@ -146,7 +145,7 @@ export class EmbeddingService {
       } else {
         throw new Error(result.error ?? 'Test connection failed');
       }
-    } catch (err) {
+    } catch {
       const config = this.router.getConfig();
       logger.warn(
         `EmbeddingService: provider not reachable at ${config.baseUrl} — RAG disabled until provider comes online`

@@ -14,7 +14,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Docker
-.dockerignore
+# .dockerignore # we need the docker ignore for correct builds
 docker-compose.override.yaml
 
 # IDE
@@ -56,3 +56,15 @@ test-results/
 
 # Local tooling indexes
 .gitnexus/   memory/
+
+# core configs
+core/config/
+
+# proxy acls
+egress-proxy/acls/
+
+# agents memories
+memory/
+
+# mcp
+.mcp.json

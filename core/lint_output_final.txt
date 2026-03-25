@@ -1,8 +1,0 @@
-
-> lint:core
-> npm run lint --workspace=core
-
-
-> core@1.0.0 lint
-> eslint src
-

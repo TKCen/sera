@@ -4,6 +4,7 @@ import { ScopedMemoryBlockStore } from '../memory/blocks/ScopedMemoryBlockStore.
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace } from '../services/vector.service.js';
 import { MemoryCompactionService } from '../memory/MemoryCompactionService.js';
+import { extractLinks } from '../memory/blocks/scoped-types.js';
 import type { KnowledgeBlockType } from '../memory/blocks/scoped-types.js';
 
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';
@@ -134,6 +135,61 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       const { agentId } = req.params;
       const result = await MemoryCompactionService.getInstance().triggerCompaction(agentId);
       res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Knowledge Links (Obsidian-style wiki-links in markdown content) ─────
+
+  /** GET /api/memory/:agentId/links — extract all links from all blocks */
+  router.get('/:agentId/links', async (req, res) => {
+    try {
+      const { agentId } = req.params;
+      const entryId = req.query.entryId as string | undefined;
+      const blocks = await scopedStore.list(agentId);
+      const allLinks: Array<{
+        sourceId: string;
+        sourceTitle: string;
+        target: string;
+        relationship: string;
+      }> = [];
+
+      for (const block of blocks) {
+        const links = extractLinks(block.content);
+        for (const link of links) {
+          if (!entryId || block.id === entryId || link.target === entryId) {
+            allLinks.push({
+              sourceId: block.id,
+              sourceTitle: block.title,
+              target: link.target,
+              relationship: link.relationship,
+            });
+          }
+        }
+      }
+      res.json(allLinks);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** GET /api/memory/:agentId/graph — build a link graph from all blocks */
+  router.get('/:agentId/graph', async (req, res) => {
+    try {
+      const { agentId } = req.params;
+      const blocks = await scopedStore.list(agentId);
+      const nodes: Array<{ id: string; title: string; type: string }> = [];
+      const edges: Array<{ source: string; target: string; relationship: string }> = [];
+
+      for (const block of blocks) {
+        nodes.push({ id: block.id, title: block.title, type: block.type });
+        const links = extractLinks(block.content);
+        for (const link of links) {
+          edges.push({ source: block.id, target: link.target, relationship: link.relationship });
+        }
+      }
+      res.json({ nodes, edges });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

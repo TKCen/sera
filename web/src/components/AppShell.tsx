@@ -8,6 +8,7 @@ export function AppShell() {
   const { data: health } = useHealthDetail();
 
   const routeTitles: Record<string, string> = {
+    '/': 'Dashboard',
     '/chat': 'Chat',
     '/agents': 'Agents',
     '/agents/new': 'New Agent',

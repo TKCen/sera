@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router';
 import {
+  LayoutDashboard,
   MessageSquare,
   Bot,
   CalendarClock,
@@ -40,6 +41,7 @@ const navGroups: NavGroup[] = [
   {
     title: 'Workspace',
     items: [
+      { label: 'Dashboard', href: '/', icon: <LayoutDashboard size={16} /> },
       { label: 'Chat', href: '/chat', icon: <MessageSquare size={16} /> },
       { label: 'Agents', href: '/agents', icon: <Bot size={16} /> },
       { label: 'Templates', href: '/templates', icon: <LayoutTemplate size={16} /> },

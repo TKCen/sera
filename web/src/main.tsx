@@ -1,7 +1,7 @@
 import './index.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { BrowserRouter, Routes, Route } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -11,6 +11,7 @@ import { AppShell } from '@/components/AppShell';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
+import DashboardPage from '@/pages/DashboardPage';
 import ChatPage from '@/pages/ChatPage';
 import AgentsPage from '@/pages/AgentsPage';
 import AgentDetailPage from '@/pages/AgentDetailPage';
@@ -55,7 +56,7 @@ createRoot(el).render(
                   </ProtectedRoute>
                 }
               >
-                <Route index element={<Navigate to="/chat" replace />} />
+                <Route index element={<DashboardPage />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="templates" element={<TemplatesPage />} />

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2, Send } from 'lucide-react';
+import { Loader2, Send, StopCircle } from 'lucide-react';
 
 interface ChatInputBarProps {
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -9,6 +9,7 @@ interface ChatInputBarProps {
   streaming: boolean;
   selectedAgent: string;
   handleSend: () => void;
+  onCancel?: () => void;
 }
 
 export function ChatInputBar({
@@ -19,6 +20,7 @@ export function ChatInputBar({
   streaming,
   selectedAgent,
   handleSend,
+  onCancel,
 }: ChatInputBarProps) {
   return (
     <div className="flex items-end gap-2">
@@ -44,13 +46,23 @@ export function ChatInputBar({
           el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
         }}
       />
-      <button
-        onClick={() => void handleSend()}
-        disabled={streaming || !input.trim() || !selectedAgent}
-        className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
-      >
-        {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-      </button>
+      {streaming && onCancel ? (
+        <button
+          onClick={onCancel}
+          className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-error/80 text-white flex items-center justify-center hover:bg-sera-error transition-all"
+          title="Stop generating"
+        >
+          <StopCircle size={14} />
+        </button>
+      ) : (
+        <button
+          onClick={() => void handleSend()}
+          disabled={streaming || !input.trim() || !selectedAgent}
+          className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
+        >
+          {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+        </button>
+      )}
     </div>
   );
 }

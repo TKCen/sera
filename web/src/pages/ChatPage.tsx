@@ -269,38 +269,41 @@ function ChatPageContent() {
 
   // ── Session actions ──────────────────────────────────────────────────────────
 
-  const loadSession = useCallback(async (id: string) => {
-    try {
-      const data = await request<SessionDetail>(`/sessions/${id}`);
-      setSessionId(data.id);
-      if (data.agentName) setSelectedAgent(data.agentName);
-      if (data.agentInstanceId) {
-        setSelectedAgentId(data.agentInstanceId);
-      } else if (data.agentName && agents) {
-        // Fall back to looking up the instance ID from the agents list
-        const agent = agents.find((a) => a.name === data.agentName);
-        if (agent) setSelectedAgentId(agent.id);
-      }
+  const loadSession = useCallback(
+    async (id: string) => {
+      try {
+        const data = await request<SessionDetail>(`/sessions/${id}`);
+        setSessionId(data.id);
+        if (data.agentName) setSelectedAgent(data.agentName);
+        if (data.agentInstanceId) {
+          setSelectedAgentId(data.agentInstanceId);
+        } else if (data.agentName && agents) {
+          // Fall back to looking up the instance ID from the agents list
+          const agent = agents.find((a) => a.name === data.agentName);
+          if (agent) setSelectedAgentId(agent.id);
+        }
 
-      const uiMessages: Message[] = (data.messages ?? [])
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          id: m.id,
-          role: m.role === 'user' ? 'user' : 'agent',
-          content: m.content,
-          thoughts: Array.isArray(m.metadata?.thoughts) ? m.metadata!.thoughts! : [],
-          streaming: false,
-          createdAt: new Date(m.createdAt),
-        }));
-      setMessages(uiMessages);
-      streamingMsgId.current = null;
-      messageIdRef.current = null;
-    } catch (err) {
-      // Non-fatal but should notify user
-      const errMsg = err instanceof Error ? err.message : 'Failed to load session';
-      toast.error(errMsg);
-    }
-  }, [agents]);
+        const uiMessages: Message[] = (data.messages ?? [])
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => ({
+            id: m.id,
+            role: m.role === 'user' ? 'user' : 'agent',
+            content: m.content,
+            thoughts: Array.isArray(m.metadata?.thoughts) ? m.metadata!.thoughts! : [],
+            streaming: false,
+            createdAt: new Date(m.createdAt),
+          }));
+        setMessages(uiMessages);
+        streamingMsgId.current = null;
+        messageIdRef.current = null;
+      } catch (err) {
+        // Non-fatal but should notify user
+        const errMsg = err instanceof Error ? err.message : 'Failed to load session';
+        toast.error(errMsg);
+      }
+    },
+    [agents]
+  );
 
   const startNewSession = useCallback(() => {
     setSessionId(null);
@@ -406,13 +409,27 @@ function ChatPageContent() {
       setSelectedAgent(name);
       const agent = agents?.find((a) => a.name === name);
       setSelectedAgentId(agent?.id ?? '');
-      // Reset session when switching agents — the useEffect on selectedAgent also does this,
-      // but explicitly clearing here ensures the UI updates immediately
+      // Reset session when switching agents
       setSessionId(null);
       setMessages([]);
     },
     [agents]
   );
+
+  const handleCancel = useCallback(() => {
+    if (!streaming) return;
+    // Stop listening — mark the current streaming message as complete
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === streamingMsgId.current
+          ? { ...m, content: m.content + '\n\n*(cancelled)*', streaming: false }
+          : m
+      )
+    );
+    setStreaming(false);
+    streamingMsgId.current = null;
+    messageIdRef.current = null;
+  }, [streaming]);
 
   // ── Selected agent status ────────────────────────────────────────────────────
   const selectedAgentData = agents?.find((a) => a.name === selectedAgent);
@@ -481,6 +498,7 @@ function ChatPageContent() {
               streaming={streaming}
               selectedAgent={selectedAgent}
               handleSend={() => void handleSend()}
+              onCancel={handleCancel}
             />
           </div>
         </div>
@@ -626,6 +644,7 @@ function ChatPageContent() {
               streaming={streaming}
               selectedAgent={selectedAgent}
               handleSend={() => void handleSend()}
+              onCancel={handleCancel}
             />
           </div>
         </div>

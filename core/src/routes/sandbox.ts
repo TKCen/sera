@@ -20,7 +20,9 @@ import { PolicyViolationError } from '../sandbox/TierPolicy.js';
 
 export function createSandboxRouter(
   sandboxManager: SandboxManager,
-  resolveManifest: (agentName: string) => AgentManifest | undefined | Promise<AgentManifest | undefined>
+  resolveManifest: (
+    agentName: string
+  ) => AgentManifest | undefined | Promise<AgentManifest | undefined>
 ): Router {
   const router = Router();
   const toolRunner = new ToolRunner(sandboxManager);
@@ -29,7 +31,10 @@ export function createSandboxRouter(
   /**
    * Helper: resolve manifest or return 404.
    */
-  async function getManifestOrFail(agentName: string | undefined, res: Response): Promise<AgentManifest | null> {
+  async function getManifestOrFail(
+    agentName: string | undefined,
+    res: Response
+  ): Promise<AgentManifest | null> {
     if (!agentName || typeof agentName !== 'string') {
       res.status(400).json({ error: 'agentName is required' });
       return null;

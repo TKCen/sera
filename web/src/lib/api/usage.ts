@@ -47,7 +47,10 @@ export function patchAgentBudget(
 }
 
 export function resetAgentBudget(agentId: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/budget/agents/${encodeURIComponent(agentId)}/budget/reset`, {
-    method: 'POST',
-  });
+  return request<{ success: boolean }>(
+    `/budget/agents/${encodeURIComponent(agentId)}/budget/reset`,
+    {
+      method: 'POST',
+    }
+  );
 }

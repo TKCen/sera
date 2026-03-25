@@ -6,7 +6,9 @@ export function getHealthDetail(): Promise<HealthDetail> {
 }
 
 export async function getCircuitBreakers(): Promise<CircuitBreakerState[]> {
-  const data = await request<{ circuitBreakers: CircuitBreakerState[] }>('/system/circuit-breakers');
+  const data = await request<{ circuitBreakers: CircuitBreakerState[] }>(
+    '/system/circuit-breakers'
+  );
   return data.circuitBreakers ?? [];
 }
 

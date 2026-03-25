@@ -78,7 +78,7 @@ export default function CircleDetailPage() {
   const knowledge = circle.knowledge;
   // DB circles have `constitution`, YAML circles have `projectContext.content`
   const projectContent =
-    (circle as unknown as Record<string, unknown>).constitution as string | undefined ??
+    ((circle as unknown as Record<string, unknown>).constitution as string | undefined) ??
     (typeof circle.projectContext === 'object' && circle.projectContext !== null
       ? ((circle.projectContext as Record<string, unknown>).content as string | undefined)
       : typeof circle.projectContext === 'string'

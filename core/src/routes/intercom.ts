@@ -16,7 +16,9 @@ import type { BridgeService } from '../intercom/BridgeService.js';
 
 export function createIntercomRouter(
   intercom: IntercomService,
-  resolveManifest: (agentName: string) => AgentManifest | undefined | Promise<AgentManifest | undefined>,
+  resolveManifest: (
+    agentName: string
+  ) => AgentManifest | undefined | Promise<AgentManifest | undefined>,
   bridge?: BridgeService
 ): Router {
   const router = Router();

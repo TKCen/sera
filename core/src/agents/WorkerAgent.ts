@@ -57,7 +57,8 @@ export class WorkerAgent extends BaseAgent {
       dynamicContext
     );
     if (memoryDegraded) {
-      systemPrompt += '\n\n**Note:** Knowledge search is currently unavailable (embedding service down). ' +
+      systemPrompt +=
+        '\n\n**Note:** Knowledge search is currently unavailable (embedding service down). ' +
         'Do not attempt to use knowledge-query or knowledge-store tools.';
     }
 

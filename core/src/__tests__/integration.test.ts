@@ -68,6 +68,15 @@ vi.mock('../services/vector.service.js', () => ({
     async search() {
       return [];
     }
+    async ensureCollection() {
+      return undefined;
+    }
+    async upsert() {
+      return undefined;
+    }
+    async upsertPoints() {
+      return undefined;
+    }
   },
 }));
 
@@ -100,9 +109,22 @@ vi.mock('../circles/CircleRegistry.js', () => {
           channelCount: 0,
         },
       ]);
+      listCircles = vi.fn().mockReturnValue([
+        {
+          name: 'development',
+          metadata: { name: 'development', displayName: 'Development' },
+          agents: ['architect-prime'],
+        },
+        {
+          name: 'operations',
+          metadata: { name: 'operations', displayName: 'Operations' },
+          agents: ['researcher-prime'],
+        },
+      ]);
       getCircle = vi.fn();
       loadFromDirectory = vi.fn().mockResolvedValue(undefined);
       init = vi.fn().mockResolvedValue(undefined);
+      getProjectContext = vi.fn();
     },
   };
 });
@@ -122,7 +144,7 @@ vi.mock('../agents/Orchestrator.js', () => {
           { name: 'developer-prime' },
           { name: 'researcher-prime' },
         ]);
-      listCircles = vi.fn().mockReturnValue([{ name: 'development' }, { name: 'operations' }]);
+      listCircles = vi.fn().mockReturnValue([{ name: 'development', metadata: { name: 'development' } }, { name: 'operations', metadata: { name: 'operations' } }]);
       getManifest = vi.fn();
       getAllManifests = vi.fn().mockReturnValue([]);
       loadAllManifests = vi.fn().mockResolvedValue(undefined);
@@ -151,6 +173,8 @@ vi.mock('../agents/Orchestrator.js', () => {
       restartAgent = vi.fn().mockResolvedValue(undefined);
       deregisterAgent = vi.fn();
       init = vi.fn().mockResolvedValue(undefined);
+      setCircleContextResolver = vi.fn();
+      getRunningAgents = vi.fn().mockReturnValue([]);
     },
   };
 });

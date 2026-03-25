@@ -10,6 +10,7 @@ interface ChatInputBarProps {
   selectedAgent: string;
   handleSend: () => void;
   onCancel?: () => void;
+  queueCount?: number;
 }
 
 export function ChatInputBar({
@@ -21,31 +22,39 @@ export function ChatInputBar({
   selectedAgent,
   handleSend,
   onCancel,
+  queueCount = 0,
 }: ChatInputBarProps) {
   return (
     <div className="flex items-end gap-2">
-      <textarea
-        ref={inputRef}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={streaming || !selectedAgent}
-        placeholder={
-          streaming
-            ? 'Agent is responding…'
-            : selectedAgent
-              ? 'Message agent… (Enter to send, Shift+Enter for newline)'
-              : 'Select an agent above'
-        }
-        rows={1}
-        className="sera-input flex-1 resize-none min-h-[38px] max-h-32 overflow-y-auto"
-        style={{ height: 'auto' }}
-        onInput={(e) => {
-          const el = e.currentTarget;
-          el.style.height = 'auto';
-          el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
-        }}
-      />
+      <div className="relative flex-1">
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={!selectedAgent}
+          placeholder={
+            streaming
+              ? 'Type next message… (queued until response completes)'
+              : selectedAgent
+                ? 'Message agent… (Enter to send, Shift+Enter for newline)'
+                : 'Select an agent above'
+          }
+          rows={1}
+          className="sera-input w-full resize-none min-h-[38px] max-h-32 overflow-y-auto"
+          style={{ height: 'auto' }}
+          onInput={(e) => {
+            const el = e.currentTarget;
+            el.style.height = 'auto';
+            el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+          }}
+        />
+        {queueCount > 0 && (
+          <span className="absolute right-2 top-1 text-[10px] font-medium text-sera-accent bg-sera-accent/15 rounded-full px-1.5 py-0.5">
+            {queueCount} queued
+          </span>
+        )}
+      </div>
       {streaming && onCancel ? (
         <button
           onClick={onCancel}
@@ -54,15 +63,14 @@ export function ChatInputBar({
         >
           <StopCircle size={14} />
         </button>
-      ) : (
-        <button
-          onClick={() => void handleSend()}
-          disabled={streaming || !input.trim() || !selectedAgent}
-          className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
-        >
-          {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-        </button>
-      )}
+      ) : null}
+      <button
+        onClick={() => void handleSend()}
+        disabled={!input.trim() || !selectedAgent}
+        className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
+      >
+        {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+      </button>
     </div>
   );
 }

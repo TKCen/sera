@@ -127,6 +127,8 @@ function ChatPageContent() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingMsgId = useRef<string | null>(null);
   const messageIdRef = useRef<string | null>(null);
+  const messageQueue = useRef<string[]>([]);
+  const [queueCount, setQueueCount] = useState(0);
 
   // ── Auto-scroll ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -311,6 +313,8 @@ function ChatPageContent() {
     setStreaming(false);
     streamingMsgId.current = null;
     messageIdRef.current = null;
+    messageQueue.current = [];
+    setQueueCount(0);
     setExpandedThoughts(new Set());
     inputRef.current?.focus();
   }, []);
@@ -342,60 +346,71 @@ function ChatPageContent() {
 
   // ── Send message ─────────────────────────────────────────────────────────────
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if (!text || !selectedAgent || streaming) return;
+  const handleSend = useCallback(
+    async (overrideText?: string) => {
+      const text = (overrideText ?? input).trim();
+      if (!text || !selectedAgent) return;
 
-    const userMsgId = crypto.randomUUID();
-    const agentMsgId = crypto.randomUUID();
+      // Queue the message if the agent is still streaming
+      if (streaming) {
+        messageQueue.current.push(text);
+        setQueueCount(messageQueue.current.length);
+        setInput('');
+        return;
+      }
 
-    const userMsg: Message = {
-      id: userMsgId,
-      role: 'user',
-      content: text,
-      thoughts: [],
-      streaming: false,
-      createdAt: new Date(),
-    };
-    const agentMsg: Message = {
-      id: agentMsgId,
-      role: 'agent',
-      content: '',
-      thoughts: [],
-      streaming: true,
-      createdAt: new Date(),
-    };
+      const userMsgId = crypto.randomUUID();
+      const agentMsgId = crypto.randomUUID();
 
-    setMessages((prev) => [...prev, userMsg, agentMsg]);
-    setInput('');
-    setStreaming(true);
-    setExpandedThoughts((prev) => new Set(prev).add(agentMsgId));
-    streamingMsgId.current = agentMsgId;
+      const userMsg: Message = {
+        id: userMsgId,
+        role: 'user',
+        content: text,
+        thoughts: [],
+        streaming: false,
+        createdAt: new Date(),
+      };
+      const agentMsg: Message = {
+        id: agentMsgId,
+        role: 'agent',
+        content: '',
+        thoughts: [],
+        streaming: true,
+        createdAt: new Date(),
+      };
 
-    try {
-      const { sessionId: newSessionId, messageId } = await sendChatStream(
-        selectedAgent,
-        text,
-        sessionId ?? undefined,
-        selectedAgentId || undefined
-      );
-      setSessionId(newSessionId);
-      messageIdRef.current = messageId;
-      // Refresh the session list so the sidebar shows the new/updated session
-      void fetchSessions();
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Failed to send message';
-      toast.error(errMsg);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === agentMsgId ? { ...m, content: `Error: ${errMsg}`, streaming: false } : m
-        )
-      );
-      setStreaming(false);
-      streamingMsgId.current = null;
-      messageIdRef.current = null;
-    }
-  }, [input, selectedAgent, selectedAgentId, streaming, sessionId, fetchSessions]);
+      setMessages((prev) => [...prev, userMsg, agentMsg]);
+      setInput('');
+      setStreaming(true);
+      setExpandedThoughts((prev) => new Set(prev).add(agentMsgId));
+      streamingMsgId.current = agentMsgId;
+
+      try {
+        const { sessionId: newSessionId, messageId } = await sendChatStream(
+          selectedAgent,
+          text,
+          sessionId ?? undefined,
+          selectedAgentId || undefined
+        );
+        setSessionId(newSessionId);
+        messageIdRef.current = messageId;
+        // Refresh the session list so the sidebar shows the new/updated session
+        void fetchSessions();
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Failed to send message';
+        toast.error(errMsg);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === agentMsgId ? { ...m, content: `Error: ${errMsg}`, streaming: false } : m
+          )
+        );
+        setStreaming(false);
+        streamingMsgId.current = null;
+        messageIdRef.current = null;
+      }
+    },
+    [input, selectedAgent, selectedAgentId, streaming, sessionId, fetchSessions]
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -430,6 +445,18 @@ function ChatPageContent() {
     streamingMsgId.current = null;
     messageIdRef.current = null;
   }, [streaming]);
+
+  // ── Drain message queue when streaming finishes ──────────────────────────────
+  const prevStreaming = useRef(false);
+  useEffect(() => {
+    // Fire when streaming transitions from true → false
+    if (prevStreaming.current && !streaming && messageQueue.current.length > 0) {
+      const next = messageQueue.current.shift()!;
+      setQueueCount(messageQueue.current.length);
+      void handleSend(next);
+    }
+    prevStreaming.current = streaming;
+  }, [streaming, handleSend]);
 
   // ── Selected agent status ────────────────────────────────────────────────────
   const selectedAgentData = agents?.find((a) => a.name === selectedAgent);
@@ -499,6 +526,7 @@ function ChatPageContent() {
               selectedAgent={selectedAgent}
               handleSend={() => void handleSend()}
               onCancel={handleCancel}
+              queueCount={queueCount}
             />
           </div>
         </div>
@@ -645,6 +673,7 @@ function ChatPageContent() {
               selectedAgent={selectedAgent}
               handleSend={() => void handleSend()}
               onCancel={handleCancel}
+              queueCount={queueCount}
             />
           </div>
         </div>

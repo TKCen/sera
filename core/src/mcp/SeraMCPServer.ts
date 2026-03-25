@@ -164,6 +164,80 @@ export class SeraMCPServer {
               required: ['circleId', 'payload'],
             },
           },
+          // ── Chat ─────────────────────────────────────────────────────────────
+          {
+            name: 'chat',
+            description:
+              'Send a message to a SERA agent and get a response. Returns the agent reply.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                agentName: {
+                  type: 'string',
+                  description: 'Name of the agent to chat with (e.g. "sera")',
+                },
+                message: { type: 'string', description: 'The message to send' },
+                sessionId: {
+                  type: 'string',
+                  description: 'Optional session ID for continuing a conversation',
+                },
+              },
+              required: ['agentName', 'message'],
+            },
+          },
+          {
+            name: 'list_sessions',
+            description: 'List chat sessions for an agent.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                agentInstanceId: { type: 'string', description: 'Agent instance ID' },
+              },
+              required: ['agentInstanceId'],
+            },
+          },
+          {
+            name: 'knowledge_query',
+            description: "Semantic search across an agent's knowledge. Returns relevant entries.",
+            inputSchema: {
+              type: 'object',
+              properties: {
+                agentId: { type: 'string', description: 'Agent instance ID' },
+                query: { type: 'string', description: 'Search query text' },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Optional tag filter',
+                },
+                topK: { type: 'number', description: 'Max results (default 10)' },
+              },
+              required: ['agentId', 'query'],
+            },
+          },
+          {
+            name: 'knowledge_store',
+            description: 'Store a knowledge entry for an agent.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                agentId: { type: 'string', description: 'Agent instance ID' },
+                content: { type: 'string', description: 'Content to store' },
+                type: {
+                  type: 'string',
+                  description:
+                    'Block type: fact, context, memory, insight, reference, observation, decision',
+                },
+                title: { type: 'string', description: 'Title for the entry' },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Tags for the entry',
+                },
+                importance: { type: 'number', description: 'Importance 1-5 (default 3)' },
+              },
+              required: ['agentId', 'content', 'type'],
+            },
+          },
           // ── Subagent Spawning (Story 10.5 / 10.4 / 17.4) ──────────────────
           {
             name: 'agents.spawn_subagent',
@@ -248,6 +322,30 @@ export class SeraMCPServer {
           );
         case 'circle.broadcast':
           return this.handleCircleBroadcast(toolArgs['circleId'] as string, toolArgs['payload']);
+        case 'chat':
+          return this.handleChat(
+            toolArgs['agentName'] as string,
+            toolArgs['message'] as string,
+            toolArgs['sessionId'] as string | undefined
+          );
+        case 'list_sessions':
+          return this.handleListSessions(toolArgs['agentInstanceId'] as string);
+        case 'knowledge_query':
+          return this.handleKnowledgeQuery(
+            toolArgs['agentId'] as string,
+            toolArgs['query'] as string,
+            toolArgs['tags'] as string[] | undefined,
+            toolArgs['topK'] as number | undefined
+          );
+        case 'knowledge_store':
+          return this.handleKnowledgeStore(
+            toolArgs['agentId'] as string,
+            toolArgs['content'] as string,
+            toolArgs['type'] as string,
+            toolArgs['title'] as string | undefined,
+            toolArgs['tags'] as string[] | undefined,
+            toolArgs['importance'] as number | undefined
+          );
         case 'agents.spawn_subagent':
           return this.handleSpawnSubagent(
             toolArgs['role'] as string,
@@ -465,6 +563,161 @@ export class SeraMCPServer {
             task,
             childDelegationIds,
           }),
+        },
+      ],
+    };
+  }
+
+  // ── Chat & Knowledge handlers ───────────────────────────────────────────
+
+  private async handleChat(agentName: string, message: string, sessionId?: string) {
+    if (!agentName || !message) throw new Error('agentName and message are required');
+
+    // Call the internal HTTP API directly
+    const port = process.env.PORT ?? '3001';
+    const body: Record<string, string> = { agentName, message };
+    if (sessionId) body.sessionId = sessionId;
+
+    const res = await fetch(`http://localhost:${port}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({ error: `HTTP ${res.status}` }))) as {
+        error?: string;
+      };
+      throw new Error(err.error ?? `Chat request failed with status ${res.status}`);
+    }
+
+    const result = (await res.json()) as { sessionId: string; reply: string; thought?: string };
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            sessionId: result.sessionId,
+            reply: result.reply,
+          }),
+        },
+      ],
+    };
+  }
+
+  private async handleListSessions(agentInstanceId: string) {
+    if (!agentInstanceId) throw new Error('agentInstanceId is required');
+    const { rows } = await pool.query(
+      `SELECT id, title, message_count, created_at, updated_at
+       FROM sessions WHERE agent_instance_id = $1
+       ORDER BY updated_at DESC LIMIT 20`,
+      [agentInstanceId]
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }],
+    };
+  }
+
+  private async handleKnowledgeQuery(
+    agentId: string,
+    query: string,
+    tags?: string[],
+    topK?: number
+  ) {
+    if (!agentId || !query) throw new Error('agentId and query are required');
+
+    const { EmbeddingService } = await import('../services/embedding.service.js');
+    const { VectorService } = await import('../services/vector.service.js');
+    const embeddingService = EmbeddingService.getInstance();
+    const vectorService = new VectorService('_mcp_search');
+
+    if (!embeddingService.isAvailable()) {
+      throw new Error('Embedding service unavailable — RAG disabled');
+    }
+
+    const queryVector = await embeddingService.embed(query);
+    const filter = tags && tags.length > 0 ? { tags } : undefined;
+    const results = await vectorService.search(
+      [`personal:${agentId}`],
+      queryVector,
+      topK ?? 10,
+      filter
+    );
+
+    const entries = results.map((r) => ({
+      id: r.id,
+      score: r.score,
+      title: r.payload.title,
+      type: r.payload.type,
+      content: r.payload.content,
+      tags: r.payload.tags,
+    }));
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
+    };
+  }
+
+  private async handleKnowledgeStore(
+    agentId: string,
+    content: string,
+    type: string,
+    title?: string,
+    tags?: string[],
+    importance?: number
+  ) {
+    if (!agentId || !content || !type) throw new Error('agentId, content, and type are required');
+
+    const { ScopedMemoryBlockStore } = await import('../memory/blocks/ScopedMemoryBlockStore.js');
+    const store = new ScopedMemoryBlockStore(process.env.MEMORY_PATH ?? '/memory');
+    const block = await store.write({
+      agentId,
+      content,
+      type: type as
+        | 'fact'
+        | 'context'
+        | 'memory'
+        | 'insight'
+        | 'reference'
+        | 'observation'
+        | 'decision',
+      ...(title ? { title } : {}),
+      ...(tags ? { tags } : {}),
+      ...(importance
+        ? { importance: Math.max(1, Math.min(5, importance)) as 1 | 2 | 3 | 4 | 5 }
+        : {}),
+    });
+
+    // Index in vector store if embedding available
+    try {
+      const { EmbeddingService } = await import('../services/embedding.service.js');
+      const { VectorService } = await import('../services/vector.service.js');
+      const embeddingService = EmbeddingService.getInstance();
+      if (embeddingService.isAvailable()) {
+        const vector = await embeddingService.embed(`${block.title}\n${block.content}`);
+        const vectorService = new VectorService('_mcp_store');
+        const ns = `personal:${agentId}` as const;
+        await vectorService.upsert(block.id, ns, vector, {
+          agent_id: agentId,
+          created_at: block.timestamp,
+          tags: block.tags,
+          type: block.type,
+          title: block.title,
+          content: block.content,
+          importance: block.importance,
+          namespace: ns,
+        });
+      }
+    } catch {
+      // Non-fatal — block is stored even if indexing fails
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Stored ${type} block "${block.title}" (id: ${block.id})`,
         },
       ],
     };

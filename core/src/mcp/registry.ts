@@ -243,30 +243,13 @@ export class MCPRegistry {
   ): Promise<void> {
     const name = 'sera-core';
 
-    // Create a shim that matches the MCPClient interface.
-    // Since this is in-process, we bypass the real transport-based MCPClient
-    // and call the server instance (or its wrapper) directly.
+    // In-process shim — bypasses transport and delegates directly to the server instance.
+    // listTools reads the tool definitions from the server so the list stays in sync.
     const mockClient: Partial<MCPClient> = {
       listTools: async () => {
         return {
-          tools: [
-            {
-              name: 'list_agents',
-              description: 'List all active agents and their status.',
-              inputSchema: { type: 'object', properties: {} },
-            },
-            {
-              name: 'restart_agent',
-              description: 'Restart a specific agent by ID.',
-              inputSchema: {
-                type: 'object',
-                properties: {
-                  agentId: { type: 'string' },
-                },
-                required: ['agentId'],
-              },
-            },
-          ],
+          tools:
+            seraMcp.getToolDefinitions() as import('@modelcontextprotocol/sdk/types.js').Tool[],
         };
       },
       callTool: async (
@@ -274,8 +257,6 @@ export class MCPRegistry {
         args: Record<string, unknown>,
         _meta?: Record<string, unknown>
       ) => {
-        // callTool typically expects CallToolResult from the MCP sdk.
-        // We cast the output if needed since seraMcp returns a simpler object.
         const result = await seraMcp.callTool(toolName, args);
         return result as import('@modelcontextprotocol/sdk/types.js').CallToolResult;
       },

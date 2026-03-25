@@ -9,7 +9,8 @@ import type { SkillDefinition } from '../types.js';
  */
 export const fileListSkill: SkillDefinition = {
   id: 'file-list',
-  description: 'List files and directories in a given path within the workspace.',
+  description:
+    'List files and directories in a given path within the workspace. Supports offset/limit pagination.',
   source: 'builtin',
   parameters: [
     {
@@ -22,6 +23,18 @@ export const fileListSkill: SkillDefinition = {
       name: 'recursive',
       type: 'boolean',
       description: 'Whether to list files recursively (default: false)',
+      required: false,
+    },
+    {
+      name: 'offset',
+      type: 'number',
+      description: 'Skip first N entries (0-indexed, default: 0)',
+      required: false,
+    },
+    {
+      name: 'limit',
+      type: 'number',
+      description: 'Max entries to return (default: 100)',
       required: false,
     },
   ],
@@ -121,11 +134,20 @@ export const fileListSkill: SkillDefinition = {
         return listDir(resolvedPath, rootPath, recursive, 0);
       })();
 
+      const totalEntries = entries.length;
+      const offset = typeof params['offset'] === 'number' ? Math.max(0, params['offset']) : 0;
+      const limit =
+        typeof params['limit'] === 'number' ? Math.max(1, params['limit']) : DEFAULT_LIMIT;
+      const paginated = entries.slice(offset, offset + limit);
+      const truncated = paginated.length < totalEntries;
+
       return {
         success: true,
         data: {
           path: rawPath,
-          entries,
+          entries: paginated,
+          totalEntries,
+          truncated,
         },
       };
     } catch (err) {
@@ -139,6 +161,7 @@ export const fileListSkill: SkillDefinition = {
 
 const MAX_DEPTH = 5;
 const MAX_ENTRIES = 200;
+const DEFAULT_LIMIT = 100;
 
 interface FileEntry {
   name: string;

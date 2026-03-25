@@ -542,11 +542,8 @@ const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
 
   const { SeraMCPServer } = await import('./mcp/SeraMCPServer.js');
-  const seraMcpServer = new SeraMCPServer(orchestrator);
-  // For simplicity in this story, we bridge it directly since it's in-process.
-  // In a full implementation, we'd use a local transport.
-  await mcpRegistry.registerSeraCoreTools(seraMcpServer);
-
+  // Set up MCP ↔ SkillRegistry bridge hooks BEFORE registering any servers,
+  // so that sera-core tools (and any loaded from disk) are automatically bridged.
   mcpRegistry.onRegister((name) => {
     skillRegistry
       .bridgeMCPToolsForServer(name, mcpRegistry)
@@ -560,6 +557,9 @@ const startServer = async () => {
     skillRegistry.unregisterByPrefix(`${name}/`);
     logger.info(`Removed bridged skills for MCP server "${name}"`);
   });
+
+  const seraMcpServer = new SeraMCPServer(orchestrator);
+  await mcpRegistry.registerSeraCoreTools(seraMcpServer);
 
   await mcpRegistry
     .loadFromDirectory(mcpServersDir)

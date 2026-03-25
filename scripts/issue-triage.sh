@@ -5,7 +5,7 @@
 set -euo pipefail
 
 LIMIT="${1:-20}"
-if [ "$1" = "--limit" ] 2>/dev/null; then LIMIT="${2:-20}"; fi
+if [ "${1:-}" = "--limit" ]; then LIMIT="${2:-20}"; fi
 
 echo "=== Open Issues (top $LIMIT) ==="
 echo ""

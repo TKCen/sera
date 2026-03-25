@@ -14,4 +14,8 @@ fi
 # Ensure log directory is writable
 chown -R proxy:proxy /var/log/squid
 
+# Remove stale PID file from previous run — prevents "Squid is already running"
+# on container restart (#363)
+rm -f /var/run/squid/squid.pid
+
 exec squid --foreground -f /etc/squid/squid.conf

@@ -198,7 +198,11 @@ export default function AgentDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {confirmAction === 'stop' ? 'Stop agent' : confirmAction === 'delete' ? 'Delete agent' : 'Restart agent'}
+              {confirmAction === 'stop'
+                ? 'Stop agent'
+                : confirmAction === 'delete'
+                  ? 'Delete agent'
+                  : 'Restart agent'}
             </DialogTitle>
             <DialogDescription>
               {confirmAction === 'stop'
@@ -216,7 +220,9 @@ export default function AgentDetailPage() {
             </DialogClose>
             <Button
               size="sm"
-              variant={confirmAction === 'stop' || confirmAction === 'delete' ? 'danger' : 'outline'}
+              variant={
+                confirmAction === 'stop' || confirmAction === 'delete' ? 'danger' : 'outline'
+              }
               onClick={() => {
                 if (confirmAction === 'delete') {
                   void deleteAgent.mutateAsync(id).then(() => {
@@ -228,7 +234,11 @@ export default function AgentDetailPage() {
                 }
               }}
             >
-              {confirmAction === 'stop' ? 'Stop' : confirmAction === 'delete' ? 'Delete' : 'Restart'}
+              {confirmAction === 'stop'
+                ? 'Stop'
+                : confirmAction === 'delete'
+                  ? 'Delete'
+                  : 'Restart'}
             </Button>
           </div>
         </DialogContent>
@@ -248,7 +258,9 @@ function ManifestTab({ id }: { id: string }) {
   const overrides = (inst.overrides ?? {}) as Record<string, unknown>;
   const modelOv = overrides.model as Record<string, unknown> | undefined;
   const resolvedConfig = (inst.resolved_config ?? {}) as Record<string, unknown>;
-  const specResources = (resolvedConfig.resources ?? (resolvedConfig.spec as Record<string, unknown> | undefined)?.resources ?? {}) as Record<string, unknown>;
+  const specResources = (resolvedConfig.resources ??
+    (resolvedConfig.spec as Record<string, unknown> | undefined)?.resources ??
+    {}) as Record<string, unknown>;
   const resourcesOv = (overrides.resources ?? specResources) as Record<string, unknown> | undefined;
   const resolvedCaps = (inst.resolved_capabilities ?? {}) as Record<string, unknown>;
   const permissions = overrides.permissions as Record<string, unknown> | undefined;
@@ -372,14 +384,20 @@ function ManifestTab({ id }: { id: string }) {
           <div className="space-y-1 text-xs">
             {Object.entries(resolvedCaps).map(([key, value]) => (
               <div key={key} className="mb-2">
-                <span className="text-sera-text-muted text-[11px] uppercase tracking-wider">{key}</span>
+                <span className="text-sera-text-muted text-[11px] uppercase tracking-wider">
+                  {key}
+                </span>
                 {typeof value === 'object' && value !== null ? (
                   <div className="mt-1 ml-2 space-y-0.5">
                     {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
                       <div key={k} className="flex items-start gap-2">
                         <span className="text-sera-text-dim min-w-[120px]">{k}:</span>
                         <span className="text-sera-text font-mono break-all">
-                          {Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}
+                          {Array.isArray(v)
+                            ? v.join(', ')
+                            : typeof v === 'object'
+                              ? JSON.stringify(v, null, 2)
+                              : String(v)}
                         </span>
                       </div>
                     ))}
@@ -755,7 +773,13 @@ function LogsTab({ id }: { id: string }) {
         />
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-sera-text-muted">Auto-refreshes every 3s</span>
-          <Button size="sm" variant="ghost" onClick={() => { void refetch(); }}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void refetch();
+            }}
+          >
             Refresh
           </Button>
         </div>

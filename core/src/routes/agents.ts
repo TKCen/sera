@@ -252,7 +252,9 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
       // Delete from DB
       await agentRegistry.deleteInstance(id);
 
-      res.json({ deleted: { id: instance.id, name: instance.name, circle_id: instance.circle_id } });
+      res.json({
+        deleted: { id: instance.id, name: instance.name, circle_id: instance.circle_id },
+      });
     })
   );
 

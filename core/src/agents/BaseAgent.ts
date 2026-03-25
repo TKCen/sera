@@ -168,11 +168,12 @@ export abstract class BaseAgent {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: IdentityService.generateStreamingSystemPrompt(
-          this.manifest,
-          circleContext,
-          dynamicContext
-        ) + degradationNotice,
+        content:
+          IdentityService.generateStreamingSystemPrompt(
+            this.manifest,
+            circleContext,
+            dynamicContext
+          ) + degradationNotice,
       },
       ...cleanHistory,
       { role: 'user', content: input },

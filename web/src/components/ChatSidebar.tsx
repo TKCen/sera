@@ -1,5 +1,5 @@
-import React from 'react';
-import { Plus, Bot, MessageSquare, Trash2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Plus, Bot, MessageSquare, Trash2, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface SessionInfo {
@@ -16,6 +16,7 @@ export interface AgentInfo {
   id: string;
   name: string;
   display_name?: string | null;
+  status?: string | null;
 }
 
 interface ChatSidebarProps {
@@ -31,6 +32,74 @@ interface ChatSidebarProps {
   onLoadSession: (id: string) => void;
   onDeleteSession: (id: string, e: React.MouseEvent) => void;
   onRefetchAgents: () => void;
+}
+
+function statusColor(status?: string | null): string {
+  switch (status) {
+    case 'running': return 'bg-sera-success';
+    case 'stopped': return 'bg-sera-text-dim';
+    case 'error': return 'bg-sera-error';
+    default: return 'bg-sera-text-muted';
+  }
+}
+
+function AgentDropdown({
+  agents,
+  selectedAgent,
+  onAgentChange,
+}: {
+  agents: AgentInfo[];
+  selectedAgent: string;
+  onAgentChange: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = agents.find((a) => a.name === selectedAgent);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
+
+  if (!agents.length) {
+    return <span className="text-xs text-sera-text-muted">No agents</span>;
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 bg-sera-surface border border-sera-border rounded px-2 py-1.5 text-xs text-sera-text hover:border-sera-accent transition-colors"
+      >
+        <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(selected?.status))} />
+        <span className="flex-1 text-left truncate">{selected?.display_name ?? selected?.name ?? selectedAgent}</span>
+        <ChevronDown size={12} className={cn('text-sera-text-muted transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-sera-surface border border-sera-border rounded shadow-lg max-h-48 overflow-y-auto">
+          {agents.map((a) => (
+            <button
+              key={a.name}
+              onClick={() => { onAgentChange(a.name); setOpen(false); }}
+              className={cn(
+                'w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-sera-surface-hover transition-colors',
+                a.name === selectedAgent && 'bg-sera-accent-soft text-sera-accent'
+              )}
+            >
+              <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(a.status))} />
+              <span className="truncate">{a.display_name ?? a.name}</span>
+              {a.status && (
+                <span className="ml-auto text-[10px] text-sera-text-dim">{a.status}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ChatSidebar({
@@ -90,18 +159,11 @@ export function ChatSidebar({
             </button>
           </div>
         ) : (
-          <select
-            value={selectedAgent}
-            onChange={(e) => onAgentChange(e.target.value)}
-            className="w-full bg-sera-surface border border-sera-border rounded px-2 py-1 text-xs text-sera-text focus:outline-none focus:border-sera-accent"
-          >
-            {!agents?.length && <option value="">No agents</option>}
-            {agents?.map((a) => (
-              <option key={a.name} value={a.name}>
-                {a.display_name ?? a.name}
-              </option>
-            ))}
-          </select>
+          <AgentDropdown
+            agents={agents ?? []}
+            selectedAgent={selectedAgent}
+            onAgentChange={onAgentChange}
+          />
         )}
       </div>
 

@@ -29,12 +29,20 @@ export function MemoryTab({ id }: { id: string }) {
             </button>
           ))}
         </div>
-        <Link
-          to={`/agents/${id}/memory-graph`}
-          className="flex items-center gap-1 text-xs text-sera-accent hover:underline"
-        >
-          <ExternalLink size={11} /> View graph
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            to={`/memory/${id}`}
+            className="flex items-center gap-1 text-xs text-sera-accent hover:underline"
+          >
+            <ExternalLink size={11} /> Browse all
+          </Link>
+          <Link
+            to={`/agents/${id}/memory-graph`}
+            className="flex items-center gap-1 text-xs text-sera-accent hover:underline"
+          >
+            <ExternalLink size={11} /> Graph view
+          </Link>
+        </div>
       </div>
 
       {isLoading ? (
@@ -44,11 +52,7 @@ export function MemoryTab({ id }: { id: string }) {
       ) : (
         <div className="space-y-2">
           {blocks.map((block) => (
-            <Link
-              key={block.id}
-              to={`/memory/${block.id}`}
-              className="sera-card flex items-start gap-3 p-3 block"
-            >
+            <div key={block.id} className="sera-card flex items-start gap-3 p-3">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-0.5">
                   <span className="text-sm font-medium text-sera-text truncate">{block.title}</span>
@@ -73,7 +77,7 @@ export function MemoryTab({ id }: { id: string }) {
                   <Clock size={9} /> {new Date(block.updatedAt).toLocaleDateString()}
                 </span>
               )}
-            </Link>
+            </div>
           ))}
         </div>
       )}

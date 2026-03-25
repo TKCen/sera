@@ -146,17 +146,25 @@ export default function MemoryDetailPage() {
         </div>
       </div>
 
-      {/* Stats */}
-      {stats && (
-        <div className="flex items-center gap-6 text-xs text-sera-text-muted">
-          <span className="flex items-center gap-1.5">
-            <FileText size={12} /> {stats.blockCount} blocks
-          </span>
-          <span className="flex items-center gap-1.5">
-            <Search size={12} /> {stats.vectorCount} vectors indexed
-          </span>
-        </div>
-      )}
+      {/* Stats + Graph link */}
+      <div className="flex items-center gap-6 text-xs text-sera-text-muted">
+        {stats && (
+          <>
+            <span className="flex items-center gap-1.5">
+              <FileText size={12} /> {stats.blockCount} blocks
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Search size={12} /> {stats.vectorCount} vectors indexed
+            </span>
+          </>
+        )}
+        <Link
+          to={`/agents/${agentId}/memory-graph`}
+          className="flex items-center gap-1.5 text-sera-accent hover:underline ml-auto"
+        >
+          <Link2 size={12} /> Graph view
+        </Link>
+      </div>
 
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">

@@ -347,8 +347,12 @@ async function resolveManifest(name: string): Promise<AgentManifest | undefined>
             displayName: template.display_name ?? template.name,
             icon: template.spec?.identity?.icon ?? '',
             circle: template.spec?.circle ?? instance.circle,
-            tier: template.spec?.sandboxBoundary === 'tier-3' ? 3
-              : template.spec?.sandboxBoundary === 'tier-2' ? 2 : 1,
+            tier:
+              template.spec?.sandboxBoundary === 'tier-3'
+                ? 3
+                : template.spec?.sandboxBoundary === 'tier-2'
+                  ? 2
+                  : 1,
           },
           identity: {
             role: template.spec?.identity?.role ?? template.name,
@@ -393,8 +397,9 @@ app.get('/api/tools', authMiddleware, async (_req, res) => {
   const tools = skillRegistry.listTools();
   // Combine YAML manifests with DB-loaded agent manifests (from orchestrator's running agents)
   const yamlManifests = orchestrator.getAllManifests();
-  const runningAgentManifests = Array.from(orchestrator.getRunningAgents().values())
-    .map((a) => a.getManifest());
+  const runningAgentManifests = Array.from(orchestrator.getRunningAgents().values()).map((a) =>
+    a.getManifest()
+  );
   const allManifests = [...yamlManifests, ...runningAgentManifests];
   // Deduplicate by name
   const seen = new Set<string>();
@@ -459,7 +464,11 @@ app.use('/api/pipelines', authMiddleware, createPipelinesRouter(orchestrator));
 app.use('/api/skills', authMiddleware, createSkillsRouter(skillRegistry, orchestrator, pool));
 app.use('/api/memory', authMiddleware, createMemoryRouter(memoryManager));
 app.use('/api/sessions', authMiddleware, createSessionRouter(sessionStore));
-app.use('/api', authMiddleware, createChatRouter(sessionStore, orchestrator, agentRegistry));
+app.use(
+  '/api',
+  authMiddleware,
+  createChatRouter(sessionStore, orchestrator, agentRegistry, sandboxManager)
+);
 
 app.use(
   '/v1/llm',

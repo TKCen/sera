@@ -4,6 +4,7 @@ import { Logger } from '../lib/logger.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { SessionStore } from '../sessions/SessionStore.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
+import type { SandboxManager } from '../sandbox/SandboxManager.js';
 import type { ChatMessage } from '../agents/types.js';
 
 const logger = new Logger('ChatRouter');
@@ -11,7 +12,8 @@ const logger = new Logger('ChatRouter');
 export function createChatRouter(
   sessionStore: SessionStore,
   orchestrator: Orchestrator,
-  agentRegistry?: AgentRegistry
+  agentRegistry?: AgentRegistry,
+  sandboxManager?: SandboxManager
 ) {
   const router = Router();
 
@@ -106,8 +108,41 @@ export function createChatRouter(
       );
 
       try {
-        const response = await agent.process(message, history);
-        const reply = response.finalAnswer || response.thought || 'No response generated.';
+        // Try routing through agent container for full context assembly
+        const instanceId = agent.agentInstanceId;
+        const sandbox =
+          instanceId && sandboxManager
+            ? sandboxManager.getContainerByInstance(instanceId)
+            : undefined;
+
+        let reply = '';
+        let thought: string | undefined;
+
+        if (sandbox?.chatUrl) {
+          try {
+            const chatRes = await fetch(`${sandbox.chatUrl}/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message, sessionId, history }),
+              signal: AbortSignal.timeout(120_000),
+            });
+            if (chatRes.ok) {
+              const body = (await chatRes.json()) as { result: string | null; error?: string };
+              reply = body.result || 'No response generated.';
+            } else {
+              throw new Error(`Container chat returned ${chatRes.status}`);
+            }
+          } catch (containerErr) {
+            logger.warn(`[${agent.name}] Container chat failed, falling back:`, containerErr);
+            const response = await agent.process(message, history);
+            reply = response.finalAnswer || response.thought || 'No response generated.';
+            thought = response.thought;
+          }
+        } else {
+          const response = await agent.process(message, history);
+          reply = response.finalAnswer || response.thought || 'No response generated.';
+          thought = response.thought;
+        }
 
         // Persist messages
         await sessionStore.addMessage({ sessionId, role: 'user', content: message });
@@ -122,11 +157,7 @@ export function createChatRouter(
         // Best-effort JSONL mirror
         sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
 
-        res.json({
-          sessionId,
-          reply,
-          thought: response.thought,
-        });
+        res.json({ sessionId, reply, thought });
       } catch (agentError: unknown) {
         const err = agentError as Error;
         logger.error(`[${agent.name}] Error during processing:`, agentError);
@@ -213,19 +244,49 @@ export function createChatRouter(
 
       // Process in background
       try {
-        const response = await agent.processStream(message, history, messageId);
-        const reply = response.finalAnswer || response.thought || '';
+        // Try routing through agent container (full context: skills + RAG + constitution)
+        const instanceId = agent.agentInstanceId;
+        const sandbox =
+          instanceId && sandboxManager
+            ? sandboxManager.getContainerByInstance(instanceId)
+            : undefined;
 
-        // Persist messages — include thoughts in assistant metadata for session restore
+        let reply = '';
+
+        if (sandbox?.chatUrl) {
+          // Container path — full context assembly via ContextAssembler
+          try {
+            const chatRes = await fetch(`${sandbox.chatUrl}/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message, sessionId, history, messageId }),
+              signal: AbortSignal.timeout(120_000),
+            });
+            if (chatRes.ok) {
+              const body = (await chatRes.json()) as { result: string | null; error?: string };
+              reply = body.result || '';
+              logger.info(`[${agent.name}] Chat routed through container (${sandbox.chatUrl})`);
+            } else {
+              throw new Error(`Container chat returned ${chatRes.status}`);
+            }
+          } catch (containerErr) {
+            // Fallback to in-process if container chat fails
+            logger.warn(
+              `[${agent.name}] Container chat failed, falling back to in-process:`,
+              containerErr
+            );
+            const response = await agent.processStream(message, history, messageId);
+            reply = response.finalAnswer || response.thought || '';
+          }
+        } else {
+          // In-process fallback (no container or chatUrl not available)
+          const response = await agent.processStream(message, history, messageId);
+          reply = response.finalAnswer || response.thought || '';
+        }
+
+        // Persist messages
         await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-        await sessionStore.addMessage({
-          sessionId,
-          role: 'assistant',
-          content: reply,
-          ...(response.thoughts && response.thoughts.length > 0
-            ? { metadata: { thoughts: response.thoughts } }
-            : {}),
-        });
+        await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
 
         // Auto-title on first exchange
         if (isNew) {

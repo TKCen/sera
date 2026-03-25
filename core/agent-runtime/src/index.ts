@@ -34,6 +34,7 @@ import { CentrifugoPublisher, CentrifugoSubscriber } from './centrifugo.js';
 import { ReasoningLoop } from './loop.js';
 import type { TaskInput, TaskOutput } from './loop.js';
 import { startHeartbeat } from './heartbeat.js';
+import { startChatServer } from './chatServer.js';
 import { log } from './logger.js';
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -146,12 +147,17 @@ async function main(): Promise<void> {
   // ── Start Heartbeat ──────────────────────────────────────────────────────
   const stopHeartbeat = startHeartbeat(SERA_CORE_URL, AGENT_INSTANCE_ID, SERA_IDENTITY_TOKEN);
 
+  // ── Start Chat Server ───────────────────────────────────────────────────
+  const chatBusy = false;
+  const chatServer = startChatServer(loop, () => chatBusy);
+
   // ── Graceful Shutdown Setup ──────────────────────────────────────────────
   let currentTaskId: string | null = null;
 
   const shutdown = async (signal: string) => {
     log('info', `${signal} received — beginning graceful shutdown`);
     loop.shutdownRequested = true;
+    chatServer.stop();
 
     // Give the current reasoning step up to 25s to finish
     const shutdownDeadline = Date.now() + 25_000;
@@ -183,7 +189,7 @@ async function main(): Promise<void> {
 
   // ── Announce Readiness ───────────────────────────────────────────────────
   await centrifugo.publishThought('observe', 'Agent runtime started — ready for tasks', 0);
-  log('info', 'Agent runtime ready — waiting for task on stdin');
+  log('info', `Agent runtime ready — chat server on port ${chatServer.port}, waiting for task on stdin`);
 
   // ── Read Initial Task from Stdin ─────────────────────────────────────────
   const firstTask = await readTaskFromStdin();

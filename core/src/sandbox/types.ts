@@ -87,6 +87,8 @@ export interface SandboxInfo {
   proxyEnabled?: boolean;
   /** Container IP on agent_net — used by EgressAclManager for per-agent ACLs (Story 20.2) */
   containerIp?: string;
+  /** HTTP chat endpoint URL (e.g. http://172.18.0.5:3100) — set when agent container starts */
+  chatUrl?: string;
 }
 
 // ── Docker Event ─────────────────────────────────────────────────────────────────

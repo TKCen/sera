@@ -33,6 +33,9 @@ WORKDIR /workspace
 # Drop to non-root
 USER agent
 
+# Chat server port — sera-core routes web chat requests here
+EXPOSE 3100
+
 # DECISION: CMD uses bun directly to run TypeScript source.
 # No tsc build step needed — bun transpiles on the fly.
 CMD ["bun", "run", "/opt/agent-runtime/src/index.ts"]

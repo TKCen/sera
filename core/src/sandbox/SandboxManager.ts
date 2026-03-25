@@ -95,6 +95,7 @@ export class SandboxManager {
       `CENTRIFUGO_API_KEY=${process.env.CENTRIFUGO_API_KEY ?? ''}`,
       `AGENT_HEARTBEAT_INTERVAL_MS=${process.env.AGENT_HEARTBEAT_INTERVAL_MS ?? '30000'}`,
       `AGENT_LIFECYCLE_MODE=${request.lifecycleMode ?? 'persistent'}`,
+      `AGENT_CHAT_PORT=3100`,
     ];
 
     // Story 3.1 — include identity JWT if provided
@@ -268,6 +269,7 @@ export class SandboxManager {
       Image: request.image ?? 'sera-agent-worker:latest',
       Cmd: request.command ?? undefined,
       Env: env,
+      ExposedPorts: { '3100/tcp': {} },
       AttachStdin: !!request.task,
       OpenStdin: !!request.task,
       StdinOnce: !!request.task,
@@ -358,7 +360,7 @@ export class SandboxManager {
       instanceId: finalInstanceId,
       ...(request.lifecycleMode !== undefined ? { lifecycleMode: request.lifecycleMode } : {}),
       ...(proxyEnabled ? { proxyEnabled } : {}),
-      ...(containerIp ? { containerIp } : {}),
+      ...(containerIp ? { containerIp, chatUrl: `http://${containerIp}:3100` } : {}),
     };
 
     this.containers.set(info.Id, sandboxInfo);

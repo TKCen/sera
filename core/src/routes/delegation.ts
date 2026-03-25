@@ -69,27 +69,27 @@ export function createDelegationRouter(intercomService?: IntercomService) {
     requireRole(['admin', 'operator']),
     asyncHandler(async (req, res) => {
       const operator = req.operator!;
-    const {
-      agentId,
-      service,
-      permissions,
-      resourceConstraints,
-      credentialSecretName,
-      grantType = 'session',
-      expiresAt,
-      instanceScoped = false,
-      instanceId,
-    } = req.body as {
-      agentId: string;
-      service: string;
-      permissions: string[];
-      resourceConstraints?: Record<string, string[]>;
-      credentialSecretName: string;
-      grantType?: 'one-time' | 'session' | 'persistent';
-      expiresAt?: string;
-      instanceScoped?: boolean;
-      instanceId?: string;
-    };
+      const {
+        agentId,
+        service,
+        permissions,
+        resourceConstraints,
+        credentialSecretName,
+        grantType = 'session',
+        expiresAt,
+        instanceScoped = false,
+        instanceId,
+      } = req.body as {
+        agentId: string;
+        service: string;
+        permissions: string[];
+        resourceConstraints?: Record<string, string[]>;
+        credentialSecretName: string;
+        grantType?: 'one-time' | 'session' | 'persistent';
+        expiresAt?: string;
+        instanceScoped?: boolean;
+        instanceId?: string;
+      };
 
       if (!agentId || !service || !permissions || !credentialSecretName) {
         return res
@@ -127,38 +127,38 @@ export function createDelegationRouter(intercomService?: IntercomService) {
       }
 
       // Persist to DB
-    await pool.query(
-      `INSERT INTO delegation_tokens
+      await pool.query(
+        `INSERT INTO delegation_tokens
        (id, principal_type, principal_id, principal_name,
         actor_agent_id, actor_instance_id, scope, grant_type,
         credential_secret_name, signed_token, issued_at, expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [
-        id,
-        'operator',
-        operator.sub,
-        operator.email ?? operator.sub,
-        agentId,
-        instanceScoped && instanceId ? instanceId : null,
-        JSON.stringify(scope),
-        grantType,
-        credentialSecretName,
-        signedToken,
-        issuedAt,
-        expiryDate,
-      ]
-    );
+        [
+          id,
+          'operator',
+          operator.sub,
+          operator.email ?? operator.sub,
+          agentId,
+          instanceScoped && instanceId ? instanceId : null,
+          JSON.stringify(scope),
+          grantType,
+          credentialSecretName,
+          signedToken,
+          issuedAt,
+          expiryDate,
+        ]
+      );
 
-    // Audit
-    await audit
-      .record({
-        actorType: 'operator',
-        actorId: operator.sub,
-        actingContext: null,
-        eventType: 'delegation.created',
-        payload: { delegationId: id, agentId, service, grantType },
-      })
-      .catch((err) => logger.error('Audit failed:', err));
+      // Audit
+      await audit
+        .record({
+          actorType: 'operator',
+          actorId: operator.sub,
+          actingContext: null,
+          eventType: 'delegation.created',
+          payload: { delegationId: id, agentId, service, grantType },
+        })
+        .catch((err) => logger.error('Audit failed:', err));
 
       // Notify agent via Centrifugo
       if (intercomService) {

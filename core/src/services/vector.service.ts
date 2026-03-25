@@ -1,6 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { Logger } from '../lib/logger.js';
-import { EmbeddingService, EMBEDDING_VECTOR_SIZE } from './embedding.service.js';
+import { EmbeddingService, getEmbeddingDimension } from './embedding.service.js';
 import type { ScopedMemoryBlockStore } from '../memory/blocks/ScopedMemoryBlockStore.js';
 
 const logger = new Logger('VectorService');
@@ -75,7 +75,7 @@ export class VectorService {
 
   private async ensureCollectionByName(
     name: string,
-    vectorSize = EMBEDDING_VECTOR_SIZE,
+    vectorSize = getEmbeddingDimension(),
     attempt = 0
   ): Promise<void> {
     const maxAttempts = 5;

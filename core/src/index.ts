@@ -75,6 +75,9 @@ import { createKnowledgeRouter } from './routes/knowledge.js';
 import { KnowledgeGitService } from './memory/KnowledgeGitService.js';
 import { MemoryCompactionService } from './memory/MemoryCompactionService.js';
 import { EmbeddingService } from './services/embedding.service.js';
+import { EmbeddingRouter as EmbeddingRouterService } from './services/embedding-router.js';
+import { loadEmbeddingConfig } from './services/embedding-config.js';
+import { createEmbeddingRouter } from './routes/embedding.js';
 import { AuditService } from './audit/AuditService.js';
 import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
@@ -489,6 +492,7 @@ app.use(
   createProvidersRouter(llmRouter, circuitBreakerService, dynamicProviderManager)
 );
 app.use('/api/system', authMiddleware, createSystemRouter(circuitBreakerService));
+app.use('/api/embedding', authMiddleware, createEmbeddingRouter(EmbeddingService.getInstance()));
 app.use('/api/metering', authMiddleware, createMeteringRouter(meteringService));
 app.use('/api/audit', authMiddleware, createAuditRouter());
 app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permissionService));

@@ -36,10 +36,14 @@ interface ChatSidebarProps {
 
 function statusColor(status?: string | null): string {
   switch (status) {
-    case 'running': return 'bg-sera-success';
-    case 'stopped': return 'bg-sera-text-dim';
-    case 'error': return 'bg-sera-error';
-    default: return 'bg-sera-text-muted';
+    case 'running':
+      return 'bg-sera-success';
+    case 'stopped':
+      return 'bg-sera-text-dim';
+    case 'error':
+      return 'bg-sera-error';
+    default:
+      return 'bg-sera-text-muted';
   }
 }
 
@@ -75,15 +79,23 @@ function AgentDropdown({
         className="w-full flex items-center gap-2 bg-sera-surface border border-sera-border rounded px-2 py-1.5 text-xs text-sera-text hover:border-sera-accent transition-colors"
       >
         <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(selected?.status))} />
-        <span className="flex-1 text-left truncate">{selected?.display_name ?? selected?.name ?? selectedAgent}</span>
-        <ChevronDown size={12} className={cn('text-sera-text-muted transition-transform', open && 'rotate-180')} />
+        <span className="flex-1 text-left truncate">
+          {selected?.display_name ?? selected?.name ?? selectedAgent}
+        </span>
+        <ChevronDown
+          size={12}
+          className={cn('text-sera-text-muted transition-transform', open && 'rotate-180')}
+        />
       </button>
       {open && (
         <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-sera-surface border border-sera-border rounded shadow-lg max-h-48 overflow-y-auto">
           {agents.map((a) => (
             <button
               key={a.name}
-              onClick={() => { onAgentChange(a.name); setOpen(false); }}
+              onClick={() => {
+                onAgentChange(a.name);
+                setOpen(false);
+              }}
               className={cn(
                 'w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-sera-surface-hover transition-colors',
                 a.name === selectedAgent && 'bg-sera-accent-soft text-sera-accent'

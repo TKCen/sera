@@ -1,5 +1,15 @@
 import { useState, useCallback } from 'react';
-import { Play, Pencil, Trash2, Check, X, Info, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import {
+  Play,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+  Info,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from '@/lib/utils';
 import {
@@ -317,7 +327,12 @@ export default function SchedulesPage() {
   const [agentFilter, setAgentFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'paused'>('');
   const [showCreate, setShowCreate] = useState(false);
-  const [newSchedule, setNewSchedule] = useState({ agentName: '', name: '', expression: '', taskPrompt: '' });
+  const [newSchedule, setNewSchedule] = useState({
+    agentName: '',
+    name: '',
+    expression: '',
+    taskPrompt: '',
+  });
 
   const { data: schedules, isLoading } = useSchedules({
     agentName: agentFilter || undefined,
@@ -371,9 +386,7 @@ export default function SchedulesPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Schedule</DialogTitle>
-            <DialogDescription>
-              Create a new cron schedule for an agent.
-            </DialogDescription>
+            <DialogDescription>Create a new cron schedule for an agent.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 mt-2">
             <div>
@@ -385,7 +398,9 @@ export default function SchedulesPage() {
               >
                 <option value="">Select agent…</option>
                 {agentNames.map((n) => (
-                  <option key={n} value={n}>{n}</option>
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
                 ))}
               </select>
             </div>
@@ -408,10 +423,14 @@ export default function SchedulesPage() {
                 placeholder="0 */6 * * *"
                 className="sera-input text-xs w-full font-mono"
               />
-              <p className="text-[10px] text-sera-text-dim mt-1">Standard 5-field cron: minute hour day month weekday</p>
+              <p className="text-[10px] text-sera-text-dim mt-1">
+                Standard 5-field cron: minute hour day month weekday
+              </p>
             </div>
             <div>
-              <label className="block text-xs text-sera-text-muted mb-1">Task Prompt (optional)</label>
+              <label className="block text-xs text-sera-text-muted mb-1">
+                Task Prompt (optional)
+              </label>
               <textarea
                 value={newSchedule.taskPrompt}
                 onChange={(e) => setNewSchedule((s) => ({ ...s, taskPrompt: e.target.value }))}
@@ -423,7 +442,9 @@ export default function SchedulesPage() {
           </div>
           <div className="flex gap-3 justify-end mt-4">
             <DialogClose asChild>
-              <Button variant="ghost" size="sm">Cancel</Button>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
             </DialogClose>
             <Button
               size="sm"

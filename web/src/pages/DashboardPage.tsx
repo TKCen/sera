@@ -34,7 +34,13 @@ function StatCard({
       className="sera-card-static p-4 hover:border-sera-accent/40 transition-colors group"
     >
       <div className="flex items-center justify-between mb-2">
-        <Icon size={18} className={cn('text-sera-text-muted group-hover:text-sera-accent transition-colors', accent)} />
+        <Icon
+          size={18}
+          className={cn(
+            'text-sera-text-muted group-hover:text-sera-accent transition-colors',
+            accent
+          )}
+        />
       </div>
       <div className="text-2xl font-bold text-sera-text">{value}</div>
       <div className="text-xs text-sera-text-muted mt-0.5">{label}</div>
@@ -96,12 +102,7 @@ export default function DashboardPage() {
           accent="text-sera-success"
         />
         <StatCard label="Circles" value={circles?.length ?? 0} icon={Circle} to="/circles" />
-        <StatCard
-          label="Active schedules"
-          value={activeSchedules}
-          icon={Clock}
-          to="/schedules"
-        />
+        <StatCard label="Active schedules" value={activeSchedules} icon={Clock} to="/schedules" />
       </div>
 
       {/* Agent status breakdown */}

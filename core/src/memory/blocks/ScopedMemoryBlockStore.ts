@@ -190,7 +190,8 @@ export class ScopedMemoryBlockStore {
         }
         if (filters?.since && block.timestamp < filters.since) continue;
         if (filters?.before && block.timestamp >= filters.before) continue;
-        if (filters?.minImportance !== undefined && block.importance < filters.minImportance) continue;
+        if (filters?.minImportance !== undefined && block.importance < filters.minImportance)
+          continue;
 
         results.push(block);
       }

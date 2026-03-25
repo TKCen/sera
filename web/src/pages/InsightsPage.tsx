@@ -62,7 +62,11 @@ export default function InsightsPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const { from, to } = rangeToFromTo(range, customFrom, customTo);
-  const { data, isLoading, isError, error, refetch, isFetching } = useUsage({ groupBy: 'agent', from, to });
+  const { data, isLoading, isError, error, refetch, isFetching } = useUsage({
+    groupBy: 'agent',
+    from,
+    to,
+  });
 
   const toggleSort = useCallback(
     (key: SortKey) => {
@@ -188,269 +192,269 @@ export default function InsightsPage() {
 
       <ErrorBoundary fallbackMessage="Failed to load insights.">
         {isLoading ? (
-        <div className="flex items-center justify-center py-20">
-          <Spinner />
-        </div>
-      ) : isError ? (
-        <div className="flex flex-col items-center justify-center py-24 gap-4 bg-sera-surface border border-sera-error/20 rounded-xl">
-          <p className="text-sm text-sera-error font-medium">Failed to load insights</p>
-          <div className="text-xs text-sera-text-dim max-w-md text-center">
-            {error instanceof Error ? error.message : String(error)}
+          <div className="flex items-center justify-center py-20">
+            <Spinner />
           </div>
-          <button
-            onClick={() => void refetch()}
-            className="px-4 py-2 mt-2 bg-sera-surface-hover hover:bg-sera-surface-active text-sera-text border border-sera-border rounded-lg text-sm font-medium transition-all flex items-center gap-2"
-          >
-            <RefreshCw size={14} />
-            Retry
-          </button>
-        </div>
-      ) : (
-        <>
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <SummaryCard
-              label="Total Tokens Today"
-              value={fmtTokens(data?.summary.totalTokensToday ?? 0)}
-              icon={<Activity size={16} className="text-sera-accent" />}
-            />
-            <SummaryCard
-              label="Total Tokens (Period)"
-              value={fmtTokens(data?.summary.totalTokensMonth ?? 0)}
-              icon={<TrendingUp size={16} className="text-sera-success" />}
-            />
-            <SummaryCard
-              label="Most Active Agent"
-              value={data?.summary.mostActiveAgent ?? '—'}
-              icon={<Bot size={16} className="text-sera-warning" />}
-            />
-            <SummaryCard
-              label="Estimated Cost"
-              value={
-                data?.summary.estimatedCost !== undefined
-                  ? `$${data.summary.estimatedCost.toFixed(4)}`
-                  : '—'
-              }
-              icon={<DollarSign size={16} className="text-sera-info" />}
-            />
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center py-24 gap-4 bg-sera-surface border border-sera-error/20 rounded-xl">
+            <p className="text-sm text-sera-error font-medium">Failed to load insights</p>
+            <div className="text-xs text-sera-text-dim max-w-md text-center">
+              {error instanceof Error ? error.message : String(error)}
+            </div>
+            <button
+              onClick={() => void refetch()}
+              className="px-4 py-2 mt-2 bg-sera-surface-hover hover:bg-sera-surface-active text-sera-text border border-sera-border rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+            >
+              <RefreshCw size={14} />
+              Retry
+            </button>
           </div>
+        ) : (
+          <>
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <SummaryCard
+                label="Total Tokens Today"
+                value={fmtTokens(data?.summary.totalTokensToday ?? 0)}
+                icon={<Activity size={16} className="text-sera-accent" />}
+              />
+              <SummaryCard
+                label="Total Tokens (Period)"
+                value={fmtTokens(data?.summary.totalTokensMonth ?? 0)}
+                icon={<TrendingUp size={16} className="text-sera-success" />}
+              />
+              <SummaryCard
+                label="Most Active Agent"
+                value={data?.summary.mostActiveAgent ?? '—'}
+                icon={<Bot size={16} className="text-sera-warning" />}
+              />
+              <SummaryCard
+                label="Estimated Cost"
+                value={
+                  data?.summary.estimatedCost !== undefined
+                    ? `$${data.summary.estimatedCost.toFixed(4)}`
+                    : '—'
+                }
+                icon={<DollarSign size={16} className="text-sera-info" />}
+              />
+            </div>
 
-          {/* Time-series area chart */}
-          <div className="sera-card-static p-5">
-            <h2 className="text-sm font-semibold text-sera-text mb-4">Token Usage Over Time</h2>
-            {chartData.length === 0 ? (
-              <p className="text-center text-sera-text-dim text-sm py-10">
-                No data for selected range.
-              </p>
-            ) : (
-              <ResponsiveContainer width="100%" height={240}>
-                <AreaChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="gradPrompt" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--sera-accent)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--sera-accent)" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gradCompletion" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--sera-success)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--sera-success)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }} />
-                  <YAxis
-                    tickFormatter={(v: number) => fmtTokens(v)}
-                    tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'var(--sera-surface)',
-                      border: '1px solid var(--sera-border)',
-                      borderRadius: '8px',
-                      fontSize: 12,
-                    }}
-                    formatter={(value: number, name: string) => [fmtTokens(value), name]}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Area
-                    type="monotone"
-                    dataKey="promptTokens"
-                    name="Prompt"
-                    stroke="var(--sera-accent)"
-                    fill="url(#gradPrompt)"
-                    strokeWidth={2}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="completionTokens"
-                    name="Completion"
-                    stroke="var(--sera-success)"
-                    fill="url(#gradCompletion)"
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          {/* Per-agent bar chart */}
-          {(data?.byAgent ?? []).length > 0 && (
+            {/* Time-series area chart */}
             <div className="sera-card-static p-5">
-              <h2 className="text-sm font-semibold text-sera-text mb-4">Per-Agent Breakdown</h2>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart
-                  data={data?.byAgent ?? []}
-                  margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis
-                    dataKey="agentName"
-                    tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
-                  />
-                  <YAxis
-                    tickFormatter={(v: number) => fmtTokens(v)}
-                    tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'var(--sera-surface)',
-                      border: '1px solid var(--sera-border)',
-                      borderRadius: '8px',
-                      fontSize: 12,
-                    }}
-                    formatter={(value: number, name: string) => [fmtTokens(value), name]}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar
-                    dataKey="promptTokens"
-                    name="Prompt"
-                    fill="var(--sera-accent)"
-                    stackId="a"
-                    radius={[0, 0, 0, 0]}
-                  />
-                  <Bar
-                    dataKey="completionTokens"
-                    name="Completion"
-                    fill="var(--sera-success)"
-                    stackId="a"
-                    radius={[4, 4, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              <h2 className="text-sm font-semibold text-sera-text mb-4">Token Usage Over Time</h2>
+              {chartData.length === 0 ? (
+                <p className="text-center text-sera-text-dim text-sm py-10">
+                  No data for selected range.
+                </p>
+              ) : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <AreaChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="gradPrompt" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--sera-accent)" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="var(--sera-accent)" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="gradCompletion" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--sera-success)" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="var(--sera-success)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }} />
+                    <YAxis
+                      tickFormatter={(v: number) => fmtTokens(v)}
+                      tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'var(--sera-surface)',
+                        border: '1px solid var(--sera-border)',
+                        borderRadius: '8px',
+                        fontSize: 12,
+                      }}
+                      formatter={(value: number, name: string) => [fmtTokens(value), name]}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Area
+                      type="monotone"
+                      dataKey="promptTokens"
+                      name="Prompt"
+                      stroke="var(--sera-accent)"
+                      fill="url(#gradPrompt)"
+                      strokeWidth={2}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="completionTokens"
+                      name="Completion"
+                      stroke="var(--sera-success)"
+                      fill="url(#gradCompletion)"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
-          )}
 
-          {/* Per-agent table */}
-          <div className="sera-card-static overflow-hidden">
-            <div className="p-4 border-b border-sera-border">
-              <h2 className="text-sm font-semibold text-sera-text">Agent Usage Table</h2>
-            </div>
-            {sortedAgents.length === 0 ? (
-              <p className="text-center text-sera-text-dim text-sm py-10">No usage data.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
-                      {(
-                        [
-                          ['agentName', 'Agent'],
-                          ['promptTokens', 'Prompt'],
-                          ['completionTokens', 'Completion'],
-                          ['totalTokens', 'Total'],
-                          ['pctOfTotal', '% of Total'],
-                        ] as [SortKey, string][]
-                      ).map(([key, label]) => (
-                        <th
-                          key={key}
-                          className="text-left py-3 px-4 cursor-pointer hover:text-sera-text transition-colors select-none"
-                          onClick={() => toggleSort(key)}
-                        >
-                          <span className="flex items-center gap-1">
-                            {label}
-                            <SortIcon active={sortKey === key} dir={sortDir} />
-                          </span>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedAgents.map((a) => (
-                      <tr
-                        key={a.agentName}
-                        className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
-                      >
-                        <td className="py-3 px-4 text-sera-text font-medium">{a.agentName}</td>
-                        <td className="py-3 px-4 text-sera-text-muted font-mono">
-                          {fmtTokens(a.promptTokens)}
-                        </td>
-                        <td className="py-3 px-4 text-sera-text-muted font-mono">
-                          {fmtTokens(a.completionTokens)}
-                        </td>
-                        <td className="py-3 px-4 text-sera-text font-mono font-semibold">
-                          {fmtTokens(a.totalTokens)}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-sera-surface-hover rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-sera-accent rounded-full"
-                                style={{ width: `${Math.min(a.pctOfTotal, 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-sera-text-muted w-10 text-right">
-                              {a.pctOfTotal.toFixed(1)}%
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {/* Per-agent bar chart */}
+            {(data?.byAgent ?? []).length > 0 && (
+              <div className="sera-card-static p-5">
+                <h2 className="text-sm font-semibold text-sera-text mb-4">Per-Agent Breakdown</h2>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart
+                    data={data?.byAgent ?? []}
+                    margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis
+                      dataKey="agentName"
+                      tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
+                    />
+                    <YAxis
+                      tickFormatter={(v: number) => fmtTokens(v)}
+                      tick={{ fontSize: 10, fill: 'var(--sera-text-dim)' }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'var(--sera-surface)',
+                        border: '1px solid var(--sera-border)',
+                        borderRadius: '8px',
+                        fontSize: 12,
+                      }}
+                      formatter={(value: number, name: string) => [fmtTokens(value), name]}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar
+                      dataKey="promptTokens"
+                      name="Prompt"
+                      fill="var(--sera-accent)"
+                      stackId="a"
+                      radius={[0, 0, 0, 0]}
+                    />
+                    <Bar
+                      dataKey="completionTokens"
+                      name="Completion"
+                      fill="var(--sera-success)"
+                      stackId="a"
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             )}
-          </div>
 
-          {/* Model breakdown */}
-          {(data?.byModel ?? []).length > 0 && (
+            {/* Per-agent table */}
             <div className="sera-card-static overflow-hidden">
               <div className="p-4 border-b border-sera-border">
-                <h2 className="text-sm font-semibold text-sera-text">Model Breakdown</h2>
+                <h2 className="text-sm font-semibold text-sera-text">Agent Usage Table</h2>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
-                      <th className="text-left py-3 px-4">Model</th>
-                      <th className="text-right py-3 px-4">Prompt</th>
-                      <th className="text-right py-3 px-4">Completion</th>
-                      <th className="text-right py-3 px-4">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(data?.byModel ?? []).map((m) => (
-                      <tr
-                        key={m.model}
-                        className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
-                      >
-                        <td className="py-3 px-4 text-sera-text font-mono text-xs">{m.model}</td>
-                        <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">
-                          {fmtTokens(m.promptTokens)}
-                        </td>
-                        <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">
-                          {fmtTokens(m.completionTokens)}
-                        </td>
-                        <td className="py-3 px-4 text-right text-sera-text font-mono text-xs font-semibold">
-                          {fmtTokens(m.totalTokens)}
-                        </td>
+              {sortedAgents.length === 0 ? (
+                <p className="text-center text-sera-text-dim text-sm py-10">No usage data.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
+                        {(
+                          [
+                            ['agentName', 'Agent'],
+                            ['promptTokens', 'Prompt'],
+                            ['completionTokens', 'Completion'],
+                            ['totalTokens', 'Total'],
+                            ['pctOfTotal', '% of Total'],
+                          ] as [SortKey, string][]
+                        ).map(([key, label]) => (
+                          <th
+                            key={key}
+                            className="text-left py-3 px-4 cursor-pointer hover:text-sera-text transition-colors select-none"
+                            onClick={() => toggleSort(key)}
+                          >
+                            <span className="flex items-center gap-1">
+                              {label}
+                              <SortIcon active={sortKey === key} dir={sortDir} />
+                            </span>
+                          </th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {sortedAgents.map((a) => (
+                        <tr
+                          key={a.agentName}
+                          className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                        >
+                          <td className="py-3 px-4 text-sera-text font-medium">{a.agentName}</td>
+                          <td className="py-3 px-4 text-sera-text-muted font-mono">
+                            {fmtTokens(a.promptTokens)}
+                          </td>
+                          <td className="py-3 px-4 text-sera-text-muted font-mono">
+                            {fmtTokens(a.completionTokens)}
+                          </td>
+                          <td className="py-3 px-4 text-sera-text font-mono font-semibold">
+                            {fmtTokens(a.totalTokens)}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 h-1.5 bg-sera-surface-hover rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-sera-accent rounded-full"
+                                  style={{ width: `${Math.min(a.pctOfTotal, 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-sera-text-muted w-10 text-right">
+                                {a.pctOfTotal.toFixed(1)}%
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          )}
-        </>
-      )}
+
+            {/* Model breakdown */}
+            {(data?.byModel ?? []).length > 0 && (
+              <div className="sera-card-static overflow-hidden">
+                <div className="p-4 border-b border-sera-border">
+                  <h2 className="text-sm font-semibold text-sera-text">Model Breakdown</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
+                        <th className="text-left py-3 px-4">Model</th>
+                        <th className="text-right py-3 px-4">Prompt</th>
+                        <th className="text-right py-3 px-4">Completion</th>
+                        <th className="text-right py-3 px-4">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(data?.byModel ?? []).map((m) => (
+                        <tr
+                          key={m.model}
+                          className="border-b border-sera-border/50 hover:bg-sera-surface-hover transition-colors"
+                        >
+                          <td className="py-3 px-4 text-sera-text font-mono text-xs">{m.model}</td>
+                          <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">
+                            {fmtTokens(m.promptTokens)}
+                          </td>
+                          <td className="py-3 px-4 text-right text-sera-text-muted font-mono text-xs">
+                            {fmtTokens(m.completionTokens)}
+                          </td>
+                          <td className="py-3 px-4 text-right text-sera-text font-mono text-xs font-semibold">
+                            {fmtTokens(m.totalTokens)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </ErrorBoundary>
     </div>
   );

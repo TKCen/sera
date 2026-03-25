@@ -83,16 +83,6 @@ vi.mock('../services/vector.service.js', () => ({
 vi.mock('../circles/CircleRegistry.js', () => {
   return {
     CircleRegistry: class {
-      listCircles = vi.fn().mockReturnValue([
-        {
-          metadata: { name: 'development', displayName: 'Development' },
-          agents: ['architect-prime'],
-        },
-        {
-          metadata: { name: 'operations', displayName: 'Operations' },
-          agents: ['researcher-prime'],
-        },
-      ]);
       listCircleSummaries = vi.fn().mockReturnValue([
         {
           name: 'development',

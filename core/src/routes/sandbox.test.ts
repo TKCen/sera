@@ -104,7 +104,7 @@ describe('Sandbox Routes', () => {
       (layer: any) => layer.route && layer.route.path === path && layer.route.methods[method]
     );
 
-    if (!route) {
+    if (!route || !route.route || !route.route.stack || !route.route.stack[0]) {
       throw new Error(`Route ${method.toUpperCase()} ${path} not found`);
     }
 

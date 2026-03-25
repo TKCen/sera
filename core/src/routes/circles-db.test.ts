@@ -93,7 +93,7 @@ describe('Circles DB Router', () => {
       (layer: any) => layer.route && layer.route.path === pathStr && layer.route.methods[method]
     );
 
-    if (!route) {
+    if (!route || !route.route || !route.route.stack || !route.route.stack[0]) {
       throw new Error(`Route ${method.toUpperCase()} ${pathStr} not found`);
     }
 

@@ -52,6 +52,8 @@ services:
       - /app/dist
     entrypoint: ["/bin/sh", "/app/docker-entrypoint.dev.sh"]
     command: ["bun", "run", "dev", "--", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:5173/ || exit 1"]
     environment:
       - NODE_ENV=development
       - VITE_API_URL=http://sera-core:3001

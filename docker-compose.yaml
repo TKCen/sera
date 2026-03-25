@@ -78,6 +78,7 @@ services:
     restart: unless-stopped
     networks:
       - sera_net
+      - agent_net
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost/ || exit 1"]
       interval: 30s

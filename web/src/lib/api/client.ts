@@ -70,7 +70,18 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   }
 
   if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+
+  const body = await response.json() as T;
+
+  // Guard: backend may return 200 with { error: "..." } (e.g. via dev proxy)
+  if (body && typeof body === 'object' && 'error' in body && !('id' in body)) {
+    const errBody = body as unknown as ErrorResponse;
+    if (errBody.error) {
+      throw new APIError(response.status, errBody.error, errBody.code);
+    }
+  }
+
+  return body;
 }
 
 export async function requestText(path: string, options: RequestInit = {}): Promise<string> {

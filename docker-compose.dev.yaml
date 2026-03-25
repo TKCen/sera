@@ -28,8 +28,8 @@ services:
       - HOST_MEMORY_DIR=${PWD}/memory
       - NODE_ENV=development
       - PORT=3001
-      - SERA_BOOTSTRAP_API_KEY=sera_bootstrap_dev_123
-      - SECRETS_MASTER_KEY=f6e5d4c3b2a1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7
+      - SERA_BOOTSTRAP_API_KEY=${SERA_BOOTSTRAP_API_KEY:-sera-dev-key-change-me}
+      - SECRETS_MASTER_KEY=${SECRETS_MASTER_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
       - EGRESS_PROXY_URL=http://sera-egress-proxy:3128
       # Uncomment to enable local embeddings (Ollama on host):
@@ -57,7 +57,7 @@ services:
     environment:
       - NODE_ENV=development
       - VITE_API_URL=http://sera-core:3001
-      - VITE_DEV_API_KEY=sera_bootstrap_dev_123
+      - VITE_DEV_API_KEY=${SERA_BOOTSTRAP_API_KEY:-sera-dev-key-change-me}
 
   # Egress proxy — no dev overrides, uses base definition from docker-compose.yaml
   sera-egress-proxy: {}

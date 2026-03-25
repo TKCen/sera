@@ -51,17 +51,35 @@ describe('Circle Router', () => {
     });
   });
 
-  const invokeRoute = async (method: 'get' | 'post' | 'put' | 'delete', pathStr: string, reqData: any = {}) => {
-    const router = createCircleRouter(mockCircleRegistry, '/mock/circles', mockGetAgentManifests, mockOrchestrator);
+  const invokeRoute = async (
+    method: 'get' | 'post' | 'put' | 'delete',
+    pathStr: string,
+    reqData: any = {}
+  ) => {
+    const router = createCircleRouter(
+      mockCircleRegistry,
+      '/mock/circles',
+      mockGetAgentManifests,
+      mockOrchestrator
+    );
     const req = { method: method.toUpperCase(), path: pathStr, ...reqData } as any;
 
     let resData: any;
     let statusCode: number = 200;
 
     const res = {
-      status: vi.fn((code: number) => { statusCode = code; return res; }),
-      json: vi.fn((data: any) => { resData = data; return res; }),
-      send: vi.fn((data: any) => { resData = data; return res; }),
+      status: vi.fn((code: number) => {
+        statusCode = code;
+        return res;
+      }),
+      json: vi.fn((data: any) => {
+        resData = data;
+        return res;
+      }),
+      send: vi.fn((data: any) => {
+        resData = data;
+        return res;
+      }),
     } as any;
 
     let nextCalled = false;
@@ -71,8 +89,8 @@ describe('Circle Router', () => {
       nextErr = err;
     });
 
-    const route = router.stack.find((layer: any) =>
-      layer.route && layer.route.path === pathStr && layer.route.methods[method]
+    const route = router.stack.find(
+      (layer: any) => layer.route && layer.route.path === pathStr && layer.route.methods[method]
     );
 
     if (!route) {
@@ -97,7 +115,9 @@ describe('Circle Router', () => {
   describe('GET /:name', () => {
     it('should return 404 if circle not found', async () => {
       mockCircleRegistry.getCircle.mockReturnValue(undefined);
-      const { statusCode, resData } = await invokeRoute('get', '/:name', { params: { name: 'missing' } });
+      const { statusCode, resData } = await invokeRoute('get', '/:name', {
+        params: { name: 'missing' },
+      });
       expect(statusCode).toBe(404);
       expect(resData.error).toBe('Circle "missing" not found');
     });
@@ -106,7 +126,9 @@ describe('Circle Router', () => {
       mockCircleRegistry.getCircle.mockReturnValue({ metadata: { name: 'test-circle' } });
       mockCircleRegistry.getProjectContext.mockReturnValue('Project rules');
 
-      const { statusCode, resData } = await invokeRoute('get', '/:name', { params: { name: 'test-circle' } });
+      const { statusCode, resData } = await invokeRoute('get', '/:name', {
+        params: { name: 'test-circle' },
+      });
       expect(statusCode).toBe(200);
       expect(resData.metadata.name).toBe('test-circle');
       expect(resData.projectContext).toBe('Project rules');
@@ -128,7 +150,9 @@ describe('Circle Router', () => {
 
     it('should return 409 if circle already exists', async () => {
       mockCircleRegistry.getCircle.mockReturnValue({});
-      const { statusCode, resData } = await invokeRoute('post', '/', { body: { metadata: { name: 'existing' } } });
+      const { statusCode, resData } = await invokeRoute('post', '/', {
+        body: { metadata: { name: 'existing' } },
+      });
       expect(statusCode).toBe(409);
     });
 
@@ -136,7 +160,9 @@ describe('Circle Router', () => {
       mockCircleRegistry.getCircle.mockReturnValue(undefined);
       (fs.writeFileSync as any).mockImplementation(() => {});
 
-      const { statusCode, resData } = await invokeRoute('post', '/', { body: { metadata: { name: 'new-circle' } } });
+      const { statusCode, resData } = await invokeRoute('post', '/', {
+        body: { metadata: { name: 'new-circle' } },
+      });
 
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         path.join('/mock/circles', 'new-circle.circle.yaml'),

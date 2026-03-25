@@ -144,7 +144,10 @@ vi.mock('../agents/Orchestrator.js', () => {
           { name: 'developer-prime' },
           { name: 'researcher-prime' },
         ]);
-      listCircles = vi.fn().mockReturnValue([{ name: 'development', metadata: { name: 'development' } }, { name: 'operations', metadata: { name: 'operations' } }]);
+      listCircles = vi.fn().mockReturnValue([
+        { name: 'development', metadata: { name: 'development' } },
+        { name: 'operations', metadata: { name: 'operations' } },
+      ]);
       getManifest = vi.fn();
       getAllManifests = vi.fn().mockReturnValue([]);
       loadAllManifests = vi.fn().mockResolvedValue(undefined);

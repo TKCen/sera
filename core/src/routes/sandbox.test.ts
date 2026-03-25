@@ -67,11 +67,7 @@ describe('Sandbox Routes', () => {
     },
   } as unknown as AgentManifest;
 
-  const invokeRoute = async (
-    method: 'get' | 'post' | 'delete',
-    path: string,
-    reqData: any
-  ) => {
+  const invokeRoute = async (method: 'get' | 'post' | 'delete', path: string, reqData: any) => {
     const router = createSandboxRouter(mockSandboxManager, mockResolveManifest);
     const req = {
       method: method.toUpperCase(),
@@ -83,9 +79,18 @@ describe('Sandbox Routes', () => {
     let statusCode: number = 200;
 
     const res = {
-      status: vi.fn((code: number) => { statusCode = code; return res; }),
-      json: vi.fn((data: any) => { resData = data; return res; }),
-      send: vi.fn((data: any) => { resData = data; return res; }),
+      status: vi.fn((code: number) => {
+        statusCode = code;
+        return res;
+      }),
+      json: vi.fn((data: any) => {
+        resData = data;
+        return res;
+      }),
+      send: vi.fn((data: any) => {
+        resData = data;
+        return res;
+      }),
     } as any;
 
     let nextCalled = false;
@@ -95,8 +100,8 @@ describe('Sandbox Routes', () => {
       nextErr = err;
     });
 
-    const route = router.stack.find((layer: any) =>
-      layer.route && layer.route.path === path && layer.route.methods[method]
+    const route = router.stack.find(
+      (layer: any) => layer.route && layer.route.path === path && layer.route.methods[method]
     );
 
     if (!route) {
@@ -118,14 +123,18 @@ describe('Sandbox Routes', () => {
 
     it('should return 404 if manifest not found', async () => {
       mockResolveManifest.mockResolvedValue(undefined);
-      const { statusCode, resData } = await invokeRoute('post', '/spawn', { body: { agentName: 'missing' } });
+      const { statusCode, resData } = await invokeRoute('post', '/spawn', {
+        body: { agentName: 'missing' },
+      });
       expect(statusCode).toBe(404);
       expect(resData.error).toBe('Agent "missing" not found');
     });
 
     it('should return 400 if type or image is missing', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
-      const { statusCode, resData } = await invokeRoute('post', '/spawn', { body: { agentName: 'test-agent' } });
+      const { statusCode, resData } = await invokeRoute('post', '/spawn', {
+        body: { agentName: 'test-agent' },
+      });
       expect(statusCode).toBe(400);
       expect(resData.error).toBe('type and image are required');
     });
@@ -134,7 +143,7 @@ describe('Sandbox Routes', () => {
       const noTierManifest = { metadata: { name: 'no-tier' } } as any;
       mockResolveManifest.mockResolvedValue(noTierManifest);
       const { statusCode, resData } = await invokeRoute('post', '/spawn', {
-        body: { agentName: 'no-tier', type: 'test', image: 'test:latest' }
+        body: { agentName: 'no-tier', type: 'test', image: 'test:latest' },
       });
       expect(statusCode).toBe(403);
       expect(resData.error).toBe('Agent manifest must define a valid security tier');
@@ -145,22 +154,29 @@ describe('Sandbox Routes', () => {
       mockSandboxManager.spawn.mockResolvedValue({ containerId: '123' });
 
       const { statusCode, resData } = await invokeRoute('post', '/spawn', {
-        body: { agentName: 'test-agent', type: 'test', image: 'test:latest', command: ['sh'] }
+        body: { agentName: 'test-agent', type: 'test', image: 'test:latest', command: ['sh'] },
       });
 
       expect(statusCode).toBe(201);
       expect(resData).toEqual({ containerId: '123' });
-      expect(mockSandboxManager.spawn).toHaveBeenCalledWith(validManifest, expect.objectContaining({
-        type: 'test', image: 'test:latest', command: ['sh']
-      }));
+      expect(mockSandboxManager.spawn).toHaveBeenCalledWith(
+        validManifest,
+        expect.objectContaining({
+          type: 'test',
+          image: 'test:latest',
+          command: ['sh'],
+        })
+      );
     });
 
     it('should handle PolicyViolationError', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
-      mockSandboxManager.spawn.mockRejectedValue(new PolicyViolationError('Violated', 'test-agent', 'code'));
+      mockSandboxManager.spawn.mockRejectedValue(
+        new PolicyViolationError('Violated', 'test-agent', 'code')
+      );
 
       const { statusCode, resData } = await invokeRoute('post', '/spawn', {
-        body: { agentName: 'test-agent', type: 'test', image: 'test:latest' }
+        body: { agentName: 'test-agent', type: 'test', image: 'test:latest' },
       });
 
       expect(statusCode).toBe(403);
@@ -173,7 +189,7 @@ describe('Sandbox Routes', () => {
     it('should return 400 if containerId or command are missing', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
       const { statusCode, resData } = await invokeRoute('post', '/exec', {
-        body: { agentName: 'test-agent', containerId: '123' } // missing command
+        body: { agentName: 'test-agent', containerId: '123' }, // missing command
       });
       expect(statusCode).toBe(400);
     });
@@ -181,7 +197,7 @@ describe('Sandbox Routes', () => {
     it('should return 403 if tool is in denied list', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
       const { statusCode, resData } = await invokeRoute('post', '/exec', {
-        body: { agentName: 'test-agent', containerId: '123', command: ['rm', '-rf', '/'] }
+        body: { agentName: 'test-agent', containerId: '123', command: ['rm', '-rf', '/'] },
       });
       expect(statusCode).toBe(403);
       expect(resData.violation).toBe('tool_denied');
@@ -190,7 +206,7 @@ describe('Sandbox Routes', () => {
     it('should return 403 if tool is not in allowed list', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
       const { statusCode, resData } = await invokeRoute('post', '/exec', {
-        body: { agentName: 'test-agent', containerId: '123', command: ['wget', 'http://'] }
+        body: { agentName: 'test-agent', containerId: '123', command: ['wget', 'http://'] },
       });
       expect(statusCode).toBe(403);
       expect(resData.violation).toBe('tool_not_allowed');
@@ -200,7 +216,7 @@ describe('Sandbox Routes', () => {
       mockResolveManifest.mockResolvedValue(validManifest);
       mockSandboxManager.exec.mockResolvedValue({ stdout: 'hi' });
       const { statusCode, resData } = await invokeRoute('post', '/exec', {
-        body: { agentName: 'test-agent', containerId: '123', command: ['echo', 'hi'] }
+        body: { agentName: 'test-agent', containerId: '123', command: ['echo', 'hi'] },
       });
       expect(statusCode).toBe(200);
       expect(resData).toEqual({ stdout: 'hi' });
@@ -213,7 +229,7 @@ describe('Sandbox Routes', () => {
       mockSandboxManager.remove.mockResolvedValue();
       const { statusCode, resData } = await invokeRoute('delete', '/:id', {
         params: { id: '123' },
-        query: { agentName: 'test-agent' }
+        query: { agentName: 'test-agent' },
       });
       expect(statusCode).toBe(200);
       expect(resData).toEqual({ success: true });
@@ -226,7 +242,7 @@ describe('Sandbox Routes', () => {
       mockSandboxManager.getLogs.mockResolvedValue('logs content');
       const { statusCode, resData } = await invokeRoute('get', '/:id/logs', {
         params: { id: '123' },
-        query: { tail: '10' }
+        query: { tail: '10' },
       });
       expect(statusCode).toBe(200);
       expect(resData).toEqual({ logs: 'logs content' });
@@ -238,7 +254,7 @@ describe('Sandbox Routes', () => {
     it('should list containers', async () => {
       mockSandboxManager.listContainers.mockReturnValue([{ id: '123' }]);
       const { statusCode, resData } = await invokeRoute('get', '/', {
-        query: { agentName: 'test-agent' }
+        query: { agentName: 'test-agent' },
       });
       expect(statusCode).toBe(200);
       expect(resData).toEqual([{ id: '123' }]);
@@ -250,7 +266,7 @@ describe('Sandbox Routes', () => {
     it('should return 400 if toolName or command are missing', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
       const { statusCode, resData } = await invokeRoute('post', '/tool', {
-        body: { agentName: 'test-agent' }
+        body: { agentName: 'test-agent' },
       });
       expect(statusCode).toBe(400);
     });
@@ -260,7 +276,7 @@ describe('Sandbox Routes', () => {
     it('should return 400 if subagentRole or task are missing', async () => {
       mockResolveManifest.mockResolvedValue(validManifest);
       const { statusCode, resData } = await invokeRoute('post', '/subagent', {
-        body: { agentName: 'test-agent' }
+        body: { agentName: 'test-agent' },
       });
       expect(statusCode).toBe(400);
     });

@@ -56,7 +56,11 @@ describe('Circles DB Router', () => {
     });
   });
 
-  const invokeRoute = async (method: 'get' | 'post' | 'put' | 'delete', pathStr: string, reqData: any = {}) => {
+  const invokeRoute = async (
+    method: 'get' | 'post' | 'put' | 'delete',
+    pathStr: string,
+    reqData: any = {}
+  ) => {
     const router = createCirclesDbRouter(mockOrchestrator);
     const req = { method: method.toUpperCase(), path: pathStr, ...reqData } as any;
 
@@ -64,9 +68,18 @@ describe('Circles DB Router', () => {
     let statusCode: number = 200;
 
     const res = {
-      status: vi.fn((code: number) => { statusCode = code; return res; }),
-      json: vi.fn((data: any) => { resData = data; return res; }),
-      send: vi.fn((data: any) => { resData = data; return res; }),
+      status: vi.fn((code: number) => {
+        statusCode = code;
+        return res;
+      }),
+      json: vi.fn((data: any) => {
+        resData = data;
+        return res;
+      }),
+      send: vi.fn((data: any) => {
+        resData = data;
+        return res;
+      }),
     } as any;
 
     let nextCalled = false;
@@ -76,8 +89,8 @@ describe('Circles DB Router', () => {
       nextErr = err;
     });
 
-    const route = router.stack.find((layer: any) =>
-      layer.route && layer.route.path === pathStr && layer.route.methods[method]
+    const route = router.stack.find(
+      (layer: any) => layer.route && layer.route.path === pathStr && layer.route.methods[method]
     );
 
     if (!route) {
@@ -102,7 +115,7 @@ describe('Circles DB Router', () => {
     it('should create a new circle', async () => {
       mockCircleService.createCircle.mockResolvedValue({ id: 'c2', name: 'new-circle' });
       const { statusCode, resData } = await invokeRoute('post', '/', {
-        body: { name: 'new-circle', displayName: 'New Circle' }
+        body: { name: 'new-circle', displayName: 'New Circle' },
       });
       expect(statusCode).toBe(201);
       expect(resData.id).toBe('c2');
@@ -110,7 +123,7 @@ describe('Circles DB Router', () => {
 
     it('should return 400 if name is missing', async () => {
       const { statusCode, resData } = await invokeRoute('post', '/', {
-        body: { displayName: 'New Circle' }
+        body: { displayName: 'New Circle' },
       });
       expect(statusCode).toBe(400);
       expect(resData.error).toBe('name and displayName are required');
@@ -122,7 +135,7 @@ describe('Circles DB Router', () => {
       mockCircleService.createCircle.mockRejectedValue(err);
 
       const { statusCode, resData } = await invokeRoute('post', '/', {
-        body: { name: 'existing', displayName: 'Existing' }
+        body: { name: 'existing', displayName: 'Existing' },
       });
       expect(statusCode).toBe(409);
       expect(resData.error).toContain('already exists');
@@ -142,7 +155,9 @@ describe('Circles DB Router', () => {
 
     it('should return 404 if circle not found', async () => {
       mockCircleService.getCircle.mockResolvedValue(undefined);
-      const { statusCode, resData } = await invokeRoute('get', '/:id', { params: { id: 'missing' } });
+      const { statusCode, resData } = await invokeRoute('get', '/:id', {
+        params: { id: 'missing' },
+      });
       expect(statusCode).toBe(404);
     });
   });
@@ -152,7 +167,7 @@ describe('Circles DB Router', () => {
       mockCircleService.updateCircle.mockResolvedValue({ id: 'c1', displayName: 'Updated' });
       const { statusCode, resData } = await invokeRoute('put', '/:id', {
         params: { id: 'c1' },
-        body: { displayName: 'Updated' }
+        body: { displayName: 'Updated' },
       });
       expect(statusCode).toBe(200);
       expect(resData.displayName).toBe('Updated');
@@ -168,7 +183,9 @@ describe('Circles DB Router', () => {
     });
 
     it('should return 409 if circle has active agents', async () => {
-      mockCircleService.deleteCircle.mockRejectedValue(new Error('Cannot delete circle with active agents'));
+      mockCircleService.deleteCircle.mockRejectedValue(
+        new Error('Cannot delete circle with active agents')
+      );
       const { statusCode, resData } = await invokeRoute('delete', '/:id', { params: { id: 'c1' } });
       expect(statusCode).toBe(409);
       expect(resData.error).toContain('active agent');

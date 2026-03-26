@@ -336,6 +336,23 @@ export function createTasksRouter(intercom: IntercomService): Router {
         /* best-effort */
       });
 
+    // ── Notify delegating agent if this was a delegated task (#268) ─────
+    const taskContext = row.context as Record<string, unknown> | null;
+    const delegation = taskContext?.delegation as { fromInstanceId?: string } | undefined;
+    if (delegation?.fromInstanceId) {
+      await intercom
+        .publish(`agent:${delegation.fromInstanceId}:status`, {
+          event: 'delegation.completed',
+          taskId,
+          targetAgent: agentId,
+          status: newStatus,
+          completedAt: new Date().toISOString(),
+        })
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+
     return res.json({ taskId, status: newStatus });
   });
 

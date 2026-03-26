@@ -57,7 +57,8 @@ type Tab =
   | 'memory'
   | 'schedules'
   | 'budget'
-  | 'prompt';
+  | 'prompt'
+  | 'health';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -160,7 +161,16 @@ export default function AgentDetailPage() {
         {/* Tabs */}
         <div className="flex gap-0 mt-4">
           {(
-            ['overview', 'grants', 'delegations', 'logs', 'memory', 'schedules', 'budget'] as const
+            [
+              'overview',
+              'grants',
+              'delegations',
+              'logs',
+              'memory',
+              'schedules',
+              'budget',
+              'health',
+            ] as const
           ).map((t) => (
             <button
               key={t}
@@ -188,6 +198,7 @@ export default function AgentDetailPage() {
         {tab === 'schedules' && <SchedulesTab id={id} />}
         {tab === 'budget' && <BudgetTab id={id} />}
         {tab === 'prompt' && <SystemPromptTab id={id} />}
+        {tab === 'health' && <HealthCheckTab id={id} />}
       </div>
 
       {/* Confirmation dialog */}
@@ -790,6 +801,70 @@ function LogsTab({ id }: { id: string }) {
         <pre className="flex-1 sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-auto whitespace-pre">
           {filteredLogs || 'No logs.'}
         </pre>
+      )}
+    </div>
+  );
+}
+
+interface HealthCheckResult {
+  agentId: string;
+  agentName?: string;
+  overallStatus: string;
+  checks: Record<string, { ok: boolean; detail?: string }>;
+}
+
+function HealthCheckTab({ id }: { id: string }) {
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['agent-health-check', id],
+    queryFn: () => request<HealthCheckResult>(`/agents/${encodeURIComponent(id)}/health-check`),
+    enabled: id.length > 0,
+  });
+
+  if (isLoading) return <TabLoading />;
+
+  const overallColor =
+    data?.overallStatus === 'healthy'
+      ? 'text-sera-success'
+      : data?.overallStatus === 'degraded'
+        ? 'text-yellow-400'
+        : 'text-sera-error';
+
+  return (
+    <div className="p-6 max-w-2xl space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-sera-text">Health Check</h3>
+          <p className="text-xs text-sera-text-muted mt-0.5">
+            Diagnostic checks for this agent instance
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => void refetch()} disabled={isFetching}>
+          <RotateCcw size={12} className={isFetching ? 'animate-spin' : ''} /> Re-check
+        </Button>
+      </div>
+
+      {data && (
+        <>
+          <div className={cn('text-sm font-semibold', overallColor)}>
+            Status: {data.overallStatus}
+          </div>
+
+          <div className="sera-card-static divide-y divide-sera-border/50">
+            {Object.entries(data.checks).map(([name, check]) => (
+              <div key={name} className="flex items-center gap-3 px-4 py-3">
+                {check.ok ? (
+                  <Check size={14} className="text-sera-success flex-shrink-0" />
+                ) : (
+                  <AlertCircle size={14} className="text-sera-error flex-shrink-0" />
+                )}
+                <span className="text-sm text-sera-text font-medium flex-1">{name}</span>
+                {check.detail && (
+                  <span className="text-xs text-sera-text-muted">{check.detail}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

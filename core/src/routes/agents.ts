@@ -442,5 +442,88 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
     })
   );
 
+  // ── Health Check ─────────────────────────────────────────────────────────
+  /**
+   * GET /api/agents/:id/health-check
+   * Runs a quick diagnostic for a specific agent instance.
+   */
+  router.get(
+    '/:id/health-check',
+    asyncHandler(async (req, res) => {
+      const instanceId = String(req.params['id']);
+
+      const checks: Record<string, { ok: boolean; detail?: string }> = {};
+
+      // 1. Instance exists in DB
+      const instance = await agentRegistry.getInstance(instanceId);
+      checks['instanceExists'] = instance
+        ? { ok: true, detail: instance.name }
+        : { ok: false, detail: 'Not found in database' };
+
+      if (!instance) {
+        res.json({ agentId: instanceId, overallStatus: 'not-found', checks });
+        return;
+      }
+
+      // 2. Agent loaded in orchestrator
+      const liveAgents = orchestrator.listAgents();
+      const liveAgent = liveAgents.find((a) => a.id === instanceId);
+      checks['orchestratorLoaded'] = liveAgent
+        ? { ok: true, detail: liveAgent.status }
+        : { ok: false, detail: 'Not loaded in orchestrator' };
+
+      // 3. Manifest available
+      const manifest = instance ? orchestrator.getManifest(instance.name) : undefined;
+      checks['manifestLoaded'] = manifest
+        ? { ok: true }
+        : { ok: false, detail: 'Manifest not found' };
+
+      // 4. Container running (check via Docker label)
+      try {
+        const sandboxManager = (orchestrator as unknown as Record<string, unknown>)[
+          'sandboxManager'
+        ];
+        if (
+          sandboxManager &&
+          typeof (sandboxManager as Record<string, unknown>)['ping'] === 'function'
+        ) {
+          await (sandboxManager as { ping: () => Promise<void> }).ping();
+          checks['dockerReachable'] = { ok: true };
+        } else {
+          checks['dockerReachable'] = { ok: false, detail: 'SandboxManager not available' };
+        }
+      } catch (err) {
+        checks['dockerReachable'] = {
+          ok: false,
+          detail: err instanceof Error ? err.message : 'Docker unreachable',
+        };
+      }
+
+      // 5. Tool executor available
+      const toolExecutor = orchestrator.getToolExecutor();
+      checks['toolExecutor'] = toolExecutor
+        ? { ok: true }
+        : { ok: false, detail: 'ToolExecutor not available' };
+
+      // 6. Intercom (Centrifugo) available
+      const intercom = orchestrator.getIntercom();
+      checks['intercomAvailable'] = intercom
+        ? { ok: true }
+        : { ok: false, detail: 'IntercomService not available' };
+
+      // Overall status
+      const allOk = Object.values(checks).every((c) => c.ok);
+      const anyFailed = Object.values(checks).some((c) => !c.ok);
+      const overallStatus = allOk ? 'healthy' : anyFailed ? 'degraded' : 'healthy';
+
+      res.json({
+        agentId: instanceId,
+        agentName: instance.name,
+        overallStatus,
+        checks,
+      });
+    })
+  );
+
   return router;
 }

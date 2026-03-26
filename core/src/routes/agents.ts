@@ -11,6 +11,8 @@ import type { AgentRegistry } from '../agents/registry.service.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
 import { IdentityService } from '../agents/identity/IdentityService.js';
+import { ContextAssembler, type ContextAssemblyEvent } from '../llm/ContextAssembler.js';
+import { pool as dbPool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AgentRouter');
@@ -521,6 +523,62 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         agentName: instance.name,
         overallStatus,
         checks,
+      });
+    })
+  );
+
+  // ── Context Debug (#305) ─────────────────────────────────────────────────
+  /**
+   * GET /api/agents/:id/context-debug?message=...
+   * Dry-runs context assembly and returns structured events showing what
+   * would be injected into the LLM call (skills, memory, token budget).
+   */
+  router.get(
+    '/:id/context-debug',
+    asyncHandler(async (req, res) => {
+      const instanceId = String(req.params['id']);
+      const testMessage = (req.query['message'] as string) || 'Hello';
+
+      const instance = await agentRegistry.getInstance(instanceId);
+      if (!instance) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+
+      const manifest = orchestrator.getManifest(instance.name);
+      if (!manifest) {
+        res.status(404).json({ error: 'Agent manifest not found' });
+        return;
+      }
+
+      // Build minimal message array for assembly
+      const systemPrompt = IdentityService.generateSystemPrompt(manifest);
+
+      const messages = [
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: testMessage },
+      ];
+
+      const assembler = new ContextAssembler(dbPool, orchestrator);
+
+      const events: ContextAssemblyEvent[] = [];
+      try {
+        await assembler.assemble(instanceId, messages, (event) => {
+          events.push(event);
+        });
+      } catch (err) {
+        events.push({
+          stage: 'assembly.error',
+          detail: { error: (err as Error).message },
+        });
+      }
+
+      res.json({
+        agentId: instanceId,
+        agentName: instance.name,
+        testMessage,
+        systemPromptLength: systemPrompt.length,
+        events,
       });
     })
   );

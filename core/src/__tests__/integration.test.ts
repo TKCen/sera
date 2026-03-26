@@ -68,6 +68,18 @@ vi.mock('../services/vector.service.js', () => ({
     async search() {
       return [];
     }
+    async ensureCollection() {
+      return;
+    }
+    async upsert() {
+      return;
+    }
+    async upsertPoints() {
+      return;
+    }
+    async getById() {
+      return null;
+    }
   },
 }));
 
@@ -136,6 +148,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setMetering = vi.fn();
       setIdentityService = vi.fn();
       setLlmRouter = vi.fn();
+      setCircleContextResolver = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
       watchAgentsDirectory = vi.fn();
@@ -144,6 +157,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       reloadTemplates = vi.fn().mockReturnValue({ count: 0 });
       getIntercom = vi.fn().mockReturnValue(undefined);
       getToolExecutor = vi.fn().mockReturnValue(undefined);
+      getRunningAgents = vi.fn().mockReturnValue(new Map());
       getAgentInfo = vi.fn();
       getManifestByInstanceId = vi.fn();
       startInstance = vi.fn().mockResolvedValue(undefined);

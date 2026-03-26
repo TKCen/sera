@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus, Bot, MessageSquare, Trash2, ChevronDown } from 'lucide-react';
+import { Plus, Bot, MessageSquare, Trash2, ChevronDown, Pencil, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface SessionInfo {
@@ -31,6 +31,7 @@ interface ChatSidebarProps {
   onStartNewSession: () => void;
   onLoadSession: (id: string) => void;
   onDeleteSession: (id: string, e: React.MouseEvent) => void;
+  onRenameSession: (id: string, title: string) => void;
   onRefetchAgents: () => void;
 }
 
@@ -114,6 +115,138 @@ function AgentDropdown({
   );
 }
 
+function SessionItem({
+  session,
+  isActive,
+  onLoad,
+  onDelete,
+  onRename,
+}: {
+  session: SessionInfo;
+  isActive: boolean;
+  onLoad: () => void;
+  onDelete: (e: React.MouseEvent) => void;
+  onRename: (title: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(session.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const commitRename = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== session.title) {
+      onRename(trimmed);
+    }
+    setEditing(false);
+  };
+
+  const cancelRename = () => {
+    setEditValue(session.title);
+    setEditing(false);
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => !editing && onLoad()}
+      onKeyDown={(e) => {
+        if (!editing && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onLoad();
+        }
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setEditValue(session.title);
+        setEditing(true);
+      }}
+      className={cn(
+        'w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors border-l-2 cursor-pointer',
+        isActive
+          ? 'bg-sera-accent-soft border-sera-accent'
+          : 'hover:bg-sera-surface border-transparent'
+      )}
+    >
+      <MessageSquare size={13} className="text-sera-text-muted mt-0.5 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        {editing ? (
+          <div className="flex items-center gap-1">
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                if (e.key === 'Escape') cancelRename();
+                e.stopPropagation();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="text-xs bg-sera-surface border border-sera-border rounded px-1 py-0.5 w-full text-sera-text outline-none focus:border-sera-accent"
+            />
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                commitRename();
+              }}
+              className="p-0.5 text-sera-success hover:text-green-400"
+              title="Save"
+            >
+              <Check size={11} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                cancelRename();
+              }}
+              className="p-0.5 text-sera-text-muted hover:text-red-400"
+              title="Cancel"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="text-xs text-sera-text truncate">{session.title}</p>
+            <p className="text-[10px] text-sera-text-muted mt-0.5">
+              {session.messageCount} messages · {new Date(session.updatedAt).toLocaleDateString()}
+            </p>
+          </>
+        )}
+      </div>
+      {!editing && (
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditValue(session.title);
+              setEditing(true);
+            }}
+            className="p-0.5 rounded text-sera-text-muted hover:text-sera-accent"
+            title="Rename session"
+          >
+            <Pencil size={11} />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-0.5 rounded text-sera-text-muted hover:text-red-400"
+            title="Delete session"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatSidebar({
   sessions,
   agents,
@@ -126,6 +259,7 @@ export function ChatSidebar({
   onStartNewSession,
   onLoadSession,
   onDeleteSession,
+  onRenameSession,
   onRefetchAgents,
 }: ChatSidebarProps) {
   const groupedSessions = sessions.reduce<Record<string, SessionInfo[]>>((acc, s) => {
@@ -198,42 +332,14 @@ export function ChatSidebar({
                 </div>
                 <div className="space-y-0.5">
                   {agentSessions.map((s) => (
-                    <div
+                    <SessionItem
                       key={s.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onLoadSession(s.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onLoadSession(s.id);
-                        }
-                      }}
-                      className={cn(
-                        'w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors border-l-2 cursor-pointer',
-                        sessionId === s.id
-                          ? 'bg-sera-accent-soft border-sera-accent'
-                          : 'hover:bg-sera-surface border-transparent'
-                      )}
-                    >
-                      <MessageSquare
-                        size={13}
-                        className="text-sera-text-muted mt-0.5 flex-shrink-0"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-sera-text truncate">{s.title}</p>
-                        <p className="text-[10px] text-sera-text-muted mt-0.5">
-                          {s.messageCount} messages · {new Date(s.updatedAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <button
-                        onClick={(e) => onDeleteSession(s.id, e)}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-sera-text-muted hover:text-red-400 transition-all"
-                        title="Delete session"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
+                      session={s}
+                      isActive={sessionId === s.id}
+                      onLoad={() => onLoadSession(s.id)}
+                      onDelete={(e) => onDeleteSession(s.id, e)}
+                      onRename={(title) => onRenameSession(s.id, title)}
+                    />
                   ))}
                 </div>
               </div>

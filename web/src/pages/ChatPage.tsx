@@ -335,6 +335,20 @@ function ChatPageContent() {
     [sessionId, startNewSession]
   );
 
+  const renameSession = useCallback(async (id: string, title: string) => {
+    try {
+      await request(`/sessions/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Failed to rename session';
+      toast.error(errMsg);
+    }
+  }, []);
+
   const toggleThoughts = useCallback((msgId: string) => {
     setExpandedThoughts((prev) => {
       const next = new Set(prev);
@@ -494,6 +508,7 @@ function ChatPageContent() {
           onStartNewSession={startNewSession}
           onLoadSession={(id) => void loadSession(id)}
           onDeleteSession={(id, e) => void deleteSession(id, e)}
+          onRenameSession={(id, title) => void renameSession(id, title)}
           onRefetchAgents={() => void refetchAgents()}
         />
         <div className="flex-1 flex flex-col items-center justify-center px-8 relative">
@@ -550,6 +565,7 @@ function ChatPageContent() {
         onStartNewSession={startNewSession}
         onLoadSession={(id) => void loadSession(id)}
         onDeleteSession={(id, e) => void deleteSession(id, e)}
+        onRenameSession={(id, title) => void renameSession(id, title)}
         onRefetchAgents={() => void refetchAgents()}
       />
 

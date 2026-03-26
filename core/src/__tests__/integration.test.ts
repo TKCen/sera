@@ -71,6 +71,20 @@ vi.mock('../services/vector.service.js', () => ({
   },
 }));
 
+vi.mock('../circles/CircleService.js', () => {
+  return {
+    CircleService: {
+      getInstance: vi.fn().mockReturnValue({
+        listCircles: vi.fn().mockResolvedValue([
+          { name: 'development', displayName: 'Development', id: 'c1' },
+          { name: 'operations', displayName: 'Operations', id: 'c2' },
+        ]),
+        getCircle: vi.fn().mockResolvedValue(null),
+      }),
+    },
+  };
+});
+
 vi.mock('../circles/CircleRegistry.js', () => {
   return {
     CircleRegistry: class {
@@ -98,6 +112,16 @@ vi.mock('../circles/CircleRegistry.js', () => {
           agents: ['researcher-prime'],
           hasProjectContext: false,
           channelCount: 0,
+        },
+      ]);
+      listCircles = vi.fn().mockReturnValue([
+        {
+          metadata: { name: 'development', displayName: 'Development' },
+          agents: ['architect-prime'],
+        },
+        {
+          metadata: { name: 'operations', displayName: 'Operations' },
+          agents: ['researcher-prime'],
         },
       ]);
       getCircle = vi.fn();
@@ -136,6 +160,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setMetering = vi.fn();
       setIdentityService = vi.fn();
       setLlmRouter = vi.fn();
+      setCircleContextResolver = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
       watchAgentsDirectory = vi.fn();
@@ -146,6 +171,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       getToolExecutor = vi.fn().mockReturnValue(undefined);
       getAgentInfo = vi.fn();
       getManifestByInstanceId = vi.fn();
+      getRunningAgents = vi.fn().mockReturnValue(new Map());
       startInstance = vi.fn().mockResolvedValue(undefined);
       stopInstance = vi.fn().mockResolvedValue(undefined);
       restartAgent = vi.fn().mockResolvedValue(undefined);

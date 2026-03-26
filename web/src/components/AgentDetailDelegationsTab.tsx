@@ -1,10 +1,41 @@
+import { useQuery } from '@tanstack/react-query';
 import { useAgentDelegations } from '@/hooks/useAgents';
+import { request } from '@/lib/api/client';
 import { TabLoading } from './AgentDetailTabLoading';
 import { Badge } from './ui/badge';
-import { ShieldCheck, User, Clock, Activity } from 'lucide-react';
+import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft } from 'lucide-react';
+import { formatDistanceToNow } from '@/lib/utils';
+
+interface TaskDelegation {
+  id: string;
+  agent_instance_id: string;
+  task: string;
+  context: Record<string, unknown> | null;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  result: unknown;
+  error: string | null;
+}
+
+function useDelegatedTasks(agentId: string) {
+  return useQuery({
+    queryKey: ['agent-delegated-tasks', agentId],
+    queryFn: () =>
+      request<TaskDelegation[]>(`/agents/${encodeURIComponent(agentId)}/tasks?status=all`),
+    enabled: agentId.length > 0,
+  });
+}
 
 export function DelegationsTab({ id }: { id: string }) {
   const { data: delegations, isLoading } = useAgentDelegations(id);
+  const { data: tasks } = useDelegatedTasks(id);
+
+  // Separate delegated tasks: tasks received from other agents vs tasks this agent sent
+  const receivedTasks = (tasks ?? []).filter((t) => {
+    const ctx = t.context as Record<string, unknown> | null;
+    return ctx?.delegation;
+  });
 
   if (isLoading) return <TabLoading />;
 
@@ -143,6 +174,54 @@ export function DelegationsTab({ id }: { id: string }) {
           </div>
         ))}
       </div>
+
+      {/* Task Delegations — received from other agents */}
+      {receivedTasks.length > 0 && (
+        <div className="mt-8">
+          <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2 mb-3">
+            <ArrowLeft size={14} className="text-sera-accent" />
+            Received Task Delegations
+          </h3>
+          <div className="space-y-2">
+            {receivedTasks.map((t) => {
+              const delegation = (t.context as Record<string, unknown>)?.delegation as
+                | { fromAgent?: string; delegatedAt?: string }
+                | undefined;
+              return (
+                <div key={t.id} className="sera-card-static p-3 flex items-start gap-3">
+                  <ArrowRight size={13} className="text-sera-text-muted mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-xs text-sera-text-dim">
+                        from{' '}
+                        <span className="text-sera-text font-medium">
+                          {delegation?.fromAgent ?? 'unknown'}
+                        </span>
+                      </span>
+                      <Badge
+                        variant={
+                          t.status === 'completed'
+                            ? 'success'
+                            : t.status === 'failed'
+                              ? 'error'
+                              : 'default'
+                        }
+                        className="text-[9px]"
+                      >
+                        {t.status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-sera-text truncate">{t.task}</p>
+                  </div>
+                  <span className="text-[10px] text-sera-text-dim flex-shrink-0">
+                    {formatDistanceToNow(t.created_at)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -381,8 +381,8 @@ export class LlmRouter {
       reasoning: false,
       input: ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 4_096,
+      contextWindow: config.contextWindow ?? 128_000,
+      maxTokens: config.maxTokens ?? 4_096,
       ...(compat ? { compat } : {}),
     };
   }
@@ -487,7 +487,15 @@ export class LlmRouter {
       if (cfg.baseUrl !== undefined) item.baseUrl = cfg.baseUrl;
       if (cfg.description !== undefined) item.description = cfg.description;
       if (cfg.dynamicProviderId !== undefined) item.dynamicProviderId = cfg.dynamicProviderId;
-      (item as unknown as Record<string, unknown>).authStatus = cfg.authStatus;
+      const extra = item as unknown as Record<string, unknown>;
+      extra.authStatus = cfg.authStatus;
+      if (cfg.contextWindow !== undefined) extra.contextWindow = cfg.contextWindow;
+      if (cfg.maxTokens !== undefined) extra.maxTokens = cfg.maxTokens;
+      if (cfg.contextStrategy !== undefined) extra.contextStrategy = cfg.contextStrategy;
+      if (cfg.contextHighWaterMark !== undefined)
+        extra.contextHighWaterMark = cfg.contextHighWaterMark;
+      if (cfg.contextCompactionModel !== undefined)
+        extra.contextCompactionModel = cfg.contextCompactionModel;
       return item;
     });
   }

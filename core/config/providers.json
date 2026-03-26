@@ -6,7 +6,9 @@
       "provider": "lmstudio",
       "baseUrl": "http://host.docker.internal:1234/v1",
       "apiKey": "lm-studio",
-      "description": "Local LM Studio instance (host port 1234) — generic alias"
+      "description": "Local LM Studio instance (host port 1234) — generic alias",
+      "contextWindow": 32768,
+      "maxTokens": 4096
     },
     {
       "modelName": "qwen3.5-35b-a3b",
@@ -14,7 +16,10 @@
       "provider": "lmstudio",
       "baseUrl": "http://host.docker.internal:1234/v1",
       "apiKey": "lm-studio",
-      "description": "Qwen 3.5 35B A3B via LM Studio"
+      "description": "Qwen 3.5 35B A3B via LM Studio",
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "contextStrategy": "sliding-window"
     },
     {
       "modelName": "ollama-local",
@@ -22,7 +27,9 @@
       "provider": "ollama",
       "baseUrl": "http://host.docker.internal:11434/v1",
       "apiKey": "ollama",
-      "description": "Local Ollama instance (host port 11434) — generic alias"
+      "description": "Local Ollama instance (host port 11434) — generic alias",
+      "contextWindow": 32768,
+      "maxTokens": 4096
     }
   ]
 }

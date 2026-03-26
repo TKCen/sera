@@ -59,6 +59,32 @@ export interface ProviderConfig {
   description?: string | undefined;
   /** ID of the dynamic provider that registered this model (internal). */
   dynamicProviderId?: string | undefined;
+  /** Context window size in tokens. Default: 128000. */
+  contextWindow?: number | undefined;
+  /** Maximum output tokens per response. Default: 4096. */
+  maxTokens?: number | undefined;
+  /**
+   * Context management strategy when conversation exceeds the high-water mark.
+   * - 'summarize': use an LLM to summarize/compact older messages (recommended)
+   * - 'sliding-window': drop oldest non-system messages
+   * - 'truncate': hard cut-off at the limit
+   *
+   * Default: 'summarize' if contextCompactionModel is set, otherwise 'sliding-window'.
+   */
+  contextStrategy?: 'summarize' | 'sliding-window' | 'truncate' | undefined;
+  /**
+   * High-water mark as a fraction of contextWindow (0.0–1.0).
+   * When context exceeds this percentage, the strategy is applied.
+   * Default: 0.80 (80%).
+   */
+  contextHighWaterMark?: number | undefined;
+  /**
+   * Model name to use for context compaction/summarization.
+   * Should be a fast, cheap model (e.g. a local model or haiku-class).
+   * When set, enables the 'summarize' strategy.
+   * If not set, summarize strategy falls back to sliding-window.
+   */
+  contextCompactionModel?: string | undefined;
 }
 
 export interface DynamicProviderConfig {

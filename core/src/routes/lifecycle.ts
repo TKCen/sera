@@ -45,20 +45,22 @@ export function createLifecycleRouter(
 
   // ── Story 3.2: Capability dry-run ─────────────────────────────────────────
 
-  const resolveCapabilities: RequestHandler = asyncHandler(async (req: Request, res: Response, next) => {
-    try {
-      const resolver = new CapabilityResolver(registry);
-      const result = await resolver.resolve(req.params['id'] as string);
-      res.json(result);
-    } catch (err: unknown) {
-      const error = err as Error;
-      if (error.name === 'CapabilityEscalationError') {
-        res.status(422).json({ error: error.message });
-        return;
+  const resolveCapabilities: RequestHandler = asyncHandler(
+    async (req: Request, res: Response, next) => {
+      try {
+        const resolver = new CapabilityResolver(registry);
+        const result = await resolver.resolve(req.params['id'] as string);
+        res.json(result);
+      } catch (err: unknown) {
+        const error = err as Error;
+        if (error.name === 'CapabilityEscalationError') {
+          res.status(422).json({ error: error.message });
+          return;
+        }
+        next(err);
       }
-      next(err);
     }
-  });
+  );
   router.post('/:id/resolve-capabilities', resolveCapabilities as RequestHandler);
 
   // ── Story 3.4: Worktree management ────────────────────────────────────────

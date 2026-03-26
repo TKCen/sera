@@ -71,6 +71,19 @@ Format:
 
 Only record durable facts — environment quirks, library gotchas, architectural decisions made during implementation. Not task-specific notes.
 
+## Memory protocol
+
+Claude Code's auto-memory system persists across conversations at `~/.claude/projects/<project>/memory/`. Use it for:
+
+- **User preferences** (role, coding style, communication style)
+- **Feedback** (corrections, confirmed approaches — what to repeat or avoid)
+- **Project context** (ongoing initiatives, deadlines, decisions not in code/docs)
+- **External references** (where to find things outside the repo)
+
+Do **not** duplicate CLAUDE.md learnings into memory — learnings belong in CLAUDE.md (checked into git, shared with all contributors), while memory is personal to the Claude Code instance.
+
+When completing a workflow loop or resolving a non-trivial issue, check whether a new learning should be added to the relevant CLAUDE.md and/or a memory should be saved.
+
 ## Docker Compose (dev)
 
 - **Dev start command:** `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d`
@@ -98,3 +111,5 @@ Only record durable facts — environment quirks, library gotchas, architectural
 - **sera-web healthcheck reports unhealthy but UI works**: The `wget` command in the healthcheck can't connect to `localhost` inside the container, even though Vite is listening on `0.0.0.0:5173`. `node -e "fetch(...)"` works. See #364.
 - **API endpoints require auth header**: All `/api/*` endpoints (except `/api/health/*`) require `Authorization: Bearer <key>`. Dev key: `sera_bootstrap_dev_123`. The `runtime-verify.sh` script must include this header.
 - **Providers endpoint is `/api/providers/list` not `/api/providers`**: Express 5 doesn't match `router.get('/')` on mounted sub-routers. The providers router uses `router.get('/list')`. This is documented in `core/CLAUDE.md` but easy to forget in scripts and tests.
+- **web/bun.lock must be generated in standalone Docker context**: The web Dockerfile builds with `context: ./web` (not the workspace root). Running `bun install` locally inside the workspace produces a different lockfile than running it standalone with only `web/package.json`. To regenerate correctly: `MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/web:/app" -w /app oven/bun:1-alpine bun install`. Never run `bun install` via Docker volume mount into the host `web/` directory — it contaminates `node_modules` with Linux binaries (e.g. esbuild) that crash on Windows.
+- **Docker volume mount + `bun install` contaminates host node_modules**: Running `bun install` inside a Docker container with the host's `web/` bind-mounted replaces platform-specific binaries (esbuild, etc.) with Linux versions. This causes `Host version "X" does not match binary version "Y"` errors. Fix: `rm -rf web/node_modules && bun install` from the host.

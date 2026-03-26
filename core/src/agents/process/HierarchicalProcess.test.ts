@@ -56,10 +56,14 @@ describe('HierarchicalProcess', () => {
 
     expect(worker.process).toHaveBeenCalledWith('task 1 description');
     expect(manager.process).toHaveBeenCalledWith(
-      expect.stringContaining('Review this worker output for the task "task 1 description":\n\nworker output 1')
+      expect.stringContaining(
+        'Review this worker output for the task "task 1 description":\n\nworker output 1'
+      )
     );
     expect(manager.process).toHaveBeenCalledWith(
-      expect.stringContaining('Review and consolidate the following worker outputs into a final answer:\n\n[worker1] Task: task1\nworker output 1')
+      expect.stringContaining(
+        'Review and consolidate the following worker outputs into a final answer:\n\n[worker1] Task: task1\nworker output 1'
+      )
     );
   });
 
@@ -95,9 +99,7 @@ describe('HierarchicalProcess', () => {
   it('should fail task when assigned agent is not found and no other worker exists', async () => {
     const process = new HierarchicalProcess();
     const manager = createMockAgent('manager', 'consolidation');
-    const agents = new Map<string, BaseAgent>([
-      ['manager', manager]
-    ]); // No workers
+    const agents = new Map<string, BaseAgent>([['manager', manager]]); // No workers
 
     const tasks: ProcessTask[] = [
       { id: 'task1', description: 'task 1 description', assignedAgent: 'missing-worker' },
@@ -122,7 +124,8 @@ describe('HierarchicalProcess', () => {
     const process = new HierarchicalProcess(1); // maxRetries = 1
     const worker = {
       role: 'worker1',
-      process: vi.fn()
+      process: vi
+        .fn()
         .mockResolvedValueOnce({ finalAnswer: 'worker attempt 1' })
         .mockResolvedValueOnce({ finalAnswer: 'worker attempt 2' }),
     } as unknown as BaseAgent;
@@ -152,8 +155,11 @@ describe('HierarchicalProcess', () => {
     // It attempts 0, then 1 (maxRetries = 1), then returns last output
     expect(worker.process).toHaveBeenCalledTimes(2);
     expect(worker.process).toHaveBeenNthCalledWith(1, 'task 1 description');
-    expect(worker.process).toHaveBeenNthCalledWith(2,
-      expect.stringContaining('The manager rejected your previous answer and asked you to retry.\nPrevious answer: worker attempt 1\n\nOriginal task: task 1 description')
+    expect(worker.process).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining(
+        'The manager rejected your previous answer and asked you to retry.\nPrevious answer: worker attempt 1\n\nOriginal task: task 1 description'
+      )
     );
 
     // After exhausting retries, the final status is 'completed' if output exists.
@@ -163,7 +169,9 @@ describe('HierarchicalProcess', () => {
 
     // It will consolidate the last output since it was completed
     expect(manager.process).toHaveBeenCalledWith(
-      expect.stringContaining('Review and consolidate the following worker outputs into a final answer:\n\n[worker1] Task: task1\nworker attempt 2')
+      expect.stringContaining(
+        'Review and consolidate the following worker outputs into a final answer:\n\n[worker1] Task: task1\nworker attempt 2'
+      )
     );
   });
 

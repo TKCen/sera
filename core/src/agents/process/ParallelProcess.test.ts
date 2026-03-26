@@ -47,9 +47,7 @@ describe('ParallelProcess', () => {
     const agent1 = createMockAgent('agent1', 'output1');
     const agents = new Map<string, BaseAgent>([['agent1', agent1]]);
 
-    const tasks: ProcessTask[] = [
-      { id: 'task1', description: 'task 1 description' },
-    ];
+    const tasks: ProcessTask[] = [{ id: 'task1', description: 'task 1 description' }];
 
     const result = await process.execute(tasks, agents);
 

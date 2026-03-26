@@ -114,16 +114,6 @@ vi.mock('../circles/CircleRegistry.js', () => {
           channelCount: 0,
         },
       ]);
-      listCircles = vi.fn().mockReturnValue([
-        {
-          metadata: { name: 'development', displayName: 'Development' },
-          agents: ['architect-prime'],
-        },
-        {
-          metadata: { name: 'operations', displayName: 'Operations' },
-          agents: ['researcher-prime'],
-        },
-      ]);
       getCircle = vi.fn();
       loadFromDirectory = vi.fn().mockResolvedValue(undefined);
       init = vi.fn().mockResolvedValue(undefined);

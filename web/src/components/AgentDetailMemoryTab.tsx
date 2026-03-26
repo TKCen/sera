@@ -1,14 +1,63 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Link } from 'react-router';
-import { Clock, ExternalLink } from 'lucide-react';
+import { Clock, ExternalLink, Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAgentMemory } from '@/hooks/useAgents';
+import { addMemoryEntry } from '@/lib/api/memory';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from '@/components/ui/dialog';
+
+const MEMORY_TYPES = ['fact', 'preference', 'episode', 'insight', 'task', 'note'] as const;
 
 export function MemoryTab({ id }: { id: string }) {
   const [scope, setScope] = useState<string>('');
-  const { data: blocks, isLoading } = useAgentMemory(id, scope || undefined);
+  const { data: blocks, isLoading, refetch } = useAgentMemory(id, scope || undefined);
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newEntry, setNewEntry] = useState({
+    type: 'note' as string,
+    title: '',
+    content: '',
+    tags: '',
+  });
+
+  const handleCreate = useCallback(async () => {
+    if (!newEntry.title.trim() || !newEntry.content.trim()) {
+      toast.error('Title and content are required');
+      return;
+    }
+    setCreating(true);
+    try {
+      const tags = newEntry.tags
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      await addMemoryEntry(newEntry.type, {
+        title: newEntry.title.trim(),
+        content: newEntry.content.trim(),
+        ...(tags.length > 0 ? { tags } : {}),
+        source: 'manual',
+      });
+      toast.success('Memory entry created');
+      setShowCreate(false);
+      setNewEntry({ type: 'note', title: '', content: '', tags: '' });
+      void refetch();
+    } catch {
+      toast.error('Failed to create memory entry');
+    } finally {
+      setCreating(false);
+    }
+  }, [newEntry, refetch]);
 
   return (
     <div className="p-6 space-y-4">
@@ -30,6 +79,9 @@ export function MemoryTab({ id }: { id: string }) {
           ))}
         </div>
         <div className="flex items-center gap-3">
+          <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
+            <Plus size={12} /> Add Entry
+          </Button>
           <Link
             to={`/memory/${id}`}
             className="flex items-center gap-1 text-xs text-sera-accent hover:underline"
@@ -81,6 +133,74 @@ export function MemoryTab({ id }: { id: string }) {
           ))}
         </div>
       )}
+
+      {/* Create Memory Entry Dialog */}
+      <Dialog open={showCreate} onOpenChange={(o: boolean) => !o && setShowCreate(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Memory Entry</DialogTitle>
+            <DialogDescription>Manually create a memory entry for this agent.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div>
+              <label className="block text-xs text-sera-text-muted mb-1">Type</label>
+              <select
+                value={newEntry.type}
+                onChange={(e) => setNewEntry((s) => ({ ...s, type: e.target.value }))}
+                className="sera-input text-xs w-full"
+              >
+                {MEMORY_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-sera-text-muted mb-1">Title</label>
+              <input
+                type="text"
+                value={newEntry.title}
+                onChange={(e) => setNewEntry((s) => ({ ...s, title: e.target.value }))}
+                placeholder="e.g. User prefers concise responses"
+                className="sera-input text-xs w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-sera-text-muted mb-1">Content</label>
+              <textarea
+                value={newEntry.content}
+                onChange={(e) => setNewEntry((s) => ({ ...s, content: e.target.value }))}
+                placeholder="The memory content…"
+                rows={4}
+                className="sera-input text-xs w-full resize-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-sera-text-muted mb-1">
+                Tags (comma-separated, optional)
+              </label>
+              <input
+                type="text"
+                value={newEntry.tags}
+                onChange={(e) => setNewEntry((s) => ({ ...s, tags: e.target.value }))}
+                placeholder="e.g. preference, style"
+                className="sera-input text-xs w-full"
+              />
+            </div>
+          </div>
+          <div className="flex gap-3 justify-end mt-4">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button size="sm" onClick={() => void handleCreate()} disabled={creating}>
+              Create
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
   ScrollText,
   HeartPulse,
   Radio,
+  Server,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
@@ -67,6 +68,7 @@ const navGroups: NavGroup[] = [
     title: 'System',
     items: [
       { label: 'Health', href: '/health', icon: <HeartPulse size={16} /> },
+      { label: 'Providers', href: '/providers', icon: <Server size={16} /> },
       {
         label: 'Settings',
         href: '/settings',

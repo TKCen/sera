@@ -11,7 +11,7 @@ import { AppShell } from '@/components/AppShell';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
-import DashboardPage from '@/app/dashboard/page';
+import DashboardPage from '@/pages/DashboardPage';
 import ChatPage from '@/pages/ChatPage';
 import AgentsPage from '@/pages/AgentsPage';
 import AgentDetailPage from '@/pages/AgentDetailPage';
@@ -30,8 +30,8 @@ import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
 import ChannelsPage from '@/pages/ChannelsPage';
 import TemplatesPage from '@/pages/TemplatesPage';
 import ProvidersPage from '@/pages/ProvidersPage';
-import LoginPage from '@/app/login/page';
-import AuthCallbackPage from '@/app/auth/callback/page';
+import LoginPage from '@/pages/LoginPage';
+import AuthCallbackPage from '@/pages/AuthCallbackPage';
 import { ForbiddenView } from '@/views/ForbiddenView';
 import { NotFoundView } from '@/views/NotFoundView';
 

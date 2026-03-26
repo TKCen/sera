@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Bot, Plus, Play, Square, Trash2, Search } from 'lucide-react';
 import { toast } from 'sonner';
@@ -9,6 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from '@/components/ui/dialog';
 
 // TODO: virtualise if > 100 agents
 
@@ -23,6 +31,9 @@ export default function AgentsPage() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCircle, setFilterCircle] = useState<string>('all');
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [liveMessage, setLiveMessage] = useState<string>('');
+  const titleRef = useRef<HTMLHeadingElement>(null);
 
   const circles = useMemo(() => {
     if (!agents) return [];
@@ -72,24 +83,25 @@ export default function AgentsPage() {
   async function handleDelete(e: React.MouseEvent, id: string, name: string) {
     e.preventDefault();
     e.stopPropagation();
-    if (
-      !window.confirm(
-        `Delete agent "${name}"? This will stop its container and remove the instance permanently.`
-      )
-    )
-      return;
-    try {
-      await deleteAgent.mutateAsync(id);
-      toast.success(`Deleted ${name}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete');
-    }
+    setConfirmDelete({ id, name });
   }
+
+  useEffect(() => {
+    if (liveMessage) {
+      const timer = setTimeout(() => setLiveMessage(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [liveMessage]);
 
   return (
     <main className="p-6">
+      {/* Visually hidden live region for screen readers */}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
+        {liveMessage}
+      </div>
+
       <header className="sera-page-header">
-        <h1 className="sera-page-title">Agents</h1>
+        <h1 ref={titleRef} tabIndex={-1} className="sera-page-title outline-none">Agents</h1>
         <Button asChild size="sm">
           <Link to="/agents/new">
             <Plus size={14} />
@@ -100,7 +112,7 @@ export default function AgentsPage() {
 
       {/* Filters */}
       <section aria-label="Filters" className="flex items-center gap-3 mb-4">
-        <div className="relative flex-1 max-w-xs">
+        <div role="search" className="relative flex-1 max-w-xs">
           <Search
             size={13}
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none"
@@ -131,7 +143,7 @@ export default function AgentsPage() {
           </select>
         )}
 
-        <div className="flex items-center gap-1">
+        <nav aria-label="Filter by status" className="flex items-center gap-1">
           {STATUS_OPTIONS.map((s) => (
             <button
               key={s}
@@ -146,7 +158,7 @@ export default function AgentsPage() {
               {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
             </button>
           ))}
-        </div>
+        </nav>
       </section>
 
       {isLoading ? (
@@ -248,6 +260,46 @@ export default function AgentsPage() {
           ))}
         </ul>
       )}
+
+      {/* Confirmation dialog */}
+      <Dialog
+        open={confirmDelete !== null}
+        onOpenChange={(open: boolean) => !open && setConfirmDelete(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Agent</DialogTitle>
+            <DialogDescription>
+              Delete agent "{confirmDelete?.name}"? This will stop its container and remove the instance permanently.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end mt-4">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={deleteAgent.isPending}
+              onClick={() => {
+                if (!confirmDelete) return;
+                void deleteAgent.mutateAsync(confirmDelete.id).then(() => {
+                  toast.success(`Deleted ${confirmDelete.name}`);
+                  setLiveMessage(`Deleted agent ${confirmDelete.name}`);
+                  setConfirmDelete(null);
+                  titleRef.current?.focus();
+                }).catch((err: unknown) => {
+                  toast.error(err instanceof Error ? err.message : 'Failed to delete');
+                });
+              }}
+            >
+              {deleteAgent.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

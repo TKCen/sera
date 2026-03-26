@@ -20,7 +20,6 @@ import { BrowserRouter } from 'react-router';
 // ── Hoisted mutable state for mock control ────────────────────────────────────
 
 const mockDeleteFn = vi.hoisted(() => vi.fn());
-const mockConfirmReturn = vi.hoisted(() => ({ value: true }));
 
 // ── Module mocks (must be before any imports of the mocked modules) ───────────
 
@@ -109,13 +108,10 @@ describe('AgentsPage — delete agent', () => {
   beforeEach(() => {
     mockDeleteFn.mockReset();
     mockDeleteFn.mockResolvedValue(undefined);
-    mockConfirmReturn.value = true;
-    vi.stubGlobal('confirm', () => mockConfirmReturn.value);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
-    vi.unstubAllGlobals();
   });
 
   // ── Rendering ──────────────────────────────────────────────────────────────
@@ -152,26 +148,28 @@ describe('AgentsPage — delete agent', () => {
 
   it('clicking Delete shows a confirmation dialog mentioning the agent name', async () => {
     const user = userEvent.setup();
-    const confirmSpy = vi.fn(() => true);
-    vi.stubGlobal('confirm', confirmSpy);
     renderPage();
 
     const [firstDelete] = screen.getAllByTitle('Delete');
     await user.click(firstDelete!);
 
-    expect(confirmSpy).toHaveBeenCalledOnce();
-    const firstCall = confirmSpy.mock.calls[0] as unknown as string[];
-    expect(firstCall[0]).toMatch(/qwen-assistant/);
-    expect(firstCall[0]).toMatch(/permanently/i);
+    const dialogTitle = await screen.findByText('Delete Agent');
+    expect(dialogTitle).toBeInTheDocument();
+
+    const dialogDesc = await screen.findByText(/Delete agent "qwen-assistant"/);
+    expect(dialogDesc).toBeInTheDocument();
+    expect(dialogDesc.textContent).toMatch(/permanently/i);
   });
 
   it('confirms the dialog and calls deleteAgent with the correct agent name', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', () => true);
     renderPage();
 
     const [firstDelete] = screen.getAllByTitle('Delete');
     await user.click(firstDelete!);
+
+    const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
+    await user.click(confirmBtn);
 
     await waitFor(() => {
       expect(mockDeleteFn).toHaveBeenCalledOnce();
@@ -181,11 +179,13 @@ describe('AgentsPage — delete agent', () => {
 
   it('cancelling the confirmation does NOT call deleteAgent', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', () => false);
     renderPage();
 
     const [firstDelete] = screen.getAllByTitle('Delete');
     await user.click(firstDelete!);
+
+    const cancelBtn = await screen.findByRole('button', { name: 'Cancel' });
+    await user.click(cancelBtn);
 
     // Give any async mutations a chance to fire
     await new Promise((r) => setTimeout(r, 50));
@@ -196,11 +196,13 @@ describe('AgentsPage — delete agent', () => {
 
   it('shows a success toast after confirmed deletion', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', () => true);
     renderPage();
 
     const [firstDelete] = screen.getAllByTitle('Delete');
     await user.click(firstDelete!);
+
+    const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
+    await user.click(confirmBtn);
 
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/qwen-assistant/));
@@ -209,12 +211,14 @@ describe('AgentsPage — delete agent', () => {
 
   it('shows an error toast when deleteAgent rejects', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', () => true);
     mockDeleteFn.mockRejectedValueOnce(new Error('Network error'));
     renderPage();
 
     const [firstDelete] = screen.getAllByTitle('Delete');
     await user.click(firstDelete!);
+
+    const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
+    await user.click(confirmBtn);
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Network error');
@@ -225,11 +229,13 @@ describe('AgentsPage — delete agent', () => {
 
   it('deletes the correct agent when the second Delete button is clicked', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', () => true);
     renderPage();
 
     const deleteButtons = screen.getAllByTitle('Delete');
     await user.click(deleteButtons[1]!);
+
+    const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
+    await user.click(confirmBtn);
 
     await waitFor(() => {
       expect(mockDeleteFn).toHaveBeenCalledWith('inst-002');
@@ -240,11 +246,13 @@ describe('AgentsPage — delete agent', () => {
 
   it('Delete button click does not navigate to the agent detail page', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', () => false); // cancel so no API call, just checking nav
     renderPage();
 
     const [firstDelete] = screen.getAllByTitle('Delete');
     await user.click(firstDelete!);
+
+    const cancelBtn = await screen.findByRole('button', { name: 'Cancel' });
+    await user.click(cancelBtn);
 
     // URL should remain on /agents (BrowserRouter starts at /)
     expect(window.location.pathname).not.toMatch(/\/agents\/qwen-assistant/);

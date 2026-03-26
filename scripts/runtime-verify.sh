@@ -60,6 +60,22 @@ check_json_field() {
 echo "=== Runtime Verification ==="
 echo ""
 
+# ── Pre-flight: lockfile freshness ────────────────────────────────────────────
+echo "Step 0: Pre-flight checks"
+# The web Dockerfile builds standalone (context: ./web) — verify the lockfile
+# is compatible with --frozen-lockfile before attempting a Docker build.
+if command -v bun &>/dev/null; then
+  (cd web && bun install --frozen-lockfile --dry-run 2>/dev/null) && pass "web/bun.lock fresh" || {
+    warn "web/bun.lock may be stale — Docker build could fail. Regenerate with:"
+    warn "  MSYS_NO_PATHCONV=1 docker run --rm -v \"\$(pwd)/web:/app\" -w /app oven/bun:1-alpine bun install"
+    WARNINGS=$((WARNINGS + 1))
+  }
+else
+  warn "bun not found — skipping lockfile check"
+  WARNINGS=$((WARNINGS + 1))
+fi
+
+echo ""
 echo -e "${YELLOW}Restarting containers...${NC}"
 docker restart sera-core sera-web > /dev/null 2>&1
 
@@ -96,7 +112,7 @@ for component in database centrifugo docker qdrant pg-boss; do
   fi
 done
 
-# Squid is known-flaky on restart (#363) — warn instead of fail
+# Squid PID issue fixed in #363 (entrypoint.sh removes stale PID) — treat as real failure now
 squid_status=$(echo "$HEALTH_JSON" | node -e "
   let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
     try {
@@ -109,8 +125,8 @@ squid_status=$(echo "$HEALTH_JSON" | node -e "
 if [ "$squid_status" = "healthy" ]; then
   pass "squid"
 else
-  warn "squid ($squid_status) — known restart issue (#363)"
-  WARNINGS=$((WARNINGS + 1))
+  fail "squid ($squid_status)"
+  ERRORS=$((ERRORS + 1))
 fi
 
 echo ""
@@ -132,9 +148,10 @@ for container in sera-core sera-web sera-db sera-qdrant sera-centrifugo; do
     ERRORS=$((ERRORS + 1))
   elif [ "$status" = "healthy" ] || [ "$status" = "no-healthcheck" ]; then
     pass "$container ($status)"
-  elif [ "$container" = "sera-web" ]; then
-    # sera-web healthcheck is known-broken (#364) — wget can't reach localhost
-    warn "$container ($status) — known healthcheck issue (#364)"
+  elif [ "$container" = "sera-web" ] && [ "$status" = "unhealthy" ]; then
+    # Healthcheck fixed in #364 (127.0.0.1 instead of localhost) — but still
+    # starting state may report unhealthy; warn if unhealthy, fail only if not running
+    warn "$container ($status) — may still be starting"
     WARNINGS=$((WARNINGS + 1))
   else
     fail "$container ($status)"

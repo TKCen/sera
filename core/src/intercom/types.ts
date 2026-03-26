@@ -24,7 +24,8 @@ export type ThoughtStepType =
   | 'reflect'
   | 'tool-call'
   | 'tool-result'
-  | 'reasoning';
+  | 'reasoning'
+  | 'context-assembly';
 
 // ── Message Envelope ────────────────────────────────────────────────────────────
 

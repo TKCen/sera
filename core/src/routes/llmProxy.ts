@@ -126,12 +126,18 @@ export function createLlmProxyRouter(
         return;
       }
 
-      // ── 2.1 Context Assembly (Story 6.3 / 8.4) ─────────────────────────────
+      // ── 2.1 Context Assembly (Story 6.3 / 8.4 / #308) ────────────────────
       try {
         if (messages) {
           messages = (await contextAssembler.assemble(
             agentId,
-            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[]
+            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+            (event) => {
+              logger.info(`[context-assembly] ${event.stage}`, {
+                ...event.detail,
+                ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+              });
+            }
           )) as unknown as import('../agents/types.js').ChatMessage[];
         }
       } catch (err) {

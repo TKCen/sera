@@ -101,7 +101,9 @@ export default function AgentsPage() {
       </div>
 
       <header className="sera-page-header">
-        <h1 ref={titleRef} tabIndex={-1} className="sera-page-title outline-none">Agents</h1>
+        <h1 ref={titleRef} tabIndex={-1} className="sera-page-title outline-none">
+          Agents
+        </h1>
         <Button asChild size="sm">
           <Link to="/agents/new">
             <Plus size={14} />
@@ -270,7 +272,8 @@ export default function AgentsPage() {
           <DialogHeader>
             <DialogTitle>Delete Agent</DialogTitle>
             <DialogDescription>
-              Delete agent "{confirmDelete?.name}"? This will stop its container and remove the instance permanently.
+              Delete agent "{confirmDelete?.name}"? This will stop its container and remove the
+              instance permanently.
             </DialogDescription>
           </DialogHeader>
           <div className="flex gap-3 justify-end mt-4">
@@ -285,14 +288,17 @@ export default function AgentsPage() {
               disabled={deleteAgent.isPending}
               onClick={() => {
                 if (!confirmDelete) return;
-                void deleteAgent.mutateAsync(confirmDelete.id).then(() => {
-                  toast.success(`Deleted ${confirmDelete.name}`);
-                  setLiveMessage(`Deleted agent ${confirmDelete.name}`);
-                  setConfirmDelete(null);
-                  titleRef.current?.focus();
-                }).catch((err: unknown) => {
-                  toast.error(err instanceof Error ? err.message : 'Failed to delete');
-                });
+                void deleteAgent
+                  .mutateAsync(confirmDelete.id)
+                  .then(() => {
+                    toast.success(`Deleted ${confirmDelete.name}`);
+                    setLiveMessage(`Deleted agent ${confirmDelete.name}`);
+                    setConfirmDelete(null);
+                    titleRef.current?.focus();
+                  })
+                  .catch((err: unknown) => {
+                    toast.error(err instanceof Error ? err.message : 'Failed to delete');
+                  });
               }}
             >
               {deleteAgent.isPending ? 'Deleting…' : 'Delete'}

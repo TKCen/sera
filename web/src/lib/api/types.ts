@@ -262,6 +262,7 @@ export interface ProviderConfig {
   baseUrl?: string;
   description?: string;
   dynamicProviderId?: string;
+  authStatus?: string;
 }
 
 export interface ProvidersResponse {

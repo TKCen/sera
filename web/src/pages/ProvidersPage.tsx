@@ -139,6 +139,20 @@ export default function ProvidersPage() {
                             {m.baseUrl}
                           </span>
                         )}
+                        {m.authStatus && (
+                          <Badge
+                            variant={
+                              m.authStatus === 'configured'
+                                ? 'success'
+                                : m.authStatus === 'not-required'
+                                  ? 'default'
+                                  : 'warning'
+                            }
+                            className="text-[9px]"
+                          >
+                            {m.authStatus}
+                          </Badge>
+                        )}
                         {dpStatus && (
                           <span className="flex items-center gap-1 text-[10px]">
                             {dpStatus === 'connected' ? (

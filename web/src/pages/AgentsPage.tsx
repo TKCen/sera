@@ -17,13 +17,14 @@ import {
   DialogDescription,
   DialogClose,
 } from '@/components/ui/dialog';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // TODO: virtualise if > 100 agents
 
 const STATUS_OPTIONS = ['all', 'running', 'stopped', 'created', 'error', 'unresponsive'] as const;
 
-export default function AgentsPage() {
-  const { data: agents, isLoading } = useAgents();
+function AgentsPageContent() {
+  const { data: agents, isLoading, isError, refetch } = useAgents();
   const startAgent = useStartAgent();
   const stopAgent = useStopAgent();
   const deleteAgent = useDeleteAgent();
@@ -171,6 +172,13 @@ export default function AgentsPage() {
             </li>
           ))}
         </ul>
+      ) : isError ? (
+        <div className="flex flex-col items-center justify-center p-8 border border-sera-border rounded-xl bg-sera-surface mt-4">
+          <p className="text-sera-error mb-4">Failed to load agents.</p>
+          <Button onClick={() => refetch()} variant="outline">
+            Retry
+          </Button>
+        </div>
       ) : !agents?.length ? (
         <EmptyState
           icon={<Bot size={24} />}
@@ -307,5 +315,13 @@ export default function AgentsPage() {
         </DialogContent>
       </Dialog>
     </main>
+  );
+}
+
+export default function AgentsPage() {
+  return (
+    <ErrorBoundary fallbackMessage="The agents page encountered an error.">
+      <AgentsPageContent />
+    </ErrorBoundary>
   );
 }

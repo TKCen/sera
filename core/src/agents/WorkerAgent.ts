@@ -112,6 +112,18 @@ export class WorkerAgent extends BaseAgent {
       }
 
       // No tool calls — we have a final text response
+      // Detect empty/error responses from the LLM
+      if (!response.content && !response.toolCalls?.length) {
+        const errorMsg =
+          '⚠️ The LLM returned an empty response. This may indicate a context window overflow, ' +
+          'model misconfiguration, or provider error. Check agent and LLM provider logs for details.';
+        this.logger.warn(
+          `[${this.name}] LLM returned empty content for input: ${input.substring(0, 100)}`
+        );
+        await this.publishThought('reflect', errorMsg);
+        return { thought: 'LLM returned empty response', finalAnswer: errorMsg };
+      }
+
       this.history = [
         ...fullHistory,
         { role: 'assistant', content: response.content } as ChatMessage,

@@ -30,7 +30,7 @@ export class ContextAssembler {
   private embeddingService = EmbeddingService.getInstance();
 
   constructor(
-    private pool: Pool,
+    pool: Pool,
     private orchestrator: Orchestrator
   ) {
     this.skillInjector = new SkillInjector(pool);

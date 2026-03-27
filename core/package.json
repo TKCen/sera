@@ -67,7 +67,7 @@
     "js-yaml": "^4.1",
     "jsonwebtoken": "^9.0",
     "node-pg-migrate": "^7.0",
-    "nodemailer": "^8.0.3",
+    "nodemailer": "^8.0.4",
     "openai": "^4.0",
     "openid-client": "^6.1.7",
     "opossum": "^9.0.0",

@@ -471,6 +471,21 @@ export abstract class BaseAgent {
     // Flush any remaining reasoning (e.g. model only reasoned, produced no content)
     if (accumulatedReasoning) {
       await this.publishThought('reasoning', accumulatedReasoning);
+
+      // Fallback: if the model only produced reasoning tokens and no content tokens
+      // (happens when reasoning flag is misconfigured), use the reasoning as the reply.
+      if (!accumulated) {
+        accumulated = accumulatedReasoning;
+        // Also publish the reasoning as token content so the web UI shows it
+        if (this.intercom) {
+          await this.intercom.publishToken(
+            this.agentInstanceId || this.role,
+            accumulated,
+            false,
+            messageId
+          );
+        }
+      }
     }
 
     const reply = accumulated || 'No response generated.';

@@ -372,19 +372,40 @@ export class LlmRouter {
         ? { supportsStore: false, supportsDeveloperRole: false }
         : undefined;
 
+    // Auto-detect reasoning/thinking models by name if not explicitly set.
+    // These models emit `reasoning_content` tokens before `content` tokens;
+    // pi-mono needs to know so it correctly separates thinking from answer.
+    const reasoning = config.reasoning ?? LlmRouter.isReasoningModel(config.modelName);
+
     return {
       id: config.modelName,
       name: config.description ?? config.modelName,
       api: config.api as Api,
       provider: (config.provider ?? 'openai') as Provider,
       baseUrl: config.baseUrl ?? '',
-      reasoning: false,
+      reasoning,
       input: ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: config.contextWindow ?? 128_000,
       maxTokens: config.maxTokens ?? 4_096,
       ...(compat ? { compat } : {}),
     };
+  }
+
+  /**
+   * Heuristic: detect whether a model name indicates a reasoning/thinking model.
+   * These models separate reasoning_content from content in streaming.
+   */
+  private static isReasoningModel(modelName: string): boolean {
+    const lower = modelName.toLowerCase();
+    return (
+      /qwen3/i.test(lower) ||
+      /deepseek-r1/i.test(lower) ||
+      /\bo[13]-/i.test(lower) || // o1-*, o3-*
+      /\bo[13]$/i.test(lower) || // just "o1" or "o3"
+      /thinking/i.test(lower) ||
+      /reasoner/i.test(lower)
+    );
   }
 
   /**

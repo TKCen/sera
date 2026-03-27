@@ -85,6 +85,15 @@ export interface ProviderConfig {
    * If not set, summarize strategy falls back to sliding-window.
    */
   contextCompactionModel?: string | undefined;
+  /**
+   * Whether this model supports extended thinking / reasoning.
+   * When true, pi-mono separates `reasoning_content` (thinking) from
+   * `content` (answer) in the streaming response. Required for Qwen3
+   * thinking models, o1/o3 series, DeepSeek-R1, etc.
+   *
+   * Default: auto-detected from model name (qwen3*, o1*, o3*, deepseek-r1*).
+   */
+  reasoning?: boolean | undefined;
 }
 
 export interface DynamicProviderConfig {

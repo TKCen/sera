@@ -32,11 +32,14 @@ export class LlmRouterProvider implements LLMProvider {
     const msg = await eventStream.result();
 
     let textContent = '';
+    let thinkingContent = '';
     const toolCalls: LLMResponse['toolCalls'] = [];
 
     for (const block of msg.content) {
       if (block.type === 'text') {
         textContent += block.text;
+      } else if (block.type === 'thinking') {
+        thinkingContent += (block as { type: 'thinking'; thinking: string }).thinking;
       } else if (block.type === 'toolCall') {
         toolCalls!.push({
           id: block.id,
@@ -50,6 +53,13 @@ export class LlmRouterProvider implements LLMProvider {
           },
         });
       }
+    }
+
+    // Fallback: if model produced only thinking blocks and no text content,
+    // use the thinking content as the response. This happens when a reasoning
+    // model isn't flagged as reasoning=true in providers.json.
+    if (!textContent && thinkingContent) {
+      textContent = thinkingContent;
     }
 
     const response: LLMResponse = {

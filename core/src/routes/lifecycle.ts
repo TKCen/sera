@@ -29,12 +29,6 @@ import type { SandboxManager } from '../sandbox/SandboxManager.js';
 import { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
 import type { PermissionDecision } from '../sandbox/PermissionRequestService.js';
 
-// Typed param shapes
-
-type IdParam = { id: string };
-type RequestIdParam = { requestId: string };
-type IdGrantParam = { id: string; grantId: string };
-
 export function createLifecycleRouter(
   registry: AgentRegistry,
   orchestrator: Orchestrator,

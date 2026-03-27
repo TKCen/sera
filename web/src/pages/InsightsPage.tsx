@@ -16,7 +16,8 @@ const {
 } = RC;
 import { RefreshCw, Download, TrendingUp, Bot, DollarSign, Activity } from 'lucide-react';
 import { useUsage } from '@/hooks/useUsage';
-import { Spinner } from '@/components/ui/spinner';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 type Range = '24h' | '7d' | '30d' | 'custom';
 
@@ -53,7 +54,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
 
 type SortKey = 'agentName' | 'promptTokens' | 'completionTokens' | 'totalTokens' | 'pctOfTotal';
 
-export default function InsightsPage() {
+function InsightsPageContent() {
   const [range, setRange] = useState<Range>('7d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -118,8 +119,8 @@ export default function InsightsPage() {
   ];
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-8">
-      <div className="sera-page-header">
+    <main aria-label="Insights" className="p-8 max-w-6xl mx-auto space-y-8">
+      <header className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Insights</h1>
           <p className="text-sm text-sera-text-muted mt-1">
@@ -127,11 +128,12 @@ export default function InsightsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 border border-sera-border rounded-lg p-1">
+          <nav aria-label="Time range filters" className="flex items-center gap-1 border border-sera-border rounded-lg p-1">
             {ranges.map((r) => (
               <button
                 key={r.id}
                 onClick={() => setRange(r.id)}
+                aria-pressed={range === r.id}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                   range === r.id
                     ? 'bg-sera-accent-soft text-sera-accent'
@@ -141,13 +143,14 @@ export default function InsightsPage() {
                 {r.label}
               </button>
             ))}
-          </div>
+          </nav>
           <button
             onClick={() => {
               void refetch();
             }}
             className="sera-btn-ghost p-2"
             title="Refresh"
+            aria-label="Refresh data"
           >
             <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
           </button>
@@ -156,17 +159,19 @@ export default function InsightsPage() {
               void handleDownload();
             }}
             className="sera-btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
+            aria-label="Download CSV"
           >
             <Download size={13} /> CSV
           </button>
         </div>
-      </div>
+      </header>
 
       {range === 'custom' && (
-        <div className="flex items-center gap-3">
+        <section aria-label="Custom time range" className="flex items-center gap-3">
           <div className="space-y-1">
-            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">From</label>
+            <label htmlFor="custom-from" className="text-[11px] text-sera-text-dim uppercase tracking-wider">From</label>
             <input
+              id="custom-from"
               type="datetime-local"
               value={customFrom}
               onChange={(e) => setCustomFrom(e.target.value)}
@@ -174,23 +179,32 @@ export default function InsightsPage() {
             />
           </div>
           <div className="space-y-1">
-            <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">To</label>
+            <label htmlFor="custom-to" className="text-[11px] text-sera-text-dim uppercase tracking-wider">To</label>
             <input
+              id="custom-to"
               type="datetime-local"
               value={customTo}
               onChange={(e) => setCustomTo(e.target.value)}
               className="sera-input text-xs"
             />
           </div>
-        </div>
+        </section>
       )}
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-20">
-          <Spinner />
+        <div role="status" aria-label="Loading insights" className="space-y-8">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Skeleton className="h-[90px] rounded-xl" />
+            <Skeleton className="h-[90px] rounded-xl" />
+            <Skeleton className="h-[90px] rounded-xl" />
+            <Skeleton className="h-[90px] rounded-xl" />
+          </div>
+          <Skeleton className="h-[300px] rounded-xl" />
+          <Skeleton className="h-[300px] rounded-xl" />
+          <Skeleton className="h-[200px] rounded-xl" />
         </div>
       ) : (
-        <>
+        <div aria-live="polite">
           {/* Summary cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <SummaryCard
@@ -346,6 +360,7 @@ export default function InsightsPage() {
                       ).map(([key, label]) => (
                         <th
                           key={key}
+                          aria-sort={sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
                           className="text-left py-3 px-4 cursor-pointer hover:text-sera-text transition-colors select-none"
                           onClick={() => toggleSort(key)}
                         >
@@ -433,9 +448,17 @@ export default function InsightsPage() {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
-    </div>
+    </main>
+  );
+}
+
+export default function InsightsPage() {
+  return (
+    <ErrorBoundary fallbackMessage="The insights page encountered an error.">
+      <InsightsPageContent />
+    </ErrorBoundary>
   );
 }
 

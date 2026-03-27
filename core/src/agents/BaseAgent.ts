@@ -430,62 +430,84 @@ export abstract class BaseAgent {
     let accumulated = '';
     let accumulatedReasoning = '';
 
-    for await (const chunk of this.llmProvider.chatStream(messages)) {
-      if (chunk.token) {
-        accumulated += chunk.token;
+    try {
+      for await (const chunk of this.llmProvider.chatStream(messages)) {
+        if (chunk.token) {
+          accumulated += chunk.token;
 
-        // First content token: flush any accumulated reasoning as one thought block
-        if (accumulatedReasoning) {
-          await this.publishThought('reasoning', accumulatedReasoning);
-          accumulatedReasoning = '';
+          // First content token: flush any accumulated reasoning as one thought block
+          if (accumulatedReasoning) {
+            await this.publishThought('reasoning', accumulatedReasoning);
+            accumulatedReasoning = '';
+          }
         }
-      }
 
-      // Accumulate reasoning/thinking tokens (e.g. Qwen / DeepSeek reasoning_content)
-      if (chunk.reasoning) {
-        accumulatedReasoning += chunk.reasoning;
-      }
+        // Accumulate reasoning/thinking tokens (e.g. Qwen / DeepSeek reasoning_content)
+        if (chunk.reasoning) {
+          accumulatedReasoning += chunk.reasoning;
+        }
 
-      if (chunk.usage && this.meteringEngine) {
-        await this.meteringEngine.record({
-          agentId: this.agentInstanceId || this.role,
-          model: this.manifest.model.name,
-          ...chunk.usage,
-        });
-      }
+        if (chunk.usage && this.meteringEngine) {
+          await this.meteringEngine.record({
+            agentId: this.agentInstanceId || this.role,
+            model: this.manifest.model.name,
+            ...chunk.usage,
+          });
+        }
 
-      // Only publish to the frontend when there is an actual token or the stream
-      // is done. Skipping empty-string tokens avoids flooding Centrifugo with
-      // hundreds of no-op HTTP requests during a thinking/reasoning phase
-      // (e.g. Qwen3 emits reasoning_content before any visible content).
-      if (this.intercom && (chunk.token !== '' || chunk.done)) {
-        await this.intercom.publishToken(
-          this.agentInstanceId || this.role,
-          chunk.token,
-          chunk.done,
-          messageId
-        );
-      }
-    }
-
-    // Flush any remaining reasoning (e.g. model only reasoned, produced no content)
-    if (accumulatedReasoning) {
-      await this.publishThought('reasoning', accumulatedReasoning);
-
-      // Fallback: if the model only produced reasoning tokens and no content tokens
-      // (happens when reasoning flag is misconfigured), use the reasoning as the reply.
-      if (!accumulated) {
-        accumulated = accumulatedReasoning;
-        // Also publish the reasoning as token content so the web UI shows it
-        if (this.intercom) {
+        // Only publish to the frontend when there is an actual token or the stream
+        // is done. Skipping empty-string tokens avoids flooding Centrifugo with
+        // hundreds of no-op HTTP requests during a thinking/reasoning phase
+        // (e.g. Qwen3 emits reasoning_content before any visible content).
+        if (this.intercom && (chunk.token !== '' || chunk.done)) {
           await this.intercom.publishToken(
             this.agentInstanceId || this.role,
-            accumulated,
-            false,
+            chunk.token,
+            chunk.done,
             messageId
           );
         }
       }
+
+      // Flush any remaining reasoning (e.g. model only reasoned, produced no content)
+      if (accumulatedReasoning) {
+        await this.publishThought('reasoning', accumulatedReasoning);
+
+        // Fallback: if the model only produced reasoning tokens and no content tokens
+        // (happens when reasoning flag is misconfigured), use the reasoning as the reply.
+        if (!accumulated) {
+          accumulated = accumulatedReasoning;
+          // Also publish the reasoning as token content so the web UI shows it
+          if (this.intercom) {
+            await this.intercom.publishToken(
+              this.agentInstanceId || this.role,
+              accumulated,
+              false,
+              messageId
+            );
+          }
+        }
+      }
+    } catch (streamError) {
+      const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
+      this.logger.error(`[${this.role}] LLM stream error:`, errMsg);
+      const userMsg =
+        '⚠️ LLM error: ' +
+        (errMsg.includes('context') || errMsg.includes('n_keep') || errMsg.includes('n_ctx')
+          ? 'Context window exceeded. Try a shorter message or clear the conversation.'
+          : errMsg.length > 200
+            ? errMsg.substring(0, 200) + '...'
+            : errMsg);
+      await this.publishThought('reflect', userMsg);
+      if (this.intercom) {
+        await this.intercom.publishToken(
+          this.agentInstanceId || this.role,
+          userMsg,
+          true,
+          messageId
+        );
+      }
+      return { thought: 'LLM error', finalAnswer: userMsg };
     }
 
     const reply = accumulated || 'No response generated.';

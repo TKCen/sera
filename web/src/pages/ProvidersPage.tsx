@@ -127,6 +127,15 @@ export default function ProvidersPage() {
                             {m.description}
                           </p>
                         )}
+                        {(m.contextWindow || m.maxTokens) && (
+                          <div className="flex gap-2 mt-1 text-[10px] text-sera-text-dim">
+                            {m.contextWindow && (
+                              <span>ctx: {(m.contextWindow / 1024).toFixed(0)}K</span>
+                            )}
+                            {m.maxTokens && <span>max: {(m.maxTokens / 1024).toFixed(1)}K</span>}
+                            {m.contextStrategy && <span>strategy: {m.contextStrategy}</span>}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-3 flex-shrink-0">

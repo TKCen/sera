@@ -263,6 +263,11 @@ export interface ProviderConfig {
   description?: string;
   dynamicProviderId?: string;
   authStatus?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  contextStrategy?: 'summarize' | 'sliding-window' | 'truncate';
+  contextHighWaterMark?: number;
+  contextCompactionModel?: string;
 }
 
 export interface ProvidersResponse {

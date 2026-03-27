@@ -2,16 +2,7 @@ import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
-import {
-  ArrowLeft,
-  Play,
-  Square,
-  RotateCcw,
-  Bot,
-  Trash2,
-  Check,
-  AlertCircle,
-} from 'lucide-react';
+import { ArrowLeft, Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,

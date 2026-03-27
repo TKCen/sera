@@ -11,9 +11,9 @@ import { AppShell } from '@/components/AppShell';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
-import DashboardPage from '@/pages/DashboardPage';
-import ChatPage from '@/pages/ChatPage';
-import AgentsPage from '@/pages/AgentsPage';
+import DashboardPage from '@/app/dashboard/page';
+import ChatPage from '@/app/chat/page';
+import AgentsPage from '@/app/agents/page';
 import AgentDetailPage from '@/pages/AgentDetailPage';
 import AgentEditPage from '@/pages/AgentEditPage';
 import AgentNewPage from '@/pages/AgentNewPage';

@@ -1,17 +1,87 @@
 import { request } from './client';
 import type { UsageResponse } from './types';
 
-export function getUsage(params: {
+interface UsageRow {
+  period: string;
+  agent_id?: string;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+/**
+ * Fetch usage data from the metering API and transform into the shape
+ * the InsightsPage expects: summary, timeSeries, byAgent, byModel.
+ *
+ * The API only supports groupBy=hour|day (not agent/model), so we
+ * always request by day and aggregate agent/model breakdowns client-side.
+ */
+export async function getUsage(params: {
   groupBy?: 'agent' | 'model';
   from?: string;
   to?: string;
 }): Promise<UsageResponse> {
   const q = new URLSearchParams();
-  if (params.groupBy) q.set('groupBy', params.groupBy);
+  // API only supports hour|day — use 'day' for time series
+  q.set('groupBy', 'day');
   if (params.from) q.set('from', params.from);
   if (params.to) q.set('to', params.to);
   const qs = q.toString();
-  return request<UsageResponse>(`/metering/usage${qs ? `?${qs}` : ''}`);
+
+  const raw = await request<{ data: UsageRow[] }>(`/metering/usage${qs ? `?${qs}` : ''}`);
+  const rows = raw.data ?? [];
+
+  // Build time series (aggregate across all agents per period)
+  const periodMap = new Map<string, { promptTokens: number; completionTokens: number }>();
+  for (const row of rows) {
+    const existing = periodMap.get(row.period);
+    const tokens = Number(row.total_tokens) || 0;
+    if (existing) {
+      existing.completionTokens += tokens;
+    } else {
+      periodMap.set(row.period, { promptTokens: 0, completionTokens: tokens });
+    }
+  }
+  const timeSeries = [...periodMap.entries()].map(([period, v]) => ({
+    period,
+    promptTokens: v.promptTokens,
+    completionTokens: v.completionTokens,
+    totalTokens: v.promptTokens + v.completionTokens,
+  }));
+
+  // Build by-agent breakdown
+  const agentMap = new Map<string, number>();
+  for (const row of rows) {
+    const name = row.agent_id ?? 'unknown';
+    agentMap.set(name, (agentMap.get(name) ?? 0) + (Number(row.total_tokens) || 0));
+  }
+  const grandTotal = [...agentMap.values()].reduce((a, b) => a + b, 0) || 1;
+  const byAgent = [...agentMap.entries()].map(([agentName, totalTokens]) => ({
+    agentName,
+    promptTokens: 0,
+    completionTokens: totalTokens,
+    totalTokens,
+    pctOfTotal: (totalTokens / grandTotal) * 100,
+  }));
+
+  // Summary
+  const totalTokens = byAgent.reduce((s, a) => s + a.totalTokens, 0);
+
+  return {
+    summary: {
+      totalTokensToday: totalTokens,
+      totalTokensMonth: totalTokens,
+      estimatedCost: rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0),
+      mostActiveAgent: byAgent[0]?.agentName,
+    },
+    timeSeries: timeSeries.map((t) => ({
+      timestamp: t.period,
+      promptTokens: t.promptTokens,
+      completionTokens: t.completionTokens,
+      totalTokens: t.totalTokens,
+    })),
+    byAgent,
+    byModel: [],
+  };
 }
 
 export async function getAgentBudget(agentId: string): Promise<{

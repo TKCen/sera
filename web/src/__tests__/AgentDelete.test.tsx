@@ -80,7 +80,7 @@ vi.mock('@/components/AgentStatusBadge', () => ({
 
 // ── Lazy import after mocks ────────────────────────────────────────────────────
 
-import AgentsPage from '@/pages/AgentsPage';
+import AgentsPage from '@/app/agents/page';
 import { toast } from 'sonner';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

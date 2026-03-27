@@ -12,20 +12,22 @@ export const createSchedulesRouter = () => {
   router.get('/', async (req, res) => {
     try {
       const { agentId } = req.query;
-      let query = 'SELECT * FROM schedules';
+      let query = `SELECT s.*, ai.name AS resolved_agent_name
+        FROM schedules s
+        LEFT JOIN agent_instances ai ON s.agent_instance_id = ai.id::text`;
       const params = [];
       if (agentId) {
-        query += ' WHERE agent_instance_id = $1';
+        query += ' WHERE s.agent_instance_id = $1';
         params.push(agentId);
       }
-      query += ' ORDER BY created_at DESC';
+      query += ' ORDER BY s.created_at DESC';
 
       const { rows } = await pool.query(query, params);
       // Map snake_case DB columns to camelCase for the frontend
       res.json(
         rows.map((r: Record<string, unknown>) => ({
           id: r.id,
-          agentName: r.agent_name ?? r.agent_instance_id,
+          agentName: (r.resolved_agent_name as string) ?? r.agent_name ?? r.agent_instance_id,
           agentInstanceId: r.agent_instance_id,
           name: r.name,
           type: r.type ?? 'cron',

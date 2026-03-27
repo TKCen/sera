@@ -255,7 +255,11 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
         <tr className="border-b border-sera-border/50 bg-sera-bg/50">
           <td colSpan={8} className="px-8 py-3">
             <pre className="text-xs font-mono text-sera-text-muted leading-relaxed whitespace-pre-wrap">
-              {sched.lastRunOutput}
+              {/VIOLATES NOT NULL CONSTRAINT|syntax error|column .* does not exist/i.test(
+                sched.lastRunOutput
+              )
+                ? 'Internal error: schedule configuration is invalid. Check agent logs for details.'
+                : sched.lastRunOutput}
             </pre>
           </td>
         </tr>

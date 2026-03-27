@@ -262,8 +262,20 @@ export function ChatSidebar({
   onRenameSession,
   onRefetchAgents,
 }: ChatSidebarProps) {
+  // Resolve agent UUIDs to display names when possible
+  const resolveAgentName = (session: SessionInfo): string => {
+    const raw = session.agentName || 'Unknown Agent';
+    // If it looks like a UUID, try to resolve via the agents list
+    if (/^[0-9a-f-]{36}$/i.test(raw) && agents) {
+      const match =
+        agents.find((a) => a.id === raw) ?? agents.find((a) => a.id === session.agentInstanceId);
+      if (match) return match.display_name ?? match.name;
+    }
+    return raw;
+  };
+
   const groupedSessions = sessions.reduce<Record<string, SessionInfo[]>>((acc, s) => {
-    const key = s.agentName || 'Unknown Agent';
+    const key = resolveAgentName(s);
     if (!acc[key]) acc[key] = [];
     acc[key]!.push(s);
     return acc;

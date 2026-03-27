@@ -1,5 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Loader2, Bot, User, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import {
+  Loader2,
+  Bot,
+  User,
+  Brain,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Copy,
+  Check,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { PublicationContext } from 'centrifuge';
@@ -98,6 +107,24 @@ function CodeBlock({ children, className }: { children?: React.ReactNode; classN
         {copied ? 'Copied!' : 'Copy'}
       </button>
     </div>
+  );
+}
+
+function MessageCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="p-1 rounded text-sera-text-dim hover:text-sera-text transition-colors"
+      title="Copy message"
+    >
+      {copied ? <Check size={12} className="text-sera-success" /> : <Copy size={12} />}
+    </button>
   );
 }
 
@@ -599,7 +626,10 @@ function ChatPageContent() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={cn('flex gap-3', msg.role === 'user' ? 'justify-end' : 'justify-start')}
+              className={cn(
+                'flex gap-3 group',
+                msg.role === 'user' ? 'justify-end' : 'justify-start'
+              )}
             >
               {msg.role === 'agent' && (
                 <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -663,9 +693,16 @@ function ChatPageContent() {
                   )}
                 </div>
 
-                <span className="text-[10px] opacity-40 mt-1.5 block">
-                  {msg.createdAt.toLocaleTimeString()}
-                </span>
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <span className="text-[10px] opacity-40">
+                    {msg.createdAt.toLocaleTimeString()}
+                  </span>
+                  {msg.role === 'agent' && msg.content && !msg.streaming && (
+                    <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                      <MessageCopyButton text={msg.content} />
+                    </span>
+                  )}
+                </div>
               </div>
               {msg.role === 'user' && (
                 <div className="w-8 h-8 rounded-lg bg-sera-surface border border-sera-border flex items-center justify-center flex-shrink-0 mt-0.5">

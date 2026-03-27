@@ -28,10 +28,31 @@ export async function getAuditEvents(params: AuditParams = {}): Promise<AuditRes
   q.set('offset', String((page - 1) * pageSize));
 
   const qs = q.toString();
-  // Backend returns { entries, total } but frontend expects { events, total, page, pageSize }
-  const raw = await request<{ entries: unknown[]; total: number }>(`/audit${qs ? `?${qs}` : ''}`);
+  // Backend returns { entries, total } — entries use snake_case DB column names.
+  // Map to camelCase for the frontend AuditEvent type.
+  const raw = await request<{ entries: Record<string, unknown>[]; total: number }>(
+    `/audit${qs ? `?${qs}` : ''}`
+  );
+  const events = (raw.entries ?? []).map((e) => ({
+    id: (e.id as string) ?? '',
+    sequence: (e.sequence as number) ?? 0,
+    timestamp: (e.timestamp as string) ?? '',
+    actorId: (e.actor_id as string) ?? (e.actorId as string) ?? '',
+    actorType: ((e.actor_type as string) ?? (e.actorType as string) ?? 'agent') as
+      | 'agent'
+      | 'operator',
+    actorName: (e.actor_name as string) ?? (e.actorName as string),
+    eventType: (e.event_type as string) ?? (e.eventType as string) ?? '',
+    resourceType: (e.resource_type as string) ?? (e.resourceType as string),
+    payload: (e.payload as Record<string, unknown>) ?? {},
+    status: ((e.status as string) ?? 'success') as 'success' | 'failure',
+    resourceId: (e.resource_id as string) ?? (e.resourceId as string),
+    hash: (e.hash as string) ?? '',
+    prevHash: (e.prev_hash as string) ?? (e.prevHash as string) ?? null,
+    actingContext: (e.acting_context as Record<string, unknown>) ?? null,
+  }));
   return {
-    events: raw.entries as AuditResponse['events'],
+    events: events as AuditResponse['events'],
     total: raw.total,
     page,
     pageSize,

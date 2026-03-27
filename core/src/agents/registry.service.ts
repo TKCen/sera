@@ -154,33 +154,47 @@ export class AgentRegistry {
   }
 
   async getInstance(id: string): Promise<AgentInstance | null> {
-    const res = await this.pool.query('SELECT * FROM agent_instances WHERE id = $1', [id]);
+    const res = await this.pool.query(
+      `SELECT ai.*, COALESCE(ai.circle, c.name) AS circle
+       FROM agent_instances ai
+       LEFT JOIN circles c ON ai.circle_id = c.id
+       WHERE ai.id = $1`,
+      [id]
+    );
     return res.rows[0] || null;
   }
 
   async getInstanceByName(name: string): Promise<AgentInstance | null> {
-    const res = await this.pool.query('SELECT * FROM agent_instances WHERE name = $1', [name]);
+    const res = await this.pool.query(
+      `SELECT ai.*, COALESCE(ai.circle, c.name) AS circle
+       FROM agent_instances ai
+       LEFT JOIN circles c ON ai.circle_id = c.id
+       WHERE ai.name = $1`,
+      [name]
+    );
     return res.rows[0] || null;
   }
 
   async listInstances(
     filters: { circle?: string; status?: string } = {}
   ): Promise<AgentInstance[]> {
-    let queryText = 'SELECT * FROM agent_instances';
+    let queryText = `SELECT ai.*, COALESCE(ai.circle, c.name) AS circle
+       FROM agent_instances ai
+       LEFT JOIN circles c ON ai.circle_id = c.id`;
     const params: unknown[] = [];
     const wheres: string[] = [];
 
     if (filters.circle) {
       params.push(filters.circle);
-      wheres.push(`circle = $${params.length}`);
+      wheres.push(`COALESCE(ai.circle, c.name) = $${params.length}`);
     }
     if (filters.status) {
       params.push(filters.status);
-      wheres.push(`status = $${params.length}`);
+      wheres.push(`ai.status = $${params.length}`);
     }
 
     if (wheres.length > 0) queryText += ' WHERE ' + wheres.join(' AND ');
-    queryText += ' ORDER BY created_at DESC';
+    queryText += ' ORDER BY ai.created_at DESC';
     const res = await this.pool.query(queryText, params);
     return res.rows;
   }

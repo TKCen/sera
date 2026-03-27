@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseJson, safeParseJson } from './json';
+import { parseJson, safeParseJson } from './json.js';
 
 describe('json utilities', () => {
   describe('parseJson', () => {

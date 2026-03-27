@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { PlatformPath } from './PlatformPath';
+import { describe, it, expect, afterEach } from 'vitest';
+import { PlatformPath } from './PlatformPath.js';
 
 describe('PlatformPath', () => {
   const originalPlatform = process.platform;

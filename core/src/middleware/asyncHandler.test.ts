@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
-import { asyncHandler } from './asyncHandler';
+import { asyncHandler } from './asyncHandler.js';
 
 describe('asyncHandler', () => {
   it('should call the wrapped function and pass arguments to it', async () => {
@@ -34,9 +34,6 @@ describe('asyncHandler', () => {
 
   it('should catch synchronously thrown errors and call next with the error', async () => {
     const error = new Error('sync error');
-    const fn = vi.fn().mockImplementation(() => {
-      throw error;
-    });
 
     const asyncFn = vi.fn().mockImplementation(async () => {
       throw error;

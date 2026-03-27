@@ -128,7 +128,10 @@ function InsightsPageContent() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <nav aria-label="Time range filters" className="flex items-center gap-1 border border-sera-border rounded-lg p-1">
+          <nav
+            aria-label="Time range filters"
+            className="flex items-center gap-1 border border-sera-border rounded-lg p-1"
+          >
             {ranges.map((r) => (
               <button
                 key={r.id}
@@ -169,7 +172,12 @@ function InsightsPageContent() {
       {range === 'custom' && (
         <section aria-label="Custom time range" className="flex items-center gap-3">
           <div className="space-y-1">
-            <label htmlFor="custom-from" className="text-[11px] text-sera-text-dim uppercase tracking-wider">From</label>
+            <label
+              htmlFor="custom-from"
+              className="text-[11px] text-sera-text-dim uppercase tracking-wider"
+            >
+              From
+            </label>
             <input
               id="custom-from"
               type="datetime-local"
@@ -179,7 +187,12 @@ function InsightsPageContent() {
             />
           </div>
           <div className="space-y-1">
-            <label htmlFor="custom-to" className="text-[11px] text-sera-text-dim uppercase tracking-wider">To</label>
+            <label
+              htmlFor="custom-to"
+              className="text-[11px] text-sera-text-dim uppercase tracking-wider"
+            >
+              To
+            </label>
             <input
               id="custom-to"
               type="datetime-local"
@@ -360,7 +373,13 @@ function InsightsPageContent() {
                       ).map(([key, label]) => (
                         <th
                           key={key}
-                          aria-sort={sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                          aria-sort={
+                            sortKey === key
+                              ? sortDir === 'asc'
+                                ? 'ascending'
+                                : 'descending'
+                              : 'none'
+                          }
                           className="text-left py-3 px-4 cursor-pointer hover:text-sera-text transition-colors select-none"
                           onClick={() => toggleSort(key)}
                         >

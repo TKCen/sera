@@ -166,6 +166,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
       watchAgentsDirectory = vi.fn();
+      setCircleContextResolver = vi.fn();
       startDockerEventListener = vi.fn().mockResolvedValue(undefined);
       stopWatching = vi.fn();
       reloadTemplates = vi.fn().mockReturnValue({ count: 0 });

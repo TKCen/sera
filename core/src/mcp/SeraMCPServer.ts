@@ -731,12 +731,17 @@ export class SeraMCPServer {
 
     // Call the internal HTTP API directly
     const port = process.env.PORT ?? '3001';
+    const apiKey =
+      process.env.SERA_BOOTSTRAP_API_KEY ?? process.env.SERA_API_KEY ?? 'sera_bootstrap_dev_123';
     const body: Record<string, string> = { agentName, message };
     if (sessionId) body.sessionId = sessionId;
 
     const res = await fetch(`http://localhost:${port}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000),
     });

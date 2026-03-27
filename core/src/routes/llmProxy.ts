@@ -28,6 +28,7 @@ import { Logger } from '../lib/logger.js';
 import type { Pool } from 'pg';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { ContextAssembler } from '../llm/ContextAssembler.js';
+import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
 
 const logger = new Logger('LLMProxy');
 
@@ -68,7 +69,8 @@ export function createLlmProxyRouter(
   llmRouter: LlmRouter,
   circuitBreakerService: CircuitBreakerService,
   pool: Pool,
-  orchestrator: Orchestrator
+  orchestrator: Orchestrator,
+  contextCompactionService?: ContextCompactionService
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(identityService, authService);
@@ -146,6 +148,24 @@ export function createLlmProxyRouter(
 
       const modelName =
         typeof model === 'string' ? model : (process.env.LLM_MODEL ?? 'lmstudio-default');
+
+      // ── 2.2 Context Compaction (#387) ──────────────────────────────────────
+      try {
+        if (contextCompactionService && messages) {
+          messages = (await contextCompactionService.compact(
+            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+            modelName,
+            (event) => {
+              logger.info(`[context-compaction] ${event.stage}`, {
+                ...event.detail,
+                ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+              });
+            }
+          )) as unknown as import('../agents/types.js').ChatMessage[];
+        }
+      } catch (err) {
+        logger.error('Context compaction failed (continuing with full context):', err);
+      }
 
       const chatRequest = {
         model: modelName,

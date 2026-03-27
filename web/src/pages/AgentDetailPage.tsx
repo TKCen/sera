@@ -48,6 +48,7 @@ import { MemoryTab } from '@/components/AgentDetailMemoryTab';
 import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
 import { BudgetTab } from '@/components/AgentDetailBudgetTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
+import { ContextTab } from '@/components/AgentDetailContextTab';
 
 type Tab =
   | 'overview'
@@ -57,6 +58,7 @@ type Tab =
   | 'memory'
   | 'schedules'
   | 'budget'
+  | 'context'
   | 'prompt'
   | 'health';
 
@@ -169,6 +171,7 @@ export default function AgentDetailPage() {
               'memory',
               'schedules',
               'budget',
+              'context',
               'health',
             ] as const
           ).map((t) => (
@@ -197,6 +200,7 @@ export default function AgentDetailPage() {
         {tab === 'memory' && <MemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} />}
         {tab === 'budget' && <BudgetTab id={id} />}
+        {tab === 'context' && <ContextTab id={id} />}
         {tab === 'prompt' && <SystemPromptTab id={id} />}
         {tab === 'health' && <HealthCheckTab id={id} />}
       </div>

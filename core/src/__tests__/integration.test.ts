@@ -83,6 +83,20 @@ vi.mock('../services/vector.service.js', () => ({
   },
 }));
 
+vi.mock('../circles/CircleService.js', () => {
+  return {
+    CircleService: {
+      getInstance: vi.fn().mockReturnValue({
+        listCircles: vi.fn().mockResolvedValue([
+          { name: 'development', displayName: 'Development', id: 'c1' },
+          { name: 'operations', displayName: 'Operations', id: 'c2' },
+        ]),
+        getCircle: vi.fn().mockResolvedValue(null),
+      }),
+    },
+  };
+});
+
 vi.mock('../circles/CircleRegistry.js', () => {
   return {
     CircleRegistry: class {
@@ -160,6 +174,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       getRunningAgents = vi.fn().mockReturnValue(new Map());
       getAgentInfo = vi.fn();
       getManifestByInstanceId = vi.fn();
+      getRunningAgents = vi.fn().mockReturnValue(new Map());
       startInstance = vi.fn().mockResolvedValue(undefined);
       stopInstance = vi.fn().mockResolvedValue(undefined);
       restartAgent = vi.fn().mockResolvedValue(undefined);

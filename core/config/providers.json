@@ -19,7 +19,8 @@
       "description": "Qwen 3.5 35B A3B via LM Studio",
       "contextWindow": 131072,
       "maxTokens": 8192,
-      "contextStrategy": "sliding-window"
+      "contextStrategy": "sliding-window",
+      "reasoning": true
     },
     {
       "modelName": "ollama-local",

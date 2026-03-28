@@ -66,6 +66,7 @@ import { createToolProxyRouter } from './routes/toolProxy.js';
 import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
 import { ProviderRegistry } from './llm/ProviderRegistry.js';
 import { LlmRouter } from './llm/LlmRouter.js';
+import { ContextCompactionService } from './llm/ContextCompactionService.js';
 import { DynamicProviderManager } from './llm/DynamicProviderManager.js';
 import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
@@ -137,6 +138,7 @@ const dynamicProviderManager = new DynamicProviderManager(
   providerRegistry,
   process.env.DYNAMIC_PROVIDERS_CONFIG_PATH ?? '/app/config/dynamic_providers.json'
 );
+const contextCompactionService = new ContextCompactionService(llmRouter, providerRegistry);
 const circuitBreakerService = new CircuitBreakerService(llmRouter);
 const agentScheduler = new AgentScheduler();
 const permissionService = new PermissionRequestService(agentRegistry, intercomService);
@@ -153,6 +155,7 @@ sandboxManager.setAgentRegistry(agentRegistry);
 orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
 orchestrator.setLlmRouter(llmRouter);
+orchestrator.setContextCompactionService(contextCompactionService);
 orchestrator.setCircleContextResolver((circleName) => circleRegistry.getProjectContext(circleName));
 
 registerBuiltinSkills(skillRegistry, memoryManager);
@@ -480,7 +483,8 @@ app.use(
     llmRouter,
     circuitBreakerService,
     pool,
-    orchestrator
+    orchestrator,
+    contextCompactionService
   )
 );
 app.use('/api/budget', authMiddleware, createBudgetRouter(meteringService));

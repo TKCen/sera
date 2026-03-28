@@ -5,6 +5,7 @@ import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
 import type { MemoryManager } from '../memory/manager.js';
+import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
 import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { LoopGuard } from './stability/LoopGuard.js';
@@ -37,6 +38,7 @@ export abstract class BaseAgent {
   protected logger: Logger;
   protected loopGuard: LoopGuard;
   protected identityService: IdentityService | undefined;
+  protected contextCompactionService: ContextCompactionService | undefined;
 
   /** Queue of incoming intercom messages for the reasoning loop. */
   protected messageQueue: Array<{ from: string; payload: Record<string, unknown> }> = [];
@@ -96,6 +98,11 @@ export abstract class BaseAgent {
   /** Attach a MemoryManager after construction. */
   public setMemoryManager(memoryManager: MemoryManager): void {
     this.memoryManager = memoryManager;
+  }
+
+  /** Attach a ContextCompactionService for automatic context window management. */
+  public setContextCompactionService(service: ContextCompactionService): void {
+    this.contextCompactionService = service;
   }
 
   /** Optional resolver for circle project context. Set by Orchestrator on startup. */
@@ -429,6 +436,25 @@ export abstract class BaseAgent {
   ): Promise<AgentResponse> {
     let accumulated = '';
     let accumulatedReasoning = '';
+
+    // Context compaction: summarize/trim if over context window budget
+    if (this.contextCompactionService) {
+      try {
+        const modelName = this.manifest.spec?.model?.name ?? this.manifest.model?.name ?? 'default';
+        const compacted = await this.contextCompactionService.compact(
+          messages as import('../llm/LlmRouter.js').ChatMessage[],
+          modelName,
+          (event) => {
+            if (event.stage !== 'compaction.skipped') {
+              void this.publishThought('context-assembly', JSON.stringify(event));
+            }
+          }
+        );
+        messages = compacted as ChatMessage[];
+      } catch (err) {
+        this.logger.error(`[${this.role}] Context compaction failed:`, err);
+      }
+    }
 
     try {
       for await (const chunk of this.llmProvider.chatStream(messages)) {

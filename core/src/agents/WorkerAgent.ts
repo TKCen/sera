@@ -67,7 +67,26 @@ export class WorkerAgent extends BaseAgent {
     // Get tool definitions if ToolExecutor is available
     const tools = this.toolExecutor ? this.toolExecutor.getToolDefinitions(this.manifest) : [];
 
-    const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...fullHistory];
+    let messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...fullHistory];
+
+    // ── Context Compaction ─────────────────────────────────────────────────
+    if (this.contextCompactionService) {
+      try {
+        const modelName = this.manifest.spec?.model?.name ?? this.manifest.model?.name ?? 'default';
+        const compacted = await this.contextCompactionService.compact(
+          messages as import('../llm/LlmRouter.js').ChatMessage[],
+          modelName,
+          (event) => {
+            if (event.stage !== 'compaction.skipped') {
+              void this.publishThought('context-assembly', JSON.stringify(event));
+            }
+          }
+        );
+        messages = compacted as ChatMessage[];
+      } catch (err) {
+        this.logger.error(`[${this.name}] Context compaction failed:`, err);
+      }
+    }
 
     // ── Agentic Tool Loop ──────────────────────────────────────────────────
     const MAX_TOOL_ITERATIONS = 10;

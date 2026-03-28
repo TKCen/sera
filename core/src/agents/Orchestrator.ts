@@ -17,6 +17,7 @@ import { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { query } from '../lib/database.js';
 import { AuditService } from '../audit/AuditService.js';
+import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
 
 const logger = new Logger('Orchestrator');
 
@@ -47,6 +48,7 @@ export class Orchestrator {
   private identityService: IdentityService | undefined;
   private meteringEngine: MeteringEngine | undefined;
   private agentScheduler: AgentScheduler | undefined;
+  private contextCompactionService: ContextCompactionService | undefined;
   private registry: AgentRegistry | undefined;
   private llmRouter: LlmRouter | undefined;
   private circleContextResolver: ((circleName: string) => string | undefined) | undefined;
@@ -138,6 +140,13 @@ export class Orchestrator {
     this.agentScheduler = scheduler;
     for (const agent of this.agents.values()) {
       agent.setMetering(engine, scheduler);
+    }
+  }
+
+  public setContextCompactionService(service: ContextCompactionService): void {
+    this.contextCompactionService = service;
+    for (const agent of this.agents.values()) {
+      agent.setContextCompactionService(service);
     }
   }
 
@@ -243,6 +252,9 @@ export class Orchestrator {
     if (this.identityService) agent.setIdentityService(this.identityService);
     if (this.meteringEngine && this.agentScheduler) {
       agent.setMetering(this.meteringEngine, this.agentScheduler);
+    }
+    if (this.contextCompactionService) {
+      agent.setContextCompactionService(this.contextCompactionService);
     }
 
     // Wire circle context resolver so agents can access their circle's shared context

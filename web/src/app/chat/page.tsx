@@ -1,58 +1,20 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import {
-  Loader2,
-  Bot,
-  User,
-  Brain,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Copy,
-  Check,
-} from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
 import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { sendChatStream } from '@/lib/api/chat';
 import { request } from '@/lib/api/client';
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { ChatSidebar } from '@/components/ChatSidebar';
+import { ChatSidebar, type SessionInfo } from '@/components/ChatSidebar';
 import { ChatInputBar } from '@/components/ChatInputBar';
-import { ChatThoughtPanel } from '@/components/ChatThoughtPanel';
+import { ChatMessageList } from '@/components/ChatMessageList';
+import { ChatHeader } from '@/components/ChatHeader';
+import { ChatEmptyState } from '@/components/ChatEmptyState';
+import type { SessionDetail, Message, MessageThought } from '@/components/chat-types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface SessionInfo {
-  id: string;
-  agentName: string;
-  agentInstanceId?: string | null;
-  title: string;
-  messageCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface SessionDetail extends SessionInfo {
-  messages: SessionMessage[];
-}
-
-interface SessionMessage {
-  id: string;
-  sessionId: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  metadata?: { thoughts?: MessageThought[] };
-  createdAt: string;
-}
-
-interface MessageThought {
-  timestamp: string;
-  stepType: string;
-  content: string;
-}
 
 interface TokenPayload {
   token: string;
@@ -66,66 +28,6 @@ interface ThoughtPayload {
   content: string;
   agentId: string;
   agentDisplayName: string;
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'agent';
-  content: string;
-  thoughts: MessageThought[];
-  streaming: boolean;
-  createdAt: Date;
-}
-
-// ── Code block with copy button ───────────────────────────────────────────────
-
-function CodeBlock({ children, className }: { children?: React.ReactNode; className?: string }) {
-  const [copied, setCopied] = useState(false);
-  const code = String(children ?? '').trim();
-
-  function handleCopy() {
-    void navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <div className="relative group my-2">
-      <pre
-        className={cn(
-          'bg-sera-bg border border-sera-border rounded-lg px-4 py-3 overflow-x-auto text-[0.8em] leading-relaxed',
-          className
-        )}
-      >
-        <code>{children}</code>
-      </pre>
-      <button
-        onClick={handleCopy}
-        className="absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] bg-sera-surface text-sera-text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-sera-text"
-      >
-        {copied ? 'Copied!' : 'Copy'}
-      </button>
-    </div>
-  );
-}
-
-function MessageCopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-      className="p-1 rounded text-sera-text-dim hover:text-sera-text transition-colors"
-      title="Copy message"
-    >
-      {copied ? <Check size={12} className="text-sera-success" /> : <Copy size={12} />}
-    </button>
-  );
 }
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
@@ -538,27 +440,14 @@ function ChatPageContent() {
           onRenameSession={(id, title) => void renameSession(id, title)}
           onRefetchAgents={() => void refetchAgents()}
         />
-        <div className="flex-1 flex flex-col items-center justify-center px-8 relative">
-          <div className="absolute top-4 left-4">{sidebarToggle}</div>
-          <div className="w-16 h-16 rounded-2xl bg-sera-accent-soft flex items-center justify-center mb-6">
-            <Bot size={32} className="text-sera-accent" />
-          </div>
-          <h2 className="text-xl font-semibold text-sera-text mb-2">How can I help you?</h2>
-          {isAgentUnavailable && (
-            <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
-              Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
-              <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
-                agent detail page
-              </a>
-              .
-            </div>
-          )}
-          <p className="text-sm text-sera-text-muted mb-8 text-center max-w-md">
-            {selectedAgent
-              ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
-              : 'Select an agent from the sidebar to get started.'}
-          </p>
-          <div className="w-full max-w-2xl">
+        <ChatEmptyState
+          sidebarToggle={sidebarToggle}
+          isAgentUnavailable={isAgentUnavailable}
+          agentStatus={agentStatus}
+          selectedAgent={selectedAgent}
+          selectedAgentData={selectedAgentData as Record<string, unknown> | undefined}
+          selectedAgentId={selectedAgentId}
+          inputBar={
             <ChatInputBar
               inputRef={inputRef}
               input={input}
@@ -570,8 +459,8 @@ function ChatPageContent() {
               onCancel={handleCancel}
               queueCount={queueCount}
             />
-          </div>
-        </div>
+          }
+        />
       </div>
     );
   }
@@ -598,121 +487,22 @@ function ChatPageContent() {
 
       <div className="flex-1 flex flex-col min-w-0 h-full">
         {/* Top bar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-sera-border flex-shrink-0">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {sidebarToggle}
-            {sessionId && (
-              <span className="text-xs text-sera-text-muted font-mono truncate">
-                {sessions.find((s) => s.id === sessionId)?.title ?? 'New Chat'}
-              </span>
-            )}
-          </div>
-          <button
-            onClick={() => setShowThinking((v) => !v)}
-            className={cn(
-              'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium transition-all border',
-              showThinking
-                ? 'bg-sera-accent/10 text-sera-accent border-sera-accent/20'
-                : 'bg-sera-surface text-sera-text-muted border-sera-border hover:text-sera-text'
-            )}
-          >
-            <Brain size={12} className={showThinking ? 'animate-pulse' : ''} />
-            THINKING: {showThinking ? 'ON' : 'OFF'}
-          </button>
-        </div>
+        <ChatHeader
+          sidebarToggle={sidebarToggle}
+          sessionId={sessionId}
+          sessions={sessions}
+          showThinking={showThinking}
+          setShowThinking={setShowThinking}
+        />
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={cn(
-                'flex gap-3 group',
-                msg.role === 'user' ? 'justify-end' : 'justify-start'
-              )}
-            >
-              {msg.role === 'agent' && (
-                <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Bot size={16} className="text-sera-accent" />
-                </div>
-              )}
-              <div
-                className={cn(
-                  'max-w-[72%] rounded-xl px-4 py-3',
-                  msg.role === 'user'
-                    ? 'bg-sera-accent text-sera-bg'
-                    : 'bg-sera-surface border border-sera-border text-sera-text'
-                )}
-              >
-                {/* Inline thinking block */}
-                <ChatThoughtPanel
-                  msg={msg}
-                  showThinking={showThinking}
-                  isExpanded={expandedThoughts.has(msg.id)}
-                  onToggleThoughts={toggleThoughts}
-                />
-
-                {/* Message content */}
-                <div
-                  className={cn(
-                    'text-sm break-words leading-relaxed max-w-none',
-                    msg.role === 'user' ? 'text-sera-bg' : 'chat-prose'
-                  )}
-                >
-                  {msg.role === 'user' ? (
-                    <p className="whitespace-pre-wrap m-0">{msg.content}</p>
-                  ) : msg.streaming && !msg.content ? (
-                    <div className="flex items-center gap-2">
-                      <Loader2 size={14} className="animate-spin text-sera-accent" />
-                      <span className="text-xs text-sera-text-muted">Generating…</span>
-                    </div>
-                  ) : (
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        code({ className, children, ...props }) {
-                          const isBlock = /language-/.test(className ?? '');
-                          return isBlock ? (
-                            <CodeBlock className={className}>{children}</CodeBlock>
-                          ) : (
-                            <code
-                              className="text-sera-accent bg-sera-surface-active rounded px-1 py-0.5 font-mono text-[0.82em]"
-                              {...props}
-                            >
-                              {children}
-                            </code>
-                          );
-                        },
-                      }}
-                    >
-                      {msg.content}
-                    </ReactMarkdown>
-                  )}
-                  {msg.streaming && msg.content && (
-                    <span className="inline-block w-1.5 h-4 bg-sera-accent rounded-sm ml-0.5 animate-pulse align-text-bottom" />
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] opacity-40">
-                    {msg.createdAt.toLocaleTimeString()}
-                  </span>
-                  {msg.role === 'agent' && msg.content && !msg.streaming && (
-                    <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <MessageCopyButton text={msg.content} />
-                    </span>
-                  )}
-                </div>
-              </div>
-              {msg.role === 'user' && (
-                <div className="w-8 h-8 rounded-lg bg-sera-surface border border-sera-border flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <User size={16} className="text-sera-text-muted" />
-                </div>
-              )}
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
+        <ChatMessageList
+          messages={messages}
+          showThinking={showThinking}
+          expandedThoughts={expandedThoughts}
+          toggleThoughts={toggleThoughts}
+          messagesEndRef={messagesEndRef}
+        />
 
         {/* Input */}
         <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">

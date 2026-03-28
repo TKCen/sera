@@ -197,8 +197,6 @@ export class SandboxManager {
       },
     };
 
-
-
     this.audit('spawn', agentName, {
       instanceId: finalInstanceId,
       type: request.type,

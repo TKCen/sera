@@ -10,10 +10,7 @@ export interface SecurityOptions {
 }
 
 export class ContainerSecurityMapper {
-  static mapSecurityOptions(
-    caps: ResolvedCapabilities,
-    isEphemeral: boolean
-  ): SecurityOptions {
+  static mapSecurityOptions(caps: ResolvedCapabilities, isEphemeral: boolean): SecurityOptions {
     const cpuShares = caps.resources?.cpu_shares || 0;
     const memoryBytes = (caps.resources?.memory_limit || 0) * 1024 * 1024;
     const linuxCaps: string[] = Array.isArray(caps.capabilities) ? caps.capabilities : [];

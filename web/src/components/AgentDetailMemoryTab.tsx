@@ -1,12 +1,13 @@
 import { useState, useCallback } from 'react';
 import { Link } from 'react-router';
-import { Clock, ExternalLink, Plus } from 'lucide-react';
+import { Brain, Clock, ExternalLink, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentMemory } from '@/hooks/useAgents';
 import { addMemoryEntry } from '@/lib/api/memory';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { EmptyState } from '@/components/EmptyState';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
 import {
   Dialog,
@@ -100,7 +101,16 @@ export function MemoryTab({ id }: { id: string }) {
       {isLoading ? (
         <TabLoading />
       ) : !blocks?.length ? (
-        <p className="text-sm text-sera-text-muted text-center py-8">No memory blocks.</p>
+        <EmptyState
+          icon={<Brain size={24} />}
+          title="No memories yet"
+          description="This agent hasn't formed any memories."
+          action={
+            <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Plus size={12} className="mr-1" /> Create Entry
+            </Button>
+          }
+        />
       ) : (
         <div className="space-y-2">
           {blocks.map((block) => (

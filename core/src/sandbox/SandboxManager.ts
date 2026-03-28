@@ -349,6 +349,14 @@ export class SandboxManager {
         ? info.NetworkSettings?.Networks?.['agent_net']?.IPAddress || undefined
         : undefined;
 
+    // For chatUrl, use sera_net IP (reachable from sera-core) rather than
+    // agent_net IP (only reachable from other agents / egress proxy).
+    const seraNetIp =
+      networkMode === 'agent_net'
+        ? info.NetworkSettings?.Networks?.['sera_net']?.IPAddress || undefined
+        : undefined;
+    const chatIp = seraNetIp || containerIp;
+
     const sandboxInfo: SandboxInfo = {
       containerId: info.Id,
       agentName,
@@ -360,7 +368,8 @@ export class SandboxManager {
       instanceId: finalInstanceId,
       ...(request.lifecycleMode !== undefined ? { lifecycleMode: request.lifecycleMode } : {}),
       ...(proxyEnabled ? { proxyEnabled } : {}),
-      ...(containerIp ? { containerIp, chatUrl: `http://${containerIp}:3100` } : {}),
+      ...(containerIp ? { containerIp } : {}),
+      ...(chatIp ? { chatUrl: `http://${chatIp}:3100` } : {}),
     };
 
     // Wait for the container's chat server to become ready before

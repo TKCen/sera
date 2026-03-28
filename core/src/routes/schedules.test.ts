@@ -168,10 +168,7 @@ describe('SchedulesRouter', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ id: 'sched-1', name: 'Task' });
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT * FROM schedules WHERE id = $1',
-        ['sched-1']
-      );
+      expect(pool.query).toHaveBeenCalledWith('SELECT * FROM schedules WHERE id = $1', ['sched-1']);
     });
 
     it('returns 404 if schedule not found', async () => {
@@ -216,11 +213,12 @@ describe('SchedulesRouter', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(updatedSchedule);
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT source FROM schedules WHERE id = $1',
-        ['sched-1']
-      );
-      expect(mockScheduleService.updateSchedule).toHaveBeenCalledWith('sched-1', { name: 'Updated Task' });
+      expect(pool.query).toHaveBeenCalledWith('SELECT source FROM schedules WHERE id = $1', [
+        'sched-1',
+      ]);
+      expect(mockScheduleService.updateSchedule).toHaveBeenCalledWith('sched-1', {
+        name: 'Updated Task',
+      });
     });
 
     it('returns 404 if schedule to update is not found', async () => {
@@ -272,10 +270,9 @@ describe('SchedulesRouter', () => {
       const res = await request(app).delete('/api/schedules/sched-1');
 
       expect(res.status).toBe(204);
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT source FROM schedules WHERE id = $1',
-        ['sched-1']
-      );
+      expect(pool.query).toHaveBeenCalledWith('SELECT source FROM schedules WHERE id = $1', [
+        'sched-1',
+      ]);
       expect(mockScheduleService.deleteSchedule).toHaveBeenCalledWith('sched-1');
     });
 

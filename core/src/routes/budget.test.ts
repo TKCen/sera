@@ -105,9 +105,7 @@ describe('BudgetRouter', () => {
   describe('GET /api/budget/agents/:id', () => {
     it('returns single agent usage history', async () => {
       vi.mocked(query).mockResolvedValueOnce({
-        rows: [
-          { date: new Date('2023-10-01T00:00:00Z'), total_tokens: '500' },
-        ],
+        rows: [{ date: new Date('2023-10-01T00:00:00Z'), total_tokens: '500' }],
         command: 'SELECT',
         rowCount: 1,
         oid: 0,
@@ -119,9 +117,7 @@ describe('BudgetRouter', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         agentId: 'agent1',
-        usage: [
-          { date: '2023-10-01', totalTokens: 500 },
-        ],
+        usage: [{ date: '2023-10-01', totalTokens: 500 }],
       });
       expect(query).toHaveBeenCalledWith(expect.any(String), ['agent1']);
     });

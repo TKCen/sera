@@ -34,7 +34,7 @@ describe('WebhooksRouter', () => {
     // Middleware to optionally set rawBody for testing webhook signatures
     app.use((req, res, next) => {
       let data = '';
-      req.on('data', chunk => {
+      req.on('data', (chunk) => {
         data += chunk;
       });
       req.on('end', () => {
@@ -42,7 +42,7 @@ describe('WebhooksRouter', () => {
           try {
             req.body = JSON.parse(data);
           } catch (e) {
-             req.body = {};
+            req.body = {};
           }
           (req as any).rawBody = Buffer.from(data);
         }
@@ -50,7 +50,10 @@ describe('WebhooksRouter', () => {
       });
     });
 
-    app.use('/api/webhooks', createWebhooksRouter(mockWebhooksService as WebhooksService, mockAuthMiddleware));
+    app.use(
+      '/api/webhooks',
+      createWebhooksRouter(mockWebhooksService as WebhooksService, mockAuthMiddleware)
+    );
   });
 
   describe('POST /api/webhooks', () => {
@@ -59,7 +62,7 @@ describe('WebhooksRouter', () => {
         name: 'My Webhook',
         urlPath: '/custom/path',
         secret: 'supersecret',
-        eventType: 'issue_created'
+        eventType: 'issue_created',
       };
       const createdWebhook = { id: 'wh-1', slug: 'my-webhook-slug', ...webhookInput };
 
@@ -69,7 +72,12 @@ describe('WebhooksRouter', () => {
 
       expect(res.status).toBe(201);
       expect(res.body).toEqual(createdWebhook);
-      expect(mockWebhooksService.createWebhook).toHaveBeenCalledWith('My Webhook', '/custom/path', 'supersecret', 'issue_created');
+      expect(mockWebhooksService.createWebhook).toHaveBeenCalledWith(
+        'My Webhook',
+        '/custom/path',
+        'supersecret',
+        'issue_created'
+      );
       expect(mockAuthMiddleware).toHaveBeenCalled();
     });
 
@@ -81,13 +89,15 @@ describe('WebhooksRouter', () => {
     });
 
     it('returns 500 on service error', async () => {
-      vi.mocked(mockWebhooksService.createWebhook!).mockRejectedValueOnce(new Error('Service failure'));
+      vi.mocked(mockWebhooksService.createWebhook!).mockRejectedValueOnce(
+        new Error('Service failure')
+      );
 
       const res = await request(app).post('/api/webhooks').send({
         name: 'My Webhook',
         urlPath: '/custom/path',
         secret: 'supersecret',
-        eventType: 'issue_created'
+        eventType: 'issue_created',
       });
 
       expect(res.status).toBe(500);
@@ -142,16 +152,16 @@ describe('WebhooksRouter', () => {
     });
 
     it('returns 401 if missing headers', async () => {
-      const res = await request(app)
-        .post('/api/webhooks/incoming/test-slug')
-        .send({});
+      const res = await request(app).post('/api/webhooks/incoming/test-slug').send({});
 
       expect(res.status).toBe(401);
       expect(res.body.error).toContain('Missing or invalid X-Sera-Signature or X-Sera-Timestamp');
     });
 
     it('handles signature validation errors by returning 401', async () => {
-      vi.mocked(mockWebhooksService.handleIncoming!).mockRejectedValueOnce(new Error('Invalid signature'));
+      vi.mocked(mockWebhooksService.handleIncoming!).mockRejectedValueOnce(
+        new Error('Invalid signature')
+      );
 
       const res = await request(app)
         .post('/api/webhooks/incoming/test-slug')
@@ -164,7 +174,9 @@ describe('WebhooksRouter', () => {
     });
 
     it('handles other errors by returning 404', async () => {
-      vi.mocked(mockWebhooksService.handleIncoming!).mockRejectedValueOnce(new Error('Webhook not found'));
+      vi.mocked(mockWebhooksService.handleIncoming!).mockRejectedValueOnce(
+        new Error('Webhook not found')
+      );
 
       const res = await request(app)
         .post('/api/webhooks/incoming/test-slug')

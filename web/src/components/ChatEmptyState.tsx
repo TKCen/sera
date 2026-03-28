@@ -40,9 +40,7 @@ export function ChatEmptyState({
           ? `Chatting with ${(selectedAgentData?.display_name as string) ?? selectedAgent}`
           : 'Select an agent from the sidebar to get started.'}
       </p>
-      <div className="w-full max-w-2xl">
-        {inputBar}
-      </div>
+      <div className="w-full max-w-2xl">{inputBar}</div>
     </div>
   );
 }

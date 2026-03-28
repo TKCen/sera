@@ -823,6 +823,35 @@ export class Orchestrator {
     return Array.from(this.agents.values())[0];
   }
 
+  /**
+   * Ensure an agent instance has a running container with a reachable chat
+   * server.  If the container is not running, starts the instance and waits
+   * for the chat server to become ready (via the spawn readiness poll).
+   *
+   * @returns The chat URL to forward requests to.
+   * @throws  If the container cannot be started or the chat URL is unavailable.
+   */
+  public async ensureContainerRunning(instanceId: string): Promise<string> {
+    if (!this.sandboxManager) {
+      throw new Error('SandboxManager is not available — cannot route to container');
+    }
+
+    // Check if already running with a chatUrl
+    let sandbox = this.sandboxManager.getContainerByInstance(instanceId);
+    if (sandbox?.chatUrl) return sandbox.chatUrl;
+
+    // Not running — try starting the instance (spawns container + readiness poll)
+    await this.startInstance(instanceId);
+
+    sandbox = this.sandboxManager.getContainerByInstance(instanceId);
+    if (sandbox?.chatUrl) return sandbox.chatUrl;
+
+    throw new Error(
+      `Agent instance ${instanceId} started but chat URL is not available — ` +
+        'container may not have acquired a network IP'
+    );
+  }
+
   public deregisterAgent(name: string): void {
     // Remove manifest
     this.manifests.delete(name);

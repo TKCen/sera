@@ -349,6 +349,14 @@ export class SandboxManager {
         ? info.NetworkSettings?.Networks?.['agent_net']?.IPAddress || undefined
         : undefined;
 
+    // For chatUrl, use sera_net IP (reachable from sera-core) rather than
+    // agent_net IP (only reachable from other agents / egress proxy).
+    const seraNetIp =
+      networkMode === 'agent_net'
+        ? info.NetworkSettings?.Networks?.['sera_net']?.IPAddress || undefined
+        : undefined;
+    const chatIp = seraNetIp || containerIp;
+
     const sandboxInfo: SandboxInfo = {
       containerId: info.Id,
       agentName,
@@ -360,8 +368,18 @@ export class SandboxManager {
       instanceId: finalInstanceId,
       ...(request.lifecycleMode !== undefined ? { lifecycleMode: request.lifecycleMode } : {}),
       ...(proxyEnabled ? { proxyEnabled } : {}),
-      ...(containerIp ? { containerIp, chatUrl: `http://${containerIp}:3100` } : {}),
+      ...(containerIp ? { containerIp } : {}),
+      ...(chatIp ? { chatUrl: `http://${chatIp}:3100` } : {}),
     };
+
+    // Wait for the container's chat server to become ready before
+    // marking the container as available.  Without this, the first
+    // chat request can arrive before the HTTP server inside the
+    // container has started listening, causing a connect timeout.
+    if (sandboxInfo.chatUrl && request.type === 'agent') {
+      const readyTimeout = parseInt(process.env['AGENT_READY_TIMEOUT_MS'] || '30000', 10);
+      await this.waitForChatReady(sandboxInfo.chatUrl, readyTimeout);
+    }
 
     this.containers.set(info.Id, sandboxInfo);
     this.instanceToContainer.set(finalInstanceId, info.Id);
@@ -374,6 +392,44 @@ export class SandboxManager {
     }
 
     return sandboxInfo;
+  }
+
+  // ── Container Readiness ────────────────────────────────────────────────────────
+
+  /**
+   * Poll the container's chat server health endpoint until it reports ready.
+   * Uses exponential backoff starting at 100 ms, capped at 2 000 ms.
+   * Throws if `timeoutMs` elapses without a successful health check.
+   */
+  async waitForChatReady(chatUrl: string, timeoutMs: number): Promise<void> {
+    const healthUrl = `${chatUrl}/health`;
+    const start = Date.now();
+    let delay = 100;
+    const maxDelay = 2_000;
+    const perRequestTimeout = 3_000;
+
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const res = await fetch(healthUrl, {
+          signal: AbortSignal.timeout(perRequestTimeout),
+        });
+        if (res.ok) {
+          const body = (await res.json()) as { ready?: boolean };
+          if (body.ready) {
+            const elapsed = Date.now() - start;
+            logger.info(`Chat server ready at ${chatUrl} (${elapsed}ms)`);
+            return;
+          }
+        }
+      } catch {
+        // Connection refused / timeout — container still booting
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, maxDelay);
+    }
+
+    throw new Error(`Chat server at ${chatUrl} did not become ready within ${timeoutMs}ms`);
   }
 
   // ── Teardown (Story 3.7) ─────────────────────────────────────────────────────

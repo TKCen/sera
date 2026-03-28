@@ -1,24 +1,156 @@
 import { Router } from 'express';
+import type { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../lib/logger.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { SessionStore } from '../sessions/SessionStore.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
-import type { SandboxManager } from '../sandbox/SandboxManager.js';
+import type { BaseAgent } from '../agents/BaseAgent.js';
 import type { ChatMessage } from '../agents/types.js';
 
 const logger = new Logger('ChatRouter');
 
+/** Response shape from the agent-runtime chat server. */
+interface ContainerChatResponse {
+  result: string | null;
+  error?: string;
+  thoughts?: Array<{ step: string; content: string }>;
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
+
+// ── Shared Helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Resolve the target agent from the request body.
+ * Lookup order: agentInstanceId → agentName → primary agent.
+ */
+async function resolveAgent(
+  body: { agentInstanceId?: string; agentName?: string },
+  orchestrator: Orchestrator,
+  agentRegistry?: AgentRegistry
+): Promise<{ agent: BaseAgent; agentName: string }> {
+  if (body.agentInstanceId) {
+    let agent = orchestrator.getAgent(body.agentInstanceId);
+    if (!agent) {
+      agent = await orchestrator.startInstance(body.agentInstanceId);
+    }
+    return { agent, agentName: agent.role };
+  }
+
+  if (body.agentName) {
+    let agent = orchestrator.getAgent(body.agentName);
+    if (!agent && agentRegistry) {
+      const instance = await agentRegistry.getInstanceByName(body.agentName);
+      if (instance) {
+        agent = await orchestrator.startInstance(instance.id);
+      }
+    }
+    if (!agent) {
+      throw Object.assign(new Error(`Agent "${body.agentName}" not found.`), { status: 404 });
+    }
+    return { agent, agentName: agent.role };
+  }
+
+  const agent = orchestrator.getPrimaryAgent();
+  if (!agent) {
+    throw Object.assign(
+      new Error('No primary agent configured. Check your AGENT.yaml manifests.'),
+      { status: 500 }
+    );
+  }
+  return { agent, agentName: agent.role };
+}
+
+/**
+ * Ensure the agent has a running container and return its chat URL.
+ * Auto-starts the agent if the container is not running.
+ */
+async function ensureContainer(agent: BaseAgent, orchestrator: Orchestrator): Promise<string> {
+  const instanceId = agent.agentInstanceId;
+  if (!instanceId) {
+    throw Object.assign(
+      new Error(`Agent "${agent.name}" has no instance ID — cannot route to container`),
+      { status: 503 }
+    );
+  }
+  try {
+    return await orchestrator.ensureContainerRunning(instanceId);
+  } catch (err) {
+    throw Object.assign(
+      new Error(
+        `Container for agent "${agent.name}" is not available: ${err instanceof Error ? err.message : String(err)}`
+      ),
+      { status: 503 }
+    );
+  }
+}
+
+/**
+ * Forward a chat message to the agent container's chat server.
+ * Returns the reply text and optional thought.
+ */
+async function forwardToContainer(
+  chatUrl: string,
+  payload: {
+    message: string;
+    sessionId: string;
+    history: ChatMessage[];
+    messageId?: string;
+  }
+): Promise<{ reply: string; thought?: string }> {
+  const res = await fetch(`${chatUrl}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(120_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Container chat returned ${res.status}: ${text}`);
+  }
+
+  const body = (await res.json()) as ContainerChatResponse;
+  const result: { reply: string; thought?: string } = {
+    reply: body.result || 'No response generated.',
+  };
+  if (body.error) result.thought = `Error: ${body.error}`;
+  return result;
+}
+
+/**
+ * Persist user/assistant messages and finalize the session (auto-title, JSONL mirror).
+ */
+async function persistAndFinalize(
+  sessionStore: SessionStore,
+  sessionId: string,
+  agentName: string,
+  message: string,
+  reply: string,
+  isNew: boolean
+): Promise<void> {
+  await sessionStore.addMessage({ sessionId, role: 'user', content: message });
+  await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+
+  if (isNew) {
+    const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
+    await sessionStore.updateSessionTitle(sessionId, autoTitle);
+  }
+
+  sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
+}
+
+// ── Router ──────────────────────────────────────────────────────────────────────
+
 export function createChatRouter(
   sessionStore: SessionStore,
   orchestrator: Orchestrator,
-  agentRegistry?: AgentRegistry,
-  sandboxManager?: SandboxManager
+  agentRegistry?: AgentRegistry
 ) {
   const router = Router();
 
   /**
-   * Helper: resolve or create a session and load its message history.
+   * Resolve or create a session and load its message history.
    */
   async function resolveSession(
     sessionId: string | undefined,
@@ -36,276 +168,112 @@ export function createChatRouter(
         return { sessionId, history, isNew: false };
       }
     }
-    // Create a new session
     const session = await sessionStore.createSession({ agentName, agentInstanceId });
     return { sessionId: session.id, history: [], isNew: true };
   }
 
-  /**
-   * Sends a chat message.
-   */
-  router.post('/chat', async (req, res) => {
+  // ── POST /chat ──────────────────────────────────────────────────────────────
+  //
+  // Sends a message and waits for the full response.
+  // If `stream: true` is set, returns immediately with { sessionId, messageId }
+  // and the response streams via Centrifugo (same as the legacy /chat/stream).
+  //
+
+  async function chatHandler(req: Request, res: Response): Promise<void> {
     try {
       const {
         message,
         sessionId: incomingSessionId,
         agentName: incomingAgent,
         agentInstanceId,
+        stream,
       } = req.body;
+
       if (!message) {
-        return res.status(400).json({ error: 'message is required' });
+        res.status(400).json({ error: 'message is required' });
+        return;
       }
 
-      // Resolve agent
-      let agent;
-      let agentName = incomingAgent || 'architect-prime';
+      // 1. Resolve agent
+      const { agent, agentName } = await resolveAgent(
+        { agentInstanceId, agentName: incomingAgent },
+        orchestrator,
+        agentRegistry
+      );
 
-      if (agentInstanceId) {
-        // Look up instance-specific agent
-        agent = orchestrator.getAgent(agentInstanceId);
-        if (!agent) {
-          // Try starting it if it exists in DB but not active in memory
-          try {
-            agent = await orchestrator.startInstance(agentInstanceId);
-          } catch {
-            return res
-              .status(404)
-              .json({ error: `Agent instance "${agentInstanceId}" not found.` });
-          }
-        }
-        agentName = agent.role;
-      } else if (incomingAgent) {
-        agent = orchestrator.getAgent(incomingAgent);
-        if (!agent && agentRegistry) {
-          // Fallback: look up agent instance by name in the DB and start it
-          const instance = await agentRegistry.getInstanceByName(incomingAgent);
-          if (instance) {
-            try {
-              agent = await orchestrator.startInstance(instance.id);
-            } catch (startErr) {
-              logger.error(`Failed to start instance for agent "${incomingAgent}":`, startErr);
-            }
-          }
-        }
-        if (!agent) {
-          return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
-        }
-      } else {
-        agent = orchestrator.getPrimaryAgent();
-        if (!agent) {
-          return res
-            .status(500)
-            .json({ error: 'No primary agent configured. Check your AGENT.yaml manifests.' });
-        }
-        agentName = agent.role;
-      }
-
-      // Resolve or create session
+      // 2. Resolve or create session
       const { sessionId, history, isNew } = await resolveSession(
         incomingSessionId,
         agentName,
         agentInstanceId
       );
 
-      try {
-        // Try routing through agent container for full context assembly
-        const instanceId = agent.agentInstanceId;
-        const sandbox =
-          instanceId && sandboxManager
-            ? sandboxManager.getContainerByInstance(instanceId)
-            : undefined;
+      // 3. Ensure container is running
+      const chatUrl = await ensureContainer(agent, orchestrator);
 
-        let reply = '';
-        let thought: string | undefined;
+      if (stream) {
+        // ── Streaming mode: respond immediately, process in background ──
+        const messageId = uuidv4();
+        res.json({ sessionId, messageId });
 
-        if (sandbox?.chatUrl) {
+        // Background processing — errors are logged, not returned
+        (async () => {
           try {
-            const chatRes = await fetch(`${sandbox.chatUrl}/chat`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message, sessionId, history }),
-              signal: AbortSignal.timeout(120_000),
+            const { reply } = await forwardToContainer(chatUrl, {
+              message,
+              sessionId,
+              history,
+              messageId,
             });
-            if (chatRes.ok) {
-              const body = (await chatRes.json()) as { result: string | null; error?: string };
-              reply = body.result || 'No response generated.';
-            } else {
-              throw new Error(`Container chat returned ${chatRes.status}`);
-            }
-          } catch (containerErr) {
-            logger.warn(`[${agent.name}] Container chat failed, falling back:`, containerErr);
-            const response = await agent.process(message, history);
-            reply = response.finalAnswer || response.thought || 'No response generated.';
-            thought = response.thought;
+            await persistAndFinalize(sessionStore, sessionId, agentName, message, reply, isNew);
+          } catch (err) {
+            logger.error(`[${agent.name}] Stream processing error:`, err);
           }
-        } else {
-          const response = await agent.process(message, history);
-          reply = response.finalAnswer || response.thought || 'No response generated.';
-          thought = response.thought;
-        }
+        })();
+      } else {
+        // ── Synchronous mode: wait for response ─────────────────────────
+        const { reply, thought } = await forwardToContainer(chatUrl, {
+          message,
+          sessionId,
+          history,
+        });
 
-        // Persist messages
-        await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-        await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
-
-        // Auto-title on first exchange
-        if (isNew) {
-          const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
-          await sessionStore.updateSessionTitle(sessionId, autoTitle);
-        }
-
-        // Best-effort JSONL mirror
-        sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
-
+        await persistAndFinalize(sessionStore, sessionId, agentName, message, reply, isNew);
         res.json({ sessionId, reply, thought });
-      } catch (agentError: unknown) {
-        const err = agentError as Error;
-        logger.error(`[${agent.name}] Error during processing:`, agentError);
-        if (err.name === 'AbortError' || (err.message && err.message.includes('timeout'))) {
-          return res
-            .status(504)
-            .json({ error: `Agent "${agent.name}" timed out while processing.` });
-        }
-        return res
-          .status(500)
-          .json({ error: `LLM error from "${agent.name}": ${err.message || String(agentError)}` });
       }
     } catch (error: unknown) {
+      const err = error as Error & { status?: number };
+      const status = err.status || 500;
+
+      if (err.name === 'AbortError' || err.message?.includes('timeout')) {
+        res.status(504).json({ error: 'Agent timed out while processing.' });
+        return;
+      }
+
+      if (status < 500) {
+        res.status(status).json({ error: err.message });
+        return;
+      }
+
       logger.error('Chat API error:', error);
-      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /**
-   * Streams a chat response via Centrifugo.
-   */
-  router.post('/chat/stream', async (req, res) => {
-    try {
-      const {
-        message,
-        sessionId: incomingSessionId,
-        agentName: incomingAgent,
-        agentInstanceId,
-      } = req.body;
-      if (!message) {
-        return res.status(400).json({ error: 'message is required' });
-      }
-
-      const messageId = uuidv4();
-
-      // Resolve agent
-      let agent;
-      let agentName = incomingAgent || 'architect-prime';
-
-      if (agentInstanceId) {
-        agent = orchestrator.getAgent(agentInstanceId);
-        if (!agent) {
-          try {
-            agent = await orchestrator.startInstance(agentInstanceId);
-          } catch {
-            return res
-              .status(404)
-              .json({ error: `Agent instance "${agentInstanceId}" not found.` });
-          }
-        }
-        agentName = agent.role;
-      } else if (incomingAgent) {
-        agent = orchestrator.getAgent(incomingAgent);
-        if (!agent && agentRegistry) {
-          const instance = await agentRegistry.getInstanceByName(incomingAgent);
-          if (instance) {
-            try {
-              agent = await orchestrator.startInstance(instance.id);
-            } catch (startErr) {
-              logger.error(`Failed to start instance for agent "${incomingAgent}":`, startErr);
-            }
-          }
-        }
-        if (!agent) {
-          return res.status(404).json({ error: `Agent "${incomingAgent}" not found.` });
-        }
-      } else {
-        agent = orchestrator.getPrimaryAgent();
-        if (!agent) {
-          return res.status(500).json({ error: 'No primary agent configured.' });
-        }
-        agentName = agent.role;
-      }
-
-      // Resolve or create session
-      const { sessionId, history, isNew } = await resolveSession(
-        incomingSessionId,
-        agentName,
-        agentInstanceId
-      );
-
-      // Return immediately — streaming happens via Centrifugo
-      res.json({ sessionId, messageId });
-
-      // Process in background
-      try {
-        // Try routing through agent container (full context: skills + RAG + constitution)
-        const instanceId = agent.agentInstanceId;
-        const sandbox =
-          instanceId && sandboxManager
-            ? sandboxManager.getContainerByInstance(instanceId)
-            : undefined;
-
-        let reply = '';
-
-        if (sandbox?.chatUrl) {
-          // Container path — full context assembly via ContextAssembler
-          try {
-            const chatRes = await fetch(`${sandbox.chatUrl}/chat`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message, sessionId, history, messageId }),
-              signal: AbortSignal.timeout(120_000),
-            });
-            if (chatRes.ok) {
-              const body = (await chatRes.json()) as { result: string | null; error?: string };
-              reply = body.result || '';
-              logger.info(`[${agent.name}] Chat routed through container (${sandbox.chatUrl})`);
-            } else {
-              throw new Error(`Container chat returned ${chatRes.status}`);
-            }
-          } catch (containerErr) {
-            // Fallback to in-process if container chat fails
-            logger.warn(
-              `[${agent.name}] Container chat failed, falling back to in-process:`,
-              containerErr
-            );
-            const response = await agent.processStream(message, history, messageId);
-            reply = response.finalAnswer || response.thought || '';
-          }
-        } else {
-          // In-process fallback (no container or chatUrl not available)
-          const response = await agent.processStream(message, history, messageId);
-          reply = response.finalAnswer || response.thought || '';
-        }
-
-        // Persist messages
-        await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-        await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
-
-        // Auto-title on first exchange
-        if (isNew) {
-          const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
-          await sessionStore.updateSessionTitle(sessionId, autoTitle);
-        }
-
-        // Best-effort JSONL mirror
-        sessionStore.writeJsonlMirror(agentName, sessionId).catch(() => {});
-      } catch (err: unknown) {
-        logger.error(`[${agent.name}] Stream error:`, err);
-      }
-    } catch (error: unknown) {
-      logger.error('Chat Stream API error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+        res.status(status).json({ error: err.message || String(error) });
       }
     }
-  });
+  }
+
+  router.post('/chat', chatHandler);
+
+  // ── POST /chat/stream (deprecated — same as POST /chat with stream: true) ──
+
+  router.post(
+    '/chat/stream',
+    (req, _res, next) => {
+      req.body.stream = true;
+      next();
+    },
+    chatHandler
+  );
 
   return router;
 }

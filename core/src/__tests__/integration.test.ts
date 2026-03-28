@@ -162,6 +162,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setMetering = vi.fn();
       setIdentityService = vi.fn();
       setLlmRouter = vi.fn();
+      setContextCompactionService = vi.fn();
       setCircleContextResolver = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();

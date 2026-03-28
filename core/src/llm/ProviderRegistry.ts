@@ -353,15 +353,15 @@ export class ProviderRegistry {
 
     // pi-mono standard env var fallback (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
     if (config.provider) {
-      const standardEnvVars: Record<string, string> = {
-        openai: 'OPENAI_API_KEY',
-        anthropic: 'ANTHROPIC_API_KEY',
-        google: 'GOOGLE_API_KEY',
-        groq: 'GROQ_API_KEY',
-        mistral: 'MISTRAL_API_KEY',
+      const standardEnvVars: Record<string, string[]> = {
+        openai: ['OPENAI_API_KEY'],
+        anthropic: ['ANTHROPIC_API_KEY'],
+        google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        groq: ['GROQ_API_KEY'],
+        mistral: ['MISTRAL_API_KEY'],
       };
-      const envVar = standardEnvVars[config.provider];
-      if (envVar && process.env[envVar]) {
+      const envVars = standardEnvVars[config.provider];
+      if (envVars?.some((v) => process.env[v])) {
         return 'configured';
       }
     }
@@ -443,15 +443,19 @@ export class ProviderRegistry {
 
     // 3. Standard provider env vars
     if (config.provider) {
-      const standardEnvVars: Record<string, string> = {
-        openai: 'OPENAI_API_KEY',
-        anthropic: 'ANTHROPIC_API_KEY',
-        google: 'GOOGLE_API_KEY',
-        groq: 'GROQ_API_KEY',
-        mistral: 'MISTRAL_API_KEY',
+      const standardEnvVars: Record<string, string[]> = {
+        openai: ['OPENAI_API_KEY'],
+        anthropic: ['ANTHROPIC_API_KEY'],
+        google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        groq: ['GROQ_API_KEY'],
+        mistral: ['MISTRAL_API_KEY'],
       };
-      const envVar = standardEnvVars[config.provider];
-      if (envVar && process.env[envVar]) return process.env[envVar];
+      const envVars = standardEnvVars[config.provider];
+      if (envVars) {
+        for (const v of envVars) {
+          if (process.env[v]) return process.env[v];
+        }
+      }
     }
 
     return undefined;

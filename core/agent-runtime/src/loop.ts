@@ -5,8 +5,7 @@
  * and returns a structured result with usage stats.
  */
 
-import { v4 as uuidv4 } from 'uuid';
-import type { LLMClient, ChatMessage, ToolCall, ToolDefinition, LLMResponse } from './llmClient.js';
+import type { LLMClient, ChatMessage, ToolDefinition, LLMResponse } from './llmClient.js';
 import { BudgetExceededError, ProviderUnavailableError } from './llmClient.js';
 import type { RuntimeToolExecutor } from './tools.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
@@ -237,9 +236,9 @@ export class ReasoningLoop {
         const reply = response.content || 'No response generated.';
         await think('reflect', `Completed task after ${iteration} iteration(s)`, iteration);
 
-        // Stream response tokens
-        const msgId = uuidv4();
-        await this.streamResponse(reply, msgId);
+        // Stream response tokens — use the caller-provided taskId so the
+        // web frontend can subscribe to the correct Centrifugo channel.
+        await this.streamResponse(reply, taskId);
 
         log('info', `ReasoningLoop complete after ${iteration} iteration(s) — ${reply.length} chars`);
 

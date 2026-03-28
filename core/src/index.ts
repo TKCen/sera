@@ -468,11 +468,7 @@ app.use('/api/pipelines', authMiddleware, createPipelinesRouter(orchestrator));
 app.use('/api/skills', authMiddleware, createSkillsRouter(skillRegistry, orchestrator, pool));
 app.use('/api/memory', authMiddleware, createMemoryRouter(memoryManager));
 app.use('/api/sessions', authMiddleware, createSessionRouter(sessionStore));
-app.use(
-  '/api',
-  authMiddleware,
-  createChatRouter(sessionStore, orchestrator, agentRegistry, sandboxManager)
-);
+app.use('/api', authMiddleware, createChatRouter(sessionStore, orchestrator, agentRegistry));
 
 app.use(
   '/v1/llm',

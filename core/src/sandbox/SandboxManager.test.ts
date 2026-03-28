@@ -231,6 +231,9 @@ describe('SandboxManager', () => {
 
     it('should capture container IP and set proxyEnabled in SandboxInfo', async () => {
       process.env.EGRESS_PROXY_URL = 'http://sera-egress-proxy:3128';
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue(new Response(JSON.stringify({ ready: true }), { status: 200 }));
       try {
         // First inspect call is the stale container check (no State = skip cleanup),
         // second inspect is post-create to get container IP.
@@ -259,6 +262,7 @@ describe('SandboxManager', () => {
         expect(info.containerIp).toBe('172.19.0.5');
       } finally {
         delete process.env.EGRESS_PROXY_URL;
+        fetchSpy.mockRestore();
       }
     });
   });
@@ -472,6 +476,116 @@ describe('SandboxManager', () => {
     it('should return container logs', async () => {
       const logs = await manager.getLogs('any-container-id');
       expect(logs).toBe('test log output');
+    });
+  });
+
+  describe('waitForChatReady', () => {
+    it('should resolve when health check returns ready on first try', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ready: true, busy: false }), { status: 200 })
+        );
+
+      await manager.waitForChatReady('http://172.19.0.5:3100', 5000);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'http://172.19.0.5:3100/health',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
+      fetchSpy.mockRestore();
+    });
+
+    it('should retry on connection failure then succeed', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ready: true }), { status: 200 }));
+
+      await manager.waitForChatReady('http://172.19.0.5:3100', 10000);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      fetchSpy.mockRestore();
+    });
+
+    it('should throw when timeout is exceeded', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(manager.waitForChatReady('http://172.19.0.5:3100', 500)).rejects.toThrow(
+        /did not become ready within 500ms/
+      );
+
+      fetchSpy.mockRestore();
+    });
+
+    it('should retry when health returns ready: false', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ready: false, busy: true }), { status: 200 })
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ready: true, busy: false }), { status: 200 })
+        );
+
+      await manager.waitForChatReady('http://172.19.0.5:3100', 5000);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe('spawn readiness integration', () => {
+    it('should skip readiness check for non-agent containers', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      const manifest = makeManifest();
+      const request: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'tool',
+        image: 'alpine:latest',
+      };
+
+      await manager.spawn(manifest, request, {}, 'inst-tool');
+
+      // fetch should not be called for readiness — tool containers skip it
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
+    it('should wait for readiness when spawning agent containers with chatUrl', async () => {
+      // Mock inspect to return an IP (triggers chatUrl creation)
+      mockDocker._container.inspect
+        .mockResolvedValueOnce({ Id: 'stale-check' })
+        .mockResolvedValueOnce({
+          Id: 'container-ready',
+          NetworkSettings: {
+            Networks: { agent_net: { IPAddress: '172.19.0.10' } },
+          },
+        });
+
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ready: true }), { status: 200 }));
+
+      const manifest = makeManifest();
+      const request: SpawnRequest = {
+        agentName: 'test-agent',
+        type: 'agent',
+        image: 'sera-agent-worker:latest',
+      };
+
+      const info = await manager.spawn(
+        manifest,
+        request,
+        { network: { outbound: ['api.openai.com'] } },
+        'inst-ready'
+      );
+
+      expect(info.chatUrl).toBe('http://172.19.0.10:3100');
+      expect(fetchSpy).toHaveBeenCalledWith('http://172.19.0.10:3100/health', expect.any(Object));
+      fetchSpy.mockRestore();
     });
   });
 

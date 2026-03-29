@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuditService } from './AuditService.js';
 import { pool } from '../lib/database.js';
+import { Logger } from '../lib/logger.js';
 
 // Mock Database
 vi.mock('../lib/database.js', () => ({
@@ -10,7 +11,7 @@ vi.mock('../lib/database.js', () => ({
   },
 }));
 
-const logger = { info: (...args: unknown[]) => console.log('[AuditExportTest]', ...args) };
+const logger = new Logger('AuditExportTest');
 
 describe('Audit Export Streaming', () => {
   let service: AuditService;

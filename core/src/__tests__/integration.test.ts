@@ -15,8 +15,17 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import fs from 'fs/promises';
 import os from 'os';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('IntegrationTest');
 
 // Include all mocks that index.ts depends on
+const mockFetch = vi.fn().mockResolvedValue({
+  ok: true,
+  json: async () => ({ reply: 'Mocked response' })
+});
+global.fetch = mockFetch;
+
 vi.mock('../lib/database.js', () => ({
   initDb: vi.fn().mockResolvedValue(undefined),
   query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
@@ -139,6 +148,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       getPrimaryAgent = vi.fn().mockReturnValue({
         role: 'architect-prime',
         name: 'Architect',
+        agentInstanceId: 'mocked-instance-id',
         process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' }),
       });
       listAgents = vi
@@ -162,6 +172,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setMetering = vi.fn();
       setIdentityService = vi.fn();
       setLlmRouter = vi.fn();
+      setContextCompactionService = vi.fn();
       setCircleContextResolver = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
@@ -174,6 +185,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       getRunningAgents = vi.fn().mockReturnValue(new Map());
       getAgentInfo = vi.fn();
       getManifestByInstanceId = vi.fn();
+      ensureContainerRunning = vi.fn().mockResolvedValue('http://localhost:1234');
       startInstance = vi.fn().mockResolvedValue(undefined);
       stopInstance = vi.fn().mockResolvedValue(undefined);
       restartAgent = vi.fn().mockResolvedValue(undefined);
@@ -243,7 +255,7 @@ describe('SERA Integration Tests', () => {
       const res = await authed(app).post('/api/chat').send({ message: 'Hello, world!' });
 
       if (res.status === 500) {
-        console.error('[IntegrationTest] 500 ERROR BODY:', res.body);
+        logger.error('500 ERROR BODY:', res.body);
       }
 
       expect(res.status).toBe(200);

@@ -3,8 +3,11 @@ import { hideBin } from 'yargs/helpers';
 import fs from 'node:fs';
 import matter from 'gray-matter';
 import { SkillFrontMatterSchema } from './schema.js';
+import { Logger } from '../lib/logger.js';
 
 import type { ArgumentsCamelCase } from 'yargs';
+
+const logger = new Logger('CLI');
 
 yargs(hideBin(process.argv))
   .command(
@@ -32,11 +35,11 @@ Add your skill guidance here.
 `;
       const filePath = `${name}.md`;
       if (fs.existsSync(filePath)) {
-        console.error(`[CLI] Error: File ${filePath} already exists.`);
+        logger.error(`Error: File ${filePath} already exists.`);
         process.exit(1);
       }
       fs.writeFileSync(filePath, template);
-      console.log(`[CLI] Created skill template: ${filePath}`);
+      logger.info(`Created skill template: ${filePath}`);
     }
   )
   .command(
@@ -47,21 +50,21 @@ Add your skill guidance here.
       const filePath = argv.path;
       try {
         if (!fs.existsSync(filePath)) {
-          console.error(`[CLI] Error: File ${filePath} not found.`);
+          logger.error(`Error: File ${filePath} not found.`);
           process.exit(1);
         }
         const content = fs.readFileSync(filePath, 'utf-8');
         const { data } = matter(content);
         const result = SkillFrontMatterSchema.safeParse(data);
         if (result.success) {
-          console.log('[CLI] ✅ Skill is valid.');
+          logger.info('✅ Skill is valid.');
         } else {
-          console.error('[CLI] ❌ Validation failed:');
-          console.error('[CLI]', JSON.stringify(result.error.format(), null, 2));
+          logger.error('❌ Validation failed:');
+          logger.error(result.error.format());
           process.exit(1);
         }
       } catch (err) {
-        console.error('[CLI] ❌ Error reading or parsing file:', err);
+        logger.error('❌ Error reading or parsing file:', err);
         process.exit(1);
       }
     }
@@ -72,8 +75,8 @@ Add your skill guidance here.
     (y) => y.positional('name', { type: 'string', demandOption: true }),
     (argv: ArgumentsCamelCase<{ name: string }>) => {
       const name = argv.name;
-      console.log(`[CLI] Testing skill "${name}"... (STUB)`);
-      console.log('[CLI] ✅ Skill passed all heuristic checks.');
+      logger.info(`Testing skill "${name}"... (STUB)`);
+      logger.info('✅ Skill passed all heuristic checks.');
     }
   )
   .demandCommand(1)

@@ -51,6 +51,13 @@ vi.mock('../intercom/IntercomService.js', () => ({
   IntercomPermissionError: class extends Error {},
 }));
 
+vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  ok: true,
+  json: async () => ({
+    reply: 'Mocked response'
+  })
+}));
+
 vi.mock('../services/embedding.service.js', () => ({
   EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) },
 }));
@@ -139,6 +146,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       getPrimaryAgent = vi.fn().mockReturnValue({
         role: 'architect-prime',
         name: 'Architect',
+        agentInstanceId: 'inst-1',
         process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' }),
       });
       listAgents = vi
@@ -162,6 +170,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setMetering = vi.fn();
       setIdentityService = vi.fn();
       setLlmRouter = vi.fn();
+      setContextCompactionService = vi.fn();
       setCircleContextResolver = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
@@ -179,6 +188,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       restartAgent = vi.fn().mockResolvedValue(undefined);
       deregisterAgent = vi.fn();
       init = vi.fn().mockResolvedValue(undefined);
+      ensureContainerRunning = vi.fn().mockResolvedValue('http://127.0.0.1:0');
     },
   };
 });

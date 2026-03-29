@@ -14,8 +14,6 @@
  *         GET    /api/agents/:id/grants
  *   3.10 — POST   /api/agents/:id/restart
  *         DELETE  /api/agents/:id/grants/:grantId
- *
- * TODO: wire real auth middleware from Epic 16
  */
 
 import { Router } from 'express';

@@ -627,7 +627,11 @@ function ChatPageContent() {
         </div>
 
         {/* Messages */}
-        <ul aria-label="Chat messages" aria-live="polite" className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0">
+        <ul
+          aria-label="Chat messages"
+          aria-live="polite"
+          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0"
+        >
           {messages.map((msg) => (
             <li
               key={msg.id}
@@ -667,7 +671,11 @@ function ChatPageContent() {
                   {msg.role === 'user' ? (
                     <p className="whitespace-pre-wrap m-0">{msg.content}</p>
                   ) : msg.streaming && !msg.content ? (
-                    <div role="status" aria-label="Generating response" className="flex items-center gap-2">
+                    <div
+                      role="status"
+                      aria-label="Generating response"
+                      className="flex items-center gap-2"
+                    >
                       <Loader2 size={14} className="animate-spin text-sera-accent" />
                       <span className="text-xs text-sera-text-muted">Generating…</span>
                     </div>

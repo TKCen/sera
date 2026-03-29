@@ -17,6 +17,13 @@ import fs from 'fs/promises';
 import os from 'os';
 
 // Include all mocks that index.ts depends on
+
+const mockFetch = vi.fn().mockResolvedValue({
+  ok: true,
+  json: async () => ({ reply: 'Mocked response via fetch' })
+});
+global.fetch = mockFetch;
+
 vi.mock('../lib/database.js', () => ({
   initDb: vi.fn().mockResolvedValue(undefined),
   query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
@@ -139,6 +146,8 @@ vi.mock('../agents/Orchestrator.js', () => {
       getPrimaryAgent = vi.fn().mockReturnValue({
         role: 'architect-prime',
         name: 'Architect',
+        id: 'test-instance-id',
+        agentInstanceId: 'test-instance-id',
         process: vi.fn().mockResolvedValue({ finalAnswer: 'Mocked response' }),
       });
       listAgents = vi
@@ -162,6 +171,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setMetering = vi.fn();
       setIdentityService = vi.fn();
       setLlmRouter = vi.fn();
+      setContextCompactionService = vi.fn();
       setCircleContextResolver = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
@@ -174,6 +184,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       getRunningAgents = vi.fn().mockReturnValue(new Map());
       getAgentInfo = vi.fn();
       getManifestByInstanceId = vi.fn();
+      ensureContainerRunning = vi.fn().mockResolvedValue('http://localhost:3000');
       startInstance = vi.fn().mockResolvedValue(undefined);
       stopInstance = vi.fn().mockResolvedValue(undefined);
       restartAgent = vi.fn().mockResolvedValue(undefined);

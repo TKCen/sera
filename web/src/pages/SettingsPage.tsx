@@ -39,10 +39,11 @@ import {
   useEmbeddingModels,
 } from '@/hooks/useEmbedding';
 import { EMBEDDING_PROVIDERS, type EmbeddingProvider } from '@/lib/api/embedding';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 type Tab = 'providers' | 'models' | 'general' | 'circuit-breakers' | 'embeddings';
 
-export default function SettingsPage() {
+function SettingsPageContent() {
   const [tab, setTab] = useState<Tab>('providers');
   const [showAddDynamic, setShowAddDynamic] = useState(false);
   const [newDynamic, setNewDynamic] = useState({
@@ -58,8 +59,8 @@ export default function SettingsPage() {
   } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  const { data: providersData, isLoading: isLoadingProviders } = useProviders();
-  const { data: dynamicData, isLoading: isLoadingDynamic } = useDynamicProviders();
+  const { data: providersData, isLoading: isLoadingProviders, isError: isErrorProviders, refetch: refetchProviders } = useProviders();
+  const { data: dynamicData, isLoading: isLoadingDynamic, isError: isErrorDynamic, refetch: refetchDynamic } = useDynamicProviders();
   const { data: statusesData } = useDynamicProviderStatuses();
   const addDynamic = useAddDynamicProvider();
   const removeDynamic = useRemoveDynamicProvider();
@@ -71,6 +72,12 @@ export default function SettingsPage() {
   const registeredModels = providersData?.providers ?? [];
 
   const isLoading = isLoadingProviders || isLoadingDynamic;
+  const isError = isErrorProviders || isErrorDynamic;
+
+  const handleRefetch = () => {
+    void refetchProviders();
+    void refetchDynamic();
+  };
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'providers', label: 'Providers', icon: <Layers size={14} /> },
@@ -111,6 +118,13 @@ export default function SettingsPage() {
       {isLoading ? (
         <div className="flex items-center justify-center py-20">
           <Spinner />
+        </div>
+      ) : isError ? (
+        <div className="flex flex-col items-center justify-center p-8 border border-sera-border rounded-xl bg-sera-surface mt-4">
+          <p className="text-sera-error mb-4">Failed to load provider settings.</p>
+          <Button onClick={handleRefetch} variant="outline">
+            Retry
+          </Button>
         </div>
       ) : (
         <>
@@ -435,8 +449,16 @@ export default function SettingsPage() {
   );
 }
 
+export default function SettingsPage() {
+  return (
+    <ErrorBoundary fallbackMessage="The settings page encountered an error.">
+      <SettingsPageContent />
+    </ErrorBoundary>
+  );
+}
+
 function EmbeddingsTab() {
-  const { data: config, isLoading: configLoading } = useEmbeddingConfig();
+  const { data: config, isLoading: configLoading, isError: configError, refetch: refetchConfig } = useEmbeddingConfig();
   const { data: status } = useEmbeddingStatus();
   const updateConfig = useUpdateEmbeddingConfig();
   const testConfig = useTestEmbeddingConfig();
@@ -497,6 +519,17 @@ function EmbeddingsTab() {
   };
 
   if (configLoading) return <Spinner />;
+
+  if (configError) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 border border-sera-border rounded-xl bg-sera-surface">
+        <p className="text-sera-error mb-4">Failed to load embedding settings.</p>
+        <Button onClick={() => void refetchConfig()} variant="outline">
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   const needsApiKey = provider === 'openai' || provider === 'openai-compatible';
   const needsBaseUrl = provider !== 'openai';

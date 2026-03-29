@@ -59,8 +59,18 @@ function SettingsPageContent() {
   } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  const { data: providersData, isLoading: isLoadingProviders, isError: isErrorProviders, refetch: refetchProviders } = useProviders();
-  const { data: dynamicData, isLoading: isLoadingDynamic, isError: isErrorDynamic, refetch: refetchDynamic } = useDynamicProviders();
+  const {
+    data: providersData,
+    isLoading: isLoadingProviders,
+    isError: isErrorProviders,
+    refetch: refetchProviders,
+  } = useProviders();
+  const {
+    data: dynamicData,
+    isLoading: isLoadingDynamic,
+    isError: isErrorDynamic,
+    refetch: refetchDynamic,
+  } = useDynamicProviders();
   const { data: statusesData } = useDynamicProviderStatuses();
   const addDynamic = useAddDynamicProvider();
   const removeDynamic = useRemoveDynamicProvider();
@@ -458,7 +468,12 @@ export default function SettingsPage() {
 }
 
 function EmbeddingsTab() {
-  const { data: config, isLoading: configLoading, isError: configError, refetch: refetchConfig } = useEmbeddingConfig();
+  const {
+    data: config,
+    isLoading: configLoading,
+    isError: configError,
+    refetch: refetchConfig,
+  } = useEmbeddingConfig();
   const { data: status } = useEmbeddingStatus();
   const updateConfig = useUpdateEmbeddingConfig();
   const testConfig = useTestEmbeddingConfig();

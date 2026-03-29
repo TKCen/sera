@@ -51,12 +51,15 @@ vi.mock('../intercom/IntercomService.js', () => ({
   IntercomPermissionError: class extends Error {},
 }));
 
-vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-  ok: true,
-  json: async () => ({
-    reply: 'Mocked response'
+vi.stubGlobal(
+  'fetch',
+  vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      reply: 'Mocked response',
+    }),
   })
-}));
+);
 
 vi.mock('../services/embedding.service.js', () => ({
   EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) },

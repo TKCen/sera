@@ -20,7 +20,7 @@ import os from 'os';
 
 const mockFetch = vi.fn().mockResolvedValue({
   ok: true,
-  json: async () => ({ reply: 'Mocked response via fetch' })
+  json: async () => ({ reply: 'Mocked response via fetch' }),
 });
 global.fetch = mockFetch;
 

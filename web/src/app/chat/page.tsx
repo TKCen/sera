@@ -151,7 +151,7 @@ function ChatPageContent() {
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLLIElement>(null);
   const streamingMsgId = useRef<string | null>(null);
   const messageIdRef = useRef<string | null>(null);
   const messageQueue = useRef<string[]>([]);
@@ -425,6 +425,7 @@ function ChatPageContent() {
       setStreaming(true);
       setExpandedThoughts((prev) => new Set(prev).add(agentMsgId));
       streamingMsgId.current = agentMsgId;
+      inputRef.current?.focus();
 
       try {
         const { sessionId: newSessionId, messageId } = await sendChatStream(
@@ -513,6 +514,8 @@ function ChatPageContent() {
       onClick={() => setSidebarOpen((v) => !v)}
       className="p-1.5 rounded hover:bg-sera-surface text-sera-text-muted hover:text-sera-text transition-colors"
       title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+      aria-label="Toggle sidebar"
+      aria-expanded={sidebarOpen}
     >
       {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
     </button>
@@ -538,7 +541,7 @@ function ChatPageContent() {
           onRenameSession={(id, title) => void renameSession(id, title)}
           onRefetchAgents={() => void refetchAgents()}
         />
-        <div className="flex-1 flex flex-col items-center justify-center px-8 relative">
+        <main className="flex-1 flex flex-col items-center justify-center px-8 relative">
           <div className="absolute top-4 left-4">{sidebarToggle}</div>
           <div className="w-16 h-16 rounded-2xl bg-sera-accent-soft flex items-center justify-center mb-6">
             <Bot size={32} className="text-sera-accent" />
@@ -571,7 +574,7 @@ function ChatPageContent() {
               queueCount={queueCount}
             />
           </div>
-        </div>
+        </main>
       </div>
     );
   }
@@ -596,7 +599,7 @@ function ChatPageContent() {
         onRefetchAgents={() => void refetchAgents()}
       />
 
-      <div className="flex-1 flex flex-col min-w-0 h-full">
+      <main className="flex-1 flex flex-col min-w-0 h-full">
         {/* Top bar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-sera-border flex-shrink-0">
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -609,6 +612,8 @@ function ChatPageContent() {
           </div>
           <button
             onClick={() => setShowThinking((v) => !v)}
+            aria-label="Toggle thinking"
+            aria-pressed={showThinking}
             className={cn(
               'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium transition-all border',
               showThinking
@@ -622,9 +627,9 @@ function ChatPageContent() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0">
+        <ul aria-label="Chat messages" aria-live="polite" className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0">
           {messages.map((msg) => (
-            <div
+            <li
               key={msg.id}
               className={cn(
                 'flex gap-3 group',
@@ -662,7 +667,7 @@ function ChatPageContent() {
                   {msg.role === 'user' ? (
                     <p className="whitespace-pre-wrap m-0">{msg.content}</p>
                   ) : msg.streaming && !msg.content ? (
-                    <div className="flex items-center gap-2">
+                    <div role="status" aria-label="Generating response" className="flex items-center gap-2">
                       <Loader2 size={14} className="animate-spin text-sera-accent" />
                       <span className="text-xs text-sera-text-muted">Generating…</span>
                     </div>
@@ -709,10 +714,10 @@ function ChatPageContent() {
                   <User size={16} className="text-sera-text-muted" />
                 </div>
               )}
-            </div>
+            </li>
           ))}
-          <div ref={messagesEndRef} />
-        </div>
+          <li aria-hidden="true" ref={messagesEndRef} />
+        </ul>
 
         {/* Input */}
         <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">
@@ -730,7 +735,7 @@ function ChatPageContent() {
             />
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

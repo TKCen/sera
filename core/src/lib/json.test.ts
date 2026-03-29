@@ -5,8 +5,8 @@ describe('JSON Parsing Utilities', () => {
   describe('parseJson', () => {
     it('throws error for empty input', () => {
       expect(() => parseJson('')).toThrow('Empty input');
-      expect(() => parseJson(null as any)).toThrow('Empty input');
-      expect(() => parseJson(undefined as any)).toThrow('Empty input');
+      expect(() => parseJson(null as unknown as string)).toThrow('Empty input');
+      expect(() => parseJson(undefined as unknown as string)).toThrow('Empty input');
     });
 
     it('parses direct JSON successfully', () => {

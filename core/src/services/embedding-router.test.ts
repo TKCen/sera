@@ -66,7 +66,7 @@ describe('EmbeddingRouter', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ embedding: mockEmbedding }),
-      } as any);
+      } as unknown as Response);
 
       const result = await router.embed('test text');
 
@@ -88,7 +88,7 @@ describe('EmbeddingRouter', () => {
         ok: false,
         status: 500,
         text: async () => 'Internal Server Error',
-      } as any);
+      } as unknown as Response);
 
       await expect(router.embed('test text')).rejects.toThrow(
         'Ollama HTTP 500: Internal Server Error'
@@ -101,7 +101,7 @@ describe('EmbeddingRouter', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ data: [{ embedding: mockEmbedding }] }),
-      } as any);
+      } as unknown as Response);
 
       const result = await router.embed('test text');
 
@@ -132,7 +132,7 @@ describe('EmbeddingRouter', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ data: [{ embedding: [0.1] }] }),
-      } as any);
+      } as unknown as Response);
 
       await router.embed('test text');
 
@@ -154,7 +154,7 @@ describe('EmbeddingRouter', () => {
         ok: false,
         status: 401,
         text: async () => 'Unauthorized',
-      } as any);
+      } as unknown as Response);
 
       await expect(router.embed('test text')).rejects.toThrow(
         'Embedding API HTTP 401: Unauthorized'
@@ -166,7 +166,7 @@ describe('EmbeddingRouter', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ data: [] }), // missing data[0].embedding
-      } as any);
+      } as unknown as Response);
 
       await expect(router.embed('test text')).rejects.toThrow(
         'Unexpected response format — missing data[0].embedding'
@@ -180,7 +180,7 @@ describe('EmbeddingRouter', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ embedding: [0.1, 0.2] }),
-      } as any);
+      } as unknown as Response);
 
       const result = await router.testConnection();
 

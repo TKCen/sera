@@ -58,7 +58,7 @@ describe('utils', () => {
     });
 
     it('handles conditional classes', () => {
-      expect(cn('p-4', false && 'p-8', true && 'text-red-500')).toBe('p-4 text-red-500');
+      expect(cn('p-4', undefined, null, 'text-red-500')).toBe('p-4 text-red-500');
     });
   });
 

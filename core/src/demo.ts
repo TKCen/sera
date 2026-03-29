@@ -13,9 +13,7 @@ async function main() {
 
   logger.info('\n--- Loaded Agents ---');
   for (const agent of orchestrator.listAgents()) {
-    logger.info(
-      `  - ${agent.name} [${agent.status}] (Started: ${agent.startTime.toISOString()})`
-    );
+    logger.info(`  - ${agent.name} [${agent.status}] (Started: ${agent.startTime.toISOString()})`);
   }
 
   logger.info('\n--- Scenario 1: Simple Task ---');

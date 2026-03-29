@@ -22,7 +22,7 @@ const logger = new Logger('IntegrationTest');
 // Include all mocks that index.ts depends on
 const mockFetch = vi.fn().mockResolvedValue({
   ok: true,
-  json: async () => ({ reply: 'Mocked response' })
+  json: async () => ({ reply: 'Mocked response' }),
 });
 global.fetch = mockFetch;
 

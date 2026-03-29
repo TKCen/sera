@@ -72,11 +72,14 @@ describe('EmbeddingRouter', () => {
 
       expect(result).toEqual(mockEmbedding);
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/embeddings', expect.objectContaining({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'nomic-embed-text', prompt: 'test text' })
-      }));
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:11434/api/embeddings',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'nomic-embed-text', prompt: 'test text' }),
+        })
+      );
     });
 
     it('throws error if Ollama API fails', async () => {
@@ -87,7 +90,9 @@ describe('EmbeddingRouter', () => {
         text: async () => 'Internal Server Error',
       } as any);
 
-      await expect(router.embed('test text')).rejects.toThrow('Ollama HTTP 500: Internal Server Error');
+      await expect(router.embed('test text')).rejects.toThrow(
+        'Ollama HTTP 500: Internal Server Error'
+      );
     });
 
     it('calls OpenAI API correctly', async () => {
@@ -102,21 +107,24 @@ describe('EmbeddingRouter', () => {
 
       expect(result).toEqual(mockEmbedding);
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch).toHaveBeenCalledWith('https://api.openai.com/v1/embeddings', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer test-key'
-        },
-        body: JSON.stringify({ model: 'text-embedding-3-small', input: 'test text' })
-      }));
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.openai.com/v1/embeddings',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer test-key',
+          },
+          body: JSON.stringify({ model: 'text-embedding-3-small', input: 'test text' }),
+        })
+      );
     });
 
     it('calls OpenAI API with env var API key if apiKey EnvVar is set', async () => {
       const config: EmbeddingConfig = {
         ...baseOpenAIConfig,
         apiKey: undefined,
-        apiKeyEnvVar: 'CUSTOM_OPENAI_KEY'
+        apiKeyEnvVar: 'CUSTOM_OPENAI_KEY',
       };
       process.env.CUSTOM_OPENAI_KEY = 'env-test-key';
 
@@ -128,11 +136,14 @@ describe('EmbeddingRouter', () => {
 
       await router.embed('test text');
 
-      expect(mockFetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        headers: expect.objectContaining({
-          'Authorization': 'Bearer env-test-key'
-        }),
-      }));
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer env-test-key',
+          }),
+        })
+      );
 
       delete process.env.CUSTOM_OPENAI_KEY;
     });
@@ -145,7 +156,9 @@ describe('EmbeddingRouter', () => {
         text: async () => 'Unauthorized',
       } as any);
 
-      await expect(router.embed('test text')).rejects.toThrow('Embedding API HTTP 401: Unauthorized');
+      await expect(router.embed('test text')).rejects.toThrow(
+        'Embedding API HTTP 401: Unauthorized'
+      );
     });
 
     it('throws error if OpenAI API returns invalid format', async () => {
@@ -155,7 +168,9 @@ describe('EmbeddingRouter', () => {
         json: async () => ({ data: [] }), // missing data[0].embedding
       } as any);
 
-      await expect(router.embed('test text')).rejects.toThrow('Unexpected response format — missing data[0].embedding');
+      await expect(router.embed('test text')).rejects.toThrow(
+        'Unexpected response format — missing data[0].embedding'
+      );
     });
   });
 

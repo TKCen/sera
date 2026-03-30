@@ -94,10 +94,10 @@ export function MemorySidebar({
 
       {/* Stats */}
       {overviewLoading ? (
-        <div className="p-4 flex justify-center">
+        <div className="p-3 flex justify-center">
           <Spinner size="sm" />
         </div>
-      ) : overview ? (
+      ) : overview && overview.totalBlocks > 0 ? (
         <div className="p-3 border-b border-sera-border">
           <div className="grid grid-cols-2 gap-2 text-center">
             <div className="sera-card-static p-2">

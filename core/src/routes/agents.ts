@@ -627,8 +627,10 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         ? { ok: true, detail: liveAgent.status }
         : { ok: false, detail: 'Not loaded in orchestrator' };
 
-      // 3. Manifest available
-      const manifest = instance ? orchestrator.getManifest(instance.name) : undefined;
+      // 3. Manifest available (try by name, then by instance ID for API-created agents)
+      const manifest =
+        (instance ? orchestrator.getManifest(instance.name) : undefined) ??
+        orchestrator.getManifestByInstanceId(instanceId);
       checks['manifestLoaded'] = manifest
         ? { ok: true }
         : { ok: false, detail: 'Manifest not found' };

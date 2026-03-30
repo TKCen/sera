@@ -96,44 +96,44 @@ function MemoryExplorerContent() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Sidebar (collapsible) */}
         <div
-          className={`border-r border-sera-border shrink-0 overflow-hidden transition-all duration-200 ${
-            leftCollapsed ? 'w-10' : 'w-80 lg:w-96'
-          }`}
+          className="border-r border-sera-border shrink-0 overflow-hidden flex"
+          style={{ width: leftCollapsed ? 40 : undefined }}
         >
-          {leftCollapsed ? (
+          {leftCollapsed && (
             <button
               type="button"
               onClick={() => setLeftCollapsed(false)}
-              className="w-full h-full flex items-center justify-center text-sera-text-muted hover:text-sera-text hover:bg-sera-surface/50 transition-colors"
+              className="w-10 h-full flex items-center justify-center text-sera-text-muted hover:text-sera-text hover:bg-sera-surface/50 transition-colors shrink-0"
               title="Expand sidebar"
             >
               <PanelLeftOpen size={16} />
             </button>
-          ) : (
-            <div className="flex flex-col h-full">
-              <div className="flex items-center justify-end p-1 border-b border-sera-border">
-                <button
-                  type="button"
-                  onClick={() => setLeftCollapsed(true)}
-                  className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
-                  title="Collapse sidebar"
-                >
-                  <PanelLeftClose size={14} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                <MemorySidebar
-                  scope={scope}
-                  onScopeChange={setScope}
-                  selectedBlockId={selectedBlock?.id ?? null}
-                  onBlockSelect={handleBlockSelect}
-                  tagFilter={tagFilter}
-                  onTagFilter={setTagFilter}
-                  agentNameMap={agentNameMap}
-                />
-              </div>
-            </div>
           )}
+          <div
+            className={`flex flex-col h-full w-80 lg:w-96 shrink-0 ${leftCollapsed ? 'hidden' : ''}`}
+          >
+            <div className="flex items-center justify-end p-1 border-b border-sera-border">
+              <button
+                type="button"
+                onClick={() => setLeftCollapsed(true)}
+                className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
+                title="Collapse sidebar"
+              >
+                <PanelLeftClose size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <MemorySidebar
+                scope={scope}
+                onScopeChange={setScope}
+                selectedBlockId={selectedBlock?.id ?? null}
+                onBlockSelect={handleBlockSelect}
+                tagFilter={tagFilter}
+                onTagFilter={setTagFilter}
+                agentNameMap={agentNameMap}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Center: Content */}
@@ -149,42 +149,42 @@ function MemoryExplorerContent() {
 
         {/* Right: Graph minimap (collapsible) */}
         <div
-          className={`border-l border-sera-border shrink-0 overflow-hidden transition-all duration-200 ${
-            rightCollapsed ? 'w-10' : 'w-80 lg:w-[28rem]'
-          }`}
+          className="border-l border-sera-border shrink-0 overflow-hidden flex"
+          style={{ width: rightCollapsed ? 40 : undefined }}
         >
-          {rightCollapsed ? (
+          {rightCollapsed && (
             <button
               type="button"
               onClick={() => setRightCollapsed(false)}
-              className="w-full h-full flex items-center justify-center text-sera-text-muted hover:text-sera-text hover:bg-sera-surface/50 transition-colors"
+              className="w-10 h-full flex items-center justify-center text-sera-text-muted hover:text-sera-text hover:bg-sera-surface/50 transition-colors shrink-0"
               title="Expand graph"
             >
               <PanelRightOpen size={16} />
             </button>
-          ) : (
-            <div className="flex flex-col h-full">
-              <div className="flex items-center justify-start p-1 border-b border-sera-border">
-                <button
-                  type="button"
-                  onClick={() => setRightCollapsed(true)}
-                  className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
-                  title="Collapse graph"
-                >
-                  <PanelRightClose size={14} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                <MemoryGraphMinimap
-                  onNodeSelect={handleBlockSelect}
-                  selectedBlockId={selectedBlock?.id ?? null}
-                  searchQuery={searchQuery}
-                  tagFilter={tagFilter}
-                  scopeAgentId={scope.kind === 'agent' ? scope.agentId : undefined}
-                />
-              </div>
-            </div>
           )}
+          <div
+            className={`flex flex-col h-full w-80 lg:w-[28rem] shrink-0 ${rightCollapsed ? 'hidden' : ''}`}
+          >
+            <div className="flex items-center justify-start p-1 border-b border-sera-border">
+              <button
+                type="button"
+                onClick={() => setRightCollapsed(true)}
+                className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
+                title="Collapse graph"
+              >
+                <PanelRightClose size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <MemoryGraphMinimap
+                onNodeSelect={handleBlockSelect}
+                selectedBlockId={selectedBlock?.id ?? null}
+                searchQuery={searchQuery}
+                tagFilter={tagFilter}
+                scopeAgentId={scope.kind === 'agent' ? scope.agentId : undefined}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>

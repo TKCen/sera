@@ -89,9 +89,7 @@ describe('BootstrapService', () => {
     });
 
     it('returns bootstrapped false and null when sera instance does not exist', async () => {
-      mockRegistry.listInstances = vi.fn().mockResolvedValue([
-        { name: 'other-agent', id: '123' },
-      ]);
+      mockRegistry.listInstances = vi.fn().mockResolvedValue([{ name: 'other-agent', id: '123' }]);
 
       const result = await bootstrapService.getBootstrapStatus();
 

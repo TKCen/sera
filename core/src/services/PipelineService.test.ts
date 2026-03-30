@@ -52,8 +52,9 @@ describe('PipelineService', () => {
         created_at: new Date('2023-10-10T10:00:00Z'),
       };
 
-      vi.mocked(query).mockResolvedValueOnce({ rows: [] } as any) // first call (INSERT ignores return rows currently)
-                      .mockResolvedValueOnce({ rows: [mockCreatedRow] } as any); // second call is get()
+      vi.mocked(query)
+        .mockResolvedValueOnce({ rows: [] } as any) // first call (INSERT ignores return rows currently)
+        .mockResolvedValueOnce({ rows: [mockCreatedRow] } as any); // second call is get()
 
       const result = await pipelineService.create('sequential', mockSteps);
 
@@ -128,10 +129,10 @@ describe('PipelineService', () => {
     it('only updates status for other states like running', async () => {
       await pipelineService.updateStatus('123', 'running');
 
-      expect(query).toHaveBeenCalledWith(
-        `UPDATE pipelines SET status = $1 WHERE id = $2`,
-        ['running', '123']
-      );
+      expect(query).toHaveBeenCalledWith(`UPDATE pipelines SET status = $1 WHERE id = $2`, [
+        'running',
+        '123',
+      ]);
     });
   });
 
@@ -141,10 +142,10 @@ describe('PipelineService', () => {
 
       await pipelineService.updateSteps('123', newSteps);
 
-      expect(query).toHaveBeenCalledWith(
-        `UPDATE pipelines SET steps = $1 WHERE id = $2`,
-        [JSON.stringify(newSteps), '123']
-      );
+      expect(query).toHaveBeenCalledWith(`UPDATE pipelines SET steps = $1 WHERE id = $2`, [
+        JSON.stringify(newSteps),
+        '123',
+      ]);
     });
   });
 });

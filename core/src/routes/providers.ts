@@ -307,6 +307,57 @@ export function createProvidersRouter(
   );
 
   /**
+   * PATCH /api/providers/:modelName
+   * Update per-model config overrides (contextWindow, maxTokens, etc.)
+   */
+  router.patch(
+    '/:modelName',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      const modelName = String(req.params['modelName']);
+      const {
+        contextWindow,
+        maxTokens,
+        contextStrategy,
+        contextHighWaterMark,
+        contextCompactionModel,
+        reasoning,
+        description,
+      } = req.body as Record<string, unknown>;
+
+      const overrides: Record<string, unknown> = {};
+      if (contextWindow !== undefined) overrides.contextWindow = Number(contextWindow);
+      if (maxTokens !== undefined) overrides.maxTokens = Number(maxTokens);
+      if (contextStrategy !== undefined) overrides.contextStrategy = String(contextStrategy);
+      if (contextHighWaterMark !== undefined)
+        overrides.contextHighWaterMark = Number(contextHighWaterMark);
+      if (contextCompactionModel !== undefined)
+        overrides.contextCompactionModel = String(contextCompactionModel);
+      if (reasoning !== undefined) overrides.reasoning = Boolean(reasoning);
+      if (description !== undefined) overrides.description = String(description);
+
+      if (Object.keys(overrides).length === 0) {
+        res.status(400).json({ error: 'No config fields provided' });
+        return;
+      }
+
+      try {
+        const registry = llmRouter.getRegistry();
+        registry.updateConfig(modelName, overrides as Parameters<typeof registry.updateConfig>[1]);
+        await registry.save();
+        logger.info(
+          `Provider config updated | model=${modelName} by operator=${req.operator?.sub ?? 'unknown'}`
+        );
+        res.json({ success: true, modelName });
+      } catch (err: unknown) {
+        const msg = (err as Error).message;
+        const code = msg.includes('not found') ? 404 : 500;
+        res.status(code).json({ error: msg });
+      }
+    }
+  );
+
+  /**
    * POST /api/providers/:modelName/test
    * Sends a minimal test completion to verify the provider is reachable.
    */

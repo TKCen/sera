@@ -36,6 +36,26 @@ export function updateProvider(
   });
 }
 
+export interface ProviderConfigOverrides {
+  contextWindow?: number;
+  maxTokens?: number;
+  contextStrategy?: 'summarize' | 'sliding-window' | 'truncate';
+  contextHighWaterMark?: number;
+  contextCompactionModel?: string;
+  reasoning?: boolean;
+  description?: string;
+}
+
+export function updateProviderConfig(
+  modelName: string,
+  config: ProviderConfigOverrides
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/providers/${encodeURIComponent(modelName)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(config),
+  });
+}
+
 export function testProvider(
   id: string
 ): Promise<{ success: boolean; provider: string; response?: string; error?: string }> {

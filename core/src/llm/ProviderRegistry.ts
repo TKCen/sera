@@ -536,6 +536,42 @@ export class ProviderRegistry {
     }
   }
 
+  /**
+   * Update configuration for an existing provider model.
+   * Merges overrides into the existing config and persists to file.
+   */
+  updateConfig(
+    modelName: string,
+    overrides: {
+      contextWindow?: number;
+      maxTokens?: number;
+      contextStrategy?: 'summarize' | 'sliding-window' | 'truncate';
+      contextHighWaterMark?: number;
+      contextCompactionModel?: string;
+      reasoning?: boolean;
+      description?: string;
+    }
+  ): void {
+    const existing = this.configs.get(modelName);
+    if (!existing) {
+      throw new Error(`Model "${modelName}" not found in provider registry`);
+    }
+
+    // Merge only defined fields (exactOptionalPropertyTypes safe)
+    if (overrides.contextWindow !== undefined) existing.contextWindow = overrides.contextWindow;
+    if (overrides.maxTokens !== undefined) existing.maxTokens = overrides.maxTokens;
+    if (overrides.contextStrategy !== undefined)
+      existing.contextStrategy = overrides.contextStrategy;
+    if (overrides.contextHighWaterMark !== undefined)
+      existing.contextHighWaterMark = overrides.contextHighWaterMark;
+    if (overrides.contextCompactionModel !== undefined)
+      existing.contextCompactionModel = overrides.contextCompactionModel;
+    if (overrides.reasoning !== undefined) existing.reasoning = overrides.reasoning;
+    if (overrides.description !== undefined) existing.description = overrides.description;
+
+    logger.info(`Updated config for model ${modelName}:`, overrides);
+  }
+
   // ── Secret helpers (static to avoid circular deps) ──────────────────────────
 
   private static async storeApiKeySecret(name: string, value: string): Promise<void> {

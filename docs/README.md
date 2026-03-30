@@ -30,6 +30,7 @@
 | [ADR-002](adrs/002-implementation-gap-analysis.md) | Accepted | Implementation Gap Analysis |
 | [ADR-003](adrs/003-scope-validation-framework.md) | Proposed | Scope Validation Framework |
 | [ADR-004](adrs/004-permission-grant-persistence.md) | Proposed | Permission Grant Persistence |
+| [ADR-005](adrs/005-core-modularity-and-component-interfaces.md) | Proposed | Core Modularity and Component Interfaces |
 
 See [adrs/README.md](adrs/README.md) for the ADR process.
 

@@ -1,5 +1,13 @@
 import { useState, useCallback } from 'react';
-import { Brain, Plus, ArrowUp } from 'lucide-react';
+import {
+  Brain,
+  Plus,
+  ArrowUp,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { MemorySidebar } from '@/components/memory/MemorySidebar';
 import { MemoryContent } from '@/components/memory/MemoryContent';
@@ -14,6 +22,8 @@ function MemoryExplorerContent() {
   const [scope, setScope] = useState<MemoryScope>({ kind: 'global' });
   const [selectedBlock, setSelectedBlock] = useState<ScopedBlock | null>(null);
   const [tagFilter, setTagFilter] = useState('');
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
   const promoteMutation = usePromoteBlock();
 
   const handleBlockSelect = useCallback((block: ScopedBlock) => {
@@ -73,20 +83,49 @@ function MemoryExplorerContent() {
 
       {/* Three-panel layout */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: Sidebar */}
-        <div className="w-72 border-r border-sera-border shrink-0 overflow-hidden">
-          <MemorySidebar
-            scope={scope}
-            onScopeChange={setScope}
-            selectedBlockId={selectedBlock?.id ?? null}
-            onBlockSelect={handleBlockSelect}
-            tagFilter={tagFilter}
-            onTagFilter={setTagFilter}
-          />
+        {/* Left: Sidebar (collapsible) */}
+        <div
+          className={`border-r border-sera-border shrink-0 overflow-hidden transition-all duration-200 ${
+            leftCollapsed ? 'w-10' : 'w-80 lg:w-96'
+          }`}
+        >
+          {leftCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setLeftCollapsed(false)}
+              className="w-full h-full flex items-center justify-center text-sera-text-muted hover:text-sera-text hover:bg-sera-surface/50 transition-colors"
+              title="Expand sidebar"
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          ) : (
+            <div className="flex flex-col h-full">
+              <div className="flex items-center justify-end p-1 border-b border-sera-border">
+                <button
+                  type="button"
+                  onClick={() => setLeftCollapsed(true)}
+                  className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
+                  title="Collapse sidebar"
+                >
+                  <PanelLeftClose size={14} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <MemorySidebar
+                  scope={scope}
+                  onScopeChange={setScope}
+                  selectedBlockId={selectedBlock?.id ?? null}
+                  onBlockSelect={handleBlockSelect}
+                  tagFilter={tagFilter}
+                  onTagFilter={setTagFilter}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Center: Content */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden min-w-0">
           <MemoryContent
             selectedAgentId={selectedBlock?.agentId ?? ''}
             selectedBlockId={selectedBlock?.id ?? ''}
@@ -94,12 +133,41 @@ function MemoryExplorerContent() {
           />
         </div>
 
-        {/* Right: Graph minimap */}
-        <div className="w-80 border-l border-sera-border shrink-0 overflow-hidden">
-          <MemoryGraphMinimap
-            onNodeSelect={handleBlockSelect}
-            selectedBlockId={selectedBlock?.id ?? null}
-          />
+        {/* Right: Graph minimap (collapsible) */}
+        <div
+          className={`border-l border-sera-border shrink-0 overflow-hidden transition-all duration-200 ${
+            rightCollapsed ? 'w-10' : 'w-80 lg:w-[28rem]'
+          }`}
+        >
+          {rightCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setRightCollapsed(false)}
+              className="w-full h-full flex items-center justify-center text-sera-text-muted hover:text-sera-text hover:bg-sera-surface/50 transition-colors"
+              title="Expand graph"
+            >
+              <PanelRightOpen size={16} />
+            </button>
+          ) : (
+            <div className="flex flex-col h-full">
+              <div className="flex items-center justify-start p-1 border-b border-sera-border">
+                <button
+                  type="button"
+                  onClick={() => setRightCollapsed(true)}
+                  className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
+                  title="Collapse graph"
+                >
+                  <PanelRightClose size={14} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <MemoryGraphMinimap
+                  onNodeSelect={handleBlockSelect}
+                  selectedBlockId={selectedBlock?.id ?? null}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

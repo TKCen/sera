@@ -13,12 +13,16 @@ interface MemoryContentProps {
   selectedAgentId: string;
   selectedBlockId: string;
   onBlockSelect: (block: ScopedBlock) => void;
+  onSearchChange?: (query: string) => void;
+  agentNameMap?: Map<string, string>;
 }
 
 export function MemoryContent({
   selectedAgentId,
   selectedBlockId,
   onBlockSelect,
+  onSearchChange,
+  agentNameMap,
 }: MemoryContentProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -27,11 +31,14 @@ export function MemoryContent({
   // Debounce search query
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDebouncedQuery(searchQuery), 300);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+      onSearchChange?.(searchQuery);
+    }, 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [searchQuery]);
+  }, [searchQuery, onSearchChange]);
 
   const { data: block, isLoading: blockLoading } = useBlockDetail(selectedAgentId, selectedBlockId);
   const { data: backlinks } = useBlockBacklinks(selectedAgentId, selectedBlockId);
@@ -67,6 +74,7 @@ export function MemoryContent({
             loading={searchLoading}
             query={debouncedQuery}
             onBlockSelect={onBlockSelect}
+            agentNameMap={agentNameMap}
           />
         ) : hasBlock ? (
           <BlockDetail
@@ -74,6 +82,7 @@ export function MemoryContent({
             loading={blockLoading}
             backlinks={backlinks ?? []}
             onBlockSelect={onBlockSelect}
+            agentNameMap={agentNameMap}
           />
         ) : (
           <EmptyState
@@ -94,11 +103,13 @@ function SearchResults({
   loading,
   query,
   onBlockSelect,
+  agentNameMap,
 }: {
   results: Array<{ block: ScopedBlock; score: number }>;
   loading: boolean;
   query: string;
   onBlockSelect: (block: ScopedBlock) => void;
+  agentNameMap?: Map<string, string>;
 }) {
   if (loading) {
     return (
@@ -126,7 +137,12 @@ function SearchResults({
       {results.map(({ block, score }) => (
         <div key={block.id} className="flex items-start gap-2">
           <div className="flex-1">
-            <BlockCard block={block} showAgent onClick={() => onBlockSelect(block)} />
+            <BlockCard
+              block={block}
+              showAgent
+              agentName={agentNameMap?.get(block.agentId)}
+              onClick={() => onBlockSelect(block)}
+            />
           </div>
           <span className="text-[10px] text-sera-text-dim mt-2 shrink-0">
             {Math.round(score * 100)}%
@@ -144,6 +160,7 @@ function BlockDetail({
   loading,
   backlinks,
   onBlockSelect,
+  agentNameMap,
 }: {
   block: ScopedBlock | null;
   loading: boolean;
@@ -154,6 +171,7 @@ function BlockDetail({
     relationship: string;
   }>;
   onBlockSelect: (block: ScopedBlock) => void;
+  agentNameMap?: Map<string, string>;
 }) {
   const [editContent, setEditContent] = useState<string | null>(null);
 
@@ -184,7 +202,9 @@ function BlockDetail({
       <div>
         <div className="flex items-center gap-2 mb-2">
           <Badge variant="accent">{block.type}</Badge>
-          <span className="text-[10px] text-sera-text-dim">{block.agentId}</span>
+          <span className="text-[10px] text-sera-text-dim">
+            {agentNameMap?.get(block.agentId) ?? block.agentId}
+          </span>
           <span className="text-[10px] text-sera-text-dim ml-auto">
             {new Date(block.timestamp).toLocaleString()}
           </span>
@@ -291,7 +311,7 @@ function BlockDetail({
       {/* Metadata */}
       <div className="text-[10px] text-sera-text-dim space-y-0.5 pt-2 border-t border-sera-border">
         <div>ID: {block.id}</div>
-        <div>Agent: {block.agentId}</div>
+        <div>Agent: {agentNameMap?.get(block.agentId) ?? block.agentId}</div>
       </div>
     </div>
   );

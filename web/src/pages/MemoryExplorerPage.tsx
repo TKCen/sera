@@ -14,6 +14,7 @@ import { MemoryContent } from '@/components/memory/MemoryContent';
 import { MemoryGraphMinimap } from '@/components/memory/MemoryGraphMinimap';
 import { Button } from '@/components/ui/button';
 import { usePromoteBlock } from '@/hooks/useMemoryExplorer';
+import { useAgents } from '@/hooks/useAgents';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import type { MemoryScope } from '@/components/memory/MemorySidebar';
 import type { ScopedBlock } from '@/lib/api/memory';
@@ -22,8 +23,18 @@ function MemoryExplorerContent() {
   const [scope, setScope] = useState<MemoryScope>({ kind: 'global' });
   const [selectedBlock, setSelectedBlock] = useState<ScopedBlock | null>(null);
   const [tagFilter, setTagFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const { data: agents } = useAgents();
+
+  // Build agent UUID → display name lookup
+  const agentNameMap = new Map<string, string>();
+  if (agents) {
+    for (const a of agents) {
+      agentNameMap.set(a.id, a.name);
+    }
+  }
   const promoteMutation = usePromoteBlock();
 
   const handleBlockSelect = useCallback((block: ScopedBlock) => {
@@ -118,6 +129,7 @@ function MemoryExplorerContent() {
                   onBlockSelect={handleBlockSelect}
                   tagFilter={tagFilter}
                   onTagFilter={setTagFilter}
+                  agentNameMap={agentNameMap}
                 />
               </div>
             </div>
@@ -130,6 +142,8 @@ function MemoryExplorerContent() {
             selectedAgentId={selectedBlock?.agentId ?? ''}
             selectedBlockId={selectedBlock?.id ?? ''}
             onBlockSelect={handleBlockSelect}
+            onSearchChange={setSearchQuery}
+            agentNameMap={agentNameMap}
           />
         </div>
 
@@ -164,6 +178,9 @@ function MemoryExplorerContent() {
                 <MemoryGraphMinimap
                   onNodeSelect={handleBlockSelect}
                   selectedBlockId={selectedBlock?.id ?? null}
+                  searchQuery={searchQuery}
+                  tagFilter={tagFilter}
+                  scopeAgentId={scope.kind === 'agent' ? scope.agentId : undefined}
                 />
               </div>
             </div>

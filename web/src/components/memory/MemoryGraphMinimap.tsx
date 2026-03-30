@@ -9,9 +9,18 @@ const MemoryGraph = lazy(() => import('@/components/MemoryGraph'));
 interface MemoryGraphMinimapProps {
   onNodeSelect: (block: ScopedBlock) => void;
   selectedBlockId: string | null;
+  searchQuery?: string;
+  tagFilter?: string;
+  scopeAgentId?: string;
 }
 
-export function MemoryGraphMinimap({ onNodeSelect, selectedBlockId }: MemoryGraphMinimapProps) {
+export function MemoryGraphMinimap({
+  onNodeSelect,
+  selectedBlockId,
+  searchQuery,
+  tagFilter,
+  scopeAgentId,
+}: MemoryGraphMinimapProps) {
   const [expanded, setExpanded] = useState(false);
   const { data: graphData, isLoading } = useExplorerGraph();
 
@@ -31,20 +40,35 @@ export function MemoryGraphMinimap({ onNodeSelect, selectedBlockId }: MemoryGrap
     );
   }
 
-  // Transform explorer graph data to MemoryGraph format
+  // Filter nodes by scope if an agent is selected
+  const filteredNodes = scopeAgentId
+    ? graphData.nodes.filter(
+        (n) => n.nodeKind === 'agent' || n.nodeKind === 'circle' || n.agentId === scopeAgentId
+      )
+    : graphData.nodes;
+
+  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
+  const filteredEdges = graphData.edges.filter(
+    (e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target)
+  );
+
+  // Transform to MemoryGraph format
   const memoryGraphData = {
-    nodes: graphData.nodes.map((n) => ({
+    nodes: filteredNodes.map((n) => ({
       id: n.id,
       title: n.title,
       type: n.nodeKind === 'agent' ? 'agent' : n.nodeKind === 'circle' ? 'circle' : n.type,
       tags: n.tags,
     })),
-    edges: graphData.edges.map((e) => ({
+    edges: filteredEdges.map((e) => ({
       from: e.source,
       to: e.target,
       kind: (e.kind === 'wikilink' ? 'wikilink' : 'ref') as 'ref' | 'wikilink',
     })),
   };
+
+  // Build a combined highlight query from search, tag filter, and selection
+  const highlightQuery = searchQuery || tagFilter || selectedBlockId || '';
 
   const handleNodeClick = (node: { id: string; title: string; type: string; tags: string[] }) => {
     // Don't select agent/circle meta-nodes
@@ -91,7 +115,7 @@ export function MemoryGraphMinimap({ onNodeSelect, selectedBlockId }: MemoryGrap
         <MemoryGraph
           data={memoryGraphData}
           onNodeClick={handleNodeClick}
-          searchQuery={selectedBlockId ?? undefined}
+          searchQuery={highlightQuery || undefined}
           className="w-full h-full"
         />
       </Suspense>

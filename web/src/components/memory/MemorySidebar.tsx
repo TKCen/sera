@@ -18,6 +18,7 @@ interface MemorySidebarProps {
   onBlockSelect: (block: ScopedBlock) => void;
   tagFilter: string;
   onTagFilter: (tag: string) => void;
+  agentNameMap?: Map<string, string>;
 }
 
 export function MemorySidebar({
@@ -27,6 +28,7 @@ export function MemorySidebar({
   onBlockSelect,
   tagFilter,
   onTagFilter,
+  agentNameMap,
 }: MemorySidebarProps) {
   const [typeFilter, setTypeFilter] = useState('');
   const { data: overview, isLoading: overviewLoading } = useMemoryOverview();
@@ -70,7 +72,7 @@ export function MemorySidebar({
             <option value="global">Global (all agents)</option>
             {overview?.agents.map((a) => (
               <option key={a.id} value={`agent:${a.id}`}>
-                {a.id} ({a.blockCount} blocks)
+                {agentNameMap?.get(a.id) ?? a.id} ({a.blockCount} blocks)
               </option>
             ))}
           </select>
@@ -152,6 +154,7 @@ export function MemorySidebar({
               key={block.id}
               block={block}
               showAgent={scope.kind === 'global'}
+              agentName={agentNameMap?.get(block.agentId)}
               selected={selectedBlockId === block.id}
               onClick={() => onBlockSelect(block)}
             />

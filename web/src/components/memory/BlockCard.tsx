@@ -15,11 +15,12 @@ const TYPE_COLORS: Record<string, string> = {
 interface BlockCardProps {
   block: ScopedBlock;
   showAgent?: boolean;
+  agentName?: string;
   selected?: boolean;
   onClick?: () => void;
 }
 
-export function BlockCard({ block, showAgent, selected, onClick }: BlockCardProps) {
+export function BlockCard({ block, showAgent, agentName, selected, onClick }: BlockCardProps) {
   const typeColor = TYPE_COLORS[block.type] ?? 'bg-sera-surface text-sera-text-muted';
 
   return (
@@ -39,7 +40,9 @@ export function BlockCard({ block, showAgent, selected, onClick }: BlockCardProp
               {block.type}
             </span>
             {showAgent && (
-              <span className="text-[10px] text-sera-text-dim truncate">{block.agentId}</span>
+              <span className="text-[10px] text-sera-text-dim truncate">
+                {agentName ?? block.agentId}
+              </span>
             )}
           </div>
           <p className="text-sm font-medium text-sera-text truncate">{block.title}</p>

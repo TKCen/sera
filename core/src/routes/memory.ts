@@ -87,6 +87,7 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
 
       for (const agentId of agentIds) {
         const blocks = await scopedStore.list(agentId);
+        if (blocks.length === 0) continue; // skip agents with no memory blocks
         agents.push({ id: agentId, blockCount: blocks.length });
         totalBlocks += blocks.length;
         for (const block of blocks) {

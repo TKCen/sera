@@ -1,6 +1,12 @@
 import { useState } from 'react';
-import { Database, ChevronDown, LayoutList, Clock } from 'lucide-react';
-import { useMemoryOverview, useRecentBlocks, useAgentBlockList } from '@/hooks/useMemoryExplorer';
+import { Database, ChevronDown, LayoutList, Clock, Archive } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  useMemoryOverview,
+  useRecentBlocks,
+  useAgentBlockList,
+  useTriggerCompaction,
+} from '@/hooks/useMemoryExplorer';
 import { BlockCard } from './BlockCard';
 import { TimelineView } from './TimelineView';
 import { TagCloud } from './TagCloud';
@@ -33,6 +39,7 @@ export function MemorySidebar({
 }: MemorySidebarProps) {
   const [typeFilter, setTypeFilter] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'timeline'>('cards');
+  const compactMutation = useTriggerCompaction();
   const { data: overview, isLoading: overviewLoading } = useMemoryOverview();
   const { data: recentBlocks } = useRecentBlocks(50);
   const agentId = scope.kind === 'agent' ? scope.agentId : '';
@@ -132,6 +139,27 @@ export function MemorySidebar({
                 </button>
               ))}
             </div>
+          )}
+          {/* Compact button (agent-scoped only) */}
+          {scope.kind === 'agent' && (
+            <button
+              type="button"
+              disabled={compactMutation.isPending}
+              onClick={async () => {
+                try {
+                  await compactMutation.mutateAsync(scope.agentId);
+                  toast.success('Memory compaction complete');
+                } catch (err) {
+                  toast.error(
+                    `Compaction failed: ${err instanceof Error ? err.message : String(err)}`
+                  );
+                }
+              }}
+              className="mt-2 w-full flex items-center justify-center gap-1.5 text-[10px] px-2 py-1.5 rounded border border-sera-border text-sera-text-muted hover:text-sera-text hover:border-sera-accent/50 transition-colors"
+            >
+              <Archive size={10} />
+              {compactMutation.isPending ? 'Compacting...' : 'Compact Memory'}
+            </button>
           )}
         </div>
       ) : null}

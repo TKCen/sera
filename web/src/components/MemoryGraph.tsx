@@ -215,7 +215,13 @@ export default function MemoryGraph({
         width={dimensions.width}
         height={dimensions.height}
         graphData={graphData}
-        nodeLabel="title"
+        nodeLabel={(nodeObj: object) => {
+          const node = nodeObj as GraphNode;
+          const lines = [node.title];
+          if (node.type) lines.push(`Type: ${node.type}`);
+          if (node.tags?.length) lines.push(`Tags: ${node.tags.slice(0, 5).join(', ')}`);
+          return lines.join('\n');
+        }}
         nodeRelSize={5}
         nodeCanvasObject={nodeCanvasObject}
         linkColor={(link: object) =>
@@ -225,6 +231,7 @@ export default function MemoryGraph({
         }
         linkWidth={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? 1 : 1.5)}
         linkLineDash={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? [2, 2] : null)}
+        linkLabel={(link: object) => (link as GraphEdge).kind}
         linkDirectionalArrowLength={4}
         linkDirectionalArrowRelPos={0.85}
         linkDirectionalParticles={2}

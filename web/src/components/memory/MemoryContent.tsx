@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search, ArrowUpRight, ArrowDownLeft, Save, Brain } from 'lucide-react';
 import { toast } from 'sonner';
 import { useBlockDetail, useBlockBacklinks, useMemorySearch } from '@/hooks/useMemoryExplorer';
@@ -22,17 +22,20 @@ export function MemoryContent({
 }: MemoryContentProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Debounce search query
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedQuery(searchQuery), 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [searchQuery]);
 
   const { data: block, isLoading: blockLoading } = useBlockDetail(selectedAgentId, selectedBlockId);
   const { data: backlinks } = useBlockBacklinks(selectedAgentId, selectedBlockId);
   const { data: searchResults, isLoading: searchLoading } = useMemorySearch(debouncedQuery);
-
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchQuery(value);
-    // Simple debounce via setTimeout
-    const timer = setTimeout(() => setDebouncedQuery(value), 300);
-    return () => clearTimeout(timer);
-  }, []);
 
   const isSearching = debouncedQuery.length >= 2;
   const hasBlock = selectedBlockId.length > 0 && !isSearching;
@@ -50,7 +53,7 @@ export function MemoryContent({
             type="text"
             placeholder="Search memory..."
             value={searchQuery}
-            onChange={(e) => handleSearchChange(e.target.value)}
+            onChange={(e) => setSearchQuery(e.target.value)}
             className="sera-input w-full pl-9 text-sm"
           />
         </div>

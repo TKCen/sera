@@ -353,15 +353,15 @@ export class ProviderRegistry {
 
     // pi-mono standard env var fallback (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
     if (config.provider) {
-      const standardEnvVars: Record<string, string> = {
-        openai: 'OPENAI_API_KEY',
-        anthropic: 'ANTHROPIC_API_KEY',
-        google: 'GOOGLE_API_KEY',
-        groq: 'GROQ_API_KEY',
-        mistral: 'MISTRAL_API_KEY',
+      const standardEnvVars: Record<string, string[]> = {
+        openai: ['OPENAI_API_KEY'],
+        anthropic: ['ANTHROPIC_API_KEY'],
+        google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        groq: ['GROQ_API_KEY'],
+        mistral: ['MISTRAL_API_KEY'],
       };
-      const envVar = standardEnvVars[config.provider];
-      if (envVar && process.env[envVar]) {
+      const envVars = standardEnvVars[config.provider];
+      if (envVars?.some((v) => process.env[v])) {
         return 'configured';
       }
     }
@@ -443,15 +443,19 @@ export class ProviderRegistry {
 
     // 3. Standard provider env vars
     if (config.provider) {
-      const standardEnvVars: Record<string, string> = {
-        openai: 'OPENAI_API_KEY',
-        anthropic: 'ANTHROPIC_API_KEY',
-        google: 'GOOGLE_API_KEY',
-        groq: 'GROQ_API_KEY',
-        mistral: 'MISTRAL_API_KEY',
+      const standardEnvVars: Record<string, string[]> = {
+        openai: ['OPENAI_API_KEY'],
+        anthropic: ['ANTHROPIC_API_KEY'],
+        google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        groq: ['GROQ_API_KEY'],
+        mistral: ['MISTRAL_API_KEY'],
       };
-      const envVar = standardEnvVars[config.provider];
-      if (envVar && process.env[envVar]) return process.env[envVar];
+      const envVars = standardEnvVars[config.provider];
+      if (envVars) {
+        for (const v of envVars) {
+          if (process.env[v]) return process.env[v];
+        }
+      }
     }
 
     return undefined;
@@ -479,6 +483,56 @@ export class ProviderRegistry {
     }
     if (hydrated > 0) {
       logger.info(`Hydrated ${hydrated} provider API key(s) from secrets store`);
+    }
+  }
+
+  /**
+   * Ingest API keys discovered in environment variables into the encrypted
+   * secrets store.  This makes env vars a one-time ingestion path — after
+   * the first startup the key lives in the DB and survives container rebuilds
+   * without needing the env var again.
+   *
+   * Only ingests keys that are NOT already stored (doesn't overwrite).
+   * Runs after hydrateSecrets() so we can check what's already persisted.
+   */
+  async ingestEnvKeys(): Promise<void> {
+    const STANDARD_ENV_VARS: Record<string, string[]> = {
+      openai: ['OPENAI_API_KEY'],
+      anthropic: ['ANTHROPIC_API_KEY'],
+      google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+      groq: ['GROQ_API_KEY'],
+      mistral: ['MISTRAL_API_KEY'],
+    };
+
+    let ingested = 0;
+
+    for (const [provider, envVars] of Object.entries(STANDARD_ENV_VARS)) {
+      // Find the first env var that has a value
+      let envValue: string | undefined;
+      for (const v of envVars) {
+        if (process.env[v]) {
+          envValue = process.env[v];
+          break;
+        }
+      }
+      if (!envValue) continue;
+
+      // Check if we already have this key in the secrets store
+      const secretName = `provider-key:${provider}`;
+      try {
+        const existing = await ProviderRegistry.getApiKeySecret(secretName);
+        if (existing) continue; // Already stored — don't overwrite
+
+        await ProviderRegistry.storeApiKeySecret(secretName, envValue);
+        ingested++;
+        logger.info(`Ingested ${provider} API key from env into secrets store`);
+      } catch {
+        // Secrets store not available (no SECRETS_MASTER_KEY) — skip silently
+      }
+    }
+
+    if (ingested > 0) {
+      logger.info(`Ingested ${ingested} API key(s) from env vars into secrets store`);
     }
   }
 

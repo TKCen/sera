@@ -44,7 +44,11 @@ services:
       # Local LM Studio:  LLM_BASE_URL=http://host.docker.internal:1234/v1
       # Local Ollama:     LLM_BASE_URL=http://host.docker.internal:11434/v1
       # Cloud providers are auto-detected by model name prefix (gpt-*, claude-*,
-      # gemini-*, …) — set OPENAI_API_KEY / ANTHROPIC_API_KEY as needed.
+      # gemini-*, …). Set the matching API key in .env to enable.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
       - LLM_API_KEY=${LLM_API_KEY:-lm-studio}
       - LLM_MODEL=${LLM_MODEL:-lmstudio-local}

@@ -592,6 +592,13 @@ const startServer = async () => {
     logger.warn('Could not hydrate provider secrets (SECRETS_MASTER_KEY may not be set):', err);
   });
 
+  // Ingest API keys from env vars into the secrets store (one-time).
+  // Env vars are a bootstrap/ingestion path — after this the key lives in the
+  // DB and survives container rebuilds without needing the env var again.
+  await providerRegistry.ingestEnvKeys().catch((err) => {
+    logger.warn('Could not ingest env API keys into secrets store:', err);
+  });
+
   // Start dynamic provider polling (file-based config, no DB needed but placed here
   // for consistent startup ordering — after migrations, before service consumers)
   await dynamicProviderManager.start();

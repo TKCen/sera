@@ -54,6 +54,7 @@ export class Orchestrator {
   private circleContextResolver: ((circleName: string) => string | undefined) | undefined;
   private heartbeatInterval: NodeJS.Timeout | undefined;
   private cleanupInterval: NodeJS.Timeout | undefined;
+  private ephemeralTTLs = new Map<string, { deadline: number; parentId?: string }>();
   private diskQuotaInterval: NodeJS.Timeout | undefined;
 
   /** Last heartbeat timestamp per agent instance ID */
@@ -592,6 +593,21 @@ export class Orchestrator {
     } catch (err) {
       logger.error('Cleanup job error:', err);
     }
+
+    // Enforce ephemeral TTLs
+    const now = Date.now();
+    for (const [instanceId, { deadline }] of this.ephemeralTTLs) {
+      if (now > deadline) {
+        logger.warn(`Ephemeral agent ${instanceId} exceeded TTL — killing container`);
+        await this.sandboxManager
+          .teardown(instanceId)
+          .catch((err) => logger.warn(`TTL cleanup failed for ${instanceId}:`, err));
+        if (this.registry) {
+          await this.registry.updateInstanceStatus(instanceId, 'error').catch(() => {});
+        }
+        this.ephemeralTTLs.delete(instanceId);
+      }
+    }
   }
 
   // ── Story 3.6: Heartbeat ─────────────────────────────────────────────────
@@ -872,6 +888,16 @@ export class Orchestrator {
       `Agent instance ${instanceId} started but chat URL is not available — ` +
         'container may not have acquired a network IP'
     );
+  }
+
+  /**
+   * Register a TTL for an ephemeral agent instance.
+   * The cleanup job will kill the container if the deadline passes.
+   */
+  public registerEphemeralTTL(instanceId: string, ttlMinutes: number): void {
+    this.ephemeralTTLs.set(instanceId, {
+      deadline: Date.now() + ttlMinutes * 60_000,
+    });
   }
 
   public deregisterAgent(name: string): void {

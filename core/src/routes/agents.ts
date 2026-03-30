@@ -132,6 +132,149 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
     })
   );
 
+  // ── Spawn ephemeral agent (#334) ─────────────────────────────────────────────
+  /**
+   * POST /api/agents/spawn-ephemeral
+   * One-shot: create instance → spawn container → execute task → return result.
+   */
+  router.post(
+    '/spawn-ephemeral',
+    asyncHandler(async (req, res) => {
+      const {
+        templateRef,
+        task,
+        parentInstanceId,
+        ttlMinutes = 30,
+        overrides,
+        additionalMounts,
+        async: asyncMode,
+      } = req.body as {
+        templateRef: string;
+        task: string;
+        parentInstanceId?: string;
+        ttlMinutes?: number;
+        overrides?: Record<string, unknown>;
+        additionalMounts?: Array<{ hostPath: string; containerPath: string; mode?: 'ro' | 'rw' }>;
+        async?: boolean;
+      };
+
+      if (!templateRef || !task) {
+        res.status(400).json({ error: 'templateRef and task are required' });
+        return;
+      }
+
+      // Verify template exists
+      const template = await agentRegistry.getTemplate(templateRef);
+      if (!template) {
+        res.status(404).json({ error: `Template "${templateRef}" not found` });
+        return;
+      }
+
+      const shortId = crypto.randomUUID().substring(0, 8);
+      const instanceName = `${templateRef}-ephemeral-${shortId}`;
+      const startTime = Date.now();
+
+      // Create ephemeral instance
+      const createData: Parameters<typeof agentRegistry.createInstance>[0] = {
+        name: instanceName,
+        templateRef,
+        lifecycleMode: 'ephemeral',
+      };
+      if (parentInstanceId) createData.parentInstanceId = parentInstanceId;
+      if (overrides) createData.overrides = overrides;
+      const instance = await agentRegistry.createInstance(createData);
+
+      try {
+        // Start the container (spawn + readiness poll)
+        await orchestrator.startInstance(instance.id, parentInstanceId, task);
+
+        // Register TTL for cleanup
+        orchestrator.registerEphemeralTTL(instance.id, ttlMinutes);
+
+        // Get the container's chat URL
+        const chatUrl = await orchestrator.ensureContainerRunning(instance.id);
+
+        if (asyncMode) {
+          // Async: return immediately, client subscribes to result channel
+          res.status(202).json({
+            instanceId: instance.id,
+            status: 'running',
+            resultChannel: `ephemeral:${instance.id}:result`,
+          });
+
+          // Fire-and-forget: forward task and update status on completion
+          (async () => {
+            try {
+              const chatRes = await fetch(`${chatUrl}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: task, sessionId: instance.id }),
+                signal: AbortSignal.timeout(ttlMinutes * 60_000),
+              });
+              const body = (await chatRes.json()) as {
+                result: string | null;
+                error?: string;
+                usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+              };
+              await agentRegistry.updateInstanceStatus(instance.id, 'completed');
+              logger.info(
+                `Ephemeral agent ${instanceName} completed in ${Date.now() - startTime}ms`
+              );
+
+              // TODO: publish result to Centrifugo ephemeral channel
+              void body;
+            } catch (err) {
+              logger.error(`Ephemeral agent ${instanceName} failed:`, err);
+              await agentRegistry.updateInstanceStatus(instance.id, 'error');
+            }
+          })();
+        } else {
+          // Sync: wait for result
+          const chatRes = await fetch(`${chatUrl}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: task, sessionId: instance.id }),
+            signal: AbortSignal.timeout(ttlMinutes * 60_000),
+          });
+
+          if (!chatRes.ok) {
+            const text = await chatRes.text().catch(() => '');
+            throw new Error(`Ephemeral agent returned ${chatRes.status}: ${text}`);
+          }
+
+          const body = (await chatRes.json()) as {
+            result: string | null;
+            error?: string;
+            usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+          };
+
+          await agentRegistry.updateInstanceStatus(instance.id, 'completed');
+          const durationMs = Date.now() - startTime;
+          logger.info(`Ephemeral agent ${instanceName} completed in ${durationMs}ms`);
+
+          res.json({
+            instanceId: instance.id,
+            status: body.error ? 'error' : 'completed',
+            result: body.result,
+            error: body.error,
+            usage: body.usage,
+            durationMs,
+          });
+        }
+      } catch (err) {
+        await agentRegistry.updateInstanceStatus(instance.id, 'error');
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Ephemeral spawn failed for ${instanceName}:`, msg);
+        res.status(500).json({
+          instanceId: instance.id,
+          status: 'error',
+          error: msg,
+          durationMs: Date.now() - startTime,
+        });
+      }
+    })
+  );
+
   // ── Get agent instance detail ──────────────────────────────────────────────
   router.get(
     '/instances/:id',

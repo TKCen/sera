@@ -31,6 +31,7 @@
 | [ADR-003](adrs/003-scope-validation-framework.md) | Proposed | Scope Validation Framework |
 | [ADR-004](adrs/004-permission-grant-persistence.md) | Proposed | Permission Grant Persistence |
 | [ADR-005](adrs/005-core-modularity-and-component-interfaces.md) | Proposed | Core Modularity and Component Interfaces |
+| [ADR-006](adrs/006-web-and-agent-runtime-modularity.md) | Proposed | Web Frontend and Agent-Runtime Modularity |
 
 See [adrs/README.md](adrs/README.md) for the ADR process.
 

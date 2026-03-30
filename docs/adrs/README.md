@@ -11,6 +11,7 @@ ADRs document significant architecture decisions — the current state, canonica
 | [003](003-scope-validation-framework.md) | Proposed | Scope Validation Framework |
 | [004](004-permission-grant-persistence.md) | Proposed | Permission Grant Persistence |
 | [005](005-core-modularity-and-component-interfaces.md) | Proposed | Core Modularity and Component Interfaces |
+| [006](006-web-and-agent-runtime-modularity.md) | Proposed | Web Frontend and Agent-Runtime Modularity |
 
 ## Process
 

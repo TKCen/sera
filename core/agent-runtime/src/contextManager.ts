@@ -61,7 +61,12 @@ export class ContextManager {
 
   constructor(modelName: string, contextWindowOverride?: number) {
     this.modelName = modelName;
-    this.contextWindow = contextWindowOverride ?? this.resolveContextWindow(modelName);
+    // Priority: explicit override → CONTEXT_WINDOW env var → hardcoded lookup → default
+    const envContextWindow = process.env['CONTEXT_WINDOW'];
+    this.contextWindow =
+      contextWindowOverride ??
+      (envContextWindow ? parseInt(envContextWindow, 10) : undefined) ??
+      this.resolveContextWindow(modelName);
 
     const maxTokensEnv = process.env['MAX_CONTEXT_TOKENS'];
     this.highWaterMark = maxTokensEnv

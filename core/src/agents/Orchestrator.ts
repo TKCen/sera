@@ -411,6 +411,27 @@ export class Orchestrator {
           }
         }
 
+        // Resolve model context window from provider config (for agent-runtime ContextManager)
+        const spawnEnv: Record<string, string> = {};
+        const modelName =
+          (manifest.model?.name ?? (manifest.spec as Record<string, unknown> | undefined)?.model)
+            ? (((manifest.spec as Record<string, unknown>)?.model as Record<string, unknown>)
+                ?.name as string | undefined)
+            : undefined;
+        if (modelName && this.llmRouter) {
+          try {
+            const providerConfig = this.llmRouter.getRegistry().resolve(modelName);
+            if (providerConfig.contextWindow) {
+              spawnEnv['CONTEXT_WINDOW'] = String(providerConfig.contextWindow);
+            }
+            if (providerConfig.contextStrategy) {
+              spawnEnv['CONTEXT_COMPACTION_STRATEGY'] = providerConfig.contextStrategy;
+            }
+          } catch {
+            // Model not in registry — agent-runtime will use its defaults
+          }
+        }
+
         const sandbox = await this.sandboxManager.spawn(
           manifest,
           {
@@ -422,6 +443,7 @@ export class Orchestrator {
             ...(task !== undefined ? { task } : {}),
             ...(identityToken !== undefined ? { token: identityToken } : {}),
             ...(effectiveParentId !== undefined ? { parentInstanceId: effectiveParentId } : {}),
+            ...(Object.keys(spawnEnv).length > 0 ? { env: spawnEnv } : {}),
           },
           resolvedCapabilities,
           instance.id,

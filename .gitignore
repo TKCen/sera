@@ -55,7 +55,7 @@ playwright-report/
 test-results/
 
 # Local tooling indexes
-.gitnexus/   memory/
+.gitnexus/
 
 # core configs
 core/config/
@@ -63,8 +63,8 @@ core/config/
 # proxy acls
 egress-proxy/acls/
 
-# agents memories
-memory/
+# agents memories (root-level runtime data, not source code)
+/memory/
 
 # mcp
 .mcp.json

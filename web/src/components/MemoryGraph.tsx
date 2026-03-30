@@ -29,13 +29,32 @@ export interface MemoryGraphProps {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  human: '#3b82f6', // blue
-  persona: '#a855f7', // purple
-  core: '#22c55e', // green
+  // Epic 8 block types
+  fact: '#3b82f6', // blue
+  context: '#a855f7', // purple
+  memory: '#22c55e', // green
+  insight: '#eab308', // yellow
+  reference: '#06b6d4', // cyan
+  observation: '#f97316', // orange
+  decision: '#ef4444', // red
+  // Legacy types
+  human: '#60a5fa', // light blue
+  persona: '#c084fc', // light purple
+  core: '#4ade80', // light green
   archive: '#6b7280', // gray
+  // Meta-node types (agent/circle)
+  agent: '#f472b6', // pink
+  circle: '#a78bfa', // violet
 };
 
 const DEFAULT_COLOR = '#9ca3af';
+
+/** Node radius by kind — agents and circles are larger. */
+function nodeRadius(type: string): number {
+  if (type === 'circle') return 10;
+  if (type === 'agent') return 8;
+  return 5;
+}
 
 export default function MemoryGraph({
   data,
@@ -124,17 +143,41 @@ export default function MemoryGraph({
         : true;
 
       const color = TYPE_COLORS[node.type] || DEFAULT_COLOR;
+      const r = nodeRadius(node.type);
+      const x = node.x || 0;
+      const y = node.y || 0;
 
-      // Draw node circle
+      // Draw node
       ctx.beginPath();
-      ctx.arc(node.x || 0, node.y || 0, 5, 0, 2 * Math.PI, false);
-      ctx.fillStyle = isMatched ? color : '#374151'; // highlight or dim
+      if (node.type === 'agent') {
+        // Hexagon for agents
+        for (let i = 0; i < 6; i++) {
+          const angle = (Math.PI / 3) * i - Math.PI / 6;
+          const px = x + r * Math.cos(angle);
+          const py = y + r * Math.sin(angle);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      } else if (node.type === 'circle') {
+        // Double circle for circles
+        ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+        ctx.moveTo(x + r * 0.7, y);
+        ctx.arc(x, y, r * 0.7, 0, 2 * Math.PI, false);
+      } else {
+        ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+      }
+      ctx.fillStyle = isMatched ? color : '#374151';
       ctx.fill();
 
-      // Node border for matches if searching
+      // Node border
       if (searchQuery && isMatched) {
         ctx.lineWidth = 1.5 / globalScale;
         ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+      } else if (node.type === 'agent' || node.type === 'circle') {
+        ctx.lineWidth = 1 / globalScale;
+        ctx.strokeStyle = color;
         ctx.stroke();
       }
 
@@ -182,18 +225,43 @@ export default function MemoryGraph({
         }
         linkWidth={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? 1 : 1.5)}
         linkLineDash={(link: object) => ((link as GraphEdge).kind === 'wikilink' ? [2, 2] : null)}
+        linkDirectionalArrowLength={4}
+        linkDirectionalArrowRelPos={0.85}
+        linkDirectionalParticles={2}
+        linkDirectionalParticleWidth={2}
+        linkDirectionalParticleSpeed={0.005}
+        linkDirectionalParticleColor={(link: object) =>
+          (link as GraphEdge).kind === 'wikilink'
+            ? 'rgba(168, 85, 247, 0.7)'
+            : 'rgba(148, 163, 184, 0.8)'
+        }
         onNodeClick={(node: object) => handleNodeClick(node as GraphNode)}
         d3AlphaDecay={0.02}
         d3VelocityDecay={0.3}
       />
 
       {/* Legend */}
-      <div className="absolute top-4 left-4 bg-sera-surface/80 backdrop-blur-sm border border-sera-border p-3 rounded-md text-xs">
+      <div className="absolute top-4 left-4 bg-sera-surface/80 backdrop-blur-sm border border-sera-border p-3 rounded-md text-xs max-h-64 overflow-y-auto">
         <h4 className="font-semibold text-sera-text mb-2">Node Types</h4>
-        <div className="flex flex-col gap-1.5">
-          {Object.entries(TYPE_COLORS).map(([type, color]) => (
+        <div className="flex flex-col gap-1">
+          {(
+            [
+              'agent',
+              'circle',
+              'fact',
+              'context',
+              'memory',
+              'insight',
+              'reference',
+              'observation',
+              'decision',
+            ] as const
+          ).map((type) => (
             <div key={type} className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full" style={{ backgroundColor: color }}></span>
+              <span
+                className={`w-3 h-3 shrink-0 ${type === 'agent' ? 'rotate-45' : 'rounded-full'}`}
+                style={{ backgroundColor: TYPE_COLORS[type] }}
+              />
               <span className="text-sera-text-muted capitalize">{type}</span>
             </div>
           ))}

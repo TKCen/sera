@@ -51,15 +51,18 @@ describe('Agents Routes', () => {
       const instanceId = 'ephemeral-123';
 
       agentRegistryMock.getTemplate.mockResolvedValue({ name: templateRef });
-      agentRegistryMock.createInstance.mockResolvedValue({ id: instanceId, name: 'ephemeral-name' });
+      agentRegistryMock.createInstance.mockResolvedValue({
+        id: instanceId,
+        name: 'ephemeral-name',
+      });
 
       // Mock fetch for the container's chat endpoint
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
           result: 'Task completed',
-          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
-        })
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        }),
       });
       vi.stubGlobal('fetch', mockFetch);
 

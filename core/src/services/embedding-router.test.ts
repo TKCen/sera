@@ -121,7 +121,7 @@ describe('EmbeddingRouter', () => {
     });
 
     it('calls OpenAI API with env var API key if apiKey EnvVar is set', async () => {
-      const { apiKey, ...restOpenAIConfig } = baseOpenAIConfig;
+      const { apiKey: _apiKey, ...restOpenAIConfig } = baseOpenAIConfig;
       const config: EmbeddingConfig = {
         ...restOpenAIConfig,
         apiKeyEnvVar: 'CUSTOM_OPENAI_KEY',

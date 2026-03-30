@@ -30,6 +30,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'claude-3-opus': 200_000,
   'qwen2.5-coder-7b': 32_768,
   'qwen2.5-coder-32b': 32_768,
+  'qwen3.5-35b-a3b': 131_072,
   'llama3.1:8b': 128_000,
   'llama3.2': 128_000,
 };
@@ -58,9 +59,9 @@ export class ContextManager {
   private strategy: CompactionStrategy;
   private toolOutputMaxTokens: number;
 
-  constructor(modelName: string) {
+  constructor(modelName: string, contextWindowOverride?: number) {
     this.modelName = modelName;
-    this.contextWindow = this.resolveContextWindow(modelName);
+    this.contextWindow = contextWindowOverride ?? this.resolveContextWindow(modelName);
 
     const maxTokensEnv = process.env['MAX_CONTEXT_TOKENS'];
     this.highWaterMark = maxTokensEnv

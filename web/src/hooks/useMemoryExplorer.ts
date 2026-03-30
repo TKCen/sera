@@ -8,6 +8,8 @@ import {
   getAgentBacklinks,
   getAgentBlocks,
   promoteBlock,
+  updateAgentBlock,
+  triggerCompaction,
 } from '@/lib/api/memory';
 
 export const memoryExplorerKeys = {
@@ -89,6 +91,34 @@ export function usePromoteBlock() {
       targetScope: 'circle' | 'global';
       circleId?: string;
     }) => promoteBlock(agentId, blockId, targetScope, circleId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
+    },
+  });
+}
+
+export function useUpdateBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      agentId,
+      blockId,
+      updates,
+    }: {
+      agentId: string;
+      blockId: string;
+      updates: { title?: string; content?: string; tags?: string[]; importance?: number };
+    }) => updateAgentBlock(agentId, blockId, updates),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
+    },
+  });
+}
+
+export function useTriggerCompaction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (agentId: string) => triggerCompaction(agentId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
     },

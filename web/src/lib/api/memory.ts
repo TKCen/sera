@@ -108,6 +108,21 @@ export function getAgentBlock(agentId: string, blockId: string): Promise<ScopedB
   );
 }
 
+export function updateAgentBlock(
+  agentId: string,
+  blockId: string,
+  updates: { title?: string; content?: string; tags?: string[]; importance?: number }
+): Promise<ScopedBlock> {
+  return request<ScopedBlock>(
+    `/memory/${encodeURIComponent(agentId)}/blocks/${encodeURIComponent(blockId)}`,
+    { method: 'PUT', body: JSON.stringify(updates) }
+  );
+}
+
+export function triggerCompaction(agentId: string): Promise<{ compacted: number }> {
+  return request(`/memory/${encodeURIComponent(agentId)}/compact`, { method: 'POST' });
+}
+
 export function getAgentStats(agentId: string): Promise<ScopedStats> {
   return request<ScopedStats>(`/memory/${encodeURIComponent(agentId)}/stats`);
 }

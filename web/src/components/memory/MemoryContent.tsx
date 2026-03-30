@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { Search, ArrowUpRight, ArrowDownLeft, Save, Brain } from 'lucide-react';
 import { toast } from 'sonner';
-import { useBlockDetail, useBlockBacklinks, useMemorySearch } from '@/hooks/useMemoryExplorer';
+import {
+  useBlockDetail,
+  useBlockBacklinks,
+  useMemorySearch,
+  useUpdateBlock,
+} from '@/hooks/useMemoryExplorer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -43,6 +48,7 @@ export function MemoryContent({
   const { data: block, isLoading: blockLoading } = useBlockDetail(selectedAgentId, selectedBlockId);
   const { data: backlinks } = useBlockBacklinks(selectedAgentId, selectedBlockId);
   const { data: searchResults, isLoading: searchLoading } = useMemorySearch(debouncedQuery);
+  const updateMutation = useUpdateBlock();
 
   const isSearching = debouncedQuery.length >= 2;
   const hasBlock = selectedBlockId.length > 0 && !isSearching;
@@ -83,6 +89,10 @@ export function MemoryContent({
             backlinks={backlinks ?? []}
             onBlockSelect={onBlockSelect}
             agentNameMap={agentNameMap}
+            onSave={async (agentId, blockId, updates) => {
+              await updateMutation.mutateAsync({ agentId, blockId, updates });
+            }}
+            saving={updateMutation.isPending}
           />
         ) : (
           <EmptyState
@@ -161,6 +171,8 @@ function BlockDetail({
   backlinks,
   onBlockSelect,
   agentNameMap,
+  onSave,
+  saving,
 }: {
   block: ScopedBlock | null;
   loading: boolean;
@@ -172,6 +184,8 @@ function BlockDetail({
   }>;
   onBlockSelect: (block: ScopedBlock) => void;
   agentNameMap?: Map<string, string>;
+  onSave?: (agentId: string, blockId: string, updates: { content?: string }) => Promise<void>;
+  saving?: boolean;
 }) {
   const [editContent, setEditContent] = useState<string | null>(null);
 
@@ -235,10 +249,19 @@ function BlockDetail({
             <div className="flex gap-2">
               <Button
                 size="sm"
-                onClick={() => {
-                  // Save would call an update API here
-                  toast.success('Block updated');
-                  setEditContent(null);
+                disabled={saving}
+                onClick={async () => {
+                  if (onSave && block) {
+                    try {
+                      await onSave(block.agentId, block.id, { content });
+                      toast.success('Block updated');
+                      setEditContent(null);
+                    } catch (err) {
+                      toast.error(
+                        `Save failed: ${err instanceof Error ? err.message : String(err)}`
+                      );
+                    }
+                  }
                 }}
               >
                 <Save size={12} className="mr-1" /> Save

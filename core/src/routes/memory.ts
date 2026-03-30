@@ -405,6 +405,38 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
     }
   });
 
+  /** PUT /api/memory/:agentId/blocks/:id — update a block's content/metadata */
+  router.put('/:agentId/blocks/:id', async (req, res) => {
+    try {
+      const agentId = req.params.agentId as string;
+      const blockId = req.params.id as string;
+      const { title, content, tags, importance } = req.body as {
+        title?: string;
+        content?: string;
+        tags?: string[];
+        importance?: number;
+      };
+
+      const updates: Parameters<typeof scopedStore.update>[2] = {};
+      if (title !== undefined) updates.title = title;
+      if (content !== undefined) updates.content = content;
+      if (tags !== undefined) updates.tags = tags;
+      if (importance !== undefined)
+        updates.importance = importance as import('../memory/blocks/scoped-types.js').Importance;
+
+      const updated = await scopedStore.update(agentId, blockId, updates);
+
+      if (!updated) {
+        res.status(404).json({ error: 'Block not found' });
+        return;
+      }
+
+      res.json(updated);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   /** POST /api/memory/:agentId/blocks/:id/promote — copy block to a wider scope */
   router.post('/:agentId/blocks/:id/promote', async (req, res) => {
     try {

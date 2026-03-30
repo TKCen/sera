@@ -201,6 +201,29 @@ export class ScopedMemoryBlockStore {
     return results;
   }
 
+  /** Update an existing block's mutable fields (title, content, tags, importance). */
+  async update(
+    agentId: string,
+    id: string,
+    updates: { title?: string; content?: string; tags?: string[]; importance?: Importance }
+  ): Promise<KnowledgeBlock | null> {
+    const block = await this.readByAgent(agentId, id);
+    if (!block) return null;
+
+    const updated: KnowledgeBlock = {
+      ...block,
+      ...(updates.title !== undefined ? { title: updates.title } : {}),
+      ...(updates.content !== undefined ? { content: updates.content } : {}),
+      ...(updates.tags !== undefined ? { tags: updates.tags } : {}),
+      ...(updates.importance !== undefined ? { importance: updates.importance } : {}),
+    };
+
+    // Write back to the same file location
+    const filePath = path.join(this.blockDir(agentId, block.type), this.fileName(block));
+    await fs.writeFile(filePath, this.serialize(updated), 'utf8');
+    return updated;
+  }
+
   async delete(agentId: string, id: string): Promise<boolean> {
     for (const type of KNOWLEDGE_BLOCK_TYPES) {
       const typeDir = path.join(this.memoryRoot, agentId, type);

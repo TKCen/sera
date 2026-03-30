@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Database, ChevronDown } from 'lucide-react';
+import { Database, ChevronDown, LayoutList, Clock } from 'lucide-react';
 import { useMemoryOverview, useRecentBlocks, useAgentBlockList } from '@/hooks/useMemoryExplorer';
 import { BlockCard } from './BlockCard';
+import { TimelineView } from './TimelineView';
 import { TagCloud } from './TagCloud';
 import { Spinner } from '@/components/ui/spinner';
 import type { ScopedBlock } from '@/lib/api/memory';
@@ -31,6 +32,7 @@ export function MemorySidebar({
   agentNameMap,
 }: MemorySidebarProps) {
   const [typeFilter, setTypeFilter] = useState('');
+  const [viewMode, setViewMode] = useState<'cards' | 'timeline'>('cards');
   const { data: overview, isLoading: overviewLoading } = useMemoryOverview();
   const { data: recentBlocks } = useRecentBlocks(50);
   const agentId = scope.kind === 'agent' ? scope.agentId : '';
@@ -144,10 +146,47 @@ export function MemorySidebar({
         </div>
       )}
 
-      {/* Block list */}
+      {/* Block list header + view toggle */}
+      <div className="flex items-center justify-between px-3 pt-2 pb-1">
+        <span className="sera-section-label">Blocks ({filteredBlocks.length})</span>
+        <div className="flex gap-0.5 bg-sera-surface rounded p-0.5">
+          <button
+            type="button"
+            onClick={() => setViewMode('cards')}
+            className={`p-1 rounded transition-colors ${
+              viewMode === 'cards'
+                ? 'bg-sera-accent/20 text-sera-accent'
+                : 'text-sera-text-dim hover:text-sera-text'
+            }`}
+            title="Card view"
+          >
+            <LayoutList size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('timeline')}
+            className={`p-1 rounded transition-colors ${
+              viewMode === 'timeline'
+                ? 'bg-sera-accent/20 text-sera-accent'
+                : 'text-sera-text-dim hover:text-sera-text'
+            }`}
+            title="Timeline view"
+          >
+            <Clock size={12} />
+          </button>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
         {filteredBlocks.length === 0 ? (
           <p className="text-sm text-sera-text-muted text-center py-8">No blocks found</p>
+        ) : viewMode === 'timeline' ? (
+          <TimelineView
+            blocks={filteredBlocks}
+            selectedBlockId={selectedBlockId}
+            onBlockClick={onBlockSelect}
+            agentNameMap={agentNameMap}
+          />
         ) : (
           filteredBlocks.map((block) => (
             <BlockCard

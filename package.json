@@ -2,10 +2,7 @@
   "name": "sera",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "core",
-    "web"
-  ],
+  "workspaces": ["core", "web"],
   "scripts": {
     "postinstall": "echo 'Run bun run hooks:install to set up git hooks'",
     "dev:up": "docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d",
@@ -44,10 +41,5 @@
     "pre-commit": "bun run typecheck && bun run lint && bun run test:web",
     "hooks:install": "bun run scripts/install-hooks.js",
     "tui:build": "cd tui && go build -o tui.exe ."
-  },
-  "dependencies": {
-    "@tailwindcss/postcss": "^4.2.2",
-    "postcss": "^8.5.8",
-    "postcss-load-config": "^6.0.1"
   }
 }

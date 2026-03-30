@@ -285,8 +285,11 @@ export class ScopedMemoryBlockStore {
     } catch {
       return [];
     }
+    // UUID pattern — filters out legacy directories like 'blocks', 'agents', 'circles'
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const ids: string[] = [];
     for (const entry of entries) {
+      if (!uuidPattern.test(entry)) continue;
       try {
         const stat = await fs.stat(path.join(this.memoryRoot, entry));
         if (stat.isDirectory()) ids.push(entry);

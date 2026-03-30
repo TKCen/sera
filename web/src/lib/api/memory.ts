@@ -123,3 +123,83 @@ export function getAgentLinks(
   const qs = entryId ? `?entryId=${encodeURIComponent(entryId)}` : '';
   return request(`/memory/${encodeURIComponent(agentId)}/links${qs}`);
 }
+
+export function getAgentBacklinks(
+  agentId: string,
+  blockId: string
+): Promise<
+  Array<{ sourceId: string; sourceTitle: string; sourceType: string; relationship: string }>
+> {
+  return request(
+    `/memory/${encodeURIComponent(agentId)}/blocks/${encodeURIComponent(blockId)}/backlinks`
+  );
+}
+
+export function promoteBlock(
+  agentId: string,
+  blockId: string,
+  targetScope: 'circle' | 'global',
+  circleId?: string
+): Promise<ScopedBlock> {
+  return request(
+    `/memory/${encodeURIComponent(agentId)}/blocks/${encodeURIComponent(blockId)}/promote`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ targetScope, ...(circleId ? { circleId } : {}) }),
+    }
+  );
+}
+
+// ── Cross-agent memory (#352) ─────────────────────────────────────────
+
+export interface MemoryOverview {
+  totalBlocks: number;
+  agents: Array<{ id: string; blockCount: number }>;
+  topTags: Array<{ tag: string; count: number }>;
+  typeBreakdown: Record<string, number>;
+}
+
+export interface ExplorerGraphNode {
+  id: string;
+  title: string;
+  type: string;
+  tags: string[];
+  nodeKind: 'block' | 'agent' | 'circle';
+  agentId?: string;
+}
+
+export interface ExplorerGraphEdge {
+  source: string;
+  target: string;
+  kind: string;
+  relationship?: string;
+}
+
+export interface ExplorerGraphData {
+  nodes: ExplorerGraphNode[];
+  edges: ExplorerGraphEdge[];
+}
+
+export interface MemorySearchResult {
+  block: ScopedBlock;
+  score: number;
+}
+
+export function getMemoryOverview(): Promise<MemoryOverview> {
+  return request<MemoryOverview>('/memory/overview');
+}
+
+export function getRecentBlocks(limit?: number): Promise<ScopedBlock[]> {
+  const qs = limit ? `?limit=${limit}` : '';
+  return request<ScopedBlock[]>(`/memory/recent${qs}`);
+}
+
+export function searchMemoryBlocks(query: string, limit?: number): Promise<MemorySearchResult[]> {
+  const params = new URLSearchParams({ query });
+  if (limit !== undefined) params.set('limit', String(limit));
+  return request<MemorySearchResult[]>(`/memory/search?${params.toString()}`);
+}
+
+export function getExplorerGraph(): Promise<ExplorerGraphData> {
+  return request<ExplorerGraphData>('/memory/explorer-graph');
+}

@@ -4,10 +4,13 @@ import { ScopedMemoryBlockStore } from '../memory/blocks/ScopedMemoryBlockStore.
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace } from '../services/vector.service.js';
 import { MemoryCompactionService } from '../memory/MemoryCompactionService.js';
+import { EmbeddingService } from '../services/embedding.service.js';
 import { extractLinks } from '../memory/blocks/scoped-types.js';
-import type { KnowledgeBlockType } from '../memory/blocks/scoped-types.js';
+import type { KnowledgeBlock, KnowledgeBlockType } from '../memory/blocks/scoped-types.js';
+import { Logger } from '../lib/logger.js';
 
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';
+const memLogger = new Logger('MemoryRoutes');
 
 export function createMemoryRouter(memoryManager: MemoryManager) {
   const router = Router();
@@ -64,6 +67,180 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
     try {
       const graph = await memoryManager.getGraph();
       res.json(graph);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Cross-agent routes (#352) ──────────────────────────────────────────────
+  // IMPORTANT: These must come BEFORE the /:agentId/* routes — Express 5
+  // would otherwise match 'overview', 'recent', 'search' as an agentId param.
+
+  /** GET /api/memory/overview — aggregate stats across all agents */
+  router.get('/overview', async (_req, res) => {
+    try {
+      const agentIds = await scopedStore.listAgentIds();
+      const agents: Array<{ id: string; blockCount: number }> = [];
+      const tagCounts = new Map<string, number>();
+      const typeCounts: Record<string, number> = {};
+      let totalBlocks = 0;
+
+      for (const agentId of agentIds) {
+        const blocks = await scopedStore.list(agentId);
+        agents.push({ id: agentId, blockCount: blocks.length });
+        totalBlocks += blocks.length;
+        for (const block of blocks) {
+          typeCounts[block.type] = (typeCounts[block.type] ?? 0) + 1;
+          for (const tag of block.tags) {
+            tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+          }
+        }
+      }
+
+      const topTags = [...tagCounts.entries()]
+        .map(([tag, count]) => ({ tag, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 30);
+
+      res.json({ totalBlocks, agents, topTags, typeBreakdown: typeCounts });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** GET /api/memory/recent — recent blocks across all agents */
+  router.get('/recent', async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
+      const blocks = await scopedStore.listAllBlocks({ limit });
+      res.json(blocks);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** GET /api/memory/search — semantic search across all agents */
+  router.get('/search', async (req, res) => {
+    try {
+      const query = req.query.query as string;
+      if (!query || query.length < 2) {
+        res.status(400).json({ error: 'query must be at least 2 characters' });
+        return;
+      }
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 30);
+
+      // Try semantic search first
+      let embeddingService: EmbeddingService | undefined;
+      try {
+        embeddingService = EmbeddingService.getInstance();
+      } catch {
+        // Embedding service not configured — fall back to text search
+      }
+
+      if (embeddingService?.isAvailable()) {
+        const vector = await embeddingService.embed(query);
+        const agentIds = await scopedStore.listAgentIds();
+        const namespaces: MemoryNamespace[] = agentIds.map(
+          (id) => `personal:${id}` as MemoryNamespace
+        );
+
+        if (namespaces.length > 0) {
+          const results = await vectorService.search(namespaces, vector, limit);
+          const hydrated: Array<{ block: KnowledgeBlock | null; score: number }> = [];
+          for (const result of results) {
+            const agentId = result.payload?.agent_id as string | undefined;
+            const blockId = result.id as string;
+            if (agentId) {
+              const block = await scopedStore.readByAgent(agentId, blockId);
+              hydrated.push({ block, score: result.score ?? 0 });
+            }
+          }
+          res.json(hydrated.filter((h) => h.block !== null));
+          return;
+        }
+      }
+
+      // Fallback: text search across all blocks
+      memLogger.info('Semantic search unavailable, falling back to text search');
+      const all = await scopedStore.listAllBlocks();
+      const lowerQuery = query.toLowerCase();
+      const matches = all
+        .filter(
+          (b) =>
+            b.title.toLowerCase().includes(lowerQuery) ||
+            b.content.toLowerCase().includes(lowerQuery) ||
+            b.tags.some((t) => t.toLowerCase().includes(lowerQuery))
+        )
+        .slice(0, limit)
+        .map((block) => ({ block, score: 1.0 }));
+      res.json(matches);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** GET /api/memory/explorer-graph — cross-agent graph with agent/circle meta-nodes */
+  router.get('/explorer-graph', async (_req, res) => {
+    try {
+      const agentIds = await scopedStore.listAgentIds();
+      const nodes: Array<{
+        id: string;
+        title: string;
+        type: string;
+        tags: string[];
+        nodeKind: 'block' | 'agent' | 'circle';
+        agentId?: string;
+      }> = [];
+      const edges: Array<{
+        source: string;
+        target: string;
+        kind: string;
+        relationship?: string;
+      }> = [];
+
+      for (const agentId of agentIds) {
+        // Agent meta-node
+        nodes.push({
+          id: `agent:${agentId}`,
+          title: agentId,
+          type: 'agent',
+          tags: [],
+          nodeKind: 'agent',
+        });
+
+        const blocks = await scopedStore.list(agentId);
+        for (const block of blocks) {
+          // Block node
+          nodes.push({
+            id: block.id,
+            title: block.title,
+            type: block.type,
+            tags: block.tags,
+            nodeKind: 'block',
+            agentId,
+          });
+
+          // Agent → block edge
+          edges.push({
+            source: `agent:${agentId}`,
+            target: block.id,
+            kind: 'owns',
+          });
+
+          // Wiki-link edges
+          const links = extractLinks(block.content);
+          for (const link of links) {
+            edges.push({
+              source: block.id,
+              target: link.target,
+              kind: 'wikilink',
+              relationship: link.relationship,
+            });
+          }
+        }
+      }
+
+      res.json({ nodes, edges });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -190,6 +367,77 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
         }
       }
       res.json({ nodes, edges });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** GET /api/memory/:agentId/blocks/:id/backlinks — find blocks that link TO this one */
+  router.get('/:agentId/blocks/:id/backlinks', async (req, res) => {
+    try {
+      const agentId = req.params.agentId as string;
+      const targetId = req.params.id as string;
+      const blocks = await scopedStore.list(agentId);
+      const backlinks: Array<{
+        sourceId: string;
+        sourceTitle: string;
+        sourceType: string;
+        relationship: string;
+      }> = [];
+
+      for (const block of blocks) {
+        if (block.id === targetId) continue;
+        const links = extractLinks(block.content);
+        for (const link of links) {
+          if (link.target === targetId) {
+            backlinks.push({
+              sourceId: block.id,
+              sourceTitle: block.title,
+              sourceType: block.type,
+              relationship: link.relationship,
+            });
+          }
+        }
+      }
+      res.json(backlinks);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** POST /api/memory/:agentId/blocks/:id/promote — copy block to a wider scope */
+  router.post('/:agentId/blocks/:id/promote', async (req, res) => {
+    try {
+      const agentId = req.params.agentId as string;
+      const blockId = req.params.id as string;
+      const { targetScope, circleId } = req.body as {
+        targetScope: 'circle' | 'global';
+        circleId?: string;
+      };
+
+      if (!targetScope || !['circle', 'global'].includes(targetScope)) {
+        res.status(400).json({ error: 'targetScope must be "circle" or "global"' });
+        return;
+      }
+
+      const block = await scopedStore.readByAgent(agentId, blockId);
+      if (!block) {
+        res.status(404).json({ error: 'Block not found' });
+        return;
+      }
+
+      // Write a copy to the target scope's namespace
+      const targetAgentId = targetScope === 'circle' && circleId ? `circle:${circleId}` : 'global';
+      const promoted = await scopedStore.write({
+        agentId: targetAgentId,
+        type: block.type,
+        title: `[Promoted] ${block.title}`,
+        content: block.content,
+        tags: [...block.tags, `promoted-from:${agentId}`],
+        importance: block.importance,
+      });
+
+      res.status(201).json(promoted);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

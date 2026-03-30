@@ -277,6 +277,49 @@ export class ScopedMemoryBlockStore {
     return results;
   }
 
+  /** List all agent IDs that have memory directories. */
+  async listAgentIds(): Promise<string[]> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.memoryRoot);
+    } catch {
+      return [];
+    }
+    // UUID pattern — filters out legacy directories like 'blocks', 'agents', 'circles'
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (!uuidPattern.test(entry)) continue;
+      try {
+        const stat = await fs.stat(path.join(this.memoryRoot, entry));
+        if (stat.isDirectory()) ids.push(entry);
+      } catch {
+        // skip
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * List blocks across ALL agents, sorted by timestamp descending.
+   * Accepts the same filters as `list()` plus an optional `limit`.
+   */
+  async listAllBlocks(
+    filters?: KnowledgeBlockListFilters & { limit?: number }
+  ): Promise<KnowledgeBlock[]> {
+    const agentIds = await this.listAgentIds();
+    const all: KnowledgeBlock[] = [];
+    for (const agentId of agentIds) {
+      const blocks = await this.list(agentId, filters);
+      all.push(...blocks);
+    }
+    all.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    if (filters?.limit !== undefined && filters.limit > 0) {
+      return all.slice(0, filters.limit);
+    }
+    return all;
+  }
+
   /** Count blocks by agent across all active (non-archive) types. */
   async countByAgent(agentId: string): Promise<number> {
     let count = 0;

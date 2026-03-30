@@ -17,6 +17,8 @@ export interface MessageThought {
   timestamp: string;
   stepType: string;
   content: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
 }
 
 export interface Message {
@@ -141,18 +143,28 @@ export function ChatThoughtPanel({
             }
 
             // ── Tool-call block ──────────────────────────────────────────────
-            if (thought.stepType === 'tool-call') {
-              const lines = thought.content.split('\n');
-              const toolName = (lines[0] ?? '').replace(/^Tool:\s*/, '');
-              const rawParams = lines
-                .slice(1)
-                .join('\n')
-                .replace(/^Parameters:\s*/, '');
-              let paramDisplay = rawParams;
-              try {
-                paramDisplay = JSON.stringify(JSON.parse(rawParams), null, 2);
-              } catch {
-                /* not JSON — keep as-is */
+            if (thought.stepType === 'tool-call' || thought.stepType === 'act') {
+              // Prefer structured fields; fall back to parsing from content
+              const toolName =
+                thought.toolName ??
+                (thought.content.split('\n')[0] ?? '')
+                  .replace(/^(Tool|Calling tool):\s*/, '')
+                  .replace(/\(.*/, '')
+                  .trim();
+              let paramDisplay = '';
+              if (thought.toolArgs) {
+                paramDisplay = JSON.stringify(thought.toolArgs, null, 2);
+              } else {
+                const lines = thought.content.split('\n');
+                const rawParams = lines
+                  .slice(1)
+                  .join('\n')
+                  .replace(/^Parameters:\s*/, '');
+                try {
+                  paramDisplay = JSON.stringify(JSON.parse(rawParams), null, 2);
+                } catch {
+                  paramDisplay = rawParams;
+                }
               }
               return (
                 <div
@@ -160,8 +172,13 @@ export function ChatThoughtPanel({
                   className="animate-in fade-in slide-in-from-left-2 duration-200"
                 >
                   <div className="flex items-center gap-1.5 mb-1">
-                    <span className={cn('flex-shrink-0', STEP_COLORS['tool-call'])}>
-                      {STEP_ICONS['tool-call']}
+                    <span
+                      className={cn(
+                        'flex-shrink-0',
+                        STEP_COLORS['tool-call'] ?? STEP_COLORS['act']
+                      )}
+                    >
+                      {STEP_ICONS['tool-call'] ?? STEP_ICONS['act']}
                     </span>
                     <span className="text-[11px] font-semibold text-cyan-300">{toolName}</span>
                   </div>

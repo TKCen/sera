@@ -1,10 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import {
-  Bot,
-  Brain,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react';
+import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
 import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
@@ -69,6 +64,8 @@ interface ThoughtPayload {
   content: string;
   agentId: string;
   agentDisplayName: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
 }
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
@@ -222,6 +219,8 @@ function ChatPageContent() {
         timestamp: event.timestamp,
         stepType: event.stepType,
         content: event.content,
+        ...(event.toolName ? { toolName: event.toolName } : {}),
+        ...(event.toolArgs ? { toolArgs: event.toolArgs } : {}),
       };
 
       setMessages((prev) =>

@@ -25,6 +25,7 @@ import HealthPage from '@/app/health/page';
 import SchedulesPage from '@/pages/SchedulesPage';
 import SettingsPage from '@/pages/SettingsPage';
 import ToolsPage from '@/pages/ToolsPage';
+import MemoryExplorerPage from '@/pages/MemoryExplorerPage';
 import MemoryDetailPage from '@/pages/MemoryDetailPage';
 import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
 import ChannelsPage from '@/pages/ChannelsPage';
@@ -75,6 +76,7 @@ createRoot(el).render(
                 <Route path="tools" element={<ToolsPage />} />
                 <Route path="channels" element={<ChannelsPage />} />
                 <Route path="providers" element={<ProvidersPage />} />
+                <Route path="memory" element={<MemoryExplorerPage />} />
                 <Route path="memory/:id" element={<MemoryDetailPage />} />
                 <Route path="403" element={<ForbiddenView />} />
               </Route>

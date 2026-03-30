@@ -45,7 +45,9 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
             circle: inst.circle,
             lifecycle_mode: inst.lifecycle_mode,
             icon: template?.spec?.identity?.icon ?? template?.spec?.icon,
-            sandbox_boundary: template?.spec?.sandboxBoundary,
+            sandbox_boundary:
+              (inst as unknown as Record<string, unknown>).sandbox_boundary ??
+              template?.spec?.sandboxBoundary,
             created_at: inst.created_at,
             updated_at: inst.updated_at,
           };

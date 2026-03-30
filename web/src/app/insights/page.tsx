@@ -1,8 +1,5 @@
 import { useState, useCallback } from 'react';
-import * as Recharts from 'recharts';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const RC = Recharts as any;
-const {
+import {
   AreaChart,
   Area,
   BarChart,
@@ -13,7 +10,7 @@ const {
   Tooltip,
   ResponsiveContainer,
   Legend,
-} = RC;
+} from 'recharts';
 import { RefreshCw, Download, TrendingUp, Bot, DollarSign, Activity } from 'lucide-react';
 import { useUsage } from '@/hooks/useUsage';
 import { Skeleton } from '@/components/ui/skeleton';

@@ -79,8 +79,12 @@ function ChatPageContent() {
   } = useAgents();
   const { client: centrifugoClient } = useCentrifugoContext();
 
-  const [selectedAgent, setSelectedAgent] = useState<string>('');
-  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
+  const [selectedAgent, setSelectedAgent] = useState<string>(
+    () => sessionStorage.getItem('sera-chat-agent') ?? ''
+  );
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(
+    () => sessionStorage.getItem('sera-chat-agent-id') ?? ''
+  );
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -104,13 +108,22 @@ function ChatPageContent() {
     }
   }, [messages]);
 
-  // ── Auto-select first agent ──────────────────────────────────────────────────
+  // ── Auto-select agent (prefer running, persist to sessionStorage) ────────────
   useEffect(() => {
     if (agents && agents.length > 0 && !selectedAgent) {
-      setSelectedAgent(agents[0]!.name);
-      setSelectedAgentId(agents[0]!.id);
+      // Prefer a running agent over the first alphabetically
+      const running = agents.find((a) => a.status === 'running');
+      const pick = running ?? agents[0]!;
+      setSelectedAgent(pick.name);
+      setSelectedAgentId(pick.id);
     }
   }, [agents, selectedAgent]);
+
+  // Persist selected agent to sessionStorage so it survives navigation
+  useEffect(() => {
+    if (selectedAgent) sessionStorage.setItem('sera-chat-agent', selectedAgent);
+    if (selectedAgentId) sessionStorage.setItem('sera-chat-agent-id', selectedAgentId);
+  }, [selectedAgent, selectedAgentId]);
 
   // ── Reset conversation when agent changes ────────────────────────────────────
   useEffect(() => {

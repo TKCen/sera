@@ -21,12 +21,7 @@ export function ChatMessageBubble({
   onToggleThoughts,
 }: ChatMessageBubbleProps) {
   return (
-    <div
-      className={cn(
-        'flex gap-3 group',
-        msg.role === 'user' ? 'justify-end' : 'justify-start'
-      )}
-    >
+    <div className={cn('flex gap-3 group', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
       {msg.role === 'agent' && (
         <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
           <Bot size={16} className="text-sera-accent" />
@@ -90,9 +85,7 @@ export function ChatMessageBubble({
         </div>
 
         <div className="flex items-center gap-1.5 mt-1.5">
-          <span className="text-[10px] opacity-40">
-            {msg.createdAt.toLocaleTimeString()}
-          </span>
+          <span className="text-[10px] opacity-40">{msg.createdAt.toLocaleTimeString()}</span>
           {msg.role === 'agent' && msg.content && !msg.streaming && (
             <span className="opacity-0 group-hover:opacity-100 transition-opacity">
               <MessageCopyButton text={msg.content} />

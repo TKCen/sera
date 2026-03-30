@@ -200,17 +200,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'sera_knowledge_store': {
         const tags =
           typeof a.tags === 'string' ? (a.tags as string).split(',').map((t) => t.trim()) : [];
+        const blockType = encodeURIComponent(a.type as string);
         const body = {
+          title: (a.title as string) ?? 'Untitled',
           content: a.content,
-          type: a.type,
-          ...(a.title ? { title: a.title } : {}),
           ...(tags.length > 0 ? { tags } : {}),
+          source: 'mcp',
         };
-        // Use the blocks endpoint — write via the scoped store
-        const result = await seraFetch(
-          `/memory/${encodeURIComponent(a.agentId as string)}/blocks`,
-          { method: 'POST', body: JSON.stringify(body) }
-        );
+        // Use the legacy blocks endpoint: POST /api/memory/blocks/:type
+        const result = await seraFetch(`/memory/blocks/${blockType}`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
@@ -233,16 +234,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'sera_start_agent': {
-        const result = await seraFetch(`/agents/${encodeURIComponent(a.agentId as string)}/start`, {
-          method: 'POST',
-        });
+        const result = await seraFetch(
+          `/agents/instances/${encodeURIComponent(a.agentId as string)}/start`,
+          {
+            method: 'POST',
+          }
+        );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
       case 'sera_stop_agent': {
-        const result = await seraFetch(`/agents/${encodeURIComponent(a.agentId as string)}/stop`, {
-          method: 'POST',
-        });
+        const result = await seraFetch(
+          `/agents/instances/${encodeURIComponent(a.agentId as string)}/stop`,
+          {
+            method: 'POST',
+          }
+        );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 

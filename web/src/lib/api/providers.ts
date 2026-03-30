@@ -65,11 +65,11 @@ export function testProvider(
 }
 
 export function setActiveProvider(
-  providerId: string
-): Promise<{ success: boolean; activeProvider: string }> {
-  return request('/providers/active', {
-    method: 'POST',
-    body: JSON.stringify({ providerId }),
+  modelName: string
+): Promise<{ success: boolean; defaultModel: string }> {
+  return request('/providers/default-model', {
+    method: 'PUT',
+    body: JSON.stringify({ modelName }),
   });
 }
 

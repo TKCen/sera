@@ -105,5 +105,19 @@ export const createAuditRouter = () => {
     }
   });
 
+  /**
+   * Story 11.5: GET /api/audit/verify - Verify audit chain integrity.
+   * Requires admin role.
+   */
+  router.get('/verify', requireRole(['admin']), async (req, res) => {
+    try {
+      const count = req.query.count ? parseInt(req.query.count as string, 10) : undefined;
+      const result = await auditService.verifyIntegrity(count);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   return router;
 };

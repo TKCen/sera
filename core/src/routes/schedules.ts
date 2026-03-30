@@ -14,7 +14,7 @@ export const createSchedulesRouter = () => {
       const { agentId } = req.query;
       let query = `SELECT s.*, ai.name AS resolved_agent_name
         FROM schedules s
-        LEFT JOIN agent_instances ai ON s.agent_instance_id = ai.id::text`;
+        LEFT JOIN agent_instances ai ON s.agent_instance_id = ai.id`;
       const params = [];
       if (agentId) {
         query += ' WHERE s.agent_instance_id = $1';
@@ -31,13 +31,12 @@ export const createSchedulesRouter = () => {
           agentInstanceId: r.agent_instance_id,
           name: r.name,
           type: r.type ?? 'cron',
-          expression: r.cron_expression ?? r.expression,
-          taskPrompt: r.task_prompt,
+          expression: r.cron ?? r.expression,
+          taskPrompt: r.task,
           status: r.status,
           source: r.source ?? 'api',
-          lastRunAt: r.last_run_at,
+          lastRunAt: r.last_run_at ?? r.last_run,
           lastRunStatus: r.last_run_status,
-          lastRunOutput: r.last_run_output,
           nextRunAt: r.next_run_at,
           createdAt: r.created_at,
           updatedAt: r.updated_at,

@@ -99,6 +99,13 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         return;
       }
 
+      // Check for duplicate instance name
+      const existingInstance = await agentRegistry.getInstanceByName(name);
+      if (existingInstance) {
+        res.status(409).json({ error: `Agent instance with name "${name}" already exists` });
+        return;
+      }
+
       // Verify template exists
       const template = await agentRegistry.getTemplate(templateName);
       if (!template) {

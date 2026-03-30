@@ -2,6 +2,25 @@ import { Router } from 'express';
 import { ScheduleService } from '../services/ScheduleService.js';
 import { pool } from '../lib/database.js';
 
+/** Sanitize last_run_status to avoid leaking raw SQL errors to the frontend */
+function sanitizeRunStatus(value: unknown): string | null {
+  if (value == null) return null;
+  const str = String(value);
+  const sqlKeywords = [
+    'column',
+    'relation',
+    'constraint',
+    'violates',
+    'syntax error',
+    'ERROR:',
+    'DETAIL:',
+  ];
+  if (sqlKeywords.some((kw) => str.toLowerCase().includes(kw.toLowerCase()))) {
+    return 'Execution failed';
+  }
+  return str;
+}
+
 export const createSchedulesRouter = () => {
   const router = Router();
   const scheduleService = ScheduleService.getInstance();
@@ -36,7 +55,7 @@ export const createSchedulesRouter = () => {
           status: r.status,
           source: r.source ?? 'api',
           lastRunAt: r.last_run_at ?? r.last_run,
-          lastRunStatus: r.last_run_status,
+          lastRunStatus: sanitizeRunStatus(r.last_run_status),
           nextRunAt: r.next_run_at,
           createdAt: r.created_at,
           updatedAt: r.updated_at,

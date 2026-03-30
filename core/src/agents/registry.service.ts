@@ -90,6 +90,16 @@ export class AgentRegistry {
     lifecycleMode?: 'persistent' | 'ephemeral';
     parentInstanceId?: string;
   }) {
+    // Check for duplicate instance name
+    const existing = await this.pool.query('SELECT id FROM agent_instances WHERE name = $1', [
+      data.name,
+    ]);
+    if (existing.rows.length > 0) {
+      const err = new Error(`Agent instance with name "${data.name}" already exists`);
+      (err as Error & { status: number }).status = 409;
+      throw err;
+    }
+
     const id = crypto.randomUUID();
     // Derive workspace path if not provided (mirrors AgentFactory convention)
     const workspacePath =

@@ -65,8 +65,62 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
 
   router.get('/graph', async (_req, res) => {
     try {
-      const graph = await memoryManager.getGraph();
-      res.json(graph);
+      // Build graph from Epic 8 scoped blocks instead of legacy Letta-style graph
+      const agentIds = await scopedStore.listAgentIds();
+      const nodes: Array<{
+        id: string;
+        title: string;
+        type: string;
+        tags: string[];
+        nodeKind: 'block' | 'agent';
+        agentId?: string;
+      }> = [];
+      const edges: Array<{
+        source: string;
+        target: string;
+        kind: string;
+        relationship?: string;
+      }> = [];
+
+      for (const agentId of agentIds) {
+        nodes.push({
+          id: `agent:${agentId}`,
+          title: agentId,
+          type: 'agent',
+          tags: [],
+          nodeKind: 'agent',
+        });
+
+        const blocks = await scopedStore.list(agentId);
+        for (const block of blocks) {
+          nodes.push({
+            id: block.id,
+            title: block.title,
+            type: block.type,
+            tags: block.tags,
+            nodeKind: 'block',
+            agentId,
+          });
+
+          edges.push({
+            source: `agent:${agentId}`,
+            target: block.id,
+            kind: 'owns',
+          });
+
+          const links = extractLinks(block.content);
+          for (const link of links) {
+            edges.push({
+              source: block.id,
+              target: link.target,
+              kind: 'wikilink',
+              relationship: link.relationship,
+            });
+          }
+        }
+      }
+
+      res.json({ nodes, edges });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

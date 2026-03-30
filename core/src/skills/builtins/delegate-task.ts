@@ -20,7 +20,7 @@ const logger = new Logger('DelegateTask');
 export const delegateTaskSkill: SkillDefinition = {
   id: 'delegate-task',
   description:
-    'Delegate a task to another agent. Use "send" to dispatch a task, "check" to poll for results, or "list-agents" to discover available agents.',
+    'Delegate a task to another agent. Actions: "send" to delegate, "check" to poll result, "list-agents" to discover, "spawn-ephemeral" to create+execute a temporary agent.',
   source: 'builtin',
   parameters: [
     {
@@ -213,10 +213,55 @@ export const delegateTaskSkill: SkillDefinition = {
           };
         }
 
+        case 'spawn-ephemeral': {
+          const templateRef = params.templateRef as string;
+          const spawnTask = params.task as string;
+          const ttlMinutes = (params.ttlMinutes as number) || 30;
+
+          if (!templateRef || !spawnTask) {
+            return {
+              success: false,
+              error: 'spawn-ephemeral requires "templateRef" and "task" parameters.',
+            };
+          }
+
+          // Call the spawn-ephemeral API endpoint internally
+          const coreUrl = process.env.SERA_CORE_URL ?? 'http://sera-core:3001';
+          const apiKey = process.env.SERA_BOOTSTRAP_API_KEY ?? '';
+          const spawnRes = await fetch(`${coreUrl}/api/agents/spawn-ephemeral`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              templateRef,
+              task: spawnTask,
+              parentInstanceId: callerInstanceId,
+              ttlMinutes,
+            }),
+            signal: AbortSignal.timeout(ttlMinutes * 60_000),
+          });
+
+          const spawnBody = (await spawnRes.json()) as Record<string, unknown>;
+
+          if (!spawnRes.ok) {
+            return {
+              success: false,
+              error: `Ephemeral spawn failed: ${spawnBody.error ?? spawnRes.statusText}`,
+            };
+          }
+
+          return {
+            success: true,
+            data: spawnBody,
+          };
+        }
+
         default:
           return {
             success: false,
-            error: `Unknown action "${action}". Use "send", "check", or "list-agents".`,
+            error: `Unknown action "${action}". Use "send", "check", "list-agents", or "spawn-ephemeral".`,
           };
       }
     } catch (err: unknown) {

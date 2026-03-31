@@ -145,6 +145,20 @@ async function main(): Promise<void> {
         }
       });
     }
+
+    // Subscribe to delegation completion notifications (Story 17.x / #268)
+    await subscriber.subscribe(`agent:${AGENT_INSTANCE_ID}:status`, (msg) => {
+      const event = msg.payload?.event as string | undefined;
+      if (event === 'delegation.completed') {
+        const p = msg.payload as Record<string, unknown>;
+        const summary = p.resultSummary ? `\nResult: ${String(p.resultSummary).substring(0, 500)}` : '';
+        const errMsg = p.error ? `\nError: ${String(p.error)}` : '';
+        loop.receiveIncomingMessage(
+          'system',
+          `[DELEGATION COMPLETE] Task ${p.taskId} delegated to ${p.targetAgent} finished with status: ${p.status}${summary}${errMsg}`,
+        );
+      }
+    });
   } catch (err) {
     log('warn', `Failed to initialize Centrifugo subscriber: ${err instanceof Error ? err.message : String(err)}`);
   }

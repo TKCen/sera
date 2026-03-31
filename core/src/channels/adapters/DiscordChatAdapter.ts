@@ -268,9 +268,28 @@ export class DiscordChatAdapter {
         }
       }
 
-      // Process message
-      const response = await agent.process(text, history);
-      const reply = response.finalAnswer || response.thought || 'No response generated.';
+      // Process message — route through container chat for full tool catalog + fixed prompt
+      let reply: string;
+      try {
+        const chatUrl = await this.orchestrator.ensureContainerRunning(this.config.targetAgentId);
+        const chatRes = await fetch(`${chatUrl}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, sessionId, history }),
+          signal: AbortSignal.timeout(120_000),
+        });
+        if (chatRes.ok) {
+          const body = (await chatRes.json()) as { result: string | null; error?: string };
+          reply = body.result || 'No response generated.';
+        } else {
+          throw new Error(`Container chat returned ${chatRes.status}`);
+        }
+      } catch (containerErr) {
+        // Fallback to in-process if container unavailable
+        logger.warn('Container chat failed, falling back to in-process:', containerErr);
+        const response = await agent.process(text, history);
+        reply = response.finalAnswer || response.thought || 'No response generated.';
+      }
 
       // Persist messages
       await this.sessionStore.addMessage({ sessionId, role: 'user', content: text });

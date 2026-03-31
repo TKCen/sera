@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
 import { useNavigate } from 'react-router';
+import { MEMORY_TYPE_HEX } from '@/components/memory/constants';
 
 export interface GraphNode {
   id: string;
@@ -27,25 +28,6 @@ export interface MemoryGraphProps {
   searchQuery?: string;
   className?: string;
 }
-
-const TYPE_COLORS: Record<string, string> = {
-  // Epic 8 block types
-  fact: '#3b82f6', // blue
-  context: '#a855f7', // purple
-  memory: '#22c55e', // green
-  insight: '#eab308', // yellow
-  reference: '#06b6d4', // cyan
-  observation: '#f97316', // orange
-  decision: '#ef4444', // red
-  // Legacy types
-  human: '#60a5fa', // light blue
-  persona: '#c084fc', // light purple
-  core: '#4ade80', // light green
-  archive: '#6b7280', // gray
-  // Meta-node types (agent/circle)
-  agent: '#f472b6', // pink
-  circle: '#a78bfa', // violet
-};
 
 const DEFAULT_COLOR = '#9ca3af';
 
@@ -142,7 +124,7 @@ export default function MemoryGraph({
             node.tags.some((t: string) => t.toLowerCase().includes(searchQuery.toLowerCase())))
         : true;
 
-      const color = TYPE_COLORS[node.type] || DEFAULT_COLOR;
+      const color = MEMORY_TYPE_HEX[node.type] || DEFAULT_COLOR;
       const r = nodeRadius(node.type);
       const x = node.x || 0;
       const y = node.y || 0;
@@ -267,7 +249,7 @@ export default function MemoryGraph({
             <div key={type} className="flex items-center gap-2">
               <span
                 className={`w-3 h-3 shrink-0 ${type === 'agent' ? 'rotate-45' : 'rounded-full'}`}
-                style={{ backgroundColor: TYPE_COLORS[type] }}
+                style={{ backgroundColor: MEMORY_TYPE_HEX[type] }}
               />
               <span className="text-sera-text-muted capitalize">{type}</span>
             </div>

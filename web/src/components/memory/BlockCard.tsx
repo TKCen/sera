@@ -1,16 +1,7 @@
 import { Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { MEMORY_TYPE_TAILWIND } from '@/components/memory/constants';
 import type { ScopedBlock } from '@/lib/api/memory';
-
-const TYPE_COLORS: Record<string, string> = {
-  fact: 'bg-blue-500/15 text-blue-400',
-  context: 'bg-purple-500/15 text-purple-400',
-  memory: 'bg-green-500/15 text-green-400',
-  insight: 'bg-yellow-500/15 text-yellow-400',
-  reference: 'bg-cyan-500/15 text-cyan-400',
-  observation: 'bg-orange-500/15 text-orange-400',
-  decision: 'bg-red-500/15 text-red-400',
-};
 
 interface BlockCardProps {
   block: ScopedBlock;
@@ -21,7 +12,7 @@ interface BlockCardProps {
 }
 
 export function BlockCard({ block, showAgent, agentName, selected, onClick }: BlockCardProps) {
-  const typeColor = TYPE_COLORS[block.type] ?? 'bg-sera-surface text-sera-text-muted';
+  const typeColor = MEMORY_TYPE_TAILWIND[block.type] ?? 'bg-sera-surface text-sera-text-muted';
 
   return (
     <button

@@ -1,16 +1,7 @@
 import { Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { MEMORY_TYPE_DOT } from '@/components/memory/constants';
 import type { ScopedBlock } from '@/lib/api/memory';
-
-const TYPE_COLORS: Record<string, string> = {
-  fact: 'bg-blue-500',
-  context: 'bg-purple-500',
-  memory: 'bg-green-500',
-  insight: 'bg-yellow-500',
-  reference: 'bg-cyan-500',
-  observation: 'bg-orange-500',
-  decision: 'bg-red-500',
-};
 
 interface TimelineViewProps {
   blocks: ScopedBlock[];
@@ -68,7 +59,7 @@ export function TimelineView({
           {/* Timeline entries */}
           <div className="ml-1.5 border-l-2 border-sera-border pl-5 space-y-2">
             {dayBlocks.map((block) => {
-              const dotColor = TYPE_COLORS[block.type] ?? 'bg-sera-text-dim';
+              const dotColor = MEMORY_TYPE_DOT[block.type] ?? 'bg-sera-text-dim';
               const isSelected = selectedBlockId === block.id;
               return (
                 <button

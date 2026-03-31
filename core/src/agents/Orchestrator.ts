@@ -186,35 +186,47 @@ export class Orchestrator {
     // Convert the DB template row into an AgentManifest shape.
     // getTemplate() returns a raw DB row ({ name, display_name, spec, ... })
     // but AgentFactory.createAgent expects { metadata, identity, model, spec }.
+    // All spec-wrapped fields are normalized to top-level so consumers don't
+    // need to check both paths. (#539)
+    const s = templateRow.spec ?? {};
     const manifest: AgentManifest = {
       apiVersion: 'sera/v1',
       kind: 'Agent',
       metadata: {
         name: templateRow.name,
         displayName: templateRow.display_name ?? templateRow.name,
-        icon: templateRow.spec?.identity?.icon ?? '',
-        circle: templateRow.spec?.circle ?? instance.circle,
-        tier:
-          templateRow.spec?.sandboxBoundary === 'tier-3'
-            ? 3
-            : templateRow.spec?.sandboxBoundary === 'tier-2'
-              ? 2
-              : 1,
+        icon: s.identity?.icon ?? '',
+        circle: s.circle ?? instance.circle,
+        tier: s.sandboxBoundary === 'tier-3' ? 3 : s.sandboxBoundary === 'tier-2' ? 2 : 1,
       },
       identity: {
-        role: templateRow.spec?.identity?.role ?? templateRow.name,
-        description: templateRow.spec?.identity?.description ?? '',
-        communicationStyle: templateRow.spec?.identity?.communicationStyle,
-        principles: templateRow.spec?.identity?.principles,
+        role: s.identity?.role ?? templateRow.name,
+        description: s.identity?.description ?? '',
+        communicationStyle: s.identity?.communicationStyle,
+        principles: s.identity?.principles,
       },
       model: {
-        provider: templateRow.spec?.model?.provider ?? 'default',
-        name: templateRow.spec?.model?.name ?? 'default',
-        temperature: templateRow.spec?.model?.temperature,
-        fallback: templateRow.spec?.model?.fallback,
+        provider: s.model?.provider ?? 'default',
+        name: s.model?.name ?? 'default',
+        temperature: s.model?.temperature,
+        fallback: s.model?.fallback,
       },
-      spec: templateRow.spec ?? {},
+      spec: s,
     };
+
+    // Normalize spec-wrapped fields to top-level so consumers don't need
+    // to check both manifest.X and manifest.spec.X (#539)
+    const m = manifest as unknown as Record<string, unknown>;
+    if (s.tools) m['tools'] = s.tools;
+    if (s.skills) m['skills'] = s.skills;
+    if (s.skillPackages) m['skillPackages'] = s.skillPackages;
+    if (s.subagents) m['subagents'] = s.subagents;
+    if (s.resources) m['resources'] = s.resources;
+    if (s.workspace) m['workspace'] = s.workspace;
+    if (s.memory) m['memory'] = s.memory;
+    if (s.permissions) m['permissions'] = s.permissions;
+    if (s.capabilities) m['capabilities'] = s.capabilities;
+    if (s.schedules) m['schedules'] = s.schedules;
 
     // ── Apply instance overrides (model, sandboxBoundary, resources) ──────
     const overrides = (instance.overrides ?? {}) as Record<string, unknown>;

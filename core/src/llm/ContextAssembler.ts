@@ -63,26 +63,19 @@ export class ContextAssembler {
       return messages;
     }
 
-    // Resolve memory config from top-level or spec-wrapped format
-    const memoryConfig =
-      manifest.memory ??
-      ((manifest.spec as Record<string, unknown> | undefined)?.memory as
-        | Record<string, unknown>
-        | undefined);
-
     emit({
       stage: 'assembly.started',
       detail: {
         agentId,
         agentName: manifest.metadata.name,
-        hasMemoryConfig: !!memoryConfig,
+        hasMemoryConfig: !!manifest.memory,
         skillCount: (manifest.skills ?? []).length,
         messageCount: messages.length,
       },
     });
 
     // Skip assembly if agent has no memory configuration
-    if (!memoryConfig) {
+    if (!manifest.memory) {
       emit({
         stage: 'assembly.skipped',
         detail: { reason: 'no memory configuration' },

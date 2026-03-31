@@ -237,7 +237,9 @@ export class ToolExecutor {
     }
     if (pattern.endsWith('.*')) {
       const prefix = pattern.slice(0, -2);
-      return toolId === prefix || toolId.startsWith(prefix + '.') || toolId.startsWith(prefix + '/');
+      return (
+        toolId === prefix || toolId.startsWith(prefix + '.') || toolId.startsWith(prefix + '/')
+      );
     }
     return pattern === toolId;
   }

@@ -99,7 +99,7 @@ async function forwardToContainer(
     history: ChatMessage[];
     messageId?: string;
   }
-): Promise<{ reply: string; thought?: string }> {
+): Promise<{ reply: string; thought?: string; thoughts?: ContainerChatResponse['thoughts'] }> {
   const res = await fetch(`${chatUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -113,11 +113,11 @@ async function forwardToContainer(
   }
 
   const body = (await res.json()) as ContainerChatResponse;
-  const result: { reply: string; thought?: string } = {
+  return {
     reply: body.result || 'No response generated.',
+    ...(body.error ? { thought: `Error: ${body.error}` } : {}),
+    ...(body.thoughts?.length ? { thoughts: body.thoughts } : {}),
   };
-  if (body.error) result.thought = `Error: ${body.error}`;
-  return result;
 }
 
 /**
@@ -129,10 +129,16 @@ async function persistAndFinalize(
   agentName: string,
   message: string,
   reply: string,
-  isNew: boolean
+  isNew: boolean,
+  thoughts?: ContainerChatResponse['thoughts']
 ): Promise<void> {
   await sessionStore.addMessage({ sessionId, role: 'user', content: message });
-  await sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+  await sessionStore.addMessage({
+    sessionId,
+    role: 'assistant',
+    content: reply,
+    ...(thoughts?.length ? { metadata: { thoughts } } : {}),
+  });
 
   if (isNew) {
     const autoTitle = message.length > 60 ? message.substring(0, 57) + '...' : message;
@@ -221,26 +227,42 @@ export function createChatRouter(
         // Background processing — errors are logged, not returned
         (async () => {
           try {
-            const { reply } = await forwardToContainer(chatUrl, {
+            const { reply, thoughts } = await forwardToContainer(chatUrl, {
               message,
               sessionId,
               history,
               messageId,
             });
-            await persistAndFinalize(sessionStore, sessionId, agentName, message, reply, isNew);
+            await persistAndFinalize(
+              sessionStore,
+              sessionId,
+              agentName,
+              message,
+              reply,
+              isNew,
+              thoughts
+            );
           } catch (err) {
             logger.error(`[${agent.name}] Stream processing error:`, err);
           }
         })();
       } else {
         // ── Synchronous mode: wait for response ─────────────────────────
-        const { reply, thought } = await forwardToContainer(chatUrl, {
+        const { reply, thought, thoughts } = await forwardToContainer(chatUrl, {
           message,
           sessionId,
           history,
         });
 
-        await persistAndFinalize(sessionStore, sessionId, agentName, message, reply, isNew);
+        await persistAndFinalize(
+          sessionStore,
+          sessionId,
+          agentName,
+          message,
+          reply,
+          isNew,
+          thoughts
+        );
         res.json({ sessionId, reply, thought });
       }
     } catch (error: unknown) {

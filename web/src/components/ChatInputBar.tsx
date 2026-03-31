@@ -25,10 +25,17 @@ export function ChatInputBar({
   queueCount = 0,
 }: ChatInputBarProps) {
   return (
-    <div className="flex items-end gap-2">
+    <form
+      className="flex items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSend();
+      }}
+    >
       <div className="relative flex-1">
         <textarea
           ref={inputRef}
+          aria-label="Chat input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -57,20 +64,23 @@ export function ChatInputBar({
       </div>
       {streaming && onCancel ? (
         <button
+          type="button"
           onClick={onCancel}
           className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-error/80 text-white flex items-center justify-center hover:bg-sera-error transition-all"
           title="Stop generating"
+          aria-label="Stop generating"
         >
           <StopCircle size={14} />
         </button>
       ) : null}
       <button
-        onClick={() => void handleSend()}
+        type="submit"
         disabled={!input.trim() || !selectedAgent}
         className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
+        aria-label="Send message"
       >
         {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
       </button>
-    </div>
+    </form>
   );
 }

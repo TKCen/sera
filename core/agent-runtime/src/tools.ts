@@ -218,7 +218,7 @@ export class RuntimeToolExecutor {
   /**
    * Execute a single tool call and return a tool-role ChatMessage.
    */
-  executeTool(toolCall: ToolCall): ChatMessage {
+  async executeTool(toolCall: ToolCall): Promise<ChatMessage> {
     const { id, function: fn } = toolCall;
     const toolName = fn.name;
     const start = Date.now();
@@ -255,10 +255,10 @@ export class RuntimeToolExecutor {
           );
           break;
         case 'spawn-subagent':
-          result = this.spawnSubagent(params['role'] as string, params['task'] as string);
+          result = await this.spawnSubagent(params['role'] as string, params['task'] as string);
           break;
         case 'run-tool':
-          result = this.runTool(
+          result = await this.runTool(
             params['tool_name'] as string,
             params['command'] as string,
             params['timeout_seconds'] as number | undefined,
@@ -277,7 +277,7 @@ export class RuntimeToolExecutor {
         if (fileTools.has(toolName)) {
           // Parse args again (already parsed above but out of scope)
           const params = parseJson(fn.arguments || '{}');
-          return this.executeProxiedTool(id, toolName, params, start);
+          return await this.executeProxiedTool(id, toolName, params, start);
         }
       }
 
@@ -288,10 +288,14 @@ export class RuntimeToolExecutor {
   }
 
   /**
-   * Execute multiple tool calls sequentially.
+   * Execute multiple tool calls sequentially (order matters for state).
    */
-  executeToolCalls(toolCalls: ToolCall[]): ChatMessage[] {
-    return toolCalls.map((tc) => this.executeTool(tc));
+  async executeToolCalls(toolCalls: ToolCall[]): Promise<ChatMessage[]> {
+    const results: ChatMessage[] = [];
+    for (const tc of toolCalls) {
+      results.push(await this.executeTool(tc));
+    }
+    return results;
   }
 
   // ── Built-in Tool Handlers ────────────────────────────────────────────────
@@ -419,7 +423,7 @@ export class RuntimeToolExecutor {
    * Spawn a subagent via sera-core's POST /api/sandbox/subagent endpoint.
    * The subagent runs asynchronously — this returns the spawn result (container ID, status).
    */
-  private spawnSubagent(role: string, task: string): string {
+  private async spawnSubagent(role: string, task: string): Promise<string> {
     if (this.tier === 1) {
       throw new NotPermittedError('spawn-subagent is not available for tier-1 agents');
     }
@@ -430,47 +434,29 @@ export class RuntimeToolExecutor {
     const agentName = process.env['AGENT_NAME'] ?? 'unknown';
     const coreUrl = process.env['SERA_CORE_URL'] ?? '';
     const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
-    const body = JSON.stringify({ agentName, subagentRole: role, task });
 
-    const result = spawnSync(
-      'curl',
-      [
-        '-s',
-        '-X',
-        'POST',
-        `${coreUrl}/api/sandbox/subagent`,
-        '-H',
-        'Content-Type: application/json',
-        '-H',
-        `Authorization: Bearer ${token}`,
-        '-d',
-        body,
-        '-w',
-        '\n%{http_code}',
-      ],
-      { timeout: 120_000, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 },
-    );
+    try {
+      const res = await fetch(`${coreUrl}/api/sandbox/subagent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ agentName, subagentRole: role, task }),
+        signal: AbortSignal.timeout(120_000),
+      });
 
-    const output = (result.stdout ?? '').trimEnd();
-    const lines = output.split('\n');
-    const httpStatus = lines.pop() ?? '';
-    const responseBody = lines.join('\n');
-
-    if (httpStatus === '403') {
-      return `Error: Permission denied — ${responseBody}`;
+      const responseBody = await res.text();
+      if (res.status === 403) return `Error: Permission denied — ${responseBody}`;
+      if (!res.ok) return `Error: Subagent spawn failed (HTTP ${res.status}): ${responseBody}`;
+      return responseBody;
+    } catch (err) {
+      return `Error: Subagent spawn failed: ${err instanceof Error ? err.message : String(err)}`;
     }
-    if (httpStatus !== '201' && httpStatus !== '200') {
-      return `Error: Subagent spawn failed (HTTP ${httpStatus}): ${responseBody}`;
-    }
-
-    return responseBody;
   }
 
   /**
    * Run an ephemeral tool via sera-core's POST /api/sandbox/tool endpoint.
    * The tool runs in a short-lived container and returns its output.
    */
-  private runTool(toolName: string, command: string, timeoutSeconds?: number): string {
+  private async runTool(toolName: string, command: string, timeoutSeconds?: number): Promise<string> {
     if (this.tier === 1) {
       throw new NotPermittedError('run-tool is not available for tier-1 agents');
     }
@@ -481,46 +467,28 @@ export class RuntimeToolExecutor {
     const agentName = process.env['AGENT_NAME'] ?? 'unknown';
     const coreUrl = process.env['SERA_CORE_URL'] ?? '';
     const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
-    const body = JSON.stringify({
-      agentName,
-      toolName,
-      command,
-      ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
-    });
+    const timeoutMs = Math.min((timeoutSeconds ?? 120) + 10, 310) * 1000;
 
-    const curlTimeout = Math.min((timeoutSeconds ?? 120) + 10, 310);
-    const result = spawnSync(
-      'curl',
-      [
-        '-s',
-        '-X',
-        'POST',
-        `${coreUrl}/api/sandbox/tool`,
-        '-H',
-        'Content-Type: application/json',
-        '-H',
-        `Authorization: Bearer ${token}`,
-        '-d',
-        body,
-        '-w',
-        '\n%{http_code}',
-      ],
-      { timeout: curlTimeout * 1000, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 },
-    );
+    try {
+      const res = await fetch(`${coreUrl}/api/sandbox/tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          agentName,
+          toolName,
+          command,
+          ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
 
-    const output = (result.stdout ?? '').trimEnd();
-    const lines = output.split('\n');
-    const httpStatus = lines.pop() ?? '';
-    const responseBody = lines.join('\n');
-
-    if (httpStatus === '403') {
-      return `Error: Permission denied — ${responseBody}`;
+      const responseBody = await res.text();
+      if (res.status === 403) return `Error: Permission denied — ${responseBody}`;
+      if (!res.ok) return `Error: Tool execution failed (HTTP ${res.status}): ${responseBody}`;
+      return responseBody;
+    } catch (err) {
+      return `Error: Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
     }
-    if (httpStatus !== '200') {
-      return `Error: Tool execution failed (HTTP ${httpStatus}): ${responseBody}`;
-    }
-
-    return responseBody;
   }
 
   // ── Proxy Support (Story 3.10) ────────────────────────────────────────────
@@ -534,56 +502,45 @@ export class RuntimeToolExecutor {
    * Forward a file tool call to sera-core's /v1/tools/proxy endpoint.
    * The proxy validates that the agent has an active grant for the path.
    */
-  private executeProxiedTool(
+  private async executeProxiedTool(
     toolCallId: string,
     toolName: string,
     args: Record<string, unknown>,
     startMs: number,
-  ): ChatMessage {
+  ): Promise<ChatMessage> {
     try {
-      // Use synchronous XMLHttpRequest pattern via spawnSync + curl for bun compat
-      // Bun supports top-level await but executeTool is sync — use spawnSync
       const coreUrl = process.env['SERA_CORE_URL'] ?? '';
       const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
-      const body = JSON.stringify({ tool: toolName, args });
-      const result = spawnSync('curl', [
-        '-s', '-X', 'POST',
-        `${coreUrl}/v1/tools/proxy`,
-        '-H', 'Content-Type: application/json',
-        '-H', `Authorization: Bearer ${token}`,
-        '-d', body,
-        '-w', '\n%{http_code}',
-      ], {
-        timeout: 30_000,
-        encoding: 'utf-8',
-        maxBuffer: 2 * 1024 * 1024,
+
+      const res = await fetch(`${coreUrl}/v1/tools/proxy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tool: toolName, args }),
+        signal: AbortSignal.timeout(30_000),
       });
 
-      const output = result.stdout ?? '';
-      const lines = output.trimEnd().split('\n');
-      const httpStatus = lines.pop() ?? '';
-      const responseBody = lines.join('\n');
+      const responseBody = await res.text();
 
-      if (httpStatus === '403') {
+      if (res.status === 403) {
         this.logInvocation(toolName, 'error', Date.now() - startMs);
         return {
           role: 'tool',
           tool_call_id: toolCallId,
-          content: `Error: No active grant for this path. Request filesystem access first.`,
+          content: 'Error: No active grant for this path. Request filesystem access first.',
         };
       }
 
-      if (httpStatus !== '200') {
+      if (!res.ok) {
         this.logInvocation(toolName, 'error', Date.now() - startMs);
         return {
           role: 'tool',
           tool_call_id: toolCallId,
-          content: `Error: Proxy returned HTTP ${httpStatus}: ${responseBody}`,
+          content: `Error: Proxy returned HTTP ${res.status}: ${responseBody}`,
         };
       }
 
       const parsed = parseJson(responseBody);
-      const content = parsed['result'] as string | undefined ?? parsed['error'] as string | undefined ?? responseBody;
+      const content = (parsed['result'] as string | undefined) ?? (parsed['error'] as string | undefined) ?? responseBody;
       this.logInvocation(toolName, 'success', Date.now() - startMs);
       return { role: 'tool', tool_call_id: toolCallId, content: this.truncate(String(content)) };
     } catch (err) {

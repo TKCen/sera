@@ -217,7 +217,7 @@ export class ReasoningLoop {
           });
 
           // Execute tools and add results
-          const toolResults = this.tools.executeToolCalls(response.toolCalls);
+          const toolResults = await this.tools.executeToolCalls(response.toolCalls);
           for (const result of toolResults) {
             // Pre-truncate tool output before adding to history
             result.content = this.contextManager.truncateToolOutput(result.content);

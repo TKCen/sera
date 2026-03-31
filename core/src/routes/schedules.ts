@@ -44,22 +44,29 @@ export const createSchedulesRouter = () => {
       const { rows } = await pool.query(query, params);
       // Map snake_case DB columns to camelCase for the frontend
       res.json(
-        rows.map((r: Record<string, unknown>) => ({
-          id: r.id,
-          agentName: (r.resolved_agent_name as string) ?? r.agent_name ?? r.agent_instance_id,
-          agentInstanceId: r.agent_instance_id,
-          name: r.name,
-          type: r.type ?? 'cron',
-          expression: r.cron ?? r.expression,
-          taskPrompt: r.task,
-          status: r.status,
-          source: r.source ?? 'api',
-          lastRunAt: r.last_run_at ?? r.last_run,
-          lastRunStatus: sanitizeRunStatus(r.last_run_status),
-          nextRunAt: r.next_run_at,
-          createdAt: r.created_at,
-          updatedAt: r.updated_at,
-        }))
+        rows.map((r: Record<string, unknown>) => {
+          // task is jsonb — may be a string, object, or null
+          const rawTask = r.task;
+          const taskPrompt =
+            typeof rawTask === 'string' ? rawTask : rawTask != null ? JSON.stringify(rawTask) : '';
+
+          return {
+            id: r.id,
+            agentName: (r.resolved_agent_name as string) ?? r.agent_name ?? r.agent_instance_id,
+            agentInstanceId: r.agent_instance_id,
+            name: r.name,
+            type: r.type ?? 'cron',
+            expression: r.cron ?? r.expression,
+            taskPrompt,
+            status: r.status,
+            source: r.source ?? 'api',
+            lastRunAt: r.last_run_at ?? r.last_run,
+            lastRunStatus: sanitizeRunStatus(r.last_run_status),
+            nextRunAt: r.next_run_at,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+          };
+        })
       );
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

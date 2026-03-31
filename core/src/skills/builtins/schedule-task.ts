@@ -31,8 +31,8 @@ export const scheduleTaskSkill: SkillDefinition = {
     },
     {
       name: 'task',
-      type: 'object',
-      description: 'JSON object representing the task to be executed.',
+      type: 'string',
+      description: 'The prompt/instruction to execute when the schedule fires.',
       required: false,
     },
     {
@@ -58,15 +58,19 @@ export const scheduleTaskSkill: SkillDefinition = {
       action: string;
       name?: string;
       cron?: string;
-      task?: object;
+      task?: string | object;
       scheduleId?: string;
       status?: string;
     };
 
+    // Normalize task to a string prompt — the LLM may send a string or an object
+    const taskPrompt =
+      task == null ? undefined : typeof task === 'string' ? task : JSON.stringify(task);
+
     try {
       switch (action) {
         case 'create': {
-          if (!name || !cron || !task) {
+          if (!name || !cron || !taskPrompt) {
             return {
               success: false,
               error: 'name, cron, and task are required for create action.',
@@ -75,9 +79,9 @@ export const scheduleTaskSkill: SkillDefinition = {
           const newId = uuidv4();
           const now = new Date().toISOString();
           await query(
-            `INSERT INTO schedules (id, agent_id, name, cron, task, status, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)`,
-            [newId, agentId, name, cron, JSON.stringify(task), now]
+            `INSERT INTO schedules (id, agent_instance_id, agent_name, name, expression, type, task, source, status, created_at, updated_at)
+             VALUES ($1, $2, (SELECT name FROM agent_instances WHERE id = $2), $3, $4, 'cron', $5, 'api', 'active', $6, $6)`,
+            [newId, agentId, name, cron, taskPrompt, now]
           );
           return {
             success: true,
@@ -87,7 +91,8 @@ export const scheduleTaskSkill: SkillDefinition = {
 
         case 'list': {
           const listResult = await query(
-            'SELECT id, name, cron, task, status, last_run FROM schedules WHERE agent_id = $1',
+            `SELECT id, name, expression AS cron, task, status, last_run_at AS last_run
+             FROM schedules WHERE agent_instance_id = $1`,
             [agentId]
           );
           return { success: true, data: { schedules: listResult.rows } };
@@ -96,10 +101,10 @@ export const scheduleTaskSkill: SkillDefinition = {
         case 'delete': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for delete action.' };
-          const delRes = await query('DELETE FROM schedules WHERE id = $1 AND agent_id = $2', [
-            scheduleId,
-            agentId,
-          ]);
+          const delRes = await query(
+            'DELETE FROM schedules WHERE id = $1 AND agent_instance_id = $2',
+            [scheduleId, agentId]
+          );
           if (delRes.rowCount === 0)
             return { success: false, error: 'Schedule not found or not owned by this agent.' };
           return { success: true, data: { message: 'Schedule deleted successfully.' } };
@@ -109,7 +114,7 @@ export const scheduleTaskSkill: SkillDefinition = {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for update action.' };
           const currentRes = await query(
-            'SELECT * FROM schedules WHERE id = $1 AND agent_id = $2',
+            'SELECT * FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, agentId]
           );
           if (currentRes.rows.length === 0)
@@ -117,12 +122,12 @@ export const scheduleTaskSkill: SkillDefinition = {
 
           const current = currentRes.rows[0];
           const updName = name ?? current.name;
-          const updCron = cron ?? current.cron;
-          const updTask = task ? JSON.stringify(task) : current.task;
+          const updCron = cron ?? (current.expression || current.cron);
+          const updTask = taskPrompt ?? current.task;
           const updStatus = status ?? current.status;
 
           await query(
-            `UPDATE schedules SET name = $1, cron = $2, task = $3, status = $4, updated_at = NOW()
+            `UPDATE schedules SET name = $1, expression = $2, task = $3, status = $4, updated_at = NOW()
              WHERE id = $5`,
             [updName, updCron, updTask, updStatus, scheduleId]
           );

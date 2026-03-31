@@ -233,7 +233,9 @@ export class ReasoningLoop {
         }
 
         // ── Text Response ──────────────────────────────────────────────────
-        const reply = response.content || 'No response generated.';
+        // Reasoning models (Qwen3, DeepSeek-R1) may produce reasoning_content
+        // but empty content. Use reasoning as fallback so the response isn't lost.
+        const reply = response.content || response.reasoning || 'No response generated.';
         await think('reflect', `Completed task after ${iteration} iteration(s)`, iteration);
 
         // Stream response tokens — use the caller-provided taskId so the

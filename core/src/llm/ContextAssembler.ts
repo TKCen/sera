@@ -115,6 +115,32 @@ export class ContextAssembler {
 
     const newSystemContent = memoryContext ? `${skillsPrompt}\n\n${memoryContext}` : skillsPrompt;
 
+    // Estimate token counts for the token budget visualization (#535 / context debug)
+    const estimateTokens = (text: string) => Math.ceil(text.length / 4);
+    const systemPromptTokens = estimateTokens(systemMessage.content ?? '');
+    const skillTokens = estimateTokens(skillsPrompt) - systemPromptTokens;
+    const memoryTokens = memoryContext ? estimateTokens(memoryContext) : 0;
+    const historyTokens = messages
+      .filter((m) => m.role !== 'system')
+      .reduce((sum, m) => sum + estimateTokens(m.content ?? ''), 0);
+
+    const modelName = manifest.model?.name ?? 'default';
+    const contextWindow =
+      ((manifest.spec as Record<string, unknown>)?.contextWindow as number) ?? 128_000;
+
+    emit({
+      stage: 'context.token_budget',
+      detail: {
+        totalBudget: contextWindow,
+        contextWindow,
+        systemPromptTokens,
+        skillTokens: Math.max(0, skillTokens),
+        memoryTokens,
+        historyTokens,
+        model: modelName,
+      },
+    });
+
     emit({
       stage: 'assembly.completed',
       detail: {

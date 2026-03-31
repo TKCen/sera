@@ -29,7 +29,7 @@ import readline from 'readline';
 import axios from 'axios';
 import { loadManifest } from './manifest.js';
 import { LLMClient } from './llmClient.js';
-import { RuntimeToolExecutor } from './tools.js';
+import { RuntimeToolExecutor } from './tools/index.js';
 import { CentrifugoPublisher, CentrifugoSubscriber } from './centrifugo.js';
 import { ReasoningLoop } from './loop.js';
 import type { TaskInput, TaskOutput } from './loop.js';

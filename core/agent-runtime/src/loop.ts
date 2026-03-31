@@ -7,7 +7,7 @@
 
 import type { LLMClient, ChatMessage, ToolDefinition, LLMResponse } from './llmClient.js';
 import { BudgetExceededError, ProviderUnavailableError } from './llmClient.js';
-import type { RuntimeToolExecutor } from './tools.js';
+import type { RuntimeToolExecutor } from './tools/index.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';

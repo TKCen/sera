@@ -119,7 +119,7 @@ export function createLlmProxyRouter(
       // ── 2. Validate request body ───────────────────────────────────────────
       const body = req.body as Record<string, unknown>;
       const { model, temperature, tools, stream } = body;
-      let messages = body['messages'] as import('../agents/types.js').ChatMessage[] | undefined;
+      let messages = body['messages'] as import('../llm/LlmRouter.js').ChatMessage[] | undefined;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         res
@@ -131,16 +131,16 @@ export function createLlmProxyRouter(
       // ── 2.1 Context Assembly (Story 6.3 / 8.4 / #308) ────────────────────
       try {
         if (messages) {
-          messages = (await contextAssembler.assemble(
+          messages = await contextAssembler.assemble(
             agentId,
-            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+            messages,
             (event) => {
               logger.info(`[context-assembly] ${event.stage}`, {
                 ...event.detail,
                 ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
               });
             }
-          )) as unknown as import('../agents/types.js').ChatMessage[];
+          );
         }
       } catch (err) {
         logger.error('Context assembly failed (continuing without enrichment):', err);
@@ -152,8 +152,8 @@ export function createLlmProxyRouter(
       // ── 2.2 Context Compaction (#387) ──────────────────────────────────────
       try {
         if (contextCompactionService && messages) {
-          messages = (await contextCompactionService.compact(
-            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+          messages = await contextCompactionService.compact(
+            messages,
             modelName,
             (event) => {
               logger.info(`[context-compaction] ${event.stage}`, {
@@ -161,7 +161,7 @@ export function createLlmProxyRouter(
                 ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
               });
             }
-          )) as unknown as import('../agents/types.js').ChatMessage[];
+          );
         }
       } catch (err) {
         logger.error('Context compaction failed (continuing with full context):', err);
@@ -169,7 +169,7 @@ export function createLlmProxyRouter(
 
       const chatRequest = {
         model: modelName,
-        messages: messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+        messages: messages,
         ...(temperature !== undefined ? { temperature: temperature as number } : {}),
         ...(Array.isArray(tools) ? { tools: tools as unknown[] } : {}),
       };

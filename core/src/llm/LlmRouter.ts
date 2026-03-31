@@ -345,6 +345,12 @@ export interface ModelListItem {
   baseUrl?: string;
   description?: string;
   dynamicProviderId?: string;
+  authStatus?: 'configured' | 'missing' | 'not-required';
+  contextWindow?: number;
+  maxTokens?: number;
+  contextStrategy?: string;
+  contextHighWaterMark?: number;
+  contextCompactionModel?: string;
 }
 
 // ── LlmRouter ─────────────────────────────────────────────────────────────────
@@ -508,15 +514,14 @@ export class LlmRouter {
       if (cfg.baseUrl !== undefined) item.baseUrl = cfg.baseUrl;
       if (cfg.description !== undefined) item.description = cfg.description;
       if (cfg.dynamicProviderId !== undefined) item.dynamicProviderId = cfg.dynamicProviderId;
-      const extra = item as unknown as Record<string, unknown>;
-      extra.authStatus = cfg.authStatus;
-      if (cfg.contextWindow !== undefined) extra.contextWindow = cfg.contextWindow;
-      if (cfg.maxTokens !== undefined) extra.maxTokens = cfg.maxTokens;
-      if (cfg.contextStrategy !== undefined) extra.contextStrategy = cfg.contextStrategy;
+      item.authStatus = cfg.authStatus;
+      if (cfg.contextWindow !== undefined) item.contextWindow = cfg.contextWindow;
+      if (cfg.maxTokens !== undefined) item.maxTokens = cfg.maxTokens;
+      if (cfg.contextStrategy !== undefined) item.contextStrategy = cfg.contextStrategy;
       if (cfg.contextHighWaterMark !== undefined)
-        extra.contextHighWaterMark = cfg.contextHighWaterMark;
+        item.contextHighWaterMark = cfg.contextHighWaterMark;
       if (cfg.contextCompactionModel !== undefined)
-        extra.contextCompactionModel = cfg.contextCompactionModel;
+        item.contextCompactionModel = cfg.contextCompactionModel;
       return item;
     });
   }

@@ -543,7 +543,22 @@ export async function verifyDelegationToken(
       algorithms: ['HS256'],
       issuer: 'sera',
     });
-    return payload as unknown as { sub: string; act: string; scope: DelegationScope; jti: string };
+
+    if (
+      typeof payload.sub === 'string' &&
+      typeof payload.act === 'string' &&
+      typeof payload.jti === 'string' &&
+      typeof payload.scope === 'object' &&
+      payload.scope !== null
+    ) {
+      return {
+        sub: payload.sub,
+        act: payload.act,
+        scope: payload.scope as DelegationScope,
+        jti: payload.jti
+      };
+    }
+    return null;
   } catch {
     return null;
   }

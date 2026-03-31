@@ -236,8 +236,7 @@ export class AgentManifestLoader {
     // Type assertions are safe here because we've manually validated the required fields
     // using the AgentManifestLoader.require* helpers above.
     // Cast through unknown to avoid returning a brand-new object
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return obj as any as AgentManifest;
+    return obj as unknown as AgentManifest;
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────

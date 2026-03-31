@@ -154,7 +154,7 @@ export function createChatRouter(
   sessionStore: SessionStore,
   orchestrator: Orchestrator,
   agentRegistry?: AgentRegistry
-) {
+): import('express').Router {
   const router = Router();
 
   /**

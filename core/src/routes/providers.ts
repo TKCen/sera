@@ -62,7 +62,7 @@ export function createProvidersRouter(
   llmRouter: LlmRouter,
   circuitBreakerService: CircuitBreakerService,
   dynamicProviderManager: DynamicProviderManager
-): Router {
+): import('express').Router {
   const router = Router();
   const healthService = new ProviderHealthService();
 

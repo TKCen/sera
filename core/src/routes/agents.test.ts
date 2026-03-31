@@ -5,9 +5,9 @@ import { createAgentRouter } from './agents.js';
 
 describe('Agents Routes', () => {
   let app: express.Express;
-  let orchestratorMock: any;
-  let agentRegistryMock: any;
-  let intercomMock: any;
+  let orchestratorMock: import('vitest').Mocked<Partial<import('../agents/Orchestrator.js').Orchestrator>>;
+  let agentRegistryMock: import('vitest').Mocked<Partial<import('../agents/registry.service.js').AgentRegistry>>;
+  let intercomMock: import('vitest').Mocked<Partial<import('../intercom/IntercomService.js').IntercomService>>;
 
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -15,7 +15,7 @@ describe('Agents Routes', () => {
     intercomMock = {
       publish: vi.fn(),
       getThoughts: vi.fn(),
-    };
+    } as unknown as import('vitest').Mocked<Partial<import('../intercom/IntercomService.js').IntercomService>>;
 
     orchestratorMock = {
       startInstance: vi.fn(),
@@ -27,7 +27,7 @@ describe('Agents Routes', () => {
       getIntercom: vi.fn().mockReturnValue(intercomMock),
       ensureContainerRunning: vi.fn().mockResolvedValue('http://mock-container:8080'),
       registerEphemeralTTL: vi.fn(),
-    };
+    } as unknown as import('vitest').Mocked<Partial<import('../agents/Orchestrator.js').Orchestrator>>;
 
     agentRegistryMock = {
       listInstances: vi.fn().mockResolvedValue([]),
@@ -37,11 +37,14 @@ describe('Agents Routes', () => {
       getInstance: vi.fn(),
       updateInstanceStatus: vi.fn(),
       deleteInstance: vi.fn(),
-    };
+    } as unknown as import('vitest').Mocked<Partial<import('../agents/registry.service.js').AgentRegistry>>;
 
     app = express();
     app.use(express.json());
-    app.use('/api/agents', createAgentRouter(orchestratorMock, agentRegistryMock));
+    app.use('/api/agents', createAgentRouter(
+      orchestratorMock as import('../agents/Orchestrator.js').Orchestrator,
+      agentRegistryMock as import('../agents/registry.service.js').AgentRegistry
+    ));
   });
 
   describe('POST /api/agents/spawn-ephemeral', () => {
@@ -50,8 +53,8 @@ describe('Agents Routes', () => {
       const task = 'hello world';
       const instanceId = 'ephemeral-123';
 
-      agentRegistryMock.getTemplate.mockResolvedValue({ name: templateRef });
-      agentRegistryMock.createInstance.mockResolvedValue({
+      (agentRegistryMock.getTemplate as import('vitest').Mock).mockResolvedValue({ name: templateRef });
+      (agentRegistryMock.createInstance as import('vitest').Mock).mockResolvedValue({
         id: instanceId,
         name: 'ephemeral-name',
       });
@@ -89,7 +92,7 @@ describe('Agents Routes', () => {
           usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
         })
       );
-      expect(intercomMock.publish.mock.calls[0][1].durationMs).toBeDefined();
+      expect(((intercomMock.publish as import('vitest').Mock)?.mock?.calls[0]?.[1] as Record<string, unknown>)?.durationMs).toBeDefined();
     });
   });
 });

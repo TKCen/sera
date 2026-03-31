@@ -305,5 +305,69 @@ export function createToolProxyRouter(
     }
   });
 
+  /**
+   * POST /v1/tools/invoke — Story 3.10 generalized
+   * Remote skill execution proxy. Agent-runtime calls this for any tool
+   * it can't execute locally. Core looks up the skill in SkillRegistry
+   * and executes with the caller's identity context.
+   *
+   * Body: { tool: string, params: Record<string, unknown> }
+   */
+  router.post('/invoke', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      if (!skillRegistry) {
+        res.status(503).json({ error: 'SkillRegistry not available' });
+        return;
+      }
+
+      const identity = req.agentIdentity;
+      if (!identity) {
+        res.status(401).json({ error: 'Agent authentication required' });
+        return;
+      }
+
+      const { tool, params } = req.body as {
+        tool: string;
+        params: Record<string, unknown>;
+      };
+
+      if (!tool) {
+        res.status(400).json({ error: 'tool is required' });
+        return;
+      }
+
+      const skill = skillRegistry.get(tool);
+      if (!skill) {
+        res.status(404).json({ error: `Tool "${tool}" not found in registry` });
+        return;
+      }
+
+      if (!skill.handler) {
+        res.status(501).json({ error: `Tool "${tool}" has no executable handler` });
+        return;
+      }
+
+      // Build a minimal AgentContext from the JWT identity.
+      // Remote-invoked skills don't have full context (no manifest, no sandbox).
+      const agentContext = {
+        agentName: identity.agentName ?? identity.agentId,
+        agentInstanceId: identity.agentId,
+        workspacePath: '/workspace',
+        tier: 2,
+        manifest: {} as AgentManifest,
+        containerId: undefined,
+        sessionId: '',
+        sandboxManager: undefined,
+      };
+
+      logger.info(`Invoke tool=${tool} agent=${identity.agentId}`);
+      const result = await skill.handler(params ?? {}, agentContext);
+      res.json(result);
+    } catch (err: unknown) {
+      logger.error('Tool invoke error:', err);
+      res.status(500).json({ success: false, error: (err as Error).message });
+    }
+  });
+
   return router;
 }

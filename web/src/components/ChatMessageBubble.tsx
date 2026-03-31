@@ -21,7 +21,9 @@ export function ChatMessageBubble({
   onToggleThoughts,
 }: ChatMessageBubbleProps) {
   return (
-    <div className={cn('flex gap-3 group', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+    <article
+      className={cn('flex gap-3 group', msg.role === 'user' ? 'justify-end' : 'justify-start')}
+    >
       {msg.role === 'agent' && (
         <div className="w-8 h-8 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0 mt-0.5">
           <Bot size={16} className="text-sera-accent" />
@@ -53,7 +55,11 @@ export function ChatMessageBubble({
           {msg.role === 'user' ? (
             <p className="whitespace-pre-wrap m-0">{msg.content}</p>
           ) : msg.streaming && !msg.content ? (
-            <div className="flex items-center gap-2">
+            <div
+              className="flex items-center gap-2"
+              role="status"
+              aria-label="Generating message..."
+            >
               <Loader2 size={14} className="animate-spin text-sera-accent" />
               <span className="text-xs text-sera-text-muted">Generating…</span>
             </div>
@@ -98,6 +104,6 @@ export function ChatMessageBubble({
           <User size={16} className="text-sera-text-muted" />
         </div>
       )}
-    </div>
+    </article>
   );
 }

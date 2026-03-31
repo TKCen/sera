@@ -17,6 +17,7 @@ export function MessageCopyButton({ text }: MessageCopyButtonProps) {
       }}
       className="p-1 rounded text-sera-text-dim hover:text-sera-text transition-colors"
       title="Copy message"
+      aria-label="Copy message"
     >
       {copied ? <Check size={12} className="text-sera-success" /> : <Copy size={12} />}
     </button>

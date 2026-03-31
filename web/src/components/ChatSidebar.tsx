@@ -78,6 +78,8 @@ function AgentDropdown({
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center gap-2 bg-sera-surface border border-sera-border rounded px-2 py-1.5 text-xs text-sera-text hover:border-sera-accent transition-colors"
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
         <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(selected?.status))} />
         <span className="flex-1 text-left truncate">
@@ -89,27 +91,32 @@ function AgentDropdown({
         />
       </button>
       {open && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-sera-surface border border-sera-border rounded shadow-lg max-h-48 overflow-y-auto">
+        <ul
+          className="absolute z-50 top-full left-0 right-0 mt-1 bg-sera-surface border border-sera-border rounded shadow-lg max-h-48 overflow-y-auto"
+          role="listbox"
+        >
           {agents.map((a) => (
-            <button
-              key={a.name}
-              onClick={() => {
-                onAgentChange(a.name);
-                setOpen(false);
-              }}
-              className={cn(
-                'w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-sera-surface-hover transition-colors',
-                a.name === selectedAgent && 'bg-sera-accent-soft text-sera-accent'
-              )}
-            >
-              <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(a.status))} />
-              <span className="truncate">{a.display_name ?? a.name}</span>
-              {a.status && (
-                <span className="ml-auto text-[10px] text-sera-text-dim">{a.status}</span>
-              )}
-            </button>
+            <li key={a.name} role="option" aria-selected={a.name === selectedAgent}>
+              <button
+                key={a.name}
+                onClick={() => {
+                  onAgentChange(a.name);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-sera-surface-hover transition-colors',
+                  a.name === selectedAgent && 'bg-sera-accent-soft text-sera-accent'
+                )}
+              >
+                <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(a.status))} />
+                <span className="truncate">{a.display_name ?? a.name}</span>
+                {a.status && (
+                  <span className="ml-auto text-[10px] text-sera-text-dim">{a.status}</span>
+                )}
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );
@@ -153,7 +160,7 @@ function SessionItem({
   };
 
   return (
-    <div
+    <li
       role="button"
       tabIndex={0}
       onClick={() => !editing && onLoad()}
@@ -198,6 +205,7 @@ function SessionItem({
               }}
               className="p-0.5 text-sera-success hover:text-green-400"
               title="Save"
+              aria-label="Save"
             >
               <Check size={11} />
             </button>
@@ -208,6 +216,7 @@ function SessionItem({
               }}
               className="p-0.5 text-sera-text-muted hover:text-red-400"
               title="Cancel"
+              aria-label="Cancel"
             >
               <X size={11} />
             </button>
@@ -222,7 +231,7 @@ function SessionItem({
         )}
       </div>
       {!editing && (
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all focus-within:opacity-100">
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -231,6 +240,7 @@ function SessionItem({
             }}
             className="p-0.5 rounded text-sera-text-muted hover:text-sera-accent"
             title="Rename session"
+            aria-label="Rename session"
           >
             <Pencil size={11} />
           </button>
@@ -238,12 +248,13 @@ function SessionItem({
             onClick={onDelete}
             className="p-0.5 rounded text-sera-text-muted hover:text-red-400"
             title="Delete session"
+            aria-label="Delete session"
           >
             <Trash2 size={12} />
           </button>
         </div>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -282,7 +293,7 @@ export function ChatSidebar({
   }, {});
 
   return (
-    <div
+    <aside
       className={cn(
         'flex flex-col border-r border-sera-border bg-sera-bg transition-all duration-200 flex-shrink-0',
         sidebarOpen ? 'w-64 min-w-[256px]' : 'w-0 min-w-0 overflow-hidden'
@@ -297,6 +308,7 @@ export function ChatSidebar({
           onClick={onStartNewSession}
           className="p-1 rounded hover:bg-sera-surface text-sera-text-muted hover:text-sera-accent transition-colors"
           title="New chat"
+          aria-label="New chat"
         >
           <Plus size={16} />
         </button>
@@ -342,7 +354,7 @@ export function ChatSidebar({
                     {agentName}
                   </span>
                 </div>
-                <div className="space-y-0.5">
+                <ul className="space-y-0.5">
                   {agentSessions.map((s) => (
                     <SessionItem
                       key={s.id}
@@ -353,12 +365,12 @@ export function ChatSidebar({
                       onRename={(title) => onRenameSession(s.id, title)}
                     />
                   ))}
-                </div>
+                </ul>
               </div>
             ))}
           </div>
         )}
       </div>
-    </div>
+    </aside>
   );
 }

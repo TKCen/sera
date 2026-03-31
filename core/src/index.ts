@@ -550,8 +550,11 @@ const startServer = async () => {
 
   const { SeraMCPServer } = await import('./mcp/SeraMCPServer.js');
   // Set up MCP ↔ SkillRegistry bridge hooks BEFORE registering any servers,
-  // so that sera-core tools (and any loaded from disk) are automatically bridged.
+  // so that external MCP tools (loaded from disk) are automatically bridged.
+  // The sera-core MCP server is NOT bridged — it's designed for external
+  // integrations (Claude Code, IDE). Agents use native built-in skills instead. (#535)
   mcpRegistry.onRegister((name) => {
+    if (name === 'sera-core') return; // External-only MCP server
     skillRegistry
       .bridgeMCPToolsForServer(name, mcpRegistry)
       .then((count) => {

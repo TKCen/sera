@@ -168,23 +168,8 @@ spec:
       - shell-exec
       # Scheduling
       - schedule-task
-      # SERA platform management (via sera-core MCP)
-      - sera-core/list_agents
-      - sera-core/agent_status
-      - sera-core/agent_capabilities
-      - sera-core/start_agent
-      - sera-core/stop_agent
-      - sera-core/restart_agent
-      - sera-core/create_agent
-      - sera-core/agents.spawn_subagent
-      - sera-core/circles.*
-      - sera-core/orchestration.*
-      - sera-core/chat
-      - sera-core/list_sessions
-      - sera-core/chat_history
-      - sera-core/circle.broadcast
-      - sera-core/delegate_task
-      - sera-core/memory_blocks
+      # Delegation & agent management (native built-in skills)
+      - delegate-task
     denied:
       - file-write   # requires explicit permission request per session
 

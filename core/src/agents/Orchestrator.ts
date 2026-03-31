@@ -248,6 +248,11 @@ export class Orchestrator {
 
     this.manifests.set(instance.template_ref, manifest);
 
+    // Validate that tools.allowed patterns match registered tools (Story #524)
+    if (this.toolExecutor) {
+      this.toolExecutor.validateToolPatterns(manifest);
+    }
+
     const agent = AgentFactory.createAgent(manifest, instance.id, this.intercom, this.llmRouter);
     if (this.toolExecutor) agent.setToolExecutor(this.toolExecutor);
     if (this.identityService) agent.setIdentityService(this.identityService);

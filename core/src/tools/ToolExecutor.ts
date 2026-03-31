@@ -226,10 +226,31 @@ export class ToolExecutor {
   }
 
   /**
+   * Validate that each tools.allowed pattern matches at least one registered skill.
+   * Logs a warning for patterns that match nothing — catches typos and stale manifests at startup.
+   */
+  validateToolPatterns(manifest: AgentManifest): void {
+    const allowed = manifest.tools?.allowed;
+    if (!allowed || allowed.length === 0) return;
+
+    const allSkills = this.skillRegistry.listAll();
+
+    for (const pattern of allowed) {
+      if (pattern === '*') continue;
+      const hasMatch = allSkills.some((s) => ToolExecutor.matches(pattern, s.id));
+      if (!hasMatch) {
+        logger.warn(
+          `Agent "${manifest.metadata.name}": tools.allowed pattern "${pattern}" matches no registered tools`
+        );
+      }
+    }
+  }
+
+  /**
    * Check if a tool ID matches a pattern.
    * Supports: '*' (match all), 'prefix/*' (slash wildcard), 'prefix.*' (dot wildcard), exact match.
    */
-  private static matches(pattern: string, toolId: string): boolean {
+  static matches(pattern: string, toolId: string): boolean {
     if (pattern === '*') return true;
     if (pattern.endsWith('/*')) {
       const prefix = pattern.slice(0, -2);

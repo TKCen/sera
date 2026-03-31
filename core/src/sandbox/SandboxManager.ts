@@ -126,6 +126,13 @@ export class SandboxManager {
     if (request.type !== 'mcp-server') {
       const wsInternalPath = provider.getPath(finalInstanceId, workspacePath);
       fs.mkdirSync(wsInternalPath, { recursive: true });
+      // Ensure workspace is writable by the non-root agent user (uid 1001) in the container.
+      // The bind mount inherits host permissions, so we must chmod the host directory.
+      try {
+        fs.chmodSync(wsInternalPath, 0o777);
+      } catch {
+        // Best-effort — may fail on some host filesystems
+      }
       const spec = (manifest.spec ?? {}) as Record<string, unknown>;
       // Use manifest.model (which has instance overrides applied by Orchestrator)
       // instead of spec.model (which is the raw template without overrides).
@@ -377,7 +384,7 @@ export class SandboxManager {
     // chat request can arrive before the HTTP server inside the
     // container has started listening, causing a connect timeout.
     if (sandboxInfo.chatUrl && request.type === 'agent') {
-      const readyTimeout = parseInt(process.env['AGENT_READY_TIMEOUT_MS'] || '30000', 10);
+      const readyTimeout = parseInt(process.env['AGENT_READY_TIMEOUT_MS'] || '90000', 10);
       await this.waitForChatReady(sandboxInfo.chatUrl, readyTimeout);
     }
 

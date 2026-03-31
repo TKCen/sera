@@ -48,7 +48,9 @@ async function resolveAgent(
     if (!agent) {
       throw Object.assign(new Error(`Agent "${body.agentName}" not found.`), { status: 404 });
     }
-    return { agent, agentName: agent.role };
+    // Use the requested instance name (not the template role) so sessions
+    // are linked to the correct agent instance.
+    return { agent, agentName: body.agentName };
   }
 
   const agent = orchestrator.getPrimaryAgent();
@@ -205,7 +207,7 @@ export function createChatRouter(
       const { sessionId, history, isNew } = await resolveSession(
         incomingSessionId,
         agentName,
-        agentInstanceId
+        agentInstanceId ?? agent.agentInstanceId
       );
 
       // 3. Ensure container is running

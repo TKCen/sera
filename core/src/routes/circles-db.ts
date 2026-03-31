@@ -96,6 +96,53 @@ export function createCirclesDbRouter(orchestrator: Orchestrator) {
     }
   });
 
+  // ── Broadcast to circle members ────────────────────────────────────────────
+
+  router.post('/:id/broadcast', async (req, res) => {
+    try {
+      const circle = await circleService.getCircle(req.params.id!);
+      if (!circle) return res.status(404).json({ error: 'Circle not found' });
+
+      const { from, payload } = req.body;
+      if (!from || typeof from !== 'string') {
+        return res.status(400).json({ error: 'from (agent name) is required' });
+      }
+
+      const intercom = orchestrator.getIntercom();
+      if (!intercom) {
+        return res.status(500).json({ error: 'Intercom service not initialized' });
+      }
+
+      await intercom.publish(`circle:${circle.name}`, {
+        type: 'broadcast',
+        from,
+        ...(payload ?? {}),
+      });
+      res.json({ success: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Update circle context ────────────────────────────────────────────────
+
+  router.put('/:id/context', async (req, res) => {
+    try {
+      const circle = await circleService.getCircle(req.params.id!);
+      if (!circle) return res.status(404).json({ error: 'Circle not found' });
+
+      const { content } = req.body;
+      if (typeof content !== 'string') {
+        return res.status(400).json({ error: 'content (string) is required' });
+      }
+
+      await circleService.updateCircle(circle.id, { constitution: content });
+      res.json({ success: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // ── Story 10.6: Party Mode ────────────────────────────────────────────────
 
   router.post('/:id/party', async (req, res) => {

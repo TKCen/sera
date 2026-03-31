@@ -570,7 +570,11 @@ function ChatPageContent() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0" role="log" aria-live="polite">
+        <div
+          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0"
+          role="log"
+          aria-live="polite"
+        >
           {messages.map((msg) => (
             <ChatMessageBubble
               key={msg.id}

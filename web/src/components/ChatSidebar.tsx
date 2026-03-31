@@ -91,26 +91,29 @@ function AgentDropdown({
         />
       </button>
       {open && (
-        <ul className="absolute z-50 top-full left-0 right-0 mt-1 bg-sera-surface border border-sera-border rounded shadow-lg max-h-48 overflow-y-auto" role="listbox">
+        <ul
+          className="absolute z-50 top-full left-0 right-0 mt-1 bg-sera-surface border border-sera-border rounded shadow-lg max-h-48 overflow-y-auto"
+          role="listbox"
+        >
           {agents.map((a) => (
             <li key={a.name} role="option" aria-selected={a.name === selectedAgent}>
-            <button
-              key={a.name}
-              onClick={() => {
-                onAgentChange(a.name);
-                setOpen(false);
-              }}
-              className={cn(
-                'w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-sera-surface-hover transition-colors',
-                a.name === selectedAgent && 'bg-sera-accent-soft text-sera-accent'
-              )}
-            >
-              <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(a.status))} />
-              <span className="truncate">{a.display_name ?? a.name}</span>
-              {a.status && (
-                <span className="ml-auto text-[10px] text-sera-text-dim">{a.status}</span>
-              )}
-            </button>
+              <button
+                key={a.name}
+                onClick={() => {
+                  onAgentChange(a.name);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-sera-surface-hover transition-colors',
+                  a.name === selectedAgent && 'bg-sera-accent-soft text-sera-accent'
+                )}
+              >
+                <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor(a.status))} />
+                <span className="truncate">{a.display_name ?? a.name}</span>
+                {a.status && (
+                  <span className="ml-auto text-[10px] text-sera-text-dim">{a.status}</span>
+                )}
+              </button>
             </li>
           ))}
         </ul>

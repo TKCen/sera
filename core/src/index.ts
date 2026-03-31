@@ -392,7 +392,14 @@ app.use(
 app.use('/api/agents', authMiddleware, createAgentRouter(orchestrator, agentRegistry));
 app.use(
   '/v1/tools',
-  createToolProxyRouter(identityService, authService, permissionService, agentRegistry)
+  createToolProxyRouter(
+    identityService,
+    authService,
+    permissionService,
+    agentRegistry,
+    skillRegistry,
+    orchestrator
+  )
 );
 
 // ── Convenience routes for the web UI ────────────────────────────────────────

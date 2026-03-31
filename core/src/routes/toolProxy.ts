@@ -18,6 +18,9 @@ import type { IdentityService } from '../auth/IdentityService.js';
 import type { AuthService } from '../auth/auth-service.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 import type { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
+import type { SkillRegistry } from '../skills/SkillRegistry.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { AgentManifest } from '../agents/manifest/types.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import { Logger } from '../lib/logger.js';
 
@@ -140,10 +143,85 @@ export function createToolProxyRouter(
   identityService: IdentityService,
   authService: AuthService,
   permissionService: PermissionRequestService,
-  registry: AgentRegistry
+  registry: AgentRegistry,
+  skillRegistry?: SkillRegistry,
+  orchestrator?: Orchestrator
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(identityService, authService);
+
+  // ── Local tool names (executed natively in agent container) ──────────────
+  const LOCAL_TOOL_NAMES = new Set([
+    'file-read',
+    'file-write',
+    'file-list',
+    'file-delete',
+    'shell-exec',
+    'spawn-subagent',
+    'run-tool',
+  ]);
+
+  /**
+   * GET /v1/tools/catalog — Story 7.6
+   * Returns the filtered tool catalog for a specific agent in OpenAI
+   * function-calling format. Each tool includes executionMode so the
+   * agent-runtime knows whether to execute locally or proxy to core.
+   */
+  router.get('/catalog', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      if (!skillRegistry) {
+        res.status(503).json({ error: 'SkillRegistry not available' });
+        return;
+      }
+
+      const agentId = (req.query.agentId as string) ?? req.agentIdentity?.agentId;
+      if (!agentId) {
+        res.status(400).json({ error: 'agentId is required (query param or JWT claim)' });
+        return;
+      }
+
+      // Resolve manifest for filtering
+      let manifest: AgentManifest | undefined;
+      if (orchestrator) {
+        manifest = orchestrator.getManifestByInstanceId(agentId);
+        if (!manifest) {
+          manifest = orchestrator.getManifest(agentId);
+        }
+      }
+
+      // Get filtered tool list
+      const tools = manifest ? skillRegistry.listForAgent(manifest) : skillRegistry.listAll();
+
+      // Convert SkillInfo to OpenAI function-calling format
+      const catalog = tools.map((tool) => ({
+        type: 'function' as const,
+        function: {
+          name: tool.id,
+          description: tool.description,
+          parameters: {
+            type: 'object' as const,
+            properties: Object.fromEntries(
+              tool.parameters.map((p) => [
+                p.name,
+                {
+                  type: p.type,
+                  description: p.description,
+                },
+              ])
+            ),
+            required: tool.parameters.filter((p) => p.required).map((p) => p.name),
+          },
+        },
+        executionMode: LOCAL_TOOL_NAMES.has(tool.id) ? 'local' : 'remote',
+        source: tool.source,
+      }));
+
+      res.json(catalog);
+    } catch (err) {
+      logger.error('Tool catalog error:', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   /**
    * POST /v1/tools/proxy
@@ -224,6 +302,70 @@ export function createToolProxyRouter(
     } catch (err: unknown) {
       logger.error('Tool proxy error:', err);
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * POST /v1/tools/invoke — Story 3.10 generalized
+   * Remote skill execution proxy. Agent-runtime calls this for any tool
+   * it can't execute locally. Core looks up the skill in SkillRegistry
+   * and executes with the caller's identity context.
+   *
+   * Body: { tool: string, params: Record<string, unknown> }
+   */
+  router.post('/invoke', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      if (!skillRegistry) {
+        res.status(503).json({ error: 'SkillRegistry not available' });
+        return;
+      }
+
+      const identity = req.agentIdentity;
+      if (!identity) {
+        res.status(401).json({ error: 'Agent authentication required' });
+        return;
+      }
+
+      const { tool, params } = req.body as {
+        tool: string;
+        params: Record<string, unknown>;
+      };
+
+      if (!tool) {
+        res.status(400).json({ error: 'tool is required' });
+        return;
+      }
+
+      const skill = skillRegistry.get(tool);
+      if (!skill) {
+        res.status(404).json({ error: `Tool "${tool}" not found in registry` });
+        return;
+      }
+
+      if (!skill.handler) {
+        res.status(501).json({ error: `Tool "${tool}" has no executable handler` });
+        return;
+      }
+
+      // Build a minimal AgentContext from the JWT identity.
+      // Remote-invoked skills don't have full context (no manifest, no sandbox).
+      const agentContext = {
+        agentName: identity.agentName ?? identity.agentId,
+        agentInstanceId: identity.agentId,
+        workspacePath: '/workspace',
+        tier: 2,
+        manifest: {} as AgentManifest,
+        containerId: undefined,
+        sessionId: '',
+        sandboxManager: undefined,
+      };
+
+      logger.info(`Invoke tool=${tool} agent=${identity.agentId}`);
+      const result = await skill.handler(params ?? {}, agentContext);
+      res.json(result);
+    } catch (err: unknown) {
+      logger.error('Tool invoke error:', err);
+      res.status(500).json({ success: false, error: (err as Error).message });
     }
   });
 

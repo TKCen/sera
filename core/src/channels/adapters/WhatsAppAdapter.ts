@@ -58,7 +58,9 @@ export class WhatsAppAdapter extends ChannelAdapter {
       return;
     }
 
-    try {
+    // Enqueue for sequential processing per user
+    const queueKey = `${incoming.chatId}:${incoming.userId}`;
+    this.enqueueMessage(queueKey, async () => {
       const agent = this.orchestrator.getPrimaryAgent();
       if (!agent) {
         await this.sendMessage(incoming.chatId, 'Sorry, no agent is currently available.');
@@ -69,9 +71,7 @@ export class WhatsAppAdapter extends ChannelAdapter {
       const reply = response.finalAnswer || response.thought || 'No response generated.';
 
       await this.sendMessage(incoming.chatId, reply);
-    } catch (err: unknown) {
-      this.logger.error('Error processing WhatsApp message:', (err as Error).message);
-    }
+    });
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {

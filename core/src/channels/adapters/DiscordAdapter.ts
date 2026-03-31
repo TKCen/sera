@@ -156,12 +156,12 @@ export class DiscordAdapter extends ChannelAdapter {
     }
   }
 
-  private async handleMessage(message: Record<string, unknown>) {
+  private handleMessage(message: Record<string, unknown>) {
     // Ignore bot messages
     if ((message.author as Record<string, unknown>)?.bot) return;
 
     const incoming: IncomingMessage = {
-      platform: 'Discord', // Retained 'Discord' as this is DiscordAdapter
+      platform: 'Discord',
       userId: (message.author as { id?: string })?.id || 'unknown',
       userName: (message.author as { username?: string })?.username || 'unknown',
       chatId: (message.channel_id as string) || 'unknown',
@@ -170,19 +170,13 @@ export class DiscordAdapter extends ChannelAdapter {
 
     if (this.isRateLimited(incoming.userId)) {
       this.logger.warn(`Rate limit exceeded for user ${incoming.userId}`);
-      await this.sendMessage(
-        incoming.chatId,
-        '⚠️ You are sending messages too fast. Please slow down.'
-      );
+      this.sendMessage(incoming.chatId, '⚠️ You are sending messages too fast. Please slow down.');
       return;
     }
 
-    try {
-      // The user's instruction includes a line `const querySpy = vi.spyOn(AuditService.getInstance() as unknown as Record<string, any>, 'query');`
-      // This line is not present in the original code and seems to be related to testing or a different context.
-      // I will not add this line as it's not a direct type replacement and introduces new functionality/dependencies.
-      // If the user intended to add this, it should be a separate instruction.
-
+    // Enqueue for sequential processing per channel+user
+    const queueKey = `${incoming.chatId}:${incoming.userId}`;
+    this.enqueueMessage(queueKey, async () => {
       const agent = this.orchestrator.getPrimaryAgent();
       if (!agent) {
         await this.sendMessage(incoming.chatId, 'Sorry, no agent is currently available.');
@@ -193,9 +187,7 @@ export class DiscordAdapter extends ChannelAdapter {
       const reply = response.finalAnswer || response.thought || 'No response generated.';
 
       await this.sendMessage(incoming.chatId, reply);
-    } catch (err: unknown) {
-      this.logger.error('Error processing Discord message:', (err as Error).message);
-    }
+    });
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {

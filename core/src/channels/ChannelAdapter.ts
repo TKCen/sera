@@ -9,6 +9,9 @@ export interface IncomingMessage {
   metadata?: Record<string, unknown>;
 }
 
+/** Default per-message processing timeout (2 minutes). */
+const DEFAULT_MESSAGE_TIMEOUT_MS = 120_000;
+
 export abstract class ChannelAdapter {
   protected logger: Logger;
   protected userRateLimits: Map<string, { count: number; lastReset: number }> = new Map();
@@ -16,13 +19,27 @@ export abstract class ChannelAdapter {
   protected maxMessagesPerWindow: number;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
+  /**
+   * Per-key FIFO message queue.
+   * Each key (e.g. `{channelId}:{userId}`) has an array of pending tasks
+   * and a flag indicating whether the queue is currently draining.
+   */
+  private messageQueues: Map<string, { tasks: Array<() => Promise<void>>; draining: boolean }> =
+    new Map();
+  protected messageTimeoutMs: number;
+
   constructor(
     public readonly platform: string,
-    options?: { rateLimitWindow?: number; maxMessagesPerWindow?: number }
+    options?: {
+      rateLimitWindow?: number;
+      maxMessagesPerWindow?: number;
+      messageTimeoutMs?: number;
+    }
   ) {
     this.logger = new Logger(`Channel:${platform}`);
     this.rateLimitWindow = options?.rateLimitWindow || 60 * 1000;
     this.maxMessagesPerWindow = options?.maxMessagesPerWindow || 20;
+    this.messageTimeoutMs = options?.messageTimeoutMs || DEFAULT_MESSAGE_TIMEOUT_MS;
 
     // Periodic cleanup to avoid memory leak
     this.cleanupInterval = setInterval(() => this.cleanupRateLimits(), this.rateLimitWindow * 2);
@@ -60,6 +77,50 @@ export abstract class ChannelAdapter {
     }
   }
 
+  /**
+   * Enqueue a message-processing task for sequential execution.
+   * Messages with the same key are processed one at a time in FIFO order.
+   * @param key Unique queue key (e.g. `{channelId}:{userId}`)
+   * @param task Async function that processes the message
+   */
+  protected enqueueMessage(key: string, task: () => Promise<void>): void {
+    let queue = this.messageQueues.get(key);
+    if (!queue) {
+      queue = { tasks: [], draining: false };
+      this.messageQueues.set(key, queue);
+    }
+    queue.tasks.push(task);
+
+    if (!queue.draining) {
+      this.drainQueue(key);
+    }
+  }
+
+  private drainQueue(key: string): void {
+    const queue = this.messageQueues.get(key);
+    if (!queue || queue.tasks.length === 0) {
+      if (queue) {
+        queue.draining = false;
+      }
+      return;
+    }
+
+    queue.draining = true;
+    const task = queue.tasks.shift()!;
+
+    const timeoutPromise = new Promise<void>((_, reject) =>
+      setTimeout(() => reject(new Error('Message processing timeout')), this.messageTimeoutMs)
+    );
+
+    Promise.race([task(), timeoutPromise])
+      .catch((err) => {
+        this.logger.error(`Message queue error for key "${key}":`, (err as Error).message);
+      })
+      .finally(() => {
+        this.drainQueue(key);
+      });
+  }
+
   abstract start(): Promise<void>;
   abstract stop(): Promise<void>;
   abstract sendMessage(chatId: string, text: string): Promise<void>;
@@ -69,5 +130,6 @@ export abstract class ChannelAdapter {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+    this.messageQueues.clear();
   }
 }

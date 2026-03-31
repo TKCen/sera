@@ -340,12 +340,15 @@ export function createTasksRouter(intercom: IntercomService): Router {
     const taskContext = row.context as Record<string, unknown> | null;
     const delegation = taskContext?.delegation as { fromInstanceId?: string } | undefined;
     if (delegation?.fromInstanceId) {
+      const resultStr = typeof body.result === 'string' ? body.result : null;
       await intercom
         .publish(`agent:${delegation.fromInstanceId}:status`, {
           event: 'delegation.completed',
           taskId,
           targetAgent: agentId,
           status: newStatus,
+          resultSummary: resultStr ? resultStr.substring(0, 500) : null,
+          error: body.error || null,
           completedAt: new Date().toISOString(),
         })
         .catch(() => {

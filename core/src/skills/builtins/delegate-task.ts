@@ -59,6 +59,13 @@ export const delegateTaskSkill: SkillDefinition = {
       description: 'Task ID to check status/result for (required for "check").',
       required: false,
     },
+    {
+      name: 'waitForResult',
+      type: 'boolean',
+      description:
+        'If true, wait for the delegated task to complete and return the result inline (max 2 min). Default: false (fire-and-forget).',
+      required: false,
+    },
   ],
   handler: async (params, agentContext) => {
     const callerInstanceId = agentContext.agentInstanceId;
@@ -68,13 +75,14 @@ export const delegateTaskSkill: SkillDefinition = {
       return { success: false, error: 'delegate-task must run in an agent instance context.' };
     }
 
-    const { action, targetAgent, task, context, priority, taskId } = params as {
+    const { action, targetAgent, task, context, priority, taskId, waitForResult } = params as {
       action: string;
       targetAgent?: string;
       task?: string;
       context?: unknown;
       priority?: number;
       taskId?: string;
+      waitForResult?: boolean;
     };
 
     try {
@@ -158,6 +166,46 @@ export const delegateTaskSkill: SkillDefinition = {
           logger.info(
             `Agent ${callerName} delegated task ${newTaskId} to ${targetAgent} (${target.id})`
           );
+
+          // If waitForResult is set, poll until the task completes or times out
+          if (waitForResult) {
+            const maxWaitMs = 120_000;
+            const pollIntervalMs = 3_000;
+            const deadline = Date.now() + maxWaitMs;
+
+            while (Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, pollIntervalMs));
+              const { rows } = await pool.query(
+                'SELECT status, result, error, exit_reason FROM task_queue WHERE id = $1',
+                [newTaskId]
+              );
+              const t = rows[0];
+              if (t?.status === 'completed' || t?.status === 'failed') {
+                return {
+                  success: t.status === 'completed',
+                  data: {
+                    taskId: newTaskId,
+                    targetAgent,
+                    status: t.status,
+                    result: t.result,
+                    error: t.error,
+                    exitReason: t.exit_reason,
+                  },
+                };
+              }
+            }
+
+            // Timed out — return what we know
+            const { rows: finalRows } = await pool.query(
+              'SELECT status FROM task_queue WHERE id = $1',
+              [newTaskId]
+            );
+            const finalStatus = finalRows[0]?.status ?? 'unknown';
+            return {
+              success: false,
+              error: `Delegation to ${targetAgent} timed out after ${maxWaitMs / 1000}s. Task ${newTaskId} is still "${finalStatus}". Use action "check" with taskId "${newTaskId}" to poll later.`,
+            };
+          }
 
           return {
             success: true,

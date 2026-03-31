@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { SkillInjector } from '../skills/SkillInjector.js';
-import type { ChatMessage } from './LiteLLMClient.js';
+import type { ChatMessage } from './LlmRouter.js';
 import { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
 import { EmbeddingService } from '../services/embedding.service.js';

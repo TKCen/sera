@@ -90,6 +90,11 @@ async function main(): Promise<void> {
   const llmClient = new LLMClient(SERA_CORE_URL, SERA_IDENTITY_TOKEN, manifest.model.name);
   const toolExecutor = new RuntimeToolExecutor(WORKSPACE_PATH, TIER);
 
+  // Fetch dynamic tool catalog from core (Story 7.6, ADR-001)
+  await toolExecutor.fetchCatalog().catch((err: unknown) => {
+    log('warn', `Tool catalog fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+
   // CentrifugoPublisher uses AGENT_INSTANCE_ID as the agentId for channel names
   const centrifugo = new CentrifugoPublisher(
     CENTRIFUGO_API_URL,

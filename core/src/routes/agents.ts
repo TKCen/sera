@@ -230,8 +230,17 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
                 `Ephemeral agent ${instanceName} completed in ${Date.now() - startTime}ms`
               );
 
-              // TODO: publish result to Centrifugo ephemeral channel
-              void body;
+              const intercom = orchestrator.getIntercom();
+              if (intercom) {
+                await intercom.publish(`ephemeral:${instance.id}:result`, {
+                  instanceId: instance.id,
+                  status: body.error ? 'error' : 'completed',
+                  result: body.result,
+                  error: body.error,
+                  usage: body.usage,
+                  durationMs: Date.now() - startTime,
+                });
+              }
             } catch (err) {
               logger.error(`Ephemeral agent ${instanceName} failed:`, err);
               await agentRegistry.updateInstanceStatus(instance.id, 'error');

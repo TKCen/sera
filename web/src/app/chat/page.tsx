@@ -184,10 +184,15 @@ function ChatPageContent() {
       });
 
       if (done) {
-        setStreaming(false);
-        streamingMsgId.current = null;
-        void fetchSessions();
-        inputRef.current?.focus();
+        // Delay clearing the streaming state to allow any remaining queued
+        // tokens to be processed (Centrifugo may deliver them slightly after
+        // the done packet). Without this, late tokens are silently dropped.
+        setTimeout(() => {
+          setStreaming(false);
+          streamingMsgId.current = null;
+          void fetchSessions();
+          inputRef.current?.focus();
+        }, 500);
       }
     });
     sub.subscribe();

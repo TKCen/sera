@@ -182,7 +182,7 @@ describe('IdentityService', () => {
       );
     });
 
-    it('should preserve regular sections like tools or identity', () => {
+    it('should preserve identity but strip Available Tools from streaming prompt', () => {
       const manifest = {
         kind: 'Agent',
         metadata: { name: 'test-agent' },
@@ -192,7 +192,9 @@ describe('IdentityService', () => {
 
       const streamingPrompt = IdentityService.generateStreamingSystemPrompt(manifest);
       expect(streamingPrompt).toContain('You are test-agent, a tester.');
-      expect(streamingPrompt).toContain('## Available Tools\n- test-tool');
+      // Available Tools section is stripped from streaming prompt to prevent
+      // LLM from hallucinating tool calls — tools are provided via function-calling API
+      expect(streamingPrompt).not.toContain('## Available Tools');
     });
   });
 });

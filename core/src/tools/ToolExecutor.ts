@@ -226,13 +226,18 @@ export class ToolExecutor {
   }
 
   /**
-   * Check if a tool ID matches a pattern (supports * and prefix/*).
+   * Check if a tool ID matches a pattern.
+   * Supports: '*' (match all), 'prefix/*' (slash wildcard), 'prefix.*' (dot wildcard), exact match.
    */
   private static matches(pattern: string, toolId: string): boolean {
     if (pattern === '*') return true;
     if (pattern.endsWith('/*')) {
       const prefix = pattern.slice(0, -2);
       return toolId.startsWith(prefix + '/');
+    }
+    if (pattern.endsWith('.*')) {
+      const prefix = pattern.slice(0, -2);
+      return toolId === prefix || toolId.startsWith(prefix + '.') || toolId.startsWith(prefix + '/');
     }
     return pattern === toolId;
   }

@@ -18,6 +18,9 @@ import type { IdentityService } from '../auth/IdentityService.js';
 import type { AuthService } from '../auth/auth-service.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 import type { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
+import type { SkillRegistry } from '../skills/SkillRegistry.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { AgentManifest } from '../agents/manifest/types.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
 import { Logger } from '../lib/logger.js';
 
@@ -140,10 +143,85 @@ export function createToolProxyRouter(
   identityService: IdentityService,
   authService: AuthService,
   permissionService: PermissionRequestService,
-  registry: AgentRegistry
+  registry: AgentRegistry,
+  skillRegistry?: SkillRegistry,
+  orchestrator?: Orchestrator
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(identityService, authService);
+
+  // ── Local tool names (executed natively in agent container) ──────────────
+  const LOCAL_TOOL_NAMES = new Set([
+    'file-read',
+    'file-write',
+    'file-list',
+    'file-delete',
+    'shell-exec',
+    'spawn-subagent',
+    'run-tool',
+  ]);
+
+  /**
+   * GET /v1/tools/catalog — Story 7.6
+   * Returns the filtered tool catalog for a specific agent in OpenAI
+   * function-calling format. Each tool includes executionMode so the
+   * agent-runtime knows whether to execute locally or proxy to core.
+   */
+  router.get('/catalog', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      if (!skillRegistry) {
+        res.status(503).json({ error: 'SkillRegistry not available' });
+        return;
+      }
+
+      const agentId = (req.query.agentId as string) ?? req.agentIdentity?.agentId;
+      if (!agentId) {
+        res.status(400).json({ error: 'agentId is required (query param or JWT claim)' });
+        return;
+      }
+
+      // Resolve manifest for filtering
+      let manifest: AgentManifest | undefined;
+      if (orchestrator) {
+        manifest = orchestrator.getManifestByInstanceId(agentId);
+        if (!manifest) {
+          manifest = orchestrator.getManifest(agentId);
+        }
+      }
+
+      // Get filtered tool list
+      const tools = manifest ? skillRegistry.listForAgent(manifest) : skillRegistry.listAll();
+
+      // Convert SkillInfo to OpenAI function-calling format
+      const catalog = tools.map((tool) => ({
+        type: 'function' as const,
+        function: {
+          name: tool.id,
+          description: tool.description,
+          parameters: {
+            type: 'object' as const,
+            properties: Object.fromEntries(
+              tool.parameters.map((p) => [
+                p.name,
+                {
+                  type: p.type,
+                  description: p.description,
+                },
+              ])
+            ),
+            required: tool.parameters.filter((p) => p.required).map((p) => p.name),
+          },
+        },
+        executionMode: LOCAL_TOOL_NAMES.has(tool.id) ? 'local' : 'remote',
+        source: tool.source,
+      }));
+
+      res.json(catalog);
+    } catch (err) {
+      logger.error('Tool catalog error:', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   /**
    * POST /v1/tools/proxy

@@ -167,12 +167,17 @@ export class IdentityService {
     // Replace the JSON response format with a natural-language instruction.
     // The lookahead matches the next section header (\n## ) OR end of string ($) so
     // that agents without a circle (no ## Context section) are handled correctly.
-    const withFormat = base.replace(
+    let withFormat = base.replace(
       /## Response Format[\s\S]*?(?=\n## |$)/,
       `## Response Format\n` +
         `Respond directly and naturally in markdown. Do NOT wrap your response in JSON.\n` +
         `Focus on providing a helpful, well-formatted answer to the user's question.\n\n`
     );
+
+    // Remove the "Available Tools" section from the system prompt — tools are provided
+    // via the function-calling API. Listing them again in the prompt causes the LLM to
+    // hallucinate XML-style tool calls for names that don't match the actual definitions.
+    withFormat = withFormat.replace(/## Available Tools[\s\S]*?(?=\n## |$)/, '');
 
     // Append stability guidelines
     const stabilityGuidelines =
@@ -182,7 +187,9 @@ export class IdentityService {
       `- If a tool fails, try an alternative approach instead of retrying the same call.\n` +
       `- Summarize your findings when you have enough information rather than making unlimited ` +
       `additional calls.\n` +
-      `- Limit yourself to the minimum number of tool calls necessary to answer the question.\n`;
+      `- Limit yourself to the minimum number of tool calls necessary to answer the question.\n` +
+      `- Only use tools that are provided to you via function calling. Do NOT invent or ` +
+      `fabricate tool calls in XML, JSON, or any other text format.\n`;
 
     return withFormat + stabilityGuidelines;
   }

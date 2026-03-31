@@ -77,8 +77,8 @@ export function createKnowledgeQuerySkill(): SkillDefinition {
       }
 
       if (requestedScopes.includes('circle')) {
-        const primary = context.manifest.metadata.circle;
-        const additional = context.manifest.metadata.additionalCircles ?? [];
+        const primary = context.manifest?.metadata?.circle;
+        const additional = context.manifest?.metadata?.additionalCircles ?? [];
         const circles = [primary, ...additional].filter(Boolean) as string[];
 
         if (circles.length === 0) {

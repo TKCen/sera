@@ -148,7 +148,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 
       // ── Circle scope ────────────────────────────────────────────────────
       if (scope === 'circle') {
-        const capabilities: string[] = context.manifest.capabilities ?? [];
+        const capabilities: string[] = context.manifest?.capabilities ?? [];
         if (
           !capabilities.includes('knowledgeWrite:circle') &&
           !capabilities.includes('knowledgeWrite:merge-without-approval')
@@ -162,7 +162,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
         const circleId =
           typeof params['circleId'] === 'string' && params['circleId']
             ? params['circleId']
-            : context.manifest.metadata.circle;
+            : context.manifest?.metadata?.circle;
 
         if (!circleId) {
           return { success: false, error: 'No circleId available — agent is not a circle member' };
@@ -205,7 +205,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 
       // ── Global scope ────────────────────────────────────────────────────
       if (scope === 'global') {
-        const capabilities: string[] = context.manifest.capabilities ?? [];
+        const capabilities: string[] = context.manifest?.capabilities ?? [];
         if (
           !capabilities.includes('knowledgeWrite:global') &&
           !capabilities.includes('knowledgeWrite:merge-without-approval')

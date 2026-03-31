@@ -92,7 +92,9 @@ describe('PipelineService', () => {
         created_at: new Date('2023-10-10T10:00:00Z'),
         completed_at: new Date('2023-10-10T10:05:00Z'),
       };
-      vi.mocked(query).mockResolvedValue({ rows: [mockRow] } as unknown as import('pg').QueryResult);
+      vi.mocked(query).mockResolvedValue({
+        rows: [mockRow],
+      } as unknown as import('pg').QueryResult);
 
       const result = await pipelineService.get('123');
 

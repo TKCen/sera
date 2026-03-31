@@ -555,7 +555,7 @@ export async function verifyDelegationToken(
         sub: payload.sub,
         act: payload.act,
         scope: payload.scope as DelegationScope,
-        jti: payload.jti
+        jti: payload.jti,
       };
     }
     return null;

@@ -131,16 +131,12 @@ export function createLlmProxyRouter(
       // ── 2.1 Context Assembly (Story 6.3 / 8.4 / #308) ────────────────────
       try {
         if (messages) {
-          messages = await contextAssembler.assemble(
-            agentId,
-            messages,
-            (event) => {
-              logger.info(`[context-assembly] ${event.stage}`, {
-                ...event.detail,
-                ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
-              });
-            }
-          );
+          messages = await contextAssembler.assemble(agentId, messages, (event) => {
+            logger.info(`[context-assembly] ${event.stage}`, {
+              ...event.detail,
+              ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+            });
+          });
         }
       } catch (err) {
         logger.error('Context assembly failed (continuing without enrichment):', err);
@@ -152,16 +148,12 @@ export function createLlmProxyRouter(
       // ── 2.2 Context Compaction (#387) ──────────────────────────────────────
       try {
         if (contextCompactionService && messages) {
-          messages = await contextCompactionService.compact(
-            messages,
-            modelName,
-            (event) => {
-              logger.info(`[context-compaction] ${event.stage}`, {
-                ...event.detail,
-                ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
-              });
-            }
-          );
+          messages = await contextCompactionService.compact(messages, modelName, (event) => {
+            logger.info(`[context-compaction] ${event.stage}`, {
+              ...event.detail,
+              ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+            });
+          });
         }
       } catch (err) {
         logger.error('Context compaction failed (continuing with full context):', err);

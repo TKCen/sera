@@ -78,6 +78,7 @@
         "force-graph": "^1.51.2",
         "js-yaml": "^4.1.0",
         "lucide-react": "^0.577.0",
+        "postcss": "^8.5.8",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "react-force-graph-2d": "^1.29.1",
@@ -106,7 +107,7 @@
         "globals": "^16.0.0",
         "jsdom": "^26.1.0",
         "prettier": "^3.5.3",
-        "tailwindcss": "^4",
+        "tailwindcss": "^4.2.2",
         "typescript": "^5",
         "typescript-eslint": "^8.29.0",
         "vite": "^6.2.4",
@@ -1953,7 +1954,7 @@
 
     "tailwind-merge": ["tailwind-merge@3.5.0", "", {}, ""],
 
-    "tailwindcss": ["tailwindcss@4.2.1", "", {}, ""],
+    "tailwindcss": ["tailwindcss@4.2.2", "", {}, "sha512-KWBIxs1Xb6NoLdMVqhbhgwZf2PGBpPEiwOqgI4pFIYbNTfBXiKYyWoTsXgBQ9WFg/OlhnvHaY+AEpW7wSmFo2Q=="],
 
     "tailwindcss-animate": ["tailwindcss-animate@1.0.7", "", { "peerDependencies": { "tailwindcss": ">=3.0.0 || insiders" } }, ""],
 
@@ -2180,6 +2181,10 @@
     "@radix-ui/react-tooltip/@radix-ui/react-slot": ["@radix-ui/react-slot@1.2.3", "", { "dependencies": { "@radix-ui/react-compose-refs": "1.1.2" }, "peerDependencies": { "@types/react": "*", "react": "^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc" }, "optionalPeers": ["@types/react"] }, "sha512-aeNmHnBxbi2St0au6VBVC7JXFlhLlOnvIIlePNniyUNAClzmtAUEY8/pBiK3iHjufOlwA+c20/8jngo7xcrg8A=="],
 
     "@tailwindcss/node/lightningcss": ["lightningcss@1.31.1", "", { "dependencies": { "detect-libc": "^2.0.3" }, "optionalDependencies": { "lightningcss-android-arm64": "1.31.1", "lightningcss-darwin-arm64": "1.31.1", "lightningcss-darwin-x64": "1.31.1", "lightningcss-freebsd-x64": "1.31.1", "lightningcss-linux-arm-gnueabihf": "1.31.1", "lightningcss-linux-arm64-gnu": "1.31.1", "lightningcss-linux-arm64-musl": "1.31.1", "lightningcss-linux-x64-gnu": "1.31.1", "lightningcss-linux-x64-musl": "1.31.1", "lightningcss-win32-arm64-msvc": "1.31.1", "lightningcss-win32-x64-msvc": "1.31.1" } }, ""],
+
+    "@tailwindcss/node/tailwindcss": ["tailwindcss@4.2.1", "", {}, ""],
+
+    "@tailwindcss/postcss/tailwindcss": ["tailwindcss@4.2.1", "", {}, ""],
 
     "@testing-library/dom/dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 

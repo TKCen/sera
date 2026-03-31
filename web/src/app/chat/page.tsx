@@ -11,6 +11,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { ChatInputBar } from '@/components/ChatInputBar';
 import { ChatMessageBubble } from '@/components/ChatMessageBubble';
+import { EmptyState } from '@/components/EmptyState';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -456,6 +457,8 @@ function ChatPageContent() {
       onClick={() => setSidebarOpen((v) => !v)}
       className="p-1.5 rounded hover:bg-sera-surface text-sera-text-muted hover:text-sera-text transition-colors"
       title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+      aria-label="Toggle sidebar"
+      aria-expanded={sidebarOpen}
     >
       {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
     </button>
@@ -465,7 +468,7 @@ function ChatPageContent() {
 
   if (messages.length === 0 && !streaming) {
     return (
-      <div className="flex h-full">
+      <main className="flex h-full">
         <ChatSidebar
           sessions={sessions}
           agents={agents}
@@ -483,25 +486,27 @@ function ChatPageContent() {
         />
         <div className="flex-1 flex flex-col items-center justify-center px-8 relative">
           <div className="absolute top-4 left-4">{sidebarToggle}</div>
-          <div className="w-16 h-16 rounded-2xl bg-sera-accent-soft flex items-center justify-center mb-6">
-            <Bot size={32} className="text-sera-accent" />
+          <div className="flex-1 w-full flex flex-col items-center justify-center">
+            <EmptyState
+              icon={<Bot size={32} className="text-sera-accent" />}
+              title="How can I help you?"
+              description={
+                selectedAgent
+                  ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
+                  : 'Select an agent from the sidebar to get started.'
+              }
+            />
+            {isAgentUnavailable && (
+              <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
+                Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
+                <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
+                  agent detail page
+                </a>
+                .
+              </div>
+            )}
           </div>
-          <h2 className="text-xl font-semibold text-sera-text mb-2">How can I help you?</h2>
-          {isAgentUnavailable && (
-            <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
-              Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
-              <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
-                agent detail page
-              </a>
-              .
-            </div>
-          )}
-          <p className="text-sm text-sera-text-muted mb-8 text-center max-w-md">
-            {selectedAgent
-              ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
-              : 'Select an agent from the sidebar to get started.'}
-          </p>
-          <div className="w-full max-w-2xl">
+          <div className="w-full max-w-2xl pb-8">
             <ChatInputBar
               inputRef={inputRef}
               input={input}
@@ -515,14 +520,14 @@ function ChatPageContent() {
             />
           </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   // ── Conversation view ─────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full">
+    <main className="flex h-full">
       <ChatSidebar
         sessions={sessions}
         agents={agents}
@@ -565,7 +570,7 @@ function ChatPageContent() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0">
+        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0" role="log" aria-live="polite">
           {messages.map((msg) => (
             <ChatMessageBubble
               key={msg.id}
@@ -595,7 +600,7 @@ function ChatPageContent() {
           </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 

@@ -161,4 +161,3 @@ export function getEmbeddingDimension(): number {
 }
 
 // Backward compat export — deprecated, use getEmbeddingDimension() instead
-export const EMBEDDING_VECTOR_SIZE = 768;

@@ -7,7 +7,7 @@
 export type SecurityTier = 1 | 2 | 3;
 
 // ── Metadata ────────────────────────────────────────────────────────────────────
-export interface AgentMetadata {
+interface AgentMetadata {
   name: string;
   displayName: string;
   icon: string;
@@ -17,7 +17,7 @@ export interface AgentMetadata {
 }
 
 // ── Identity (BMAD-inspired) ────────────────────────────────────────────────────
-export interface AgentIdentity {
+interface AgentIdentity {
   role: string;
   description: string;
   communicationStyle?: string;
@@ -25,7 +25,7 @@ export interface AgentIdentity {
 }
 
 // ── Model Configuration ─────────────────────────────────────────────────────────
-export interface ModelFallback {
+interface ModelFallback {
   provider: string;
   name: string;
   maxComplexity?: number;
@@ -39,60 +39,60 @@ export interface ModelConfig {
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────────
-export interface ToolsConfig {
+interface ToolsConfig {
   allowed?: string[];
   denied?: string[];
 }
 
 // ── Subagents ───────────────────────────────────────────────────────────────────
-export interface SubagentAllowedEntry {
+interface SubagentAllowedEntry {
   role: string;
   maxInstances?: number;
   requiresApproval?: boolean;
 }
 
-export interface SubagentsConfig {
+interface SubagentsConfig {
   allowed?: SubagentAllowedEntry[];
 }
 
 // ── Intercom ────────────────────────────────────────────────────────────────────
-export interface IntercomChannels {
+interface IntercomChannels {
   publish?: string[];
   subscribe?: string[];
 }
 
-export interface IntercomConfig {
+interface IntercomConfig {
   canMessage?: string[];
   channels?: IntercomChannels;
 }
 
 // ── Resources ───────────────────────────────────────────────────────────────────
-export interface ResourcesConfig {
+interface ResourcesConfig {
   memory?: string;
   cpu?: string;
   maxLlmTokensPerHour?: number;
 }
 
 // ── Workspace ───────────────────────────────────────────────────────────────────
-export interface WorkspaceConfig {
+interface WorkspaceConfig {
   provider?: string;
   path?: string;
 }
 
 // ── Memory ──────────────────────────────────────────────────────────────────────
-export interface MemoryConfig {
+interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────────────
-export interface PermissionsConfig {
+interface PermissionsConfig {
   canExec?: boolean;
   canSpawnSubagents?: boolean;
 }
 
 // ── Schedules ───────────────────────────────────────────────────────────────────
-export interface ScheduleManifest {
+interface ScheduleManifest {
   name: string;
   description?: string;
   type: 'cron' | 'once';

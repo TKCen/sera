@@ -759,4 +759,4 @@ if (process.env.NODE_ENV !== 'test' && isMainModule) {
   });
 }
 
-export { app, startServer };
+export { app };

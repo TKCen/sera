@@ -27,7 +27,7 @@ const HEARTBEAT_STALE_MS = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 
 // Story 3.11 — hard ceiling on subagent recursion depth
 const SUBAGENT_MAX_DEPTH = parseInt(process.env.SUBAGENT_MAX_DEPTH ?? '5', 10);
 
-export class RecursionLimitError extends Error {
+class RecursionLimitError extends Error {
   constructor(
     public readonly currentDepth: number,
     public readonly maxDepth: number

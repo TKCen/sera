@@ -14,7 +14,7 @@ interface OpenAIEmbedResponse {
   usage: { prompt_tokens: number; total_tokens: number };
 }
 
-export interface TestResult {
+interface TestResult {
   ok: boolean;
   latencyMs: number;
   dimension?: number;

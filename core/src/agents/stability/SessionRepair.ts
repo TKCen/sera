@@ -14,7 +14,7 @@ import { Logger } from '../../lib/logger.js';
 
 const logger = new Logger('SessionRepair');
 
-export interface RepairReport {
+interface RepairReport {
   /** Number of orphaned tool messages removed. */
   orphanedToolMessages: number;
   /** Number of empty messages removed. */

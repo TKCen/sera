@@ -21,7 +21,7 @@ export interface MemoryGraphData {
   edges: GraphEdge[];
 }
 
-export interface MemoryGraphProps {
+interface MemoryGraphProps {
   data: MemoryGraphData;
   onNodeClick?: (node: GraphNode) => void;
   onNodeDoubleClick?: (node: GraphNode) => void;

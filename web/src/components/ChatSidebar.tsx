@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Plus, Bot, MessageSquare, Trash2, ChevronDown, Pencil, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export interface SessionInfo {
+interface SessionInfo {
   id: string;
   agentName: string;
   agentInstanceId?: string | null;
@@ -12,7 +12,7 @@ export interface SessionInfo {
   updatedAt: string;
 }
 
-export interface AgentInfo {
+interface AgentInfo {
   id: string;
   name: string;
   display_name?: string | null;

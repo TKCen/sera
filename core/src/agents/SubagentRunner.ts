@@ -18,7 +18,7 @@ const logger = new Logger('SubagentRunner');
 
 // ── SubagentResult ──────────────────────────────────────────────────────────────
 
-export interface SubagentResult {
+interface SubagentResult {
   subagentRole: string;
   containerId: string;
   status: 'completed' | 'failed' | 'timeout';

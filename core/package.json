@@ -26,7 +26,6 @@
     "@types/dockerode": "^3.3",
     "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0",
-    "@types/jsonwebtoken": "^9.0",
     "@types/node": "^20.0.0",
     "@types/opossum": "^8.1.9",
     "@types/pg": "^8.11",
@@ -74,6 +73,7 @@
     "vscode-languageserver-protocol": "^3.17.5",
     "vscode-uri": "^3.0",
     "ws": "^8.18",
+    "yargs": "^18.0.0",
     "zod": "^3.25.76"
   }
 }

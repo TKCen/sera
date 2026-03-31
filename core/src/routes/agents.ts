@@ -155,7 +155,7 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         parentInstanceId,
         ttlMinutes = 30,
         overrides,
-        additionalMounts,
+
         async: asyncMode,
       } = req.body as {
         templateRef: string;

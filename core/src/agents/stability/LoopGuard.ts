@@ -20,9 +20,9 @@ const WARN_THRESHOLD = 3;
 /** Number of identical calls before blocking execution. */
 const BLOCK_THRESHOLD = 5;
 
-export type LoopGuardStatus = 'ok' | 'warn' | 'block';
+type LoopGuardStatus = 'ok' | 'warn' | 'block';
 
-export interface LoopGuardResult {
+interface LoopGuardResult {
   status: LoopGuardStatus;
   count: number;
   hash: string;

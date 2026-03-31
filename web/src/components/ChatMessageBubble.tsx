@@ -7,7 +7,7 @@ import { CodeBlock } from '@/components/CodeBlock';
 import { MessageCopyButton } from '@/components/MessageCopyButton';
 import type { Message } from '@/app/chat/page';
 
-export interface ChatMessageBubbleProps {
+interface ChatMessageBubbleProps {
   msg: Message;
   showThinking: boolean;
   isExpanded: boolean;

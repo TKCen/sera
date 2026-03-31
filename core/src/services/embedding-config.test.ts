@@ -5,7 +5,7 @@ import {
   saveEmbeddingConfig,
   maskConfig,
   resolveApiKey,
-  KNOWN_EMBEDDING_MODELS,
+
 } from './embedding-config.js';
 
 vi.mock('node:fs', () => ({

@@ -9,7 +9,7 @@ const logger = new Logger('VectorService');
 
 export type MemoryNamespace = `personal:${string}` | `circle:${string}` | 'global';
 
-export function collectionName(namespace: MemoryNamespace): string {
+function collectionName(namespace: MemoryNamespace): string {
   if (namespace === 'global') return 'memory_global';
   if (namespace.startsWith('personal:')) return `memory_personal_${namespace.slice(9)}`;
   if (namespace.startsWith('circle:')) return `memory_circle_${namespace.slice(7)}`;
@@ -18,7 +18,7 @@ export function collectionName(namespace: MemoryNamespace): string {
 
 // ── Payload metadata ──────────────────────────────────────────────────────────
 
-export interface VectorPayload {
+interface VectorPayload {
   source_file?: string;
   commit_hash?: string;
   agent_id: string;
@@ -31,13 +31,8 @@ export interface VectorPayload {
   [key: string]: unknown;
 }
 
-export interface VectorPoint {
-  id: string | number;
-  vector: number[];
-  payload: VectorPayload;
-}
 
-export interface SearchResult {
+interface SearchResult {
   id: string | number;
   score: number;
   payload: VectorPayload;

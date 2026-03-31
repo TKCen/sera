@@ -116,7 +116,7 @@ export class ScheduleService {
       agent_instance_id,
       agent_name,
       name,
-      description: _description,
+
       type,
       expression,
       task,

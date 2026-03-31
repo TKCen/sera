@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // ── Shared ──────────────────────────────────────────────────────────────────
 
-export const MetadataSchema = z.object({
+const MetadataSchema = z.object({
   name: z
     .string()
     .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/)

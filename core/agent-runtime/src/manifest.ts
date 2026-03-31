@@ -71,8 +71,13 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
 
 /**
  * Generate a system prompt from a manifest, similar to Core's IdentityService.
+ * Optionally includes tool descriptions so the LLM knows what tools are available
+ * even if it doesn't fully parse OpenAI function-calling schemas.
  */
-export function generateSystemPrompt(manifest: RuntimeManifest): string {
+export function generateSystemPrompt(
+  manifest: RuntimeManifest,
+  toolDefs?: Array<{ function: { name: string; description: string } }>
+): string {
   const lines: string[] = [
     `You are ${manifest.metadata.displayName}, a SERA AI agent.`,
     `Role: ${manifest.identity.role}`,
@@ -92,10 +97,19 @@ export function generateSystemPrompt(manifest: RuntimeManifest): string {
 
   lines.push('');
   lines.push('## Tool Usage Guidelines');
-  lines.push('- When you need to accomplish a task, use the available tools.');
+  lines.push('- When you need to accomplish a task, USE the available tools via function calls.');
   lines.push('- Report results clearly. If a tool errors, explain what happened.');
   lines.push('- Do not call the same tool with identical arguments repeatedly.');
   lines.push('- If you cannot accomplish a task with the tools available, say so.');
+
+  if (toolDefs && toolDefs.length > 0) {
+    lines.push('');
+    lines.push('## Available Tools');
+    lines.push('You MUST use these tools via function calls when they are relevant to the task:');
+    for (const tool of toolDefs) {
+      lines.push(`- **${tool.function.name}**: ${tool.function.description}`);
+    }
+  }
 
   return lines.join('\n');
 }

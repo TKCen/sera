@@ -121,6 +121,12 @@ export class LLMClient {
       body['temperature'] = temperature;
     }
 
+    // Debug: log tool names and message roles sent to LLM
+    if (tools && tools.length > 0) {
+      const toolNames = tools.map((t) => t.function.name).join(', ');
+      log('debug', `LLM request: ${(body['messages'] as unknown[]).length} messages, ${tools.length} tools: [${toolNames}]`);
+    }
+
     try {
       const res = await this.http.post('/chat/completions', body);
       const data = res.data as Record<string, unknown>;

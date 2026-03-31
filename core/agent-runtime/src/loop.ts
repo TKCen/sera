@@ -65,8 +65,8 @@ export class ReasoningLoop {
     this.tools = tools;
     this.centrifugo = centrifugo;
     this.manifest = manifest;
-    this.systemPrompt = generateSystemPrompt(manifest);
     this.toolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
+    this.systemPrompt = generateSystemPrompt(manifest, this.toolDefs);
     this.contextManager = new ContextManager(manifest.model.name);
   }
 

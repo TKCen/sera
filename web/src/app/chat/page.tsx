@@ -14,20 +14,8 @@ import { ChatMessageBubble } from '@/components/ChatMessageBubble';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export interface MessageThought {
-  timestamp: string;
-  stepType: string;
-  content: string;
-}
-
-export interface Message {
-  id: string;
-  role: 'user' | 'agent';
-  content: string;
-  thoughts: MessageThought[];
-  streaming: boolean;
-  createdAt: Date;
-}
+import type { Message, MessageThought } from '@/lib/types/chat';
+export type { Message, MessageThought } from '@/lib/types/chat';
 
 interface SessionInfo {
   id: string;

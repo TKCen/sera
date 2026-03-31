@@ -13,22 +13,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export interface MessageThought {
-  timestamp: string;
-  stepType: string;
-  content: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-}
-
-export interface Message {
-  id: string;
-  role: 'user' | 'agent';
-  content: string;
-  thoughts: MessageThought[];
-  streaming: boolean;
-  createdAt: Date;
-}
+export type { Message, MessageThought } from '@/lib/types/chat';
+import type { Message } from '@/lib/types/chat';
 
 // ── Thought step icons & colours ─────────────────────────────────────────────
 

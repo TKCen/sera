@@ -42,7 +42,7 @@ describe('rateLimitStub', () => {
       capabilities: [],
       scope: 'agent',
       iat: 1234567890,
-      exp: 1234567890
+      exp: 1234567890,
     };
 
     rateLimitStub(req as Request, res as Response, next);

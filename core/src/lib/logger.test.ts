@@ -29,7 +29,11 @@ describe('Logger', () => {
 
   it('logs error messages with component prefix', () => {
     logger.error('test error', new Error('fail'));
-    expect(console.error).toHaveBeenCalledWith(`[${componentName}]`, 'test error', expect.any(Error));
+    expect(console.error).toHaveBeenCalledWith(
+      `[${componentName}]`,
+      'test error',
+      expect.any(Error)
+    );
   });
 
   it('debug method does not throw and does not log (commented out in implementation)', () => {

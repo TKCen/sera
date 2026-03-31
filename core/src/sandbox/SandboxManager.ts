@@ -153,8 +153,6 @@ export class SandboxManager {
       // Container doesn't exist — expected case
     }
 
-
-
     this.audit('spawn', agentName, {
       instanceId: finalInstanceId,
       type: request.type,

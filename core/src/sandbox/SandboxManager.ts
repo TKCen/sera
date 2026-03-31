@@ -5,9 +5,6 @@
  * with the Docker daemon directly.
  */
 
-import fs from 'fs';
-import path from 'path';
-import yaml from 'js-yaml';
 import Docker from 'dockerode';
 import { v4 as uuidv4 } from 'uuid';
 import type { AgentManifest, ResolvedCapabilities } from '../agents/manifest/types.js';
@@ -16,8 +13,10 @@ import { PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 import { Logger } from '../lib/logger.js';
-import { PlatformPath } from '../lib/PlatformPath.js';
 import type { EgressAclManager } from './EgressAclManager.js';
+import { BindMountBuilder } from './BindMountBuilder.js';
+import { ContainerSecurityMapper } from './ContainerSecurityMapper.js';
+
 import type { AgentRegistry } from '../agents/registry.service.js';
 
 const logger = new Logger('SandboxManager');
@@ -111,148 +110,31 @@ export class SandboxManager {
     }
 
     // ── Bind Mounts ──────────────────────────────────────────────────────────
-    const binds: string[] = [];
-
-    // 1. Workspace mount (Story 3.3)
-    const providerName = manifest.workspace?.provider ?? 'local';
-    const provider = this.storageFactory.getProvider(providerName);
-    const workspacePath = request.hostWorkspacePath ?? manifest.workspace?.path;
-    const writeAllowed = caps.filesystem?.write ?? caps.fs?.write ?? false;
-    const mode = writeAllowed ? 'rw' : 'ro';
-    binds.push(provider.getBindMount(finalInstanceId, '/workspace', mode, workspacePath));
-
-    // Write AGENT.yaml to workspace so the agent-runtime can load its manifest.
-    // The runtime expects flat format (identity/model/tools at top level), not spec-wrapped.
-    if (request.type !== 'mcp-server') {
-      const wsInternalPath = provider.getPath(finalInstanceId, workspacePath);
-      fs.mkdirSync(wsInternalPath, { recursive: true });
-      // Ensure workspace is writable by the non-root agent user (uid 1001) in the container.
-      // The bind mount inherits host permissions, so we must chmod the host directory.
-      try {
-        fs.chmodSync(wsInternalPath, 0o777);
-      } catch {
-        // Best-effort — may fail on some host filesystems
-      }
-      const spec = (manifest.spec ?? {}) as Record<string, unknown>;
-      // Use manifest.model (which has instance overrides applied by Orchestrator)
-      // instead of spec.model (which is the raw template without overrides).
-      const flatModel = ((manifest.model as unknown) ?? spec.model ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const modelWithDefaults = {
-        ...flatModel,
-        ...(flatModel.name
-          ? {}
-          : { name: process.env.DEFAULT_MODEL ?? process.env.LLM_MODEL ?? 'default' }),
-      };
-      const manifestYaml = yaml.dump({
-        apiVersion: manifest.apiVersion ?? 'sera/v1',
-        kind: manifest.kind ?? 'Agent',
-        metadata: manifest.metadata,
-        identity: spec.identity ?? manifest.identity,
-        model: modelWithDefaults,
-        tools: spec.tools,
-        skills: spec.skills,
-        intercom: spec.intercom,
-        resources: spec.resources,
-        workspace: spec.workspace,
-        memory: spec.memory,
-        capabilities: spec.capabilities,
-        sandboxBoundary: spec.sandboxBoundary,
-      });
-      fs.writeFileSync(path.join(wsInternalPath, 'AGENT.yaml'), manifestYaml, 'utf-8');
-      logger.debug(`Wrote AGENT.yaml to workspace for ${containerName}`);
-    }
-
-    // 2. Memory mount (Story 3.3)
-    const memoryHostDir = process.env.HOST_MEMORY_DIR ?? '/memory';
-    const memoryHostPath = PlatformPath.normalizeDockerBindPath(
-      `${memoryHostDir}/${finalInstanceId}`
+    const binds = await BindMountBuilder.buildMounts(
+      manifest,
+      request,
+      caps,
+      finalInstanceId,
+      agentName,
+      containerName,
+      this.storageFactory,
+      this.agentRegistry
     );
-    fs.mkdirSync(memoryHostPath, { recursive: true });
-    binds.push(`${memoryHostPath}:/memory:rw`);
 
-    // 3. Knowledge mounts (Story 3.3)
-    const knowledgeHostDir = process.env.HOST_KNOWLEDGE_DIR ?? '/knowledge';
-    const personalPath = PlatformPath.normalizeDockerBindPath(
-      `${knowledgeHostDir}/agents/${agentName}`
-    );
-    fs.mkdirSync(personalPath, { recursive: true });
-    binds.push(`${personalPath}:/knowledge/personal:ro`);
-
-    const sharedPath = PlatformPath.normalizeDockerBindPath(`${knowledgeHostDir}/shared`);
-    fs.mkdirSync(sharedPath, { recursive: true });
-    binds.push(`${sharedPath}:/knowledge/shared:ro`);
-
-    // 4. MCP Custom Mounts (Story 7.3)
-    if (request.type === 'mcp-server' && manifest.mounts) {
-      for (const m of manifest.mounts) {
-        const mode = m.mode === 'rw' ? 'rw' : 'ro';
-        binds.push(`${m.hostPath}:${m.containerPath}:${mode}`);
-      }
-    }
-
-    // 5. Persistent filesystem grants (Story 3.10)
-    if (this.agentRegistry) {
-      try {
-        const grants = await this.agentRegistry.getActiveFilesystemGrants(finalInstanceId);
-        for (const grant of grants) {
-          if (grant.grant_type === 'persistent') {
-            // Canonicalise to prevent path traversal
-            const grantPath = fs.existsSync(grant.value)
-              ? fs.realpathSync(grant.value)
-              : grant.value;
-            // host path = container path = grant value (rw access)
-            binds.push(`${grantPath}:${grantPath}:rw`);
-            logger.info(
-              `Persistent grant bind mount: ${grantPath} for instance ${finalInstanceId}`
-            );
-          }
-        }
-      } catch (err: unknown) {
-        logger.error('Failed to load persistent filesystem grants:', err);
-      }
-    }
-
-    // ── Resource Limits ─────────────────────────────────────────────────────
-    const cpuShares = caps.resources?.cpu_shares || 0;
-    const memoryBytes = (caps.resources?.memory_limit || 0) * 1024 * 1024;
-
-    // ── Network Mode (Story 3.2, 20.3) ──────────────────────────────────────
-    // Agent containers always need agent_net to reach sera-core (LLM proxy,
-    // task polling, heartbeat) and centrifugo (thought streaming) via the
-    // sera_net bridge added post-start. The egress proxy on agent_net is the
-    // single exit point for all external traffic.
-    // Only non-agent tool containers with no outbound access use 'none'.
-    const outbound = caps.network?.outbound || [];
-    let networkMode: string;
-    if (request.type === 'agent') {
-      // Agents always need network for sera-core communication
-      networkMode = 'agent_net';
-    } else if (outbound.length === 0) {
-      networkMode = 'none';
-    } else {
-      networkMode = 'agent_net';
-    }
-
-    // ── Egress Proxy (Story 20.3) ─────────────────────────────────────────
-    // Inject proxy env vars so all outbound HTTP traffic routes through the
-    // egress proxy. Only active when EGRESS_PROXY_URL is set (graceful
-    // degradation if proxy not deployed).
-    const egressProxyUrl = process.env.EGRESS_PROXY_URL;
-    const proxyEnabled = networkMode === 'agent_net' && !!egressProxyUrl;
-    if (proxyEnabled) {
-      env.push(`HTTP_PROXY=${egressProxyUrl}`);
-      env.push(`HTTPS_PROXY=${egressProxyUrl}`);
-      env.push('NO_PROXY=sera-core,centrifugo,localhost,127.0.0.1');
-    }
-
-    // ── Linux Capabilities (Story 3.2) ──────────────────────────────────────
-    const linuxCaps: string[] = Array.isArray(caps.capabilities) ? caps.capabilities : [];
-
-    // ── Ephemeral auto-remove (Story 3.7) ───────────────────────────────────
     const isEphemeral = request.lifecycleMode === 'ephemeral' || request.type === 'tool';
+
+    const { createOptions, networkMode, proxyEnabled } = ContainerSecurityMapper.mapSecurityOptions(
+      manifest,
+      request,
+      caps,
+      finalInstanceId,
+      agentName,
+      tier,
+      env,
+      binds,
+      containerName,
+      isEphemeral
+    );
 
     // Remove any stale container with the same name (e.g. from a previous crashed run).
     // Only act if inspect returns a real container with State info.
@@ -269,43 +151,6 @@ export class SandboxManager {
       }
     } catch {
       // Container doesn't exist — expected case
-    }
-
-    const createOptions: Docker.ContainerCreateOptions = {
-      name: containerName,
-      Image: request.image ?? 'sera-agent-worker:latest',
-      Cmd: request.command ?? undefined,
-      Env: env,
-      ExposedPorts: { '3100/tcp': {} },
-      AttachStdin: !!request.task,
-      OpenStdin: !!request.task,
-      StdinOnce: !!request.task,
-      WorkingDir: request.type === 'mcp-server' ? undefined : '/workspace',
-      Labels: {
-        'sera.sandbox': 'true',
-        ...(request.type === 'mcp-server'
-          ? { 'sera.mcp-server': agentName }
-          : { 'sera.agent': agentName }),
-        'sera.instance': finalInstanceId,
-        'sera.type': request.type,
-        'sera.tier': String(tier),
-        'sera.circle': manifest.metadata.circle ?? 'default',
-      },
-      HostConfig: {
-        CpuShares: cpuShares,
-        Memory: memoryBytes,
-        NetworkMode: networkMode,
-        Binds: binds,
-        AutoRemove: isEphemeral,
-        CapDrop: ['ALL'],
-        ...(linuxCaps.length > 0 ? { CapAdd: linuxCaps } : {}),
-        ReadonlyRootfs: caps.security?.readonlyRootfs ?? false,
-      },
-    };
-
-    if (caps.capabilities?.includes('CHOWN')) {
-      createOptions.HostConfig!.CapAdd = createOptions.HostConfig!.CapAdd || [];
-      createOptions.HostConfig!.CapAdd.push('CHOWN');
     }
 
     this.audit('spawn', agentName, {
@@ -392,6 +237,7 @@ export class SandboxManager {
     this.instanceToContainer.set(finalInstanceId, info.Id);
 
     // Story 20.2 — generate per-agent ACL for the egress proxy
+    const outbound = caps.network?.outbound || [];
     if (this.egressAclManager && containerIp && outbound.length > 0) {
       this.egressAclManager
         .onSpawn(finalInstanceId, containerIp, { outbound })

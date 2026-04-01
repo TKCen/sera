@@ -56,11 +56,7 @@ export const ChatEmptyView: React.FC<ChatEmptyViewProps> = ({
           </div>
         )}
       </div>
-      {children && (
-        <div className="w-full max-w-2xl pb-8">
-          {children}
-        </div>
-      )}
+      {children && <div className="w-full max-w-2xl pb-8">{children}</div>}
     </div>
   );
 };

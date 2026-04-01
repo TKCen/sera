@@ -28,11 +28,7 @@ export const ChatMessageList: React.FC<ChatMessageListProps> = ({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div
-        className="flex-1 overflow-y-auto px-6 py-6 space-y-5"
-        role="log"
-        aria-live="polite"
-      >
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5" role="log" aria-live="polite">
         {messages.map((msg) => (
           <ChatMessageBubble
             key={msg.id}
@@ -46,9 +42,7 @@ export const ChatMessageList: React.FC<ChatMessageListProps> = ({
       </div>
       {children && (
         <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">
-          <div className="max-w-3xl mx-auto">
-            {children}
-          </div>
+          <div className="max-w-3xl mx-auto">{children}</div>
         </div>
       )}
     </div>

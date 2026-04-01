@@ -21,7 +21,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   setShowThinking,
 }) => {
   const sessionTitle = sessionId
-    ? sessions.find((s) => s.id === sessionId)?.title ?? 'New Chat'
+    ? (sessions.find((s) => s.id === sessionId)?.title ?? 'New Chat')
     : null;
 
   return (
@@ -37,9 +37,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
         </button>
         {sessionTitle && (
-          <span className="text-xs text-sera-text-muted font-mono truncate">
-            {sessionTitle}
-          </span>
+          <span className="text-xs text-sera-text-muted font-mono truncate">{sessionTitle}</span>
         )}
       </div>
       <button

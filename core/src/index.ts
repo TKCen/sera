@@ -602,6 +602,18 @@ const startServer = async () => {
     await initDb();
   }
 
+  // Re-import templates and resources from filesystem on every startup.
+  // This ensures template changes (new schedules, updated capabilities, etc.)
+  // are synced to the DB and propagated to existing instances.
+  await resourceImporter
+    .importAll()
+    .then((r) =>
+      logger.info(
+        `Resource import: ${r.added.length} added, ${r.updated.length} updated, ${r.errors.length} errors`
+      )
+    )
+    .catch((err) => logger.error('Failed to import resources on startup:', err));
+
   // Hydrate provider API keys from encrypted secrets store (if SECRETS_MASTER_KEY is set)
   await providerRegistry.hydrateSecrets().catch((err) => {
     logger.warn('Could not hydrate provider secrets (SECRETS_MASTER_KEY may not be set):', err);

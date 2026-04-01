@@ -5,6 +5,7 @@ import type {
   AgentInfo,
   AgentTask,
   AgentSchedule,
+  Schedule,
   AgentMemoryBlock,
   ThoughtEvent,
   CreateAgentInstanceParams,
@@ -90,8 +91,20 @@ export function getAgentMemory(id: string, scope?: string): Promise<AgentMemoryB
   return request<AgentMemoryBlock[]>(`/memory/${encodeURIComponent(id)}/blocks${params}`);
 }
 
-export function getAgentSchedules(id: string): Promise<AgentSchedule[]> {
-  return request<AgentSchedule[]>(`/agents/${encodeURIComponent(id)}/schedules`);
+export async function getAgentSchedules(id: string): Promise<AgentSchedule[]> {
+  // The schedule list endpoint is /api/schedules?agentId=:id (not /api/agents/:id/schedules)
+  const schedules = await request<Schedule[]>(`/schedules?agentId=${encodeURIComponent(id)}`);
+  return schedules.map((s) => ({
+    id: s.id,
+    agentName: s.agentName,
+    cron: s.expression,
+    description: s.name,
+    category: s.category,
+    lastRunAt: s.lastRunAt,
+    lastRunStatus: s.lastRunStatus as AgentSchedule['lastRunStatus'],
+    nextRunAt: s.nextRunAt,
+    enabled: s.status === 'active',
+  }));
 }
 
 export function getAgentTasks(id: string, type?: string): Promise<AgentTask[]> {

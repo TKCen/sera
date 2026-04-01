@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios, { AxiosError } from 'axios';
-import { LLMClient, BudgetExceededError, ProviderUnavailableError, type ChatMessage } from '../llmClient.js';
+import { LLMClient, BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError, type ChatMessage } from '../llmClient.js';
 
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios);
@@ -88,6 +88,57 @@ describe('LLMClient', () => {
         expect.objectContaining({ timeout: 60000 }),
       );
       delete process.env['LLM_TIMEOUT_MS'];
+    });
+
+    it('throws ContextOverflowError on HTTP 400 with context_length_exceeded code', async () => {
+      const error = new AxiosError('Bad Request');
+      error.response = { status: 400, data: { error: { code: 'context_length_exceeded', message: 'too long' } }, statusText: 'Bad Request', headers: {}, config: {} as any };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(ContextOverflowError);
+    });
+
+    it('throws ContextOverflowError on HTTP 400 with "maximum context length" in message', async () => {
+      const error = new AxiosError('Bad Request');
+      error.response = { status: 400, data: { error: { message: 'This model has a maximum context length of 128000 tokens' } }, statusText: 'Bad Request', headers: {}, config: {} as any };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(ContextOverflowError);
+    });
+
+    it('throws ContextOverflowError on HTTP 400 with "prompt is too long" message', async () => {
+      const error = new AxiosError('Bad Request');
+      error.response = { status: 400, data: { error: { message: 'prompt is too long: 200000 tokens > 128000' } }, statusText: 'Bad Request', headers: {}, config: {} as any };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(ContextOverflowError);
+    });
+
+    it('does NOT throw ContextOverflowError on HTTP 400 with unrelated message', async () => {
+      const error = new AxiosError('Bad Request');
+      error.response = { status: 400, data: { error: { message: 'invalid model name' } }, statusText: 'Bad Request', headers: {}, config: {} as any };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(Error);
+      // Reset and verify it's NOT a ContextOverflowError
+      mockPost.mockRejectedValueOnce(error);
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.not.toThrow(ContextOverflowError);
+    });
+
+    it('throws LLMTimeoutError on ECONNABORTED', async () => {
+      const error = new AxiosError('timeout of 120000ms exceeded');
+      error.code = 'ECONNABORTED';
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(LLMTimeoutError);
+    });
+
+    it('throws LLMTimeoutError on ETIMEDOUT', async () => {
+      const error = new AxiosError('connect ETIMEDOUT');
+      error.code = 'ETIMEDOUT';
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(LLMTimeoutError);
     });
   });
 });

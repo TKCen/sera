@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, ArrowUpRight, ArrowDownLeft, Save, Brain } from 'lucide-react';
+import { Search, ArrowUpRight, ArrowDownLeft, Save, Brain, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useBlockDetail,
   useBlockBacklinks,
   useMemorySearch,
   useUpdateBlock,
+  useDeleteBlock,
 } from '@/hooks/useMemoryExplorer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,7 +18,7 @@ import type { ScopedBlock } from '@/lib/api/memory';
 interface MemoryContentProps {
   selectedAgentId: string;
   selectedBlockId: string;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   onSearchChange?: (query: string) => void;
   agentNameMap?: Map<string, string>;
 }
@@ -49,6 +50,7 @@ export function MemoryContent({
   const { data: backlinks } = useBlockBacklinks(selectedAgentId, selectedBlockId);
   const { data: searchResults, isLoading: searchLoading } = useMemorySearch(debouncedQuery);
   const updateMutation = useUpdateBlock();
+  const deleteMutation = useDeleteBlock();
 
   const isSearching = debouncedQuery.length >= 2;
   const hasBlock = selectedBlockId.length > 0 && !isSearching;
@@ -56,7 +58,7 @@ export function MemoryContent({
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Search bar */}
-      <div className="p-3 border-b border-sera-border">
+      <div className="pb-4 mb-4 border-b border-sera-border">
         <div className="relative">
           <Search
             size={14}
@@ -73,7 +75,7 @@ export function MemoryContent({
       </div>
 
       {/* Content area */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1">
         {isSearching ? (
           <SearchResults
             results={searchResults ?? []}
@@ -93,6 +95,18 @@ export function MemoryContent({
               await updateMutation.mutateAsync({ agentId, blockId, updates });
             }}
             saving={updateMutation.isPending}
+            onDelete={async (agentId, blockId) => {
+              if (window.confirm('Are you sure you want to delete this memory block?')) {
+                try {
+                  await deleteMutation.mutateAsync({ agentId, blockId });
+                  toast.success('Block deleted');
+                  onBlockSelect(null);
+                } catch (err) {
+                  toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }
+            }}
+            deleting={deleteMutation.isPending}
           />
         ) : (
           <EmptyState
@@ -118,7 +132,7 @@ function SearchResults({
   results: Array<{ block: ScopedBlock; score: number }>;
   loading: boolean;
   query: string;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   agentNameMap?: Map<string, string>;
 }) {
   if (loading) {
@@ -173,6 +187,8 @@ function BlockDetail({
   agentNameMap,
   onSave,
   saving,
+  onDelete,
+  deleting,
 }: {
   block: ScopedBlock | null;
   loading: boolean;
@@ -182,10 +198,12 @@ function BlockDetail({
     sourceType: string;
     relationship: string;
   }>;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   agentNameMap?: Map<string, string>;
   onSave?: (agentId: string, blockId: string, updates: { content?: string }) => Promise<void>;
   saving?: boolean;
+  onDelete?: (agentId: string, blockId: string) => Promise<void>;
+  deleting?: boolean;
 }) {
   const [editContent, setEditContent] = useState<string | null>(null);
 
@@ -213,17 +231,30 @@ function BlockDetail({
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <Badge variant="accent">{block.type}</Badge>
-          <span className="text-[10px] text-sera-text-dim">
-            {agentNameMap?.get(block.agentId) ?? block.agentId}
-          </span>
-          <span className="text-[10px] text-sera-text-dim ml-auto">
-            {new Date(block.timestamp).toLocaleString()}
-          </span>
+      <div className="flex justify-between items-start">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-2">
+            <Badge variant="accent">{block.type}</Badge>
+            <span className="text-[10px] text-sera-text-dim">
+              {agentNameMap?.get(block.agentId) ?? block.agentId}
+            </span>
+            <span className="text-[10px] text-sera-text-dim ml-auto">
+              {new Date(block.timestamp).toLocaleString()}
+            </span>
+          </div>
+          <h2 className="text-lg font-semibold text-sera-text truncate">{block.title}</h2>
         </div>
-        <h2 className="text-lg font-semibold text-sera-text">{block.title}</h2>
+        {onDelete && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-sera-error hover:text-sera-error hover:bg-sera-error/10 ml-2"
+            disabled={deleting}
+            onClick={() => onDelete(block.agentId, block.id)}
+          >
+            <Trash2 size={16} />
+          </Button>
+        )}
       </div>
 
       {/* Tags */}

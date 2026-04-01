@@ -23,7 +23,7 @@ import HealthPage from '@/app/health/page';
 import SchedulesPage from '@/app/schedules/page';
 import SettingsPage from '@/app/settings/page';
 import ToolsPage from '@/pages/ToolsPage';
-import MemoryExplorerPage from '@/pages/MemoryExplorerPage';
+import MemoryExplorerPage from '@/app/memory/page';
 import MemoryDetailPage from '@/pages/MemoryDetailPage';
 import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
 import ChannelsPage from '@/pages/ChannelsPage';

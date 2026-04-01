@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { MemorySidebar } from '@/components/memory/MemorySidebar';
 import { MemoryContent } from '@/components/memory/MemoryContent';
 import { MemoryGraphMinimap } from '@/components/memory/MemoryGraphMinimap';
+import { MemoryStatsHeader } from '@/components/memory/MemoryStatsHeader';
 import { Button } from '@/components/ui/button';
 import { usePromoteBlock } from '@/hooks/useMemoryExplorer';
 import { useAgents } from '@/hooks/useAgents';
@@ -37,7 +38,7 @@ function MemoryExplorerContent() {
   }
   const promoteMutation = usePromoteBlock();
 
-  const handleBlockSelect = useCallback((block: ScopedBlock) => {
+  const handleBlockSelect = useCallback((block: ScopedBlock | null) => {
     setSelectedBlock(block);
   }, []);
 
@@ -93,7 +94,7 @@ function MemoryExplorerContent() {
       </div>
 
       {/* Three-panel layout */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left: Sidebar (collapsible) */}
         <div
           className="border-r border-sera-border shrink-0 overflow-hidden flex"
@@ -137,14 +138,21 @@ function MemoryExplorerContent() {
         </div>
 
         {/* Center: Content */}
-        <div className="flex-1 overflow-hidden min-w-0">
-          <MemoryContent
-            selectedAgentId={selectedBlock?.agentId ?? ''}
-            selectedBlockId={selectedBlock?.id ?? ''}
-            onBlockSelect={handleBlockSelect}
-            onSearchChange={setSearchQuery}
-            agentNameMap={agentNameMap}
-          />
+        <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden bg-sera-bg">
+          {!selectedBlock && searchQuery === '' && (
+            <div className="p-6 pb-0 shrink-0">
+              <MemoryStatsHeader />
+            </div>
+          )}
+          <div className="flex-1 overflow-hidden p-6">
+            <MemoryContent
+              selectedAgentId={selectedBlock?.agentId ?? ''}
+              selectedBlockId={selectedBlock?.id ?? ''}
+              onBlockSelect={handleBlockSelect}
+              onSearchChange={setSearchQuery}
+              agentNameMap={agentNameMap}
+            />
+          </div>
         </div>
 
         {/* Right: Graph minimap (collapsible) */}

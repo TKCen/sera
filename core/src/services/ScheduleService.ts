@@ -112,16 +112,7 @@ export class ScheduleService {
 
   public async createSchedule(data: Partial<Schedule>): Promise<Schedule> {
     const id = uuidv4();
-    const {
-      agent_instance_id,
-      agent_name,
-      name,
-      description: _description,
-      type,
-      expression,
-      task,
-      source = 'api',
-    } = data;
+    const { agent_instance_id, agent_name, name, type, expression, task, source = 'api' } = data;
 
     if (!agent_instance_id || !name || !type || !expression || !task) {
       throw new Error('Missing required fields for schedule');

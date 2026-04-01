@@ -9,6 +9,7 @@ import {
   getAgentBlocks,
   promoteBlock,
   updateAgentBlock,
+  deleteAgentBlock,
   triggerCompaction,
 } from '@/lib/api/memory';
 
@@ -109,6 +110,17 @@ export function useUpdateBlock() {
       blockId: string;
       updates: { title?: string; content?: string; tags?: string[]; importance?: number };
     }) => updateAgentBlock(agentId, blockId, updates),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
+    },
+  });
+}
+
+export function useDeleteBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, blockId }: { agentId: string; blockId: string }) =>
+      deleteAgentBlock(agentId, blockId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
     },

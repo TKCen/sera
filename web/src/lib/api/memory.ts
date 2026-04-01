@@ -72,6 +72,13 @@ export function updateAgentBlock(
   );
 }
 
+export function deleteAgentBlock(agentId: string, blockId: string): Promise<void> {
+  return request<void>(
+    `/memory/${encodeURIComponent(agentId)}/blocks/${encodeURIComponent(blockId)}`,
+    { method: 'DELETE' }
+  );
+}
+
 export function triggerCompaction(agentId: string): Promise<{ compacted: number }> {
   return request(`/memory/${encodeURIComponent(agentId)}/compact`, { method: 'POST' });
 }

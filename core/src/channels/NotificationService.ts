@@ -185,13 +185,20 @@ export class NotificationService {
 
     const botToken = config['botToken'];
     const targetAgentId = config['targetAgentId'];
+    const applicationId = config['applicationId'];
     if (typeof botToken !== 'string' || typeof targetAgentId !== 'string') {
       logger.warn(`Invalid discord-chat config for channel ${channelId}`);
       return;
     }
+    if (typeof applicationId !== 'string') {
+      logger.warn(
+        `discord-chat channel ${channelId}: no applicationId — slash commands will not be registered`
+      );
+    }
 
     const chatConfig: DiscordChatConfig = {
       botToken,
+      applicationId: typeof applicationId === 'string' ? applicationId : '',
       targetAgentId,
       ...(Array.isArray(config['allowedGuilds'])
         ? { allowedGuilds: config['allowedGuilds'] as string[] }

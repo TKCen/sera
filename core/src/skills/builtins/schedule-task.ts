@@ -63,9 +63,14 @@ export const scheduleTaskSkill: SkillDefinition = {
       status?: string;
     };
 
-    // Normalize task to a string prompt — the LLM may send a string or an object
+    // Normalize task to a JSON string — the `task` column is type JSON in Postgres.
+    // The LLM may send a plain string prompt or a structured object.
     const taskPrompt =
-      task == null ? undefined : typeof task === 'string' ? task : JSON.stringify(task);
+      task == null
+        ? undefined
+        : typeof task === 'string'
+          ? JSON.stringify({ prompt: task })
+          : JSON.stringify(task);
 
     try {
       switch (action) {

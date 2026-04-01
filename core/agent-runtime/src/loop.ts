@@ -133,6 +133,10 @@ export class ReasoningLoop {
     const loopDetector = new ToolLoopDetector();
     let forceTextNext = false;
 
+    // ── Pre-compaction memory save hook (fires at most once per run) ───────
+    let preCompactionHookFired = false;
+    const hasKnowledgeStore = this.toolDefs.some((t) => t.function.name === 'knowledge-store');
+
     // ── Retry state machine (per-run, reset on each invocation) ───────────
     const retryState: RetryState = {
       overflowCompactionAttempts: 0,
@@ -169,6 +173,22 @@ export class ReasoningLoop {
 
         // Context window management — compact before each LLM call
         if (this.contextManager.isNearLimit(messages)) {
+          // Pre-compaction memory save hook (#506): give the agent one iteration
+          // to save important context before it's compacted away.
+          if (hasKnowledgeStore && !preCompactionHookFired) {
+            preCompactionHookFired = true;
+            await think('reflect', 'Context window nearly full — injecting save-reminder before compaction', iteration);
+            messages.push({
+              role: 'system',
+              content:
+                'IMPORTANT: Your context window is nearly full and compaction will occur shortly. ' +
+                'If there is any critical information from this conversation that you want to ' +
+                'preserve long-term, call the knowledge-store tool NOW to save it. ' +
+                'After this turn, older messages will be dropped.',
+            });
+            continue; // Let the next iteration handle the save, then compact
+          }
+
           const compaction = this.contextManager.compact(messages);
           await think('reflect', compaction.reflectMessage, iteration);
         }
@@ -303,8 +323,20 @@ export class ReasoningLoop {
           // Execute tools and add results
           const toolResults = await this.tools.executeToolCalls(response.toolCalls);
           for (const result of toolResults) {
-            // Pre-truncate tool output before adding to history
+            // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);
+
+            // 2. Context-aware budget guard — truncate further if remaining budget is tight
+            const budgetCheck = this.contextManager.truncateToContextBudget(result.message.content, messages);
+            if (budgetCheck.compactionNeeded) {
+              const compaction = this.contextManager.compact(messages);
+              await think('reflect', `Pre-result compaction: ${compaction.reflectMessage}`, iteration);
+              const recheck = this.contextManager.truncateToContextBudget(result.message.content, messages);
+              result.message.content = recheck.content;
+            } else {
+              result.message.content = budgetCheck.content;
+            }
+
             messages.push(result.message);
 
             // Emit reflect thought for argument repair

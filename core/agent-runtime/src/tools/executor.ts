@@ -29,15 +29,42 @@ const LOCAL_TOOLS = new Set([
   'shell-exec', 'spawn-subagent', 'run-tool',
 ]);
 
+/** Tools that modify state — executed with mutual exclusion to prevent races. */
+export const WRITE_TOOLS = new Set(['file-write', 'file-delete', 'shell-exec']);
+
+const DEFAULT_MAX_TOOL_CONCURRENCY = 4;
+
+// ── Semaphore for concurrency control ────────────────────────────────────────
+
+class Semaphore {
+  private permits: number;
+  private queue: Array<() => void> = [];
+  constructor(permits: number) { this.permits = permits; }
+  async acquire(): Promise<void> {
+    if (this.permits > 0) { this.permits--; return; }
+    return new Promise<void>((resolve) => { this.queue.push(resolve); });
+  }
+  release(): void {
+    const next = this.queue.shift();
+    if (next) { next(); } else { this.permits++; }
+  }
+}
+
 export class RuntimeToolExecutor {
   private workspacePath: string;
   private tier: number;
   /** Remote tools fetched from core's catalog. */
   private remoteCatalog: ToolDefinition[] = [];
+  /** Mutex for write tools — at most 1 write tool at a time. */
+  private writeMutex = new Semaphore(1);
+  /** Max concurrent tool executions. */
+  private concurrency: number;
 
   constructor(workspacePath: string = '/workspace', tier?: number) {
     this.workspacePath = workspacePath;
     this.tier = tier ?? (process.env['AGENT_TIER'] ? parseInt(process.env['AGENT_TIER'], 10) : 2);
+    const envConcurrency = process.env['MAX_TOOL_CONCURRENCY'];
+    this.concurrency = envConcurrency ? parseInt(envConcurrency, 10) : DEFAULT_MAX_TOOL_CONCURRENCY;
   }
 
   /**
@@ -198,12 +225,41 @@ export class RuntimeToolExecutor {
     }
   }
 
-  /** Execute multiple tool calls sequentially (order matters for state). */
+  /**
+   * Execute tool calls with concurrency. Write tools are serialized via a mutex;
+   * read-only tools run in parallel up to the configured concurrency limit.
+   * Results maintain the same order as the input tool calls.
+   */
   async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolExecutionResult[]> {
-    const results: ToolExecutionResult[] = [];
-    for (const tc of toolCalls) {
-      results.push(await this.executeTool(tc));
+    // Fast path: single call, no concurrency overhead
+    if (toolCalls.length <= 1) {
+      const results: ToolExecutionResult[] = [];
+      for (const tc of toolCalls) {
+        results.push(await this.executeTool(tc));
+      }
+      return results;
     }
+
+    const concurrencySem = new Semaphore(this.concurrency);
+    const results = new Array<ToolExecutionResult>(toolCalls.length);
+
+    const tasks = toolCalls.map(async (tc, index) => {
+      await concurrencySem.acquire();
+      try {
+        const toolName = sanitizeToolName(tc.function.name);
+        const isWrite = WRITE_TOOLS.has(toolName);
+        if (isWrite) await this.writeMutex.acquire();
+        try {
+          results[index] = await this.executeTool(tc);
+        } finally {
+          if (isWrite) this.writeMutex.release();
+        }
+      } finally {
+        concurrencySem.release();
+      }
+    });
+
+    await Promise.all(tasks);
     return results;
   }
 

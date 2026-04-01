@@ -39,6 +39,7 @@ const DEFAULT_CONTEXT_WINDOW = 32_768;
 const DEFAULT_HIGH_WATER_PCT = 0.80;
 const AGGRESSIVE_COMPACT_PCT = 0.50;
 const DEFAULT_TOOL_OUTPUT_MAX_TOKENS = 4_000;
+const DEFAULT_RESPONSE_RESERVE = 4_096;
 const DEFAULT_EMERGENCY_TOOL_TOKENS = 500;
 
 export type CompactionStrategy = 'sliding-window' | 'summarise';
@@ -279,6 +280,44 @@ export class ContextManager {
       log('info', `ContextManager: retroactively truncated ${truncatedCount} tool result(s) to ${maxTokens} tokens`);
     }
     return truncatedCount;
+  }
+
+  /**
+   * Returns how many tokens remain before hitting the high-water mark,
+   * minus a reserve for the LLM's response. Clamped to 0.
+   */
+  getAvailableBudget(messages: ChatMessage[], responseReserve: number = DEFAULT_RESPONSE_RESERVE): number {
+    return Math.max(0, this.highWaterMark - this.countMessageTokens(messages) - responseReserve);
+  }
+
+  /**
+   * Context-aware truncation: ensures a tool result fits within the remaining
+   * context budget. Applied after the per-result TOOL_OUTPUT_MAX_TOKENS cap.
+   *
+   * @returns The (possibly truncated) content, whether the budget was exceeded,
+   *          and whether compaction is needed before adding the result.
+   */
+  truncateToContextBudget(
+    content: string,
+    messages: ChatMessage[],
+    responseReserve: number = DEFAULT_RESPONSE_RESERVE,
+  ): { content: string; budgetExceeded: boolean; compactionNeeded: boolean } {
+    const budget = this.getAvailableBudget(messages, responseReserve);
+
+    if (budget === 0) {
+      return { content, budgetExceeded: true, compactionNeeded: true };
+    }
+
+    const tokens = this.countTokens(content);
+    if (tokens <= budget) {
+      return { content, budgetExceeded: false, compactionNeeded: false };
+    }
+
+    const notice = `\n\n[SERA: tool result truncated to fit context budget — ${tokens} → ${budget} tokens]`;
+    const noticeTokens = this.countTokens(notice);
+    const truncated = this.truncateToFit(content, Math.max(1, budget - noticeTokens)) + notice;
+
+    return { content: truncated, budgetExceeded: true, compactionNeeded: false };
   }
 
   /** Release the tiktoken encoding (no-op for js-tiktoken, kept for API compatibility). */

@@ -186,6 +186,84 @@ describe('ContextManager', () => {
     });
   });
 
+  describe('getAvailableBudget()', () => {
+    it('returns positive value when under limit', () => {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System.' },
+        { role: 'user', content: 'Hello' },
+      ];
+      const budget = mgr.getAvailableBudget(messages);
+      expect(budget).toBeGreaterThan(0);
+    });
+
+    it('returns 0 when at or over high-water mark', () => {
+      // Use a tiny window so a few messages exceed it
+      process.env['CONTEXT_WINDOW'] = '30';
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      const tinyMgr = new ContextManager('gpt-4o-mini');
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System prompt with enough words to fill the window.' },
+        { role: 'user', content: 'User message with additional words to exceed budget.' },
+      ];
+      expect(tinyMgr.getAvailableBudget(messages)).toBe(0);
+      tinyMgr.free();
+      delete process.env['CONTEXT_WINDOW'];
+    });
+
+    it('respects custom responseReserve', () => {
+      const messages: ChatMessage[] = [{ role: 'user', content: 'Hi' }];
+      const withDefault = mgr.getAvailableBudget(messages);
+      const withLarger = mgr.getAvailableBudget(messages, 8192);
+      expect(withLarger).toBeLessThan(withDefault);
+    });
+  });
+
+  describe('truncateToContextBudget()', () => {
+    it('returns content unchanged when budget is sufficient', () => {
+      const messages: ChatMessage[] = [{ role: 'user', content: 'Hi' }];
+      const result = mgr.truncateToContextBudget('Short result', messages);
+      expect(result.content).toBe('Short result');
+      expect(result.budgetExceeded).toBe(false);
+      expect(result.compactionNeeded).toBe(false);
+    });
+
+    it('truncates content when it exceeds available budget', () => {
+      // Window of 500 tokens, high-water 400. Short messages ~30 tokens + 4096 reserve
+      // won't fit, so use a small responseReserve to leave some budget for the content.
+      process.env['CONTEXT_WINDOW'] = '500';
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      const smallMgr = new ContextManager('gpt-4o-mini');
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System.' },
+        { role: 'user', content: 'Hi' },
+      ];
+      const longContent = 'word '.repeat(500);
+      // Use responseReserve=0 so the budget is highWaterMark(400) - messageTokens(~15) ≈ 385
+      const result = smallMgr.truncateToContextBudget(longContent, messages, 0);
+      expect(result.budgetExceeded).toBe(true);
+      expect(result.compactionNeeded).toBe(false);
+      expect(result.content).toContain('[SERA: tool result truncated to fit context budget');
+      expect(result.content.length).toBeLessThan(longContent.length);
+      smallMgr.free();
+      delete process.env['CONTEXT_WINDOW'];
+    });
+
+    it('returns compactionNeeded when budget is zero', () => {
+      process.env['CONTEXT_WINDOW'] = '30';
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      const tinyMgr = new ContextManager('gpt-4o-mini');
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System prompt with enough words to completely fill the window and more.' },
+        { role: 'user', content: 'User message that pushes well over the tiny limit we set.' },
+      ];
+      const result = tinyMgr.truncateToContextBudget('any content', messages);
+      expect(result.compactionNeeded).toBe(true);
+      expect(result.budgetExceeded).toBe(true);
+      tinyMgr.free();
+      delete process.env['CONTEXT_WINDOW'];
+    });
+  });
+
   describe('compact() — sliding-window', () => {
     it('always preserves system message', () => {
       process.env['MAX_CONTEXT_TOKENS'] = '50';

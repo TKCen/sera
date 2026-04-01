@@ -3,7 +3,7 @@ import { SkillInjector } from '../skills/index.js';
 import type { ChatMessage } from './LlmRouter.js';
 import { Orchestrator } from '../agents/index.js';
 import { AgentFactory } from '../agents/index.js';
-import { IdentityService } from '../agents/identity/IdentityService.js';
+import { IdentityService } from '../agents/index.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace, SearchFilter } from '../services/vector.service.js';

@@ -1,4 +1,4 @@
-import type { ToolCall } from '../lib/llm/types.js';
+import type { ToolCall } from '../llm/index.js';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';

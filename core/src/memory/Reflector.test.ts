@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { Reflector } from './Reflector.js';
 import { MemoryManager } from './manager.js';
-import type { LLMProvider } from '../lib/llm/types.js';
+import type { LLMProvider } from '../llm/index.js';
 
 // Mock external services so tests don't need infrastructure
 vi.mock('../services/vector.service.js', () => ({

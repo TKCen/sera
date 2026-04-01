@@ -8,7 +8,7 @@
 import type { AgentManifest } from '../agents/index.js';
 import type { SkillRegistry } from '../skills/index.js';
 import type { SkillInfo, SkillParameter } from '../skills/index.js';
-import type { ToolDefinition, ToolCall } from '../lib/llm/types.js';
+import type { ToolDefinition, ToolCall } from '../llm/index.js';
 import type { ChatMessage } from '../agents/index.js';
 import { Logger } from '../lib/logger.js';
 import { parseJson } from '../lib/json.js';

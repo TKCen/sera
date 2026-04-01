@@ -1,7 +1,7 @@
 import { BaseAgent } from './BaseAgent.js';
 import { AuditService } from '../audit/index.js';
 import type { AgentResponse, ChatMessage } from './types.js';
-import type { LLMProvider } from '../lib/llm/types.js';
+import type { LLMProvider } from '../llm/index.js';
 import type { AgentManifest } from './manifest/types.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { parseJson } from '../lib/json.js';

@@ -2,7 +2,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { AgentManifest } from './manifest/types.js';
 import { AgentManifestLoader } from './manifest/AgentManifestLoader.js';
-import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
+import { ProviderFactory } from '../llm/index.js';
 import { WorkerAgent } from './WorkerAgent.js';
 import type { BaseAgent } from './BaseAgent.js';
 import type { AgentInstance } from './types.js';

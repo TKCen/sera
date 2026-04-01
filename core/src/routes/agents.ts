@@ -11,7 +11,7 @@ import type { AgentRegistry } from '../agents/index.js';
 import { AgentManifestLoader } from '../agents/index.js';
 import type { AgentManifest } from '../agents/index.js';
 import { AgentFactory } from '../agents/index.js';
-import { IdentityService } from '../agents/identity/IdentityService.js';
+import { IdentityService } from '../agents/index.js';
 import { ContextAssembler, type ContextAssemblyEvent } from '../llm/index.js';
 import { pool as dbPool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';

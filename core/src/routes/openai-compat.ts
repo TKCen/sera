@@ -5,7 +5,7 @@ import { Orchestrator } from '../agents/index.js';
 import { AgentFactory } from '../agents/index.js';
 import { IntercomService } from '../intercom/IntercomService.js';
 import type { ChatMessage } from '../agents/index.js';
-import type { ToolCall } from '../lib/llm/types.js';
+import type { ToolCall } from '../llm/index.js';
 
 class SSEIntercom extends IntercomService {
   constructor(

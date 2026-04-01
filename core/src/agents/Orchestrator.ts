@@ -4,7 +4,7 @@ import { BaseAgent } from './BaseAgent.js';
 import { AgentFactory } from './AgentFactory.js';
 import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
-import type { LLMProvider } from '../lib/llm/types.js';
+import type { LLMProvider } from '../llm/index.js';
 import type { AgentManifest, ResolvedCapabilities } from './manifest/types.js';
 import type { LlmRouter } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';

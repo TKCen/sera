@@ -28,7 +28,7 @@ vi.mock('../lib/config.js', () => ({
 }));
 
 // Mock ProviderFactory
-vi.mock('../lib/llm/ProviderFactory.js', () => ({
+vi.mock('../llm/index.js', () => ({
   ProviderFactory: {
     createDefault: vi.fn(() => ({
       chat: vi.fn().mockResolvedValue({ content: 'Mock response' }),

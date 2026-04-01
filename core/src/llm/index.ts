@@ -5,4 +5,6 @@ export { ContextAssembler } from './ContextAssembler.js';
 export { ContextCompactionService } from './ContextCompactionService.js';
 export { DynamicProviderManager } from './DynamicProviderManager.js';
 export { ProviderHealthService } from './ProviderHealthService.js';
+export { ProviderFactory } from '../lib/llm/ProviderFactory.js';
+export * from '../lib/llm/types.js';
 export type { ChatMessage, ChatCompletionRequest } from './LlmRouter.js';

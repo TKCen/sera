@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { config } from '../lib/config.js';
-import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
+import { ProviderFactory } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('ConfigRouter');

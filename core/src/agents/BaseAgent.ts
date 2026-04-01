@@ -1,5 +1,5 @@
 import type { AgentResponse, CapturedThought, ChatMessage } from './types.js';
-import type { LLMProvider } from '../lib/llm/types.js';
+import type { LLMProvider } from '../llm/index.js';
 import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';

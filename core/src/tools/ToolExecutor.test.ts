@@ -12,7 +12,7 @@ vi.mock('../audit/index.js', () => ({
 
 import type { AgentManifest } from '../agents/index.js';
 import type { SkillInfo, SkillResult } from '../skills/index.js';
-import type { ToolCall } from '../lib/llm/types.js';
+import type { ToolCall } from '../llm/index.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { ApiKeyService } from '../auth/api-key-service.js';
+import { ApiKeyService } from '../auth/index.js';
 import { AuditService } from '../audit/index.js';
 import type { WebSessionStore } from '../auth/index.js';
 import type { OperatorIdentity, OperatorRole } from '../auth/index.js';

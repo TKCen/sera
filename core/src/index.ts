@@ -47,7 +47,7 @@ import { MeteringService } from './metering/MeteringService.js';
 import { MeteringEngine } from './metering/MeteringEngine.js';
 import { AgentScheduler } from './metering/AgentScheduler.js';
 import { TelegramAdapter } from './channels/adapters/TelegramAdapter.js';
-import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
+// Legacy DiscordAdapter removed — use DiscordChatAdapter via NotificationService
 import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
 import { initDb, pool } from './lib/database.js';
 import { config } from './lib/config.js';
@@ -680,11 +680,9 @@ const startServer = async () => {
       .start()
       .catch((err) => logger.error('Failed to start Telegram adapter:', err));
   }
-  if (config.channels.discord.token) {
-    new DiscordAdapter(config.channels.discord.token, orchestrator, sessionStore, channelOptions)
-      .start()
-      .catch((err) => logger.error('Failed to start Discord adapter:', err));
-  }
+  // Discord chat is handled by DiscordChatAdapter via NotificationService channel config.
+  // Configure via web UI or POST /api/channels with type 'discord-chat'.
+  // Legacy DiscordAdapter removed — see DiscordChatAdapter for bidirectional chat.
   if (config.channels.whatsapp.token && config.channels.whatsapp.phoneNumberId) {
     new WhatsAppAdapter(
       config.channels.whatsapp.token,

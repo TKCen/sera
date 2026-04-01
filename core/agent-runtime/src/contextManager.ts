@@ -37,7 +37,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 const DEFAULT_CONTEXT_WINDOW = 32_768;
 const DEFAULT_HIGH_WATER_PCT = 0.80;
+const AGGRESSIVE_COMPACT_PCT = 0.50;
 const DEFAULT_TOOL_OUTPUT_MAX_TOKENS = 4_000;
+const DEFAULT_EMERGENCY_TOOL_TOKENS = 500;
 
 export type CompactionStrategy = 'sliding-window' | 'summarise';
 
@@ -202,6 +204,81 @@ export class ContextManager {
 
     log('info', `ContextManager: ${reflectMessage}`);
     return { droppedCount, retainedCount, tokensBefore, tokensAfter, reflectMessage };
+  }
+
+  /**
+   * Returns the context utilization as a ratio (0.0–1.0) of current tokens to context window.
+   */
+  getUtilization(messages: ChatMessage[]): number {
+    return this.countMessageTokens(messages) / this.contextWindow;
+  }
+
+  /**
+   * Aggressive compaction — targets 50% of the context window instead of the
+   * normal 80% high-water mark. Used for overflow/timeout recovery where more
+   * headroom is needed to succeed on retry.
+   *
+   * @param messages   Current message history (mutated in place).
+   */
+  aggressiveCompact(messages: ChatMessage[]): CompactionResult {
+    const tokensBefore = this.countMessageTokens(messages);
+    const aggressiveTarget = Math.floor(this.contextWindow * AGGRESSIVE_COMPACT_PCT);
+
+    const systemMessages = messages.filter((m) => m.role === 'system');
+    const nonSystemMessages = messages.filter((m) => m.role !== 'system');
+
+    let droppedCount = 0;
+    while (
+      nonSystemMessages.length > 1 &&
+      this.countMessageTokens([...systemMessages, ...nonSystemMessages]) >= aggressiveTarget
+    ) {
+      nonSystemMessages.shift();
+      droppedCount++;
+    }
+
+    // Emergency truncation if a single message still overflows
+    if (nonSystemMessages.length > 0) {
+      const totalWithFirst = this.countMessageTokens([...systemMessages, ...nonSystemMessages]);
+      if (totalWithFirst > this.contextWindow) {
+        const first = nonSystemMessages[0]!;
+        const notice = '[SERA: message truncated due to aggressive compaction]';
+        first.content = this.truncateToFit(
+          first.content,
+          aggressiveTarget - this.countMessageTokens([...systemMessages, ...nonSystemMessages.slice(1)]),
+        ) + '\n' + notice;
+      }
+    }
+
+    messages.splice(0, messages.length, ...systemMessages, ...nonSystemMessages);
+
+    const tokensAfter = this.countMessageTokens(messages);
+    const retainedCount = nonSystemMessages.length;
+    const reflectMessage = `Aggressive compaction: dropped ${droppedCount} messages, retained ${retainedCount} non-system messages (${tokensBefore} → ${tokensAfter} tokens)`;
+
+    log('info', `ContextManager: ${reflectMessage}`);
+    return { droppedCount, retainedCount, tokensBefore, tokensAfter, reflectMessage };
+  }
+
+  /**
+   * Retroactively truncate all tool result messages to the given token limit.
+   * One-shot last resort for overflow recovery.
+   *
+   * @returns The number of tool messages that were truncated.
+   */
+  truncateAllToolResults(messages: ChatMessage[], maxTokens: number = DEFAULT_EMERGENCY_TOOL_TOKENS): number {
+    let truncatedCount = 0;
+    for (const msg of messages) {
+      if (msg.role === 'tool' && this.countTokens(msg.content) > maxTokens) {
+        const notice = `\n\n[SERA: tool result retroactively truncated to ${maxTokens} tokens for overflow recovery]`;
+        const noticeTokens = this.countTokens(notice);
+        msg.content = this.truncateToFit(msg.content, maxTokens - noticeTokens) + notice;
+        truncatedCount++;
+      }
+    }
+    if (truncatedCount > 0) {
+      log('info', `ContextManager: retroactively truncated ${truncatedCount} tool result(s) to ${maxTokens} tokens`);
+    }
+    return truncatedCount;
   }
 
   /** Release the tiktoken encoding (no-op for js-tiktoken, kept for API compatibility). */

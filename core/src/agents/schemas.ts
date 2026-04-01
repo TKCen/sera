@@ -81,6 +81,19 @@ export const AgentTemplateSchema = z.object({
       .optional(),
     workspace: z.record(z.any()).optional(),
     memory: z.record(z.any()).optional(),
+    schedules: z
+      .array(
+        z.object({
+          name: z.string(),
+          description: z.string().optional(),
+          type: z.enum(['cron', 'once']),
+          expression: z.string(),
+          task: z.string(),
+          status: z.enum(['active', 'paused']).optional(),
+          category: z.string().optional(),
+        })
+      )
+      .optional(),
   }),
 });
 

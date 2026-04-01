@@ -53,8 +53,14 @@ describe('PipelineService', () => {
       };
 
       vi.mocked(query)
-        .mockResolvedValueOnce({ rows: [] } as any) // first call (INSERT ignores return rows currently)
-        .mockResolvedValueOnce({ rows: [mockCreatedRow] } as any); // second call is get()
+        .mockResolvedValueOnce({ rows: [], command: 'INSERT', rowCount: 0, oid: 0, fields: [] }) // first call (INSERT ignores return rows currently)
+        .mockResolvedValueOnce({
+          rows: [mockCreatedRow],
+          command: 'SELECT',
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        }); // second call is get()
 
       const result = await pipelineService.create('sequential', mockSteps);
 
@@ -75,7 +81,13 @@ describe('PipelineService', () => {
 
   describe('get', () => {
     it('returns null if pipeline is not found', async () => {
-      vi.mocked(query).mockResolvedValue({ rows: [] } as any);
+      vi.mocked(query).mockResolvedValue({
+        rows: [],
+        command: 'SELECT',
+        rowCount: 0,
+        oid: 0,
+        fields: [],
+      });
 
       const result = await pipelineService.get('nonexistent');
 
@@ -92,7 +104,13 @@ describe('PipelineService', () => {
         created_at: new Date('2023-10-10T10:00:00Z'),
         completed_at: new Date('2023-10-10T10:05:00Z'),
       };
-      vi.mocked(query).mockResolvedValue({ rows: [mockRow] } as any);
+      vi.mocked(query).mockResolvedValue({
+        rows: [mockRow],
+        command: 'SELECT',
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+      });
 
       const result = await pipelineService.get('123');
 

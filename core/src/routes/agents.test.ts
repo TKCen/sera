@@ -1,13 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createAgentRouter } from './agents.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { AgentRegistry } from '../agents/registry.service.js';
+import type { IntercomService } from '../intercom/IntercomService.js';
 
 describe('Agents Routes', () => {
   let app: express.Express;
-  let orchestratorMock: any;
-  let agentRegistryMock: any;
-  let intercomMock: any;
+  let orchestratorMock: Mocked<Orchestrator>;
+  let agentRegistryMock: Mocked<AgentRegistry>;
+  let intercomMock: Mocked<IntercomService>;
 
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -15,7 +18,7 @@ describe('Agents Routes', () => {
     intercomMock = {
       publish: vi.fn(),
       getThoughts: vi.fn(),
-    };
+    } as unknown as Mocked<IntercomService>;
 
     orchestratorMock = {
       startInstance: vi.fn(),
@@ -27,7 +30,7 @@ describe('Agents Routes', () => {
       getIntercom: vi.fn().mockReturnValue(intercomMock),
       ensureContainerRunning: vi.fn().mockResolvedValue('http://mock-container:8080'),
       registerEphemeralTTL: vi.fn(),
-    };
+    } as unknown as Mocked<Orchestrator>;
 
     agentRegistryMock = {
       listInstances: vi.fn().mockResolvedValue([]),
@@ -37,7 +40,7 @@ describe('Agents Routes', () => {
       getInstance: vi.fn(),
       updateInstanceStatus: vi.fn(),
       deleteInstance: vi.fn(),
-    };
+    } as unknown as Mocked<AgentRegistry>;
 
     app = express();
     app.use(express.json());
@@ -89,7 +92,8 @@ describe('Agents Routes', () => {
           usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
         })
       );
-      expect(intercomMock.publish.mock.calls[0][1].durationMs).toBeDefined();
+      const publishCalls = vi.mocked(intercomMock.publish).mock.calls;
+      expect((publishCalls[0]![1] as Record<string, unknown>).durationMs).toBeDefined();
     });
   });
 });

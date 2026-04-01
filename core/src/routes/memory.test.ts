@@ -1,12 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createMemoryRouter } from './memory.js';
+import type { MemoryManager } from '../memory/manager.js';
 
 // Mock dependencies
 const mockMemoryManager = {
   deleteEntry: vi.fn(),
-};
+} as unknown as Mocked<MemoryManager>;
 
 const mockScopedStore = {
   delete: vi.fn(),
@@ -45,7 +46,7 @@ describe('Memory Routes DELETE', () => {
     vi.clearAllMocks();
     app = express();
     app.use(express.json());
-    app.use('/api/memory', createMemoryRouter(mockMemoryManager as any));
+    app.use('/api/memory', createMemoryRouter(mockMemoryManager));
   });
 
   describe('DELETE /api/memory/entries/:id', () => {

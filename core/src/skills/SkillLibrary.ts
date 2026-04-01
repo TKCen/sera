@@ -340,18 +340,27 @@ export class SkillLibrary {
   }
 
   async listSkills(): Promise<Array<SkillFrontMatter & { maxTokens?: number; source?: string }>> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.pool.query<{
+      name: string;
+      version: string;
+      description: string;
+      triggers: string[];
+      category?: string;
+      tags?: string[];
+      max_tokens?: number;
+      source?: string;
+    }>(
       'SELECT name, version, description, triggers, category, tags, max_tokens, source FROM skills ORDER BY name, version DESC'
     );
-    return rows.map((row: any) => ({
+    return rows.map((row) => ({
       name: row.name,
       version: row.version,
       description: row.description,
       triggers: row.triggers,
       category: row.category,
       tags: row.tags,
-      ...(row.max_tokens != null ? { maxTokens: row.max_tokens as number } : {}),
-      ...(row.source ? { source: row.source as string } : {}),
+      ...(row.max_tokens != null ? { maxTokens: row.max_tokens } : {}),
+      ...(row.source ? { source: row.source } : {}),
     }));
   }
 

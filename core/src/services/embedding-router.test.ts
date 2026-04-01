@@ -121,6 +121,7 @@ describe('EmbeddingRouter', () => {
     });
 
     it('calls OpenAI API with env var API key if apiKey EnvVar is set', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { apiKey: _apiKey, ...restOpenAIConfig } = baseOpenAIConfig;
       const config: EmbeddingConfig = {
         ...restOpenAIConfig,

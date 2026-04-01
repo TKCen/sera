@@ -82,7 +82,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
           </button>
           {expanded && (
             <div className="mt-1.5 space-y-1 pl-3 border-l border-sera-border/50">
-              {tool.parameters.map((p: any) => (
+              {tool.parameters.map((p) => (
                 <div key={p.name} className="text-[10px]">
                   <span className="font-mono text-sera-accent">{p.name}</span>
                   <span className="text-sera-text-dim ml-1">({p.type})</span>

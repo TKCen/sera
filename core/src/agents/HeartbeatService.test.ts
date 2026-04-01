@@ -1,22 +1,22 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mocked } from 'vitest';
 import { HeartbeatService } from './HeartbeatService.js';
 import type { AgentRegistry } from './registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 
 describe('HeartbeatService', () => {
   let service: HeartbeatService;
-  let mockRegistry: any;
-  let mockIntercom: any;
+  let mockRegistry: Mocked<AgentRegistry>;
+  let mockIntercom: Mocked<IntercomService>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     mockRegistry = {
       updateLastHeartbeat: vi.fn().mockResolvedValue(undefined),
       updateInstanceStatus: vi.fn().mockResolvedValue(undefined),
-    };
+    } as unknown as Mocked<AgentRegistry>;
     mockIntercom = {
       publish: vi.fn().mockResolvedValue(undefined),
-    };
+    } as unknown as Mocked<IntercomService>;
     service = new HeartbeatService();
   });
 

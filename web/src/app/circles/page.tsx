@@ -144,10 +144,10 @@ export default function CirclesPage() {
               )}
 
               {/* Agent membership ring */}
-              {circle.agents.length > 0 && (
+              {(circle.agents?.length ?? 0) > 0 && (
                 <div className="flex items-center gap-2">
                   <div className="flex -space-x-2">
-                    {circle.agents.slice(0, 5).map((agent) => (
+                    {circle.agents!.slice(0, 5).map((agent) => (
                       <div
                         key={agent}
                         className="h-7 w-7 rounded-full bg-sera-surface-active border-2 border-sera-bg flex items-center justify-center"
@@ -156,23 +156,23 @@ export default function CirclesPage() {
                         <Bot size={12} className="text-sera-text-muted" />
                       </div>
                     ))}
-                    {circle.agents.length > 5 && (
+                    {circle.agents!.length > 5 && (
                       <div className="h-7 w-7 rounded-full bg-sera-surface-active border-2 border-sera-bg flex items-center justify-center">
                         <span className="text-[10px] font-medium text-sera-text-muted">
-                          +{circle.agents.length - 5}
+                          +{circle.agents!.length - 5}
                         </span>
                       </div>
                     )}
                   </div>
                   <span className="text-xs text-sera-text-dim">
-                    {circle.agents.length} agent{circle.agents.length !== 1 ? 's' : ''}
+                    {circle.agents!.length} agent{circle.agents!.length !== 1 ? 's' : ''}
                   </span>
                 </div>
               )}
 
               {/* Stats row */}
               <div className="flex items-center gap-3 flex-wrap mt-auto">
-                {circle.channelCount > 0 && (
+                {(circle.channelCount ?? 0) > 0 && (
                   <Badge variant="default" className="gap-1">
                     <Radio size={10} />
                     {circle.channelCount} channel{circle.channelCount !== 1 ? 's' : ''}

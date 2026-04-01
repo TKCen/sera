@@ -60,6 +60,34 @@ export default function AgentDetailPage() {
   const restartAgent = useRestartAgent();
   const deleteAgent = useDeleteAgent();
 
+  const initialValues: AgentFormInitialValues | undefined = useMemo(() => {
+    if (!agent) return undefined;
+    const overrides = (agent.overrides ?? {}) as Record<string, unknown>;
+    const modelOv = overrides.model as Record<string, unknown> | undefined;
+    const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
+    const permissionsOv = overrides.permissions as Record<string, unknown> | undefined;
+    const toolsOv = overrides.tools as Record<string, unknown> | undefined;
+
+    return {
+      templateRef: agent.template_ref,
+      name: agent.name,
+      displayName: agent.display_name ?? '',
+      circle: agent.circle ?? '',
+      lifecycleMode: (agent.lifecycle_mode as 'persistent' | 'ephemeral') ?? 'persistent',
+      modelName: (modelOv?.name as string) ?? '',
+      modelProvider: (modelOv?.provider as string) ?? '',
+      temperature: (modelOv?.temperature as number) ?? 0.7,
+      sandboxBoundary: (overrides.sandboxBoundary as string) ?? 'tier-2',
+      tokensPerHour: (resourcesOv?.maxLlmTokensPerHour as number) ?? 100000,
+      tokensPerDay: (resourcesOv?.maxLlmTokensPerDay as number) ?? 1000000,
+      canExec: (permissionsOv?.canExec as boolean) ?? false,
+      canSpawnSubagents: (permissionsOv?.canSpawnSubagents as boolean) ?? false,
+      toolsAllowed: Array.isArray(toolsOv?.allowed) ? (toolsOv.allowed as string[]) : [],
+      toolsDenied: Array.isArray(toolsOv?.denied) ? (toolsOv.denied as string[]) : [],
+      skills: Array.isArray(overrides.skills) ? (overrides.skills as string[]) : [],
+    };
+  }, [agent]);
+
   async function handleLifecycle(action: 'start' | 'stop' | 'restart') {
     try {
       if (action === 'start') {
@@ -89,34 +117,6 @@ export default function AgentDetailPage() {
   }
 
   const displayName = agent?.display_name ?? agent?.name ?? id;
-
-  const initialValues: AgentFormInitialValues | undefined = useMemo(() => {
-    if (!agent) return undefined;
-    const overrides = (agent.overrides ?? {}) as Record<string, unknown>;
-    const modelOv = overrides.model as Record<string, unknown> | undefined;
-    const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
-    const permissionsOv = overrides.permissions as Record<string, unknown> | undefined;
-    const toolsOv = overrides.tools as Record<string, unknown> | undefined;
-
-    return {
-      templateRef: agent.template_ref,
-      name: agent.name,
-      displayName: agent.display_name ?? '',
-      circle: agent.circle ?? '',
-      lifecycleMode: (agent.lifecycle_mode as 'persistent' | 'ephemeral') ?? 'persistent',
-      modelName: (modelOv?.name as string) ?? '',
-      modelProvider: (modelOv?.provider as string) ?? '',
-      temperature: (modelOv?.temperature as number) ?? 0.7,
-      sandboxBoundary: (overrides.sandboxBoundary as string) ?? 'tier-2',
-      tokensPerHour: (resourcesOv?.maxLlmTokensPerHour as number) ?? 100000,
-      tokensPerDay: (resourcesOv?.maxLlmTokensPerDay as number) ?? 1000000,
-      canExec: (permissionsOv?.canExec as boolean) ?? false,
-      canSpawnSubagents: (permissionsOv?.canSpawnSubagents as boolean) ?? false,
-      toolsAllowed: Array.isArray(toolsOv?.allowed) ? (toolsOv.allowed as string[]) : [],
-      toolsDenied: Array.isArray(toolsOv?.denied) ? (toolsOv.denied as string[]) : [],
-      skills: Array.isArray(overrides.skills) ? (overrides.skills as string[]) : [],
-    };
-  }, [agent]);
 
   return (
     <div className="flex flex-col h-full">

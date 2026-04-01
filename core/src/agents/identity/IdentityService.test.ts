@@ -196,5 +196,37 @@ describe('IdentityService', () => {
       // LLM from hallucinating tool calls — tools are provided via function-calling API
       expect(streamingPrompt).not.toContain('## Available Tools');
     });
+
+    it('should include Capabilities section with delegation and scheduling tools in streaming prompt', () => {
+      const manifest = {
+        kind: 'Agent',
+        metadata: { name: 'sera' },
+        identity: { role: 'assistant' },
+        tools: { allowed: ['delegate-task', 'schedule-task', 'knowledge-store', 'web-search'] },
+      } as unknown as AgentManifest;
+
+      const streamingPrompt = IdentityService.generateStreamingSystemPrompt(manifest);
+
+      // Available Tools is stripped, but Capabilities survives
+      expect(streamingPrompt).not.toContain('## Available Tools');
+      expect(streamingPrompt).toContain('## Capabilities');
+      expect(streamingPrompt).toContain('`delegate-task`');
+      expect(streamingPrompt).toContain('`schedule-task`');
+      expect(streamingPrompt).toContain('`knowledge-store`');
+      expect(streamingPrompt).toContain('Delegation');
+      expect(streamingPrompt).toContain('Scheduling');
+    });
+
+    it('should not include Capabilities section when no known tools are allowed', () => {
+      const manifest = {
+        kind: 'Agent',
+        metadata: { name: 'test-agent' },
+        identity: { role: 'tester' },
+        tools: { allowed: ['custom-unknown-tool'] },
+      } as unknown as AgentManifest;
+
+      const streamingPrompt = IdentityService.generateStreamingSystemPrompt(manifest);
+      expect(streamingPrompt).not.toContain('## Capabilities');
+    });
   });
 });

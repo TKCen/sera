@@ -60,6 +60,8 @@ export interface ChatCompletionRequest {
   temperature?: number;
   tools?: unknown[];
   stream?: boolean;
+  /** Thinking/reasoning level for capable models (maps to pi-mono reasoning option). */
+  thinkingLevel?: string;
 }
 
 export interface ChatCompletionUsage {
@@ -396,6 +398,21 @@ export class LlmRouter {
    * Heuristic: detect whether a model name indicates a reasoning/thinking model.
    * These models separate reasoning_content from content in streaming.
    */
+  /**
+   * Map agent-facing thinking level names to pi-mono ThinkingLevel values.
+   * 'off' is handled before this is called (not passed to pi-mono).
+   */
+  private static mapThinkingLevel(level: string): string {
+    const mapping: Record<string, string> = {
+      minimal: 'minimal',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      max: 'xhigh',
+    };
+    return mapping[level] ?? 'medium';
+  }
+
   private static isReasoningModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();
     return (
@@ -470,6 +487,9 @@ export class LlmRouter {
     const context = toContext(request);
     const opts: StreamOptions = {
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.thinkingLevel
+        ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
+        : {}),
     };
 
     const eventStream = this.dispatch(config, context, opts);
@@ -494,6 +514,9 @@ export class LlmRouter {
     const context = toContext(request);
     const opts: StreamOptions = {
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.thinkingLevel
+        ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
+        : {}),
     };
 
     const eventStream = this.dispatch(config, context, opts);

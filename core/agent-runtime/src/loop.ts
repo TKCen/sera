@@ -5,7 +5,7 @@
  * and returns a structured result with usage stats.
  */
 
-import type { LLMClient, ChatMessage, ToolDefinition, LLMResponse } from './llmClient.js';
+import type { LLMClient, ChatMessage, ToolDefinition, LLMResponse, ThinkingLevel } from './llmClient.js';
 import { BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError } from './llmClient.js';
 import type { RuntimeToolExecutor } from './tools/index.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
@@ -31,7 +31,10 @@ export interface TaskOutput {
   usage: {
     promptTokens: number;
     completionTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
     totalTokens: number;
+    turns: number;
   };
   /** Ordered list of thought events for Story 5.9. */
   thoughtStream: Array<{ step: string; content: string; iteration: number; timestamp: string }>;
@@ -101,8 +104,21 @@ export class ReasoningLoop {
     const hasTools = this.toolDefs.length > 0;
     const thoughtStream: TaskOutput['thoughtStream'] = [];
 
+    // ── Usage tracking with cache awareness (#547) ────────────────────────
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
+    let totalCacheCreationTokens = 0;
+    let totalCacheReadTokens = 0;
+    let turnCount = 0;
+
+    const buildUsage = () => ({
+      promptTokens: totalPromptTokens,
+      completionTokens: totalCompletionTokens,
+      cacheCreationTokens: totalCacheCreationTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      totalTokens: totalPromptTokens + totalCompletionTokens,
+      turns: turnCount,
+    });
 
     // Helper to emit and record a thought
     const think = async (
@@ -154,7 +170,7 @@ export class ReasoningLoop {
             taskId,
             result: null,
             error: 'shutdown',
-            usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+            usage: buildUsage(),
             thoughtStream,
             exitReason: 'shutdown',
           };
@@ -201,9 +217,9 @@ export class ReasoningLoop {
           const useTools = hasTools && !forceTextNext;
           forceTextNext = false; // reset after use
           if (useTools) {
-            response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature);
+            response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature, this.manifest.model.thinkingLevel as ThinkingLevel | undefined);
           } else {
-            response = await this.llm.chat(messages, undefined, this.manifest.model.temperature);
+            response = await this.llm.chat(messages, undefined, this.manifest.model.temperature, this.manifest.model.thinkingLevel as ThinkingLevel | undefined);
           }
         } catch (llmErr) {
           // ── Context overflow recovery ────────────────────────────────────
@@ -236,7 +252,7 @@ export class ReasoningLoop {
               taskId,
               result: null,
               error: `Context overflow after ${MAX_OVERFLOW_RETRIES} compaction attempts: ${llmErr.message}`,
-              usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+              usage: buildUsage(),
               thoughtStream,
               exitReason: 'context_overflow',
             };
@@ -265,11 +281,14 @@ export class ReasoningLoop {
           throw llmErr;
         }
 
-        // Accumulate usage
+        // Accumulate usage (including cache tokens)
         if (response.usage) {
           totalPromptTokens += response.usage.promptTokens;
           totalCompletionTokens += response.usage.completionTokens;
-          log('debug', `Iteration ${iteration} usage: prompt=${response.usage.promptTokens} completion=${response.usage.completionTokens}`);
+          totalCacheCreationTokens += response.usage.cacheCreationTokens;
+          totalCacheReadTokens += response.usage.cacheReadTokens;
+          turnCount++;
+          log('debug', `Iteration ${iteration} usage: prompt=${response.usage.promptTokens} completion=${response.usage.completionTokens} cacheRead=${response.usage.cacheReadTokens} turn=${turnCount}`);
         }
 
         // Emit chain-of-thought reasoning if present (e.g. Qwen / DeepSeek)
@@ -368,11 +387,7 @@ export class ReasoningLoop {
         return {
           taskId,
           result: reply,
-          usage: {
-            promptTokens: totalPromptTokens,
-            completionTokens: totalCompletionTokens,
-            totalTokens: totalPromptTokens + totalCompletionTokens,
-          },
+          usage: buildUsage(),
           thoughtStream,
           exitReason: 'success',
         };
@@ -386,7 +401,7 @@ export class ReasoningLoop {
         taskId,
         result: null,
         error: 'max_iterations_exceeded',
-        usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+        usage: buildUsage(),
         thoughtStream,
         exitReason: 'max_iterations_exceeded',
       };
@@ -405,7 +420,7 @@ export class ReasoningLoop {
         taskId,
         result: null,
         error: errMsg,
-        usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+        usage: buildUsage(),
         thoughtStream,
         exitReason,
       };

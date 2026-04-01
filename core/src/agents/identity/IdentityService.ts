@@ -85,6 +85,8 @@ export class IdentityService {
     }
 
     // ── Available Tools ───────────────────────────────────────────────────────
+    // Note: In streaming mode, this section is stripped (tools provided via
+    // function-calling API). The Capabilities section below survives.
     if (tools?.allowed && tools.allowed.length > 0) {
       const toolsList = tools.allowed.map((t) => `- ${t}`).join('\n');
       sections.push(`## Available Tools\n${toolsList}`);
@@ -93,6 +95,18 @@ export class IdentityService {
     if (tools?.denied && tools.denied.length > 0) {
       const deniedList = tools.denied.map((t) => `- ${t}`).join('\n');
       sections.push(`## Denied Tools (never use these)\n${deniedList}`);
+    }
+
+    // ── Capabilities (survives streaming-mode tool section stripping) ─────────
+    if (tools?.allowed && tools.allowed.length > 0) {
+      const capabilities = IdentityService.buildCapabilitySummary(tools.allowed);
+      if (capabilities.length > 0) {
+        sections.push(
+          `## Capabilities\n` +
+            `You have these capabilities available as function-calling tools:\n` +
+            capabilities.join('\n')
+        );
+      }
     }
 
     // ── Skills ────────────────────────────────────────────────────────────────
@@ -192,5 +206,67 @@ export class IdentityService {
       `fabricate tool calls in XML, JSON, or any other text format.\n`;
 
     return withFormat + stabilityGuidelines;
+  }
+
+  // ── Capability mapping ─────────────────────────────────────────────────────
+
+  /** Maps tool IDs to human-readable capability descriptions for the system prompt. */
+  private static readonly CAPABILITY_MAP: Record<
+    string,
+    { category: string; description: string }
+  > = {
+    'delegate-task': {
+      category: 'Delegation',
+      description: 'assign work to other agents or spawn ephemeral helpers',
+    },
+    'schedule-task': {
+      category: 'Scheduling',
+      description: 'create reminders, recurring jobs, and scheduled tasks',
+    },
+    'knowledge-store': {
+      category: 'Knowledge',
+      description: 'save important facts, decisions, and context to persistent memory',
+    },
+    'knowledge-query': {
+      category: 'Knowledge',
+      description: 'retrieve relevant context from persistent memory',
+    },
+    'web-search': { category: 'Web', description: 'search the web for current information' },
+    'web-fetch': { category: 'Web', description: 'fetch and read web page content' },
+    'file-read': { category: 'Files', description: 'read file contents from the workspace' },
+    'file-write': { category: 'Files', description: 'create or update files in the workspace' },
+    'file-list': { category: 'Files', description: 'list directory contents' },
+    'file-delete': { category: 'Files', description: 'delete files or directories' },
+    'shell-exec': { category: 'Shell', description: 'execute shell commands in the workspace' },
+    'spawn-subagent': {
+      category: 'Delegation',
+      description: 'spawn a child agent in a separate container',
+    },
+    'run-tool': {
+      category: 'Tools',
+      description: 'run an ephemeral tool in an isolated container',
+    },
+  };
+
+  /**
+   * Build capability summary lines from a list of allowed tool IDs.
+   * Groups by category and deduplicates.
+   */
+  private static buildCapabilitySummary(allowedTools: string[]): string[] {
+    const seen = new Set<string>();
+    const lines: string[] = [];
+
+    for (const toolId of allowedTools) {
+      const mapping = IdentityService.CAPABILITY_MAP[toolId];
+      if (!mapping) continue;
+
+      const key = `${mapping.category}:${toolId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      lines.push(`- **${mapping.category}**: Use \`${toolId}\` to ${mapping.description}`);
+    }
+
+    return lines;
   }
 }

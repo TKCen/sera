@@ -31,6 +31,7 @@ export interface RuntimeManifest {
     provider: string;
     name: string;
     temperature?: number;
+    thinkingLevel?: string;
   };
   tools?: {
     allowed?: string[];

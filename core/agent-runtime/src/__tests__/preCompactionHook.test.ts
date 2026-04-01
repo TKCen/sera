@@ -38,7 +38,7 @@ const manifest: RuntimeManifest = {
 };
 
 function successResponse(content: string): LLMResponse {
-  return { content, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+  return { content, usage: { promptTokens: 10, completionTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 15 } };
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────

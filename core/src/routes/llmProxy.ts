@@ -118,7 +118,7 @@ export function createLlmProxyRouter(
 
       // ── 2. Validate request body ───────────────────────────────────────────
       const body = req.body as Record<string, unknown>;
-      const { model, temperature, tools, stream } = body;
+      const { model, temperature, tools, stream, thinking_level: thinkingLevel } = body;
       let messages = body['messages'] as import('../agents/types.js').ChatMessage[] | undefined;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -172,6 +172,7 @@ export function createLlmProxyRouter(
         messages: messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
         ...(temperature !== undefined ? { temperature: temperature as number } : {}),
         ...(Array.isArray(tools) ? { tools: tools as unknown[] } : {}),
+        ...(thinkingLevel ? { thinkingLevel: thinkingLevel as string } : {}),
       };
 
       // ── 3. Streaming path ──────────────────────────────────────────────────

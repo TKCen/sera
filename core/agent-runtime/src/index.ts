@@ -193,7 +193,7 @@ async function main(): Promise<void> {
         error: 'shutdown',
         exitReason: 'shutdown',
         completedAt: new Date().toISOString(),
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        usage: { promptTokens: 0, completionTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, turns: 0 },
         thoughtStream: [],
       };
       writeResultFile(partial);

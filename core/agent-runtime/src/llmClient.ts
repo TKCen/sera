@@ -76,6 +76,8 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';
+
 export interface LLMResponse {
   content: string;
   /** Chain-of-thought text, e.g. Qwen / DeepSeek reasoning_content. */
@@ -84,6 +86,8 @@ export interface LLMResponse {
   usage?: {
     promptTokens: number;
     completionTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
     totalTokens: number;
   };
 }
@@ -125,6 +129,7 @@ export class LLMClient {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     temperature?: number,
+    thinkingLevel?: ThinkingLevel,
   ): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -142,6 +147,10 @@ export class LLMClient {
 
     if (temperature !== undefined) {
       body['temperature'] = temperature;
+    }
+
+    if (thinkingLevel && thinkingLevel !== 'off') {
+      body['thinking_level'] = thinkingLevel;
     }
 
     // Debug: log tool names and message roles sent to LLM
@@ -185,6 +194,8 @@ export class LLMClient {
         ? {
             promptTokens: rawUsage['prompt_tokens'] ?? 0,
             completionTokens: rawUsage['completion_tokens'] ?? 0,
+            cacheCreationTokens: rawUsage['cache_creation_input_tokens'] ?? 0,
+            cacheReadTokens: rawUsage['cache_read_input_tokens'] ?? 0,
             totalTokens: rawUsage['total_tokens'] ?? 0,
           }
         : undefined;

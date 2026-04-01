@@ -5,6 +5,8 @@ import type { MeteringService } from '../metering/MeteringService.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('BudgetRoute');
+const DEFAULT_HOURLY_QUOTA = parseInt(process.env.DEFAULT_HOURLY_QUOTA ?? '100000', 10);
+const DEFAULT_DAILY_QUOTA = parseInt(process.env.DEFAULT_DAILY_QUOTA ?? '1000000', 10);
 
 export function createBudgetRouter(meteringService?: MeteringService): Router {
   const router = Router();
@@ -122,6 +124,59 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
       res.json({ agentId, ...status });
     } catch (err: unknown) {
       logger.error(`Error fetching budget for agent ${String(req.params['id'])}:`, err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * PATCH /api/budget/agents/:id/budget
+   * Update an agent's token quotas (hourly and/or daily).
+   * Upserts into token_quotas so it works even if no row exists yet.
+   */
+  router.patch('/agents/:id/budget', async (req: Request, res: Response) => {
+    try {
+      const agentId = String(req.params['id']);
+      const { maxLlmTokensPerHour, maxLlmTokensPerDay } = req.body as {
+        maxLlmTokensPerHour?: number | null;
+        maxLlmTokensPerDay?: number | null;
+      };
+
+      const hourly = maxLlmTokensPerHour ?? DEFAULT_HOURLY_QUOTA;
+      const daily = maxLlmTokensPerDay ?? DEFAULT_DAILY_QUOTA;
+
+      await query(
+        `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (agent_id)
+         DO UPDATE SET
+           max_tokens_per_hour = $2,
+           max_tokens_per_day = $3,
+           updated_at = NOW()`,
+        [agentId, hourly, daily]
+      );
+
+      logger.info(`Budget updated for agent=${agentId} hourly=${hourly} daily=${daily}`);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      logger.error(`Error updating budget for agent ${String(req.params['id'])}:`, err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * POST /api/budget/agents/:id/budget/reset
+   * Reset an agent's usage counters by deleting their token_usage rows.
+   */
+  router.post('/agents/:id/budget/reset', async (req: Request, res: Response) => {
+    try {
+      const agentId = String(req.params['id']);
+
+      await query(`DELETE FROM token_usage WHERE agent_id = $1`, [agentId]);
+
+      logger.info(`Budget counters reset for agent=${agentId}`);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      logger.error(`Error resetting budget for agent ${String(req.params['id'])}:`, err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });

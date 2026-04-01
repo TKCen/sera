@@ -343,8 +343,7 @@ export abstract class BaseAgent {
             // Publish results and add to conversation
             for (const result of toolResults) {
               const content = result.content ?? '';
-              const preview =
-                content.length > 2000 ? content.substring(0, 2000) + '...' : content;
+              const preview = content.length > 2000 ? content.substring(0, 2000) + '...' : content;
               await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
             }

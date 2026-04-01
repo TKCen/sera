@@ -98,6 +98,8 @@ export interface ScheduleManifest {
   type: 'cron' | 'once';
   expression: string;
   task: string;
+  status?: 'active' | 'paused';
+  category?: string;
 }
 
 // ── Full Manifest ───────────────────────────────────────────────────────────────
@@ -152,6 +154,8 @@ export interface AgentManifest {
       type: 'cron' | 'once';
       expression: string;
       task: string;
+      status?: 'active' | 'paused';
+      category?: string;
     }>;
   };
   tools?: ToolsConfig;

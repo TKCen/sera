@@ -152,6 +152,8 @@ export class AgentRegistry {
           type: s.type,
           expression: s.expression,
           task: s.task,
+          status: s.status,
+          category: s.category,
           source: 'manifest',
         })
         .catch((err) => {

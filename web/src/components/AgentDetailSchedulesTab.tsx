@@ -105,6 +105,11 @@ export function SchedulesTab({ id }: { id: string }) {
                   <Badge variant={sched.enabled ? 'success' : 'default'}>
                     {sched.enabled ? 'enabled' : 'disabled'}
                   </Badge>
+                  {sched.category && (
+                    <span className="text-[10px] text-sera-text-dim px-1.5 py-0.5 rounded bg-sera-surface border border-sera-border">
+                      {sched.category.replace(/_/g, ' ')}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 text-xs text-sera-text-muted">
                   {sched.lastRunAt && (

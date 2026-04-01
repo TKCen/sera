@@ -188,8 +188,9 @@ export class SandboxManager {
       try {
         const seraNet = this.docker.getNetwork('sera_net');
         await seraNet.connect({ Container: container.id });
-      } catch (netErr) {
-        logger.warn(`Failed to connect container to sera_net: ${(netErr as Error).message}`);
+      } catch (netErr: unknown) {
+        const msg = netErr instanceof Error ? netErr.message : String(netErr);
+        logger.warn(`Failed to connect container to sera_net: ${msg}`);
       }
     }
 

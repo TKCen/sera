@@ -1,0 +1,12 @@
+export { Orchestrator } from './Orchestrator.js';
+export { HeartbeatService } from './HeartbeatService.js';
+export { AgentRegistry } from './registry.service.js';
+export { ResourceImporter } from './importer.service.js';
+export { AgentFactory } from './AgentFactory.js';
+export { SubagentRunner } from './SubagentRunner.js';
+export { BaseAgent } from './BaseAgent.js';
+export { AgentManifestLoader, ManifestValidationError } from './manifest/AgentManifestLoader.js';
+export { IdentityService } from './identity/IdentityService.js';
+export * from './manifest/types.js';
+export type { AgentInstance, ChatMessage, CapturedThought, AgentResponse } from './types.js';
+export * from './schemas.js';

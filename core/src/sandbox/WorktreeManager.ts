@@ -32,8 +32,9 @@ export class WorktreeManager {
         cwd: repoPath,
         stdio: 'pipe',
       });
-    } catch (err) {
-      logger.error('Failed to create worktree:', err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('Failed to create worktree:', msg);
       throw err;
     }
 
@@ -50,8 +51,9 @@ export class WorktreeManager {
     logger.info(`Removing worktree: path=${worktreePath}`);
     try {
       execSync(`git worktree remove "${worktreePath}" --force`, { cwd: repoPath, stdio: 'pipe' });
-    } catch (err) {
-      logger.warn('Failed to remove worktree via git, cleaning up manually:', err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Failed to remove worktree via git, cleaning up manually:', msg);
       if (fs.existsSync(worktreePath)) {
         fs.rmSync(worktreePath, { recursive: true, force: true });
       }
@@ -74,8 +76,9 @@ export class WorktreeManager {
         cwd: worktreePath,
         encoding: 'utf-8',
       });
-    } catch (err) {
-      logger.error('Failed to get worktree diff:', err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('Failed to get worktree diff:', msg);
       return '';
     }
   }

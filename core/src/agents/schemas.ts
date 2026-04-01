@@ -154,7 +154,7 @@ export const SandboxBoundarySchema = z.object({
 });
 
 export type AgentTemplate = z.infer<typeof AgentTemplateSchema>;
-export type AgentInstance = z.infer<typeof AgentInstanceSchema>;
+export type AgentInstanceManifest = z.infer<typeof AgentInstanceSchema>;
 export type NamedList = z.infer<typeof NamedListSchema>;
 export type CapabilityPolicy = z.infer<typeof CapabilityPolicySchema>;
 export type SandboxBoundary = z.infer<typeof SandboxBoundarySchema>;

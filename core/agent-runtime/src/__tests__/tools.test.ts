@@ -238,6 +238,63 @@ describe('RuntimeToolExecutor', () => {
     });
   });
 
+  describe('executeToolCalls() — parallel execution', () => {
+    it('executes multiple read tools and preserves result order', async () => {
+      // Create 3 files and read them all in one batch
+      fs.writeFileSync(path.join(tempDir, 'a.txt'), 'content-a');
+      fs.writeFileSync(path.join(tempDir, 'b.txt'), 'content-b');
+      fs.writeFileSync(path.join(tempDir, 'c.txt'), 'content-c');
+
+      const calls = [
+        makeCallWithId('call_1', 'file-read', { path: 'a.txt' }),
+        makeCallWithId('call_2', 'file-read', { path: 'b.txt' }),
+        makeCallWithId('call_3', 'file-read', { path: 'c.txt' }),
+      ];
+
+      const results = await executor.executeToolCalls(calls);
+      expect(results).toHaveLength(3);
+      expect(results[0]!.message.content).toBe('content-a');
+      expect(results[1]!.message.content).toBe('content-b');
+      expect(results[2]!.message.content).toBe('content-c');
+    });
+
+    it('write tools complete without data races', async () => {
+      const calls = [
+        makeCallWithId('call_1', 'file-write', { path: 'out1.txt', content: 'data1' }),
+        makeCallWithId('call_2', 'file-write', { path: 'out2.txt', content: 'data2' }),
+      ];
+
+      const results = await executor.executeToolCalls(calls);
+      expect(results).toHaveLength(2);
+      expect(results[0]!.message.content).toContain('File written');
+      expect(results[1]!.message.content).toContain('File written');
+      expect(fs.readFileSync(path.join(tempDir, 'out1.txt'), 'utf-8')).toBe('data1');
+      expect(fs.readFileSync(path.join(tempDir, 'out2.txt'), 'utf-8')).toBe('data2');
+    });
+
+    it('individual failure does not block other tools', async () => {
+      fs.writeFileSync(path.join(tempDir, 'good.txt'), 'ok');
+      const calls = [
+        makeCallWithId('call_1', 'file-read', { path: 'nonexistent.txt' }),
+        makeCallWithId('call_2', 'file-read', { path: 'good.txt' }),
+      ];
+
+      const results = await executor.executeToolCalls(calls);
+      expect(results).toHaveLength(2);
+      expect(results[0]!.message.content).toContain('Error');
+      expect(results[1]!.message.content).toBe('ok');
+    });
+
+    it('single call takes fast path', async () => {
+      fs.writeFileSync(path.join(tempDir, 'solo.txt'), 'alone');
+      const results = await executor.executeToolCalls([
+        makeCallWithId('call_1', 'file-read', { path: 'solo.txt' }),
+      ]);
+      expect(results).toHaveLength(1);
+      expect(results[0]!.message.content).toBe('alone');
+    });
+  });
+
   describe('getToolDefinitions()', () => {
     it('returns all 7 built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
@@ -257,6 +314,14 @@ describe('RuntimeToolExecutor', () => {
 function makeCall(name: string, args: Record<string, unknown>): ToolCall {
   return {
     id: 'call_test',
+    type: 'function',
+    function: { name, arguments: JSON.stringify(args) },
+  };
+}
+
+function makeCallWithId(id: string, name: string, args: Record<string, unknown>): ToolCall {
+  return {
+    id,
     type: 'function',
     function: { name, arguments: JSON.stringify(args) },
   };

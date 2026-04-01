@@ -24,7 +24,7 @@ const mockVectorService = {
 
 vi.mock('../memory/blocks/ScopedMemoryBlockStore.js', () => {
   return {
-    ScopedMemoryBlockStore: vi.fn().mockImplementation(function() {
+    ScopedMemoryBlockStore: vi.fn().mockImplementation(function () {
       return mockScopedStore;
     }),
   };
@@ -32,7 +32,7 @@ vi.mock('../memory/blocks/ScopedMemoryBlockStore.js', () => {
 
 vi.mock('../services/vector.service.js', () => {
   return {
-    VectorService: vi.fn().mockImplementation(function() {
+    VectorService: vi.fn().mockImplementation(function () {
       return mockVectorService;
     }),
   };

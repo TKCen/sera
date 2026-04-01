@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  AlertTriangle,
   ChevronDown,
   Sparkles,
   Brain,
@@ -26,6 +27,7 @@ const STEP_ICONS: Record<string, React.ReactNode> = {
   'tool-call': <Wrench size={11} />,
   'tool-result': <CheckCircle2 size={11} />,
   reasoning: <Brain size={11} />,
+  error: <AlertTriangle size={11} />,
 };
 
 const STEP_COLORS: Record<string, string> = {
@@ -36,7 +38,28 @@ const STEP_COLORS: Record<string, string> = {
   'tool-call': 'text-cyan-400',
   'tool-result': 'text-teal-400',
   reasoning: 'text-violet-400',
+  error: 'text-red-400',
 };
+
+/** Derive iteration count from observe/reflect cycles in the thought array */
+function getIterationInfo(thoughts: MessageThought[]): { current: number; label: string } | null {
+  const observeCount = thoughts.filter(
+    (t) => t.stepType === 'observe' || t.stepType === 'reflect'
+  ).length;
+  if (observeCount === 0) return null;
+  // Each full cycle is observe→plan→act→reflect; count observe steps as iteration number
+  const iterations = thoughts.filter((t) => t.stepType === 'observe').length;
+  return { current: iterations, label: `iteration ${iterations}` };
+}
+
+/** Format elapsed time between two ISO timestamps */
+function formatElapsed(from: string, to: string): string {
+  const ms = new Date(to).getTime() - new Date(from).getTime();
+  if (isNaN(ms) || ms < 0) return '';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
 
 interface ChatThoughtPanelProps {
   msg: Message;
@@ -72,7 +95,14 @@ export function ChatThoughtPanel({
             msg.streaming && msg.thoughts.length > 0 ? 'animate-pulse text-sera-accent' : ''
           }
         />
-        <span>{msg.streaming ? 'Thinking…' : 'Thought process'}</span>
+        <span>
+          {msg.streaming
+            ? `Thinking…${(() => {
+                const iter = getIterationInfo(msg.thoughts);
+                return iter ? ` (${iter.label})` : '';
+              })()}`
+            : `Thought process (${msg.thoughts.length} steps)`}
+        </span>
         <ChevronDown
           size={12}
           className={cn('transition-transform duration-200', isExpanded && 'rotate-180')}
@@ -167,6 +197,11 @@ export function ChatThoughtPanel({
                       {STEP_ICONS['tool-call'] ?? STEP_ICONS['act']}
                     </span>
                     <span className="text-[11px] font-semibold text-cyan-300">{toolName}</span>
+                    {i > 0 && (
+                      <span className="ml-auto text-[10px] text-sera-text-muted/50">
+                        {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
+                      </span>
+                    )}
                   </div>
                   {paramDisplay && (
                     <pre className="ml-4 text-[10.5px] text-sera-text-muted leading-relaxed bg-sera-bg/60 border border-sera-border rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap break-all [scrollbar-width:thin]">
@@ -256,6 +291,31 @@ export function ChatThoughtPanel({
               );
             }
 
+            // ── Error block ──────────────────────────────────────────────────
+            if (thought.stepType === 'error') {
+              return (
+                <div
+                  key={`${thought.timestamp}-${i}`}
+                  className="animate-in fade-in slide-in-from-left-2 duration-200 rounded-md bg-red-500/10 border border-red-500/30 px-3 py-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-red-400 flex-shrink-0">
+                      <AlertTriangle size={11} />
+                    </span>
+                    <span className="text-[11px] font-semibold text-red-300">Error</span>
+                    {i > 0 && (
+                      <span className="ml-auto text-[10px] text-sera-text-muted/50">
+                        {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-red-300/80 mt-1 ml-4 leading-relaxed">
+                    {thought.content}
+                  </p>
+                </div>
+              );
+            }
+
             // ── Generic step ─────────────────────────────────────────────────
             return (
               <div
@@ -270,9 +330,14 @@ export function ChatThoughtPanel({
                 >
                   {STEP_ICONS[thought.stepType] ?? <Brain size={11} />}
                 </span>
-                <span className="text-[11px] text-sera-text-muted leading-relaxed">
+                <span className="text-[11px] text-sera-text-muted leading-relaxed flex-1">
                   {thought.content}
                 </span>
+                {i > 0 && (
+                  <span className="text-[10px] text-sera-text-muted/50 flex-shrink-0">
+                    {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
+                  </span>
+                )}
               </div>
             );
           })}

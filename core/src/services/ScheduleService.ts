@@ -116,7 +116,6 @@ export class ScheduleService {
       agent_instance_id,
       agent_name,
       name,
-      description,
       type,
       expression,
       task,
@@ -129,10 +128,10 @@ export class ScheduleService {
 
     const { rows } = await pool.query<Schedule>(
       `INSERT INTO schedules
-       (id, agent_instance_id, agent_name, name, description, type, expression, task, status, source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
+       (id, agent_instance_id, agent_name, name, type, expression, task, status, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)
        RETURNING *`,
-      [id, agent_instance_id, agent_name, name, description, type, expression, task, source]
+      [id, agent_instance_id, agent_name, name, type, expression, task, source]
     );
 
     const schedule = rows[0]!;

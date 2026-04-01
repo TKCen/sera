@@ -8,8 +8,8 @@
  */
 
 import type { LLMProvider, LLMResponse, LLMStreamChunk, ToolDefinition } from './types.js';
-import type { ChatMessage } from '../../agents/types.js';
-import type { LlmRouter, ChatCompletionRequest } from '../../llm/LlmRouter.js';
+import type { ChatMessage } from '../../agents/index.js';
+import type { LlmRouter, ChatCompletionRequest } from '../../llm/index.js';
 
 export class LlmRouterProvider implements LLMProvider {
   constructor(

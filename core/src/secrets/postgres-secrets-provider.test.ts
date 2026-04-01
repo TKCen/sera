@@ -169,7 +169,7 @@ describe('PostgresSecretsProvider', () => {
       const context = {
         operator: {
           sub: 'admin',
-          roles: ['admin'] as import('../auth/interfaces.js').OperatorRole[],
+          roles: ['admin'] as import('../auth/index.js').OperatorRole[],
         },
       };
       const list = await provider.list(
@@ -186,7 +186,7 @@ describe('PostgresSecretsProvider', () => {
       const context = {
         operator: {
           sub: 'admin',
-          roles: ['admin'] as import('../auth/interfaces.js').OperatorRole[],
+          roles: ['admin'] as import('../auth/index.js').OperatorRole[],
         },
       };
       await provider.delete(

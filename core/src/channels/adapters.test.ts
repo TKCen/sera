@@ -4,8 +4,8 @@ import { DiscordAdapter } from './adapters/DiscordAdapter.js';
 import { WhatsAppAdapter } from './adapters/WhatsAppAdapter.js';
 import axios from 'axios';
 import { v5 as uuidv5 } from 'uuid';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import type { SessionStore } from '../sessions/SessionStore.js';
+import type { Orchestrator } from '../agents/index.js';
+import type { SessionStore } from '../sessions/index.js';
 
 vi.mock('axios');
 vi.mock('ws');

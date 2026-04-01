@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { shellExecSkill } from './shell-exec.js';
 import type { AgentContext } from '../types.js';
-import type { SecurityTier } from '../../agents/manifest/types.js';
+import type { SecurityTier } from '../../agents/index.js';
 import path from 'path';
 
 describe('shellExecSkill', () => {

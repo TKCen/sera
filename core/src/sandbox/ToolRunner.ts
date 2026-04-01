@@ -8,7 +8,7 @@
  * @see sera/docs/reimplementation/agent-workspace-architecture.md § Operations
  */
 
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 import type { ToolRunRequest, ToolResult } from './types.js';
 import { SandboxManager } from './SandboxManager.js';
 import { TierPolicy } from './TierPolicy.js';

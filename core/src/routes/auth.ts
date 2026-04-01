@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { ApiKeyService } from '../auth/api-key-service.js';
-import { AuditService } from '../audit/AuditService.js';
-import type { WebSessionStore } from '../auth/web-session-store.js';
-import type { OperatorIdentity, OperatorRole } from '../auth/interfaces.js';
+import { AuditService } from '../audit/index.js';
+import type { WebSessionStore } from '../auth/index.js';
+import type { OperatorIdentity, OperatorRole } from '../auth/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AuthRouter');

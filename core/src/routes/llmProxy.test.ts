@@ -54,13 +54,13 @@ const { mockLlmRouter, mockProviderRegistry } = vi.hoisted(() => ({
   mockProviderRegistry: vi.fn().mockImplementation(() => ({})),
 }));
 
-vi.mock('../llm/LlmRouter.js', () => ({
+vi.mock('../llm/index.js', () => ({
   LlmRouter: mockLlmRouter,
   ProviderRegistry: mockProviderRegistry,
 }));
 
 // Mock the CircuitBreakerService — default passes through to client.chatCompletion
-vi.mock('../llm/CircuitBreakerService.js', () => {
+vi.mock('../llm/index.js', () => {
   interface CircuitBreakerServiceMockInstance {
     client: unknown;
     call: import('vitest').Mock;
@@ -99,12 +99,12 @@ vi.mock('../middleware/rateLimitStub.js', () => ({
 }));
 
 import { createLlmProxyRouter } from './llmProxy.js';
-import { IdentityService } from '../auth/IdentityService.js';
-import { AuthService } from '../auth/auth-service.js';
+import { IdentityService } from '../auth/index.js';
+import { AuthService } from '../auth/index.js';
 import { MeteringService } from '../metering/MeteringService.js';
-import { LlmRouter } from '../llm/LlmRouter.js';
-import { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
-import { createAuthMiddleware } from '../auth/authMiddleware.js';
+import { LlmRouter } from '../llm/index.js';
+import { CircuitBreakerService } from '../llm/index.js';
+import { createAuthMiddleware } from '../auth/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -148,7 +148,7 @@ async function createTestSetup(
     testModel: vi.fn(),
   } as unknown as LlmRouter;
   const circuitBreakerService = new CircuitBreakerService(
-    llmRouter as unknown as import('../llm/CircuitBreakerService.js').CircuitBreakerService['client']
+    llmRouter as unknown as import('../llm/index.js').CircuitBreakerService['client']
   );
 
   vi.spyOn(meteringService, 'checkBudget').mockResolvedValue({
@@ -166,7 +166,7 @@ async function createTestSetup(
   const orchestrator = {
     getManifest: vi.fn(),
     getManifestByInstanceId: vi.fn(),
-  } as unknown as import('../agents/Orchestrator.js').Orchestrator;
+  } as unknown as import('../agents/index.js').Orchestrator;
   const router = createLlmProxyRouter(
     identityService,
     authService,

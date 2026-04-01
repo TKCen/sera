@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CapabilityResolver } from './resolver.js';
-import type { AgentRegistry } from '../agents/registry.service.js';
+import type { AgentRegistry } from '../agents/index.js';
 
 describe('CapabilityResolver - deepMerge $append/$remove', () => {
   let registryMock: unknown;

@@ -1,5 +1,5 @@
-import { SandboxManager } from '../sandbox/SandboxManager.js';
-import type { SandboxInfo } from '../sandbox/types.js';
+import { SandboxManager } from '../sandbox/index.js';
+import type { SandboxInfo } from '../sandbox/index.js';
 import { Logger } from '../lib/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -56,7 +56,7 @@ export class MCPServerManager {
       mounts: manifest.mounts, // Now supported by SandboxManager.spawn
     };
 
-    const request: import('../sandbox/types.js').SpawnRequest = {
+    const request: import('../sandbox/index.js').SpawnRequest = {
       agentName: serverName,
       type: 'mcp-server' as const,
       image: manifest.image,
@@ -108,7 +108,7 @@ export class MCPServerManager {
    */
   private manifestToAgentManifest(
     mcp: MCPServerManifest
-  ): import('../agents/manifest/types.js').AgentManifest {
+  ): import('../agents/index.js').AgentManifest {
     return {
       apiVersion: mcp.apiVersion,
       kind: 'Agent', // SandboxManager expects 'Agent' or similar

@@ -27,7 +27,7 @@ vi.mock('pg-boss', () => {
 });
 
 // Mock AuditService
-vi.mock('../audit/AuditService.js', () => ({
+vi.mock('../audit/index.js', () => ({
   AuditService: {
     getInstance: () => ({
       record: vi.fn().mockResolvedValue(undefined),

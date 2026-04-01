@@ -1,8 +1,8 @@
 import type { PgBoss } from 'pg-boss';
 import { pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import { AuditService } from '../audit/AuditService.js';
+import type { Orchestrator } from '../agents/index.js';
+import { AuditService } from '../audit/index.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const logger = new Logger('ScheduleService');

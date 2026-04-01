@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { CapabilityResolver } from './resolver.js';
-import type { AgentRegistry } from '../agents/registry.service.js';
+import type { AgentRegistry } from '../agents/index.js';
 
 describe('CapabilityResolver', () => {
   let registryMock: Record<string, import('vitest').Mock>;

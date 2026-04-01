@@ -38,9 +38,9 @@ describe('Registry Routes', () => {
     app.use(
       '/api/registry',
       createRegistryRouter(
-        registryMock as unknown as import('../agents/registry.service.js').AgentRegistry,
-        importerMock as unknown as import('../agents/importer.service.js').ResourceImporter,
-        orchestratorMock as unknown as import('../agents/Orchestrator.js').Orchestrator
+        registryMock as unknown as import('../agents/index.js').AgentRegistry,
+        importerMock as unknown as import('../agents/index.js').ResourceImporter,
+        orchestratorMock as unknown as import('../agents/index.js').Orchestrator
       )
     );
   });

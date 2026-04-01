@@ -19,7 +19,7 @@ describe('SkillRegistry - Cycle Detection', () => {
     });
     const manifest = {
       skills: ['s1'],
-    } as unknown as import('../agents/manifest/types.js').AgentManifest;
+    } as unknown as import('../agents/index.js').AgentManifest;
     const errors = registry.validateManifestSkills(manifest);
     expect(errors[0]).toContain('Circular skill dependency detected: s1 -> s1');
   });
@@ -43,7 +43,7 @@ describe('SkillRegistry - Cycle Detection', () => {
     });
     const manifest = {
       skills: ['s1'],
-    } as unknown as import('../agents/manifest/types.js').AgentManifest;
+    } as unknown as import('../agents/index.js').AgentManifest;
     const errors = registry.validateManifestSkills(manifest);
     expect(errors[0]).toContain('Circular skill dependency detected');
     expect(errors[0]).toMatch(/s1 -> s2 -> s1|s2 -> s1 -> s2/);
@@ -67,7 +67,7 @@ describe('SkillRegistry - Cycle Detection', () => {
     });
     const manifest = {
       skills: ['s1'],
-    } as unknown as import('../agents/manifest/types.js').AgentManifest;
+    } as unknown as import('../agents/index.js').AgentManifest;
     const errors = registry.validateManifestSkills(manifest);
     expect(errors).toHaveLength(0);
   });

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PartySession, PartySessionManager } from './PartyMode.js';
 import type { CircleManifest } from './types.js';
-import type { AgentResponse } from '../agents/types.js';
-import type { BaseAgent } from '../agents/BaseAgent.js';
+import type { AgentResponse } from '../agents/index.js';
+import type { BaseAgent } from '../agents/index.js';
 
 // ── Mock Agent ──────────────────────────────────────────────────────────────────
 

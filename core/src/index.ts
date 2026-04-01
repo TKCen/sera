@@ -5,20 +5,20 @@ import fs from 'node:fs';
 import { Logger } from './lib/logger.js';
 import { IntercomService } from './intercom/IntercomService.js';
 import { BridgeService } from './intercom/BridgeService.js';
-import { SandboxManager } from './sandbox/SandboxManager.js';
-import { Orchestrator } from './agents/Orchestrator.js';
-import { HeartbeatService } from './agents/HeartbeatService.js';
-import { MCPRegistry } from './mcp/registry.js';
-import { MCPServerManager } from './mcp/MCPServerManager.js';
-import { MemoryManager } from './memory/manager.js';
-import { SkillRegistry } from './skills/SkillRegistry.js';
-import { registerBuiltinSkills } from './skills/builtins/index.js';
+import { SandboxManager } from './sandbox/index.js';
+import { Orchestrator } from './agents/index.js';
+import { HeartbeatService } from './agents/index.js';
+import { MCPRegistry } from './mcp/index.js';
+import { MCPServerManager } from './mcp/index.js';
+import { MemoryManager } from './memory/index.js';
+import { SkillRegistry } from './skills/index.js';
+import { registerBuiltinSkills } from './skills/index.js';
 import { ToolExecutor } from './tools/ToolExecutor.js';
 import { CircleRegistry } from './circles/CircleRegistry.js';
-import { AgentManifestLoader } from './agents/manifest/AgentManifestLoader.js';
-import type { AgentManifest } from './agents/manifest/types.js';
+import { AgentManifestLoader } from './agents/index.js';
+import type { AgentManifest } from './agents/index.js';
 import Docker from 'dockerode';
-import { EgressAclManager } from './sandbox/EgressAclManager.js';
+import { EgressAclManager } from './sandbox/index.js';
 import { createSandboxRouter } from './routes/sandbox.js';
 import { createIntercomRouter } from './routes/intercom.js';
 import { createAgentRouter } from './routes/agents.js';
@@ -41,8 +41,8 @@ import { createWebhooksRouter } from './routes/webhooks.js';
 import { createMemoryRouter } from './routes/memory.js';
 import { createMCPRouter } from './routes/mcp.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
-import { SessionStore } from './sessions/SessionStore.js';
-import { IdentityService } from './auth/IdentityService.js';
+import { SessionStore } from './sessions/index.js';
+import { IdentityService } from './auth/index.js';
 import { MeteringService } from './metering/MeteringService.js';
 import { MeteringEngine } from './metering/MeteringEngine.js';
 import { AgentScheduler } from './metering/AgentScheduler.js';
@@ -51,34 +51,34 @@ import { DiscordAdapter } from './channels/adapters/DiscordAdapter.js';
 import { WhatsAppAdapter } from './channels/adapters/WhatsAppAdapter.js';
 import { initDb, pool } from './lib/database.js';
 import { config } from './lib/config.js';
-import { AuthService } from './auth/auth-service.js';
+import { AuthService } from './auth/index.js';
 import { ApiKeyProvider } from './auth/api-key-provider.js';
 import { OIDCAuthPlugin } from './auth/oidc-provider.js';
-import { WebSessionStore } from './auth/web-session-store.js';
-import { createAuthMiddleware } from './auth/authMiddleware.js';
+import { WebSessionStore } from './auth/index.js';
+import { createAuthMiddleware } from './auth/index.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createSecretsRouter } from './routes/secrets.js';
 import { SecretsManager } from './secrets/secrets-manager.js';
-import { AgentRegistry } from './agents/registry.service.js';
-import { ResourceImporter } from './agents/importer.service.js';
+import { AgentRegistry } from './agents/index.js';
+import { ResourceImporter } from './agents/index.js';
 import { createRegistryRouter } from './routes/registry.js';
 import { createLifecycleRouter, createPermissionRouter } from './routes/lifecycle.js';
 import { createToolProxyRouter } from './routes/toolProxy.js';
-import { PermissionRequestService } from './sandbox/PermissionRequestService.js';
-import { ProviderRegistry } from './llm/ProviderRegistry.js';
-import { LlmRouter } from './llm/LlmRouter.js';
-import { ContextCompactionService } from './llm/ContextCompactionService.js';
-import { DynamicProviderManager } from './llm/DynamicProviderManager.js';
-import { CircuitBreakerService } from './llm/CircuitBreakerService.js';
+import { PermissionRequestService } from './sandbox/index.js';
+import { ProviderRegistry } from './llm/index.js';
+import { LlmRouter } from './llm/index.js';
+import { ContextCompactionService } from './llm/index.js';
+import { DynamicProviderManager } from './llm/index.js';
+import { CircuitBreakerService } from './llm/index.js';
 import { createProvidersRouter, createSystemRouter } from './routes/providers.js';
 import { createMeteringRouter } from './routes/metering.js';
 import { createTasksRouter, pruneOldTaskResults } from './routes/tasks.js';
 import { createKnowledgeRouter } from './routes/knowledge.js';
-import { KnowledgeGitService } from './memory/KnowledgeGitService.js';
-import { MemoryCompactionService } from './memory/MemoryCompactionService.js';
+import { KnowledgeGitService } from './memory/index.js';
+import { MemoryCompactionService } from './memory/index.js';
 import { EmbeddingService } from './services/embedding.service.js';
 import { createEmbeddingRouter } from './routes/embedding.js';
-import { AuditService } from './audit/AuditService.js';
+import { AuditService } from './audit/index.js';
 import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
 import { createNotificationsRouter } from './routes/notifications.js';
@@ -553,7 +553,7 @@ app.use(
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);
 
-  const { SeraMCPServer } = await import('./mcp/SeraMCPServer.js');
+  const { SeraMCPServer } = await import('./mcp/index.js');
   // Set up MCP ↔ SkillRegistry bridge hooks BEFORE registering any servers,
   // so that external MCP tools (loaded from disk) are automatically bridged.
   // The sera-core MCP server is NOT bridged — it's designed for external
@@ -583,7 +583,7 @@ const startServer = async () => {
 
   const manifests = orchestrator.getAllManifests();
   for (const manifest of manifests) {
-    const { AgentFactory } = await import('./agents/AgentFactory.js');
+    const { AgentFactory } = await import('./agents/index.js');
     const agent = AgentFactory.createAgent(manifest, undefined, intercomService, llmRouter);
     agent.setIntercom(intercomService);
     agent.setToolExecutor(toolExecutor);
@@ -645,7 +645,7 @@ const startServer = async () => {
   }
 
   // Story 6.2 — load skills from library
-  const { SkillLibrary } = await import('./skills/SkillLibrary.js');
+  const { SkillLibrary } = await import('./skills/index.js');
   const skillLibrary = SkillLibrary.getInstance(pool);
   skillLibrary.setIntercom(intercomService);
   const skillStats = await skillLibrary.loadSkills().catch((err) => {

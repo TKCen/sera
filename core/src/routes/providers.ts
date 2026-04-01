@@ -21,13 +21,13 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import type { LlmRouter } from '../llm/LlmRouter.js';
-import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
-import { providerFromModel } from '../llm/CircuitBreakerService.js';
-import { requireRole } from '../auth/authMiddleware.js';
+import type { LlmRouter } from '../llm/index.js';
+import type { CircuitBreakerService } from '../llm/index.js';
+import { providerFromModel } from '../llm/index.js';
+import { requireRole } from '../auth/index.js';
 import { Logger } from '../lib/logger.js';
-import type { DynamicProviderManager } from '../llm/DynamicProviderManager.js';
-import { ProviderHealthService } from '../llm/ProviderHealthService.js';
+import type { DynamicProviderManager } from '../llm/index.js';
+import { ProviderHealthService } from '../llm/index.js';
 
 const logger = new Logger('ProvidersRoute');
 

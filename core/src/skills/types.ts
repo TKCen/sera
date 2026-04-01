@@ -33,11 +33,11 @@ export interface AgentContext {
   agentName: string;
   workspacePath: string;
   tier: number;
-  manifest: import('../agents/manifest/types.js').AgentManifest;
+  manifest: import('../agents/index.js').AgentManifest;
   agentInstanceId: string | undefined;
   containerId: string | undefined;
   sessionId: string;
-  sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
+  sandboxManager: import('../sandbox/index.js').SandboxManager | undefined;
   /** Container mount paths the agent can access (e.g. /memory, /knowledge/personal) */
   allowedPaths?: string[];
 }

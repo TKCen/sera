@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import type { SkillDefinition } from '../types.js';
-import { TierPolicy } from '../../sandbox/TierPolicy.js';
+import { TierPolicy } from '../../sandbox/index.js';
 
 /**
  * Built-in skill: shell-exec

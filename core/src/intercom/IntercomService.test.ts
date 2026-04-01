@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { IntercomService, IntercomPermissionError } from './IntercomService.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 
 // ── Mock axios ──────────────────────────────────────────────────────────────────
 vi.mock('axios', () => {

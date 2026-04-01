@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SandboxManager } from './SandboxManager.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 import type { SpawnRequest } from './types.js';
 
 vi.mock('fs');
@@ -276,7 +276,7 @@ describe('SandboxManager', () => {
         ]),
       };
       manager.setAgentRegistry(
-        mockRegistry as unknown as import('../agents/registry.service.js').AgentRegistry
+        mockRegistry as unknown as import('../agents/index.js').AgentRegistry
       );
 
       const manifest = makeManifest();
@@ -303,7 +303,7 @@ describe('SandboxManager', () => {
           .mockResolvedValue([{ id: 'grant-1', value: '/data/temp', grant_type: 'session' }]),
       };
       manager.setAgentRegistry(
-        mockRegistry as unknown as import('../agents/registry.service.js').AgentRegistry
+        mockRegistry as unknown as import('../agents/index.js').AgentRegistry
       );
 
       const manifest = makeManifest();
@@ -326,7 +326,7 @@ describe('SandboxManager', () => {
         getActiveFilesystemGrants: vi.fn().mockRejectedValue(new Error('DB connection failed')),
       };
       manager.setAgentRegistry(
-        mockRegistry as unknown as import('../agents/registry.service.js').AgentRegistry
+        mockRegistry as unknown as import('../agents/index.js').AgentRegistry
       );
 
       const manifest = makeManifest();

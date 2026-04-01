@@ -4,7 +4,7 @@ import request from 'supertest';
 import { createKnowledgeRouter } from './knowledge.js';
 
 // Mock KnowledgeGitService
-vi.mock('../memory/KnowledgeGitService.js', () => {
+vi.mock('../memory/index.js', () => {
   const mockInstance = {
     log: vi.fn(),
     listMergeRequests: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock('../lib/logger.js', () => ({
   },
 }));
 
-import { KnowledgeGitService } from '../memory/KnowledgeGitService.js';
+import { KnowledgeGitService } from '../memory/index.js';
 
 function createApp(llmRouter?: unknown) {
   const app = express();

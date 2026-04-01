@@ -5,14 +5,14 @@
  * executes tool calls via the SkillRegistry, and handles timeout + truncation.
  */
 
-import type { AgentManifest } from '../agents/manifest/types.js';
-import type { SkillRegistry } from '../skills/SkillRegistry.js';
-import type { SkillInfo, SkillParameter } from '../skills/types.js';
+import type { AgentManifest } from '../agents/index.js';
+import type { SkillRegistry } from '../skills/index.js';
+import type { SkillInfo, SkillParameter } from '../skills/index.js';
 import type { ToolDefinition, ToolCall } from '../lib/llm/types.js';
-import type { ChatMessage } from '../agents/types.js';
+import type { ChatMessage } from '../agents/index.js';
 import { Logger } from '../lib/logger.js';
 import { parseJson } from '../lib/json.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('ToolExecutor');
 
@@ -25,7 +25,7 @@ const DEFAULT_TOOL_TIMEOUT_MS = 60_000;
 export class ToolExecutor {
   constructor(
     private readonly skillRegistry: SkillRegistry,
-    private readonly sandboxManager?: import('../sandbox/SandboxManager.js').SandboxManager
+    private readonly sandboxManager?: import('../sandbox/index.js').SandboxManager
   ) {}
 
   // ── Tool Definitions ──────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ export class ToolExecutor {
       // Agents always have access to /workspace (rw), /memory (rw),
       // /knowledge/personal (ro), and /knowledge/shared (ro) inside
       // their containers — these are standard SERA mounts.
-      const context: import('../skills/types.js').AgentContext = {
+      const context: import('../skills/index.js').AgentContext = {
         agentName: manifest.metadata.name,
         workspacePath: manifest.workspace?.path || `workspaces/${manifest.metadata.name}`,
         tier: manifest.metadata.tier,

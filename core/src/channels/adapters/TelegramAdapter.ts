@@ -1,9 +1,9 @@
 import axios from 'axios';
 import { v5 as uuidv5 } from 'uuid';
 import { ChannelAdapter, type IncomingMessage } from '../ChannelAdapter.js';
-import type { Orchestrator } from '../../agents/Orchestrator.js';
-import type { SessionStore } from '../../sessions/SessionStore.js';
-import type { ChatMessage } from '../../agents/types.js';
+import type { Orchestrator } from '../../agents/index.js';
+import type { SessionStore } from '../../sessions/index.js';
+import type { ChatMessage } from '../../agents/index.js';
 
 // Namespace for SERA platform session UUIDs (generated once)
 const SERA_SESSION_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';

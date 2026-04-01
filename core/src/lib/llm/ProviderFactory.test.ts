@@ -107,7 +107,7 @@ describe('ProviderFactory', () => {
           name: 'manifest-model',
           temperature: 0.9,
         },
-      } as unknown as import('../../agents/manifest/types.js').AgentManifest;
+      } as unknown as import('../../agents/index.js').AgentManifest;
 
       const spy = vi.spyOn(ProviderFactory, 'createFromModelConfig');
       ProviderFactory.createFromManifest(manifest);

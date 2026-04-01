@@ -1,9 +1,9 @@
 import { OpenAIProvider } from './OpenAIProvider.js';
 import { LlmRouterProvider } from './LlmRouterProvider.js';
 import type { LLMProvider } from './types.js';
-import type { AgentManifest, ModelConfig } from '../../agents/manifest/types.js';
+import type { AgentManifest, ModelConfig } from '../../agents/index.js';
 import { config } from '../config.js';
-import type { LlmRouter } from '../../llm/LlmRouter.js';
+import type { LlmRouter } from '../../llm/index.js';
 
 /**
  * ProviderFactory — creates LLMProvider instances from manifest model config.

@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { AgentRegistry } from '../agents/registry.service.js';
-import { ResourceImporter } from '../agents/importer.service.js';
-import { AgentInstanceSchema } from '../agents/schemas.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import { AgentRegistry } from '../agents/index.js';
+import { ResourceImporter } from '../agents/index.js';
+import { AgentInstanceSchema } from '../agents/index.js';
+import type { Orchestrator } from '../agents/index.js';
 
 export function createRegistryRouter(
   registry: AgentRegistry,
@@ -24,7 +24,7 @@ export function createRegistryRouter(
   router.post('/templates', async (req, res) => {
     try {
       const template = await registry.upsertTemplate(
-        req.body as import('../agents/schemas.js').AgentTemplate
+        req.body as import('../agents/index.js').AgentTemplate
       );
       res.status(201).json(template);
     } catch (err: unknown) {
@@ -46,7 +46,7 @@ export function createRegistryRouter(
     try {
       const template = await registry.updateTemplate(
         req.params.name,
-        req.body as import('../agents/schemas.js').AgentTemplate
+        req.body as import('../agents/index.js').AgentTemplate
       );
       res.json(template);
     } catch (err: unknown) {

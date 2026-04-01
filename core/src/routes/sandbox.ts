@@ -10,11 +10,11 @@
 
 import { Router } from 'express';
 import type { Response } from 'express';
-import type { AgentManifest } from '../agents/manifest/types.js';
-import { SandboxManager } from '../sandbox/SandboxManager.js';
-import { ToolRunner } from '../sandbox/ToolRunner.js';
-import { SubagentRunner } from '../agents/SubagentRunner.js';
-import { PolicyViolationError } from '../sandbox/TierPolicy.js';
+import type { AgentManifest } from '../agents/index.js';
+import { SandboxManager } from '../sandbox/index.js';
+import { ToolRunner } from '../sandbox/index.js';
+import { SubagentRunner } from '../agents/index.js';
+import { PolicyViolationError } from '../sandbox/index.js';
 
 // ── Factory ─────────────────────────────────────────────────────────────────────
 

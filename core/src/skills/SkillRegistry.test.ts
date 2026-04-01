@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SkillRegistry } from './SkillRegistry.js';
 import type { SkillDefinition } from './types.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 import type { AgentContext } from './types.js';
-import type { MCPRegistry } from '../mcp/registry.js';
+import type { MCPRegistry } from '../mcp/index.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 

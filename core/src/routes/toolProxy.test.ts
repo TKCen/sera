@@ -48,7 +48,7 @@ vi.mock('node:fs', () => ({
 }));
 
 // Mock authMiddleware to inject agent identity
-vi.mock('../auth/authMiddleware.js', () => ({
+vi.mock('../auth/index.js', () => ({
   createAuthMiddleware: vi.fn(() => (req: Request, _res: Response, next: NextFunction) => {
     req.agentIdentity = {
       agentId: 'agent-1',
@@ -67,16 +67,16 @@ vi.mock('../auth/authMiddleware.js', () => ({
 const mockHasActiveGrant = vi.fn();
 const mockPermissionService = {
   hasActiveGrant: mockHasActiveGrant,
-} as unknown as import('../sandbox/PermissionRequestService.js').PermissionRequestService;
+} as unknown as import('../sandbox/index.js').PermissionRequestService;
 
 // Mock AgentRegistry
 const mockGetActiveFilesystemGrants = vi.fn();
 const mockRegistry = {
   getActiveFilesystemGrants: mockGetActiveFilesystemGrants,
-} as unknown as import('../agents/registry.service.js').AgentRegistry;
+} as unknown as import('../agents/index.js').AgentRegistry;
 
-const mockIdentityService = {} as import('../auth/IdentityService.js').IdentityService;
-const mockAuthService = {} as import('../auth/auth-service.js').AuthService;
+const mockIdentityService = {} as import('../auth/index.js').IdentityService;
+const mockAuthService = {} as import('../auth/index.js').AuthService;
 
 // ── Test Suite ────────────────────────────────────────────────────────────────
 

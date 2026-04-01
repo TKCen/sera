@@ -1,5 +1,5 @@
 import { BaseAgent } from './BaseAgent.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 import type { AgentResponse, ChatMessage } from './types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest } from './manifest/types.js';
@@ -12,7 +12,7 @@ export class WorkerAgent extends BaseAgent {
     llmProvider: LLMProvider,
     intercom?: import('../intercom/IntercomService.js').IntercomService,
     agentInstanceId?: string,
-    memoryManager?: import('../memory/manager.js').MemoryManager
+    memoryManager?: import('../memory/index.js').MemoryManager
   ) {
     super(manifest, llmProvider, intercom, agentInstanceId, memoryManager);
   }
@@ -74,7 +74,7 @@ export class WorkerAgent extends BaseAgent {
       try {
         const modelName = this.manifest.spec?.model?.name ?? this.manifest.model?.name ?? 'default';
         const compacted = await this.contextCompactionService.compact(
-          messages as import('../llm/LlmRouter.js').ChatMessage[],
+          messages as import('../llm/index.js').ChatMessage[],
           modelName,
           (event) => {
             if (event.stage !== 'compaction.skipped') {

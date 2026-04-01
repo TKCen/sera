@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import type { BaseAgent } from '../agents/BaseAgent.js';
+import type { BaseAgent } from '../agents/index.js';
 
 const hasDb = !!process.env.DATABASE_URL;
 
@@ -29,7 +29,7 @@ describe.skipIf(!hasDb)('Circles integration (Story 10.1 + 10.2)', () => {
       initCircleRepo: vi.fn().mockResolvedValue(undefined),
       archiveCircleRepo: vi.fn().mockResolvedValue(undefined),
     };
-    vi.doMock('../memory/KnowledgeGitService.js', () => ({
+    vi.doMock('../memory/index.js', () => ({
       KnowledgeGitService: { getInstance: () => kgsMock },
     }));
 

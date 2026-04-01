@@ -65,7 +65,7 @@ vi.mock('../services/embedding.service.js', () => ({
   EmbeddingService: { getInstance: () => ({ generateEmbedding: async () => [] }) },
 }));
 
-vi.mock('../audit/AuditService.js', () => ({
+vi.mock('../audit/index.js', () => ({
   AuditService: {
     getInstance: () => ({
       record: vi.fn().mockResolvedValue(undefined),
@@ -143,7 +143,7 @@ vi.mock('../circles/CircleRegistry.js', () => {
   };
 });
 
-vi.mock('../agents/HeartbeatService.js', () => {
+vi.mock('../agents/index.js', () => {
   return {
     HeartbeatService: class {
       setRegistry = vi.fn();
@@ -157,7 +157,7 @@ vi.mock('../agents/HeartbeatService.js', () => {
   };
 });
 
-vi.mock('../agents/Orchestrator.js', () => {
+vi.mock('../agents/index.js', () => {
   return {
     Orchestrator: class {
       getPrimaryAgent = vi.fn().mockReturnValue({

@@ -6,13 +6,13 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import type { AgentRegistry } from '../agents/registry.service.js';
-import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
-import { AgentFactory } from '../agents/AgentFactory.js';
+import type { Orchestrator } from '../agents/index.js';
+import type { AgentRegistry } from '../agents/index.js';
+import { AgentManifestLoader } from '../agents/index.js';
+import type { AgentManifest } from '../agents/index.js';
+import { AgentFactory } from '../agents/index.js';
 import { IdentityService } from '../agents/identity/IdentityService.js';
-import { ContextAssembler, type ContextAssemblyEvent } from '../llm/ContextAssembler.js';
+import { ContextAssembler, type ContextAssemblyEvent } from '../llm/index.js';
 import { pool as dbPool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 

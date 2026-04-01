@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolExecutor } from './ToolExecutor.js';
-import type { SkillRegistry } from '../skills/SkillRegistry.js';
+import type { SkillRegistry } from '../skills/index.js';
 
-vi.mock('../audit/AuditService.js', () => ({
+vi.mock('../audit/index.js', () => ({
   AuditService: {
     getInstance: () => ({
       record: vi.fn().mockResolvedValue(undefined),
@@ -10,8 +10,8 @@ vi.mock('../audit/AuditService.js', () => ({
   },
 }));
 
-import type { AgentManifest } from '../agents/manifest/types.js';
-import type { SkillInfo, SkillResult } from '../skills/types.js';
+import type { AgentManifest } from '../agents/index.js';
+import type { SkillInfo, SkillResult } from '../skills/index.js';
 import type { ToolCall } from '../lib/llm/types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────

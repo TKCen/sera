@@ -6,7 +6,7 @@ import type {
 } from './interfaces.js';
 import { PostgresSecretsProvider } from './postgres-secrets-provider.js';
 import { Logger } from '../lib/logger.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('SecretsManager');
 

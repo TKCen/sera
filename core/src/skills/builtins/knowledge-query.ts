@@ -5,7 +5,7 @@
  */
 
 import type { SkillDefinition } from '../types.js';
-import type { MemoryScope } from '../../memory/blocks/scoped-types.js';
+import type { MemoryScope } from '../../memory/index.js';
 import { EmbeddingService } from '../../services/embedding.service.js';
 import { VectorService } from '../../services/vector.service.js';
 import type { MemoryNamespace, SearchFilter } from '../../services/vector.service.js';

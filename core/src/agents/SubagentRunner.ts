@@ -9,9 +9,9 @@
  */
 
 import type { AgentManifest } from './manifest/types.js';
-import type { SandboxInfo } from '../sandbox/types.js';
-import { SandboxManager } from '../sandbox/SandboxManager.js';
-import { TierPolicy, PolicyViolationError } from '../sandbox/TierPolicy.js';
+import type { SandboxInfo } from '../sandbox/index.js';
+import { SandboxManager } from '../sandbox/index.js';
+import { TierPolicy, PolicyViolationError } from '../sandbox/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('SubagentRunner');

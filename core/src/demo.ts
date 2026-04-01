@@ -1,5 +1,5 @@
 import path from 'path';
-import { Orchestrator } from './agents/Orchestrator.js';
+import { Orchestrator } from './agents/index.js';
 
 async function main() {
   console.log('[Demo] --- Starting SERA Multi-Agent Demo ---');

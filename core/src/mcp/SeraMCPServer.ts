@@ -1,10 +1,10 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { v4 as uuidv4 } from 'uuid';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { Orchestrator } from '../agents/index.js';
 import { CircleService } from '../circles/CircleService.js';
 import { pool } from '../lib/database.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
 import type { ProcessTask } from '../agents/process/types.js';
 
@@ -608,7 +608,7 @@ export class SeraMCPServer {
   ) {
     if (!role || !task) throw new Error('role and task are required');
 
-    const { AgentFactory } = await import('../agents/AgentFactory.js');
+    const { AgentFactory } = await import('../agents/index.js');
 
     // Find a template matching the requested role
     const manifests = this.orchestrator.getAllManifests();
@@ -830,7 +830,7 @@ export class SeraMCPServer {
   ) {
     if (!agentId || !content || !type) throw new Error('agentId, content, and type are required');
 
-    const { ScopedMemoryBlockStore } = await import('../memory/blocks/ScopedMemoryBlockStore.js');
+    const { ScopedMemoryBlockStore } = await import('../memory/index.js');
     const store = new ScopedMemoryBlockStore(process.env.MEMORY_PATH ?? '/memory');
     const block = await store.write({
       agentId,
@@ -954,7 +954,7 @@ export class SeraMCPServer {
     task?: string
   ) {
     if (!templateName || !name) throw new Error('templateName and name are required');
-    const { AgentFactory } = await import('../agents/AgentFactory.js');
+    const { AgentFactory } = await import('../agents/index.js');
     const instance = await AgentFactory.createInstance(templateName, name, '', circleId);
     if (task) {
       await this.orchestrator.startInstance(instance.id, undefined, task);
@@ -1023,10 +1023,10 @@ export class SeraMCPServer {
     limit?: number
   ) {
     if (!agentId) throw new Error('agentId is required');
-    const { ScopedMemoryBlockStore } = await import('../memory/blocks/ScopedMemoryBlockStore.js');
+    const { ScopedMemoryBlockStore } = await import('../memory/index.js');
     const store = new ScopedMemoryBlockStore(process.env.MEMORY_PATH ?? '/memory');
 
-    const { KNOWLEDGE_BLOCK_TYPES } = await import('../memory/blocks/scoped-types.js');
+    const { KNOWLEDGE_BLOCK_TYPES } = await import('../memory/index.js');
     const blocks = await store.list(agentId, {
       ...(type && (KNOWLEDGE_BLOCK_TYPES as readonly string[]).includes(type)
         ? { type: type as (typeof KNOWLEDGE_BLOCK_TYPES)[number] }

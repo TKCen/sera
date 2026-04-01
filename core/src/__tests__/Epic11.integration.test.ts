@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ScheduleService } from '../services/ScheduleService.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 import { pool } from '../lib/database.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { Orchestrator } from '../agents/index.js';
 
 // Mock Database Pool
 vi.mock('../lib/database.js', () => ({

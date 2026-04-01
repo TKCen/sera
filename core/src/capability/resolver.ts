@@ -1,4 +1,4 @@
-import type { AgentRegistry } from '../agents/registry.service.js';
+import type { AgentRegistry } from '../agents/index.js';
 
 /**
  * Application-level capability dimensions that bypass sandbox escalation checks.

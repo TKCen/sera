@@ -21,7 +21,7 @@ import type {
   ThoughtStepType,
   StreamToken,
 } from './types.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 
 // ── Configuration ───────────────────────────────────────────────────────────────
 

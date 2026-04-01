@@ -1,5 +1,5 @@
 import type Docker from 'dockerode';
-import type { AgentManifest, ResolvedCapabilities } from '../agents/manifest/types.js';
+import type { AgentManifest, ResolvedCapabilities } from '../agents/index.js';
 import type { SpawnRequest } from './types.js';
 
 export class ContainerSecurityMapper {

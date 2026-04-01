@@ -5,7 +5,7 @@ import { BridgeService } from '../intercom/BridgeService.js';
 import { CircleRegistry } from '../circles/CircleRegistry.js';
 import { createIntercomRouter } from '../routes/intercom.js';
 import request from 'supertest';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 
 vi.mock('axios', () => {
   return {

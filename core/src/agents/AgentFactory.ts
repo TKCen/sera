@@ -7,8 +7,8 @@ import { WorkerAgent } from './WorkerAgent.js';
 import type { BaseAgent } from './BaseAgent.js';
 import type { AgentInstance } from './types.js';
 import { query } from '../lib/database.js';
-import { MemoryManager } from '../memory/manager.js';
-import type { LlmRouter } from '../llm/LlmRouter.js';
+import { MemoryManager } from '../memory/index.js';
+import type { LlmRouter } from '../llm/index.js';
 
 export class AgentFactory {
   /**

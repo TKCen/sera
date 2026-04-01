@@ -6,18 +6,18 @@ import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest, ResolvedCapabilities } from './manifest/types.js';
-import type { LlmRouter } from '../llm/LlmRouter.js';
+import type { LlmRouter } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';
 import { CapabilityResolver } from '../capability/resolver.js';
 import type { AgentRegistry } from './registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { ToolExecutor } from '../tools/ToolExecutor.js';
-import { IdentityService } from '../auth/IdentityService.js';
+import { IdentityService } from '../auth/index.js';
 import { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { query } from '../lib/database.js';
-import { AuditService } from '../audit/AuditService.js';
-import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
+import { AuditService } from '../audit/index.js';
+import type { ContextCompactionService } from '../llm/index.js';
 import type { HeartbeatService } from './HeartbeatService.js';
 
 const logger = new Logger('Orchestrator');
@@ -42,7 +42,7 @@ export class Orchestrator {
   private processManager: ProcessManager = new ProcessManager();
   private intercom: IntercomService | undefined;
   private toolExecutor: ToolExecutor | undefined;
-  private sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager | undefined;
+  private sandboxManager: import('../sandbox/index.js').SandboxManager | undefined;
   private identityService: IdentityService | undefined;
   private meteringEngine: MeteringEngine | undefined;
   private agentScheduler: AgentScheduler | undefined;
@@ -121,7 +121,7 @@ export class Orchestrator {
   }
 
   public setSandboxManager(
-    sandboxManager: import('../sandbox/SandboxManager.js').SandboxManager
+    sandboxManager: import('../sandbox/index.js').SandboxManager
   ): void {
     this.sandboxManager = sandboxManager;
   }

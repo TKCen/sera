@@ -1,5 +1,5 @@
 import type { SkillRegistry } from '../SkillRegistry.js';
-import type { MemoryManager } from '../../memory/manager.js';
+import type { MemoryManager } from '../../memory/index.js';
 import { webSearchSkill } from './web-search.js';
 import { webFetchSkill } from './web-fetch.js';
 import { fileReadSkill } from './file-read.js';

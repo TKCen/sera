@@ -11,10 +11,10 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { HeartbeatService } from '../agents/HeartbeatService.js';
-import type { IdentityService } from '../auth/IdentityService.js';
-import type { AuthService } from '../auth/auth-service.js';
-import { createAuthMiddleware } from '../auth/authMiddleware.js';
+import type { HeartbeatService } from '../agents/index.js';
+import type { IdentityService } from '../auth/index.js';
+import type { AuthService } from '../auth/index.js';
+import { createAuthMiddleware } from '../auth/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('Heartbeat');

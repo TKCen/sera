@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { rateLimitStub } from './rateLimitStub.js';
 import type { Request, Response, NextFunction } from 'express';
-import type { AgentTokenClaims } from '../auth/types.js';
-import type { OperatorIdentity } from '../auth/interfaces.js';
+import type { AgentTokenClaims } from '../auth/index.js';
+import type { OperatorIdentity } from '../auth/index.js';
 
 describe('rateLimitStub', () => {
   let req: Partial<Request> & { agentIdentity?: AgentTokenClaims; operator?: OperatorIdentity };

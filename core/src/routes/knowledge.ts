@@ -3,9 +3,9 @@
  */
 
 import { Router } from 'express';
-import { KnowledgeGitService } from '../memory/KnowledgeGitService.js';
-import type { MergeStrategy } from '../memory/KnowledgeGitService.js';
-import type { LlmRouter } from '../llm/LlmRouter.js';
+import { KnowledgeGitService } from '../memory/index.js';
+import type { MergeStrategy } from '../memory/index.js';
+import type { LlmRouter } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('KnowledgeRouter');

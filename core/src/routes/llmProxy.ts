@@ -17,18 +17,18 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { IdentityService } from '../auth/IdentityService.js';
-import { createAuthMiddleware } from '../auth/authMiddleware.js';
-import type { AuthService } from '../auth/auth-service.js';
+import type { IdentityService } from '../auth/index.js';
+import { createAuthMiddleware } from '../auth/index.js';
+import type { AuthService } from '../auth/index.js';
 import type { MeteringService } from '../metering/MeteringService.js';
 import { rateLimitStub } from '../middleware/rateLimitStub.js';
-import type { LlmRouter } from '../llm/LlmRouter.js';
-import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
+import type { LlmRouter } from '../llm/index.js';
+import type { CircuitBreakerService } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';
 import type { Pool } from 'pg';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import { ContextAssembler } from '../llm/ContextAssembler.js';
-import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
+import type { Orchestrator } from '../agents/index.js';
+import { ContextAssembler } from '../llm/index.js';
+import type { ContextCompactionService } from '../llm/index.js';
 
 const logger = new Logger('LLMProxy');
 
@@ -119,7 +119,7 @@ export function createLlmProxyRouter(
       // ── 2. Validate request body ───────────────────────────────────────────
       const body = req.body as Record<string, unknown>;
       const { model, temperature, tools, stream, thinking_level: thinkingLevel } = body;
-      let messages = body['messages'] as import('../agents/types.js').ChatMessage[] | undefined;
+      let messages = body['messages'] as import('../agents/index.js').ChatMessage[] | undefined;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         res
@@ -133,14 +133,14 @@ export function createLlmProxyRouter(
         if (messages) {
           messages = (await contextAssembler.assemble(
             agentId,
-            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+            messages as unknown as import('../llm/index.js').ChatMessage[],
             (event) => {
               logger.info(`[context-assembly] ${event.stage}`, {
                 ...event.detail,
                 ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
               });
             }
-          )) as unknown as import('../agents/types.js').ChatMessage[];
+          )) as unknown as import('../agents/index.js').ChatMessage[];
         }
       } catch (err) {
         logger.error('Context assembly failed (continuing without enrichment):', err);
@@ -153,7 +153,7 @@ export function createLlmProxyRouter(
       try {
         if (contextCompactionService && messages) {
           messages = (await contextCompactionService.compact(
-            messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+            messages as unknown as import('../llm/index.js').ChatMessage[],
             modelName,
             (event) => {
               logger.info(`[context-compaction] ${event.stage}`, {
@@ -161,7 +161,7 @@ export function createLlmProxyRouter(
                 ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
               });
             }
-          )) as unknown as import('../agents/types.js').ChatMessage[];
+          )) as unknown as import('../agents/index.js').ChatMessage[];
         }
       } catch (err) {
         logger.error('Context compaction failed (continuing with full context):', err);
@@ -169,7 +169,7 @@ export function createLlmProxyRouter(
 
       const chatRequest = {
         model: modelName,
-        messages: messages as unknown as import('../llm/LlmRouter.js').ChatMessage[],
+        messages: messages as unknown as import('../llm/index.js').ChatMessage[],
         ...(temperature !== undefined ? { temperature: temperature as number } : {}),
         ...(Array.isArray(tools) ? { tools: tools as unknown[] } : {}),
         ...(thinkingLevel ? { thinkingLevel: thinkingLevel as string } : {}),

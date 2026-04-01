@@ -67,13 +67,13 @@ vi.mock('./KnowledgeGitService.js', () => ({
   },
 }));
 
-vi.mock('../audit/AuditService.js', () => ({
+vi.mock('../audit/index.js', () => ({
   AuditService: { getInstance: () => ({ record: vi.fn().mockResolvedValue(undefined) }) },
 }));
 
 import { createKnowledgeStoreSkill } from '../skills/builtins/knowledge-store.js';
 import { createKnowledgeQuerySkill } from '../skills/builtins/knowledge-query.js';
-import type { AgentContext } from '../skills/types.js';
+import type { AgentContext } from '../skills/index.js';
 
 function makeContext(
   overrides: Partial<{

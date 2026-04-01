@@ -11,7 +11,7 @@
  */
 
 import Docker from 'dockerode';
-import type { FilesystemMode } from '../sandbox/types.js';
+import type { FilesystemMode } from '../sandbox/index.js';
 import type { StorageProvider, MountResult } from './StorageProvider.js';
 
 // ── DockerVolumeProvider ────────────────────────────────────────────────────────

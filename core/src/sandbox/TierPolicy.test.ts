@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TierPolicy, PolicyViolationError } from './TierPolicy.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import type { AgentManifest } from '../agents/index.js';
 import type { SpawnRequest, ToolRunRequest } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────

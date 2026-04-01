@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { AuditService } from '../audit/AuditService.js';
-import { requireRole } from '../auth/authMiddleware.js';
+import { AuditService } from '../audit/index.js';
+import { requireRole } from '../auth/index.js';
 
 /**
  * Creates the audit trail router.

@@ -6,10 +6,10 @@
 
 import { Router } from 'express';
 import type { Pool } from 'pg';
-import type { SkillRegistry } from '../skills/SkillRegistry.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import { SkillLibrary } from '../skills/SkillLibrary.js';
-import { SkillRegistryService } from '../skills/adapters/SkillRegistryService.js';
+import type { SkillRegistry } from '../skills/index.js';
+import type { Orchestrator } from '../agents/index.js';
+import { SkillLibrary } from '../skills/index.js';
+import { SkillRegistryService } from '../skills/index.js';
 
 export function createSkillsRouter(
   _skillRegistry: SkillRegistry,

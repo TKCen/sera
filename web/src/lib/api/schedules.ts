@@ -27,9 +27,12 @@ export function updateSchedule(
   id: string,
   data: Partial<Pick<Schedule, 'expression' | 'taskPrompt' | 'status' | 'name'>>
 ): Promise<Schedule> {
+  // Backend expects 'task' not 'taskPrompt'
+  const { taskPrompt, ...rest } = data;
+  const payload = taskPrompt !== undefined ? { ...rest, task: taskPrompt } : rest;
   return request<Schedule>(`/schedules/${encodeURIComponent(id)}`, {
     method: 'PATCH',
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
 }
 

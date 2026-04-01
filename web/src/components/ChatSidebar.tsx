@@ -12,7 +12,7 @@ export interface SessionInfo {
   updatedAt: string;
 }
 
-export interface AgentInfo {
+export interface ChatAgent {
   id: string;
   name: string;
   display_name?: string | null;
@@ -21,7 +21,7 @@ export interface AgentInfo {
 
 interface ChatSidebarProps {
   sessions: SessionInfo[];
-  agents: AgentInfo[] | undefined;
+  agents: ChatAgent[] | undefined;
   agentsLoading: boolean;
   agentsError: boolean;
   selectedAgent: string;
@@ -53,7 +53,7 @@ function AgentDropdown({
   selectedAgent,
   onAgentChange,
 }: {
-  agents: AgentInfo[];
+  agents: ChatAgent[];
   selectedAgent: string;
   onAgentChange: (name: string) => void;
 }) {

@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { ChatThoughtPanel } from '@/components/ChatThoughtPanel';
 import { CodeBlock } from '@/components/CodeBlock';
 import { MessageCopyButton } from '@/components/MessageCopyButton';
-import type { Message } from '@/app/chat/page';
+import type { Message } from '@/lib/api/types';
 
 export interface ChatMessageBubbleProps {
   msg: Message;

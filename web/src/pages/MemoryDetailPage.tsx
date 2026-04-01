@@ -15,16 +15,7 @@ import { getAgentBlocks, getAgentStats, getAgentLinks } from '@/lib/api/memory';
 import type { ScopedBlock } from '@/lib/api/memory';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-
-const TYPE_COLORS: Record<string, string> = {
-  fact: 'bg-blue-500/20 text-blue-400',
-  context: 'bg-purple-500/20 text-purple-400',
-  memory: 'bg-green-500/20 text-green-400',
-  insight: 'bg-yellow-500/20 text-yellow-400',
-  reference: 'bg-cyan-500/20 text-cyan-400',
-  observation: 'bg-orange-500/20 text-orange-400',
-  decision: 'bg-red-500/20 text-red-400',
-};
+import { MEMORY_TYPE_TAILWIND } from '@/components/memory/constants';
 
 function BlockCard({ block, agentId }: { block: ScopedBlock; agentId: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -49,7 +40,7 @@ function BlockCard({ block, agentId }: { block: ScopedBlock; agentId: string }) 
             <span
               className={cn(
                 'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                TYPE_COLORS[block.type] ?? 'bg-sera-surface text-sera-text-muted'
+                MEMORY_TYPE_TAILWIND[block.type] ?? 'bg-sera-surface text-sera-text-muted'
               )}
             >
               {block.type}

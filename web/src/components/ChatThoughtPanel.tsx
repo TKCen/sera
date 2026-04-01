@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type { Message, MessageThought } from '@/lib/types/chat';
-import type { Message } from '@/lib/types/chat';
+import type { Message, MessageThought } from '@/lib/api/types';
+export type { Message, MessageThought };
 
 // ── Thought step icons & colours ─────────────────────────────────────────────
 

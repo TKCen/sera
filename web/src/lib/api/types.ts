@@ -290,6 +290,23 @@ export interface HealthResponse {
   timestamp: string;
 }
 
+export interface MessageThought {
+  timestamp: string;
+  stepType: string;
+  content: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'agent';
+  content: string;
+  thoughts: MessageThought[];
+  streaming: boolean;
+  createdAt: Date;
+}
+
 export interface ThoughtEvent {
   timestamp: string;
   stepType: 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result' | 'reasoning';

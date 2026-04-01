@@ -42,17 +42,13 @@ import { streamAnthropic } from '@mariozechner/pi-ai/anthropic';
 import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { Logger } from '../lib/logger.js';
 import type { ProviderConfig, ProviderRegistry } from './ProviderRegistry.js';
+import type { ChatMessage } from '../agents/types.js';
 
 const logger = new Logger('LlmRouter');
 
 // ── Re-exported types (backward-compat with LiteLLMClient consumers) ──────────
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
-  tool_calls?: unknown[];
-  tool_call_id?: string;
-}
+export type { ChatMessage };
 
 export interface ChatCompletionRequest {
   model: string;
@@ -132,7 +128,7 @@ function toContext(request: ChatCompletionRequest): Context {
         }
 
         if (Array.isArray(msg.tool_calls)) {
-          for (const tc of msg.tool_calls as Record<string, unknown>[]) {
+          for (const tc of msg.tool_calls as unknown as Record<string, unknown>[]) {
             let parsedArgs: Record<string, unknown> = {};
             try {
               const functionBlock = tc['function'] as Record<string, unknown>;

@@ -8,14 +8,14 @@ SERA (Sandboxed Extensible Reasoning Agent) is a Docker-native multi-agent AI or
 
 Load selectively based on your task — do not load everything upfront:
 
-| Document | Load when |
-|---|---|
-| `docs/ARCHITECTURE.md` | Any implementation task — canonical tech stack, data models, all design decisions |
-| `docs/IMPLEMENTATION-ORDER.md` | Starting an epic — epic dependencies and build sequence |
-| `docs/TESTING.md` | Writing tests — strategy, patterns, coverage requirements |
-| `docs/epics/{n}-{name}.md` | Implementing stories — acceptance criteria and DB schema for that epic |
-| `docs/openapi.yaml` | Adding or modifying API endpoints — path-level spec for all ~190 endpoints |
-| `docs/AGENT-WORKFLOW.md` | Multi-agent coordination — agent roles, issue flow, validation loops |
+| Document                       | Load when                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------- |
+| `docs/ARCHITECTURE.md`         | Any implementation task — canonical tech stack, data models, all design decisions |
+| `docs/IMPLEMENTATION-ORDER.md` | Starting an epic — epic dependencies and build sequence                           |
+| `docs/TESTING.md`              | Writing tests — strategy, patterns, coverage requirements                         |
+| `docs/epics/{n}-{name}.md`     | Implementing stories — acceptance criteria and DB schema for that epic            |
+| `docs/openapi.yaml`            | Adding or modifying API endpoints — path-level spec for all ~190 endpoints        |
+| `docs/AGENT-WORKFLOW.md`       | Multi-agent coordination — agent roles, issue flow, validation loops              |
 
 ## Environment
 
@@ -65,6 +65,7 @@ sera/
 When you discover a non-obvious environment behaviour, fix a recurring error, or make a significant implementation decision not fully covered by the docs, add it to the **Learnings** section of the most relevant CLAUDE.md. This prevents future sessions from repeating the same discovery.
 
 Format:
+
 ```
 - **[Short title]**: What the issue was and what the resolution or decision is.
 ```
@@ -101,7 +102,7 @@ When completing a workflow loop or resolving a non-trivial issue, check whether 
 - **Core build uses tsup (esbuild)**: `core/package.json` build script runs `tsup` for fast file-per-file transpilation (~100ms). Type checking is separate via `tsc --noEmit`. The tsup config is in `core/tsup.config.ts`.
 - **Agent-runtime runs on bun**: `core/sandbox/Dockerfile.worker` uses `oven/bun:1-slim` as base image. No TypeScript build step — bun runs `.ts` files directly. Faster cold start and smaller image than Node.js.
 - **`simple-git` and `pg-boss` use named exports**: `import { simpleGit } from 'simple-git'` and `import { PgBoss } from 'pg-boss'` — default imports have no call signatures and fail tsc. See `core/CLAUDE.md` for further gotchas with each library.
-- **LiteLLM replaced by `@mariozechner/pi-ai` (in-process routing)**: The `litellm` sidecar container is gone. LLM calls now happen in-process via `LlmRouter` → `ProviderRegistry` → pi-mono provider functions. Provider config lives in `core/config/providers.json`. Cloud providers (gpt-*, claude-*, gemini-*) are auto-detected by model name and read their API keys from standard env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). Local providers (LM Studio, Ollama) are registered in `providers.json` with a `baseUrl`. `LLM_BASE_URL` + `LLM_MODEL` env vars bootstrap a single default provider without a config file. See `core/src/llm/ProviderRegistry.ts` and `core/src/llm/LlmRouter.ts`.
+- **LiteLLM replaced by `@mariozechner/pi-ai` (in-process routing)**: The `litellm` sidecar container is gone. LLM calls now happen in-process via `LlmRouter` → `ProviderRegistry` → pi-mono provider functions. Provider config lives in `core/config/providers.json`. Cloud providers (gpt-_, claude-_, gemini-\*) are auto-detected by model name and read their API keys from standard env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). Local providers (LM Studio, Ollama) are registered in `providers.json` with a `baseUrl`. `LLM_BASE_URL` + `LLM_MODEL` env vars bootstrap a single default provider without a config file. See `core/src/llm/ProviderRegistry.ts` and `core/src/llm/LlmRouter.ts`.
 - **pi-mono `Model<TApi>` has all fields required**: All of `id`, `name`, `api`, `provider`, `baseUrl`, `reasoning`, `input`, `cost`, `contextWindow`, `maxTokens` are non-optional. When constructing a model dynamically, provide sensible defaults (`''` for baseUrl, `false` for reasoning, `['text']` for input, zero cost, 128k context).
 - **Centrifugo v6 health endpoint — use `health.enabled: true`**: The `/health` HTTP endpoint is disabled by default. Enable it with `"health": { "enabled": true }` in `centrifugo/config.json`. The wrong key (`health_check.enable`) silently has no effect and the endpoint returns 404, which the core health check treats as `degraded`.
 - **Centrifugo v6 config — `hmac_secret_key` moved under `client.token`**: In Centrifugo v6+, the JWT HMAC secret must be at `client.token.hmac_secret_key`, NOT the top-level `token.hmac_secret_key` path used in v5. A misplaced key produces `"unknown key in configuration file"` and `"disabled JWT algorithm: HS256"` errors causing all web-client connections to fail. The `CENTRIFUGO_TOKEN_SECRET` env var (defaults to `'sera-token-secret'`) in `IntercomService` must match this value.
@@ -128,3 +129,6 @@ When completing a workflow loop or resolving a non-trivial issue, check whether 
 - **Ephemeral agents cannot use the task queue**: The `task_queue` endpoints and `delegate-task` skill's `send` action reject ephemeral agents with 405. Use the `spawn-ephemeral` action instead, which creates+spawns+executes+returns in one call. See #334.
 - **Prettier format check differs between Windows and Linux**: Jules PRs formatted on Linux may fail CI format check when our pre-commit hook reformats on Windows. The `ChatMessageBubble.tsx` multi-line vs single-line className pattern is a known divergence. Always run `bun run format` before pushing.
 - **Dynamic provider model names cause LM Studio JIT conflicts**: Models discovered by `DynamicProviderManager` get `dp-{providerId}-{modelId}` names (e.g., `dp-agw-qwen/qwen3.5-35b-a3b`). When sent to LM Studio, this name doesn't match the already-loaded model, causing LM Studio to JIT-load a second instance with default 4096 context. Use the static `providers.json` entry name instead. See #497.
+- **Schedule task column is JSONB — plain strings must be wrapped**: The `task` column in the `schedules` table is JSONB. Plain prompt strings (e.g. from template YAML) must be wrapped as `{"prompt": "..."}` before insertion. `ScheduleService.createSchedule()` now handles this automatically. The `schedule-task` skill also normalizes (line 68-73). See #599/#605.
+- **AgentTemplate Zod schema strips unknown fields**: The `AgentTemplateSchema` in `schemas.ts` uses Zod's default strict parsing. Any field not in the schema is silently dropped during template import. When adding new template spec fields (e.g. `schedules`), always add them to both `types.ts` AND `schemas.ts`. See #603.
+- **Templates are reimported on every startup**: `ResourceImporter.importAll()` runs in `index.ts` after `initDb()`. `upsertTemplate()` syncs manifest schedules to all existing instances (duplicates skipped via unique constraint). See #601/#602.

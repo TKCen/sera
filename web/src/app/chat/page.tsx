@@ -1,61 +1,36 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
 import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { sendChatStream } from '@/lib/api/chat';
 import { request } from '@/lib/api/client';
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { ChatInputBar } from '@/components/ChatInputBar';
-import { ChatMessageBubble } from '@/components/ChatMessageBubble';
-import { EmptyState } from '@/components/EmptyState';
+import { ChatHeader } from '@/components/ChatHeader';
+import { ChatMessageList } from '@/components/ChatMessageList';
+import { ChatEmptyView } from '@/components/ChatEmptyView';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-import type { Message, MessageThought } from '@/lib/types/chat';
-export type { Message, MessageThought } from '@/lib/types/chat';
+import type {
+  Message,
+  MessageThought,
+  SessionInfo,
+  SessionDetail,
+  TokenPayload,
+  ThoughtPayload,
+} from '@/lib/types/chat';
 
-interface SessionInfo {
-  id: string;
-  agentName: string;
-  agentInstanceId?: string | null;
-  title: string;
-  messageCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface SessionDetail extends SessionInfo {
-  messages: SessionMessage[];
-}
-
-interface SessionMessage {
-  id: string;
-  sessionId: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  metadata?: { thoughts?: MessageThought[] };
-  createdAt: string;
-}
-
-interface TokenPayload {
-  token: string;
-  done: boolean;
-  messageId?: string;
-}
-
-interface ThoughtPayload {
-  timestamp: string;
-  stepType: string;
-  content: string;
-  agentId: string;
-  agentDisplayName: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-}
+export type {
+  Message,
+  MessageThought,
+  SessionInfo,
+  SessionDetail,
+  TokenPayload,
+  ThoughtPayload,
+} from '@/lib/types/chat';
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 
@@ -84,18 +59,10 @@ function ChatPageContent() {
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingMsgId = useRef<string | null>(null);
   const messageIdRef = useRef<string | null>(null);
   const messageQueue = useRef<string[]>([]);
   const [queueCount, setQueueCount] = useState(0);
-
-  // ── Auto-scroll ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (messagesEndRef.current?.scrollIntoView) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
 
   // ── Auto-select agent (prefer running, persist to sessionStorage) ────────────
   useEffect(() => {
@@ -453,83 +420,22 @@ function ChatPageContent() {
   const agentStatus = (selectedAgentData as Record<string, unknown> | undefined)?.status as
     | string
     | undefined;
-  const isAgentUnavailable = agentStatus === 'error' || agentStatus === 'stopped';
-
-  // ── Sidebar toggle button ─────────────────────────────────────────────────────
-
-  const sidebarToggle = (
-    <button
-      onClick={() => setSidebarOpen((v) => !v)}
-      className="p-1.5 rounded hover:bg-sera-surface text-sera-text-muted hover:text-sera-text transition-colors"
-      title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-      aria-label="Toggle sidebar"
-      aria-expanded={sidebarOpen}
-    >
-      {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-    </button>
-  );
-
-  // ── Empty state ───────────────────────────────────────────────────────────────
-
-  if (messages.length === 0 && !streaming) {
-    return (
-      <main className="flex h-full">
-        <ChatSidebar
-          sessions={sessions}
-          agents={agents}
-          agentsLoading={agentsLoading}
-          agentsError={agentsError}
-          selectedAgent={selectedAgent}
-          sessionId={sessionId}
-          sidebarOpen={sidebarOpen}
-          onAgentChange={handleAgentChange}
-          onStartNewSession={startNewSession}
-          onLoadSession={(id) => void loadSession(id)}
-          onDeleteSession={(id, e) => void deleteSession(id, e)}
-          onRenameSession={(id, title) => void renameSession(id, title)}
-          onRefetchAgents={() => void refetchAgents()}
-        />
-        <div className="flex-1 flex flex-col items-center justify-center px-8 relative">
-          <div className="absolute top-4 left-4">{sidebarToggle}</div>
-          <div className="flex-1 w-full flex flex-col items-center justify-center">
-            <EmptyState
-              icon={<Bot size={32} className="text-sera-accent" />}
-              title="How can I help you?"
-              description={
-                selectedAgent
-                  ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
-                  : 'Select an agent from the sidebar to get started.'
-              }
-            />
-            {isAgentUnavailable && (
-              <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
-                Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
-                <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
-                  agent detail page
-                </a>
-                .
-              </div>
-            )}
-          </div>
-          <div className="w-full max-w-2xl pb-8">
-            <ChatInputBar
-              inputRef={inputRef}
-              input={input}
-              setInput={setInput}
-              handleKeyDown={handleKeyDown}
-              streaming={streaming}
-              selectedAgent={selectedAgent}
-              handleSend={() => void handleSend()}
-              onCancel={handleCancel}
-              queueCount={queueCount}
-            />
-          </div>
-        </div>
-      </main>
-    );
-  }
 
   // ── Conversation view ─────────────────────────────────────────────────────────
+
+  const inputBar = (
+    <ChatInputBar
+      inputRef={inputRef}
+      input={input}
+      setInput={setInput}
+      handleKeyDown={handleKeyDown}
+      streaming={streaming}
+      selectedAgent={selectedAgent}
+      handleSend={() => void handleSend()}
+      onCancel={handleCancel}
+      queueCount={queueCount}
+    />
+  );
 
   return (
     <main className="flex h-full">
@@ -550,64 +456,38 @@ function ChatPageContent() {
       />
 
       <div className="flex-1 flex flex-col min-w-0 h-full">
-        {/* Top bar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-sera-border flex-shrink-0">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {sidebarToggle}
-            {sessionId && (
-              <span className="text-xs text-sera-text-muted font-mono truncate">
-                {sessions.find((s) => s.id === sessionId)?.title ?? 'New Chat'}
-              </span>
-            )}
-          </div>
-          <button
-            onClick={() => setShowThinking((v) => !v)}
-            className={cn(
-              'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium transition-all border',
-              showThinking
-                ? 'bg-sera-accent/10 text-sera-accent border-sera-accent/20'
-                : 'bg-sera-surface text-sera-text-muted border-sera-border hover:text-sera-text'
-            )}
+        {messages.length === 0 && !streaming ? (
+          <ChatEmptyView
+            selectedAgent={selectedAgent}
+            selectedAgentDisplayName={selectedAgentData?.display_name}
+            selectedAgentId={selectedAgentId}
+            agentStatus={agentStatus}
+            sidebarOpen={sidebarOpen}
+            setSidebarOpen={setSidebarOpen}
           >
-            <Brain size={12} className={showThinking ? 'animate-pulse' : ''} />
-            THINKING: {showThinking ? 'ON' : 'OFF'}
-          </button>
-        </div>
-
-        {/* Messages */}
-        <div
-          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0"
-          role="log"
-          aria-live="polite"
-        >
-          {messages.map((msg) => (
-            <ChatMessageBubble
-              key={msg.id}
-              msg={msg}
+            {inputBar}
+          </ChatEmptyView>
+        ) : (
+          <>
+            <ChatHeader
+              sidebarOpen={sidebarOpen}
+              setSidebarOpen={setSidebarOpen}
+              sessionId={sessionId}
+              sessions={sessions}
               showThinking={showThinking}
-              isExpanded={expandedThoughts.has(msg.id)}
-              onToggleThoughts={toggleThoughts}
+              setShowThinking={setShowThinking}
             />
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
 
-        {/* Input */}
-        <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">
-          <div className="max-w-3xl mx-auto">
-            <ChatInputBar
-              inputRef={inputRef}
-              input={input}
-              setInput={setInput}
-              handleKeyDown={handleKeyDown}
-              streaming={streaming}
-              selectedAgent={selectedAgent}
-              handleSend={() => void handleSend()}
-              onCancel={handleCancel}
-              queueCount={queueCount}
-            />
-          </div>
-        </div>
+            <ChatMessageList
+              messages={messages}
+              showThinking={showThinking}
+              expandedThoughts={expandedThoughts}
+              toggleThoughts={toggleThoughts}
+            >
+              {inputBar}
+            </ChatMessageList>
+          </>
+        )}
       </div>
     </main>
   );

@@ -19,3 +19,42 @@ export interface Message {
   streaming: boolean;
   createdAt: Date;
 }
+
+export interface SessionInfo {
+  id: string;
+  agentName: string;
+  agentInstanceId?: string | null;
+  title: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionDetail extends SessionInfo {
+  messages: SessionMessage[];
+}
+
+export interface SessionMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  metadata?: { thoughts?: MessageThought[] };
+  createdAt: string;
+}
+
+export interface TokenPayload {
+  token: string;
+  done: boolean;
+  messageId?: string;
+}
+
+export interface ThoughtPayload {
+  timestamp: string;
+  stepType: string;
+  content: string;
+  agentId: string;
+  agentDisplayName: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+}

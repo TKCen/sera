@@ -60,14 +60,14 @@ export class ToolRunner {
         ...result,
         durationMs: Date.now() - startTime,
       };
-    } catch (error) {
+    } catch (err: unknown) {
       // Attempt cleanup on any failure
       try {
         await this.sandboxManager.remove(manifest, sandbox.containerId);
       } catch {
         // Best-effort cleanup
       }
-      throw error;
+      throw err;
     }
   }
 

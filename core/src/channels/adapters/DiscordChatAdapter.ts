@@ -30,6 +30,7 @@ const INTENTS = 1 + 512 + 4096 + 32768; // 37377
 
 export interface DiscordChatConfig {
   botToken: string;
+  applicationId: string;
   targetAgentId: string;
   allowedGuilds?: string[];
   allowedUsers?: string[];
@@ -50,6 +51,58 @@ interface DiscordMessagePayload {
   };
   mentions?: Array<{ id: string }>;
 }
+
+interface DiscordInteraction {
+  id: string;
+  token: string;
+  type: number; // 2 = APPLICATION_COMMAND
+  channel_id: string;
+  guild_id?: string;
+  member?: { user: { id: string; username: string } };
+  user?: { id: string; username: string }; // DM interactions
+  data?: {
+    name: string;
+    options?: Array<{ name: string; value: string | number }>;
+  };
+}
+
+/** Discord Application Command definitions for bulk overwrite */
+const SLASH_COMMANDS = [
+  {
+    name: 'ask',
+    description: 'Send a message to Sera',
+    options: [
+      {
+        name: 'message',
+        description: 'The message to send',
+        type: 3, // STRING
+        required: true,
+      },
+    ],
+  },
+  {
+    name: 'status',
+    description: 'Show agent status and current session info',
+  },
+  {
+    name: 'history',
+    description: 'Show recent conversation history',
+    options: [
+      {
+        name: 'count',
+        description: 'Number of messages to show (default 10, max 50)',
+        type: 4, // INTEGER
+        required: false,
+        min_value: 1,
+        max_value: 50,
+      },
+    ],
+  },
+  {
+    name: 'reset',
+    description: 'Start a new conversation session',
+  },
+];
 
 export class DiscordChatAdapter {
   private ws: WebSocket | null = null;
@@ -166,10 +219,13 @@ export class DiscordChatAdapter {
         // Dispatch
         if (t === 'MESSAGE_CREATE') {
           void this.handleMessage(d as DiscordMessagePayload);
+        } else if (t === 'INTERACTION_CREATE') {
+          void this.handleInteraction(d as DiscordInteraction);
         } else if (t === 'READY') {
           const ready = d as { user: { id: string; username: string } };
           this.botUserId = ready.user.id;
           logger.info(`Discord bot ready as ${ready.user.username} (${ready.user.id})`);
+          void this.registerSlashCommands();
         }
         break;
     }
@@ -375,6 +431,304 @@ export class DiscordChatAdapter {
       hash.substring(16, 20),
       hash.substring(20, 32),
     ].join('-');
+  }
+
+  // ── Slash Commands ─────────────────────────────────────────────────────────
+
+  /**
+   * Register slash commands globally via Discord's bulk overwrite endpoint.
+   * Called once on READY. Discord caches these — re-registering is idempotent.
+   */
+  private async registerSlashCommands(): Promise<void> {
+    const appId = this.config.applicationId;
+    if (!appId) {
+      logger.warn('No applicationId configured — slash commands will not be registered');
+      return;
+    }
+
+    try {
+      const resp = await fetch(`${DISCORD_API}/applications/${appId}/commands`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bot ${this.config.botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(SLASH_COMMANDS),
+      });
+
+      if (resp.ok) {
+        logger.info(`Registered ${SLASH_COMMANDS.length} slash commands for application ${appId}`);
+      } else {
+        const body = await resp.text();
+        logger.error(`Failed to register slash commands: ${resp.status} ${body}`);
+      }
+    } catch (err) {
+      logger.error('Error registering slash commands:', (err as Error).message);
+    }
+  }
+
+  // ── Interaction Handling ──────────────────────────────────────────────────
+
+  private async handleInteraction(interaction: DiscordInteraction): Promise<void> {
+    // Only handle application commands (type 2)
+    if (interaction.type !== 2) return;
+
+    const user = interaction.member?.user ?? interaction.user;
+    if (!user) {
+      logger.warn('Interaction with no user info — ignoring');
+      return;
+    }
+
+    // Security: guild + user allowlists
+    if (!this.isAllowed(interaction.guild_id, user.id)) {
+      await this.respondToInteraction(interaction.id, interaction.token, 4, {
+        content: '⚠️ You are not authorized to use this bot.',
+        flags: 64, // EPHEMERAL
+      });
+      return;
+    }
+
+    const commandName = interaction.data?.name;
+    switch (commandName) {
+      case 'ask':
+        await this.handleAskCommand(interaction, user);
+        break;
+      case 'status':
+        await this.handleStatusCommand(interaction, user);
+        break;
+      case 'history':
+        await this.handleHistoryCommand(interaction, user);
+        break;
+      case 'reset':
+        await this.handleResetCommand(interaction, user);
+        break;
+      default:
+        await this.respondToInteraction(interaction.id, interaction.token, 4, {
+          content: `Unknown command: ${commandName ?? '(none)'}`,
+          flags: 64,
+        });
+    }
+  }
+
+  private async handleAskCommand(
+    interaction: DiscordInteraction,
+    user: { id: string; username: string }
+  ): Promise<void> {
+    const message = interaction.data?.options?.find((o) => o.name === 'message')?.value;
+    if (typeof message !== 'string' || !message.trim()) {
+      await this.respondToInteraction(interaction.id, interaction.token, 4, {
+        content: 'Please provide a message.',
+        flags: 64,
+      });
+      return;
+    }
+
+    // ACK with deferred response (type 5) — "bot is thinking"
+    await this.respondToInteraction(interaction.id, interaction.token, 5);
+
+    try {
+      const sessionId = await this.getOrCreateSession(user.id, user.username);
+      const messages = await this.sessionStore.getMessages(sessionId);
+      const history: ChatMessage[] = messages.map((m) => ({
+        role: m.role as ChatMessage['role'],
+        content: m.content,
+      }));
+
+      let agent = this.orchestrator.getAgent(this.config.targetAgentId);
+      if (!agent) {
+        try {
+          agent = await this.orchestrator.startInstance(this.config.targetAgentId);
+        } catch {
+          await this.editInteractionResponse(
+            interaction.token,
+            '⚠️ The bound agent is not available.'
+          );
+          return;
+        }
+      }
+
+      let reply: string;
+      try {
+        const chatUrl = await this.orchestrator.ensureContainerRunning(this.config.targetAgentId);
+        const chatRes = await fetch(`${chatUrl}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: message.trim(), sessionId, history }),
+          signal: AbortSignal.timeout(120_000),
+        });
+        if (chatRes.ok) {
+          const body = (await chatRes.json()) as { result: string | null; error?: string };
+          reply = body.result || 'No response generated.';
+        } else {
+          throw new Error(`Container chat returned ${chatRes.status}`);
+        }
+      } catch (containerErr) {
+        logger.warn('Container chat failed, falling back to in-process:', containerErr);
+        const response = await agent.process(message.trim(), history);
+        reply = response.finalAnswer || response.thought || 'No response generated.';
+      }
+
+      // Persist messages
+      await this.sessionStore.addMessage({ sessionId, role: 'user', content: message.trim() });
+      await this.sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+
+      // Edit the deferred response with the actual reply
+      const prefix = this.config.responsePrefix ? `**${this.config.responsePrefix}:** ` : '';
+      const fullReply = prefix + reply;
+
+      // Discord interaction responses have a 2000 char limit — truncate if needed
+      const truncated =
+        fullReply.length > MAX_MESSAGE_LENGTH
+          ? fullReply.substring(0, MAX_MESSAGE_LENGTH - 3) + '...'
+          : fullReply;
+      await this.editInteractionResponse(interaction.token, truncated);
+    } catch (err) {
+      logger.error(`Error processing /ask from ${user.username}:`, (err as Error).message);
+      await this.editInteractionResponse(
+        interaction.token,
+        '⚠️ An error occurred while processing your message.'
+      );
+    }
+  }
+
+  private async handleStatusCommand(
+    interaction: DiscordInteraction,
+    user: { id: string; username: string }
+  ): Promise<void> {
+    const agent = this.orchestrator.getAgent(this.config.targetAgentId);
+    const status = agent ? 'running' : 'stopped';
+
+    const key = `discord:${user.id}:${this.config.targetAgentId}`;
+    const sessionId = this.userSessions.get(key);
+
+    let messageCount = 0;
+    if (sessionId) {
+      const messages = await this.sessionStore.getMessages(sessionId);
+      messageCount = messages.length;
+    }
+
+    const lines = [
+      `**Agent:** ${this.config.targetAgentId}`,
+      `**Status:** ${status}`,
+      `**Your session:** ${sessionId ?? 'none'}`,
+      `**Messages in session:** ${messageCount}`,
+    ];
+
+    await this.respondToInteraction(interaction.id, interaction.token, 4, {
+      content: lines.join('\n'),
+      flags: 64,
+    });
+  }
+
+  private async handleHistoryCommand(
+    interaction: DiscordInteraction,
+    user: { id: string; username: string }
+  ): Promise<void> {
+    const countOpt = interaction.data?.options?.find((o) => o.name === 'count')?.value;
+    const count = typeof countOpt === 'number' ? Math.min(Math.max(countOpt, 1), 50) : 10;
+
+    // ACK with deferred response
+    await this.respondToInteraction(interaction.id, interaction.token, 5, { flags: 64 });
+
+    const key = `discord:${user.id}:${this.config.targetAgentId}`;
+    const sessionId = this.userSessions.get(key);
+
+    if (!sessionId) {
+      await this.editInteractionResponse(
+        interaction.token,
+        'No conversation history yet. Use `/ask` to start chatting.'
+      );
+      return;
+    }
+
+    const messages = await this.sessionStore.getMessages(sessionId);
+    const recent = messages.slice(-count);
+
+    if (recent.length === 0) {
+      await this.editInteractionResponse(interaction.token, 'No messages in your current session.');
+      return;
+    }
+
+    const formatted = recent
+      .map((m, i) => {
+        const role = m.role === 'user' ? '👤' : '🤖';
+        const content = m.content.length > 100 ? m.content.substring(0, 100) + '...' : m.content;
+        return `${i + 1}. ${role} ${content}`;
+      })
+      .join('\n');
+
+    const header = `**Last ${recent.length} message(s):**\n`;
+    const full = header + formatted;
+    const truncated =
+      full.length > MAX_MESSAGE_LENGTH ? full.substring(0, MAX_MESSAGE_LENGTH - 3) + '...' : full;
+
+    await this.editInteractionResponse(interaction.token, truncated);
+  }
+
+  private async handleResetCommand(
+    interaction: DiscordInteraction,
+    user: { id: string; username: string }
+  ): Promise<void> {
+    const key = `discord:${user.id}:${this.config.targetAgentId}`;
+    this.userSessions.delete(key);
+
+    // Create a fresh session immediately so next /ask doesn't reuse the old one
+    const newSessionId = await this.getOrCreateSession(user.id, user.username);
+
+    await this.respondToInteraction(interaction.id, interaction.token, 4, {
+      content: `✅ Session reset. New session: \`${newSessionId.substring(0, 8)}...\`\nUse \`/ask\` to start a new conversation.`,
+      flags: 64,
+    });
+  }
+
+  // ── Interaction API ───────────────────────────────────────────────────────
+
+  /**
+   * Send an initial response to a Discord interaction.
+   * @param type 4 = immediate response, 5 = deferred (shows "thinking...")
+   */
+  private async respondToInteraction(
+    interactionId: string,
+    interactionToken: string,
+    type: number,
+    data?: { content?: string; flags?: number }
+  ): Promise<void> {
+    try {
+      const resp = await fetch(
+        `${DISCORD_API}/interactions/${interactionId}/${interactionToken}/callback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, data }),
+        }
+      );
+      if (!resp.ok) {
+        logger.error(`Interaction response error: ${resp.status} ${resp.statusText}`);
+      }
+    } catch (err) {
+      logger.error('Failed to respond to interaction:', (err as Error).message);
+    }
+  }
+
+  /**
+   * Edit the original deferred interaction response.
+   */
+  private async editInteractionResponse(interactionToken: string, content: string): Promise<void> {
+    try {
+      const resp = await fetch(
+        `${DISCORD_API}/webhooks/${this.config.applicationId}/${interactionToken}/messages/@original`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        }
+      );
+      if (!resp.ok) {
+        logger.error(`Edit interaction response error: ${resp.status} ${resp.statusText}`);
+      }
+    } catch (err) {
+      logger.error('Failed to edit interaction response:', (err as Error).message);
+    }
   }
 
   // ── Discord API ────────────────────────────────────────────────────────────

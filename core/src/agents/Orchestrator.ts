@@ -120,9 +120,7 @@ export class Orchestrator {
     return this.agents.get(instanceId)?.getManifest();
   }
 
-  public setSandboxManager(
-    sandboxManager: import('../sandbox/index.js').SandboxManager
-  ): void {
+  public setSandboxManager(sandboxManager: import('../sandbox/index.js').SandboxManager): void {
     this.sandboxManager = sandboxManager;
   }
 

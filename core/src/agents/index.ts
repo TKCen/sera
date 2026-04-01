@@ -8,4 +8,9 @@ export { ResourceImporter } from './importer.service.js';
 export { AgentManifestLoader } from './manifest/AgentManifestLoader.js';
 export * from './schemas.js';
 export * from './types.js';
-export type { AgentManifest, ModelConfig, ResolvedCapabilities, SecurityTier } from './manifest/types.js';
+export type {
+  AgentManifest,
+  ModelConfig,
+  ResolvedCapabilities,
+  SecurityTier,
+} from './manifest/types.js';

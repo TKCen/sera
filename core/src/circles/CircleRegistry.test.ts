@@ -1,10 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
 import { CircleRegistry } from './CircleRegistry.js';
-import {
-  AgentManifestLoader,
-  ManifestValidationError,
-} from '../agents/index.js';
+import { AgentManifestLoader, ManifestValidationError } from '../agents/index.js';
 import type { CircleManifest } from './types.js';
 import type { AgentManifest } from '../agents/index.js';
 

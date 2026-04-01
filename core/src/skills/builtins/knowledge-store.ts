@@ -6,11 +6,7 @@
 
 import type { SkillDefinition } from '../types.js';
 import { KNOWLEDGE_BLOCK_TYPES } from '../../memory/index.js';
-import type {
-  KnowledgeBlockType,
-  MemoryScope,
-  Importance,
-} from '../../memory/index.js';
+import type { KnowledgeBlockType, MemoryScope, Importance } from '../../memory/index.js';
 import { ScopedMemoryBlockStore } from '../../memory/index.js';
 import { EmbeddingService } from '../../services/embedding.service.js';
 import { VectorService } from '../../services/vector.service.js';

@@ -321,6 +321,7 @@ export abstract class BaseAgent {
             for (let i = 0; i < activeCalls.length; i++) {
               const tc = activeCalls[i]!;
               const tr = toolResults[i]!;
+              const trContent = tr.content ?? '';
               try {
                 await AuditService.getInstance().record({
                   actorType: 'agent',
@@ -331,7 +332,7 @@ export abstract class BaseAgent {
                     tool: tc.function.name,
                     args: tc.function.arguments,
                     result:
-                      tr.content.length > 500 ? tr.content.substring(0, 500) + '...' : tr.content,
+                      trContent.length > 500 ? trContent.substring(0, 500) + '...' : trContent,
                   },
                 });
               } catch (auditErr) {
@@ -341,10 +342,8 @@ export abstract class BaseAgent {
 
             // Publish results and add to conversation
             for (const result of toolResults) {
-              const preview =
-                result.content.length > 2000
-                  ? result.content.substring(0, 2000) + '...'
-                  : result.content;
+              const content = result.content ?? '';
+              const preview = content.length > 2000 ? content.substring(0, 2000) + '...' : content;
               await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
             }

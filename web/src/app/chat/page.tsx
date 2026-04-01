@@ -15,8 +15,8 @@ import { EmptyState } from '@/components/EmptyState';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-import type { Message, MessageThought } from '@/lib/types/chat';
-export type { Message, MessageThought } from '@/lib/types/chat';
+import type { Message, MessageThought } from '@/lib/api/types';
+export type { Message, MessageThought };
 
 interface SessionInfo {
   id: string;

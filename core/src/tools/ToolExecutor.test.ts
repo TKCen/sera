@@ -216,7 +216,7 @@ describe('ToolExecutor', () => {
       };
 
       const result = await executor.executeTool(toolCall, minimalManifest());
-      expect(result.content).toContain('Failed to parse tool arguments');
+      expect(result.content ?? '').toContain('Failed to parse tool arguments');
     });
 
     it('should handle tool arguments wrapped in markdown', async () => {
@@ -263,8 +263,8 @@ describe('ToolExecutor', () => {
       const executor = new ToolExecutor(registry);
 
       const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());
-      expect(result.content.length).toBeLessThan(60_000);
-      expect(result.content).toContain('[TRUNCATED');
+      expect((result.content ?? '').length).toBeLessThan(60_000);
+      expect(result.content ?? '').toContain('[TRUNCATED');
     });
 
     it('should handle thrown exceptions in skill execution', async () => {
@@ -274,7 +274,7 @@ describe('ToolExecutor', () => {
 
       const result = await executor.executeTool(makeToolCall('test', {}), minimalManifest());
       expect(result.role).toBe('tool');
-      expect(result.content).toContain('Unexpected crash');
+      expect(result.content ?? '').toContain('Unexpected crash');
     });
   });
 

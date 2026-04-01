@@ -63,7 +63,7 @@ export interface ThoughtEvent {
   stepType: ThoughtStepType;
   content: string;
   agentId: string;
-  agentDisplayName: string;
+  agentDisplayName?: string;
   taskId?: string | undefined;
   iteration?: number | undefined;
 }

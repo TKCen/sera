@@ -6,6 +6,7 @@
  */
 
 import { Centrifuge, type Subscription, type PublicationContext } from 'centrifuge';
+import type { ThoughtEvent } from '@/lib/api/types';
 
 // ── Client Singleton ────────────────────────────────────────────────────────────
 
@@ -42,13 +43,7 @@ export function disconnectClient(): void {
 
 // ── Thought Stream Subscription ─────────────────────────────────────────────────
 
-export interface ThoughtEvent {
-  timestamp: string;
-  stepType: 'observe' | 'plan' | 'act' | 'reflect' | 'tool-call' | 'tool-result' | 'reasoning';
-  content: string;
-  agentId: string;
-  agentDisplayName: string;
-}
+export type { ThoughtEvent };
 
 /**
  * Safely get or create a subscription to a channel.

@@ -46,7 +46,7 @@ export class OpenAIProvider implements LLMProvider {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
-          content: msg.content,
+          content: msg.content ?? '',
           tool_call_id: msg.tool_call_id ?? '',
         };
       }
@@ -66,7 +66,7 @@ export class OpenAIProvider implements LLMProvider {
       }
       return {
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content,
+        content: msg.content ?? '',
       };
     });
   }

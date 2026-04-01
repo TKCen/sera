@@ -2,7 +2,7 @@ import type { ToolCall } from '../lib/llm/types.js';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | null;
   name?: string;
   /** Present on assistant messages that contain tool calls. */
   tool_calls?: ToolCall[];

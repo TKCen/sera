@@ -7,6 +7,7 @@ import { IntercomService } from './intercom/IntercomService.js';
 import { BridgeService } from './intercom/BridgeService.js';
 import { SandboxManager } from './sandbox/SandboxManager.js';
 import { Orchestrator } from './agents/Orchestrator.js';
+import { HeartbeatService } from './agents/HeartbeatService.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MCPServerManager } from './mcp/MCPServerManager.js';
 import { MemoryManager } from './memory/manager.js';
@@ -100,6 +101,7 @@ const sandboxManager = new SandboxManager();
 const egressAclManager = new EgressAclManager(new Docker());
 sandboxManager.setEgressAclManager(egressAclManager);
 const orchestrator = new Orchestrator();
+const heartbeatService = new HeartbeatService();
 const skillRegistry = new SkillRegistry();
 const agentsDir = path.join(workspaceRoot, 'agents');
 const mcpServersDir = path.join(workspaceRoot, 'mcp-servers');
@@ -151,6 +153,9 @@ orchestrator.setIntercom(intercomService);
 orchestrator.setToolExecutor(toolExecutor);
 orchestrator.setSandboxManager(sandboxManager);
 orchestrator.setRegistry(agentRegistry);
+orchestrator.setHeartbeatService(heartbeatService);
+heartbeatService.setRegistry(agentRegistry);
+heartbeatService.setIntercom(intercomService);
 sandboxManager.setAgentRegistry(agentRegistry);
 orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);
@@ -383,7 +388,7 @@ app.use('/api/sandbox', authMiddleware, sandboxRouter);
 const intercomRouter = createIntercomRouter(intercomService, resolveManifest, bridgeService);
 app.use('/api/intercom', authMiddleware, intercomRouter);
 
-app.use('/api/agents', createHeartbeatRouter(orchestrator, identityService, authService));
+app.use('/api/agents', createHeartbeatRouter(heartbeatService, identityService, authService));
 app.use(
   '/api/agents',
   authMiddleware,
@@ -745,6 +750,7 @@ const startServer = async () => {
 const shutdown = async () => {
   logger.info('Shutting down SERA Core...');
   orchestrator.stopWatching();
+  heartbeatService.stop();
   await lspManager.stopAll();
   await PgBossService.getInstance().stop();
 };

@@ -28,6 +28,20 @@ export class AgentRegistry {
       RETURNING *;
     `;
     const res = await this.pool.query(query, [name, displayName, builtin, category, template.spec]);
+
+    // Sync manifest schedules to all existing instances of this template.
+    // New schedules are created; duplicates are silently skipped (unique constraint).
+    const spec = template.spec as Record<string, unknown> | undefined;
+    if ((spec?.schedules as unknown[] | undefined)?.length) {
+      const instances = await this.pool.query(
+        'SELECT id FROM agent_instances WHERE template_ref = $1',
+        [name]
+      );
+      for (const inst of instances.rows) {
+        await this.syncManifestSchedules(inst.id as string, name);
+      }
+    }
+
     return {
       status: existing ? 'updated' : 'added',
       name: res.rows[0].name,

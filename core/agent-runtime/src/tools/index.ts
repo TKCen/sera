@@ -5,6 +5,6 @@
  */
 
 export { RuntimeToolExecutor } from './executor.js';
-export type { ToolExecutionResult } from './executor.js';
+export type { ToolExecutionResult, IToolExecutor } from './executor.js';
 export { BUILTIN_TOOLS } from './definitions.js';
 export { PermissionDeniedError, NotPermittedError } from './types.js';

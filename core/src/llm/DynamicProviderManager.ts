@@ -124,7 +124,7 @@ export class DynamicProviderManager {
         api: 'openai-completions',
         provider: 'lmstudio', // Default for now
         baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
+        apiKey: provider.apiKey || 'lm-studio',
         description: `Discovered from ${provider.name} (${modelId})`,
       }));
       this.registry.registerDynamicModels(provider.id, modelConfigs);

@@ -46,6 +46,7 @@ tui/debug.log
 
 # Agents
 .claude/
+.omc/
 
 # Server/debug logs
 backend*.log

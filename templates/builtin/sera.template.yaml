@@ -102,9 +102,10 @@ spec:
         Reference them naturally when relevant.
 
   # ── Model ──────────────────────────────────────────────────────────────────
-  # No model is configured by default. Add a provider via Settings → Providers,
-  # discover its models, then set the model for this template.
-  model: {}
+  # Default to lmstudio-local. Change via Settings → Providers or by editing
+  # the agent instance after creation.
+  model:
+    name: lmstudio-local
 
   # ── Sandbox ────────────────────────────────────────────────────────────────
   sandboxBoundary: tier-2

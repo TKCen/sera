@@ -438,6 +438,11 @@ export class LlmRouter {
       if (config.apiKeyEnvVar.startsWith('sera-secret:')) return undefined;
       return process.env[config.apiKeyEnvVar];
     }
+    // Local providers don't require auth — return placeholder so pi-mono
+    // includes an Authorization header (LM Studio accepts any value).
+    if (config.provider === 'lmstudio' || config.provider === 'ollama') {
+      return 'lm-studio';
+    }
     return undefined;
   }
 

@@ -126,8 +126,18 @@ export interface CircleManifest {
   connections?: CircleConnectionConfig[];
 }
 
-/** Full manifest + resolved project context content from GET /circles/:name */
+/** Full manifest + resolved project context content from GET /circles/:name.
+ *  DB-sourced circles return flat properties; YAML circles use the metadata wrapper. */
 export interface CircleDetails extends CircleManifest {
+  /** Flat DB properties (may not have metadata wrapper) */
+  id?: string;
+  name?: string;
+  displayName?: string;
+  description?: string;
+  constitution?: string;
+  members?: string[];
+  createdAt?: string;
+  updatedAt?: string;
   projectContext?: { path: string; autoLoad?: boolean; content?: string };
 }
 

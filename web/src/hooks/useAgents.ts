@@ -47,7 +47,7 @@ export function useAgentLogs(id: string) {
     queryKey: agentsKeys.logs(id),
     queryFn: () => agentsApi.getAgentLogs(id),
     enabled: id.length > 0,
-    refetchInterval: 3000,
+    refetchInterval: 15000,
   });
 }
 
@@ -205,7 +205,7 @@ export function usePermissionRequests(agentId?: string) {
   return useQuery({
     queryKey: agentsKeys.permissionRequests(agentId),
     queryFn: () => agentsApi.listPermissionRequests(agentId),
-    refetchInterval: 5000,
+    refetchInterval: 15000,
   });
 }
 

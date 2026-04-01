@@ -143,6 +143,20 @@ vi.mock('../circles/CircleRegistry.js', () => {
   };
 });
 
+vi.mock('../agents/HeartbeatService.js', () => {
+  return {
+    HeartbeatService: class {
+      setRegistry = vi.fn();
+      setIntercom = vi.fn();
+      registerHeartbeat = vi.fn().mockResolvedValue(undefined);
+      checkStaleInstances = vi.fn().mockResolvedValue(undefined);
+      getUnhealthyInstances = vi.fn().mockReturnValue([]);
+      removeHeartbeat = vi.fn();
+      stop = vi.fn();
+    },
+  };
+});
+
 vi.mock('../agents/Orchestrator.js', () => {
   return {
     Orchestrator: class {
@@ -175,6 +189,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setLlmRouter = vi.fn();
       setContextCompactionService = vi.fn();
       setCircleContextResolver = vi.fn();
+      setHeartbeatService = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
       watchAgentsDirectory = vi.fn();

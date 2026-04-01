@@ -18,11 +18,9 @@ import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { query } from '../lib/database.js';
 import { AuditService } from '../audit/AuditService.js';
 import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
+import type { HeartbeatService } from './HeartbeatService.js';
 
 const logger = new Logger('Orchestrator');
-
-// Story 3.6 — agents that miss heartbeats for this long are marked unresponsive
-const HEARTBEAT_STALE_MS = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 10);
 
 // Story 3.11 — hard ceiling on subagent recursion depth
 const SUBAGENT_MAX_DEPTH = parseInt(process.env.SUBAGENT_MAX_DEPTH ?? '5', 10);
@@ -51,25 +49,17 @@ export class Orchestrator {
   private contextCompactionService: ContextCompactionService | undefined;
   private registry: AgentRegistry | undefined;
   private llmRouter: LlmRouter | undefined;
+  private heartbeatService: HeartbeatService | undefined;
   private circleContextResolver: ((circleName: string) => string | undefined) | undefined;
-  private heartbeatInterval: NodeJS.Timeout | undefined;
   private cleanupInterval: NodeJS.Timeout | undefined;
   private ephemeralTTLs = new Map<string, { deadline: number; parentId?: string }>();
   private diskQuotaInterval: NodeJS.Timeout | undefined;
-
-  /** Last heartbeat timestamp per agent instance ID */
-  private heartbeats: Map<string, Date> = new Map();
 
   /** Active file watcher */
   private watcher: fs.FSWatcher | undefined;
   private agentsDir: string | undefined;
 
   constructor() {
-    // Story 3.6 — periodic heartbeat staleness check
-    this.heartbeatInterval = setInterval(() => {
-      this.checkStaleInstances().catch((err) => logger.error('Heartbeat check error:', err));
-    }, 30000);
-
     // Story 3.7 — periodic cleanup of stopped/error containers
     this.cleanupInterval = setInterval(() => {
       this.runCleanupJob().catch((err) => logger.error('Cleanup job error:', err));
@@ -90,6 +80,10 @@ export class Orchestrator {
 
   public setLlmRouter(router: LlmRouter): void {
     this.llmRouter = router;
+  }
+
+  public setHeartbeatService(service: HeartbeatService): void {
+    this.heartbeatService = service;
   }
 
   public setCircleContextResolver(resolver: (circleName: string) => string | undefined): void {
@@ -560,7 +554,9 @@ export class Orchestrator {
     });
 
     this.agents.delete(instanceId);
-    this.heartbeats.delete(instanceId);
+    if (this.heartbeatService) {
+      this.heartbeatService.removeHeartbeat(instanceId);
+    }
     this.publishLifecycleEvent('stopped', instanceId);
     logger.info(`Stopped agent instance: ${instanceId}`);
   }
@@ -579,7 +575,9 @@ export class Orchestrator {
       await this.registry.updateInstanceStatus(instanceId, 'stopped');
     }
     this.agents.delete(instanceId);
-    this.heartbeats.delete(instanceId);
+    if (this.heartbeatService) {
+      this.heartbeatService.removeHeartbeat(instanceId);
+    }
     this.publishLifecycleEvent('stopped', instanceId);
   }
 
@@ -627,40 +625,19 @@ export class Orchestrator {
     }
   }
 
-  // ── Story 3.6: Heartbeat ─────────────────────────────────────────────────
+  // ── Heartbeat Delegations ────────────────────────────────────────────────
 
   public async registerHeartbeat(instanceId: string): Promise<void> {
-    this.heartbeats.set(instanceId, new Date());
-    if (this.registry) {
-      await this.registry.updateLastHeartbeat(instanceId);
+    if (this.heartbeatService) {
+      await this.heartbeatService.registerHeartbeat(instanceId);
     }
   }
 
-  private async checkStaleInstances(): Promise<void> {
-    const now = new Date();
-    for (const [instanceId, lastHeartbeat] of this.heartbeats.entries()) {
-      if (now.getTime() - lastHeartbeat.getTime() > HEARTBEAT_STALE_MS) {
-        logger.warn(`Agent instance ${instanceId} has missed heartbeats — marking unresponsive`);
-        this.heartbeats.delete(instanceId);
-        if (this.registry) {
-          await this.registry.updateInstanceStatus(instanceId, 'unresponsive');
-        }
-        this.publishLifecycleEvent('unresponsive', instanceId);
-      }
+  public getUnhealthyInstances(timeoutMs?: number): { instanceId: string; lastSeen: Date }[] {
+    if (this.heartbeatService) {
+      return this.heartbeatService.getUnhealthyInstances(timeoutMs);
     }
-  }
-
-  public getUnhealthyInstances(
-    timeoutMs: number = HEARTBEAT_STALE_MS
-  ): { instanceId: string; lastSeen: Date }[] {
-    const now = new Date();
-    const unhealthy: { instanceId: string; lastSeen: Date }[] = [];
-    for (const [instanceId, lastHeartbeat] of this.heartbeats.entries()) {
-      if (now.getTime() - lastHeartbeat.getTime() > timeoutMs) {
-        unhealthy.push({ instanceId, lastSeen: lastHeartbeat });
-      }
-    }
-    return unhealthy;
+    return [];
   }
 
   // ── Story 3.12: Disk Quota ───────────────────────────────────────────────
@@ -741,20 +718,26 @@ export class Orchestrator {
         const agent = this.agents.get(instanceId);
         if (agent) agent.status = status as 'error' | 'stopped';
         await this.registry.updateInstanceStatus(instanceId, status);
-        this.heartbeats.delete(instanceId);
+        if (this.heartbeatService) {
+          this.heartbeatService.removeHeartbeat(instanceId);
+        }
         this.publishLifecycleEvent(status, instanceId, event.agentName);
       } else if (action === 'oom') {
         const agent = this.agents.get(instanceId);
         if (agent) agent.status = 'error';
         await this.registry.updateInstanceStatus(instanceId, 'error');
-        this.heartbeats.delete(instanceId);
+        if (this.heartbeatService) {
+          this.heartbeatService.removeHeartbeat(instanceId);
+        }
         logger.warn(`OOM kill: agent=${event.agentName} instance=${instanceId}`);
         this.publishLifecycleEvent('error', instanceId, event.agentName);
       } else if (action === 'stop') {
         const agent = this.agents.get(instanceId);
         if (agent) agent.status = 'stopped';
         await this.registry.updateInstanceStatus(instanceId, 'stopped');
-        this.heartbeats.delete(instanceId);
+        if (this.heartbeatService) {
+          this.heartbeatService.removeHeartbeat(instanceId);
+        }
       }
     });
 
@@ -853,7 +836,6 @@ export class Orchestrator {
   }
 
   public async stop(): Promise<void> {
-    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.diskQuotaInterval) clearInterval(this.diskQuotaInterval);
     if (this.watcher) {

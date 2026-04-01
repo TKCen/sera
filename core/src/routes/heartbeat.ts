@@ -11,7 +11,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { HeartbeatService } from '../agents/HeartbeatService.js';
 import type { IdentityService } from '../auth/IdentityService.js';
 import type { AuthService } from '../auth/auth-service.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
@@ -20,7 +20,7 @@ import { Logger } from '../lib/logger.js';
 const logger = new Logger('Heartbeat');
 
 export function createHeartbeatRouter(
-  orchestrator: Orchestrator,
+  heartbeatService: HeartbeatService,
   identityService: IdentityService,
   authService: AuthService
 ): Router {
@@ -42,7 +42,7 @@ export function createHeartbeatRouter(
       return;
     }
 
-    orchestrator.registerHeartbeat(id);
+    heartbeatService.registerHeartbeat(id);
     logger.debug(`Heartbeat received from ${id}`);
 
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -53,7 +53,7 @@ export function createHeartbeatRouter(
    * No auth required (internal admin API).
    */
   router.get('/health', (_req: Request, res: Response) => {
-    const unhealthy = orchestrator.getUnhealthyInstances();
+    const unhealthy = heartbeatService.getUnhealthyInstances();
     res.json({
       unhealthy: unhealthy.map((u) => ({
         instanceId: u.instanceId,

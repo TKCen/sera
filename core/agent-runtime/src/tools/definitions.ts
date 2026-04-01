@@ -156,4 +156,24 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'tool-search',
+      description:
+        'Search for additional tools by capability description. ' +
+        'Use this when you need a tool that is not in your current set. ' +
+        'Returns matching tool names and descriptions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Description of the capability you need (e.g., "schedule a task", "search the web").',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
 ];

@@ -63,6 +63,16 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
     }
   });
 
+  router.delete('/entries/:id', async (req, res) => {
+    try {
+      const deleted = await memoryManager.deleteEntry(req.params.id);
+      if (!deleted) return res.status(404).json({ error: 'Entry not found' });
+      res.status(204).end();
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.get('/graph', async (_req, res) => {
     try {
       // Build graph from Epic 8 scoped blocks instead of legacy Letta-style graph
@@ -455,6 +465,36 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
         }
       }
       res.json(backlinks);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** DELETE /api/memory/:agentId/blocks/:id — delete a block */
+  router.delete('/:agentId/blocks/:id', async (req, res) => {
+    try {
+      const { agentId, id } = req.params;
+      let deleted = await scopedStore.delete(agentId, id);
+      if (!deleted) {
+        deleted = await scopedStore.deleteArchive(agentId, id);
+      }
+
+      if (!deleted) {
+        res.status(404).json({ error: 'Block not found' });
+        return;
+      }
+
+      // Cleanup vector store
+      const namespace: MemoryNamespace =
+        agentId === 'global'
+          ? 'global'
+          : agentId.startsWith('circle:')
+            ? (agentId as MemoryNamespace)
+            : (`personal:${agentId}` as MemoryNamespace);
+
+      await vectorService.delete(id, namespace);
+
+      res.status(204).end();
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

@@ -151,10 +151,14 @@ export class SkillInjector {
 
     const totalInjection = (constitutionXml + skillsXml).trim();
 
-    // 7. Append to system prompt
-    const principlesMatch = systemPrompt.indexOf('## Guiding Principles');
+    // 7. Append to system prompt — insert after the Principles section.
+    // IdentityService uses `## Guiding Principles`; the Runtime fallback uses `Principles:`.
+    let principlesMatch = systemPrompt.indexOf('## Guiding Principles');
+    if (principlesMatch === -1) {
+      principlesMatch = systemPrompt.indexOf('Principles:');
+    }
     if (principlesMatch !== -1) {
-      const nextSectionMatch = systemPrompt.indexOf('\n## ', principlesMatch + 20);
+      const nextSectionMatch = systemPrompt.indexOf('\n## ', principlesMatch + 12);
       const insertIdx = nextSectionMatch !== -1 ? nextSectionMatch : systemPrompt.length;
 
       return (

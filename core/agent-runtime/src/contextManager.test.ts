@@ -82,6 +82,110 @@ describe('ContextManager', () => {
     });
   });
 
+  describe('getUtilization()', () => {
+    it('returns a ratio between 0 and 1 for normal messages', () => {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'Hello' },
+      ];
+      const util = mgr.getUtilization(messages);
+      expect(util).toBeGreaterThan(0);
+      expect(util).toBeLessThan(1);
+    });
+
+    it('returns higher utilization for more messages', () => {
+      const small: ChatMessage[] = [{ role: 'user', content: 'Hi' }];
+      const big: ChatMessage[] = [
+        { role: 'user', content: 'word '.repeat(5000) },
+        { role: 'assistant', content: 'word '.repeat(5000) },
+      ];
+      expect(mgr.getUtilization(big)).toBeGreaterThan(mgr.getUtilization(small));
+    });
+  });
+
+  describe('aggressiveCompact()', () => {
+    it('drops more messages than regular compact for the same input', () => {
+      // Use a small context window so that both compact (80% = 80 tokens)
+      // and aggressiveCompact (50% = 50 tokens) actually trigger compaction.
+      process.env['CONTEXT_WINDOW'] = '100';
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      const smallMgr = new ContextManager('gpt-4o-mini');
+      const makeMessages = (): ChatMessage[] => [
+        { role: 'system', content: 'System.' },
+        { role: 'user', content: 'Message 1 with many words to fill tokens.' },
+        { role: 'assistant', content: 'Response 1 with many words to fill tokens.' },
+        { role: 'user', content: 'Message 2 with many words to fill tokens.' },
+        { role: 'assistant', content: 'Response 2 with many words to fill tokens.' },
+        { role: 'user', content: 'Message 3 with many words to fill tokens.' },
+        { role: 'assistant', content: 'Response 3 with many words to fill tokens.' },
+      ];
+
+      const msgs1 = makeMessages();
+      const regular = smallMgr.compact(msgs1);
+
+      const msgs2 = makeMessages();
+      const aggressive = smallMgr.aggressiveCompact(msgs2);
+
+      expect(aggressive.droppedCount).toBeGreaterThanOrEqual(regular.droppedCount);
+      expect(aggressive.tokensAfter).toBeLessThanOrEqual(regular.tokensAfter);
+      smallMgr.free();
+      delete process.env['CONTEXT_WINDOW'];
+    });
+
+    it('always preserves system message', () => {
+      process.env['CONTEXT_WINDOW'] = '60';
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      const smallMgr = new ContextManager('gpt-4o-mini');
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'Message 1 with many words.' },
+        { role: 'assistant', content: 'Response 1 with many words.' },
+        { role: 'user', content: 'Message 2 with many words.' },
+      ];
+      smallMgr.aggressiveCompact(messages);
+      expect(messages[0]!.role).toBe('system');
+      expect(messages[0]!.content).toBe('You are a helpful assistant.');
+      smallMgr.free();
+      delete process.env['CONTEXT_WINDOW'];
+    });
+  });
+
+  describe('truncateAllToolResults()', () => {
+    it('truncates oversized tool messages', () => {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System.' },
+        { role: 'user', content: 'Run a tool.' },
+        { role: 'tool', content: 'word '.repeat(5000), tool_call_id: 'call_1' },
+      ];
+      const count = mgr.truncateAllToolResults(messages, 100);
+      expect(count).toBe(1);
+      expect(messages[2]!.content).toContain('[SERA: tool result retroactively truncated');
+      expect(mgr.countTokens(messages[2]!.content)).toBeLessThan(200);
+    });
+
+    it('leaves small tool messages unchanged', () => {
+      const shortContent = 'OK';
+      const messages: ChatMessage[] = [
+        { role: 'tool', content: shortContent, tool_call_id: 'call_1' },
+      ];
+      const count = mgr.truncateAllToolResults(messages, 100);
+      expect(count).toBe(0);
+      expect(messages[0]!.content).toBe(shortContent);
+    });
+
+    it('only truncates tool role messages', () => {
+      const longContent = 'word '.repeat(5000);
+      const messages: ChatMessage[] = [
+        { role: 'user', content: longContent },
+        { role: 'tool', content: longContent, tool_call_id: 'call_1' },
+      ];
+      const count = mgr.truncateAllToolResults(messages, 100);
+      expect(count).toBe(1);
+      // User message should be untouched
+      expect(messages[0]!.content).toBe(longContent);
+    });
+  });
+
   describe('compact() — sliding-window', () => {
     it('always preserves system message', () => {
       process.env['MAX_CONTEXT_TOKENS'] = '50';

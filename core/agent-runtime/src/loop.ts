@@ -6,12 +6,13 @@
  */
 
 import type { LLMClient, ChatMessage, ToolDefinition, LLMResponse } from './llmClient.js';
-import { BudgetExceededError, ProviderUnavailableError } from './llmClient.js';
+import { BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError } from './llmClient.js';
 import type { RuntimeToolExecutor } from './tools/index.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
+import { ToolLoopDetector } from './toolLoopDetector.js';
 import { log } from './logger.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -34,12 +35,21 @@ export interface TaskOutput {
   };
   /** Ordered list of thought events for Story 5.9. */
   thoughtStream: Array<{ step: string; content: string; iteration: number; timestamp: string }>;
-  exitReason: 'success' | 'max_iterations_exceeded' | 'budget_exceeded' | 'provider_unavailable' | 'error' | 'shutdown';
+  exitReason: 'success' | 'max_iterations_exceeded' | 'budget_exceeded' | 'provider_unavailable' | 'context_overflow' | 'error' | 'shutdown';
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_ITERATIONS = 10;
+const MAX_OVERFLOW_RETRIES = 3;
+const MAX_TIMEOUT_RETRIES = 2;
+const TIMEOUT_COMPACTION_THRESHOLD = 0.65;
+
+interface RetryState {
+  overflowCompactionAttempts: number;
+  timeoutCompactionAttempts: number;
+  toolResultTruncationAttempted: boolean;
+}
 
 // ── ReasoningLoop ─────────────────────────────────────────────────────────────
 
@@ -66,7 +76,7 @@ export class ReasoningLoop {
     this.centrifugo = centrifugo;
     this.manifest = manifest;
     this.toolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
-    this.systemPrompt = generateSystemPrompt(manifest, this.toolDefs);
+    this.systemPrompt = generateSystemPrompt(manifest);
     this.contextManager = new ContextManager(manifest.model.name);
   }
 
@@ -119,8 +129,16 @@ export class ReasoningLoop {
     await think('observe', `Received task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`, 0);
     await think('plan', `Planning approach. Available tools: ${toolNames}`, 0);
 
-    // Track last tool call to detect duplicate-call loops
-    let lastToolCallSignature: string | null = null;
+    // ── Tool loop detection (per-run) ──────────────────────────────────────
+    const loopDetector = new ToolLoopDetector();
+    let forceTextNext = false;
+
+    // ── Retry state machine (per-run, reset on each invocation) ───────────
+    const retryState: RetryState = {
+      overflowCompactionAttempts: 0,
+      timeoutCompactionAttempts: 0,
+      toolResultTruncationAttempted: false,
+    };
 
     try {
       let iteration = 0;
@@ -157,11 +175,74 @@ export class ReasoningLoop {
 
         log('debug', `Iteration ${iteration}/${MAX_ITERATIONS} — messages=${messages.length} approxTokens=${this.contextManager.countMessageTokens(messages)}`);
 
+        // ── LLM call with retry recovery ──────────────────────────────────
         let response: LLMResponse;
-        if (hasTools) {
-          response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature);
-        } else {
-          response = await this.llm.chat(messages, undefined, this.manifest.model.temperature);
+        try {
+          const useTools = hasTools && !forceTextNext;
+          forceTextNext = false; // reset after use
+          if (useTools) {
+            response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature);
+          } else {
+            response = await this.llm.chat(messages, undefined, this.manifest.model.temperature);
+          }
+        } catch (llmErr) {
+          // ── Context overflow recovery ────────────────────────────────────
+          if (llmErr instanceof ContextOverflowError) {
+            if (retryState.overflowCompactionAttempts < MAX_OVERFLOW_RETRIES) {
+              retryState.overflowCompactionAttempts++;
+              const attempt = retryState.overflowCompactionAttempts;
+
+              const compaction = this.contextManager.aggressiveCompact(messages);
+              await think('reflect', `Context overflow detected (attempt ${attempt}/${MAX_OVERFLOW_RETRIES}) — ${compaction.reflectMessage}`, iteration, { anomaly: true });
+
+              // On 2nd+ attempt, try one-shot tool result truncation
+              if (attempt >= 2 && !retryState.toolResultTruncationAttempted) {
+                retryState.toolResultTruncationAttempted = true;
+                const truncated = this.contextManager.truncateAllToolResults(messages);
+                if (truncated > 0) {
+                  await think('reflect', `Retroactively truncated ${truncated} tool result(s) for overflow recovery`, iteration, { anomaly: true });
+                }
+              }
+
+              // Retry — does NOT increment iteration (not forward progress)
+              iteration--;
+              continue;
+            }
+
+            // All overflow retries exhausted
+            log('error', `Context overflow: all ${MAX_OVERFLOW_RETRIES} compaction retries exhausted`);
+            await think('reflect', `Context overflow unrecoverable after ${MAX_OVERFLOW_RETRIES} compaction attempts`, iteration, { anomaly: true });
+            return {
+              taskId,
+              result: null,
+              error: `Context overflow after ${MAX_OVERFLOW_RETRIES} compaction attempts: ${llmErr.message}`,
+              usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
+              thoughtStream,
+              exitReason: 'context_overflow',
+            };
+          }
+
+          // ── Timeout recovery ────────────────────────────────────────────
+          if (llmErr instanceof LLMTimeoutError) {
+            const utilization = this.contextManager.getUtilization(messages);
+            if (utilization > TIMEOUT_COMPACTION_THRESHOLD && retryState.timeoutCompactionAttempts < MAX_TIMEOUT_RETRIES) {
+              retryState.timeoutCompactionAttempts++;
+              const attempt = retryState.timeoutCompactionAttempts;
+
+              const compaction = this.contextManager.aggressiveCompact(messages);
+              await think('reflect', `LLM timeout with ${(utilization * 100).toFixed(0)}% context utilization (attempt ${attempt}/${MAX_TIMEOUT_RETRIES}) — ${compaction.reflectMessage}`, iteration, { anomaly: true });
+
+              // Retry — does NOT increment iteration
+              iteration--;
+              continue;
+            }
+
+            // Low utilization or retries exhausted — propagate to outer catch
+            throw llmErr;
+          }
+
+          // All other errors — propagate to outer catch
+          throw llmErr;
         }
 
         // Accumulate usage
@@ -179,24 +260,27 @@ export class ReasoningLoop {
         if (response.toolCalls && response.toolCalls.length > 0) {
           // ── Tool Call Phase ────────────────────────────────────────────────
 
-          // Duplicate-call loop guard
-          const sig = JSON.stringify(response.toolCalls.map((tc) => ({
-            name: tc.function.name,
-            args: tc.function.arguments,
-          })));
-          if (sig === lastToolCallSignature) {
-            log('warn', `Duplicate tool call detected — breaking loop to prevent infinite repetition`);
-            await think('reflect', 'Detected duplicate tool call — aborting loop to prevent infinite repetition', iteration);
-            return {
-              taskId,
-              result: null,
-              error: 'duplicate_tool_call',
-              usage: { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens },
-              thoughtStream,
-              exitReason: 'error',
-            };
+          // Semantic loop detection — feed each tool call into the detector
+          for (const tc of response.toolCalls) {
+            let parsedArgs: Record<string, unknown> = {};
+            try { parsedArgs = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { /* best effort for detection */ }
+
+            const verdict = loopDetector.record(tc.function.name, parsedArgs);
+            if (verdict.detected) {
+              await think('reflect', `Loop detected (${verdict.kind}): ${verdict.description}`, iteration, { anomaly: true });
+
+              if (loopDetector.shouldForceTextResponse()) {
+                forceTextNext = true;
+                await think('reflect', 'Multiple loop warnings issued — forcing text-only response on next iteration', iteration, { anomaly: true });
+              } else {
+                messages.push({
+                  role: 'system',
+                  content: `WARNING: Tool loop detected (${verdict.kind}): ${verdict.description}`,
+                });
+              }
+              loopDetector.acknowledgeWarning();
+            }
           }
-          lastToolCallSignature = sig;
 
           // Emit act thoughts for each tool call (sanitized args)
           for (const tc of response.toolCalls) {
@@ -220,12 +304,17 @@ export class ReasoningLoop {
           const toolResults = await this.tools.executeToolCalls(response.toolCalls);
           for (const result of toolResults) {
             // Pre-truncate tool output before adding to history
-            result.content = this.contextManager.truncateToolOutput(result.content);
-            messages.push(result);
+            result.message.content = this.contextManager.truncateToolOutput(result.message.content);
+            messages.push(result.message);
 
-            const preview = result.content.length > 200
-              ? result.content.substring(0, 200) + '...'
-              : result.content;
+            // Emit reflect thought for argument repair
+            if (result.argRepaired) {
+              await think('reflect', `Repaired malformed tool arguments for ${result.toolName} (strategy: ${result.repairStrategy})`, iteration, { anomaly: true });
+            }
+
+            const preview = result.message.content.length > 200
+              ? result.message.content.substring(0, 200) + '...'
+              : result.message.content;
             await think('reflect', `Tool result: ${preview}`, iteration);
           }
 
@@ -278,6 +367,7 @@ export class ReasoningLoop {
       let exitReason: TaskOutput['exitReason'] = 'error';
       if (err instanceof BudgetExceededError) exitReason = 'budget_exceeded';
       else if (err instanceof ProviderUnavailableError) exitReason = 'provider_unavailable';
+      else if (err instanceof ContextOverflowError) exitReason = 'context_overflow';
 
       return {
         taskId,

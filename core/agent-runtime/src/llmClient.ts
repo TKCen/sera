@@ -24,6 +24,29 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+export class ContextOverflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContextOverflowError';
+  }
+}
+
+export class LLMTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LLMTimeoutError';
+  }
+}
+
+/** Patterns that indicate a context window overflow in LLM error responses. */
+const OVERFLOW_PATTERNS = [
+  'context_length_exceeded',
+  'maximum context length',
+  'prompt is too long',
+  'context length',
+  'token limit',
+];
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface ToolCallFunction {
@@ -169,9 +192,16 @@ export class LLMClient {
       return { content, reasoning, toolCalls, usage };
     } catch (err) {
       if (err instanceof AxiosError) {
+        // Timeout detection — must come first; timeout errors may lack a response
+        if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+          throw new LLMTimeoutError(`LLM request timed out: ${err.message}`);
+        }
+
         const status = err.response?.status;
         const body = err.response?.data as Record<string, unknown> | undefined;
-        const errorMsg = (body?.['error'] as Record<string, unknown>)?.['message'] as string | undefined;
+        const errorObj = body?.['error'] as Record<string, unknown> | undefined;
+        const errorMsg = errorObj?.['message'] as string | undefined;
+        const errorCode = errorObj?.['code'] as string | undefined;
 
         log('error', `LLM proxy error: ${status} — ${JSON.stringify(body)}`);
 
@@ -181,6 +211,14 @@ export class LLMClient {
 
         if (status === 503) {
           throw new ProviderUnavailableError(`LLM provider unavailable (circuit open): ${errorMsg ?? err.message}`);
+        }
+
+        // Context overflow detection — HTTP 400 with overflow-related error text
+        if (status === 400) {
+          const combined = `${errorCode ?? ''} ${errorMsg ?? ''}`.toLowerCase();
+          if (OVERFLOW_PATTERNS.some((p) => combined.includes(p))) {
+            throw new ContextOverflowError(`Context window overflow: ${errorMsg ?? errorCode ?? 'context too long'}`);
+          }
         }
 
         throw new Error(`LLM proxy returned ${status}: ${errorMsg ?? err.message}`);

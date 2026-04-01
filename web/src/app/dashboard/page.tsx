@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useQuery } from '@tanstack/react-query';
@@ -116,7 +117,7 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
 }
 
 function RecentSessions() {
-  const { data: sessions, isLoading } = useSessions();
+  const { data: sessions, isLoading, error } = useSessions();
   const recent = (sessions ?? [])
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 5);
@@ -132,6 +133,16 @@ function RecentSessions() {
             <Skeleton key={i} className="h-10 w-full" />
           ))}
         </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="sera-card-static p-4">
+        <Alert variant="error" title="Failed to load recent sessions">
+          {error.message}
+        </Alert>
       </section>
     );
   }
@@ -192,10 +203,10 @@ function RecentSessions() {
 }
 
 export default function DashboardPage() {
-  const { data: agents, isLoading: agentsLoading } = useAgents();
-  const { data: health, isLoading: healthLoading } = useHealthDetail();
-  const { data: circles, isLoading: circlesLoading } = useCircles();
-  const { data: schedules, isLoading: schedulesLoading } = useSchedules({});
+  const { data: agents, isLoading: agentsLoading, error: agentsError } = useAgents();
+  const { data: health, isLoading: healthLoading, error: healthError } = useHealthDetail();
+  const { data: circles, isLoading: circlesLoading, error: circlesError } = useCircles();
+  const { data: schedules, isLoading: schedulesLoading, error: schedulesError } = useSchedules({});
 
   const running = agents?.filter((a) => a.status === 'running').length ?? 0;
   const errored = agents?.filter((a) => a.status === 'error').length ?? 0;
@@ -209,41 +220,71 @@ export default function DashboardPage() {
           <h1 className="sera-page-title">Dashboard</h1>
           <p className="text-sm text-sera-text-muted mt-1">SERA platform overview</p>
         </div>
-        {!healthLoading && health && <HealthBanner status={health.status} />}
+        {!healthLoading && health && !healthError && <HealthBanner status={health.status} />}
         {healthLoading && <Skeleton className="h-8 w-48" />}
+        {healthError && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-sera-error/20 bg-sera-error/10 text-sera-error text-xs">
+            <XCircle size={14} aria-hidden="true" /> Health status unavailable
+          </div>
+        )}
       </div>
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          label="Total agents"
-          value={totalAgents}
-          icon={Bot}
-          to="/agents"
-          isLoading={agentsLoading}
-        />
-        <StatCard
-          label="Running"
-          value={running}
-          icon={Activity}
-          to="/agents"
-          accent="text-sera-success"
-          isLoading={agentsLoading}
-        />
-        <StatCard
-          label="Circles"
-          value={circles?.length ?? 0}
-          icon={Circle}
-          to="/circles"
-          isLoading={circlesLoading}
-        />
-        <StatCard
-          label="Active schedules"
-          value={activeSchedules}
-          icon={Clock}
-          to="/schedules"
-          isLoading={schedulesLoading}
-        />
+        {agentsError ? (
+          <>
+            <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
+              Failed to load agents
+            </div>
+            <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
+              Failed to load status
+            </div>
+          </>
+        ) : (
+          <>
+            <StatCard
+              label="Total agents"
+              value={totalAgents}
+              icon={Bot}
+              to="/agents"
+              isLoading={agentsLoading}
+            />
+            <StatCard
+              label="Running"
+              value={running}
+              icon={Activity}
+              to="/agents"
+              accent="text-sera-success"
+              isLoading={agentsLoading}
+            />
+          </>
+        )}
+        {circlesError ? (
+          <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
+            Failed to load circles
+          </div>
+        ) : (
+          <StatCard
+            label="Circles"
+            value={circles?.length ?? 0}
+            icon={Circle}
+            to="/circles"
+            isLoading={circlesLoading}
+          />
+        )}
+        {schedulesError ? (
+          <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
+            Failed to load schedules
+          </div>
+        ) : (
+          <StatCard
+            label="Active schedules"
+            value={activeSchedules}
+            icon={Clock}
+            to="/schedules"
+            isLoading={schedulesLoading}
+          />
+        )}
       </div>
 
       {/* Agent status breakdown */}
@@ -267,6 +308,10 @@ export default function DashboardPage() {
               <Skeleton key={i} className="h-10 w-full" />
             ))}
           </div>
+        ) : agentsError ? (
+          <Alert variant="error" title="Failed to load agents">
+            {agentsError.message}
+          </Alert>
         ) : agents && agents.length > 0 ? (
           <ul className="space-y-1.5">
             {agents.map((agent) => (

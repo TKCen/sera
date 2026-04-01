@@ -264,8 +264,8 @@ describe('ContextManager', () => {
     });
   });
 
-  describe('compact() — sliding-window', () => {
-    it('always preserves system message', () => {
+  describe('compact() — summary-based', () => {
+    it('always preserves system messages', () => {
       process.env['MAX_CONTEXT_TOKENS'] = '50';
       const smallMgr = new ContextManager('gpt-4o-mini');
       const systemContent = 'You are a helpful assistant.';
@@ -277,12 +277,101 @@ describe('ContextManager', () => {
         { role: 'assistant', content: 'Response 2 — this should push us over the limit for sure.' },
       ];
 
-      const result = smallMgr.compact(messages);
-      expect(messages[0]!.content).toBe(systemContent);
+      smallMgr.compact(messages);
       expect(messages[0]!.role).toBe('system');
-      expect(result.droppedCount).toBeGreaterThan(0);
+      expect(messages[0]!.content).toBe(systemContent);
       smallMgr.free();
       delete process.env['MAX_CONTEXT_TOKENS'];
+    });
+
+    it('injects continuation message with summary after system prompt', () => {
+      process.env['MAX_CONTEXT_TOKENS'] = '50';
+      process.env['CONTEXT_WINDOW'] = '50';
+      const smallMgr = new ContextManager('gpt-4o-mini');
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System prompt.' },
+        { role: 'user', content: 'I need to fix a bug in core/src/index.ts' },
+        { role: 'assistant', content: 'I will look into it. What is the issue?' },
+        { role: 'user', content: 'It is a todo: fix the memory leak in agent-runtime/src/loop.ts' },
+        { role: 'assistant', content: 'Understood.' },
+        { role: 'user', content: 'Actually, let us check package.json first.' },
+        { role: 'assistant', content: 'Ok.' },
+      ];
+
+      smallMgr.compact(messages);
+
+      // messages[0] is system prompt
+      // messages[1] is continuation message
+      expect(messages[1]!.role).toBe('system');
+      expect(messages[1]!.content).toContain('This session is being continued');
+      expect(messages[1]!.content).toContain('Summary:');
+
+      // Check summary content
+      const summary = messages[1]!.content;
+      expect(summary).toContain('Scope:');
+      expect(summary).toContain('Tools mentioned:');
+      expect(summary).toContain('Recent user requests:');
+      expect(summary).toContain('Pending work:');
+      expect(summary).toContain('Key files:');
+      expect(summary).toContain('Key timeline:');
+
+      // Verify specific extractions
+      expect(summary).toContain('core/src/index.ts');
+      expect(summary).toContain('agent-runtime/src/loop.ts');
+      expect(summary).toContain('package.json');
+      expect(summary).toContain('todo: fix the memory leak');
+
+      smallMgr.free();
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      delete process.env['CONTEXT_WINDOW'];
+    });
+
+    it('preserves N most recent messages verbatim', () => {
+      process.env['MAX_CONTEXT_TOKENS'] = '1000';
+      process.env['CONTEXT_WINDOW'] = '1000';
+      process.env['PRESERVE_RECENT_MESSAGES'] = '2';
+      const smallMgr = new ContextManager('gpt-4o-mini');
+
+      const m1: ChatMessage = { role: 'user', content: 'Msg 1' };
+      const m2: ChatMessage = { role: 'assistant', content: 'Msg 2' };
+      const m3: ChatMessage = { role: 'user', content: 'Msg 3' };
+      const m4: ChatMessage = { role: 'assistant', content: 'Msg 4' };
+
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System' },
+        m1, m2, m3, m4
+      ];
+
+      // We want to drop exactly 2 messages (m1 and m2)
+      // m1, m2 are dropped. m3, m4 are kept because they are the last 2.
+
+      // Total tokens for m3, m4 is roughly 20. Total with system prompt is roughly 30.
+      // Set highWaterMark low enough to trigger drop but high enough to keep m3, m4.
+      (smallMgr as any).highWaterMark = 100;
+
+      // Mock countMessageTokens to force it to look like we are over limit when all are present,
+      // but under when m3, m4 are present.
+      const realCount = smallMgr.countMessageTokens;
+      smallMgr.countMessageTokens = function(msgs) {
+        if (msgs.length === 5) return 200; // All 5
+        if (msgs.length === 4 && msgs.some(m => m.content.includes('Summary:'))) return 50; // System + Summary + m3 + m4
+        return realCount.call(this, msgs);
+      };
+
+      smallMgr.compact(messages);
+
+      // System, Continuation, m3, m4
+      expect(messages.length).toBe(4);
+      expect(messages[0]!.role).toBe('system');
+      expect(messages[1]!.role).toBe('system');
+      expect(messages[1]!.content).toContain('Summary:');
+      expect(messages[2]).toEqual(m3);
+      expect(messages[3]).toEqual(m4);
+
+      smallMgr.free();
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      delete process.env['CONTEXT_WINDOW'];
+      delete process.env['PRESERVE_RECENT_MESSAGES'];
     });
 
     it('returns compaction stats', () => {

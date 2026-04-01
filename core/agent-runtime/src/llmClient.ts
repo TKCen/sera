@@ -7,6 +7,7 @@
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { log } from './logger.js';
+import { type TokenUsage } from './usage.js';
 
 // ── Error Types ───────────────────────────────────────────────────────────────
 
@@ -74,6 +75,7 @@ export interface ChatMessage {
   content: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  usage?: TokenUsage;
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';
@@ -83,13 +85,7 @@ export interface LLMResponse {
   /** Chain-of-thought text, e.g. Qwen / DeepSeek reasoning_content. */
   reasoning?: string;
   toolCalls?: ToolCall[];
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    cacheCreationTokens: number;
-    cacheReadTokens: number;
-    totalTokens: number;
-  };
+  usage?: TokenUsage;
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -192,11 +188,10 @@ export class LLMClient {
       const rawUsage = data['usage'] as Record<string, number> | undefined;
       const usage = rawUsage
         ? {
-            promptTokens: rawUsage['prompt_tokens'] ?? 0,
-            completionTokens: rawUsage['completion_tokens'] ?? 0,
-            cacheCreationTokens: rawUsage['cache_creation_input_tokens'] ?? 0,
-            cacheReadTokens: rawUsage['cache_read_input_tokens'] ?? 0,
-            totalTokens: rawUsage['total_tokens'] ?? 0,
+            inputTokens: rawUsage['prompt_tokens'] ?? 0,
+            outputTokens: rawUsage['completion_tokens'] ?? 0,
+            cacheCreationInputTokens: rawUsage['cache_creation_input_tokens'] ?? 0,
+            cacheReadInputTokens: rawUsage['cache_read_input_tokens'] ?? 0,
           }
         : undefined;
 

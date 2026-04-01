@@ -67,6 +67,8 @@ export interface ChatCompletionRequest {
 export interface ChatCompletionUsage {
   prompt_tokens: number;
   completion_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
   total_tokens: number;
 }
 
@@ -258,6 +260,8 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
     usage: {
       prompt_tokens: msg.usage.input,
       completion_tokens: msg.usage.output,
+      cache_creation_input_tokens: msg.usage.cacheWrite,
+      cache_read_input_tokens: msg.usage.cacheRead,
       total_tokens: msg.usage.totalTokens,
     },
   };

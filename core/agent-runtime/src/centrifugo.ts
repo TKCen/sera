@@ -6,6 +6,7 @@
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { Centrifuge } from 'centrifuge';
 import { log } from './logger.js';
+import { type TokenUsage } from './usage.js';
 
 export interface IntercomMessage {
   id: string;
@@ -45,6 +46,13 @@ export interface StreamToken {
   token: string;
   done: boolean;
   messageId: string;
+}
+
+export interface UsageEvent {
+  agentId: string;
+  usage: TokenUsage;
+  costUsd: number;
+  timestamp: string;
 }
 
 // ── Publisher ─────────────────────────────────────────────────────────────────
@@ -120,6 +128,20 @@ export class CentrifugoPublisher {
     const channel = `tokens:${this.agentId}`;
     const data: StreamToken = { token, done, messageId };
     await this.publish(channel, data);
+  }
+
+  async publishUsage(
+    usage: TokenUsage,
+    costUsd: number,
+  ): Promise<void> {
+    const channel = `usage:${this.agentId}`;
+    const event: UsageEvent = {
+      agentId: this.agentId,
+      usage,
+      costUsd,
+      timestamp: new Date().toISOString(),
+    };
+    await this.publish(channel, event);
   }
 
   private toCanonicalStep(step: ThoughtType | InternalStepType): ThoughtType {

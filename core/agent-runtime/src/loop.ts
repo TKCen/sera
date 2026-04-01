@@ -14,6 +14,7 @@ import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
 import { log } from './logger.js';
+import { UsageTracker, type TokenUsage } from './usage.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -28,11 +29,7 @@ export interface TaskOutput {
   taskId: string;
   result: string | null;
   error?: string;
-  usage: {
-    promptTokens: number;
-    completionTokens: number;
-    cacheCreationTokens: number;
-    cacheReadTokens: number;
+  usage: TokenUsage & {
     totalTokens: number;
     turns: number;
   };
@@ -105,19 +102,12 @@ export class ReasoningLoop {
     const thoughtStream: TaskOutput['thoughtStream'] = [];
 
     // ── Usage tracking with cache awareness (#547) ────────────────────────
-    let totalPromptTokens = 0;
-    let totalCompletionTokens = 0;
-    let totalCacheCreationTokens = 0;
-    let totalCacheReadTokens = 0;
-    let turnCount = 0;
+    const usageTracker = UsageTracker.fromMessages(history);
 
     const buildUsage = () => ({
-      promptTokens: totalPromptTokens,
-      completionTokens: totalCompletionTokens,
-      cacheCreationTokens: totalCacheCreationTokens,
-      cacheReadTokens: totalCacheReadTokens,
-      totalTokens: totalPromptTokens + totalCompletionTokens,
-      turns: turnCount,
+      ...usageTracker.cumulativeUsage(),
+      totalTokens: usageTracker.totalTokens(),
+      turns: usageTracker.turns(),
     });
 
     // Helper to emit and record a thought
@@ -283,12 +273,14 @@ export class ReasoningLoop {
 
         // Accumulate usage (including cache tokens)
         if (response.usage) {
-          totalPromptTokens += response.usage.promptTokens;
-          totalCompletionTokens += response.usage.completionTokens;
-          totalCacheCreationTokens += response.usage.cacheCreationTokens;
-          totalCacheReadTokens += response.usage.cacheReadTokens;
-          turnCount++;
-          log('debug', `Iteration ${iteration} usage: prompt=${response.usage.promptTokens} completion=${response.usage.completionTokens} cacheRead=${response.usage.cacheReadTokens} turn=${turnCount}`);
+          usageTracker.record(response.usage);
+          const cumulative = usageTracker.cumulativeUsage();
+          const costUsd = usageTracker.estimatedCostUsd(this.manifest.model.name);
+
+          // Publish real-time usage to dashboard
+          await this.centrifugo.publishUsage(cumulative, costUsd);
+
+          log('debug', `Iteration ${iteration} usage: input=${response.usage.inputTokens} output=${response.usage.outputTokens} cacheRead=${response.usage.cacheReadInputTokens} turn=${usageTracker.turns()}`);
         }
 
         // Emit chain-of-thought reasoning if present (e.g. Qwen / DeepSeek)
@@ -332,11 +324,12 @@ export class ReasoningLoop {
             });
           }
 
-          // Add assistant turn with tool_calls
+          // Add assistant turn with tool_calls and usage
           messages.push({
             role: 'assistant',
             content: response.content || '',
             tool_calls: response.toolCalls,
+            usage: response.usage,
           });
 
           // Execute tools and add results

@@ -52,6 +52,11 @@ export class ChannelNamespace {
     return `tokens:${agentId}`;
   }
 
+  /** Agent usage and cost channel. */
+  static usage(agentId: string): string {
+    return `usage:${agentId}`;
+  }
+
   /**
    * Bridge channel for cross-instance communication.
    * bridge:dm:{circleA}:{circleB}:{agentA}:{agentB}
@@ -100,6 +105,10 @@ export class ChannelNamespace {
 
       case 'tokens':
         // tokens:{agentId}
+        return parts.length === 2 ? prefix : null;
+
+      case 'usage':
+        // usage:{agentId}
         return parts.length === 2 ? prefix : null;
 
       case 'agent':

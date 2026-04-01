@@ -13,7 +13,8 @@ export type IntercomMessageType =
   | 'task'
   | 'status'
   | 'approval-request'
-  | 'thought';
+  | 'thought'
+  | 'usage';
 
 // ── Thought Step Types ──────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ export const CHANNEL_PREFIXES = [
   'system',
   'bridge',
   'federation',
+  'usage',
 ] as const;
 
 export type ChannelPrefix = (typeof CHANNEL_PREFIXES)[number];

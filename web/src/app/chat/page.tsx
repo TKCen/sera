@@ -45,6 +45,7 @@ interface TokenPayload {
   token: string;
   done: boolean;
   messageId?: string;
+  error?: string;
 }
 
 interface ThoughtPayload {
@@ -163,7 +164,7 @@ function ChatPageContent() {
 
     const sub = centrifugoClient.newSubscription(channel);
     sub.on('publication', (ctx: PublicationContext) => {
-      const { token, done, messageId } = ctx.data as TokenPayload;
+      const { token, done, messageId, error } = ctx.data as TokenPayload;
 
       // Ignore tokens from a previous message's stream
       if (messageId != null && messageIdRef.current != null && messageId !== messageIdRef.current) {
@@ -175,11 +176,22 @@ function ChatPageContent() {
         const idx = prev.findIndex((m) => m.id === streamingMsgId.current);
         if (idx === -1) return prev;
         const updated = [...prev];
-        updated[idx] = {
-          ...updated[idx]!,
-          content: updated[idx]!.content + token,
-          streaming: !done,
-        };
+
+        if (error) {
+          // Surface LLM errors as a visible error message (#553)
+          updated[idx] = {
+            ...updated[idx]!,
+            content: `**Error:** ${error}`,
+            streaming: false,
+          };
+        } else {
+          updated[idx] = {
+            ...updated[idx]!,
+            content: updated[idx]!.content + token,
+            streaming: !done,
+          };
+        }
+
         return updated;
       });
 

@@ -45,6 +45,7 @@ export interface StreamToken {
   token: string;
   done: boolean;
   messageId: string;
+  error?: string;
 }
 
 // ── Publisher ─────────────────────────────────────────────────────────────────
@@ -119,6 +120,16 @@ export class CentrifugoPublisher {
   ): Promise<void> {
     const channel = `tokens:${this.agentId}`;
     const data: StreamToken = { token, done, messageId };
+    await this.publish(channel, data);
+  }
+
+  /** Publish an error completion signal so the web UI can stop the spinner. */
+  async publishStreamError(
+    messageId: string,
+    errorMessage: string,
+  ): Promise<void> {
+    const channel = `tokens:${this.agentId}`;
+    const data: StreamToken = { token: '', done: true, messageId, error: errorMessage };
     await this.publish(channel, data);
   }
 

@@ -44,7 +44,7 @@ export function useDynamicProviderStatuses() {
   return useQuery({
     queryKey: providersKeys.dynamicProviderStatuses,
     queryFn: getDynamicProviderStatuses,
-    refetchInterval: 10000, // Refresh statuses every 10s
+    refetchInterval: 15000, // Refresh statuses every 15s
   });
 }
 

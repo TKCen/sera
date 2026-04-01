@@ -15,8 +15,6 @@ import DashboardPage from '@/app/dashboard/page';
 import ChatPage from '@/app/chat/page';
 import AgentsPage from '@/app/agents/page';
 import AgentDetailPage from '@/app/agents/_id/page';
-import AgentEditPage from '@/app/agents/_id/edit/page';
-import AgentNewPage from '@/app/agents/new/page';
 import CirclesPage from '@/app/circles/page';
 import CircleDetailPage from '@/app/circles/_id/page';
 import InsightsPage from '@/app/insights/page';
@@ -62,9 +60,7 @@ createRoot(el).render(
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="templates" element={<TemplatesPage />} />
-                <Route path="agents/new" element={<AgentNewPage />} />
                 <Route path="agents/:id" element={<AgentDetailPage />} />
-                <Route path="agents/:id/edit" element={<AgentEditPage />} />
                 <Route path="agents/:id/memory-graph" element={<AgentMemoryGraphPage />} />
                 <Route path="circles" element={<CirclesPage />} />
                 <Route path="circles/:id" element={<CircleDetailPage />} />

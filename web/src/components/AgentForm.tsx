@@ -50,9 +50,17 @@ interface AgentFormProps {
   mode?: 'create' | 'edit';
   instanceId?: string;
   initialValues?: AgentFormInitialValues;
+  onSuccess?: (id: string) => void;
+  onCancel?: () => void;
 }
 
-export function AgentForm({ mode = 'create', instanceId, initialValues }: AgentFormProps) {
+export function AgentForm({
+  mode = 'create',
+  instanceId,
+  initialValues,
+  onSuccess,
+  onCancel,
+}: AgentFormProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { data: circles = [] } = useCircles();
@@ -228,9 +236,13 @@ export function AgentForm({ mode = 'create', instanceId, initialValues }: AgentF
           },
         });
         toast.success(`Agent "${name}" updated`);
-        void navigate(`/agents/${instanceId}`);
+        if (onSuccess) {
+          onSuccess(instanceId);
+        } else {
+          void navigate(`/agents/${instanceId}`);
+        }
       } else {
-        await createAgent.mutateAsync({
+        const newAgent = await createAgent.mutateAsync({
           templateRef: selectedTemplate,
           name,
           displayName: displayName || undefined,
@@ -240,7 +252,11 @@ export function AgentForm({ mode = 'create', instanceId, initialValues }: AgentF
           overrides,
         });
         toast.success(`Agent "${name}" created`);
-        void navigate('/agents');
+        if (onSuccess) {
+          onSuccess(newAgent.id);
+        } else {
+          void navigate(`/agents/${newAgent.id}`);
+        }
       }
     } catch (err) {
       toast.error(
@@ -545,7 +561,11 @@ export function AgentForm({ mode = 'create', instanceId, initialValues }: AgentF
               ? 'Save Changes'
               : 'Create Agent'}
         </Button>
-        <Button type="button" variant="ghost" onClick={() => navigate(-1)}>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => (onCancel ? onCancel() : navigate(-1))}
+        >
           Cancel
         </Button>
       </div>

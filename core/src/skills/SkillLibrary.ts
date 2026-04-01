@@ -133,7 +133,7 @@ export class SkillLibrary {
       interval: 100,
     });
 
-    this.watcher.on('all', async (event, filePath) => {
+    this.watcher.on('all', async (event: string, filePath: string) => {
       if (event !== 'add' && event !== 'change') return;
 
       const ext = path.extname(filePath);
@@ -196,10 +196,10 @@ export class SkillLibrary {
       const files = await Promise.all(
         entries.map(async (entry) => {
           const res = path.resolve(dir, entry.name);
-          return entry.isDirectory() ? this.recursiveScan(res, ext) : res;
+          return entry.isDirectory() ? this.recursiveScan(res, ext) : [res];
         })
       );
-      return Array.prototype.concat(...files).filter((f: string) => f.endsWith(ext));
+      return (files.flat() as string[]).filter((f: string) => f.endsWith(ext));
     } catch {
       return [];
     }
@@ -343,7 +343,7 @@ export class SkillLibrary {
     const { rows } = await this.pool.query(
       'SELECT name, version, description, triggers, category, tags, max_tokens, source FROM skills ORDER BY name, version DESC'
     );
-    return rows.map((row) => ({
+    return rows.map((row: any) => ({
       name: row.name,
       version: row.version,
       description: row.description,

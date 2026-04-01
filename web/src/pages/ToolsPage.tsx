@@ -82,7 +82,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
           </button>
           {expanded && (
             <div className="mt-1.5 space-y-1 pl-3 border-l border-sera-border/50">
-              {tool.parameters.map((p) => (
+              {tool.parameters.map((p: any) => (
                 <div key={p.name} className="text-[10px]">
                   <span className="font-mono text-sera-accent">{p.name}</span>
                   <span className="text-sera-text-dim ml-1">({p.type})</span>
@@ -101,7 +101,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
       {tool.usedBy && tool.usedBy.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap mt-1">
           <Bot size={10} className="text-sera-text-dim flex-shrink-0" />
-          {tool.usedBy.map((agent) => (
+          {tool.usedBy.map((agent: string) => (
             <span
               key={agent}
               className="text-[10px] px-1.5 py-0.5 rounded bg-sera-surface-hover text-sera-text-muted"
@@ -158,7 +158,7 @@ function SkillCard({
       {/* Tags */}
       {skill.tags && skill.tags.length > 0 && (
         <div className="flex items-center gap-1 flex-wrap">
-          {skill.tags.map((tag) => (
+          {skill.tags.map((tag: string) => (
             <span
               key={tag}
               className="text-[9px] px-1.5 py-0.5 rounded bg-sera-accent/10 text-sera-accent"
@@ -173,7 +173,7 @@ function SkillCard({
       {skill.triggers && skill.triggers.length > 0 && (
         <div className="flex items-center gap-1 flex-wrap text-[10px] text-sera-text-dim">
           <Zap size={9} className="flex-shrink-0" />
-          {skill.triggers.map((t) => (
+          {skill.triggers.map((t: string) => (
             <code key={t} className="px-1 py-0.5 rounded bg-sera-bg text-sera-text-muted">
               {t}
             </code>
@@ -257,13 +257,16 @@ export default function ToolsPage() {
 
   // Stats
   const builtinCount = useMemo(
-    () => (tools ?? []).filter((t) => t.source === 'builtin').length,
+    () => (tools ?? []).filter((t: ToolInfo) => t.source === 'builtin').length,
     [tools]
   );
-  const mcpCount = useMemo(() => (tools ?? []).filter((t) => t.source === 'mcp').length, [tools]);
+  const mcpCount = useMemo(
+    () => (tools ?? []).filter((t: ToolInfo) => t.source === 'mcp').length,
+    [tools]
+  );
   const mcpServers = useMemo(() => {
     const servers = new Set<string>();
-    for (const t of tools ?? []) {
+    for (const t of (tools ?? []) as ToolInfo[]) {
       if (t.server) servers.add(t.server);
     }
     return servers.size;
@@ -271,10 +274,10 @@ export default function ToolsPage() {
 
   // Filtering
   const filteredTools = useMemo(() => {
-    if (!search) return tools ?? [];
+    if (!search) return (tools ?? []) as ToolInfo[];
     const lower = search.toLowerCase();
-    return (tools ?? []).filter(
-      (t) =>
+    return ((tools ?? []) as ToolInfo[]).filter(
+      (t: ToolInfo) =>
         t.id.toLowerCase().includes(lower) ||
         (t.description?.toLowerCase().includes(lower) ?? false) ||
         (t.server?.toLowerCase().includes(lower) ?? false)
@@ -282,14 +285,14 @@ export default function ToolsPage() {
   }, [tools, search]);
 
   const filteredSkills = useMemo(() => {
-    if (!search) return skills ?? [];
+    if (!search) return (skills ?? []) as GuidanceSkillInfo[];
     const lower = search.toLowerCase();
-    return (skills ?? []).filter(
-      (s) =>
+    return ((skills ?? []) as GuidanceSkillInfo[]).filter(
+      (s: GuidanceSkillInfo) =>
         s.name.toLowerCase().includes(lower) ||
         (s.description?.toLowerCase().includes(lower) ?? false) ||
         (s.category?.toLowerCase().includes(lower) ?? false) ||
-        (s.tags?.some((t) => t.toLowerCase().includes(lower)) ?? false)
+        (s.tags?.some((t: string) => t.toLowerCase().includes(lower)) ?? false)
     );
   }, [skills, search]);
 
@@ -426,7 +429,7 @@ export default function ToolsPage() {
 
           {isLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[1, 2, 3, 4, 5, 6].map((i) => (
+              {[1, 2, 3, 4, 5, 6].map((i: number) => (
                 <Skeleton key={i} className="h-32 rounded-xl" />
               ))}
             </div>
@@ -489,7 +492,7 @@ export default function ToolsPage() {
 
           {isLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[1, 2, 3].map((i) => (
+              {[1, 2, 3].map((i: number) => (
                 <Skeleton key={i} className="h-32 rounded-xl" />
               ))}
             </div>

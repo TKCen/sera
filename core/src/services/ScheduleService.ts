@@ -129,6 +129,20 @@ export class ScheduleService {
       throw new Error('Missing required fields for schedule');
     }
 
+    // Normalize task to valid JSON for the JSONB column.
+    // Plain strings (e.g. from template YAML) are wrapped as { prompt: "..." }.
+    let taskJson: string;
+    if (typeof task === 'string') {
+      try {
+        JSON.parse(task);
+        taskJson = task; // Already valid JSON
+      } catch {
+        taskJson = JSON.stringify({ prompt: task }); // Wrap plain string
+      }
+    } else {
+      taskJson = JSON.stringify(task);
+    }
+
     const { rows } = await pool.query<Schedule>(
       `INSERT INTO schedules
        (id, agent_instance_id, agent_name, name, type, expression, task, status, source, category)
@@ -141,7 +155,7 @@ export class ScheduleService {
         name,
         type,
         expression,
-        task,
+        taskJson,
         initialStatus,
         source,
         category ?? null,

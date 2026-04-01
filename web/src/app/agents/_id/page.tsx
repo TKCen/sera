@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
@@ -14,6 +14,7 @@ import {
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { AgentForm, type AgentFormInitialValues } from '@/components/AgentForm';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Dialog,
@@ -50,6 +51,7 @@ export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>('overview');
   const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | 'delete' | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
 
   const { data: agent, isLoading } = useAgent(id);
   const navigate = useNavigate();
@@ -88,6 +90,34 @@ export default function AgentDetailPage() {
 
   const displayName = agent?.display_name ?? agent?.name ?? id;
 
+  const initialValues: AgentFormInitialValues | undefined = useMemo(() => {
+    if (!agent) return undefined;
+    const overrides = (agent.overrides ?? {}) as Record<string, unknown>;
+    const modelOv = overrides.model as Record<string, unknown> | undefined;
+    const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
+    const permissionsOv = overrides.permissions as Record<string, unknown> | undefined;
+    const toolsOv = overrides.tools as Record<string, unknown> | undefined;
+
+    return {
+      templateRef: agent.template_ref,
+      name: agent.name,
+      displayName: agent.display_name ?? '',
+      circle: agent.circle ?? '',
+      lifecycleMode: (agent.lifecycle_mode as 'persistent' | 'ephemeral') ?? 'persistent',
+      modelName: (modelOv?.name as string) ?? '',
+      modelProvider: (modelOv?.provider as string) ?? '',
+      temperature: (modelOv?.temperature as number) ?? 0.7,
+      sandboxBoundary: (overrides.sandboxBoundary as string) ?? 'tier-2',
+      tokensPerHour: (resourcesOv?.maxLlmTokensPerHour as number) ?? 100000,
+      tokensPerDay: (resourcesOv?.maxLlmTokensPerDay as number) ?? 1000000,
+      canExec: (permissionsOv?.canExec as boolean) ?? false,
+      canSpawnSubagents: (permissionsOv?.canSpawnSubagents as boolean) ?? false,
+      toolsAllowed: Array.isArray(toolsOv?.allowed) ? (toolsOv.allowed as string[]) : [],
+      toolsDenied: Array.isArray(toolsOv?.denied) ? (toolsOv.denied as string[]) : [],
+      skills: Array.isArray(overrides.skills) ? (overrides.skills as string[]) : [],
+    };
+  }, [agent]);
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -122,22 +152,29 @@ export default function AgentDetailPage() {
               onClick={() => {
                 void handleLifecycle('start');
               }}
-              disabled={startAgent.isPending}
+              disabled={startAgent.isPending || agent?.status === 'running'}
             >
               <Play size={13} /> Start
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setConfirmAction('stop')}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmAction('stop')}
+              disabled={stopAgent.isPending || agent?.status === 'stopped'}
+            >
               <Square size={13} /> Stop
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setConfirmAction('restart')}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmAction('restart')}
+              disabled={restartAgent.isPending}
+            >
               <RotateCcw size={13} /> Restart
             </Button>
-            <Link
-              to={`/agents/${id}/edit`}
-              className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-md border border-sera-border hover:bg-sera-surface transition-colors text-sera-text"
-            >
+            <Button size="sm" variant="outline" onClick={() => setIsEditDialogOpen(true)}>
               Edit
-            </Link>
+            </Button>
             <Button size="sm" variant="danger" onClick={() => setConfirmAction('delete')}>
               <Trash2 size={13} /> Delete
             </Button>
@@ -188,6 +225,27 @@ export default function AgentDetailPage() {
         {tab === 'prompt' && <SystemPromptTab id={id} />}
         {tab === 'health' && <HealthCheckTab id={id} />}
       </div>
+
+      {/* Edit agent dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Agent</DialogTitle>
+            <DialogDescription>
+              Modify agent configuration and overrides.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4">
+            <AgentForm
+              mode="edit"
+              instanceId={id}
+              initialValues={initialValues}
+              onSuccess={() => setIsEditDialogOpen(false)}
+              onCancel={() => setIsEditDialogOpen(false)}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation dialog */}
       <Dialog

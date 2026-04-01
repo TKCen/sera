@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Bot, Plus, Play, Square, Trash2, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgents, useStartAgent, useStopAgent, useDeleteAgent } from '@/hooks/useAgents';
@@ -18,12 +18,14 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { AgentForm } from '@/components/AgentForm';
 
 // TODO: virtualise if > 100 agents
 
 const STATUS_OPTIONS = ['all', 'running', 'stopped', 'created', 'error', 'unresponsive'] as const;
 
 function AgentsPageContent() {
+  const navigate = useNavigate();
   const { data: agents, isLoading, isError, refetch } = useAgents();
   const startAgent = useStartAgent();
   const stopAgent = useStopAgent();
@@ -33,6 +35,7 @@ function AgentsPageContent() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCircle, setFilterCircle] = useState<string>('all');
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [liveMessage, setLiveMessage] = useState<string>('');
   const titleRef = useRef<HTMLHeadingElement>(null);
 
@@ -105,11 +108,9 @@ function AgentsPageContent() {
         <h1 ref={titleRef} tabIndex={-1} className="sera-page-title outline-none">
           Agents
         </h1>
-        <Button asChild size="sm">
-          <Link to="/agents/new">
-            <Plus size={14} />
-            New Agent
-          </Link>
+        <Button size="sm" onClick={() => setIsCreateDialogOpen(true)}>
+          <Plus size={14} />
+          New Agent
         </Button>
       </header>
 
@@ -185,8 +186,8 @@ function AgentsPageContent() {
           title="No agents yet"
           description="Create your first agent from a template to get started."
           action={
-            <Button asChild size="sm">
-              <Link to="/agents/new">Create Agent</Link>
+            <Button size="sm" onClick={() => setIsCreateDialogOpen(true)}>
+              Create Agent
             </Button>
           }
         />
@@ -270,6 +271,27 @@ function AgentsPageContent() {
           ))}
         </ul>
       )}
+
+      {/* Create agent dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create Agent</DialogTitle>
+            <DialogDescription>
+              Deploy a new agent instance from a template.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4">
+            <AgentForm
+              onSuccess={(id) => {
+                setIsCreateDialogOpen(false);
+                void navigate(`/agents/${id}`);
+              }}
+              onCancel={() => setIsCreateDialogOpen(false)}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation dialog */}
       <Dialog

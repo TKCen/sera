@@ -81,9 +81,9 @@ export interface CircleSummary {
   name: string;
   displayName: string;
   description?: string;
-  agents: string[];
-  hasProjectContext: boolean;
-  channelCount: number;
+  agents?: string[];
+  hasProjectContext?: boolean;
+  channelCount?: number;
 }
 
 export interface CircleChannelConfig {

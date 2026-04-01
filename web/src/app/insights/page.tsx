@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   AreaChart,
   Area,
@@ -23,11 +23,15 @@ function rangeToFromTo(
   customFrom?: string,
   customTo?: string
 ): { from: string; to: string } {
-  const now = new Date();
-  const to = now.toISOString();
   if (range === 'custom') {
-    return { from: customFrom ?? to, to: customTo ?? to };
+    const now = new Date().toISOString();
+    return { from: customFrom ?? now, to: customTo ?? now };
   }
+  // Truncate to the start of the current minute so the value stays stable within
+  // the same minute and doesn't cause query key churn on every render.
+  const now = new Date();
+  now.setSeconds(0, 0);
+  const to = now.toISOString();
   const ms = range === '24h' ? 86400_000 : range === '7d' ? 7 * 86400_000 : 30 * 86400_000;
   return { from: new Date(now.getTime() - ms).toISOString(), to };
 }
@@ -58,7 +62,10 @@ function InsightsPageContent() {
   const [sortKey, setSortKey] = useState<SortKey>('totalTokens');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
-  const { from, to } = rangeToFromTo(range, customFrom, customTo);
+  const { from, to } = useMemo(
+    () => rangeToFromTo(range, customFrom, customTo),
+    [range, customFrom, customTo]
+  );
   const { data, isLoading, refetch, isFetching } = useUsage({ groupBy: 'agent', from, to });
 
   const toggleSort = useCallback(

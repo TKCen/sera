@@ -52,7 +52,8 @@ export function MemoryStatsHeader() {
           </h3>
           <div className="flex items-end gap-2 h-32">
             {Object.entries(overview.typeBreakdown).map(([type, count]) => {
-              const percentage = (count / overview.totalBlocks) * 100;
+              const percentage =
+                overview.totalBlocks > 0 ? (count / overview.totalBlocks) * 100 : 0;
               return (
                 <div key={type} className="flex-1 flex flex-col items-center gap-2 group">
                   <div className="w-full relative flex flex-col justify-end h-full">

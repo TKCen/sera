@@ -22,7 +22,7 @@ interface MemorySidebarProps {
   scope: MemoryScope;
   onScopeChange: (scope: MemoryScope) => void;
   selectedBlockId: string | null;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   tagFilter: string;
   onTagFilter: (tag: string) => void;
   agentNameMap?: Map<string, string>;

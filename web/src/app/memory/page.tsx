@@ -38,7 +38,7 @@ function MemoryExplorerContent() {
   }
   const promoteMutation = usePromoteBlock();
 
-  const handleBlockSelect = useCallback((block: ScopedBlock) => {
+  const handleBlockSelect = useCallback((block: ScopedBlock | null) => {
     setSelectedBlock(block);
   }, []);
 

@@ -18,7 +18,7 @@ import type { ScopedBlock } from '@/lib/api/memory';
 interface MemoryContentProps {
   selectedAgentId: string;
   selectedBlockId: string;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   onSearchChange?: (query: string) => void;
   agentNameMap?: Map<string, string>;
 }
@@ -100,7 +100,7 @@ export function MemoryContent({
                 try {
                   await deleteMutation.mutateAsync({ agentId, blockId });
                   toast.success('Block deleted');
-                  onBlockSelect(null as unknown as ScopedBlock); // Clear selection
+                  onBlockSelect(null);
                 } catch (err) {
                   toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
@@ -132,7 +132,7 @@ function SearchResults({
   results: Array<{ block: ScopedBlock; score: number }>;
   loading: boolean;
   query: string;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   agentNameMap?: Map<string, string>;
 }) {
   if (loading) {
@@ -198,7 +198,7 @@ function BlockDetail({
     sourceType: string;
     relationship: string;
   }>;
-  onBlockSelect: (block: ScopedBlock) => void;
+  onBlockSelect: (block: ScopedBlock | null) => void;
   agentNameMap?: Map<string, string>;
   onSave?: (agentId: string, blockId: string, updates: { content?: string }) => Promise<void>;
   saving?: boolean;

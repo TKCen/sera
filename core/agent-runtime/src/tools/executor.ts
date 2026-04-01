@@ -26,7 +26,7 @@ export interface ToolExecutionResult {
 /** Local tool names that are handled natively in the container. */
 const LOCAL_TOOLS = new Set([
   'file-read', 'file-write', 'file-list', 'file-delete',
-  'shell-exec', 'spawn-subagent', 'run-tool',
+  'shell-exec', 'spawn-subagent', 'run-tool', 'tool-search',
 ]);
 
 /** Tools that modify state — executed with mutual exclusion to prevent races. */
@@ -187,6 +187,9 @@ export class RuntimeToolExecutor {
             params['timeout_seconds'] as number | undefined
           );
           break;
+        case 'tool-search':
+          result = this.searchTools(params['query'] as string);
+          break;
         default:
           // Route to core's invoke endpoint for remote tools (ADR-001)
           if (isProxyAvailable() && this.remoteCatalog.some((t) => t.function.name === toolName)) {
@@ -261,6 +264,27 @@ export class RuntimeToolExecutor {
 
     await Promise.all(tasks);
     return results;
+  }
+
+  /**
+   * Search the combined tool catalog (local + remote) by query string.
+   * Matches against tool name and description (case-insensitive).
+   */
+  private searchTools(query: string): string {
+    const q = query.toLowerCase();
+    const allTools = [...BUILTIN_TOOLS, ...this.remoteCatalog];
+    const matches = allTools.filter((t) => {
+      const name = t.function.name.toLowerCase();
+      const desc = t.function.description.toLowerCase();
+      return name.includes(q) || desc.includes(q) || q.split(/\s+/).some((word) => desc.includes(word) || name.includes(word));
+    });
+
+    if (matches.length === 0) {
+      return `No tools found matching "${query}". Available tool categories: file operations, shell commands, web search/fetch, knowledge store/query, delegation, scheduling.`;
+    }
+
+    const results = matches.map((t) => `- **${t.function.name}**: ${t.function.description}`);
+    return `Found ${matches.length} matching tool(s):\n${results.join('\n')}\n\nUse these tools by calling them directly via function calling.`;
   }
 
   /** Call core's POST /v1/tools/invoke for a remote tool. */

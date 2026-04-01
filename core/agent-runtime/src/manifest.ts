@@ -36,6 +36,8 @@ export interface RuntimeManifest {
   tools?: {
     allowed?: string[];
     denied?: string[];
+    /** Explicit core tools always sent to LLM. Remaining allowed tools are deferred. */
+    coreTools?: string[];
   };
   skills?: string[];
   memory?: Record<string, unknown>;

@@ -47,6 +47,8 @@ const MAX_ITERATIONS = 10;
 const MAX_OVERFLOW_RETRIES = 3;
 const MAX_TIMEOUT_RETRIES = 2;
 const TIMEOUT_COMPACTION_THRESHOLD = 0.65;
+/** Max tools sent per LLM call. Beyond this, remaining tools are deferred and discoverable via tool-search. */
+const CORE_TOOL_LIMIT = 12;
 
 interface RetryState {
   overflowCompactionAttempts: number;
@@ -62,7 +64,10 @@ export class ReasoningLoop {
   private centrifugo: CentrifugoPublisher;
   private manifest: RuntimeManifest;
   private systemPrompt: string;
+  /** Core tools sent on every LLM call (up to CORE_TOOL_LIMIT). */
   private toolDefs: ToolDefinition[];
+  /** All tools including deferred ones (for tool-search). */
+  private allToolDefs: ToolDefinition[];
   private contextManager: ContextManager;
 
   /** Set to true when SIGTERM received; loop exits after current step. */
@@ -78,9 +83,29 @@ export class ReasoningLoop {
     this.tools = tools;
     this.centrifugo = centrifugo;
     this.manifest = manifest;
-    this.toolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
+    this.allToolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
     this.systemPrompt = generateSystemPrompt(manifest);
     this.contextManager = new ContextManager(manifest.model.name);
+
+    // Dynamic tool exposure (#535): if tool count exceeds CORE_TOOL_LIMIT,
+    // defer the excess tools and keep tool-search in the core set.
+    const coreLimit = manifest.tools?.coreTools
+      ? this.allToolDefs.filter((t) => (manifest.tools!.coreTools as string[]).includes(t.function.name))
+      : undefined;
+
+    if (coreLimit) {
+      // Explicit coreTools list from manifest
+      const searchTool = this.allToolDefs.find((t) => t.function.name === 'tool-search');
+      this.toolDefs = [...coreLimit, ...(searchTool ? [searchTool] : [])];
+    } else if (this.allToolDefs.length > CORE_TOOL_LIMIT) {
+      // Auto-defer: keep first CORE_TOOL_LIMIT tools + tool-search
+      const searchTool = this.allToolDefs.find((t) => t.function.name === 'tool-search');
+      const withoutSearch = this.allToolDefs.filter((t) => t.function.name !== 'tool-search');
+      this.toolDefs = [...withoutSearch.slice(0, CORE_TOOL_LIMIT), ...(searchTool ? [searchTool] : [])];
+      log('info', `Tool deferral active: ${this.toolDefs.length} core + ${withoutSearch.length - CORE_TOOL_LIMIT} deferred of ${this.allToolDefs.length} total`);
+    } else {
+      this.toolDefs = this.allToolDefs;
+    }
   }
 
   /**
@@ -410,6 +435,13 @@ export class ReasoningLoop {
       const errMsg = err instanceof Error ? err.message : String(err);
       log('error', `ReasoningLoop error: ${errMsg}`);
       await think('reflect', `Error: ${errMsg}`, 0);
+
+      // Publish error to Centrifugo so the web UI stops the spinner (#553)
+      try {
+        await this.centrifugo.publishStreamError(taskId, errMsg);
+      } catch (pubErr) {
+        log('warn', `Failed to publish stream error: ${pubErr instanceof Error ? pubErr.message : String(pubErr)}`);
+      }
 
       let exitReason: TaskOutput['exitReason'] = 'error';
       if (err instanceof BudgetExceededError) exitReason = 'budget_exceeded';

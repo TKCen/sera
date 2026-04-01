@@ -32,6 +32,7 @@ import { AgentDetailLogsTab as LogsTab } from '@/components/AgentDetailLogsTab';
 import { MemoryTab } from '@/components/AgentDetailMemoryTab';
 import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
 import { BudgetTab } from '@/components/AgentDetailBudgetTab';
+import { InnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 import { ContextTab } from '@/components/AgentDetailContextTab';
 
@@ -42,6 +43,7 @@ type Tab =
   | 'logs'
   | 'memory'
   | 'schedules'
+  | 'inner-life'
   | 'budget'
   | 'context'
   | 'prompt'
@@ -191,6 +193,7 @@ export default function AgentDetailPage() {
               'logs',
               'memory',
               'schedules',
+              'inner-life',
               'budget',
               'context',
               'health',
@@ -220,6 +223,7 @@ export default function AgentDetailPage() {
         {tab === 'logs' && <LogsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} />}
+        {tab === 'inner-life' && <InnerLifeTab id={id} />}
         {tab === 'budget' && <BudgetTab id={id} />}
         {tab === 'context' && <ContextTab id={id} />}
         {tab === 'prompt' && <SystemPromptTab id={id} />}

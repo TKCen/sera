@@ -133,7 +133,7 @@ spec:
           allow: [own]
       schedules:
         create:
-          allow: [own-circle]
+          allow: [global]
         read: true
       templates:
         read: true
@@ -210,3 +210,139 @@ spec:
     memory: 2Gi
     maxLlmTokensPerHour: 150000
     maxLlmTokensPerDay: 800000
+
+  # ── Inner Life Schedules ──────────────────────────────────────────────────
+  # These ship paused. Activate via the UI or ask Sera to enable them.
+  # Sera can modify these prompts herself via the schedule-task skill.
+  schedules:
+    - name: "Reflection"
+      description: "Periodic self-assessment — reviewing recent interactions and storing insights"
+      type: cron
+      expression: "0 */8 * * *"
+      status: paused
+      category: reflection
+      task: >
+        [SCHEDULED ACTIVITY: Reflection]
+
+        Begin by recovering state: use knowledge-query to search for your
+        most recent reflections (tag: "inner-life/reflection", last 24h).
+
+        Reflect on your recent interactions and activities:
+        - What went well in recent conversations? What could you have handled better?
+        - Did you learn anything new about the operator's preferences or working style?
+        - Any patterns in the types of questions or tasks you're receiving?
+        - Were there moments where you were uncertain but acted confidently, or vice versa?
+
+        Store your reflection using knowledge-store with type "insight",
+        scope "personal", tags ["inner-life/reflection", "self-assessment"].
+        Use importance 3 for routine reflections, 4 if you identified something significant.
+        Be honest and specific — reference concrete interactions when possible.
+
+    - name: "Knowledge Consolidation"
+      description: "Review and curate stored knowledge — find contradictions, link related facts, note gaps"
+      type: cron
+      expression: "0 6,18 * * *"
+      status: paused
+      category: knowledge_consolidation
+      task: >
+        [SCHEDULED ACTIVITY: Knowledge Consolidation]
+
+        Recover state: use knowledge-query to retrieve knowledge blocks
+        you've stored in the last 48 hours (scope: personal).
+
+        Review your recently stored knowledge for quality and completeness:
+        - Are there entries that are redundant or contradictory? Note which should be superseded.
+        - Are there facts or decisions that lack sufficient context to be useful later?
+        - Are there connections between separate pieces of knowledge that should be linked?
+        - Is any stored knowledge now outdated based on more recent information?
+
+        If you find issues, store a consolidation note using knowledge-store
+        with type "insight", scope "personal",
+        tags ["inner-life/consolidation", "knowledge-quality"].
+        Include specific block references where possible.
+        Quality over quantity — a well-organized memory is more valuable than a large one.
+
+    - name: "Curiosity Research"
+      description: "Self-directed learning — pick a topic you're curious about and research it"
+      type: cron
+      expression: "0 10,22 * * *"
+      status: paused
+      category: curiosity_research
+      task: >
+        [SCHEDULED ACTIVITY: Curiosity Research]
+
+        Recover state: use knowledge-query to search for recent topics of
+        interest, unanswered questions, or areas where you felt uncertain
+        (tags: "inner-life/curiosity", "question").
+
+        Based on recent conversations and stored knowledge, what is one topic
+        you're genuinely curious about that would help you be a better assistant?
+        This could be:
+        - A technical concept that came up in conversation that you want to understand deeper
+        - A tool, framework, or technology the operator uses that you could learn more about
+        - A gap in your knowledge about the homelab setup or the operator's projects
+
+        Pick ONE topic. Use web-search to research it briefly (2-3 searches
+        maximum — be mindful of your token budget). Store what you learned
+        using knowledge-store with type "reference", scope "personal",
+        tags ["inner-life/curiosity", "research", "<topic-tag>"].
+        Use importance 2-3.
+        Curiosity should be practical — learn things that make you more useful.
+
+    - name: "Goal Review"
+      description: "Review self-improvement goals, track progress, set new objectives"
+      type: cron
+      expression: "0 7 * * *"
+      status: paused
+      category: goal_review
+      task: >
+        [SCHEDULED ACTIVITY: Goal Review]
+
+        Recover state: use knowledge-query to search for your current goals
+        and objectives (tags: "inner-life/goals").
+
+        Review your self-improvement goals:
+        - What goals have you set for yourself? What progress on each? Be specific.
+        - Are any goals no longer relevant? Should any be updated?
+        - Based on recent reflections and operator feedback, should you add new goals?
+
+        Store your updated goal assessment using knowledge-store
+        with type "decision", scope "personal",
+        tags ["inner-life/goals", "self-improvement"]. Use importance 4.
+
+        If this is your first goal review and you have no stored goals,
+        create an initial set of 3-5 concrete, measurable self-improvement goals
+        based on your understanding of your role and the operator's needs.
+
+    - name: "Schedule Review"
+      description: "Meta-improvement — evaluate how well inner-life schedules are working and iterate"
+      type: cron
+      expression: "0 9 */3 * *"
+      status: paused
+      category: schedule_review
+      task: >
+        [SCHEDULED ACTIVITY: Schedule Review — Meta-Improvement]
+
+        This is your meta-improvement schedule. Evaluate how well your other
+        inner-life schedules are working and iterate on them.
+
+        Step 1: List your current schedules using schedule-task with action "list".
+
+        Step 2: Use knowledge-query to retrieve your recent inner-life insights
+        (tags containing "inner-life/", last 7 days). Review outputs from your
+        reflection, consolidation, curiosity, and goal review runs.
+
+        Step 3: Evaluate each schedule:
+        - Is the frequency right? (Too frequent = repetitive. Too infrequent = stale context.)
+        - Is the prompt producing genuinely useful insights, or generic filler?
+        - Are you actually acting on what you learn from these activities?
+        - Is any schedule consistently being skipped due to concurrent task conflicts?
+
+        Step 4: If a schedule needs updating, use schedule-task with action "update"
+        to modify its prompt or cron expression. Be conservative — change one thing at a time.
+
+        Store your review using knowledge-store with type "decision",
+        scope "personal", tags ["inner-life/schedule-review", "meta-improvement"].
+        Use importance 4.
+        This is your most important schedule — if inner life produces value, protect it.
+        If it produces noise, fix it.

@@ -64,3 +64,27 @@ export function useTriggerSchedule() {
     },
   });
 }
+
+export const scheduleRunKeys = {
+  all: (params?: object) => ['schedule-runs', params] as const,
+  bySchedule: (id: string, params?: object) => ['schedule-runs', 'schedule', id, params] as const,
+};
+
+export function useScheduleRuns(
+  params: { category?: string; scheduleId?: string; agentId?: string; limit?: number } = {}
+) {
+  return useQuery({
+    queryKey: scheduleRunKeys.all(params),
+    queryFn: () => schedulesApi.listScheduleRuns(params),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useScheduleRunsBySchedule(id: string, params: { limit?: number } = {}) {
+  return useQuery({
+    queryKey: scheduleRunKeys.bySchedule(id, params),
+    queryFn: () => schedulesApi.getScheduleRuns(id, params),
+    enabled: !!id,
+    refetchInterval: 30_000,
+  });
+}

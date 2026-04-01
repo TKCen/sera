@@ -228,6 +228,18 @@ export class AgentManifestLoader {
         }
         AgentManifestLoader.requireString(s, 'expression', sCtx);
         AgentManifestLoader.requireString(s, 'task', sCtx);
+        if (s['status'] != null && s['status'] !== 'active' && s['status'] !== 'paused') {
+          throw new ManifestValidationError(
+            `Schedule status must be "active" or "paused", got "${String(s['status'])}"${sCtx}`,
+            `schedules[${i}].status`
+          );
+        }
+        if (s['category'] != null && typeof s['category'] !== 'string') {
+          throw new ManifestValidationError(
+            `Schedule category must be a string${sCtx}`,
+            `schedules[${i}].category`
+          );
+        }
       }
     }
 

@@ -18,6 +18,7 @@ export interface Schedule {
   task: string;
   status: 'active' | 'paused' | 'completed' | 'error';
   source: 'manifest' | 'api';
+  category?: string;
   last_run_at?: Date;
   next_run_at?: Date;
   last_run_status?: string;
@@ -112,7 +113,17 @@ export class ScheduleService {
 
   public async createSchedule(data: Partial<Schedule>): Promise<Schedule> {
     const id = uuidv4();
-    const { agent_instance_id, agent_name, name, type, expression, task, source = 'api' } = data;
+    const {
+      agent_instance_id,
+      agent_name,
+      name,
+      type,
+      expression,
+      task,
+      source = 'api',
+      status: initialStatus = 'active',
+      category,
+    } = data;
 
     if (!agent_instance_id || !name || !type || !expression || !task) {
       throw new Error('Missing required fields for schedule');
@@ -120,10 +131,21 @@ export class ScheduleService {
 
     const { rows } = await pool.query<Schedule>(
       `INSERT INTO schedules
-       (id, agent_instance_id, agent_name, name, type, expression, task, status, source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)
+       (id, agent_instance_id, agent_name, name, type, expression, task, status, source, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [id, agent_instance_id, agent_name, name, type, expression, task, source]
+      [
+        id,
+        agent_instance_id,
+        agent_name,
+        name,
+        type,
+        expression,
+        task,
+        initialStatus,
+        source,
+        category ?? null,
+      ]
     );
 
     const schedule = rows[0]!;
@@ -149,7 +171,7 @@ export class ScheduleService {
 
   public async updateSchedule(id: string, updates: Partial<Schedule>): Promise<Schedule> {
     const fields = Object.keys(updates).filter((k) =>
-      ['name', 'expression', 'task', 'status'].includes(k)
+      ['name', 'expression', 'task', 'status', 'category'].includes(k)
     );
 
     if (fields.length === 0) {
@@ -256,11 +278,19 @@ export class ScheduleService {
         return;
       }
 
-      // Enqueue task
+      // Enqueue task with schedule metadata in context
       const taskId = uuidv4();
+      const scheduleContext = JSON.stringify({
+        schedule: {
+          scheduleId: schedule.id,
+          scheduleName: schedule.name,
+          category: schedule.category ?? null,
+          firedAt: new Date().toISOString(),
+        },
+      });
       await pool.query(
-        `INSERT INTO task_queue (id, agent_instance_id, task, status) VALUES ($1, $2, $3, 'queued')`,
-        [taskId, schedule.agent_instance_id, schedule.task]
+        `INSERT INTO task_queue (id, agent_instance_id, task, context, status) VALUES ($1, $2, $3, $4, 'queued')`,
+        [taskId, schedule.agent_instance_id, schedule.task, scheduleContext]
       );
 
       // If agent not running, start it

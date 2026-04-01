@@ -352,6 +352,7 @@ export interface AgentSchedule {
   agentName: string;
   cron: string;
   description?: string;
+  category?: string | null;
   lastRunAt?: string;
   lastRunStatus?: 'success' | 'error';
   nextRunAt?: string;
@@ -544,10 +545,27 @@ export interface Schedule {
   taskPrompt?: string;
   status: 'active' | 'paused';
   source: 'manifest' | 'api';
+  category?: string | null;
   lastRunAt?: string;
   lastRunStatus?: 'success' | 'error' | 'missed';
   lastRunOutput?: string;
   nextRunAt?: string;
+}
+
+export interface ScheduleRun {
+  taskId: string;
+  scheduleId: string;
+  scheduleName: string;
+  scheduleCategory: string | null;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  result: unknown;
+  error: string | null;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null;
+  exitReason: string | null;
+  firedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
 }
 
 export interface AgentBudget {

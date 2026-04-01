@@ -60,6 +60,7 @@ export const createSchedulesRouter = () => {
             taskPrompt,
             status: r.status,
             source: r.source ?? 'api',
+            category: r.category ?? null,
             lastRunAt: r.last_run_at ?? r.last_run,
             lastRunStatus: sanitizeRunStatus(r.last_run_status),
             nextRunAt: r.next_run_at,
@@ -82,6 +83,73 @@ export const createSchedulesRouter = () => {
       res.status(201).json(schedule);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/schedules/runs - List schedule-triggered task runs
+   * Query params: category, scheduleId, agentId, limit (default 50)
+   * NOTE: Must be registered before /:id to avoid Express matching "runs" as an id.
+   */
+  router.get('/runs', async (req, res) => {
+    try {
+      const { category, scheduleId, agentId, limit: limitStr } = req.query;
+      const limit = Math.min(Math.max(parseInt(String(limitStr || '50'), 10) || 50, 1), 200);
+
+      const conditions: string[] = ["tq.context->'schedule' IS NOT NULL"];
+      const params: unknown[] = [];
+      let paramIdx = 1;
+
+      if (category) {
+        conditions.push(`s.category = $${paramIdx++}`);
+        params.push(category);
+      }
+      if (scheduleId) {
+        conditions.push(`(tq.context->'schedule'->>'scheduleId') = $${paramIdx++}`);
+        params.push(scheduleId);
+      }
+      if (agentId) {
+        conditions.push(`tq.agent_instance_id = $${paramIdx++}`);
+        params.push(agentId);
+      }
+
+      params.push(limit);
+
+      const { rows } = await pool.query(
+        `SELECT tq.id AS task_id, tq.status, tq.result, tq.error, tq.usage,
+                tq.exit_reason, tq.created_at, tq.started_at, tq.completed_at,
+                tq.context->'schedule'->>'scheduleId' AS schedule_id,
+                tq.context->'schedule'->>'scheduleName' AS schedule_name,
+                tq.context->'schedule'->>'category' AS schedule_category,
+                tq.context->'schedule'->>'firedAt' AS fired_at,
+                s.name AS current_schedule_name, s.category AS current_category
+         FROM task_queue tq
+         LEFT JOIN schedules s ON (tq.context->'schedule'->>'scheduleId')::uuid = s.id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY tq.created_at DESC
+         LIMIT $${paramIdx}`,
+        params
+      );
+
+      res.json(
+        rows.map((r: Record<string, unknown>) => ({
+          taskId: r.task_id,
+          scheduleId: r.schedule_id,
+          scheduleName: r.current_schedule_name ?? r.schedule_name,
+          scheduleCategory: r.current_category ?? r.schedule_category,
+          status: r.status,
+          result: r.result,
+          error: r.error,
+          usage: r.usage,
+          exitReason: r.exit_reason,
+          firedAt: r.fired_at,
+          startedAt: r.started_at,
+          completedAt: r.completed_at,
+          createdAt: r.created_at,
+        }))
+      );
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -136,6 +204,44 @@ export const createSchedulesRouter = () => {
 
       await scheduleService.deleteSchedule(req.params.id);
       res.status(204).send();
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/schedules/:id/runs - List runs for a specific schedule
+   * Query params: limit (default 20)
+   */
+  router.get('/:id/runs', async (req, res) => {
+    try {
+      const limit = Math.min(Math.max(parseInt(String(req.query.limit || '20'), 10) || 20, 1), 200);
+
+      const { rows } = await pool.query(
+        `SELECT tq.id AS task_id, tq.status, tq.result, tq.error, tq.usage,
+                tq.exit_reason, tq.created_at, tq.started_at, tq.completed_at,
+                tq.context->'schedule'->>'firedAt' AS fired_at
+         FROM task_queue tq
+         WHERE (tq.context->'schedule'->>'scheduleId') = $1
+         ORDER BY tq.created_at DESC
+         LIMIT $2`,
+        [req.params.id, limit]
+      );
+
+      res.json(
+        rows.map((r: Record<string, unknown>) => ({
+          taskId: r.task_id,
+          status: r.status,
+          result: r.result,
+          error: r.error,
+          usage: r.usage,
+          exitReason: r.exit_reason,
+          firedAt: r.fired_at,
+          startedAt: r.started_at,
+          completedAt: r.completed_at,
+          createdAt: r.created_at,
+        }))
+      );
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

@@ -300,6 +300,29 @@ export class ScopedMemoryBlockStore {
     return results;
   }
 
+  /** Delete a block from the archive directory. */
+  async deleteArchive(agentId: string, id: string): Promise<boolean> {
+    const archiveDir = path.join(this.memoryRoot, agentId, 'archive');
+    let files: string[];
+    try {
+      files = await fs.readdir(archiveDir);
+    } catch {
+      return false;
+    }
+    for (const file of files) {
+      if (!file.endsWith('.md') || !file.includes(id)) continue;
+      const filePath = path.join(archiveDir, file);
+      const raw = await fs.readFile(filePath, 'utf8').catch(() => null);
+      if (!raw) continue;
+      const block = this.parse(raw, filePath);
+      if (block?.id === id) {
+        await fs.unlink(filePath);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** List all agent IDs that have memory directories. */
   async listAgentIds(): Promise<string[]> {
     let entries: string[];

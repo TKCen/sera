@@ -5,9 +5,9 @@
  * and returns a structured result with usage stats.
  */
 
-import type { LLMClient, ChatMessage, ToolDefinition, LLMResponse, ThinkingLevel } from './llmClient.js';
+import type { ILLMClient, ChatMessage, ToolDefinition, LLMResponse, ThinkingLevel } from './llmClient.js';
 import { BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError } from './llmClient.js';
-import type { RuntimeToolExecutor } from './tools/index.js';
+import type { IToolExecutor } from './tools/index.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
@@ -59,8 +59,8 @@ interface RetryState {
 // ── ReasoningLoop ─────────────────────────────────────────────────────────────
 
 export class ReasoningLoop {
-  private llm: LLMClient;
-  private tools: RuntimeToolExecutor;
+  private llm: ILLMClient;
+  private tools: IToolExecutor;
   private centrifugo: CentrifugoPublisher;
   private manifest: RuntimeManifest;
   private systemPrompt: string;
@@ -74,8 +74,8 @@ export class ReasoningLoop {
   shutdownRequested = false;
 
   constructor(
-    llm: LLMClient,
-    tools: RuntimeToolExecutor,
+    llm: ILLMClient,
+    tools: IToolExecutor,
     centrifugo: CentrifugoPublisher,
     manifest: RuntimeManifest,
   ) {

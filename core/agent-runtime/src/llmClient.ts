@@ -92,9 +92,20 @@ export interface LLMResponse {
   };
 }
 
+// ── Interface ─────────────────────────────────────────────────────────────────
+
+export interface ILLMClient {
+  chat(
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+    temperature?: number,
+    thinkingLevel?: ThinkingLevel,
+  ): Promise<LLMResponse>;
+}
+
 // ── Client ────────────────────────────────────────────────────────────────────
 
-export class LLMClient {
+export class LLMClient implements ILLMClient {
   private http: AxiosInstance;
   private model: string;
 

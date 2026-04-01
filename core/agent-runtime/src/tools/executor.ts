@@ -34,6 +34,13 @@ export const WRITE_TOOLS = new Set(['file-write', 'file-delete', 'shell-exec']);
 
 const DEFAULT_MAX_TOOL_CONCURRENCY = 4;
 
+// ── Interface ─────────────────────────────────────────────────────────────────
+
+export interface IToolExecutor {
+  getToolDefinitions(allowedTools?: string[]): ToolDefinition[];
+  executeToolCalls(toolCalls: ToolCall[]): Promise<ToolExecutionResult[]>;
+}
+
 // ── Semaphore for concurrency control ────────────────────────────────────────
 
 class Semaphore {
@@ -50,7 +57,7 @@ class Semaphore {
   }
 }
 
-export class RuntimeToolExecutor {
+export class RuntimeToolExecutor implements IToolExecutor {
   private workspacePath: string;
   private tier: number;
   /** Remote tools fetched from core's catalog. */

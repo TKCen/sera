@@ -41,6 +41,7 @@ const AGGRESSIVE_COMPACT_PCT = 0.50;
 const DEFAULT_TOOL_OUTPUT_MAX_TOKENS = 4_000;
 const DEFAULT_RESPONSE_RESERVE = 4_096;
 const DEFAULT_EMERGENCY_TOOL_TOKENS = 500;
+const DEFAULT_PRESERVE_RECENT_MESSAGES = 4;
 
 export type CompactionStrategy = 'sliding-window' | 'summarise';
 
@@ -61,6 +62,7 @@ export class ContextManager {
   private highWaterMark: number;
   private strategy: CompactionStrategy;
   private toolOutputMaxTokens: number;
+  private preserveRecentMessages: number;
 
   constructor(modelName: string, contextWindowOverride?: number) {
     this.modelName = modelName;
@@ -83,6 +85,11 @@ export class ContextManager {
     this.toolOutputMaxTokens = toolMaxEnv
       ? parseInt(toolMaxEnv, 10)
       : DEFAULT_TOOL_OUTPUT_MAX_TOKENS;
+
+    const preserveEnv = process.env['PRESERVE_RECENT_MESSAGES'];
+    this.preserveRecentMessages = preserveEnv
+      ? parseInt(preserveEnv, 10)
+      : DEFAULT_PRESERVE_RECENT_MESSAGES;
 
     // Use cl100k_base encoding as a universal approximation for any model.
     // 5-10% error is acceptable per the spec.
@@ -150,61 +157,13 @@ export class ContextManager {
 
   /**
    * Compact the message history using the configured strategy.
-   * Always preserves the system prompt (first message if role === 'system').
-   *
-   * Strategy 'sliding-window': drops oldest non-system messages until under limit.
-   * Strategy 'summarise': not implemented in the runtime (requires a synchronous
-   *   LLM call) — falls back to sliding-window with a warning.
+   * Always preserves system messages and the N most recent messages verbatim.
    *
    * @param messages   Current message history (mutated in place).
    * @returns CompactionResult describing what happened.
    */
   compact(messages: ChatMessage[]): CompactionResult {
-    const tokensBefore = this.countMessageTokens(messages);
-
-    if (this.strategy === 'summarise') {
-      // DECISION: 'summarise' requires a synchronous LLM round-trip which is
-      // complex to fit in the synchronous compact() interface. Falling back to
-      // sliding-window and recording a warning in the reflect message.
-      log('warn', 'ContextManager: summarise strategy not yet implemented — using sliding-window');
-    }
-
-    // Identify system messages and mutable messages separately
-    const systemMessages = messages.filter((m) => m.role === 'system');
-    const nonSystemMessages = messages.filter((m) => m.role !== 'system');
-
-    let droppedCount = 0;
-    while (
-      nonSystemMessages.length > 1 &&
-      this.countMessageTokens([...systemMessages, ...nonSystemMessages]) >= this.highWaterMark
-    ) {
-      nonSystemMessages.shift();
-      droppedCount++;
-    }
-
-    // If a single non-system message still puts us over (e.g. enormous tool result),
-    // truncate it rather than silently drop the system prompt.
-    if (nonSystemMessages.length > 0) {
-      const first = nonSystemMessages[0]!;
-      const totalWithFirst = this.countMessageTokens([...systemMessages, ...nonSystemMessages]);
-      if (totalWithFirst > this.contextWindow) {
-        const notice = '[SERA: message truncated due to context window overflow]';
-        first.content = this.truncateToFit(
-          first.content,
-          this.highWaterMark - this.countMessageTokens([...systemMessages, ...nonSystemMessages.slice(1)]),
-        ) + '\n' + notice;
-      }
-    }
-
-    // Rebuild the messages array in place
-    messages.splice(0, messages.length, ...systemMessages, ...nonSystemMessages);
-
-    const tokensAfter = this.countMessageTokens(messages);
-    const retainedCount = nonSystemMessages.length;
-    const reflectMessage = `Context compacted: dropped ${droppedCount} messages, retained ${retainedCount} non-system messages (${tokensBefore} → ${tokensAfter} tokens)`;
-
-    log('info', `ContextManager: ${reflectMessage}`);
-    return { droppedCount, retainedCount, tokensBefore, tokensAfter, reflectMessage };
+    return this.performCompaction(messages, this.highWaterMark, 'Context compacted');
   }
 
   /**
@@ -222,42 +181,8 @@ export class ContextManager {
    * @param messages   Current message history (mutated in place).
    */
   aggressiveCompact(messages: ChatMessage[]): CompactionResult {
-    const tokensBefore = this.countMessageTokens(messages);
     const aggressiveTarget = Math.floor(this.contextWindow * AGGRESSIVE_COMPACT_PCT);
-
-    const systemMessages = messages.filter((m) => m.role === 'system');
-    const nonSystemMessages = messages.filter((m) => m.role !== 'system');
-
-    let droppedCount = 0;
-    while (
-      nonSystemMessages.length > 1 &&
-      this.countMessageTokens([...systemMessages, ...nonSystemMessages]) >= aggressiveTarget
-    ) {
-      nonSystemMessages.shift();
-      droppedCount++;
-    }
-
-    // Emergency truncation if a single message still overflows
-    if (nonSystemMessages.length > 0) {
-      const totalWithFirst = this.countMessageTokens([...systemMessages, ...nonSystemMessages]);
-      if (totalWithFirst > this.contextWindow) {
-        const first = nonSystemMessages[0]!;
-        const notice = '[SERA: message truncated due to aggressive compaction]';
-        first.content = this.truncateToFit(
-          first.content,
-          aggressiveTarget - this.countMessageTokens([...systemMessages, ...nonSystemMessages.slice(1)]),
-        ) + '\n' + notice;
-      }
-    }
-
-    messages.splice(0, messages.length, ...systemMessages, ...nonSystemMessages);
-
-    const tokensAfter = this.countMessageTokens(messages);
-    const retainedCount = nonSystemMessages.length;
-    const reflectMessage = `Aggressive compaction: dropped ${droppedCount} messages, retained ${retainedCount} non-system messages (${tokensBefore} → ${tokensAfter} tokens)`;
-
-    log('info', `ContextManager: ${reflectMessage}`);
-    return { droppedCount, retainedCount, tokensBefore, tokensAfter, reflectMessage };
+    return this.performCompaction(messages, aggressiveTarget, 'Aggressive compaction');
   }
 
   /**
@@ -354,5 +279,183 @@ export class ContextManager {
       }
     }
     return content.slice(0, low);
+  }
+
+  private performCompaction(messages: ChatMessage[], targetTokens: number, label: string): CompactionResult {
+    const tokensBefore = this.countMessageTokens(messages);
+
+    const systemMessages = messages.filter((m) => m.role === 'system');
+    const nonSystemMessages = messages.filter((m) => m.role !== 'system');
+
+    if (tokensBefore < targetTokens) {
+      return {
+        droppedCount: 0,
+        retainedCount: nonSystemMessages.length,
+        tokensBefore,
+        tokensAfter: tokensBefore,
+        reflectMessage: `${label}: no compaction needed`,
+      };
+    }
+
+    const droppedMessages: ChatMessage[] = [];
+    const keepLimit = Math.min(nonSystemMessages.length, this.preserveRecentMessages);
+
+    // Initial drop to reach target (before accounting for summary overhead)
+    while (
+      nonSystemMessages.length > keepLimit &&
+      this.countMessageTokens([...systemMessages, ...nonSystemMessages]) >= targetTokens
+    ) {
+      droppedMessages.push(nonSystemMessages.shift()!);
+    }
+
+    // Force at least one drop if we are over limit, to trigger summary injection logic
+    if (droppedMessages.length === 0 && nonSystemMessages.length > 1 && tokensBefore >= targetTokens) {
+      droppedMessages.push(nonSystemMessages.shift()!);
+    }
+
+    let droppedCount = droppedMessages.length;
+    let continuationMsg: ChatMessage | undefined;
+
+    if (droppedCount > 0) {
+      const generateContinuation = (msgs: ChatMessage[]): ChatMessage => ({
+        role: 'system',
+        content: `This session is being continued from a previous conversation that ran out of context.
+The summary below covers the earlier portion of the conversation.
+
+Summary:
+${this.summarizeMessages(msgs)}
+
+Recent messages are preserved verbatim.
+Continue the conversation from where it left off without asking the user any further questions.
+Resume directly — do not acknowledge the summary, do not recap what was happening, and do not preface with continuation text.`,
+      });
+
+      continuationMsg = generateContinuation(droppedMessages);
+
+      // If summary overhead pushes us back over, drop more if allowed
+      while (
+        nonSystemMessages.length > 1 &&
+        this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages]) >= targetTokens
+      ) {
+        droppedMessages.push(nonSystemMessages.shift()!);
+        droppedCount++;
+        continuationMsg = generateContinuation(droppedMessages);
+      }
+
+      // Final check: if dropping all didn't help (huge system prompt or single huge recent message),
+      // keep 1 but it will be truncated later.
+
+      // If still over, truncate the first retained message
+      const total = this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages]);
+      if (total > targetTokens && nonSystemMessages.length > 0) {
+        const first = nonSystemMessages[0]!;
+        const notice = '[SERA: message truncated due to context window overflow]';
+        const noticeTokens = this.countTokens(notice);
+        const otherTokens = this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages.slice(1)]);
+        const available = targetTokens - otherTokens;
+        if (available > noticeTokens) {
+          first.content = this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
+        } else {
+          first.content = notice;
+        }
+      }
+      messages.splice(0, messages.length, ...systemMessages, continuationMsg, ...nonSystemMessages);
+    } else {
+      // No messages dropped, but might be over if a single message is huge
+      const total = this.countMessageTokens([...systemMessages, ...nonSystemMessages]);
+      if (total > targetTokens && nonSystemMessages.length > 0) {
+        const first = nonSystemMessages[0]!;
+        const notice = '[SERA: message truncated due to context window overflow]';
+        const noticeTokens = this.countTokens(notice);
+        const otherTokens = this.countMessageTokens([...systemMessages, ...nonSystemMessages.slice(1)]);
+        const available = targetTokens - otherTokens;
+        if (available > noticeTokens) {
+          first.content = this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
+        } else {
+          first.content = notice;
+        }
+      }
+      messages.splice(0, messages.length, ...systemMessages, ...nonSystemMessages);
+    }
+
+    const tokensAfter = this.countMessageTokens(messages);
+    const retainedCount = nonSystemMessages.length;
+    const reflectMessage = `${label}: dropped ${droppedCount} messages, retained ${retainedCount} non-system messages (${tokensBefore} → ${tokensAfter} tokens)`;
+
+    log('info', `ContextManager: ${reflectMessage}`);
+    return { droppedCount, retainedCount, tokensBefore, tokensAfter, reflectMessage };
+  }
+
+  private summarizeMessages(dropped: ChatMessage[]): string {
+    const counts: Record<string, number> = { user: 0, assistant: 0, tool: 0, system: 0 };
+    const tools = new Set<string>();
+    const userRequests: string[] = [];
+    const pendingWork: string[] = [];
+    const keyFiles = new Set<string>();
+    let currentWork = '';
+
+    const PENDING_KEYWORDS = ['todo', 'next', 'pending', 'follow up', 'remaining'];
+    const FILE_PATH_REGEX = /\b[\w./\\-]+\.(?:ts|rs|json|md)\b/g;
+
+    const toolCallIdToName = new Map<string, string>();
+    for (const msg of dropped) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          toolCallIdToName.set(tc.id, tc.function.name);
+          tools.add(tc.function.name);
+        }
+      }
+    }
+
+    for (const msg of dropped) {
+      counts[msg.role] = (counts[msg.role] || 0) + 1;
+
+      if (msg.role === 'tool' && msg.tool_call_id) {
+        const name = toolCallIdToName.get(msg.tool_call_id);
+        if (name) tools.add(name);
+      }
+
+      const content = msg.content || '';
+      if (msg.role === 'user' && content.trim()) {
+        userRequests.push(content.trim().slice(0, 160));
+      }
+
+      const lowerContent = content.toLowerCase();
+      if (PENDING_KEYWORDS.some((kw) => lowerContent.includes(kw))) {
+        pendingWork.push(content.trim().slice(0, 160));
+      }
+
+      const matches = content.match(FILE_PATH_REGEX);
+      if (matches) {
+        for (const m of matches) {
+          if (keyFiles.size < 8) keyFiles.add(m);
+        }
+      }
+
+      if (content.trim()) {
+        currentWork = content.trim();
+      }
+    }
+
+    const last3UserRequests = userRequests.slice(-3);
+
+    const timeline = dropped
+      .map((msg) => {
+        const truncated = (msg.content || '').trim().slice(0, 160).replace(/\s+/g, ' ');
+        return `- ${msg.role}: ${truncated}`;
+      })
+      .join('\n');
+
+    const summaryParts = [
+      `Scope: ${counts['user']} user, ${counts['assistant']} assistant, ${counts['tool']} tool`,
+      `Tools mentioned: ${Array.from(tools).join(', ') || 'none'}`,
+      `Recent user requests:\n${last3UserRequests.map((r) => `- ${r}`).join('\n') || 'none'}`,
+      `Pending work:\n${pendingWork.slice(-5).map((p) => `- ${p}`).join('\n') || 'none'}`,
+      `Key files: ${Array.from(keyFiles).join(', ') || 'none'}`,
+      `Current work: ${currentWork.slice(0, 500)}${currentWork.length > 500 ? '...' : ''}`,
+      `Key timeline:\n${timeline}`,
+    ];
+
+    return summaryParts.join('\n\n');
   }
 }

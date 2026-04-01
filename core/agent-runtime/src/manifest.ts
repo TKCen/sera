@@ -46,6 +46,10 @@ export interface RuntimeManifest {
       subscribe?: string[];
     };
   };
+  hooks?: {
+    preToolUse?: string[];
+    postToolUse?: string[];
+  };
 }
 
 /**
@@ -69,6 +73,7 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
     if (spec['skills'] && !raw['skills']) raw['skills'] = spec['skills'];
     if (spec['memory'] && !raw['memory']) raw['memory'] = spec['memory'];
     if (spec['intercom'] && !raw['intercom']) raw['intercom'] = spec['intercom'];
+    if (spec['hooks'] && !raw['hooks']) raw['hooks'] = spec['hooks'];
   }
 
   const parsed = raw as unknown as RuntimeManifest;

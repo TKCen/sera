@@ -13,6 +13,7 @@ import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
+import { HookRunner } from './hooks.js';
 import { log } from './logger.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ export class ReasoningLoop {
   private systemPrompt: string;
   private toolDefs: ToolDefinition[];
   private contextManager: ContextManager;
+  private hookRunner: HookRunner;
 
   /** Set to true when SIGTERM received; loop exits after current step. */
   shutdownRequested = false;
@@ -81,6 +83,7 @@ export class ReasoningLoop {
     this.toolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
     this.systemPrompt = generateSystemPrompt(manifest);
     this.contextManager = new ContextManager(manifest.model.name);
+    this.hookRunner = new HookRunner(process.env['WORKSPACE_PATH'] || '/workspace');
   }
 
   /**
@@ -340,7 +343,74 @@ export class ReasoningLoop {
           });
 
           // Execute tools and add results
-          const toolResults = await this.tools.executeToolCalls(response.toolCalls);
+          const preHooks = this.manifest.hooks?.preToolUse || [];
+          const postHooks = this.manifest.hooks?.postToolUse || [];
+
+          const toolResults: Array<Awaited<ReturnType<typeof this.tools.executeTool>>> = [];
+
+          for (const tc of response.toolCalls) {
+            const toolName = tc.function.name;
+            const toolInput = tc.function.arguments || '{}';
+
+            // 1. PreToolUse hooks
+            if (preHooks.length > 0) {
+              const preResult = await this.hookRunner.runHooks('PreToolUse', preHooks, toolName, toolInput);
+              if (!preResult.allowed) {
+                toolResults.push({
+                  message: {
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    content: `Error: Tool execution denied by policy hook.\n\n${preResult.feedback || ''}`.trim(),
+                  },
+                  toolName,
+                  argRepaired: false,
+                  repairStrategy: null,
+                });
+                continue;
+              }
+
+              // Pre-hook feedback/warning can be prepended or handled if needed
+              // For now, Claude Code architecture suggests merging into tool result.
+              // If it's a pre-hook allow with feedback, we store it to merge later.
+              (tc as any).hookFeedback = preResult.feedback;
+              (tc as any).hookWarning = preResult.warning;
+            }
+
+            // 2. Execute tool
+            const result = await this.tools.executeTool(tc);
+
+            // 3. PostToolUse hooks
+            if (postHooks.length > 0) {
+              const isError = result.message.content.startsWith('Error:');
+              const postResult = await this.hookRunner.runHooks(
+                'PostToolUse',
+                postHooks,
+                toolName,
+                toolInput,
+                result.message.content,
+                isError
+              );
+
+              // Merge post-hook feedback/warning
+              if (postResult.feedback || postResult.warning) {
+                const parts = [result.message.content];
+                if (postResult.feedback) parts.push(`\nHook feedback:\n${postResult.feedback}`);
+                if (postResult.warning) parts.push(`\nHook warning:\n${postResult.warning}`);
+                result.message.content = parts.join('\n');
+              }
+            }
+
+            // Merge pre-hook feedback/warning if any
+            if ((tc as any).hookFeedback || (tc as any).hookWarning) {
+              const parts = [result.message.content];
+              if ((tc as any).hookFeedback) parts.push(`\nPre-hook feedback:\n${(tc as any).hookFeedback}`);
+              if ((tc as any).hookWarning) parts.push(`\nPre-hook warning:\n${(tc as any).hookWarning}`);
+              result.message.content = parts.join('\n');
+            }
+
+            toolResults.push(result);
+          }
+
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);

@@ -141,18 +141,19 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
         maxLlmTokensPerDay?: number | null;
       };
 
-      const hourly = maxLlmTokensPerHour ?? DEFAULT_HOURLY_QUOTA;
-      const daily = maxLlmTokensPerDay ?? DEFAULT_DAILY_QUOTA;
+      // Use provided values, or fall back to existing values, or defaults for new rows
+      const hourly = maxLlmTokensPerHour !== undefined ? maxLlmTokensPerHour : null;
+      const daily = maxLlmTokensPerDay !== undefined ? maxLlmTokensPerDay : null;
 
       await query(
         `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
-         VALUES ($1, $2, $3, NOW())
+         VALUES ($1, COALESCE($2, $4), COALESCE($3, $5), NOW())
          ON CONFLICT (agent_id)
          DO UPDATE SET
-           max_tokens_per_hour = $2,
-           max_tokens_per_day = $3,
+           max_tokens_per_hour = COALESCE($2, token_quotas.max_tokens_per_hour),
+           max_tokens_per_day = COALESCE($3, token_quotas.max_tokens_per_day),
            updated_at = NOW()`,
-        [agentId, hourly, daily]
+        [agentId, hourly, daily, DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA]
       );
 
       logger.info(`Budget updated for agent=${agentId} hourly=${hourly} daily=${daily}`);

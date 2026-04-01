@@ -3,9 +3,9 @@ import type { UsageResponse } from './types';
 
 interface UsageRow {
   period: string;
-  agent_id?: string;
-  total_tokens: number;
-  cost_usd: number;
+  agentId?: string;
+  totalTokens: number;
+  costUsd: number;
 }
 
 /**
@@ -34,7 +34,7 @@ export async function getUsage(params: {
   const periodMap = new Map<string, { promptTokens: number; completionTokens: number }>();
   for (const row of rows) {
     const existing = periodMap.get(row.period);
-    const tokens = Number(row.total_tokens) || 0;
+    const tokens = Number(row.totalTokens) || 0;
     if (existing) {
       existing.completionTokens += tokens;
     } else {
@@ -51,8 +51,8 @@ export async function getUsage(params: {
   // Build by-agent breakdown
   const agentMap = new Map<string, number>();
   for (const row of rows) {
-    const name = row.agent_id ?? 'unknown';
-    agentMap.set(name, (agentMap.get(name) ?? 0) + (Number(row.total_tokens) || 0));
+    const name = row.agentId ?? 'unknown';
+    agentMap.set(name, (agentMap.get(name) ?? 0) + (Number(row.totalTokens) || 0));
   }
   const grandTotal = [...agentMap.values()].reduce((a, b) => a + b, 0) || 1;
   const byAgent = [...agentMap.entries()].map(([agentName, totalTokens]) => ({
@@ -70,7 +70,7 @@ export async function getUsage(params: {
     summary: {
       totalTokensToday: totalTokens,
       totalTokensMonth: totalTokens,
-      estimatedCost: rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0),
+      estimatedCost: rows.reduce((s, r) => s + (Number(r.costUsd) || 0), 0),
       mostActiveAgent: byAgent[0]?.agentName,
     },
     timeSeries: timeSeries.map((t) => ({

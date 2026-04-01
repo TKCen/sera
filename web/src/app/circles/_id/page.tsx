@@ -89,7 +89,9 @@ export default function CircleDetailPage() {
     if (!id) return;
     try {
       await deleteCircle.mutateAsync(id);
-      toast.success(`Deleted circle "${circle?.metadata.displayName ?? id}"`);
+      toast.success(
+        `Deleted circle "${circle?.displayName ?? circle?.metadata?.displayName ?? id}"`
+      );
       void navigate('/circles');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete');
@@ -104,7 +106,8 @@ export default function CircleDetailPage() {
         manifest: {
           ...circle,
           metadata: {
-            ...circle.metadata,
+            name: circle.name ?? circle.metadata?.name ?? id,
+            displayName: circle.displayName ?? circle.metadata?.displayName ?? id,
             description: descDraft.trim() || undefined,
           },
         },
@@ -156,8 +159,12 @@ export default function CircleDetailPage() {
           <Users size={24} className="text-sera-accent" />
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold text-sera-text">{circle.metadata.displayName}</h1>
-          <span className="text-xs text-sera-text-dim font-mono">{circle.metadata.name}</span>
+          <h1 className="text-xl font-bold text-sera-text">
+            {circle.displayName ?? circle.metadata?.displayName}
+          </h1>
+          <span className="text-xs text-sera-text-dim font-mono">
+            {circle.name ?? circle.metadata?.name}
+          </span>
 
           {/* Description — inline editable */}
           <div className="mt-1">
@@ -187,11 +194,11 @@ export default function CircleDetailPage() {
             ) : (
               <div className="flex items-center gap-1.5 group/desc">
                 <p className="text-sm text-sera-text-muted">
-                  {circle.metadata.description || 'No description'}
+                  {circle.description ?? circle.metadata?.description ?? 'No description'}
                 </p>
                 <button
                   onClick={() => {
-                    setDescDraft(circle.metadata.description ?? '');
+                    setDescDraft(circle.description ?? circle.metadata?.description ?? '');
                     setEditingDesc(true);
                   }}
                   className="p-1 rounded text-sera-text-dim opacity-0 group-hover/desc:opacity-100 hover:bg-sera-surface-hover transition-opacity"

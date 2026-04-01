@@ -231,9 +231,7 @@ export default function AgentDetailPage() {
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Agent</DialogTitle>
-            <DialogDescription>
-              Modify agent configuration and overrides.
-            </DialogDescription>
+            <DialogDescription>Modify agent configuration and overrides.</DialogDescription>
           </DialogHeader>
           <div className="mt-4">
             <AgentForm

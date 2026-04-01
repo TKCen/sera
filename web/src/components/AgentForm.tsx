@@ -561,7 +561,11 @@ export function AgentForm({
               ? 'Save Changes'
               : 'Create Agent'}
         </Button>
-        <Button type="button" variant="ghost" onClick={() => (onCancel ? onCancel() : navigate(-1))}>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => (onCancel ? onCancel() : navigate(-1))}
+        >
           Cancel
         </Button>
       </div>

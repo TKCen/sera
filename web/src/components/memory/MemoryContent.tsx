@@ -100,7 +100,7 @@ export function MemoryContent({
                 try {
                   await deleteMutation.mutateAsync({ agentId, blockId });
                   toast.success('Block deleted');
-                  onBlockSelect({} as any); // Clear selection
+                  onBlockSelect(null as unknown as ScopedBlock); // Clear selection
                 } catch (err) {
                   toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
@@ -234,13 +234,13 @@ function BlockDetail({
       <div className="flex justify-between items-start">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-2">
-          <Badge variant="accent">{block.type}</Badge>
-          <span className="text-[10px] text-sera-text-dim">
-            {agentNameMap?.get(block.agentId) ?? block.agentId}
-          </span>
-          <span className="text-[10px] text-sera-text-dim ml-auto">
-            {new Date(block.timestamp).toLocaleString()}
-          </span>
+            <Badge variant="accent">{block.type}</Badge>
+            <span className="text-[10px] text-sera-text-dim">
+              {agentNameMap?.get(block.agentId) ?? block.agentId}
+            </span>
+            <span className="text-[10px] text-sera-text-dim ml-auto">
+              {new Date(block.timestamp).toLocaleString()}
+            </span>
           </div>
           <h2 className="text-lg font-semibold text-sera-text truncate">{block.title}</h2>
         </div>

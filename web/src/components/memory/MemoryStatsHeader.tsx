@@ -56,7 +56,7 @@ export function MemoryStatsHeader() {
               return (
                 <div key={type} className="flex-1 flex flex-col items-center gap-2 group">
                   <div className="w-full relative flex flex-col justify-end h-full">
-                     <div
+                    <div
                       className="w-full bg-sera-accent/20 border-t-2 border-sera-accent rounded-t-sm transition-all group-hover:bg-sera-accent/30"
                       style={{ height: `${percentage}%` }}
                     />
@@ -66,7 +66,10 @@ export function MemoryStatsHeader() {
                       </span>
                     </div>
                   </div>
-                  <span className="text-[10px] text-sera-text-dim truncate w-full text-center" title={type}>
+                  <span
+                    className="text-[10px] text-sera-text-dim truncate w-full text-center"
+                    title={type}
+                  >
                     {type}
                   </span>
                 </div>

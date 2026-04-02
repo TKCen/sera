@@ -27,10 +27,7 @@ export const AgentListItem: React.FC<AgentListItemProps> = ({
   style,
 }) => {
   return (
-    <div
-      className="sera-card relative flex items-center gap-4 px-4 py-3 group"
-      style={style}
-    >
+    <div className="sera-card relative flex items-center gap-4 px-4 py-3 group" style={style}>
       <div className="h-9 w-9 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
         <Bot size={16} className="text-sera-accent" />
       </div>
@@ -43,9 +40,7 @@ export const AgentListItem: React.FC<AgentListItemProps> = ({
           <span className="text-xs text-sera-text-dim truncate">{agent.name}</span>
           {agent.template_ref && <Badge variant="default">{agent.template_ref}</Badge>}
           {agent.circle && <Badge variant="default">{agent.circle}</Badge>}
-          {agent.sandbox_boundary && (
-            <Badge variant="accent">{agent.sandbox_boundary}</Badge>
-          )}
+          {agent.sandbox_boundary && <Badge variant="accent">{agent.sandbox_boundary}</Badge>}
         </div>
       </div>
 

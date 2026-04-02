@@ -146,9 +146,21 @@ export class IdentityService {
         `}`
     );
 
-    // ── Memory Context ────────────────────────────────────────────────────────
+    // ── Memory Context & Citations ────────────────────────────────────────────
     if (dynamicMemoryContext) {
       sections.push(dynamicMemoryContext);
+
+      // Add citation instructions if in 'full' mode
+      const citationsMode = manifest.spec?.memory?.citations ?? manifest.memory?.citations;
+      if (citationsMode === 'full') {
+        sections.push(
+          `## Citations\n` +
+            `When you use information from the provided <memory> blocks, you MUST include a citation ` +
+            `at the end of the relevant sentence or paragraph using the format \`[from: id]\`. ` +
+            `The \`id\` should match the \`id\` attribute of the source <memory> block.\n` +
+            `Example: "The project uses camelCase for JSON fields [from: api-conventions]."`
+        );
+      }
     }
 
     // ── Circle Context ────────────────────────────────────────────────────────

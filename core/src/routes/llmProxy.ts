@@ -129,6 +129,13 @@ export function createLlmProxyRouter(
       }
 
       // ── 2.1 Context Assembly (Story 6.3 / 8.4 / #308) ────────────────────
+      const injectedBlocks: Array<{
+        id: string;
+        source: string;
+        relevance: number;
+        content: string;
+      }> = [];
+
       try {
         if (messages) {
           messages = (await contextAssembler.assemble(
@@ -159,6 +166,11 @@ export function createLlmProxyRouter(
                     event.detail
                   )
                   .catch((err) => logger.warn('Failed to publish assembly thought:', err));
+              }
+
+              // Collect injected memory blocks for citation metadata
+              if (event.stage === 'context.memory_retrieved' && Array.isArray(event.detail?.blocks)) {
+                injectedBlocks.push(...(event.detail.blocks as typeof injectedBlocks));
               }
             }
           )) as unknown as import('../agents/types.js').ChatMessage[];
@@ -298,7 +310,58 @@ export function createLlmProxyRouter(
             `tokens=${usage?.total_tokens ?? 0} latency=${llmResponse.latencyMs}ms`
         );
 
-        res.json(llmResponse.response);
+        const response = { ...llmResponse.response } as Record<string, unknown>;
+        const choice = (response['choices'] as any[])?.[0];
+        const content = choice?.message?.content as string | undefined;
+
+        if (content && injectedBlocks.length > 0) {
+          const citations: Array<{ blockId: string; scope: string; relevance: number }> = [];
+          const seenIds = new Set<string>();
+
+          // Track by explicit citation: [from: id]
+          const citationRegex = /\[from:\s*([^\]]+)\]/g;
+          let match;
+          while ((match = citationRegex.exec(content)) !== null) {
+            const blockId = match[1]!.trim();
+            const block = injectedBlocks.find((b) => b.id === blockId);
+            if (block && !seenIds.has(block.id)) {
+              citations.push({
+                blockId: block.id,
+                scope: block.source,
+                relevance: block.relevance,
+              });
+              seenIds.add(block.id);
+            }
+          }
+
+          // Track by content overlap if not explicitly cited (simple keyword/fragment match for 'brief' mode)
+          // For now, we'll only use explicit citations or very basic overlap if no explicit citations found
+          if (citations.length === 0) {
+            for (const block of injectedBlocks) {
+              if (seenIds.has(block.id)) continue;
+              // Check for significant overlap — at least 30 chars and present in content
+              if (block.content.length > 30) {
+                const fragment = block.content.substring(0, 100).toLowerCase();
+                // If a significant fragment of the memory block is in the response, count it
+                const fragmentToCheck = fragment.substring(0, Math.min(fragment.length, 50));
+                if (content.toLowerCase().includes(fragmentToCheck)) {
+                  citations.push({
+                    blockId: block.id,
+                    scope: block.source,
+                    relevance: block.relevance,
+                  });
+                  seenIds.add(block.id);
+                }
+              }
+            }
+          }
+
+          if (citations.length > 0) {
+            response['citations'] = citations;
+          }
+        }
+
+        res.json(response);
       }
     }
   );

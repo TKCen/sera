@@ -28,6 +28,7 @@ const DEFAULT_RECENT_K = 6;
 /** Enrichment markers injected by ContextAssembler / SkillInjector — stripped before summarization. */
 const ENRICHMENT_PATTERNS = [
   /<memory>[\s\S]*?<\/memory>/g,
+  /<injected_memory>[\s\S]*?<\/injected_memory>/g,
   /<skills>[\s\S]*?<\/skills>/g,
   /<constitution>[\s\S]*?<\/constitution>/g,
   /<tool-descriptions>[\s\S]*?<\/tool-descriptions>/g,

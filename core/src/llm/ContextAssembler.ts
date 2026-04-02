@@ -370,14 +370,29 @@ export class ContextAssembler {
     const charBudget = DEFAULT_MEMORY_CHAR_BUDGET;
     const blocks: string[] = [];
     const scores: number[] = [];
+    const injectedBlocksMetadata: Array<{
+      id: string;
+      source: string;
+      relevance: number;
+      content: string;
+    }> = [];
     let charCount = 0;
 
     for (const r of results) {
       const content = (r.payload.content as string | undefined) ?? '';
-      const blockXml = `<block id="${r.id}" type="${r.payload.type ?? ''}" scope="${r.namespace}" author="${r.payload.agent_id ?? ''}" timestamp="${r.payload.created_at ?? ''}">${content}</block>`;
+      // The desired format is <memory source="..." id="..." relevance="...">...</memory>
+      // The old format was <block id="..." type="..." scope="..." author="..." timestamp="...">...</block>
+      // We'll migrate to the more compact citation-friendly format.
+      const blockXml = `<memory source="${r.namespace}" id="${r.id}" relevance="${r.score.toFixed(3)}">${content}</memory>`;
       if (charCount + blockXml.length > charBudget) break;
       blocks.push(blockXml);
       scores.push(r.score);
+      injectedBlocksMetadata.push({
+        id: String(r.id),
+        source: r.namespace,
+        relevance: r.score,
+        content,
+      });
       charCount += blockXml.length;
       logger.debug(
         `ContextAssembler: retrieved block ${r.id} from ${r.namespace} (score=${r.score.toFixed(3)})`
@@ -397,6 +412,7 @@ export class ContextAssembler {
         charsUsed: charCount,
         topK: DEFAULT_TOP_K,
         scores: scores.map((s) => Math.round(s * 1000) / 1000),
+        blocks: injectedBlocksMetadata,
       },
       durationMs: elapsed,
     });
@@ -407,6 +423,6 @@ export class ContextAssembler {
       logger.warn(`ContextAssembler: memory retrieval took ${elapsed}ms (>200ms budget)`);
     }
 
-    return `<memory>\n${blocks.join('\n')}\n</memory>`;
+    return `<injected_memory>\n${blocks.join('\n')}\n</injected_memory>`;
   }
 }

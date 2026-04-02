@@ -103,8 +103,10 @@ describe('ContextAssembler', () => {
     const result = await assembler.assemble('agent-1', messages as any);
 
     expect(result[0]!.content).toContain('Prompt with Skills');
-    expect(result[0]!.content).toContain('<memory>');
-    expect(result[0]!.content).toContain('Memory Content');
+    expect(result[0]!.content).toContain('<injected_memory>');
+    expect(result[0]!.content).toContain(
+      '<memory source="personal:agent-1" id="1" relevance="0.900">Memory Content</memory>'
+    );
   });
 
   it('should handle missing system message', async () => {

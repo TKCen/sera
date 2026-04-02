@@ -83,6 +83,7 @@ export interface LLMResponse {
   /** Chain-of-thought text, e.g. Qwen / DeepSeek reasoning_content. */
   reasoning?: string;
   toolCalls?: ToolCall[];
+  citations?: Array<{ blockId: string; scope: string; relevance: number }>;
   usage?: {
     promptTokens: number;
     completionTokens: number;
@@ -211,7 +212,9 @@ export class LLMClient implements ILLMClient {
           }
         : undefined;
 
-      return { content, reasoning, toolCalls, usage };
+      const citations = data['citations'] as Array<{ blockId: string; scope: string; relevance: number }> | undefined;
+
+      return { content, reasoning, toolCalls, usage, citations };
     } catch (err) {
       if (err instanceof AxiosError) {
         // Timeout detection — must come first; timeout errors may lack a response

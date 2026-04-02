@@ -26,8 +26,9 @@ describe('WebhooksService', () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     // Stop the interval to allow tests to exit
-    // @ts-ignore
-    clearInterval(webhooksService.nonceCleanupInterval);
+    // @ts-expect-error - accessing private property for cleanup
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    clearInterval((webhooksService as any).nonceCleanupInterval);
   });
 
   describe('verifySignature', () => {
@@ -81,11 +82,19 @@ describe('WebhooksService', () => {
     it('should process a valid webhook and publish to intercom', async () => {
       vi.mocked(pool.query).mockResolvedValueOnce({
         rows: [{ id: 'hook-1', secret, enabled: true, event_type: 'test.event' }],
-      } as any);
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
 
       vi.mocked(pool.query).mockResolvedValueOnce({
         rows: [{ id: 'delivery-1' }],
-      } as any);
+        rowCount: 1,
+        command: 'INSERT',
+        oid: 0,
+        fields: [],
+      });
 
       await webhooksService.handleIncoming(slug, rawBody, signature, timestamp);
 
@@ -100,13 +109,11 @@ describe('WebhooksService', () => {
       // Wait for async publishAndLog to complete its database updates
       await vi.waitFor(() => {
         if (
-          vi
-            .mocked(pool.query)
-            .mock.calls.some(
-              (call) =>
-                typeof call[0] === 'string' &&
-                call[0].includes('UPDATE webhook_deliveries SET status = $1')
-            )
+          vi.mocked(pool.query).mock.calls.some(
+            (call) =>
+              typeof call[0] === 'string' &&
+              call[0].includes('UPDATE webhook_deliveries SET status = $1')
+          )
         ) {
           return true;
         }
@@ -126,7 +133,13 @@ describe('WebhooksService', () => {
     });
 
     it('should throw error if webhook not found', async () => {
-      vi.mocked(pool.query).mockResolvedValueOnce({ rows: [] } as any);
+      vi.mocked(pool.query).mockResolvedValueOnce({
+        rows: [],
+        rowCount: 0,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
 
       await expect(
         webhooksService.handleIncoming(slug, rawBody, signature, timestamp)
@@ -136,7 +149,11 @@ describe('WebhooksService', () => {
     it('should throw error if signature invalid', async () => {
       vi.mocked(pool.query).mockResolvedValueOnce({
         rows: [{ id: 'hook-1', secret, enabled: true, event_type: 'test.event' }],
-      } as any);
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
 
       await expect(
         webhooksService.handleIncoming(slug, rawBody, 'wrong-sig', timestamp)

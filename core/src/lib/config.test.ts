@@ -1,25 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import type { config as ConfigType } from './config.js';
 
 vi.mock('fs');
 vi.mock('path', async (importOriginal) => {
   const original = (await importOriginal()) as typeof path;
   return {
     ...original,
-    join: vi.fn((...args) => args.join('/')),
-    dirname: vi.fn((p) => p.split('/').slice(0, -1).join('/')),
+    join: vi.fn((...args: string[]) => args.join('/')),
+    dirname: vi.fn((p: string) => p.split('/').slice(0, -1).join('/')),
   };
 });
 
 describe('config', () => {
-  let config: any;
+  let config: typeof ConfigType;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
     // Dynamically import config to ensure fresh module state for each test
-    const mod = await import('./config.js');
+    const mod = (await import('./config.js')) as unknown as {
+      config: typeof ConfigType;
+    };
     config = mod.config;
   });
 
@@ -34,7 +37,7 @@ describe('config', () => {
     });
 
     it('loads legacy config from llm.json', () => {
-      vi.mocked(fs.existsSync).mockImplementation((p: any) => p.includes('llm.json'));
+      vi.mocked(fs.existsSync).mockImplementation((p) => (p as string).includes('llm.json'));
       vi.mocked(fs.readFileSync).mockReturnValue(
         JSON.stringify({
           baseUrl: 'http://custom:1234/v1',
@@ -48,7 +51,7 @@ describe('config', () => {
     });
 
     it('derives llm config from active provider in providers.json', () => {
-      vi.mocked(fs.existsSync).mockImplementation((p: any) => p.includes('providers.json'));
+      vi.mocked(fs.existsSync).mockImplementation((p) => (p as string).includes('providers.json'));
       vi.mocked(fs.readFileSync).mockReturnValue(
         JSON.stringify({
           activeProvider: 'openai',
@@ -78,7 +81,7 @@ describe('config', () => {
     });
 
     it('loads providers config from file', () => {
-      vi.mocked(fs.existsSync).mockImplementation((p: any) => p.includes('providers.json'));
+      vi.mocked(fs.existsSync).mockImplementation((p) => (p as string).includes('providers.json'));
       vi.mocked(fs.readFileSync).mockReturnValue(
         JSON.stringify({
           activeProvider: 'ollama',
@@ -90,6 +93,7 @@ describe('config', () => {
 
       const providers = config.providers;
       expect(providers.activeProvider).toBe('ollama');
+      // @ts-expect-error - testing dynamic properties
       expect(providers.providers['ollama']?.model).toBe('llama3');
     });
   });

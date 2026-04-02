@@ -10,14 +10,15 @@ type AgentInstance struct {
 	Status       string `json:"status"`
 }
 
-// ChatRequest is the payload for the /api/chat/stream endpoint.
+// ChatRequest is the payload for the /api/chat endpoint.
 type ChatRequest struct {
 	Message         string `json:"message"`
 	SessionID       string `json:"sessionId,omitempty"`
 	AgentInstanceID string `json:"agentInstanceId,omitempty"`
+	Stream          bool   `json:"stream"`
 }
 
-// ChatResponse is the response from the /api/chat/stream endpoint.
+// ChatResponse is the response from the /api/chat endpoint.
 type ChatResponse struct {
 	SessionID string `json:"sessionId"`
 	MessageID string `json:"messageId"`

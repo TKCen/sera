@@ -57,12 +57,18 @@ func TestSendChatStream(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST method, got %s", r.Method)
 		}
+		if r.URL.Path != "/api/chat" {
+			t.Errorf("expected path /api/chat, got %s", r.URL.Path)
+		}
 		var req ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("failed to decode request: %v", err)
 		}
 		if req.Message != "hello" {
 			t.Errorf("expected message 'hello', got '%s'", req.Message)
+		}
+		if !req.Stream {
+			t.Errorf("expected stream to be true")
 		}
 
 		resp := ChatResponse{

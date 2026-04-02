@@ -199,7 +199,7 @@ export function createChatRouter(
   //
   // Sends a message and waits for the full response.
   // If `stream: true` is set, returns immediately with { sessionId, messageId }
-  // and the response streams via Centrifugo (same as the legacy /chat/stream).
+  // and the response streams via Centrifugo.
   //
 
   async function chatHandler(req: Request, res: Response): Promise<void> {
@@ -304,17 +304,6 @@ export function createChatRouter(
   }
 
   router.post('/chat', chatHandler);
-
-  // ── POST /chat/stream (deprecated — same as POST /chat with stream: true) ──
-
-  router.post(
-    '/chat/stream',
-    (req, _res, next) => {
-      req.body.stream = true;
-      next();
-    },
-    chatHandler
-  );
 
   return router;
 }

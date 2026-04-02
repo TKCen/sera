@@ -45,21 +45,18 @@ export class ApiKeyProvider implements AuthPlugin {
       'SELECT id, key_hash, owner_sub, roles FROM api_keys WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())'
     );
 
-    const verificationResults = await Promise.all(
-      result.rows.map(async (row) => {
-        try {
-          if (row.key_hash && (await argon2.verify(row.key_hash, key))) {
-            return row;
-          }
-        } catch (error) {
-          // Ignore errors from invalid hashes to prevent crashing the entire check
-          logger.warn(`Failed to verify API key hash for key ID ${row.id}: ${error}`);
+    let validRow = null;
+    for (const row of result.rows) {
+      try {
+        if (row.key_hash && (await argon2.verify(row.key_hash, key))) {
+          validRow = row;
+          break;
         }
-        return null;
-      })
-    );
-
-    const validRow = verificationResults.find((row) => row !== null);
+      } catch (error) {
+        // Ignore errors from invalid hashes to prevent crashing the entire check
+        logger.warn(`Failed to verify API key hash for key ID ${row.id}: ${error}`);
+      }
+    }
 
     if (validRow) {
       // Update last_used_at async

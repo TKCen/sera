@@ -79,7 +79,7 @@ export function useSetActiveProvider() {
 export function useUpdateLLMConfig() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: updateLLMConfig,
+    mutationFn: (config: Parameters<typeof updateLLMConfig>[0]) => updateLLMConfig(config),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: providersKeys.llmConfig });
     },

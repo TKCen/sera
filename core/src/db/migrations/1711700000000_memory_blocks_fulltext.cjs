@@ -16,7 +16,7 @@ exports.up = (pgm) => {
     importance: { type: 'integer', default: 3 },
     created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
     metadata: { type: 'jsonb', default: '{}' },
-    tsv: { type: 'tsvector' }
+    tsv: { type: 'tsvector' },
   });
 
   pgm.createIndex('memory_blocks', 'tsv', { method: 'gin' });

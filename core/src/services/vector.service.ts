@@ -242,9 +242,7 @@ export class VectorService {
               ...((row.metadata as VectorPayload) ?? {}),
               agent_id: row.agent_id,
               created_at:
-                row.created_at instanceof Date
-                  ? row.created_at.toISOString()
-                  : row.created_at,
+                row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
               tags: row.tags,
               type: row.type,
               title: row.title,
@@ -252,9 +250,7 @@ export class VectorService {
             },
             namespace: row.namespace as MemoryNamespace,
             timestamp:
-              row.created_at instanceof Date
-                ? row.created_at.toISOString()
-                : row.created_at,
+              row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
           });
         }
       } catch (err) {
@@ -513,11 +509,7 @@ function normalizeScores(results: SearchResult[]): SearchResult[] {
   }));
 }
 
-function applyTemporalDecay(
-  score: number,
-  createdAt: string,
-  halfLifeDays: number = 30
-): number {
+function applyTemporalDecay(score: number, createdAt: string, halfLifeDays: number = 30): number {
   const now = new Date();
   const created = new Date(createdAt);
   const ageInDays = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);

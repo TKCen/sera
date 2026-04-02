@@ -18,7 +18,7 @@ vi.mock('../lib/database.js', () => ({
           importance: 3,
           created_at: new Date().toISOString(),
           metadata: {},
-          rank: Math.random()
+          rank: Math.random(),
         });
       }
       return { rows };
@@ -66,7 +66,7 @@ describe('VectorService Hybrid Search Logic', () => {
   it('should re-rank with MMR correctly', () => {
     const v1 = [1, 0, 0];
     const v2 = [0.99, 0.01, 0]; // Very similar to v1
-    const v3 = [0, 1, 0];       // Very different from v1
+    const v3 = [0, 1, 0]; // Very different from v1
 
     const candidates = [
       { id: '1', score: 1.0, vector: v1, payload: {}, namespace: 'global' },
@@ -92,12 +92,12 @@ describe('VectorService Hybrid Search Logic', () => {
             id: `qd-${i}`,
             score: Math.random(),
             payload: { created_at: new Date().toISOString() },
-            vector: new Array(768).fill(Math.random())
+            vector: new Array(768).fill(Math.random()),
           });
         }
         return results;
       }),
-      getCollections: vi.fn(async () => ({ collections: [{ name: 'memory_global' }] }))
+      getCollections: vi.fn(async () => ({ collections: [{ name: 'memory_global' }] })),
     };
 
     const start = performance.now();

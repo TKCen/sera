@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { Layers, Settings2, Activity, Search, Sliders } from 'lucide-react';
-import {
-  useProviders,
-  useDynamicProviders,
-} from '@/hooks/useProviders';
+import { useProviders, useDynamicProviders } from '@/hooks/useProviders';
 import { useCircuitBreakers, useResetCircuitBreaker } from '@/hooks/useHealth';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';

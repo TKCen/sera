@@ -177,9 +177,9 @@ export function DelegationsTab({ id }: { id: string }) {
                       </span>
                       <Badge
                         variant={
-                      t.status === 'done'
+                          t.status === 'done'
                             ? 'success'
-                        : t.status === 'error'
+                            : t.status === 'error'
                               ? 'error'
                               : 'default'
                         }
@@ -188,10 +188,10 @@ export function DelegationsTab({ id }: { id: string }) {
                         {t.status}
                       </Badge>
                     </div>
-                <p className="text-xs text-sera-text truncate">{t.input}</p>
+                    <p className="text-xs text-sera-text truncate">{t.input}</p>
                   </div>
                   <span className="text-[10px] text-sera-text-dim flex-shrink-0">
-                {t.createdAt ? formatDistanceToNow(t.createdAt) : ''}
+                    {t.createdAt ? formatDistanceToNow(t.createdAt) : ''}
                   </span>
                 </div>
               );

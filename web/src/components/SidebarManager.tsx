@@ -65,11 +65,7 @@ export const SidebarManager = memo(function SidebarManager({
         onRenameSession={onRenameSession}
         onRefetchAgents={onRefetchAgents}
       />
-      {!sidebarOpen && (
-        <div className="absolute top-4 left-4 z-10">
-          {sidebarToggle}
-        </div>
-      )}
+      {!sidebarOpen && <div className="absolute top-4 left-4 z-10">{sidebarToggle}</div>}
     </>
   );
 });

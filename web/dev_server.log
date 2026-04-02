@@ -71,3 +71,7 @@ AggregateError [ECONNREFUSED]:
 AggregateError [ECONNREFUSED]:
     at internalConnectMultiple (node:net:1134:18)
     at afterConnectMultiple (node:net:1715:7)
+12:50:06 PM [vite] (client) hmr update /src/app/settings/page.tsx, /src/index.css
+12:50:06 PM [vite] (client) hmr update /src/components/AgentDetailContextTab.tsx, /src/index.css
+12:50:06 PM [vite] (client) hmr update /src/components/AgentDetailDelegationsTab.tsx, /src/index.css
+12:50:07 PM [vite] (client) page reload src/components/SidebarManager.tsx

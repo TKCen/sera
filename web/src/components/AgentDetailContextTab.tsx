@@ -114,7 +114,10 @@ export function ContextTab({ id }: { id: string }) {
   const [testMessage, setTestMessage] = useState('Hello');
   const [queryMessage, setQueryMessage] = useState('Hello');
 
-  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(id, queryMessage) as any;
+  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(
+    id,
+    queryMessage
+  ) as any;
 
   const handleRun = () => {
     setQueryMessage(testMessage);

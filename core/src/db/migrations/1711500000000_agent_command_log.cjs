@@ -9,7 +9,12 @@ exports.up = (pgm) => {
     {
       id: { type: 'uuid', primaryKey: true, default: pgm.func('gen_random_uuid()') },
       session_id: { type: 'uuid', notNull: true, references: 'chat_sessions', onDelete: 'CASCADE' },
-      agent_instance_id: { type: 'uuid', notNull: true, references: 'agent_instances', onDelete: 'CASCADE' },
+      agent_instance_id: {
+        type: 'uuid',
+        notNull: true,
+        references: 'agent_instances',
+        onDelete: 'CASCADE',
+      },
       tool_name: { type: 'text', notNull: true },
       arguments: { type: 'jsonb', notNull: true },
       result: { type: 'text' },

@@ -8,7 +8,7 @@ import {
   Terminal,
   CheckCircle2,
   XCircle,
-  Hash
+  Hash,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
@@ -24,10 +24,13 @@ interface CommandLog {
   createdAt: string;
 }
 
-export function CommandLogTimeline({ agentId, sessionId }: { agentId: string, sessionId: string }) {
+export function CommandLogTimeline({ agentId, sessionId }: { agentId: string; sessionId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['agent-command-logs', agentId, sessionId],
-    queryFn: () => request<CommandLog[]>(`/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/commands`),
+    queryFn: () =>
+      request<CommandLog[]>(
+        `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/commands`
+      ),
     enabled: !!agentId && !!sessionId,
   });
 
@@ -38,7 +41,9 @@ export function CommandLogTimeline({ agentId, sessionId }: { agentId: string, se
       <div className="flex flex-col items-center justify-center p-12 text-sera-text-muted">
         <Terminal size={32} className="mb-3 opacity-20" />
         <p className="text-sm font-medium">No command logs found for this session.</p>
-        <p className="text-xs mt-1">Enable "spec.logging.commands: true" in the agent manifest to see tool logs.</p>
+        <p className="text-xs mt-1">
+          Enable "spec.logging.commands: true" in the agent manifest to see tool logs.
+        </p>
       </div>
     );
   }
@@ -65,10 +70,14 @@ function CommandLogItem({ log }: { log: CommandLog }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className={cn(
-      "sera-card-static overflow-hidden transition-all duration-200",
-      expanded ? "ring-1 ring-sera-border-bright bg-sera-surface-bright/30" : "hover:bg-sera-surface/50"
-    )}>
+    <div
+      className={cn(
+        'sera-card-static overflow-hidden transition-all duration-200',
+        expanded
+          ? 'ring-1 ring-sera-border-bright bg-sera-surface-bright/30'
+          : 'hover:bg-sera-surface/50'
+      )}
+    >
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-3 px-4 py-3 text-left group"
@@ -86,10 +95,14 @@ function CommandLogItem({ log }: { log: CommandLog }) {
             <span className="text-sm font-mono font-semibold text-sera-text truncate">
               {log.toolName}
             </span>
-            <span className={cn(
-              "text-[10px] px-1.5 py-0.5 rounded uppercase font-bold",
-              log.status === 'success' ? "bg-sera-success/10 text-sera-success/80" : "bg-sera-error/10 text-sera-error/80"
-            )}>
+            <span
+              className={cn(
+                'text-[10px] px-1.5 py-0.5 rounded uppercase font-bold',
+                log.status === 'success'
+                  ? 'bg-sera-success/10 text-sera-success/80'
+                  : 'bg-sera-error/10 text-sera-error/80'
+              )}
+            >
               {log.status}
             </span>
           </div>

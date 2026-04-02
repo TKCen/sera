@@ -198,10 +198,7 @@ export class AgentManifestLoader {
     if (obj['logging']) {
       const logging = obj['logging'] as Record<string, unknown>;
       if (logging['commands'] !== undefined && typeof logging['commands'] !== 'boolean') {
-        throw new ManifestValidationError(
-          `"commands" must be a boolean${ctx}`,
-          'logging.commands'
-        );
+        throw new ManifestValidationError(`"commands" must be a boolean${ctx}`, 'logging.commands');
       }
     }
 

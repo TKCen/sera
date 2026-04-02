@@ -317,15 +317,18 @@ export default function AgentDetailPage() {
 function CommandsTab({ id }: { id: string }) {
   const { data: sessions, isLoading } = useQuery({
     queryKey: ['agent-sessions', id],
-    queryFn: () => request<Array<{ id: string; title: string; updatedAt: string }>>(`/sessions?agentInstanceId=${encodeURIComponent(id)}`),
+    queryFn: () =>
+      request<Array<{ id: string; title: string; updatedAt: string }>>(
+        `/sessions?agentInstanceId=${encodeURIComponent(id)}`
+      ),
   });
 
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   if (isLoading) return <TabLoading />;
 
-  const sortedSessions = [...(sessions ?? [])].sort((a, b) =>
-    new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  const sortedSessions = [...(sessions ?? [])].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
 
   // Auto-select most recent session
@@ -345,7 +348,7 @@ function CommandsTab({ id }: { id: string }) {
             onChange={(e) => setSelectedSessionId(e.target.value)}
             className="text-xs bg-sera-surface border border-sera-border rounded-md px-3 py-1.5 min-w-[240px] font-medium outline-none focus:ring-1 focus:ring-sera-accent"
           >
-            {sortedSessions.map(s => (
+            {sortedSessions.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.title || 'Untitled Session'} — {new Date(s.updatedAt).toLocaleDateString()}
               </option>
@@ -360,8 +363,8 @@ function CommandsTab({ id }: { id: string }) {
           <CommandLogTimeline agentId={id} sessionId={selectedSessionId} />
         ) : (
           <div className="flex flex-col items-center justify-center p-12 text-sera-text-muted opacity-50">
-             <Bot size={40} className="mb-4 text-sera-accent-soft" />
-             <p className="text-sm font-medium">Select a session to view its command log</p>
+            <Bot size={40} className="mb-4 text-sera-accent-soft" />
+            <p className="text-sm font-medium">Select a session to view its command log</p>
           </div>
         )}
       </div>

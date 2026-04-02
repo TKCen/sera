@@ -56,6 +56,7 @@ interface ThoughtPayload {
   agentDisplayName: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
+  toolCallId?: string;
 }
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
@@ -238,10 +239,11 @@ function ChatPageContent() {
         timestamp: event.timestamp,
         stepType: event.stepType,
         content: event.content,
+        agentId: event.agentId,
         ...(event.toolName ? { toolName: event.toolName } : {}),
         ...(event.toolArgs ? { toolArgs: event.toolArgs } : {}),
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
       };
-
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === streamingMsgId.current ? { ...msg, thoughts: [...msg.thoughts, thought] } : msg

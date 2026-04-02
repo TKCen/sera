@@ -20,7 +20,6 @@ import { toast } from 'sonner';
 import { updateProviderConfig } from '@/lib/api/providers';
 import {
   useProviders,
-  useLLMConfig,
   useDynamicProviders,
   useDynamicProviderStatuses,
   useAddDynamicProvider,
@@ -255,8 +254,6 @@ function SettingsPageContent() {
   const { data: statusesData } = useDynamicProviderStatuses();
   const addDynamic = useAddDynamicProvider();
   const removeDynamic = useRemoveDynamicProvider();
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future LLM config UI
-  const { data: _llmConfig } = useLLMConfig();
   const { data: circuitBreakers, refetch: refetchCB } = useCircuitBreakers();
   const resetCB = useResetCircuitBreaker();
 

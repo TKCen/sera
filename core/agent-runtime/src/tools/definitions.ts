@@ -29,6 +29,76 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'read_file',
+      description: 'Read a file with optional offset and limit for large files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Relative path to the file within the workspace.',
+          },
+          offset: {
+            type: 'number',
+            description: 'Starting line number (1-indexed). Defaults to 1.',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of lines to read. Defaults to 500.',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob',
+      description:
+        'Find files using a glob pattern. Returns sorted paths, respects .gitignore, max 1000 files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Glob pattern to search for (e.g., "**/*.ts").',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description: 'Search for content in files using ripgrep.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Regex pattern to search for.',
+          },
+          path: {
+            type: 'string',
+            description: 'Relative path to directory or file to search in. Defaults to root.',
+          },
+          mode: {
+            type: 'string',
+            enum: ['files_with_matches', 'content', 'count'],
+            description:
+              'Search mode: files_with_matches (list files), content (show matches with line numbers), count (count matches per file).',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'file-write',
       description: 'Write content to a file in the workspace. Creates parent directories if needed.',
       parameters: {

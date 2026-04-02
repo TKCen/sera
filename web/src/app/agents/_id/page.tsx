@@ -242,7 +242,7 @@ export default function AgentDetailPage() {
         {tab === 'logs' && <LogsTab id={id} />}
         {tab === 'commands' && <CommandsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}
-        {tab === 'schedules' && <SchedulesTab id={id} />}
+        {tab === 'schedules' && <SchedulesTab id={id} agentName={agent?.name} />}
         {tab === 'inner-life' && <InnerLifeTab id={id} />}
         {tab === 'budget' && <BudgetTab id={id} />}
         {tab === 'context' && <ContextTab id={id} />}

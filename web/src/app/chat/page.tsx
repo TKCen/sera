@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Bot, Brain, PanelLeftClose, PanelLeftOpen, Pencil, Trash2 } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
 import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
@@ -12,6 +12,16 @@ import { ChatSidebar } from '@/components/ChatSidebar';
 import { ChatInputBar } from '@/components/ChatInputBar';
 import { ChatMessageBubble } from '@/components/ChatMessageBubble';
 import { EmptyState } from '@/components/EmptyState';
+import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +94,10 @@ function ChatPageContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showThinking, setShowThinking] = useState(true);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
+
+  const [renamingSession, setRenamingSession] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -569,9 +583,30 @@ function ChatPageContent() {
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {sidebarToggle}
             {sessionId && (
-              <span className="text-xs text-sera-text-muted font-mono truncate">
-                {sessions.find((s) => s.id === sessionId)?.title ?? 'New Chat'}
-              </span>
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-xs text-sera-text-muted font-mono truncate">
+                  {sessions.find((s) => s.id === sessionId)?.title ?? 'New Chat'}
+                </span>
+                <Tooltip content="Rename Session">
+                  <button
+                    onClick={() => {
+                      setRenameValue(sessions.find((s) => s.id === sessionId)?.title ?? '');
+                      setRenamingSession(true);
+                    }}
+                    className="p-1 rounded text-sera-text-dim hover:text-sera-accent transition-colors"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                </Tooltip>
+                <Tooltip content="Delete Session">
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="p-1 rounded text-sera-text-dim hover:text-sera-error transition-colors"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </Tooltip>
+              </div>
             )}
           </div>
           <button
@@ -605,6 +640,64 @@ function ChatPageContent() {
           ))}
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Rename Dialog */}
+        <Dialog open={renamingSession} onOpenChange={setRenamingSession}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Rename Session</DialogTitle>
+            </DialogHeader>
+            <div className="py-4">
+              <Input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                placeholder="Enter session title..."
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" size="sm" onClick={() => setRenamingSession(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (sessionId) void renameSession(sessionId, renameValue);
+                  setRenamingSession(false);
+                }}
+              >
+                Rename
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Dialog */}
+        <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete Session</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-sera-text-muted py-4">
+              Are you sure you want to delete this session? This action cannot be undone.
+            </p>
+            <DialogFooter>
+              <Button variant="ghost" size="sm" onClick={() => setShowDeleteConfirm(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={(e) => {
+                  if (sessionId) void deleteSession(sessionId, e as any);
+                  setShowDeleteConfirm(false);
+                }}
+              >
+                Delete
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Input */}
         <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">

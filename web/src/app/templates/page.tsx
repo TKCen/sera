@@ -1,7 +1,12 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
-import { LayoutTemplate, Plus, Lock, X } from 'lucide-react';
-import { useTemplates } from '@/hooks/useTemplates';
+import { LayoutTemplate, Plus, Lock, X, Pencil, Trash2 } from 'lucide-react';
+import {
+  useTemplates,
+  useCreateTemplate,
+  useUpdateTemplate,
+  useDeleteTemplate,
+} from '@/hooks/useTemplates';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -13,7 +18,10 @@ import {
   DialogTitle,
   DialogDescription,
   DialogClose,
+  DialogFooter,
 } from '@/components/ui/dialog';
+import { toast } from 'sonner';
+import yaml from 'js-yaml';
 
 interface TemplateData {
   name: string;
@@ -26,11 +34,26 @@ interface TemplateData {
 function TemplateDetailDialog({
   template,
   onClose,
+  onEdit,
 }: {
   template: TemplateData | null;
   onClose: () => void;
+  onEdit: (t: TemplateData) => void;
 }) {
+  const deleteTemplate = useDeleteTemplate();
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+
   if (!template) return null;
+
+  const handleDelete = async () => {
+    try {
+      await deleteTemplate.mutateAsync(template.name);
+      toast.success(`Template ${template.name} deleted`);
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete template');
+    }
+  };
 
   const spec = template.spec ?? {};
   const identity = spec.identity as Record<string, string> | undefined;
@@ -108,19 +131,58 @@ function TemplateDetailDialog({
           </Section>
         </div>
 
-        <div className="flex gap-3 justify-end mt-4">
-          <DialogClose asChild>
-            <Button variant="ghost" size="sm">
-              <X size={12} /> Close
+        <div className="flex gap-3 justify-between mt-4">
+          <div className="flex gap-2">
+            {!template.builtin && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => onEdit(template)}>
+                  <Pencil size={12} /> Edit
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => setShowConfirmDelete(true)}>
+                  <Trash2 size={12} /> Delete
+                </Button>
+              </>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">
+                <X size={12} /> Close
+              </Button>
+            </DialogClose>
+            <Button asChild size="sm">
+              <Link to={`/agents/new?template=${encodeURIComponent(template.name)}`}>
+                <Plus size={12} /> Create Agent
+              </Link>
             </Button>
-          </DialogClose>
-          <Button asChild size="sm">
-            <Link to={`/agents/new?template=${encodeURIComponent(template.name)}`}>
-              <Plus size={12} /> Create Agent
-            </Link>
-          </Button>
+          </div>
         </div>
       </DialogContent>
+
+      <Dialog open={showConfirmDelete} onOpenChange={setShowConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Template</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete template <strong>{template.name}</strong>? This action
+              cannot be undone and may affect any existing agents using this template.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setShowConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleDelete}
+              disabled={deleteTemplate.isPending}
+            >
+              {deleteTemplate.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
@@ -145,14 +207,114 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
+function TemplateEditDialog({
+  template,
+  onClose,
+}: {
+  template: TemplateData | null | boolean; // true for new, TemplateData for edit
+  onClose: () => void;
+}) {
+  const isNew = template === true;
+  const initialData = useMemo(() => {
+    if (typeof template === 'object' && template !== null) {
+      return yaml.dump(template);
+    }
+    return yaml.dump({
+      apiVersion: 'sera/v1',
+      kind: 'Agent',
+      metadata: {
+        name: 'my-new-template',
+        displayName: 'My New Template',
+      },
+      spec: {
+        identity: {
+          role: 'A helpful assistant',
+        },
+        model: {
+          name: 'gpt-4o',
+          temperature: 0.7,
+        },
+      },
+    });
+  }, [template]);
+
+  const [code, setCode] = useState(initialData);
+  const createTemplate = useCreateTemplate();
+  const updateTemplate = useUpdateTemplate();
+
+  const handleSave = async () => {
+    try {
+      const parsed = yaml.load(code) as any;
+      if (!parsed.name && !parsed.metadata?.name) {
+        toast.error('Template name is required (metadata.name)');
+        return;
+      }
+      const name = parsed.name ?? parsed.metadata?.name;
+
+      if (isNew) {
+        await createTemplate.mutateAsync(parsed as any);
+        toast.success(`Template ${name} created`);
+      } else {
+        await updateTemplate.mutateAsync({
+          name: (template as TemplateData).name,
+          template: parsed as any,
+        });
+        toast.success(`Template ${name} updated`);
+      }
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save template');
+    }
+  };
+
+  return (
+    <Dialog open={!!template} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>{isNew ? 'Create Template' : 'Edit Template'}</DialogTitle>
+          <DialogDescription>
+            Templates are defined using YAML. Ensure your spec follows the Agent schema.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex-1 min-h-[400px] mt-4 relative">
+          <textarea
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            className="w-full h-full p-4 font-mono text-xs bg-sera-surface border border-sera-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-sera-accent leading-relaxed"
+            placeholder="Paste YAML template spec here..."
+          />
+        </div>
+
+        <DialogFooter className="mt-4">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={createTemplate.isPending || updateTemplate.isPending}
+          >
+            {createTemplate.isPending || updateTemplate.isPending ? 'Saving...' : 'Save Template'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function TemplatesPage() {
   const { data: templates, isLoading } = useTemplates();
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateData | null>(null);
+  const [editTemplate, setEditTemplate] = useState<TemplateData | null | boolean>(null);
 
   return (
     <div className="p-6">
       <div className="sera-page-header">
         <h1 className="sera-page-title">Templates</h1>
+        <Button size="sm" onClick={() => setEditTemplate(true)}>
+          <Plus size={14} /> Create Template
+        </Button>
       </div>
       <p className="text-sm text-sera-text-muted mb-6">
         Agent templates are reusable blueprints. Create an agent instance from any template below.
@@ -240,7 +402,19 @@ export default function TemplatesPage() {
         </div>
       )}
 
-      <TemplateDetailDialog template={selectedTemplate} onClose={() => setSelectedTemplate(null)} />
+      <TemplateDetailDialog
+        template={selectedTemplate}
+        onClose={() => setSelectedTemplate(null)}
+        onEdit={(t) => {
+          setSelectedTemplate(null);
+          setEditTemplate(t);
+        }}
+      />
+
+      <TemplateEditDialog
+        template={editTemplate}
+        onClose={() => setEditTemplate(null)}
+      />
     </div>
   );
 }

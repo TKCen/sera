@@ -1,9 +1,22 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAgentDelegations } from '@/hooks/useAgents';
+import { useIssueDelegation } from '@/hooks/useDelegations';
 import { request } from '@/lib/api/client';
 import { TabLoading } from './AgentDetailTabLoading';
 import { Badge } from './ui/badge';
-import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { toast } from 'sonner';
+import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft, Plus } from 'lucide-react';
 import { formatDistanceToNow } from '@/lib/utils';
 
 interface TaskDelegation {
@@ -28,8 +41,36 @@ function useDelegatedTasks(agentId: string) {
 }
 
 export function DelegationsTab({ id }: { id: string }) {
-  const { data: delegations, isLoading } = useAgentDelegations(id);
+  const { data: delegations, isLoading, refetch } = useAgentDelegations(id);
   const { data: tasks } = useDelegatedTasks(id);
+  const issueDelegation = useIssueDelegation();
+
+  const [showIssueDialog, setShowIssueDialog] = useState(false);
+  const [newDelegation, setNewDelegation] = useState({
+    service: '',
+    permissions: '',
+    credentialSecretName: '',
+    grantType: 'session' as 'one-time' | 'session' | 'persistent',
+    expiresAt: '',
+  });
+
+  const handleIssue = async () => {
+    try {
+      await issueDelegation.mutateAsync({
+        agentId: id,
+        service: newDelegation.service,
+        permissions: newDelegation.permissions.split(',').map((p) => p.trim()).filter(Boolean),
+        credentialSecretName: newDelegation.credentialSecretName,
+        grantType: newDelegation.grantType,
+        expiresAt: newDelegation.expiresAt || undefined,
+      });
+      toast.success('Delegation issued');
+      setShowIssueDialog(false);
+      void refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to issue delegation');
+    }
+  };
 
   // Separate delegated tasks: tasks received from other agents vs tasks this agent sent
   const receivedTasks = (tasks ?? []).filter((t) => {
@@ -60,7 +101,12 @@ export function DelegationsTab({ id }: { id: string }) {
           <ShieldCheck size={14} className="text-sera-accent" />
           Inbound Delegations
         </h3>
-        <span className="text-xs text-sera-text-dim">{delegations.length} active</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-sera-text-dim">{delegations.length} active</span>
+          <Button size="sm" onClick={() => setShowIssueDialog(true)}>
+            <Plus size={14} /> Issue Delegation
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4">
@@ -222,6 +268,81 @@ export function DelegationsTab({ id }: { id: string }) {
           </div>
         </div>
       )}
+      {/* Issue Delegation Dialog */}
+      <Dialog open={showIssueDialog} onOpenChange={setShowIssueDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Issue Delegation</DialogTitle>
+            <DialogDescription>
+              Grant this agent authority to act on your behalf for a specific service.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-4">
+            <div className="space-y-1.5">
+              <label className="text-xs text-sera-text-muted">Service Name</label>
+              <Input
+                value={newDelegation.service}
+                onChange={(e) => setNewDelegation({ ...newDelegation, service: e.target.value })}
+                placeholder="e.g. github, slack, aws"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-sera-text-muted">Permissions (comma-separated)</label>
+              <Input
+                value={newDelegation.permissions}
+                onChange={(e) => setNewDelegation({ ...newDelegation, permissions: e.target.value })}
+                placeholder="e.g. repo:read, repo:write"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-sera-text-muted">Credential Secret Name</label>
+              <Input
+                value={newDelegation.credentialSecretName}
+                onChange={(e) =>
+                  setNewDelegation({ ...newDelegation, credentialSecretName: e.target.value })
+                }
+                placeholder="Name of the secret in the vault"
+              />
+            </div>
+            <div className="flex gap-4">
+              <div className="flex-1 space-y-1.5">
+                <label className="text-xs text-sera-text-muted">Grant Type</label>
+                <select
+                  value={newDelegation.grantType}
+                  onChange={(e) =>
+                    setNewDelegation({
+                      ...newDelegation,
+                      grantType: e.target.value as 'one-time' | 'session' | 'persistent',
+                    })
+                  }
+                  className="sera-input text-xs w-full"
+                >
+                  <option value="one-time">One-time</option>
+                  <option value="session">Session</option>
+                  <option value="persistent">Persistent</option>
+                </select>
+              </div>
+              <div className="flex-1 space-y-1.5">
+                <label className="text-xs text-sera-text-muted">Expires At (optional)</label>
+                <Input
+                  type="datetime-local"
+                  value={newDelegation.expiresAt}
+                  onChange={(e) => setNewDelegation({ ...newDelegation, expiresAt: e.target.value })}
+                  className="text-xs"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setShowIssueDialog(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleIssue} disabled={issueDelegation.isPending}>
+              Issue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

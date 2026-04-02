@@ -690,6 +690,20 @@ export function createAgentRouter(
     })
   );
 
+  // ── Skip Template Update ─────────────────────────────────────────────────
+  /**
+   * POST /api/agents/:id/skip-template-update
+   * Dismisses pending template changes for this instance by updating template_applied_at.
+   */
+  router.post(
+    '/:id/skip-template-update',
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      await agentRegistry.skipTemplateUpdate(id as string);
+      res.json({ success: true });
+    })
+  );
+
   // ── Health Check ─────────────────────────────────────────────────────────
   /**
    * GET /api/agents/:id/health-check

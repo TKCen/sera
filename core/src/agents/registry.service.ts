@@ -41,7 +41,7 @@ function classifyImpact(
     'sandboxBoundary',
     'policyRef',
   ];
-  const resourceKeywords = ['resources', 'memory', 'cpu', 'maxLlm'];
+  const resourceKeywords = ['resources', 'memory', 'cpu', 'maxLlm', 'model', 'fallback'];
   if (permissionKeywords.some((k) => path.includes(k))) return 'permission';
   if (resourceKeywords.some((k) => path.includes(k))) return 'resource';
   if (type === 'removed') return 'breaking';
@@ -120,21 +120,6 @@ export class AgentRegistry {
     `;
     const res = await this.pool.query(query, [name, displayName, builtin, category, template.spec]);
 
-    // Sync manifest schedules and budgets to all existing instances of this template.
-    const spec = template.spec as Record<string, unknown> | undefined;
-    const instances = await this.pool.query(
-      'SELECT id FROM agent_instances WHERE template_ref = $1',
-      [name]
-    );
-    if ((spec?.schedules as unknown[] | undefined)?.length) {
-      for (const inst of instances.rows) {
-        await this.syncManifestSchedules(inst.id as string, name);
-      }
-    }
-    for (const inst of instances.rows) {
-      await this.syncManifestBudget(inst.id as string, name);
-    }
-
     return {
       status: existing ? 'updated' : 'added',
       name: res.rows[0].name,
@@ -211,11 +196,16 @@ export class AgentRegistry {
     // Derive workspace path if not provided (mirrors AgentFactory convention)
     const workspacePath =
       data.workspacePath ?? `/workspaces/${data.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+
+    const template = await this.getTemplate(data.templateRef);
+    const templateSpec = template?.spec ?? {};
+
     const query = `
       INSERT INTO agent_instances (
         id, name, display_name, template_name, template_ref, workspace_path,
-        circle, lifecycle_mode, parent_instance_id, overrides, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'created')
+        circle, lifecycle_mode, parent_instance_id, overrides, status,
+        resolved_config, template_applied_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'created', $11, NOW())
       RETURNING *;
     `;
     const res = await this.pool.query(query, [
@@ -229,14 +219,15 @@ export class AgentRegistry {
       data.lifecycleMode ?? 'persistent',
       data.parentInstanceId,
       data.overrides ?? {},
+      templateSpec,
     ]);
     const instance = res.rows[0];
 
     // Story 11.2: Import manifest schedules
-    await this.syncManifestSchedules(instance.id, data.templateRef);
+    await this.syncManifestSchedules(instance.id, templateSpec, data.templateRef);
 
     // Sync manifest budget limits to token_quotas
-    await this.syncManifestBudget(instance.id, data.templateRef);
+    await this.syncManifestBudget(instance.id, templateSpec);
 
     return instance;
   }
@@ -247,11 +238,10 @@ export class AgentRegistry {
    * are updated, and stale manifest schedules (removed from template) are deleted.
    * Operator-created API schedules are never touched.
    */
-  private async syncManifestSchedules(instanceId: string, templateRef: string) {
-    const template = await this.getTemplate(templateRef);
+  private async syncManifestSchedules(instanceId: string, spec: any, templateName: string) {
     const scheduleService = ScheduleService.getInstance();
 
-    const manifestSchedules = (template?.spec?.schedules ?? []) as Array<{
+    const manifestSchedules = (spec?.schedules ?? []) as Array<{
       name: string;
       description?: string;
       type: 'cron' | 'once';
@@ -266,7 +256,7 @@ export class AgentRegistry {
       await scheduleService
         .upsertManifestSchedule({
           agent_instance_id: instanceId,
-          agent_name: templateRef,
+          agent_name: templateName,
           name: s.name,
           ...(s.description !== undefined ? { description: s.description } : {}),
           type: s.type,
@@ -290,11 +280,10 @@ export class AgentRegistry {
    * Only writes if the template defines maxLlmTokensPerHour or maxLlmTokensPerDay.
    * Uses 0 as "unlimited" sentinel.
    */
-  private async syncManifestBudget(instanceId: string, templateRef: string) {
-    const template = await this.getTemplate(templateRef);
-    if (!template?.spec) return;
+  private async syncManifestBudget(instanceId: string, spec: any) {
+    if (!spec) return;
 
-    const resources = (template.spec as Record<string, unknown>).resources as
+    const resources = spec.resources as
       | { maxLlmTokensPerHour?: number; maxLlmTokensPerDay?: number }
       | undefined;
     if (!resources) return;
@@ -756,7 +745,7 @@ export class AgentRegistry {
 
   async getTemplateDiff(instanceId: string): Promise<TemplateDiff> {
     const instanceRes = await this.pool.query(
-      'SELECT id, name, template_ref, resolved_config, overrides, template_applied_at FROM agent_instances WHERE id = $1',
+      'SELECT id, name, template_ref, resolved_config, template_applied_at FROM agent_instances WHERE id = $1',
       [instanceId]
     );
     const instance = instanceRes.rows[0];
@@ -778,18 +767,13 @@ export class AgentRegistry {
       : null;
 
     const templateSpec = (template.spec ?? {}) as Record<string, unknown>;
-    const instanceSpec = (instance.resolved_config ?? instance.overrides ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const appliedSpec = (instance.resolved_config ?? {}) as Record<string, unknown>;
 
     const changes: TemplateDiffChange[] = [];
-    deepDiff(instanceSpec, templateSpec, '', changes);
+    deepDiff(appliedSpec, templateSpec, '', changes);
 
     const hasChanges =
-      changes.length > 0 ||
-      instanceAppliedAt === null ||
-      new Date(templateUpdatedAt) > new Date(instanceAppliedAt);
+      instanceAppliedAt === null || new Date(templateUpdatedAt) > new Date(instanceAppliedAt);
 
     return {
       hasChanges,
@@ -814,21 +798,22 @@ export class AgentRegistry {
       throw Object.assign(new Error(`Template ${diff.templateName} not found`), { status: 404 });
 
     const templateSpec = (template.spec ?? {}) as Record<string, unknown>;
+    let nextConfig: Record<string, unknown>;
 
     if (paths && paths.length > 0) {
       // Partial apply: fetch current instance config and overlay only the requested paths
       const instanceRes = await this.pool.query(
-        'SELECT resolved_config, overrides FROM agent_instances WHERE id = $1',
+        'SELECT resolved_config FROM agent_instances WHERE id = $1',
         [instanceId]
       );
       const inst = instanceRes.rows[0];
-      const current = (inst?.resolved_config ?? inst?.overrides ?? {}) as Record<string, unknown>;
-      const merged: Record<string, unknown> = { ...current };
+      const current = (inst?.resolved_config ?? {}) as Record<string, unknown>;
+      nextConfig = { ...current };
 
       for (const path of paths) {
         const keys = path.split('.');
-        let src: unknown = templateSpec;
-        let dst: Record<string, unknown> = merged;
+        let src: any = templateSpec;
+        let dst: any = nextConfig;
 
         for (let i = 0; i < keys.length - 1; i++) {
           const key = keys[i]!;
@@ -842,22 +827,41 @@ export class AgentRegistry {
         const lastKey = keys[keys.length - 1]!;
         dst[lastKey] = (src as Record<string, unknown>)[lastKey];
       }
-
-      await this.pool.query(
-        'UPDATE agent_instances SET resolved_config = $2, template_applied_at = NOW(), updated_at = NOW() WHERE id = $1',
-        [instanceId, merged]
-      );
     } else {
-      // Full apply: set resolved_config to the template spec
-      await this.pool.query(
-        'UPDATE agent_instances SET resolved_config = $2, template_applied_at = NOW(), updated_at = NOW() WHERE id = $1',
-        [instanceId, templateSpec]
-      );
+      nextConfig = templateSpec;
     }
 
-    // Re-sync schedules and budgets
-    await this.syncManifestSchedules(instanceId, diff.templateName);
-    await this.syncManifestBudget(instanceId, diff.templateName);
+    await this.pool.query(
+      'UPDATE agent_instances SET resolved_config = $2, template_applied_at = NOW(), updated_at = NOW() WHERE id = $1',
+      [instanceId, nextConfig]
+    );
+
+    // Re-sync schedules and budgets from the newly merged config
+    await this.syncManifestSchedules(instanceId, nextConfig, diff.templateName);
+    await this.syncManifestBudget(instanceId, nextConfig);
+  }
+
+  async skipTemplateUpdate(instanceId: string): Promise<void> {
+    const instanceRes = await this.pool.query(
+      'SELECT template_ref FROM agent_instances WHERE id = $1',
+      [instanceId]
+    );
+    const instance = instanceRes.rows[0];
+    if (!instance)
+      throw Object.assign(new Error(`Instance ${instanceId} not found`), { status: 404 });
+
+    const templateRes = await this.pool.query(
+      'SELECT updated_at FROM agent_templates WHERE name = $1',
+      [instance.template_ref]
+    );
+    const template = templateRes.rows[0];
+    if (!template)
+      throw Object.assign(new Error(`Template ${instance.template_ref} not found`), { status: 404 });
+
+    await this.pool.query(
+      'UPDATE agent_instances SET template_applied_at = $2, updated_at = NOW() WHERE id = $1',
+      [instanceId, template.updated_at]
+    );
   }
 
   async getInstancesWithPendingUpdates(): Promise<PendingUpdateEntry[]> {

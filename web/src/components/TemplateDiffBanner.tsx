@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, RefreshCw, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { useTemplateDiff, useApplyTemplateUpdate } from '@/hooks/useAgents';
+import { useTemplateDiff, useApplyTemplateUpdate, useSkipTemplateUpdate } from '@/hooks/useAgents';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { TemplateDiffChange } from '@/lib/api/types';
@@ -37,6 +37,7 @@ function typeBadgeClass(type: TemplateDiffChange['type']): string {
 export function TemplateDiffBanner({ agentId }: TemplateDiffBannerProps) {
   const { data: diff, isLoading } = useTemplateDiff(agentId);
   const applyUpdate = useApplyTemplateUpdate(agentId);
+  const skipUpdate = useSkipTemplateUpdate(agentId);
   const [expanded, setExpanded] = useState(false);
 
   if (isLoading || !diff || !diff.hasChanges) return null;
@@ -47,6 +48,24 @@ export function TemplateDiffBanner({ agentId }: TemplateDiffBannerProps) {
       toast.success('Template update applied');
     } catch {
       toast.error('Failed to apply template update');
+    }
+  };
+
+  const handleApplyPartial = async (path: string) => {
+    try {
+      await applyUpdate.mutateAsync([path]);
+      toast.success(`Applied update for ${path}`);
+    } catch {
+      toast.error(`Failed to apply update for ${path}`);
+    }
+  };
+
+  const handleSkip = async () => {
+    try {
+      await skipUpdate.mutateAsync();
+      toast.success('Template update dismissed');
+    } catch {
+      toast.error('Failed to dismiss template update');
     }
   };
 
@@ -75,11 +94,22 @@ export function TemplateDiffBanner({ agentId }: TemplateDiffBannerProps) {
           )}
           <Button
             size="sm"
+            variant="ghost"
+            onClick={() => {
+              void handleSkip();
+            }}
+            disabled={skipUpdate.isPending || applyUpdate.isPending}
+            className="text-yellow-400 hover:bg-yellow-500/10"
+          >
+            {skipUpdate.isPending ? 'Skipping…' : 'Skip'}
+          </Button>
+          <Button
+            size="sm"
             variant="outline"
             onClick={() => {
               void handleApplyAll();
             }}
-            disabled={applyUpdate.isPending}
+            disabled={applyUpdate.isPending || skipUpdate.isPending}
           >
             {applyUpdate.isPending ? 'Applying…' : 'Apply All'}
           </Button>
@@ -90,7 +120,7 @@ export function TemplateDiffBanner({ agentId }: TemplateDiffBannerProps) {
       {expanded && diff.changes.length > 0 && (
         <div className="border-t border-yellow-500/20 divide-y divide-yellow-500/10">
           {diff.changes.map((change, i) => (
-            <div key={i} className="px-4 py-2.5 flex items-start gap-3">
+            <div key={i} className="px-4 py-2.5 flex items-start gap-3 group">
               <code className="text-xs font-mono text-sera-text flex-1 min-w-0 break-all">
                 {change.path || '(root)'}
               </code>
@@ -132,6 +162,16 @@ export function TemplateDiffBanner({ agentId }: TemplateDiffBannerProps) {
                   )}
                 </div>
               )}
+              <button
+                onClick={() => {
+                  void handleApplyPartial(change.path);
+                }}
+                disabled={applyUpdate.isPending}
+                className="flex-shrink-0 text-yellow-400 hover:text-yellow-300 opacity-0 group-hover:opacity-100 transition-all p-1"
+                title="Apply this change only"
+              >
+                <CheckCircle size={14} />
+              </button>
             </div>
           ))}
         </div>

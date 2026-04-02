@@ -82,6 +82,60 @@ describe('SkillInjector', () => {
     expect(result).toContain('s1');
     expect(result).not.toContain('s2');
   });
+
+  it('should resolve version conflicts by picking the latest version', async () => {
+    const skillV1 = { name: 'v-skill', version: '1.0.0', content: 'v1 content', triggers: [] };
+    const skillV2 = { name: 'v-skill', version: '2.0.0', content: 'v2 content', triggers: [] };
+
+    (libMock['getSkill'] as import('vitest').Mock).mockImplementation((name: string, version?: string) => {
+      if (name === 'v-skill') {
+        if (version === '1.0.0') return Promise.resolve(skillV1);
+        if (version === '2.0.0' || !version) return Promise.resolve(skillV2);
+      }
+      return Promise.resolve(null);
+    });
+
+    const prompt = '## Guiding Principles\n- Be helpful.';
+    // Request both versions (e.g., from different dependencies)
+    const result = await injector.inject(prompt, [
+      { name: 'v-skill', version: '1.0.0' },
+      { name: 'v-skill', version: '2.0.0' }
+    ], [], 'msg');
+
+    expect(result).toContain('v2 content');
+    expect(result).not.toContain('v1 content');
+    expect(result).toContain('version="2.0.0"');
+  });
+
+  it('should re-enqueue dependencies when a higher version replaces an existing one', async () => {
+    const baseSkillV1 = { name: 'base', version: '1.0.0', content: 'base v1', requires: ['dep-a'], triggers: [] };
+    const baseSkillV2 = { name: 'base', version: '2.0.0', content: 'base v2', requires: ['dep-b'], triggers: [] };
+    const depA = { name: 'dep-a', version: '1.0.0', content: 'dep-a content', triggers: [] };
+    const depB = { name: 'dep-b', version: '1.0.0', content: 'dep-b content', triggers: [] };
+
+    (libMock['getSkill'] as import('vitest').Mock).mockImplementation((name: string, version?: string) => {
+      if (name === 'base') {
+        if (version === '1.0.0') return Promise.resolve(baseSkillV1);
+        if (version === '2.0.0' || !version) return Promise.resolve(baseSkillV2);
+      }
+      if (name === 'dep-a') return Promise.resolve(depA);
+      if (name === 'dep-b') return Promise.resolve(depB);
+      return Promise.resolve(null);
+    });
+
+    const prompt = '## Guiding Principles\n- Be helpful.';
+    // Request v1 first, then v2
+    const result = await injector.inject(prompt, [
+      { name: 'base', version: '1.0.0' },
+      { name: 'base', version: '2.0.0' }
+    ], [], 'msg');
+
+    expect(result).toContain('base v2');
+    expect(result).toContain('dep-b content');
+    // dep-a might still be there if it was already resolved and not conflicted,
+    // but the key is dep-b MUST be there.
+    expect(result).toContain('dep-b');
+  });
 });
 
 describe('SkillInjector — constitution injection (Story 10.2)', () => {

@@ -124,6 +124,12 @@ export function getAgentThoughts(id: string, taskId?: string): Promise<ThoughtEv
   return request<ThoughtEvent[]>(`/agents/${encodeURIComponent(id)}/thoughts${params}`);
 }
 
+export function getAgentTools(id: string): Promise<import('./types').AgentToolsResponse> {
+  return request<import('./types').AgentToolsResponse>(
+    `/agents/instances/${encodeURIComponent(id)}/tools`
+  );
+}
+
 export function getAgentDelegations(id: string): Promise<AgentDelegation[]> {
   return request<AgentDelegation[]>(`/agents/${encodeURIComponent(id)}/delegations`);
 }

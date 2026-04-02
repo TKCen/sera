@@ -13,6 +13,7 @@ export const agentsKeys = {
   schedules: (id: string) => ['agents', id, 'schedules'] as const,
   memory: (id: string, scope?: string) => ['agents', id, 'memory', scope] as const,
   thoughts: (id: string, taskId?: string) => ['agents', id, 'thoughts', taskId] as const,
+  tools: (id: string) => ['agents', id, 'tools'] as const,
   logs: (id: string) => ['agents', id, 'logs'] as const,
   grants: (id: string) => ['agents', id, 'grants'] as const,
   delegations: (id: string) => ['agents', id, 'delegations'] as const,
@@ -30,6 +31,14 @@ export function useAgent(id: string) {
   return useQuery({
     queryKey: agentsKeys.detail(id),
     queryFn: () => agentsApi.getAgentInstance(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function useAgentTools(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.tools(id),
+    queryFn: () => agentsApi.getAgentTools(id),
     enabled: id.length > 0,
   });
 }

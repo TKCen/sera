@@ -359,6 +359,11 @@ export interface AgentSchedule {
   enabled: boolean;
 }
 
+export interface AgentToolsResponse {
+  available: ToolInfo[];
+  unavailable: string[];
+}
+
 export interface AgentMemoryBlock {
   id: string;
   agentName: string;

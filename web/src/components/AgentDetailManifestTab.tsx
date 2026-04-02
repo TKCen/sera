@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { useAgent } from '@/hooks/useAgents';
+import { useAgent, useAgentTools } from '@/hooks/useAgents';
 import { cn } from '@/lib/utils';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 export function AgentDetailManifestTab({ id }: { id: string }) {
   const { data: instance, isLoading } = useAgent(id);
+  const { data: toolsData } = useAgentTools(id);
   const [showRaw, setShowRaw] = useState(false);
 
   if (isLoading) return <TabLoading />;
@@ -108,9 +110,34 @@ export function AgentDetailManifestTab({ id }: { id: string }) {
             {Array.isArray(tools?.allowed) && (tools.allowed as string[]).length > 0 && (
               <div>
                 <span className="text-sera-text-muted">Tools Allowed: </span>
-                <span className="text-sera-text font-mono">
-                  {(tools.allowed as string[]).join(', ')}
-                </span>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {(tools.allowed as string[]).map((toolId) => {
+                    const isAvailable = toolsData?.available.some((t) => t.id === toolId);
+                    const isUnavailable = toolsData?.unavailable.includes(toolId);
+                    const statusIcon = isAvailable ? (
+                      <CheckCircle2 size={10} className="text-sera-success" />
+                    ) : isUnavailable ? (
+                      <AlertCircle size={10} className="text-sera-warning" />
+                    ) : null;
+
+                    return (
+                      <div
+                        key={toolId}
+                        className={cn(
+                          'inline-flex items-center gap-1.5 px-2 py-0.5 rounded border font-mono text-[11px]',
+                          isAvailable
+                            ? 'bg-sera-success/5 border-sera-success/20 text-sera-success'
+                            : isUnavailable
+                              ? 'bg-sera-warning/5 border-sera-warning/20 text-sera-warning'
+                              : 'bg-sera-surface border-sera-border text-sera-text'
+                        )}
+                      >
+                        {statusIcon}
+                        {toolId}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             {Array.isArray(tools?.denied) && (tools.denied as string[]).length > 0 && (

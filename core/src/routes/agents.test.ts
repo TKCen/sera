@@ -7,6 +7,7 @@ describe('Agents Routes', () => {
   let app: express.Express;
   let orchestratorMock: any;
   let agentRegistryMock: any;
+  let skillRegistryMock: any;
   let intercomMock: any;
 
   beforeEach(() => {
@@ -39,9 +40,17 @@ describe('Agents Routes', () => {
       deleteInstance: vi.fn(),
     };
 
+    skillRegistryMock = {
+      listForAgent: vi.fn(),
+      validateManifestSkills: vi.fn(),
+    };
+
     app = express();
     app.use(express.json());
-    app.use('/api/agents', createAgentRouter(orchestratorMock, agentRegistryMock));
+    app.use(
+      '/api/agents',
+      createAgentRouter(orchestratorMock, agentRegistryMock, skillRegistryMock)
+    );
   });
 
   describe('POST /api/agents/spawn-ephemeral', () => {
@@ -90,6 +99,54 @@ describe('Agents Routes', () => {
         })
       );
       expect(intercomMock.publish.mock.calls[0][1].durationMs).toBeDefined();
+    });
+  });
+
+  describe('GET /api/agents/instances/:id/tools', () => {
+    it('returns available and unavailable tools for an agent instance', async () => {
+      const instanceId = 'agent-123';
+      const mockInstance = {
+        id: instanceId,
+        name: 'test-agent',
+        template_ref: 'test-template',
+      };
+      const mockManifest = {
+        metadata: { name: 'test-agent' },
+        tools: { allowed: ['tool1', 'tool2'] },
+      };
+
+      agentRegistryMock.getInstance.mockResolvedValue(mockInstance);
+      orchestratorMock.getManifestByInstanceId.mockReturnValue(mockManifest);
+      skillRegistryMock.listForAgent.mockReturnValue([{ id: 'tool1', description: 'Tool 1' }]);
+      skillRegistryMock.validateManifestSkills.mockReturnValue(['tool2']);
+
+      const res = await request(app).get(`/api/agents/instances/${instanceId}/tools`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        available: [{ id: 'tool1', description: 'Tool 1' }],
+        unavailable: ['tool2'],
+      });
+      expect(skillRegistryMock.listForAgent).toHaveBeenCalledWith(mockManifest);
+      expect(skillRegistryMock.validateManifestSkills).toHaveBeenCalledWith(mockManifest);
+    });
+
+    it('returns 404 if agent instance not found', async () => {
+      agentRegistryMock.getInstance.mockResolvedValue(null);
+      const res = await request(app).get('/api/agents/instances/non-existent/tools');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Agent instance not found');
+    });
+
+    it('returns 404 if manifest cannot be resolved', async () => {
+      agentRegistryMock.getInstance.mockResolvedValue({ id: 'id', name: 'name' });
+      orchestratorMock.getManifestByInstanceId.mockReturnValue(null);
+      orchestratorMock.getManifest.mockReturnValue(null);
+      agentRegistryMock.getTemplate.mockResolvedValue(null);
+
+      const res = await request(app).get('/api/agents/instances/id/tools');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Agent manifest not found');
     });
   });
 });

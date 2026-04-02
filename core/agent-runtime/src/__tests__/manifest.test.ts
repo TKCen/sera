@@ -118,7 +118,7 @@ model:
           provider: 'openai',
           name: 'gpt-4',
         },
-        contextFiles: ['README.md'],
+        contextFiles: [{ path: 'README.md', label: 'README' }],
         outputFormat: 'Markdown',
       };
 
@@ -151,7 +151,7 @@ model:
       expect(prompt).toContain('## Agent Notes');
       expect(prompt).toContain('Agent notes here.');
       expect(prompt).toContain('## Workspace Context');
-      expect(prompt).toContain('README.md');
+      expect(prompt).toContain('### README');
       expect(prompt).toContain('## System Constraints');
       expect(prompt).toContain('## Output Format');
     });

@@ -37,6 +37,7 @@ import { BudgetTab } from '@/components/AgentDetailBudgetTab';
 import { InnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 import { ContextTab } from '@/components/AgentDetailContextTab';
+import { CoreMemoryTab } from '@/components/AgentDetailCoreMemoryTab';
 import { CommandLogTimeline } from '@/components/CommandLogTimeline';
 import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
 import { TemplateDiffBanner } from '@/components/TemplateDiffBanner';
@@ -50,6 +51,7 @@ type Tab =
   | 'logs'
   | 'commands'
   | 'memory'
+  | 'core-memory'
   | 'schedules'
   | 'inner-life'
   | 'budget'
@@ -206,6 +208,7 @@ export default function AgentDetailPage() {
               'logs',
               'commands',
               'memory',
+              'core-memory',
               'schedules',
               'inner-life',
               'budget',
@@ -242,6 +245,7 @@ export default function AgentDetailPage() {
         {tab === 'logs' && <LogsTab id={id} />}
         {tab === 'commands' && <CommandsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}
+        {tab === 'core-memory' && <CoreMemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} agentName={agent?.name} />}
         {tab === 'inner-life' && <InnerLifeTab id={id} />}
         {tab === 'budget' && <BudgetTab id={id} />}

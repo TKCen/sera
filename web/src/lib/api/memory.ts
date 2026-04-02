@@ -178,3 +178,34 @@ export function searchMemoryBlocks(query: string, limit?: number): Promise<Memor
 export function getExplorerGraph(): Promise<ExplorerGraphData> {
   return request<ExplorerGraphData>('/memory/explorer-graph');
 }
+
+// ── Core Memory Blocks (Story 8.1) ───────────────────────────────────────
+
+export interface CoreMemoryBlock {
+  id: string;
+  agentInstanceId: string;
+  name: string;
+  content: string;
+  characterLimit: number;
+  isReadOnly: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function getCoreMemoryBlocks(agentId: string): Promise<CoreMemoryBlock[]> {
+  return request<CoreMemoryBlock[]>(`/memory/${encodeURIComponent(agentId)}/core`);
+}
+
+export function updateCoreMemoryBlock(
+  agentId: string,
+  name: string,
+  updates: { content?: string; characterLimit?: number; isReadOnly?: boolean }
+): Promise<CoreMemoryBlock> {
+  return request<CoreMemoryBlock>(
+    `/memory/${encodeURIComponent(agentId)}/core/${encodeURIComponent(name)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    }
+  );
+}

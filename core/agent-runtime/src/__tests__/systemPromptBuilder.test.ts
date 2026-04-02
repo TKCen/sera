@@ -25,7 +25,7 @@ describe('SystemPromptBuilder', () => {
       provider: 'openai',
       name: 'gpt-4',
     },
-    contextFiles: ['README.md'],
+    contextFiles: [{ path: 'README.md', label: 'README' }],
     outputFormat: 'Markdown',
   };
 
@@ -53,6 +53,7 @@ describe('SystemPromptBuilder', () => {
       .addCircleContext('default', ['user1'])
       .addDelegationContext([{ name: 'sub-agent', role: 'Sub-agent role' }])
       .addAgentNotes(mockManifest)
+      .addCoreMemoryBlocks([{ name: 'persona', content: 'test persona', characterLimit: 100 }])
       .addWorkspaceContext(mockManifest)
       .addReasoningHints('gpt-4-thinking')
       .addConstraints(1)
@@ -75,8 +76,10 @@ describe('SystemPromptBuilder', () => {
     expect(prompt).toContain('## Delegation');
     expect(prompt).toContain('## Agent Notes');
     expect(prompt).toContain('Some internal notes.');
+    expect(prompt).toContain('<memory_blocks>');
+    expect(prompt).toContain('<block name="persona" character_count="12" character_limit="100">');
     expect(prompt).toContain('## Workspace Context');
-    expect(prompt).toContain('- README.md');
+    expect(prompt).toContain('### README');
     expect(prompt).toContain('## Reasoning Instructions');
     expect(prompt).toContain('## System Constraints');
     expect(prompt).toContain('## Output Format');

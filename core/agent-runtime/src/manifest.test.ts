@@ -62,8 +62,22 @@ describe('generateSystemPrompt', () => {
       notes: 'Always respond in JSON format.',
     };
     const prompt = generateSystemPrompt(manifest);
-    expect(prompt).toContain('## Notes');
+    expect(prompt).toContain('## Agent Notes');
     expect(prompt).toContain('Always respond in JSON format.');
+  });
+
+  it('injects core memory blocks when provided', () => {
+    const prompt = generateSystemPrompt(baseManifest, {
+      coreMemoryBlocks: [
+        { name: 'persona', content: 'Test persona content', characterLimit: 100 },
+        { name: 'human', content: 'Test human content', characterLimit: 100 },
+      ],
+    });
+    expect(prompt).toContain('<memory_blocks>');
+    expect(prompt).toContain('<block name="persona" character_count="20" character_limit="100">');
+    expect(prompt).toContain('Test persona content');
+    expect(prompt).toContain('<block name="human" character_count="18" character_limit="100">');
+    expect(prompt).toContain('Test human content');
   });
 
   it('injects context files with labels as subsections', () => {

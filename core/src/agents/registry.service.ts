@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import type { AgentTemplate, NamedList, CapabilityPolicy, SandboxBoundary } from './schemas.js';
 import type { AgentInstance } from './types.js';
 import { ScheduleService } from '../services/ScheduleService.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
 import { DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA } from '../metering/MeteringService.js';
 
 import { Logger } from '../lib/logger.js';
@@ -228,6 +229,9 @@ export class AgentRegistry {
 
     // Sync manifest budget limits to token_quotas
     await this.syncManifestBudget(instance.id, templateSpec);
+
+    // Epic 08: Initialize core memory blocks
+    await CoreMemoryService.getInstance(this.pool).initializeDefaultBlocks(instance.id);
 
     return instance;
   }

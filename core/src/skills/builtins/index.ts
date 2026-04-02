@@ -7,6 +7,7 @@ import { fileWriteSkill } from './file-write.js';
 import { fileListSkill } from './file-list.js';
 import { createKnowledgeStoreSkill } from './knowledge-store.js';
 import { createKnowledgeQuerySkill } from './knowledge-query.js';
+import { createCoreMemoryAppendSkill, createCoreMemoryReplaceSkill } from './core-memory.js';
 import { shellExecSkill } from './shell-exec.js';
 import { scheduleTaskSkill } from './schedule-task.js';
 import { delegateTaskSkill } from './delegate-task.js';
@@ -30,4 +31,6 @@ export function registerBuiltinSkills(
   registry.register(delegateTaskSkill);
   registry.register(createKnowledgeStoreSkill());
   registry.register(createKnowledgeQuerySkill());
+  registry.register(createCoreMemoryAppendSkill());
+  registry.register(createCoreMemoryReplaceSkill());
 }

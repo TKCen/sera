@@ -388,38 +388,43 @@ export class Orchestrator {
           : [];
 
         if (secretNames.length > 0) {
-          const { SecretsManager } = await import('../secrets/secrets-manager.js');
-          for (const secretName of secretNames) {
-            try {
-              const secretValue = await SecretsManager.getInstance().get(secretName, {
-                agentId: instance.id,
-                agentName: instance.name,
-              });
-              if (secretValue !== null) {
-                // Fetch exposure metadata to determine injection mode
-                const { query: dbQuery } = await import('../lib/database.js');
-                const metaResult = await dbQuery(
-                  'SELECT exposure FROM secrets WHERE name = $1 AND deleted_at IS NULL',
-                  [secretName]
-                );
-                const exposure = metaResult.rows[0]?.exposure ?? 'per-call';
-                if (exposure === 'agent-env') {
-                  agentEnvSecrets[secretName] = secretValue;
-                  await AuditService.getInstance()
-                    .record({
-                      actorType: 'system',
-                      actorId: 'system',
-                      actingContext: null,
-                      eventType: 'secret.injected',
-                      payload: { secretName, agentId: instance.id },
-                    })
-                    .catch(() => {});
+          const [{ SecretsManager }, { query: dbQuery }] = await Promise.all([
+            import('../secrets/secrets-manager.js'),
+            import('../lib/database.js'),
+          ]);
+
+          await Promise.all(
+            secretNames.map(async (secretName) => {
+              try {
+                const secretValue = await SecretsManager.getInstance().get(secretName, {
+                  agentId: instance.id,
+                  agentName: instance.name,
+                });
+                if (secretValue !== null) {
+                  // Fetch exposure metadata to determine injection mode
+                  const metaResult = await dbQuery(
+                    'SELECT exposure FROM secrets WHERE name = $1 AND deleted_at IS NULL',
+                    [secretName]
+                  );
+                  const exposure = metaResult.rows[0]?.exposure ?? 'per-call';
+                  if (exposure === 'agent-env') {
+                    agentEnvSecrets[secretName] = secretValue;
+                    await AuditService.getInstance()
+                      .record({
+                        actorType: 'system',
+                        actorId: 'system',
+                        actingContext: null,
+                        eventType: 'secret.injected',
+                        payload: { secretName, agentId: instance.id },
+                      })
+                      .catch(() => {});
+                  }
                 }
+              } catch (secretErr) {
+                logger.warn(`Secret "${secretName}" denied for agent ${instance.name}:`, secretErr);
               }
-            } catch (secretErr) {
-              logger.warn(`Secret "${secretName}" denied for agent ${instance.name}:`, secretErr);
-            }
-          }
+            })
+          );
         }
 
         // Resolve model context window from provider config (for agent-runtime ContextManager)

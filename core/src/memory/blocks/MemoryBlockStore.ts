@@ -111,7 +111,7 @@ export class MemoryBlockStore {
   private parse(fileContent: string): MemoryEntry {
     const parsed = matter(fileContent);
     const data = parsed.data as Record<string, unknown>;
-    return {
+    const entry: MemoryEntry = {
       id: data.id as string,
       title: data.title as string,
       type: data.type as MemoryBlockType,
@@ -121,8 +121,11 @@ export class MemoryBlockStore {
       source: (data.source as MemorySource | undefined) ?? 'system',
       createdAt: data.createdAt as string,
       updatedAt: data.updatedAt as string,
-      importance: data.importance as number | undefined,
     };
+    if (data.importance !== undefined) {
+      entry.importance = data.importance as number;
+    }
+    return entry;
   }
 
   /** Find the filepath for an entry by scanning all block dirs.  Returns null if not found. */

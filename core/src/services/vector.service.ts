@@ -170,7 +170,7 @@ export class VectorService {
               score: r.score,
               payload: (r.payload ?? {}) as VectorPayload,
               namespace: ns,
-              vector: r.vector as number[] | undefined,
+              ...(r.vector ? { vector: r.vector as number[] } : {}),
             });
           }
         } catch (err) {

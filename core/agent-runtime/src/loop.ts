@@ -288,7 +288,19 @@ export class ReasoningLoop {
           );
         }
 
-        // Context window management — compact before each LLM call
+        // Context window management — clear old tool results or compact before each LLM call
+        const currentTokens = this.contextManager.countMessageTokens(messages);
+        if (currentTokens >= this.contextManager.getClearThreshold()) {
+          const clearedCount = this.contextManager.clearOldToolResults(messages, 3);
+          if (clearedCount > 0) {
+            await think(
+              'reflect',
+              `Cleared ${clearedCount} old tool result(s) to free space ([cleared — re-read if needed] placeholders used)`,
+              iteration
+            );
+          }
+        }
+
         if (this.contextManager.isNearLimit(messages)) {
           // Pre-compaction memory flush (Story 5.12): allow one turn with only
           // memory tools before compaction.
@@ -313,6 +325,13 @@ export class ReasoningLoop {
                 'to save any important information from the current conversation that you want to remember. ' +
                 'This is your last chance to persist this context.',
               internal: true,
+              tokens: this.contextManager.estimateMessageTokens({
+                role: 'system',
+                content:
+                  'Your context window is about to be compacted. Before this happens, use your memory tools ' +
+                  'to save any important information from the current conversation that you want to remember. ' +
+                  'This is your last chance to persist this context.',
+              }),
             });
 
             // Execute one reasoning turn restricted to memory tools only (30s timeout)

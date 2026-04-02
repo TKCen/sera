@@ -194,10 +194,10 @@ export class IntercomService {
       content,
       agentId,
       agentDisplayName,
-      taskId,
-      iteration,
-      detail,
     };
+    if (taskId !== undefined) event.taskId = taskId;
+    if (iteration !== undefined) event.iteration = iteration;
+    if (detail !== undefined) event.detail = detail;
 
     // Story 9.7: Persist thought to database (non-blocking).
     // Skip persistence for YAML-loaded agents that use their manifest name (not a UUID)

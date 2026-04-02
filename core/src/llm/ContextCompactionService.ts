@@ -13,7 +13,11 @@
 
 import type { LlmRouter, ChatMessage } from './LlmRouter.js';
 import type { ProviderRegistry } from './ProviderRegistry.js';
-import type { ContextAssemblyEvent, ContextEventListener } from './ContextAssembler.js';
+import type {
+  ContextAssemblyEvent,
+  ContextEventListener,
+  ContextAssemblyStage,
+} from './ContextAssembler.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('ContextCompactionService');
@@ -51,7 +55,11 @@ export class ContextCompactionService {
     modelName: string,
     onEvent?: ContextEventListener
   ): Promise<ChatMessage[]> {
-    const emit = (stage: string, detail: Record<string, unknown>, durationMs?: number) => {
+    const emit = (
+      stage: ContextAssemblyStage,
+      detail: Record<string, unknown>,
+      durationMs?: number
+    ) => {
       const event: ContextAssemblyEvent = { stage, detail };
       if (durationMs !== undefined) event.durationMs = durationMs;
       onEvent?.(event);
@@ -63,7 +71,10 @@ export class ContextCompactionService {
       config = this.registry.resolve(modelName);
     } catch {
       // Model not in registry — can't determine context limits, skip compaction
-      emit('compaction.skipped', { reason: 'model not in registry', modelName });
+      emit('compaction.skipped' as ContextAssemblyStage, {
+        reason: 'model not in registry',
+        modelName,
+      });
       return messages;
     }
 
@@ -78,7 +89,7 @@ export class ContextCompactionService {
     const estimatedTokens = estimateTokens(messages);
 
     if (estimatedTokens < threshold) {
-      emit('compaction.skipped', {
+      emit('compaction.skipped' as ContextAssemblyStage, {
         estimatedTokens,
         threshold,
         contextWindow,
@@ -86,7 +97,7 @@ export class ContextCompactionService {
       return messages;
     }
 
-    emit('compaction.started', {
+    emit('compaction.started' as ContextAssemblyStage, {
       estimatedTokens,
       threshold,
       contextWindow,
@@ -101,7 +112,7 @@ export class ContextCompactionService {
       try {
         const result = await this.summarize(messages, compactionModel, threshold, emit);
         emit(
-          'compaction.completed',
+          'compaction.completed' as ContextAssemblyStage,
           {
             strategy: 'summarize',
             tokensBefore: estimatedTokens,
@@ -113,7 +124,7 @@ export class ContextCompactionService {
         return result;
       } catch (err) {
         logger.error('Summarization failed, falling back to sliding-window:', err);
-        emit('compaction.fallback', {
+        emit('compaction.fallback' as ContextAssemblyStage, {
           reason: err instanceof Error ? err.message : String(err),
           fallbackStrategy: 'sliding-window',
         });
@@ -124,7 +135,7 @@ export class ContextCompactionService {
     // Sliding-window / truncate
     const result = this.slidingWindow(messages, threshold);
     emit(
-      'compaction.completed',
+      'compaction.completed' as ContextAssemblyStage,
       {
         strategy: 'sliding-window',
         tokensBefore: estimatedTokens,
@@ -143,7 +154,11 @@ export class ContextCompactionService {
     messages: ChatMessage[],
     compactionModel: string,
     threshold: number,
-    emit: (stage: string, detail: Record<string, unknown>, durationMs?: number) => void
+    emit: (
+      stage: ContextAssemblyStage,
+      detail: Record<string, unknown>,
+      durationMs?: number
+    ) => void
   ): Promise<ChatMessage[]> {
     // Partition: [system, ...oldest, ...recent]
     const systemMsg = messages.find((m) => m.role === 'system');
@@ -168,7 +183,7 @@ export class ContextCompactionService {
 
     const prompt = SUMMARIZATION_PROMPT.replace('{CONVERSATION}', conversationText);
 
-    emit('compaction.summarizing', {
+    emit('compaction.summarizing' as ContextAssemblyStage, {
       oldestCount: oldest.length,
       recentCount: recent.length,
       compactionModel,
@@ -190,7 +205,7 @@ export class ContextCompactionService {
 
     const summary = response.choices[0]?.message?.content ?? '';
 
-    emit('compaction.summarized', {
+    emit('compaction.summarized' as ContextAssemblyStage, {
       summaryTokens: estimateTokensStr(summary),
       durationMs: Date.now() - start,
     });

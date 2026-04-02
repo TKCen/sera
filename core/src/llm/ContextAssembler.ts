@@ -37,20 +37,29 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
+/** All possible stages for context assembly events. */
+export type ContextAssemblyStage =
+  | 'context.assembly_started'
+  | 'context.circle_constitution_injected'
+  | 'context.circle_constitution_skipped'
+  | 'context.skills_injected'
+  | 'context.memory_retrieved'
+  | 'context.memory_skipped'
+  | 'context.tools_resolved'
+  | 'context.token_budget'
+  | 'context.assembly_completed'
+  | 'context.assembly_skipped'
+  | 'context.assembly_error'
+  | 'compaction.skipped'
+  | 'compaction.started'
+  | 'compaction.summarizing'
+  | 'compaction.summarized'
+  | 'compaction.completed'
+  | 'compaction.fallback';
+
 /** Structured event emitted during context assembly for debugging/introspection. */
 export interface ContextAssemblyEvent {
-  stage:
-    | 'context.assembly_started'
-    | 'context.circle_constitution_injected'
-    | 'context.circle_constitution_skipped'
-    | 'context.skills_injected'
-    | 'context.memory_retrieved'
-    | 'context.memory_skipped'
-    | 'context.tools_resolved'
-    | 'context.token_budget'
-    | 'context.assembly_completed'
-    | 'context.assembly_skipped'
-    | 'context.assembly_error';
+  stage: ContextAssemblyStage;
   detail: Record<string, unknown>;
   durationMs?: number;
 }
@@ -178,7 +187,7 @@ export class ContextAssembler {
     // ── 2.5 Resolve Tools ────────────────────────────────────────────────────
     const allowedTools = manifest.spec?.tools?.allowed ?? manifest.tools?.allowed ?? [];
     const toolExecutor = this.orchestrator.getToolExecutor();
-    const availableTools = toolExecutor?.getToolDefinitions() ?? [];
+    const availableTools = toolExecutor?.getToolDefinitions(manifest) ?? [];
     const availableToolNames = new Set(availableTools.map((t) => t.function.name));
     const unresolvedNames = allowedTools.filter((name) => !availableToolNames.has(name));
 

@@ -1,20 +1,18 @@
 /**
- * Rate limiting stub middleware — Story 4.7 (deferred).
+ * Rate limiting middleware — Story 4.7.
  *
  * This middleware hooks into the LLM proxy request pipeline and sets the
- * standard rate limit response headers. The enforcement logic is a no-op stub.
+ * standard rate limit response headers.
  *
- * When implemented, this should be a token-bucket limiter per agentId on
+ * Implemented as a token-bucket limiter per agentId on
  * POST /v1/llm/chat/completions and a per-operator limiter on management
  * endpoints.
  *
- * Configuration structure (future):
+ * Configuration structure:
  *   RATE_LIMIT_AGENT_RPM=60      — requests per minute per agent
  *   RATE_LIMIT_OPERATOR_RPM=120  — requests per minute per operator key
  *
  * @see docs/epics/04-llm-proxy-and-governance.md § Story 4.7
- *
- * # TODO: implement rate limiting enforcement — see Epic 04 Story 4.7
  *
  * v1 plan: in-process token bucket per agentId, reset on sera-core restart.
  * Multi-node future: Redis-backed state.
@@ -24,30 +22,93 @@
 
 import type { Request, Response, NextFunction } from 'express';
 
-// Placeholder limits — will become meaningful once enforcement is implemented
-const STUB_AGENT_RPM_LIMIT = parseInt(process.env.RATE_LIMIT_AGENT_RPM ?? '60', 10);
+const AGENT_RPM_LIMIT = parseInt(process.env.RATE_LIMIT_AGENT_RPM ?? '60', 10);
+const OPERATOR_RPM_LIMIT = parseInt(process.env.RATE_LIMIT_OPERATOR_RPM ?? '120', 10);
 
 /**
- * No-op rate limiting middleware.
+ * Token bucket implementation for rate limiting.
+ */
+class TokenBucket {
+  private tokens: number;
+  private lastRefill: number;
+
+  constructor(private readonly capacity: number) {
+    this.tokens = capacity;
+    this.lastRefill = Date.now();
+  }
+
+  /**
+   * Refills the bucket based on elapsed time.
+   */
+  private refill(): void {
+    const now = Date.now();
+    const elapsedMs = now - this.lastRefill;
+    const refillAmount = (elapsedMs * this.capacity) / 60000;
+
+    if (refillAmount > 0) {
+      this.tokens = Math.min(this.capacity, this.tokens + refillAmount);
+      this.lastRefill = now;
+    }
+  }
+
+  /**
+   * Attempts to consume one token.
+   * @returns true if a token was consumed, false otherwise.
+   */
+  consume(): boolean {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+
+  getRemaining(): number {
+    this.refill();
+    return Math.floor(this.tokens);
+  }
+
+  getResetTime(): number {
+    // Estimate when the bucket will be full
+    const missingTokens = this.capacity - this.tokens;
+    const msToFull = (missingTokens * 60000) / this.capacity;
+    return Math.floor((Date.now() + msToFull) / 1000);
+  }
+}
+
+const buckets = new Map<string, TokenBucket>();
+
+/**
+ * Rate limiting middleware.
  *
- * Sets standard X-RateLimit-* headers so clients can parse them, but does
- * not enforce any limits. Replace this with a real token-bucket implementation
- * in Epic 04 Story 4.7.
+ * Sets standard X-RateLimit-* headers and enforces limits.
  */
 export function rateLimitStub(req: Request, res: Response, next: NextFunction): void {
-  const agentId = req.agentIdentity?.agentId ?? req.operator?.sub ?? 'unknown';
+  const isOperator = !!req.operator;
+  const identifier = req.agentIdentity?.agentId ?? req.operator?.sub ?? 'unknown';
+  const limit = isOperator ? OPERATOR_RPM_LIMIT : AGENT_RPM_LIMIT;
 
-  // Set rate limit headers (values are stubs — not enforced)
-  res.setHeader('X-RateLimit-Limit', STUB_AGENT_RPM_LIMIT);
-  res.setHeader('X-RateLimit-Remaining', STUB_AGENT_RPM_LIMIT); // stub: always full
-  res.setHeader('X-RateLimit-Reset', Math.floor(Date.now() / 1000) + 60);
+  let bucket = buckets.get(identifier);
+  if (!bucket) {
+    bucket = new TokenBucket(limit);
+    buckets.set(identifier, bucket);
+  }
 
-  // # TODO: implement rate limiting enforcement — see Epic 04 Story 4.7
-  // When implemented:
-  //   1. Look up agentId in in-process token bucket map
-  //   2. If bucket is empty, respond 429 with reason: 'rate_limit'
-  //   3. Otherwise consume one token and proceed
-  void agentId; // suppress lint warning until enforcement is added
-
-  next();
+  if (bucket.consume()) {
+    res.setHeader('X-RateLimit-Limit', limit);
+    res.setHeader('X-RateLimit-Remaining', bucket.getRemaining());
+    res.setHeader('X-RateLimit-Reset', bucket.getResetTime());
+    next();
+  } else {
+    const resetTime = bucket.getResetTime();
+    res.setHeader('X-RateLimit-Limit', limit);
+    res.setHeader('X-RateLimit-Remaining', 0);
+    res.setHeader('X-RateLimit-Reset', resetTime);
+    res.setHeader('Retry-After', 1); // Simple 1-second retry hint
+    res.status(429).json({
+      error: 'rate_limit_exceeded',
+      message: 'Rate limit exceeded. Please try again later.',
+    });
+  }
 }

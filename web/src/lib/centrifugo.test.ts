@@ -87,9 +87,11 @@ describe('centrifugo lib', () => {
       subscribeToThoughts(agentId, onThought);
 
       // Get the publication callback
-      const publicationCallback = mockSubscription.on.mock.calls.find(
+      const publicationCall = mockSubscription.on.mock.calls.find(
         (call) => call[0] === 'publication'
-      )[1];
+      );
+      expect(publicationCall).toBeDefined();
+      const publicationCallback = publicationCall![1];
 
       const mockEvent = { data: { text: 'thinking' } };
       publicationCallback(mockEvent);
@@ -123,9 +125,11 @@ describe('centrifugo lib', () => {
       const onOutput = vi.fn();
       subscribeToTerminal('agent', onOutput);
 
-      const publicationCallback = mockSubscription.on.mock.calls.find(
+      const publicationCall = mockSubscription.on.mock.calls.find(
         (call) => call[0] === 'publication'
-      )[1];
+      );
+      expect(publicationCall).toBeDefined();
+      const publicationCallback = publicationCall![1];
 
       const mockData = { data: 'shell output' };
       publicationCallback(mockData);
@@ -147,9 +151,11 @@ describe('centrifugo lib', () => {
       const onDone = vi.fn();
       subscribeToStream('msg', onToken, onDone);
 
-      const publicationCallback = mockSubscription.on.mock.calls.find(
+      const publicationCall = mockSubscription.on.mock.calls.find(
         (call) => call[0] === 'publication'
-      )[1];
+      );
+      expect(publicationCall).toBeDefined();
+      const publicationCallback = publicationCall![1];
 
       // Test token
       publicationCallback({ data: { token: 'hello' } });

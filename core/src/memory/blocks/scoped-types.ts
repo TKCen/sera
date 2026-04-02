@@ -59,6 +59,7 @@ export interface KnowledgeBlock {
   importance: Importance;
   title: string;
   content: string;
+  scope?: MemoryScope;
   compacted?: boolean;
 }
 
@@ -97,6 +98,7 @@ export interface KnowledgeBlockCreateOpts {
   tags?: string[];
   importance?: Importance;
   title?: string;
+  scope?: MemoryScope;
 }
 
 export interface KnowledgeBlockListFilters {

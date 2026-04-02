@@ -661,7 +661,7 @@ export default function ChannelsPage() {
                     <div className="flex items-center gap-2 flex-1">
                       <code className="text-sm font-mono text-sera-accent">{rule.eventType}</code>
                       <Badge variant="default">{rule.minSeverity}+</Badge>
-                      <Badge variant="outline" className="text-[10px] py-0 h-4">
+                      <Badge variant="default" className="text-[10px] py-0 h-4 border border-sera-border">
                         P{rule.priority}
                       </Badge>
                       {!rule.enabled && <Badge variant="default">disabled</Badge>}

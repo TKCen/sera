@@ -23,7 +23,7 @@ const DISPATCH_JOB = 'notification.dispatch';
 export interface ChannelRecord {
   id: string;
   name: string;
-  description?: string;
+  description?: string | null;
   type: string;
   config: Record<string, unknown>;
   enabled: boolean;
@@ -115,7 +115,7 @@ export class NotificationService {
       const { rows } = await pool.query<{
         id: string;
         name: string;
-        description?: string;
+        description?: string | null;
         type: string;
         config: Record<string, unknown>;
         enabled: boolean;
@@ -256,13 +256,13 @@ export class NotificationService {
     name: string,
     type: string,
     config: Record<string, unknown>,
-    description?: string
+    description?: string | null
   ): Promise<ChannelRecord> {
     const id = uuidv4();
     const { rows } = await pool.query<{
       id: string;
       name: string;
-      description?: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
@@ -286,7 +286,7 @@ export class NotificationService {
     return {
       id: row.id,
       name: row.name,
-      description: row.description,
+      description: row.description ?? null,
       type: row.type,
       config: this.redactConfig(row.type, row.config),
       enabled: row.enabled,
@@ -298,7 +298,7 @@ export class NotificationService {
     id: string,
     updates: {
       name?: string;
-      description?: string;
+      description?: string | null;
       config?: Record<string, unknown>;
       enabled?: boolean;
     }
@@ -307,7 +307,7 @@ export class NotificationService {
     const existing = await pool.query<{
       id: string;
       name: string;
-      description?: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
@@ -338,7 +338,7 @@ export class NotificationService {
     const { rows } = await pool.query<{
       id: string;
       name: string;
-      description?: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
@@ -368,7 +368,7 @@ export class NotificationService {
     return {
       id: updated.id,
       name: updated.name,
-      description: updated.description,
+      description: updated.description ?? null,
       type: updated.type,
       config: this.redactConfig(updated.type, updated.config),
       enabled: updated.enabled,
@@ -388,7 +388,7 @@ export class NotificationService {
     const { rows } = await pool.query<{
       id: string;
       name: string;
-      description?: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
@@ -400,7 +400,7 @@ export class NotificationService {
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
-      description: r.description,
+      description: r.description ?? null,
       type: r.type,
       config: this.redactConfig(r.type, r.config),
       enabled: r.enabled,

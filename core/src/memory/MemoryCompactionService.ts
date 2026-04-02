@@ -11,8 +11,6 @@
 
 import type { PgBoss } from 'pg-boss';
 import { ScopedMemoryBlockStore } from './blocks/ScopedMemoryBlockStore.js';
-import { VectorService } from '../services/vector.service.js';
-import type { MemoryNamespace } from '../services/vector.service.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('MemoryCompactionService');
@@ -25,13 +23,11 @@ const JOB_NAME = 'memory-compaction';
 export interface CompactionResult {
   agentId: string;
   blocksArchived: number;
-  vectorsRemoved: number;
 }
 
 export class MemoryCompactionService {
   private static instance: MemoryCompactionService;
   private boss: PgBoss | null = null;
-  private vectorService = new VectorService('_compact_unused');
   private store = new ScopedMemoryBlockStore(MEMORY_ROOT);
 
   private constructor() {}
@@ -91,27 +87,16 @@ export class MemoryCompactionService {
     const toArchive = blocks.filter((b) => b.importance <= 2);
 
     let blocksArchived = 0;
-    let vectorsRemoved = 0;
 
     for (const block of toArchive) {
       const moved = await this.store.moveToArchive(agentId, block.id);
       if (moved) {
         blocksArchived++;
-        // Remove from Qdrant personal namespace
-        try {
-          const namespace: MemoryNamespace = `personal:${agentId}`;
-          await this.vectorService.delete(block.id, namespace);
-          vectorsRemoved++;
-        } catch (err) {
-          logger.warn(`Failed to remove vector for block ${block.id}:`, err);
-        }
       }
     }
 
-    logger.info(
-      `Compaction for agent ${agentId}: archived=${blocksArchived}, vectors_removed=${vectorsRemoved}`
-    );
-    return { agentId, blocksArchived, vectorsRemoved };
+    logger.info(`Compaction for agent ${agentId}: archived=${blocksArchived}`);
+    return { agentId, blocksArchived };
   }
 
   async stop(): Promise<void> {

@@ -24,6 +24,7 @@ import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
+import { HookRunner } from './hooks.js';
 import { log } from './logger.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -91,6 +92,7 @@ export class ReasoningLoop {
   /** All tools including deferred ones (for tool-search). */
   private allToolDefs: ToolDefinition[];
   private contextManager: ContextManager;
+  private hookRunner: HookRunner;
 
   /** Set to true when SIGTERM received; loop exits after current step. */
   shutdownRequested = false;
@@ -107,6 +109,7 @@ export class ReasoningLoop {
     this.manifest = manifest;
     this.allToolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
     this.contextManager = new ContextManager(manifest.model.name);
+    this.hookRunner = new HookRunner(manifest.hooks);
 
     // Initial system prompt — will be refreshed per task with current time/tools
     this.systemPrompt = this.refreshSystemPrompt();
@@ -613,7 +616,56 @@ export class ReasoningLoop {
               );
             });
           };
-          const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
+          const toolResults: ToolExecutionResult[] = await Promise.all(
+            response.toolCalls.map(async (tc) => {
+              const toolName = tc.function.name;
+              const toolInput = tc.function.arguments || '{}';
+
+              // PreToolUse hooks
+              const preResult = await this.hookRunner.run('PreToolUse', {
+                toolName,
+                toolInput,
+              });
+
+              if (preResult.status === 'deny') {
+                const feedback = preResult.feedback ? `\n\nHook feedback:\n${preResult.feedback}` : '';
+                await think('reflect', `Hook denied execution for ${toolName}`, iteration, {
+                  anomaly: true,
+                });
+                return {
+                  message: {
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    content: `Error: Execution denied by hook.${feedback}`,
+                  },
+                  toolName,
+                  argRepaired: false,
+                  repairStrategy: null,
+                };
+              }
+
+              // Execute the tool
+              const [result] = await this.tools.executeToolCalls([tc], onToolOutput);
+
+              // PostToolUse hooks
+              const isError = result.message.content.startsWith('Error:');
+              const postResult = await this.hookRunner.run('PostToolUse', {
+                toolName,
+                toolInput,
+                toolOutput: result.message.content,
+                isError,
+              });
+
+              // Merge feedback
+              const feedbacks = [preResult.feedback, postResult.feedback].filter(Boolean);
+              if (feedbacks.length > 0) {
+                result.message.content += `\n\nHook feedback:\n${feedbacks.join('\n\n')}`;
+              }
+
+              return result;
+            })
+          );
+
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);

@@ -71,6 +71,10 @@ export interface RuntimeManifest {
     priority?: 'high' | 'normal' | 'low';
   }>;
   outputFormat?: string;
+  hooks?: {
+    preToolUse?: string[];
+    postToolUse?: string[];
+  };
 }
 
 /**
@@ -99,6 +103,7 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
     if (spec['contextFiles'] && !raw['contextFiles']) raw['contextFiles'] = spec['contextFiles'];
     if (spec['outputFormat'] && !raw['outputFormat']) raw['outputFormat'] = spec['outputFormat'];
     if (spec['notes'] && !raw['notes']) raw['notes'] = spec['notes'];
+    if (spec['hooks'] && !raw['hooks']) raw['hooks'] = spec['hooks'];
   }
 
   const parsed = raw as unknown as RuntimeManifest;

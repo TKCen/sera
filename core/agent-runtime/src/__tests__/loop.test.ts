@@ -88,6 +88,87 @@ describe('ReasoningLoop E2E', () => {
     expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: hello'), 1, undefined);
   });
 
+  it('executes pre and post tool hooks', async () => {
+    const manifestWithHooks: RuntimeManifest = {
+      ...mockManifest,
+      hooks: {
+        preToolUse: ['echo "Pre hook"'],
+        postToolUse: ['echo "Post hook"'],
+      },
+    };
+
+    const llm = new ScriptedLLMClient([
+      {
+        content: 'I will echo that.',
+        toolCalls: [
+          { id: 'call_hook', type: 'function', function: { name: 'echo', arguments: '{"text": "hello"}' } },
+        ],
+      },
+      { content: 'Done' },
+    ]);
+
+    const tools = new StaticToolExecutor().register(echoTool, (args) => {
+      const parsed = JSON.parse(args);
+      return parsed.text;
+    });
+
+    const publisher = createMockPublisher();
+    const loop = new ReasoningLoop(llm, tools, publisher, manifestWithHooks);
+
+    const output = await loop.run({
+      taskId: 'task-hook',
+      task: 'Echo hello',
+    });
+
+    expect(output.result).toBe('Done');
+    expect(llm.getCallCount()).toBe(2);
+
+    // Check if feedback was merged into the tool result
+    const toolResultMessage = llm.getLastMessages().find(m => m.role === 'tool');
+    expect(toolResultMessage?.content).toContain('hello');
+    expect(toolResultMessage?.content).toContain('Hook feedback:');
+    expect(toolResultMessage?.content).toContain('Pre hook');
+    expect(toolResultMessage?.content).toContain('Post hook');
+  });
+
+  it('denies tool execution via PreToolUse hook', async () => {
+    const manifestWithDenyHook: RuntimeManifest = {
+      ...mockManifest,
+      hooks: {
+        preToolUse: ['echo "Denied by policy"; exit 2'],
+      },
+    };
+
+    const llm = new ScriptedLLMClient([
+      {
+        content: 'I will echo that.',
+        toolCalls: [
+          { id: 'call_deny', type: 'function', function: { name: 'echo', arguments: '{"text": "hello"}' } },
+        ],
+      },
+      { content: 'Hook stopped me' },
+    ]);
+
+    const handler = vi.fn().mockImplementation((args) => JSON.parse(args).text);
+    const tools = new StaticToolExecutor().register(echoTool, handler);
+
+    const publisher = createMockPublisher();
+    const loop = new ReasoningLoop(llm, tools, publisher, manifestWithDenyHook);
+
+    await loop.run({
+      taskId: 'task-deny',
+      task: 'Echo hello',
+    });
+
+    // Tool should NOT have been called
+    expect(handler).not.toHaveBeenCalled();
+
+    // Error should have been sent to LLM
+    const toolResultMessage = llm.getLastMessages().find(m => m.role === 'tool');
+    expect(toolResultMessage?.content).toContain('Error: Execution denied by hook.');
+    expect(toolResultMessage?.content).toContain('Denied by policy');
+  });
+
   it('handles unknown tool call by returning error to LLM', async () => {
     const llm = new ScriptedLLMClient([
       {

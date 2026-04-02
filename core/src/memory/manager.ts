@@ -24,7 +24,7 @@ export class MemoryManager {
   public readonly store: MemoryBlockStore;
   public readonly circleId?: string;
   public readonly agentId?: string;
-  private readonly vectorService: VectorService;
+  public readonly vectorService: VectorService;
   private readonly embeddingService = EmbeddingService.getInstance();
 
   // Simple in-memory rate limiting state

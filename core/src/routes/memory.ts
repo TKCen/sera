@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import type { MemoryManager } from '../memory/manager.js';
 import { ScopedMemoryBlockStore } from '../memory/blocks/ScopedMemoryBlockStore.js';
-import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace } from '../services/vector.service.js';
 import { MemoryCompactionService } from '../memory/MemoryCompactionService.js';
 import { EmbeddingService } from '../services/embedding.service.js';
@@ -15,7 +14,6 @@ const memLogger = new Logger('MemoryRoutes');
 export function createMemoryRouter(memoryManager: MemoryManager) {
   const router = Router();
   const scopedStore = new ScopedMemoryBlockStore(MEMORY_ROOT);
-  const vectorService = new VectorService('_mem_route_unused');
 
   // ── Legacy Letta-style routes (Epic 5) ─────────────────────────────────────
 
@@ -210,7 +208,7 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
         );
 
         if (namespaces.length > 0) {
-          const results = await vectorService.search(namespaces, vector, limit);
+          const results = await memoryManager.vectorService.search(namespaces, vector, limit);
           const hydrated: Array<{ block: KnowledgeBlock | null; score: number }> = [];
           for (const result of results) {
             const agentId = result.payload?.agent_id as string | undefined;
@@ -320,7 +318,7 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       const blockCount = await scopedStore.countByAgent(agentId);
 
       const personalNs: MemoryNamespace = `personal:${agentId}`;
-      const personalInfo = await vectorService.getCollectionInfo(personalNs);
+      const personalInfo = await memoryManager.vectorService.getCollectionInfo(personalNs);
 
       res.json({
         agentId,
@@ -492,7 +490,7 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
             ? (agentId as MemoryNamespace)
             : (`personal:${agentId}` as MemoryNamespace);
 
-      await vectorService.delete(id, namespace);
+      await memoryManager.vectorService.delete(id, namespace);
 
       res.status(204).end();
     } catch (err: unknown) {

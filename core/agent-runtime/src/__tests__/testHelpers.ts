@@ -1,7 +1,14 @@
 import { vi } from 'vitest';
-import type { ILLMClient, ChatMessage, ToolDefinition, LLMResponse, ThinkingLevel } from '../llmClient.js';
+import type {
+  ILLMClient,
+  ChatMessage,
+  ToolDefinition,
+  LLMResponse,
+  ThinkingLevel,
+  ToolCall,
+} from '../llmClient.js';
 import type { IToolExecutor, ToolExecutionResult } from '../tools/executor.js';
-import type { CentrifugoPublisher } from '../centrifugo.js';
+import type { CentrifugoPublisher, ToolOutputCallback } from '../centrifugo.js';
 
 /**
  * ScriptedLLMClient returns a sequence of pre-defined responses.
@@ -14,12 +21,15 @@ export class ScriptedLLMClient implements ILLMClient {
     _messages: ChatMessage[],
     _tools?: ToolDefinition[],
     _temperature?: number,
+
     _thinkingLevel?: ThinkingLevel,
     _timeoutMs?: number,
   ): Promise<LLMResponse> {
     const response = this.responses[this.callCount];
     if (!response) {
-      throw new Error(`ScriptedLLMClient: No more responses defined (call count: ${this.callCount})`);
+      throw new Error(
+        `ScriptedLLMClient: No more responses defined (call count: ${this.callCount})`
+      );
     }
     this.callCount++;
     return response;
@@ -37,10 +47,7 @@ export class StaticToolExecutor implements IToolExecutor {
   private handlers = new Map<string, (args: string) => string | Promise<string>>();
   private toolDefinitions: ToolDefinition[] = [];
 
-  register(
-    definition: ToolDefinition,
-    handler: (args: string) => string | Promise<string>
-  ): this {
+  register(definition: ToolDefinition, handler: (args: string) => string | Promise<string>): this {
     this.toolDefinitions.push(definition);
     this.handlers.set(definition.function.name, handler);
     return this;
@@ -53,7 +60,10 @@ export class StaticToolExecutor implements IToolExecutor {
     return this.toolDefinitions.filter((t) => allowedTools.includes(t.function.name));
   }
 
-  async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolExecutionResult[]> {
+  async executeToolCalls(
+    toolCalls: ToolCall[],
+    _onOutput?: ToolOutputCallback
+  ): Promise<ToolExecutionResult[]> {
     const results: ToolExecutionResult[] = [];
     for (const tc of toolCalls) {
       const handler = this.handlers.get(tc.function.name);

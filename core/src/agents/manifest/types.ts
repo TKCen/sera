@@ -158,6 +158,13 @@ export interface AgentManifest {
       status?: 'active' | 'paused';
       category?: string;
     }>;
+    contextFiles?: Array<{
+      path: string;
+      label: string;
+      maxTokens?: number;
+      priority?: 'high' | 'normal' | 'low';
+    }>;
+    notes?: string;
   };
   tools?: ToolsConfig;
   skills?: Array<string | { name: string; version: string }>;

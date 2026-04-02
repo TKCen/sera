@@ -19,7 +19,7 @@ import {
   LLMTimeoutError,
 } from './llmClient.js';
 import type { IToolExecutor } from './tools/index.js';
-import type { CentrifugoPublisher } from './centrifugo.js';
+import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
@@ -569,6 +569,7 @@ export class ReasoningLoop {
               {
                 toolName: tc.function.name,
                 toolArgs: sanitized,
+                toolCallId: tc.id,
               }
             );
           }
@@ -581,7 +582,16 @@ export class ReasoningLoop {
           });
 
           // Execute tools and add results
-          const toolResults = await this.tools.executeToolCalls(response.toolCalls, taskId);
+
+          const onToolOutput: ToolOutputCallback = (event) => {
+            this.centrifugo.publishToolOutput(event).catch((err) => {
+              log(
+                'warn',
+                `Failed to publish tool output: ${err instanceof Error ? err.message : String(err)}`
+              );
+            });
+          };
+          const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);

@@ -7,13 +7,18 @@
 
 import type { ChatMessage, ToolCall, ToolDefinition } from '../llmClient.js';
 import { parseJson } from '../json.js';
-import { repairToolArguments, sanitizeToolName, ToolArgumentParseError } from '../toolArgumentRepair.js';
+import {
+  repairToolArguments,
+  sanitizeToolName,
+  ToolArgumentParseError,
+} from '../toolArgumentRepair.js';
 import { log } from '../logger.js';
 import { PermissionDeniedError, AGENT_ID } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
 import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
 import type { RuntimeManifest } from '../manifest.js';
-import { shellExec, checkShellPathRestriction } from './shell-handler.js';
+import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
+import type { ToolOutputCallback } from '../centrifugo.js';
 import { spawnSubagent, runTool, executeProxiedTool, isProxyAvailable } from './proxy.js';
 
 /** Result of executing a single tool call, including repair metadata. */
@@ -26,8 +31,14 @@ export interface ToolExecutionResult {
 
 /** Local tool names that are handled natively in the container. */
 const LOCAL_TOOLS = new Set([
-  'file-read', 'file-write', 'file-list', 'file-delete',
-  'shell-exec', 'spawn-subagent', 'run-tool', 'tool-search',
+  'file-read',
+  'file-write',
+  'file-list',
+  'file-delete',
+  'shell-exec',
+  'spawn-subagent',
+  'run-tool',
+  'tool-search',
 ]);
 
 /** Tools that modify state — executed with mutual exclusion to prevent races. */
@@ -39,7 +50,10 @@ const DEFAULT_MAX_TOOL_CONCURRENCY = 4;
 
 export interface IToolExecutor {
   getToolDefinitions(allowedTools?: string[]): ToolDefinition[];
-  executeToolCalls(toolCalls: ToolCall[]): Promise<ToolExecutionResult[]>;
+  executeToolCalls(
+    toolCalls: ToolCall[],
+    onOutput?: ToolOutputCallback
+  ): Promise<ToolExecutionResult[]>;
 }
 
 // ── Semaphore for concurrency control ────────────────────────────────────────
@@ -47,14 +61,25 @@ export interface IToolExecutor {
 class Semaphore {
   private permits: number;
   private queue: Array<() => void> = [];
-  constructor(permits: number) { this.permits = permits; }
+  constructor(permits: number) {
+    this.permits = permits;
+  }
   async acquire(): Promise<void> {
-    if (this.permits > 0) { this.permits--; return; }
-    return new Promise<void>((resolve) => { this.queue.push(resolve); });
+    if (this.permits > 0) {
+      this.permits--;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.queue.push(resolve);
+    });
   }
   release(): void {
     const next = this.queue.shift();
-    if (next) { next(); } else { this.permits++; }
+    if (next) {
+      next();
+    } else {
+      this.permits++;
+    }
   }
 }
 
@@ -94,10 +119,13 @@ export class RuntimeToolExecutor implements IToolExecutor {
     const agentId = process.env['AGENT_INSTANCE_ID'] ?? AGENT_ID;
 
     try {
-      const res = await fetch(`${coreUrl}/v1/tools/catalog?agentId=${encodeURIComponent(agentId)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(10_000),
-      });
+      const res = await fetch(
+        `${coreUrl}/v1/tools/catalog?agentId=${encodeURIComponent(agentId)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(10_000),
+        }
+      );
 
       if (!res.ok) {
         log('warn', `Tool catalog fetch failed (HTTP ${res.status}), using local tools only`);
@@ -111,7 +139,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
 
       const localCount = BUILTIN_TOOLS.length;
       const remoteCount = this.remoteCatalog.length;
-      log('info', `Tool catalog: ${localCount} local + ${remoteCount} remote = ${localCount + remoteCount} total tools`);
+      log(
+        'info',
+        `Tool catalog: ${localCount} local + ${remoteCount} remote = ${localCount + remoteCount} total tools`
+      );
     } catch (err) {
       log('warn', `Tool catalog fetch error: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -127,7 +158,11 @@ export class RuntimeToolExecutor implements IToolExecutor {
   }
 
   /** Execute a single tool call and return a tool-role ChatMessage with repair metadata. */
-  async executeTool(toolCall: ToolCall, sessionId?: string): Promise<ToolExecutionResult> {
+  async executeTool(
+    toolCall: ToolCall,
+    onOutput?: ToolOutputCallback,
+    sessionId?: string
+  ): Promise<ToolExecutionResult> {
     const { id, function: fn } = toolCall;
     const toolName = sanitizeToolName(fn.name);
     const start = Date.now();
@@ -142,9 +177,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
         argRepaired = repair.repaired;
         repairStrategy = repair.strategy;
       } catch (repairErr) {
-        const result = repairErr instanceof ToolArgumentParseError
-          ? `Error: Failed to parse tool arguments after repair attempts: ${fn.arguments}`
-          : `Error: Failed to parse tool arguments as JSON: ${fn.arguments}`;
+        const result =
+          repairErr instanceof ToolArgumentParseError
+            ? `Error: Failed to parse tool arguments after repair attempts: ${fn.arguments}`
+            : `Error: Failed to parse tool arguments as JSON: ${fn.arguments}`;
         this.logInvocation(toolName, 'error', Date.now() - start);
         return {
           message: { role: 'tool', tool_call_id: id, content: result },
@@ -161,21 +197,41 @@ export class RuntimeToolExecutor implements IToolExecutor {
           result = fileRead(this.workspacePath, params['path'] as string);
           break;
         case 'file-write':
-          result = fileWrite(this.workspacePath, params['path'] as string, params['content'] as string);
+          result = fileWrite(
+            this.workspacePath,
+            params['path'] as string,
+            params['content'] as string
+          );
           break;
         case 'file-list':
           result = fileList(this.workspacePath, params['path'] as string | undefined);
           break;
         case 'file-delete':
-          result = fileDelete(this.workspacePath, params['path'] as string, params['recursive'] as boolean | undefined);
+          result = fileDelete(
+            this.workspacePath,
+            params['path'] as string,
+            params['recursive'] as boolean | undefined
+          );
           break;
         case 'shell-exec': {
-          const outsidePath = checkShellPathRestriction(this.workspacePath, params['command'] as string);
+          const outsidePath = checkShellPathRestriction(
+            this.workspacePath,
+            params['command'] as string
+          );
           if (outsidePath && isProxyAvailable()) {
             result = JSON.stringify({
               error: 'path_requires_restart',
               hint: `Path "${outsidePath}" is outside /workspace. Shell access to dynamically granted paths requires a persistent grant and container restart.`,
             });
+          } else if (onOutput) {
+            result = await shellExecStreaming(
+              this.workspacePath,
+              this.tier,
+              params['command'] as string,
+              params['timeout_ms'] as number | undefined,
+              onOutput,
+              id
+            );
           } else {
             result = shellExec(
               this.workspacePath,
@@ -187,7 +243,11 @@ export class RuntimeToolExecutor implements IToolExecutor {
           break;
         }
         case 'spawn-subagent':
-          result = await spawnSubagent(this.tier, params['role'] as string, params['task'] as string);
+          result = await spawnSubagent(
+            this.tier,
+            params['role'] as string,
+            params['task'] as string
+          );
           break;
         case 'run-tool':
           result = await runTool(
@@ -213,9 +273,22 @@ export class RuntimeToolExecutor implements IToolExecutor {
       this.logInvocation(toolName, 'success', durationMs);
       const finalResult = truncateOutput(result);
 
+      if (onOutput && toolName !== 'shell-exec') {
+        onOutput({
+          toolCallId: id,
+          toolName,
+          type: 'result',
+          content: result.substring(0, 500),
+          done: true,
+          timestamp: new Date().toISOString(),
+          durationMs,
+        });
+      }
+
       if (this.manifest?.logging?.commands && sessionId) {
         this.sendCommandLog(sessionId, toolName, params, finalResult, durationMs, 'success');
       }
+
 
       return {
         message: { role: 'tool', tool_call_id: id, content: finalResult },
@@ -262,12 +335,16 @@ export class RuntimeToolExecutor implements IToolExecutor {
    * read-only tools run in parallel up to the configured concurrency limit.
    * Results maintain the same order as the input tool calls.
    */
-  async executeToolCalls(toolCalls: ToolCall[], sessionId?: string): Promise<ToolExecutionResult[]> {
+  async executeToolCalls(
+    toolCalls: ToolCall[],
+    onOutput?: ToolOutputCallback,
+    sessionId?: string
+  ): Promise<ToolExecutionResult[]> {
     // Fast path: single call, no concurrency overhead
     if (toolCalls.length <= 1) {
       const results: ToolExecutionResult[] = [];
       for (const tc of toolCalls) {
-        results.push(await this.executeTool(tc, sessionId));
+        results.push(await this.executeTool(tc, onOutput, sessionId));
       }
       return results;
     }
@@ -282,7 +359,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
         const isWrite = WRITE_TOOLS.has(toolName);
         if (isWrite) await this.writeMutex.acquire();
         try {
-          results[index] = await this.executeTool(tc, sessionId);
+          results[index] = await this.executeTool(tc, onOutput, sessionId);
         } finally {
           if (isWrite) this.writeMutex.release();
         }
@@ -305,7 +382,11 @@ export class RuntimeToolExecutor implements IToolExecutor {
     const matches = allTools.filter((t) => {
       const name = t.function.name.toLowerCase();
       const desc = t.function.description.toLowerCase();
-      return name.includes(q) || desc.includes(q) || q.split(/\s+/).some((word) => desc.includes(word) || name.includes(word));
+      return (
+        name.includes(q) ||
+        desc.includes(q) ||
+        q.split(/\s+/).some((word) => desc.includes(word) || name.includes(word))
+      );
     });
 
     if (matches.length === 0) {
@@ -317,7 +398,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
   }
 
   /** Call core's POST /v1/tools/invoke for a remote tool. */
-  private async invokeRemoteTool(toolName: string, params: Record<string, unknown>): Promise<string> {
+  private async invokeRemoteTool(
+    toolName: string,
+    params: Record<string, unknown>
+  ): Promise<string> {
     const coreUrl = process.env['SERA_CORE_URL'] ?? '';
     const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
 

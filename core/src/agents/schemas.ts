@@ -94,6 +94,17 @@ export const AgentTemplateSchema = z.object({
         })
       )
       .optional(),
+    contextFiles: z
+      .array(
+        z.object({
+          path: z.string(),
+          label: z.string(),
+          maxTokens: z.number().optional(),
+          priority: z.enum(['high', 'normal', 'low']).optional(),
+        })
+      )
+      .optional(),
+    notes: z.string().optional(),
   }),
 });
 

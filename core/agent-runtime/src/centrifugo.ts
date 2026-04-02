@@ -1,5 +1,5 @@
 /**
- * CentrifugoPublisher & CentrifugoSubscriber — lightweight clients for 
+ * CentrifugoPublisher & CentrifugoSubscriber — lightweight clients for
  * real-time messaging in the agent runtime.
  */
 
@@ -26,6 +26,18 @@ export interface IntercomMessage {
 
 export type ThoughtType = 'observe' | 'plan' | 'act' | 'reflect';
 
+export interface ToolOutputEvent {
+  toolCallId: string;
+  toolName: string;
+  type: 'stdout' | 'stderr' | 'progress' | 'result' | 'error';
+  content: string;
+  done: boolean;
+  timestamp: string;
+  durationMs?: number;
+}
+
+export type ToolOutputCallback = (event: ToolOutputEvent) => void;
+
 /** Extended set used internally (not emitted to the spec thought channel). */
 export type InternalStepType = ThoughtType | 'tool-call' | 'tool-result' | 'reasoning';
 
@@ -38,6 +50,7 @@ export interface ThoughtEvent {
   agentDisplayName: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
+  toolCallId?: string;
   anomaly?: boolean;
   internal?: boolean;
 }
@@ -56,12 +69,7 @@ export class CentrifugoPublisher {
   private agentId: string;
   private agentDisplayName: string;
 
-  constructor(
-    centrifugoUrl: string,
-    apiKey: string,
-    agentId: string,
-    agentDisplayName: string,
-  ) {
+  constructor(centrifugoUrl: string, apiKey: string, agentId: string, agentDisplayName: string) {
     this.agentId = agentId;
     this.agentDisplayName = agentDisplayName;
     this.http = axios.create({
@@ -93,7 +101,9 @@ export class CentrifugoPublisher {
     opts?: {
       toolName?: string;
       toolArgs?: Record<string, unknown>;
+      toolCallId?: string;
       anomaly?: boolean;
+
       internal?: boolean;
     },
   ): Promise<void> {
@@ -109,6 +119,7 @@ export class CentrifugoPublisher {
       agentDisplayName: this.agentDisplayName,
       ...(opts?.toolName !== undefined ? { toolName: opts.toolName } : {}),
       ...(opts?.toolArgs !== undefined ? { toolArgs: opts.toolArgs } : {}),
+      ...(opts?.toolCallId !== undefined ? { toolCallId: opts.toolCallId } : {}),
       ...(opts?.anomaly !== undefined ? { anomaly: opts.anomaly } : {}),
       ...(opts?.internal !== undefined ? { internal: opts.internal } : {}),
     };
@@ -116,21 +127,18 @@ export class CentrifugoPublisher {
     await this.publish(channel, event);
   }
 
-  async publishStreamToken(
-    messageId: string,
-    token: string,
-    done: boolean,
-  ): Promise<void> {
+  async publishStreamToken(messageId: string, token: string, done: boolean): Promise<void> {
     const channel = `tokens:${this.agentId}`;
     const data: StreamToken = { token, done, messageId };
     await this.publish(channel, data);
   }
 
+  async publishToolOutput(event: ToolOutputEvent): Promise<void> {
+    await this.publish(`tooloutput:${this.agentId}`, event);
+  }
+
   /** Publish an error completion signal so the web UI can stop the spinner. */
-  async publishStreamError(
-    messageId: string,
-    errorMessage: string,
-  ): Promise<void> {
+  async publishStreamError(messageId: string, errorMessage: string): Promise<void> {
     const channel = `tokens:${this.agentId}`;
     const data: StreamToken = { token: '', done: true, messageId, error: errorMessage };
     await this.publish(channel, data);
@@ -144,7 +152,6 @@ export class CentrifugoPublisher {
       case 'reflect':
         return step;
       case 'tool-call':
-      case 'act':
         return 'act';
       case 'tool-result':
         return 'reflect';
@@ -169,7 +176,7 @@ export class CentrifugoSubscriber {
       debug: process.env['NODE_ENV'] === 'development',
     });
 
-    this.client.on('connected', () => log('info', `Subscriber connected to Centrifugo` ));
+    this.client.on('connected', () => log('info', `Subscriber connected to Centrifugo`));
     this.client.on('error', (ctx) => log('error', `Subscriber error: ${ctx.error.message}`));
     this.client.on('disconnected', () => log('warn', `Subscriber disconnected`));
   }
@@ -187,7 +194,7 @@ export class CentrifugoSubscriber {
    */
   async subscribe(channel: string, onMessage: (msg: IntercomMessage) => void): Promise<void> {
     const sub = this.client.newSubscription(channel);
-    
+
     sub.on('publication', (ctx) => {
       try {
         const msg = ctx.data as IntercomMessage;
@@ -197,8 +204,10 @@ export class CentrifugoSubscriber {
       }
     });
 
-    sub.on('error', (ctx) => log('error', `Subscription error on ${channel}: ${ctx.error.message}`));
-    
+    sub.on('error', (ctx) =>
+      log('error', `Subscription error on ${channel}: ${ctx.error.message}`)
+    );
+
     sub.subscribe();
     log('info', `Subscribed to ${channel}`);
   }

@@ -14,6 +14,7 @@ import type {
   PermissionRequest,
   PermissionDecisionParams,
   AgentDelegation,
+  TemplateDiff,
 } from './types';
 
 // ── Instance-based endpoints ─────────────────────────────────────────────────
@@ -187,4 +188,34 @@ export function decidePermissionRequest(
     `/permission-requests/${encodeURIComponent(requestId)}/decision`,
     { method: 'POST', body: JSON.stringify(params) }
   );
+}
+
+// ── Template Diff ────────────────────────────────────────────────────────────
+
+export function getTemplateDiff(agentId: string): Promise<TemplateDiff> {
+  return request<TemplateDiff>(`/agents/${encodeURIComponent(agentId)}/template-diff`);
+}
+
+export function applyTemplateUpdate(
+  agentId: string,
+  paths?: string[]
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/agents/${encodeURIComponent(agentId)}/apply-template-update`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ paths }),
+    }
+  );
+}
+
+export interface PendingUpdate {
+  instanceId: string;
+  instanceName: string;
+  templateName: string;
+  templateUpdatedAt: string;
+}
+
+export function getPendingUpdates(): Promise<PendingUpdate[]> {
+  return request<PendingUpdate[]>('/agents/pending-updates');
 }

@@ -70,6 +70,8 @@ export class BindMountBuilder {
         memory: spec.memory,
         capabilities: spec.capabilities,
         sandboxBoundary: spec.sandboxBoundary,
+        contextFiles: spec.contextFiles,
+        notes: spec.notes,
       });
       fs.writeFileSync(path.join(wsInternalPath, 'AGENT.yaml'), manifestYaml, 'utf-8');
       logger.debug(`Wrote AGENT.yaml to workspace for ${containerName}`);

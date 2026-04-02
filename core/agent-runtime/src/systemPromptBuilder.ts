@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { getEncoding } from 'js-tiktoken';
 import type { RuntimeManifest } from './manifest.js';
 import type { ToolDefinition } from './llmClient.js';
@@ -132,14 +134,15 @@ export class SystemPromptBuilder {
   /** Workspace Context: injected files (Optional, Priority 200) */
   addWorkspaceContext(manifest: RuntimeManifest): this {
     if (!manifest.contextFiles?.length) return this;
-    const lines = ['## Workspace Context', 'The following files are available for reference in the workspace:'];
-    for (const file of manifest.contextFiles) {
-      lines.push(`- ${file}`);
-    }
+    // Build context section inline to avoid circular dependency with manifest.ts
+    const workspacePath = process.env['WORKSPACE_PATH'] ?? '/workspace';
+    const budgetTokens = parseInt(process.env['CONTEXT_FILES_BUDGET'] ?? '8000', 10);
+    const content = buildContextSectionInline(manifest.contextFiles, workspacePath, budgetTokens);
+    if (!content) return this;
     return this.addSection({
       id: 'workspace-context',
       priority: 200, // Lowest priority, first to be truncated
-      content: lines.join('\n'),
+      content,
       required: false,
     });
   }
@@ -292,4 +295,89 @@ export class SystemPromptBuilder {
       required: false,
     });
   }
+}
+
+// ── Workspace context helpers (inlined to avoid circular dep with manifest.ts) ──
+
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+function buildContextSectionInline(
+  files: NonNullable<RuntimeManifest['contextFiles']>,
+  workspacePath: string,
+  budgetTokens: number
+): string {
+  type Entry = {
+    path: string;
+    label: string;
+    maxTokens?: number;
+    priority?: 'high' | 'normal' | 'low';
+    content: string;
+    tokens: number;
+    exists: boolean;
+  };
+
+  const entries: Entry[] = files.map((f) => {
+    const fullPath = path.join(workspacePath, f.path);
+    const resolved = path.resolve(fullPath);
+    const wsResolved = path.resolve(workspacePath);
+    if (!resolved.startsWith(wsResolved + path.sep) && resolved !== wsResolved) {
+      return { ...f, content: `*Path traversal blocked: ${f.path}*`, tokens: 10, exists: false };
+    }
+    let content: string;
+    try {
+      content = fs.readFileSync(fullPath, 'utf-8');
+    } catch {
+      return { ...f, content: `*File not found: ${f.path}*`, tokens: 10, exists: false };
+    }
+    if (f.maxTokens !== undefined) {
+      const maxChars = f.maxTokens * CHARS_PER_TOKEN_ESTIMATE;
+      if (content.length > maxChars) {
+        content = content.substring(0, maxChars) + '\n...(truncated)';
+      }
+    }
+    const tokens = Math.ceil(content.length / CHARS_PER_TOKEN_ESTIMATE);
+    return { ...f, content, tokens, exists: true };
+  });
+
+  let totalTokens = entries.reduce((sum, e) => sum + e.tokens, 0);
+
+  if (totalTokens > budgetTokens) {
+    const lowEntries = entries.filter((e) => (e.priority ?? 'normal') === 'low' && e.exists);
+    for (const entry of lowEntries) {
+      if (totalTokens <= budgetTokens) break;
+      totalTokens -= entry.tokens;
+      entry.content = `*Omitted due to token budget: ${entry.path}*`;
+      entry.tokens = 10;
+      totalTokens += 10;
+    }
+  }
+
+  if (totalTokens > budgetTokens) {
+    const normalEntries = entries.filter(
+      (e) => (e.priority ?? 'normal') === 'normal' && e.exists && e.tokens > 10
+    );
+    const excessTokens = totalTokens - budgetTokens;
+    const normalTotalTokens = normalEntries.reduce((sum, e) => sum + e.tokens, 0);
+    if (normalTotalTokens > 0) {
+      for (const entry of normalEntries) {
+        const reduction = Math.ceil((entry.tokens / normalTotalTokens) * excessTokens);
+        const newTokens = Math.max(entry.tokens - reduction, 50);
+        const newChars = newTokens * CHARS_PER_TOKEN_ESTIMATE;
+        if (entry.content.length > newChars) {
+          entry.content = entry.content.substring(0, newChars) + '\n...(truncated)';
+          totalTokens -= entry.tokens - newTokens;
+          entry.tokens = newTokens;
+        }
+      }
+    }
+  }
+
+  const lines = ['## Workspace Context'];
+  for (const entry of entries) {
+    lines.push('');
+    lines.push(`### ${entry.label}`);
+    lines.push(entry.content);
+  }
+
+  return lines.join('\n');
 }

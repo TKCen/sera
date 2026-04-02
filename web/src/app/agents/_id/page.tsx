@@ -38,6 +38,7 @@ import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 import { ContextTab } from '@/components/AgentDetailContextTab';
 import { CommandLogTimeline } from '@/components/CommandLogTimeline';
 import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
+import { TemplateDiffBanner } from '@/components/TemplateDiffBanner';
 
 type Tab =
   | 'overview'
@@ -223,6 +224,9 @@ export default function AgentDetailPage() {
           ))}
         </div>
       </div>
+
+      {/* Template diff banner */}
+      {id && <TemplateDiffBanner agentId={id} />}
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Search,
@@ -11,7 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { getAgentBlocks, getAgentStats, getAgentLinks } from '@/lib/api/memory';
+import { useAgentBlocks, useAgentStats, useAgentLinks } from '@/hooks/useMemory';
 import type { ScopedBlock } from '@/lib/api/memory';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
@@ -20,11 +19,7 @@ import { MEMORY_TYPE_TAILWIND } from '@/components/memory/constants';
 function BlockCard({ block, agentId }: { block: ScopedBlock; agentId: string }) {
   const [expanded, setExpanded] = useState(false);
 
-  const { data: links } = useQuery({
-    queryKey: ['memory-links', agentId, block.id],
-    queryFn: () => getAgentLinks(agentId, block.id),
-    enabled: expanded,
-  });
+  const { data: links } = useAgentLinks(agentId, expanded ? block.id : undefined);
 
   return (
     <div className="sera-card-static p-4">
@@ -101,21 +96,12 @@ export default function MemoryDetailPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [tagSearch, setTagSearch] = useState('');
 
-  const { data: blocks, isLoading } = useQuery({
-    queryKey: ['memory-blocks', agentId, typeFilter, tagSearch],
-    queryFn: () =>
-      getAgentBlocks(agentId, {
-        ...(typeFilter ? { type: typeFilter } : {}),
-        ...(tagSearch ? { tags: tagSearch } : {}),
-      }),
-    enabled: !!agentId,
+  const { data: blocks, isLoading } = useAgentBlocks(agentId, {
+    ...(typeFilter ? { type: typeFilter } : {}),
+    ...(tagSearch ? { tags: tagSearch } : {}),
   });
 
-  const { data: stats } = useQuery({
-    queryKey: ['memory-stats', agentId],
-    queryFn: () => getAgentStats(agentId),
-    enabled: !!agentId,
-  });
+  const { data: stats } = useAgentStats(agentId);
 
   const allTypes = [...new Set((blocks ?? []).map((b) => b.type))].sort();
   const allTags = [...new Set((blocks ?? []).flatMap((b) => b.tags))].sort();

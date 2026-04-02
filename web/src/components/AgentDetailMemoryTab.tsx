@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { Brain, Clock, ExternalLink, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentMemory } from '@/hooks/useAgents';
-import { addMemoryEntry } from '@/lib/api/memory';
+import { useAddMemoryEntry } from '@/hooks/useMemory';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -24,7 +24,7 @@ export function MemoryTab({ id }: { id: string }) {
   const [scope, setScope] = useState<string>('');
   const { data: blocks, isLoading, refetch } = useAgentMemory(id, scope || undefined);
   const [showCreate, setShowCreate] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const addMemoryEntryMutation = useAddMemoryEntry();
   const [newEntry, setNewEntry] = useState({
     type: 'note' as string,
     title: '',
@@ -37,17 +37,19 @@ export function MemoryTab({ id }: { id: string }) {
       toast.error('Title and content are required');
       return;
     }
-    setCreating(true);
     try {
       const tags = newEntry.tags
         .split(',')
         .map((t) => t.trim())
         .filter(Boolean);
-      await addMemoryEntry(newEntry.type, {
-        title: newEntry.title.trim(),
-        content: newEntry.content.trim(),
-        ...(tags.length > 0 ? { tags } : {}),
-        source: 'manual',
+      await addMemoryEntryMutation.mutateAsync({
+        type: newEntry.type,
+        entry: {
+          title: newEntry.title.trim(),
+          content: newEntry.content.trim(),
+          ...(tags.length > 0 ? { tags } : {}),
+          source: 'manual',
+        },
       });
       toast.success('Memory entry created');
       setShowCreate(false);
@@ -55,10 +57,8 @@ export function MemoryTab({ id }: { id: string }) {
       void refetch();
     } catch {
       toast.error('Failed to create memory entry');
-    } finally {
-      setCreating(false);
     }
-  }, [newEntry, refetch]);
+  }, [newEntry, refetch, addMemoryEntryMutation]);
 
   return (
     <div className="p-6 space-y-4">
@@ -205,7 +205,7 @@ export function MemoryTab({ id }: { id: string }) {
                 Cancel
               </Button>
             </DialogClose>
-            <Button size="sm" onClick={() => void handleCreate()} disabled={creating}>
+            <Button size="sm" onClick={() => void handleCreate()} disabled={addMemoryEntryMutation.isPending}>
               Create
             </Button>
           </div>

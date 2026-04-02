@@ -1,10 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as healthApi from '@/lib/api/health';
+import { request } from '@/lib/api/client';
+import type { HealthResponse } from '@/lib/api/types';
 
 export const healthKeys = {
+  basic: ['health', 'basic'] as const,
   detail: ['health', 'detail'] as const,
   circuitBreakers: ['health', 'circuit-breakers'] as const,
 };
+
+export function useHealth() {
+  return useQuery({
+    queryKey: healthKeys.basic,
+    queryFn: () => request<HealthResponse>('/health'),
+    refetchInterval: 30_000,
+  });
+}
 
 export function useHealthDetail() {
   return useQuery({

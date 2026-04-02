@@ -19,11 +19,10 @@ import {
   Server,
   Brain,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import { request } from '@/lib/api/client';
-import type { HealthResponse } from '@/lib/api/types';
+import { useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
+import { useHealth } from '@/hooks/useHealth';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -124,19 +123,10 @@ export function Sidebar() {
   const location = useLocation();
   const { user, roles, logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
-  const [coreStatus, setCoreStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const { data: health, isLoading: healthLoading, isError: healthError } = useHealth();
   const { client: centrifugoClient, connectionState: wsState } = useCentrifugoContext();
 
-  useEffect(() => {
-    const check = () => {
-      request<HealthResponse>('/health')
-        .then(() => setCoreStatus('online'))
-        .catch(() => setCoreStatus('offline'));
-    };
-    check();
-    const interval = setInterval(check, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  const coreStatus = healthLoading ? 'checking' : healthError ? 'offline' : 'online';
 
   const isActive = (href: string) =>
     location.pathname === href || location.pathname.startsWith(href + '/');

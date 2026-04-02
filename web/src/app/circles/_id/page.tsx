@@ -18,8 +18,7 @@ import {
   Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useCircle, useUpdateCircle, useDeleteCircle } from '@/hooks/useCircles';
-import * as circlesApi from '@/lib/api/circles';
+import { useCircle, useUpdateCircle, useDeleteCircle, useUpdateCircleContext } from '@/hooks/useCircles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -36,11 +35,12 @@ import { cn } from '@/lib/utils';
 type Tab = 'overview' | 'channels' | 'knowledge' | 'context';
 
 export default function CircleDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data: circle, isLoading, refetch } = useCircle(id ?? '');
+  const { data: circle, isLoading } = useCircle(id);
   const updateCircle = useUpdateCircle();
   const deleteCircle = useDeleteCircle();
+  const updateCircleContext = useUpdateCircleContext();
 
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [showDelete, setShowDelete] = useState(false);
@@ -124,10 +124,9 @@ export default function CircleDetailPage() {
     if (!id) return;
     setSavingContext(true);
     try {
-      await circlesApi.updateCircleContext(id, contextDraft);
+      await updateCircleContext.mutateAsync({ name: id, context: contextDraft });
       toast.success('Project context saved');
       setEditingContext(false);
-      void refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save context');
     } finally {

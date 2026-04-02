@@ -3,6 +3,7 @@ import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
 import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
+import { useSessions, useDeleteSession, useRenameSession } from '@/hooks/useSessions';
 import { sendChatStream } from '@/lib/api/chat';
 import { request } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
@@ -78,7 +79,6 @@ function ChatPageContent() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showThinking, setShowThinking] = useState(true);
@@ -125,27 +125,10 @@ function ChatPageContent() {
     setExpandedThoughts(new Set());
   }, [selectedAgent]);
 
-  // ── Fetch sessions whenever agent changes ────────────────────────────────────
-  const fetchSessions = useCallback(async () => {
-    try {
-      // Filter by instance ID (unambiguous) — agent_name in the DB is inconsistent
-      // (can be role name, instance name, or instance ID depending on how the session was created)
-      const data = await request<SessionInfo[]>(
-        selectedAgentId
-          ? `/sessions?agentInstanceId=${encodeURIComponent(selectedAgentId)}`
-          : selectedAgent
-            ? `/sessions?agent=${encodeURIComponent(selectedAgent)}`
-            : '/sessions'
-      );
-      setSessions(data);
-    } catch {
-      // Non-fatal — session list is best-effort
-    }
-  }, [selectedAgent, selectedAgentId]);
-
-  useEffect(() => {
-    void fetchSessions();
-  }, [fetchSessions]);
+  const { data: sessions = [], refetch: fetchSessions } = useSessions(
+    selectedAgent,
+    selectedAgentId
+  );
 
   // ── Token stream — direct subscription ──────────────────────────────────────
   // Bypasses the useChannel→useState→useEffect chain which loses tokens when
@@ -307,35 +290,34 @@ function ChatPageContent() {
     inputRef.current?.focus();
   }, []);
 
+  const deleteSessionMutation = useDeleteSession();
+  const renameSessionMutation = useRenameSession();
+
   const deleteSession = useCallback(
     async (id: string, e: React.MouseEvent) => {
       e.stopPropagation();
       try {
-        await request(`/sessions/${id}`, { method: 'DELETE' });
-        setSessions((prev) => prev.filter((s) => s.id !== id));
+        await deleteSessionMutation.mutateAsync(id);
         if (sessionId === id) startNewSession();
       } catch (err) {
-        // Non-fatal but should notify user
         const errMsg = err instanceof Error ? err.message : 'Failed to delete session';
         toast.error(errMsg);
       }
     },
-    [sessionId, startNewSession]
+    [sessionId, startNewSession, deleteSessionMutation]
   );
 
-  const renameSession = useCallback(async (id: string, title: string) => {
-    try {
-      await request(`/sessions/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title }),
-      });
-      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Failed to rename session';
-      toast.error(errMsg);
-    }
-  }, []);
+  const renameSession = useCallback(
+    async (id: string, title: string) => {
+      try {
+        await renameSessionMutation.mutateAsync({ id, title });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Failed to rename session';
+        toast.error(errMsg);
+      }
+    },
+    [renameSessionMutation]
+  );
 
   const toggleThoughts = useCallback((msgId: string) => {
     setExpandedThoughts((prev) => {

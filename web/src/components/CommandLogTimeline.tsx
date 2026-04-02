@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { request } from '@/lib/api/client';
+import { useCommandLogs } from '@/hooks/useSessions';
 import {
   ChevronDown,
   ChevronRight,
@@ -25,14 +24,7 @@ interface CommandLog {
 }
 
 export function CommandLogTimeline({ agentId, sessionId }: { agentId: string; sessionId: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['agent-command-logs', agentId, sessionId],
-    queryFn: () =>
-      request<CommandLog[]>(
-        `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/commands`
-      ),
-    enabled: !!agentId && !!sessionId,
-  });
+  const { data, isLoading } = useCommandLogs(agentId, sessionId);
 
   if (isLoading) return <TabLoading />;
 

@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { Calendar, Clock, Plus, Trash2, Play, Eraser, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentSchedules, useClearStaleTasks } from '@/hooks/useAgents';
-import { createSchedule, deleteSchedule, triggerSchedule } from '@/lib/api/schedules';
+import { useCreateSchedule, useDeleteSchedule, useTriggerSchedule } from '@/hooks/useSchedules';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,10 +17,12 @@ import {
 } from '@/components/ui/dialog';
 
 export function SchedulesTab({ id }: { id: string }) {
-  const { data: schedules, isLoading, refetch } = useAgentSchedules(id);
+  const { data: schedules, isLoading } = useAgentSchedules(id);
   const clearStaleTasks = useClearStaleTasks();
+  const createScheduleMutation = useCreateSchedule();
+  const deleteScheduleMutation = useDeleteSchedule();
+  const triggerScheduleMutation = useTriggerSchedule();
   const [showCreate, setShowCreate] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [forceTriggerId, setForceTriggerId] = useState<string | null>(null);
   const [newSchedule, setNewSchedule] = useState({
@@ -38,9 +40,8 @@ export function SchedulesTab({ id }: { id: string }) {
       toast.error('Name and cron expression are required');
       return;
     }
-    setCreating(true);
     try {
-      await createSchedule({
+      await createScheduleMutation.mutateAsync({
         agentName: agentName || id,
         name: newSchedule.name.trim(),
         type: 'cron',
@@ -51,19 +52,15 @@ export function SchedulesTab({ id }: { id: string }) {
       toast.success('Schedule created');
       setShowCreate(false);
       setNewSchedule({ name: '', expression: '', taskPrompt: '' });
-      void refetch();
     } catch {
       toast.error('Failed to create schedule');
-    } finally {
-      setCreating(false);
     }
-  }, [newSchedule, agentName, id, refetch]);
+  }, [newSchedule, agentName, id, createScheduleMutation]);
 
   const handleDelete = async (schedId: string) => {
     try {
-      await deleteSchedule(schedId);
+      await deleteScheduleMutation.mutateAsync(schedId);
       toast.success('Schedule deleted');
-      void refetch();
     } catch {
       toast.error('Failed to delete schedule');
     }
@@ -72,7 +69,7 @@ export function SchedulesTab({ id }: { id: string }) {
 
   const handleTrigger = async (schedId: string, force = false) => {
     try {
-      const res = await triggerSchedule(schedId, force);
+      const res = await triggerScheduleMutation.mutateAsync(schedId);
       if (res.status === 'triggered') {
         toast.success('Schedule triggered');
         setForceTriggerId(null);
@@ -230,8 +227,8 @@ export function SchedulesTab({ id }: { id: string }) {
                 Cancel
               </Button>
             </DialogClose>
-            <Button size="sm" onClick={() => void handleCreate()} disabled={creating}>
-              {creating ? 'Creating…' : 'Create'}
+            <Button size="sm" onClick={() => void handleCreate()} disabled={createScheduleMutation.isPending}>
+              {createScheduleMutation.isPending ? 'Creating…' : 'Create'}
             </Button>
           </div>
         </DialogContent>

@@ -280,6 +280,15 @@ export function useTemplateDiff(agentId: string) {
   });
 }
 
+export function useContextDebug(agentId: string, queryMessage: string) {
+  return useQuery({
+    queryKey: ['agent-context-debug', agentId, queryMessage],
+    queryFn: () =>
+      agentsApi.getAgentContextDebug(agentId, queryMessage),
+    enabled: !!agentId && !!queryMessage,
+  });
+}
+
 export function useApplyTemplateUpdate(agentId: string) {
   const qc = useQueryClient();
   return useMutation({

@@ -219,3 +219,7 @@ export interface PendingUpdate {
 export function getPendingUpdates(): Promise<PendingUpdate[]> {
   return request<PendingUpdate[]>('/agents/pending-updates');
 }
+
+export function getAgentContextDebug(id: string, message: string): Promise<any> {
+  return request<any>(`/agents/${id}/context-debug?message=${encodeURIComponent(message)}`);
+}

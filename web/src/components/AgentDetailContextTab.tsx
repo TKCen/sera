@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { request } from '@/lib/api/client';
+import { useContextDebug } from '@/hooks/useAgents';
 import { Loader2, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -123,13 +122,7 @@ export function ContextTab({ id }: { id: string }) {
   const [testMessage, setTestMessage] = useState('Hello');
   const [queryMessage, setQueryMessage] = useState('Hello');
 
-  const { data, isLoading, isError, error, refetch } = useQuery<ContextDebugResponse>({
-    queryKey: ['agent-context-debug', id, queryMessage],
-    queryFn: () =>
-      request<ContextDebugResponse>(
-        `/agents/${id}/context-debug?message=${encodeURIComponent(queryMessage)}`
-      ),
-  });
+  const { data, isLoading, isError, error, refetch } = useContextDebug(id, queryMessage) as any;
 
   const handleRun = () => {
     setQueryMessage(testMessage);

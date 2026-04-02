@@ -1,6 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
-import { useAgentDelegations } from '@/hooks/useAgents';
-import { request } from '@/lib/api/client';
+import { useAgentDelegations, useAgentTasks } from '@/hooks/useAgents';
 import { TabLoading } from './AgentDetailTabLoading';
 import { Badge } from './ui/badge';
 import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft } from 'lucide-react';
@@ -29,7 +27,7 @@ function useDelegatedTasks(agentId: string) {
 
 export function DelegationsTab({ id }: { id: string }) {
   const { data: delegations, isLoading } = useAgentDelegations(id);
-  const { data: tasks } = useDelegatedTasks(id);
+  const { data: tasks } = useAgentTasks(id, 'all');
 
   // Separate delegated tasks: tasks received from other agents vs tasks this agent sent
   const receivedTasks = (tasks ?? []).filter((t) => {

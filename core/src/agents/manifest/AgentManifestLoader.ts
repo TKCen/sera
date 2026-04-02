@@ -251,6 +251,44 @@ export class AgentManifestLoader {
       }
     }
 
+    // ── contextFiles & notes (within spec) ────────────────────────────────────
+    const spec = obj['spec'] as Record<string, unknown> | undefined;
+    if (spec) {
+      if (spec['contextFiles']) {
+        if (!Array.isArray(spec['contextFiles'])) {
+          throw new ManifestValidationError(
+            `"contextFiles" must be an array of objects${ctx}`,
+            'spec.contextFiles'
+          );
+        }
+        for (let i = 0; i < spec['contextFiles'].length; i++) {
+          const f = spec['contextFiles'][i] as Record<string, unknown>;
+          const fCtx = `${ctx} spec.contextFiles[${i}]`;
+          AgentManifestLoader.requireString(f, 'path', fCtx);
+          AgentManifestLoader.requireString(f, 'label', fCtx);
+          if (f['maxTokens'] !== undefined && typeof f['maxTokens'] !== 'number') {
+            throw new ManifestValidationError(
+              `"maxTokens" must be a number${fCtx}`,
+              `spec.contextFiles[${i}].maxTokens`
+            );
+          }
+          if (
+            f['priority'] !== undefined &&
+            !['high', 'normal', 'low'].includes(f['priority'] as string)
+          ) {
+            throw new ManifestValidationError(
+              `"priority" must be one of: high, normal, low${fCtx}`,
+              `spec.contextFiles[${i}].priority`
+            );
+          }
+        }
+      }
+
+      if (spec['notes'] !== undefined && typeof spec['notes'] !== 'string') {
+        throw new ManifestValidationError(`"notes" must be a string${ctx}`, 'spec.notes');
+      }
+    }
+
     // ── Construct validated manifest ──────────────────────────────────────────
 
     // Type assertions are safe here because we've manually validated the required fields

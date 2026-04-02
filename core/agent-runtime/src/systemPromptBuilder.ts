@@ -4,6 +4,8 @@ import { getEncoding } from 'js-tiktoken';
 import type { RuntimeManifest } from './manifest.js';
 import type { ToolDefinition } from './llmClient.js';
 
+const tokenizer = getEncoding('cl100k_base');
+
 export interface PromptSection {
   id: string;
   priority: number;        // Lower = more important, kept when truncating
@@ -13,7 +15,7 @@ export interface PromptSection {
 
 export class SystemPromptBuilder {
   private sections: PromptSection[] = [];
-  private enc = getEncoding('cl100k_base');
+  private enc = tokenizer;
 
   /** Add a section to the system prompt. */
   addSection(section: PromptSection): this {
@@ -120,9 +122,13 @@ export class SystemPromptBuilder {
 
   /** Agent Notes: manifest-level notes (Optional, Priority 90) */
   addAgentNotes(manifest: RuntimeManifest): this {
-    const notes = manifest.identity.notes || manifest.notes;
-    if (!notes) return this;
-    const lines = ['## Agent Notes', notes];
+    const parts: string[] = [];
+    if (manifest.identity.notes) parts.push(manifest.identity.notes);
+    if (manifest.notes) parts.push(manifest.notes);
+
+    if (parts.length === 0) return this;
+
+    const lines = ['## Agent Notes', ...parts];
     return this.addSection({
       id: 'agent-notes',
       priority: 90,
@@ -131,17 +137,16 @@ export class SystemPromptBuilder {
     });
   }
 
-  /** Workspace Context: injected files (Optional, Priority 200) */
+  /** Workspace Context: injected files (Optional, Priority 100) */
   addWorkspaceContext(manifest: RuntimeManifest): this {
     if (!manifest.contextFiles?.length) return this;
-    // Build context section inline to avoid circular dependency with manifest.ts
     const workspacePath = process.env['WORKSPACE_PATH'] ?? '/workspace';
     const budgetTokens = parseInt(process.env['CONTEXT_FILES_BUDGET'] ?? '8000', 10);
-    const content = buildContextSectionInline(manifest.contextFiles, workspacePath, budgetTokens);
+    const content = this.buildContextSection(manifest.contextFiles, workspacePath, budgetTokens);
     if (!content) return this;
     return this.addSection({
       id: 'workspace-context',
-      priority: 200, // Lowest priority, first to be truncated
+      priority: 100,
       content,
       required: false,
     });
@@ -295,89 +300,111 @@ export class SystemPromptBuilder {
       required: false,
     });
   }
-}
 
-// ── Workspace context helpers (inlined to avoid circular dep with manifest.ts) ──
+  // ── Workspace context helpers ───────────────────────────────────────────────
 
-const CHARS_PER_TOKEN_ESTIMATE = 4;
+  /** Rough heuristic: 1 token ~= 4 characters. Accurate enough for budget trimming. */
+  private static readonly CHARS_PER_TOKEN = 4;
 
-function buildContextSectionInline(
-  files: NonNullable<RuntimeManifest['contextFiles']>,
-  workspacePath: string,
-  budgetTokens: number
-): string {
-  type Entry = {
-    path: string;
-    label: string;
-    maxTokens?: number;
-    priority?: 'high' | 'normal' | 'low';
-    content: string;
-    tokens: number;
-    exists: boolean;
-  };
+  private buildContextSection(
+    files: NonNullable<RuntimeManifest['contextFiles']>,
+    workspacePath: string,
+    budgetTokens: number
+  ): string {
+    type Entry = {
+      path: string;
+      label: string;
+      maxTokens?: number;
+      priority: 'high' | 'normal' | 'low';
+      content: string;
+      tokens: number;
+      exists: boolean;
+      omitted?: boolean;
+    };
 
-  const entries: Entry[] = files.map((f) => {
-    const fullPath = path.join(workspacePath, f.path);
-    const resolved = path.resolve(fullPath);
-    const wsResolved = path.resolve(workspacePath);
-    if (!resolved.startsWith(wsResolved + path.sep) && resolved !== wsResolved) {
-      return { ...f, content: `*Path traversal blocked: ${f.path}*`, tokens: 10, exists: false };
-    }
-    let content: string;
-    try {
-      content = fs.readFileSync(fullPath, 'utf-8');
-    } catch {
-      return { ...f, content: `*File not found: ${f.path}*`, tokens: 10, exists: false };
-    }
-    if (f.maxTokens !== undefined) {
-      const maxChars = f.maxTokens * CHARS_PER_TOKEN_ESTIMATE;
-      if (content.length > maxChars) {
-        content = content.substring(0, maxChars) + '\n...(truncated)';
+    const entries: Entry[] = files.map((f) => {
+      const fullPath = path.join(workspacePath, f.path);
+      const resolved = path.resolve(fullPath);
+      const wsResolved = path.resolve(workspacePath);
+      if (!resolved.startsWith(wsResolved + path.sep) && resolved !== wsResolved) {
+        return {
+          ...f,
+          priority: f.priority ?? 'normal',
+          content: `*Path traversal blocked: ${f.path}*`,
+          tokens: 10,
+          exists: false,
+        };
       }
-    }
-    const tokens = Math.ceil(content.length / CHARS_PER_TOKEN_ESTIMATE);
-    return { ...f, content, tokens, exists: true };
-  });
+      let content: string;
+      try {
+        content = fs.readFileSync(fullPath, 'utf-8');
+      } catch {
+        return {
+          ...f,
+          priority: f.priority ?? 'normal',
+          content: `*File not found: ${f.path}*`,
+          tokens: 10,
+          exists: false,
+        };
+      }
+      if (f.maxTokens !== undefined) {
+        const maxChars = f.maxTokens * SystemPromptBuilder.CHARS_PER_TOKEN;
+        if (content.length > maxChars) {
+          content = content.substring(0, maxChars) + '\n...(truncated)';
+        }
+      }
+      const tokens = Math.ceil(content.length / SystemPromptBuilder.CHARS_PER_TOKEN);
+      return { ...f, priority: f.priority ?? 'normal', content, tokens, exists: true };
+    });
 
-  let totalTokens = entries.reduce((sum, e) => sum + e.tokens, 0);
+    const priorities: Array<'high' | 'normal' | 'low'> = ['low', 'normal', 'high'];
 
-  if (totalTokens > budgetTokens) {
-    const lowEntries = entries.filter((e) => (e.priority ?? 'normal') === 'low' && e.exists);
-    for (const entry of lowEntries) {
+    for (const prio of priorities) {
+      let totalTokens = entries.reduce((sum, e) => sum + (e.omitted ? 10 : e.tokens), 0);
       if (totalTokens <= budgetTokens) break;
-      totalTokens -= entry.tokens;
-      entry.content = `*Omitted due to token budget: ${entry.path}*`;
-      entry.tokens = 10;
-      totalTokens += 10;
-    }
-  }
 
-  if (totalTokens > budgetTokens) {
-    const normalEntries = entries.filter(
-      (e) => (e.priority ?? 'normal') === 'normal' && e.exists && e.tokens > 10
-    );
-    const excessTokens = totalTokens - budgetTokens;
-    const normalTotalTokens = normalEntries.reduce((sum, e) => sum + e.tokens, 0);
-    if (normalTotalTokens > 0) {
-      for (const entry of normalEntries) {
-        const reduction = Math.ceil((entry.tokens / normalTotalTokens) * excessTokens);
-        const newTokens = Math.max(entry.tokens - reduction, 50);
-        const newChars = newTokens * CHARS_PER_TOKEN_ESTIMATE;
-        if (entry.content.length > newChars) {
-          entry.content = entry.content.substring(0, newChars) + '\n...(truncated)';
-          totalTokens -= entry.tokens - newTokens;
-          entry.tokens = newTokens;
+      const prioEntries = entries
+        .filter((e) => e.priority === prio && e.exists && !e.omitted)
+        .sort((a, b) => b.tokens - a.tokens); // Trim longest first
+
+      for (const entry of prioEntries) {
+        if (totalTokens <= budgetTokens) break;
+
+        if (prio === 'high') {
+          // High priority files are truncated instead of omitted if possible
+          const excess = totalTokens - budgetTokens;
+          const reduction = Math.min(entry.tokens - 50, excess);
+          if (reduction > 0) {
+            const newTokens = entry.tokens - reduction;
+            const newChars = newTokens * SystemPromptBuilder.CHARS_PER_TOKEN;
+            entry.content = entry.content.substring(0, newChars) + '\n...(truncated)';
+            entry.tokens = Math.ceil(entry.content.length / SystemPromptBuilder.CHARS_PER_TOKEN);
+            totalTokens -= reduction;
+          } else {
+            // If we can't truncate more, we must omit
+            totalTokens -= entry.tokens;
+            entry.content = `*Omitted due to token budget: ${entry.path}*`;
+            entry.tokens = 10;
+            entry.omitted = true;
+            totalTokens += 10;
+          }
+        } else {
+          totalTokens -= entry.tokens;
+          entry.content = `*Omitted due to token budget: ${entry.path}*`;
+          entry.tokens = 10;
+          entry.omitted = true;
+          totalTokens += 10;
         }
       }
     }
-  }
 
-  const lines = ['## Workspace Context'];
-  for (const entry of entries) {
-    lines.push('');
-    lines.push(`### ${entry.label}`);
-    lines.push(entry.content);
-  }
+    const lines = ['## Workspace Context'];
+    for (const entry of entries) {
+      lines.push('');
+      lines.push(`### ${entry.label}`);
+      lines.push(entry.content);
+    }
 
-  return lines.join('\n');
+    return lines.join('\n');
+  }
 }

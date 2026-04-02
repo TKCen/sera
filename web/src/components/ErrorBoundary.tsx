@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallbackMessage?: string;
+  onReset?: () => void;
 }
 
 interface ErrorBoundaryState {
@@ -28,6 +29,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   handleReload = (): void => {
     window.location.reload();
+  };
+
+  handleReset = (): void => {
+    this.setState({ hasError: false, error: null });
+    this.props.onReset?.();
   };
 
   render(): ReactNode {
@@ -58,8 +64,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             )}
 
             <div className="flex flex-col gap-3">
-              <Button onClick={this.handleReload} className="w-full">
+              <Button onClick={this.handleReset} className="w-full">
                 <RefreshCcw size={14} className="mr-2" />
+                Try Again
+              </Button>
+              <Button onClick={this.handleReload} variant="outline" className="w-full">
                 Reload Application
               </Button>
               <Button

@@ -22,6 +22,8 @@ import { useCircles } from '@/hooks/useCircles';
 import { useSchedules } from '@/hooks/useSchedules';
 import { request } from '@/lib/api/client';
 import { cn, formatDistanceToNow } from '@/lib/utils';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { queryClient } from '@/lib/query-client';
 
 interface SessionSummary {
   id: string;
@@ -213,8 +215,13 @@ export default function DashboardPage() {
   const totalAgents = agents?.length ?? 0;
   const activeSchedules = schedules?.filter((s) => s.status === 'active').length ?? 0;
 
+  const handleReset = () => {
+    void queryClient.invalidateQueries();
+  };
+
   return (
     <main className="p-8 max-w-5xl mx-auto space-y-6">
+      <ErrorBoundary fallbackMessage="The dashboard header encountered an error." onReset={handleReset}>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="sera-page-title">Dashboard</h1>
@@ -228,8 +235,10 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+      </ErrorBoundary>
 
       {/* Stats grid */}
+      <ErrorBoundary fallbackMessage="The dashboard statistics encountered an error." onReset={handleReset}>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {agentsError ? (
           <>
@@ -286,8 +295,10 @@ export default function DashboardPage() {
           />
         )}
       </div>
+      </ErrorBoundary>
 
       {/* Agent status breakdown */}
+      <ErrorBoundary fallbackMessage="The agent status breakdown encountered an error." onReset={handleReset}>
       <section className="sera-card-static p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
@@ -366,9 +377,12 @@ export default function DashboardPage() {
           />
         )}
       </section>
+      </ErrorBoundary>
 
       {/* Recent sessions */}
+      <ErrorBoundary fallbackMessage="Recent sessions could not be displayed." onReset={handleReset}>
       <RecentSessions />
+      </ErrorBoundary>
 
       {/* Quick actions */}
       <nav className="flex items-center gap-3 flex-wrap" aria-label="Quick actions">

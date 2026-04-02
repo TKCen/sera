@@ -338,9 +338,17 @@ export class ContextAssembler {
     }
 
     const filter: SearchFilter = {};
+    const searchConfig = manifest.spec?.memory?.search || manifest.memory?.search;
     let results;
     try {
-      results = await this.vectorService.search(namespaces, queryVector, DEFAULT_TOP_K, filter);
+      results = await this.vectorService.search(
+        namespaces,
+        queryVector,
+        searchConfig?.maxResults || DEFAULT_TOP_K,
+        filter,
+        searchConfig,
+        currentMessage
+      );
     } catch (err) {
       emit({
         stage: 'context.memory_skipped',
@@ -410,7 +418,7 @@ export class ContextAssembler {
         tokenCount: Math.ceil(charCount / 4),
         charBudget,
         charsUsed: charCount,
-        topK: DEFAULT_TOP_K,
+        topK: searchConfig?.maxResults || DEFAULT_TOP_K,
         scores: scores.map((s) => Math.round(s * 1000) / 1000),
         blocks: injectedBlocksMetadata,
       },

@@ -437,4 +437,5 @@ export class MemoryBlockStore {
 
     return limit ? results.slice(0, limit) : results;
   }
+
 }

@@ -80,10 +80,31 @@ export interface WorkspaceConfig {
 }
 
 // ── Memory ──────────────────────────────────────────────────────────────────────
+export interface MMRConfig {
+  enabled: boolean; // Default: true
+  lambda: number; // Default: 0.7 (higher = more relevance, lower = more diversity)
+  candidateMultiplier: number; // Default: 4 (fetch 4x candidates, then re-rank)
+}
+
+export interface TemporalDecayConfig {
+  enabled: boolean; // Default: true
+  halfLifeDays: number; // Default: 30 (score halves every 30 days)
+}
+
+export interface MemorySearchConfig {
+  vectorWeight: number; // Default: 0.7
+  textWeight: number; // Default: 0.3
+  minScore: number; // Default: 0.35
+  maxResults: number; // Default: 6
+  mmr?: MMRConfig;
+  temporalDecay?: TemporalDecayConfig;
+}
+
 export interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
   citations?: 'full' | 'brief' | 'off';
+  search?: MemorySearchConfig;
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────────────

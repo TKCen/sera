@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SystemPromptBuilder } from '../systemPromptBuilder.js';
-import type { RuntimeManifest } from '../manifest.js';
-import type { ToolDefinition } from '../llmClient.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { SystemPromptBuilder } from '../systemPromptBuilder.js';
+import type { RuntimeManifest } from '../manifest.js';
+import type { ToolDefinition } from '../llmClient.js';
 
 describe('SystemPromptBuilder', () => {
   let tempDir: string;

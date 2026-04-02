@@ -140,7 +140,7 @@ model:
         circleName: 'Engineering',
         circleMembers: ['alice', 'bob'],
         availableAgents: [{ name: 'sub-agent', role: 'Support' }],
-        workspacePath: tempDir,
+        workspacePath: '/workspace',
       });
 
       expect(prompt).toContain('You are Test Agent, a SERA AI agent.');

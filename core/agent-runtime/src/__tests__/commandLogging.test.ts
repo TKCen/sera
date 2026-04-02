@@ -38,7 +38,7 @@ describe('RuntimeToolExecutor — Command Logging', () => {
     executor = new RuntimeToolExecutor(tempDir, 2, manifest);
 
     mockFetch = vi.fn().mockImplementation(async (url) => {
-      if (url.includes('/command-logs')) {
+      if (typeof url === 'string' && url.includes('/command-logs')) {
         return {
           ok: true,
           status: 201,
@@ -49,6 +49,7 @@ describe('RuntimeToolExecutor — Command Logging', () => {
         ok: true,
         status: 200,
         json: async () => ([]),
+        text: async () => '[]',
       };
     });
     vi.stubGlobal('fetch', mockFetch);

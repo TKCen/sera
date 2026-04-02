@@ -125,6 +125,7 @@ export interface SystemPromptContext {
   circleConstitution?: string;
   availableAgents?: Array<{ name: string; role: string }>;
   tokenBudget?: number;
+  workspacePath?: string;
 }
 
 /**

@@ -205,7 +205,7 @@ describe('ReasoningLoop — memory flush (formerly pre-compaction memory save ho
 
     // First LLM call should HAVE the save-reminder message
     const firstCallMsgs = mockChat.mock.calls[0]![0];
-    expect(firstCallMsgs.some(m => m.content.includes('Your context window is about to be compacted'))).toBe(true);
+    expect(firstCallMsgs.some(m => m.content.includes('IMPORTANT: Your context window is nearly full'))).toBe(true);
 
     // Second LLM call should be AFTER compaction (system prompt should be there, but maybe some old messages gone)
     // The "compaction.started" thought should have fired before the 2nd LLM call.

@@ -5,12 +5,16 @@ import path from 'path';
 // Mock fs to avoid real file system access
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
+  const readFileSync = vi.fn();
+  const existsSync = vi.fn();
   return {
     ...actual,
+    readFileSync,
+    existsSync,
     default: {
       ...actual,
-      readFileSync: vi.fn(),
-      existsSync: vi.fn(),
+      readFileSync,
+      existsSync,
     },
   };
 });
@@ -52,25 +56,28 @@ describe('generateSystemPrompt', () => {
     const prompt = generateSystemPrompt(baseManifest);
     expect(prompt).toContain('You are Test Agent');
     expect(prompt).toContain('Role: Test role');
-    expect(prompt).not.toContain('## Notes');
+    expect(prompt).not.toContain('## Agent Notes');
     expect(prompt).not.toContain('## Workspace Context');
   });
 
-  it('injects notes section when manifest.notes is set', () => {
+  it('injects notes section when manifest.identity.notes is set', () => {
     const manifest: RuntimeManifest = {
       ...baseManifest,
-      notes: 'Always respond in JSON format.',
+      identity: {
+        ...baseManifest.identity,
+        notes: 'Always respond in JSON format.',
+      },
     };
     const prompt = generateSystemPrompt(manifest);
-    expect(prompt).toContain('## Notes');
+    expect(prompt).toContain('## Agent Notes');
     expect(prompt).toContain('Always respond in JSON format.');
   });
 
   it('injects context files with labels as subsections', () => {
-    (fs.readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(
+    (fs.readFileSync as any).mockReturnValue(
       '# API Reference\nGET /api/v1/users'
     );
-    (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (fs.existsSync as any).mockReturnValue(true);
     const manifest: RuntimeManifest = {
       ...baseManifest,
       contextFiles: [{ path: 'docs/api.md', label: 'API Docs' }],
@@ -84,9 +91,10 @@ describe('generateSystemPrompt', () => {
   });
 
   it('produces "*File not found*" warning instead of throwing for missing files', () => {
-    (fs.readFileSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
+    (fs.readFileSync as any).mockImplementation(() => {
       throw new Error('ENOENT: no such file or directory');
     });
+    (fs.existsSync as any).mockReturnValue(true);
     const manifest: RuntimeManifest = {
       ...baseManifest,
       contextFiles: [{ path: 'missing/file.md', label: 'Missing Doc' }],
@@ -101,10 +109,10 @@ describe('generateSystemPrompt', () => {
   it('drops low priority files first when over budget', () => {
     const highContent = 'H'.repeat(8000 * 4); // ~8000 tokens
     const lowContent = 'L'.repeat(2000 * 4); // ~2000 tokens
-    (fs.readFileSync as ReturnType<typeof vi.fn>)
+    (fs.readFileSync as any)
       .mockReturnValueOnce(highContent)
       .mockReturnValueOnce(lowContent);
-    (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (fs.existsSync as any).mockReturnValue(true);
 
     const manifest: RuntimeManifest = {
       ...baseManifest,
@@ -125,8 +133,8 @@ describe('generateSystemPrompt', () => {
 
   it('truncates file content to per-file maxTokens', () => {
     const longContent = 'A'.repeat(10000);
-    (fs.readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(longContent);
-    (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (fs.readFileSync as any).mockReturnValue(longContent);
+    (fs.existsSync as any).mockReturnValue(true);
     const manifest: RuntimeManifest = {
       ...baseManifest,
       contextFiles: [{ path: 'big.md', label: 'Big File', maxTokens: 100 }],

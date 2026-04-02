@@ -102,7 +102,6 @@ describe('ReasoningLoop — memory flush', () => {
     expect(result.exitReason).toBe('success');
 
     // Verify flush turn restricted tools
-    // In Story 5.12 implementation, flush turn is internal and uses flushTools
     const flushCallTools = mockChat.mock.calls[0][1];
     expect(flushCallTools).toHaveLength(1);
     expect(flushCallTools![0].function.name).toBe('knowledge-store');
@@ -223,13 +222,12 @@ describe('ReasoningLoop — memory flush', () => {
 
     // 1. Under threshold
     await loop.run({ taskId: 't1', task: 'tiny' });
-    // May have 1 or 2 calls if it triggers something else, but let's check what it actually does
-    // expect(mockChat).toHaveBeenCalledTimes(1);
+    expect(mockChat).toHaveBeenCalledTimes(1);
 
     mockChat.mockClear();
 
     // 2. Over threshold (task content ~400 tokens)
     await loop.run({ taskId: 't2', task: 'word '.repeat(200) });
-    // expect(mockChat).toHaveBeenCalledTimes(2);
+    expect(mockChat).toHaveBeenCalledTimes(2);
   });
 });

@@ -23,6 +23,7 @@ describe('ContextAssembler', () => {
     mockOrchestrator = {
       getManifestByInstanceId: vi.fn(),
       getManifest: vi.fn(),
+      getToolExecutor: vi.fn(),
     };
     mockPool = {
       query: vi.fn().mockResolvedValue({ rows: [] }),

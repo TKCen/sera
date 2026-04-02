@@ -66,6 +66,7 @@ export interface ThoughtEvent {
   agentDisplayName?: string;
   taskId?: string | undefined;
   iteration?: number | undefined;
+  detail?: Record<string, unknown>;
 }
 
 // ── Stream Token (published to internal:stream:{messageId}) ─────────────────────

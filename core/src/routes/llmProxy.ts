@@ -139,6 +139,27 @@ export function createLlmProxyRouter(
                 ...event.detail,
                 ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
               });
+
+              // Publish as thought event to Centrifugo/Audit stream (Story 305)
+              const intercom = orchestrator.getIntercom();
+              if (intercom) {
+                const manifest =
+                  orchestrator.getManifestByInstanceId(agentId) ||
+                  orchestrator.getManifest(agentId);
+                const displayName = manifest?.metadata.displayName ?? agentId;
+
+                intercom
+                  .publishThought(
+                    agentId,
+                    displayName,
+                    'context-assembly',
+                    `Context: ${event.stage}`,
+                    undefined, // taskId unknown in proxy
+                    undefined, // iteration unknown in proxy
+                    event.detail
+                  )
+                  .catch((err) => logger.warn('Failed to publish assembly thought:', err));
+              }
             }
           )) as unknown as import('../agents/types.js').ChatMessage[];
         }

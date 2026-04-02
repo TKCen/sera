@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { SignJWT, jwtVerify } from 'jose';
 import { pool } from '../lib/database.js';
 import { requireRole } from '../auth/authMiddleware.js';
@@ -43,9 +44,20 @@ function addToBlocklist(tokenId: string, expiresAt: Date | null): void {
 
 // ── JWT signing key (shared with IdentityService) ────────────────────────────
 
+let ephemeralSecret: Uint8Array | undefined;
+
 function getDelegationSignKey(): Uint8Array {
-  const secret = process.env['JWT_SECRET'] ?? 'sera-delegation-secret';
-  return new TextEncoder().encode(secret);
+  if (process.env['JWT_SECRET']) {
+    return new TextEncoder().encode(process.env['JWT_SECRET']);
+  }
+  if (!ephemeralSecret) {
+    ephemeralSecret = crypto.randomBytes(32);
+    logger.warn(
+      'JWT_SECRET not set for delegation — using a random ephemeral secret. ' +
+        'Delegation tokens will not survive server restarts. Set JWT_SECRET in production.'
+    );
+  }
+  return ephemeralSecret;
 }
 
 // ── Route factory ────────────────────────────────────────────────────────────

@@ -99,7 +99,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'image-view',
-      description: 'Analyze an image using the models vision capabilities.',
+      description: "Analyze an image using the model's vision capabilities.",
       parameters: {
         type: 'object',
         properties: {

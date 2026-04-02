@@ -40,6 +40,10 @@ export async function pdfRead(
     const data = await pdf(dataBuffer, options);
     let text = data.text;
 
+    if (format === 'markdown') {
+      text = text.replace(/\n--- PAGE (\d+) ---\n/g, '\n## Page $1\n');
+    }
+
     if (pages) {
       const pageSet = parsePageRange(pages, data.numpages);
       const allPages = text.split(/\n--- PAGE \d+ ---\n/).filter(p => p.trim().length > 0);

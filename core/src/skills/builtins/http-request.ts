@@ -7,8 +7,7 @@ import type { SkillDefinition } from '../types.js';
  */
 export const httpRequestSkill: SkillDefinition = {
   id: 'http-request',
-  description:
-    'Full HTTP client for API interaction (raw HTTP with method, headers, and body).',
+  description: 'Full HTTP client for API interaction (raw HTTP with method, headers, and body).',
   source: 'builtin',
   parameters: [
     {

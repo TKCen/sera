@@ -110,6 +110,13 @@ export class MemoryManager {
     return this.store.getEntry(id);
   }
 
+  async getEntries(
+    items: Array<string | { id: string; type?: MemoryBlockType; title?: string }>
+  ): Promise<MemoryEntry[]> {
+    if (!Array.isArray(items)) throw new Error('Invalid items parameter — must be an array');
+    return this.store.getEntries(items);
+  }
+
   async updateEntry(id: string, content: string): Promise<MemoryEntry | null> {
     if (!id || typeof id !== 'string') throw new Error('Invalid id parameter');
     if (typeof content !== 'string') throw new Error('Invalid content parameter');
@@ -218,11 +225,15 @@ export class MemoryManager {
       const vector = await this.embeddingService.generateEmbedding(query);
       const vectorResults = await this.vectorService.searchLegacy(vector, limit);
 
-      const entries: MemoryEntry[] = [];
-      for (const res of vectorResults) {
-        const entry = await this.getEntry(res.id as string);
-        if (entry) entries.push(entry);
-      }
+      const searchItems = vectorResults.map((res) => {
+        const p = res.payload as Record<string, unknown> | undefined;
+        return {
+          id: res.id as string,
+          type: p?.['type'] as MemoryBlockType | undefined,
+          title: p?.['title'] as string | undefined,
+        };
+      });
+      const entries = await this.getEntries(searchItems);
 
       if (entries.length > 0) return entries;
     } catch (err) {

@@ -2,6 +2,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as providersApi from '../lib/api/providers';
+import type { LLMConfig } from '../lib/api/types';
 import {
   useProviders,
   useDynamicProviders,
@@ -95,7 +96,7 @@ describe('useProviders hooks', () => {
     });
 
     it('useLLMConfig should fetch LLM config', async () => {
-      const mockData: providersApi.LLMConfig = { model: 'test', baseUrl: 'url' };
+      const mockData: LLMConfig = { model: 'test', baseUrl: 'url' };
       vi.mocked(providersApi.getLLMConfig).mockResolvedValue(mockData);
 
       const { result } = renderHook(() => useLLMConfig(), { wrapper: TestWrapper });
@@ -143,7 +144,7 @@ describe('useProviders hooks', () => {
       vi.mocked(providersApi.updateLLMConfig).mockResolvedValue({ success: true });
       const { result } = renderHook(() => useUpdateLLMConfig(), { wrapper: TestWrapper });
 
-      const config: providersApi.LLMConfig = { model: 'test', baseUrl: 'url' };
+      const config: LLMConfig = { model: 'test', baseUrl: 'url' };
       await result.current.mutateAsync(config);
 
       expect(providersApi.updateLLMConfig).toHaveBeenCalledWith(config);

@@ -45,6 +45,10 @@ tui/*.test
 tui/*.out
 tui/debug.log
 
+# Standalone lockfiles (workspace root bun.lock is canonical)
+web/bun.lock
+core/agent-runtime/bun.lock
+
 # Agents
 .claude/
 .omc/

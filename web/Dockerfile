@@ -3,8 +3,8 @@
 # ─── Base stage (used by dev compose via `target: base`) ──────────────────────
 FROM oven/bun:1-alpine AS base
 WORKDIR /app
-COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile
+COPY package.json ./
+RUN bun install
 
 # ─── Builder (used by production builds) ─────────────────────────────────────
 FROM base AS builder

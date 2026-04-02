@@ -1,4 +1,5 @@
 node_modules
+bun.lock
 .next
 npm-debug.log
 .env

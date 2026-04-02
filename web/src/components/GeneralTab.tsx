@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Save } from 'lucide-react';
-import * as providersApi from '@/lib/api/providers';
+import { useLLMConfig, useUpdateLLMConfig } from '@/hooks/useProviders';
 import { Button } from '@/components/ui/button';
 
 export function GeneralTab({
@@ -9,18 +9,14 @@ export function GeneralTab({
   registeredModels: Array<{ modelName: string; description?: string; provider?: string }>;
 }) {
   const [defaultModel, setDefaultModelLocal] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const { data: llmConfig, isLoading: loaded } = useLLMConfig();
+  const updateLLMConfig = useUpdateLLMConfig();
 
   useEffect(() => {
-    providersApi
-      .getDefaultModel()
-      .then((res) => {
-        if (res.defaultModel) setDefaultModelLocal(res.defaultModel);
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
-  }, []);
+    if (llmConfig?.defaultModel) {
+      setDefaultModelLocal(llmConfig.defaultModel);
+    }
+  }, [llmConfig]);
 
   return (
     <div className="sera-card-static p-6 space-y-6 max-w-xl animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -56,13 +52,9 @@ export function GeneralTab({
           <Button
             size="sm"
             className="h-9 text-xs gap-1.5 bg-sera-accent hover:bg-sera-accent-hover text-sera-bg"
-            disabled={saving || !defaultModel}
+            disabled={updateLLMConfig.isPending || !defaultModel}
             onClick={() => {
-              setSaving(true);
-              providersApi
-                .setDefaultModel(defaultModel)
-                .then(() => setSaving(false))
-                .catch(() => setSaving(false));
+              updateLLMConfig.mutate({ defaultModel });
             }}
           >
             <Save size={13} /> Save

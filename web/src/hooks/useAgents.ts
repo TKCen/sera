@@ -34,6 +34,30 @@ export function useAgent(id: string) {
   });
 }
 
+export function useAgentContextDebug(id: string, message: string) {
+  return useQuery({
+    queryKey: ['agent-context-debug', id, message],
+    queryFn: () => agentsApi.getAgentContextDebug(id, message),
+    enabled: id.length > 0 && message.length > 0,
+  });
+}
+
+export function useAgentHealthCheck(id: string) {
+  return useQuery({
+    queryKey: ['agent-health-check', id],
+    queryFn: () => agentsApi.getAgentHealthCheck(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function useAgentSystemPrompt(id: string) {
+  return useQuery({
+    queryKey: ['agent-system-prompt', id],
+    queryFn: () => agentsApi.getAgentSystemPrompt(id),
+    enabled: id.length > 0,
+  });
+}
+
 export function useAgentDelegations(id: string) {
   return useQuery({
     queryKey: agentsKeys.delegations(id),

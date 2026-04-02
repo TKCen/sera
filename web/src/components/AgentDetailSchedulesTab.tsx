@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { Calendar, Clock, Plus, Trash2, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentSchedules } from '@/hooks/useAgents';
-import { createSchedule, deleteSchedule, triggerSchedule } from '@/lib/api/schedules';
+import { useCreateSchedule, useDeleteSchedule, useTriggerSchedule } from '@/hooks/useSchedules';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,13 +19,16 @@ import {
 export function SchedulesTab({ id }: { id: string }) {
   const { data: schedules, isLoading, refetch } = useAgentSchedules(id);
   const [showCreate, setShowCreate] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newSchedule, setNewSchedule] = useState({
     name: '',
     expression: '',
     taskPrompt: '',
   });
+
+  const createSchedule = useCreateSchedule();
+  const deleteSchedule = useDeleteSchedule();
+  const triggerSchedule = useTriggerSchedule();
 
   // We need the agent name from the schedule data or the parent — extract from existing schedules
   // For new schedules, we need to resolve agent name from ID
@@ -36,9 +39,8 @@ export function SchedulesTab({ id }: { id: string }) {
       toast.error('Name and cron expression are required');
       return;
     }
-    setCreating(true);
     try {
-      await createSchedule({
+      await createSchedule.mutateAsync({
         agentName: agentName || id,
         name: newSchedule.name.trim(),
         type: 'cron',
@@ -52,14 +54,12 @@ export function SchedulesTab({ id }: { id: string }) {
       void refetch();
     } catch {
       toast.error('Failed to create schedule');
-    } finally {
-      setCreating(false);
     }
-  }, [newSchedule, agentName, id, refetch]);
+  }, [newSchedule, agentName, id, refetch, createSchedule]);
 
   const handleDelete = async (schedId: string) => {
     try {
-      await deleteSchedule(schedId);
+      await deleteSchedule.mutateAsync(schedId);
       toast.success('Schedule deleted');
       void refetch();
     } catch {
@@ -70,7 +70,7 @@ export function SchedulesTab({ id }: { id: string }) {
 
   const handleTrigger = async (schedId: string) => {
     try {
-      await triggerSchedule(schedId);
+      await triggerSchedule.mutateAsync(schedId);
       toast.success('Schedule triggered');
     } catch {
       toast.error('Failed to trigger schedule');
@@ -199,8 +199,8 @@ export function SchedulesTab({ id }: { id: string }) {
                 Cancel
               </Button>
             </DialogClose>
-            <Button size="sm" onClick={() => void handleCreate()} disabled={creating}>
-              {creating ? 'Creating…' : 'Create'}
+            <Button size="sm" onClick={() => void handleCreate()} disabled={createSchedule.isPending}>
+              {createSchedule.isPending ? 'Creating…' : 'Create'}
             </Button>
           </div>
         </DialogContent>
@@ -225,6 +225,7 @@ export function SchedulesTab({ id }: { id: string }) {
               size="sm"
               variant="danger"
               onClick={() => confirmDelete && void handleDelete(confirmDelete)}
+              disabled={deleteSchedule.isPending}
             >
               Delete
             </Button>

@@ -32,6 +32,17 @@ export function useCreateCircle() {
   });
 }
 
+export function useUpdateCircleContext() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, context }: { name: string; context: string }) =>
+      circlesApi.updateCircleContext(name, context),
+    onSuccess: (_data, { name }) => {
+      void qc.invalidateQueries({ queryKey: circlesKeys.detail(name) });
+    },
+  });
+}
+
 export function useUpdateCircle() {
   const qc = useQueryClient();
   return useMutation({

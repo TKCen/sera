@@ -1,7 +1,5 @@
 import { useState, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
-import { request } from '@/lib/api/client';
 import { ArrowLeft, Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -10,6 +8,8 @@ import {
   useStopAgent,
   useRestartAgent,
   useDeleteAgent,
+  useAgentHealthCheck,
+  useAgentSystemPrompt,
 } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
@@ -314,11 +314,7 @@ interface HealthCheckResult {
 }
 
 function HealthCheckTab({ id }: { id: string }) {
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['agent-health-check', id],
-    queryFn: () => request<HealthCheckResult>(`/agents/${encodeURIComponent(id)}/health-check`),
-    enabled: id.length > 0,
-  });
+  const { data, isLoading, refetch, isFetching } = useAgentHealthCheck(id);
 
   if (isLoading) return <TabLoading />;
 
@@ -371,11 +367,7 @@ function HealthCheckTab({ id }: { id: string }) {
 }
 
 function SystemPromptTab({ id }: { id: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['agent-system-prompt', id],
-    queryFn: () => request<{ prompt: string }>(`/agents/${encodeURIComponent(id)}/system-prompt`),
-    enabled: id.length > 0,
-  });
+  const { data, isLoading } = useAgentSystemPrompt(id);
 
   if (isLoading) return <TabLoading />;
 

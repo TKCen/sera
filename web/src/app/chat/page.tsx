@@ -3,7 +3,8 @@ import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
 import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
-import { sendChatStream } from '@/lib/api/chat';
+import { useSessionManagement } from '@/hooks/useSessionManagement';
+import { useChatStream } from '@/hooks/useChatStream';
 import { request } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -17,29 +18,6 @@ import { EmptyState } from '@/components/EmptyState';
 
 import type { Message, MessageThought } from '@/lib/api/types';
 export type { Message, MessageThought };
-
-interface SessionInfo {
-  id: string;
-  agentName: string;
-  agentInstanceId?: string | null;
-  title: string;
-  messageCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface SessionDetail extends SessionInfo {
-  messages: SessionMessage[];
-}
-
-interface SessionMessage {
-  id: string;
-  sessionId: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  metadata?: { thoughts?: MessageThought[] };
-  createdAt: string;
-}
 
 interface TokenPayload {
   token: string;
@@ -78,7 +56,6 @@ function ChatPageContent() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showThinking, setShowThinking] = useState(true);
@@ -91,6 +68,29 @@ function ChatPageContent() {
   const messageQueue = useRef<string[]>([]);
   const [queueCount, setQueueCount] = useState(0);
 
+  const {
+    sessions,
+    fetchSessions,
+    loadSession,
+    startNewSession,
+    deleteSession,
+    renameSession,
+  } = useSessionManagement(
+    selectedAgent,
+    selectedAgentId,
+    sessionId,
+    setSessionId,
+    setMessages,
+    setStreaming,
+    streamingMsgId,
+    messageIdRef,
+    messageQueue,
+    setQueueCount,
+    setExpandedThoughts,
+    inputRef,
+    agents
+  );
+
   // ── Auto-scroll ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (messagesEndRef.current?.scrollIntoView) {
@@ -101,7 +101,6 @@ function ChatPageContent() {
   // ── Auto-select agent (prefer running, persist to sessionStorage) ────────────
   useEffect(() => {
     if (agents && agents.length > 0 && !selectedAgent) {
-      // Prefer a running agent over the first alphabetically
       const running = agents.find((a) => a.status === 'running');
       const pick = running ?? agents[0]!;
       setSelectedAgent(pick.name);
@@ -109,7 +108,6 @@ function ChatPageContent() {
     }
   }, [agents, selectedAgent]);
 
-  // Persist selected agent to sessionStorage so it survives navigation
   useEffect(() => {
     if (selectedAgent) sessionStorage.setItem('sera-chat-agent', selectedAgent);
     if (selectedAgentId) sessionStorage.setItem('sera-chat-agent-id', selectedAgentId);
@@ -125,31 +123,11 @@ function ChatPageContent() {
     setExpandedThoughts(new Set());
   }, [selectedAgent]);
 
-  // ── Fetch sessions whenever agent changes ────────────────────────────────────
-  const fetchSessions = useCallback(async () => {
-    try {
-      // Filter by instance ID (unambiguous) — agent_name in the DB is inconsistent
-      // (can be role name, instance name, or instance ID depending on how the session was created)
-      const data = await request<SessionInfo[]>(
-        selectedAgentId
-          ? `/sessions?agentInstanceId=${encodeURIComponent(selectedAgentId)}`
-          : selectedAgent
-            ? `/sessions?agent=${encodeURIComponent(selectedAgent)}`
-            : '/sessions'
-      );
-      setSessions(data);
-    } catch {
-      // Non-fatal — session list is best-effort
-    }
-  }, [selectedAgent, selectedAgentId]);
-
   useEffect(() => {
     void fetchSessions();
   }, [fetchSessions]);
 
   // ── Token stream — direct subscription ──────────────────────────────────────
-  // Bypasses the useChannel→useState→useEffect chain which loses tokens when
-  // React batches rapid state updates from the same WebSocket frame.
   useEffect(() => {
     const channelKey = selectedAgentId || selectedAgent;
     if (!centrifugoClient || !channelKey) return;
@@ -165,20 +143,15 @@ function ChatPageContent() {
     const sub = centrifugoClient.newSubscription(channel);
     sub.on('publication', (ctx: PublicationContext) => {
       const { token, done, messageId, error } = ctx.data as TokenPayload;
-
-      // Ignore tokens from a previous message's stream
       if (messageId != null && messageIdRef.current != null && messageId !== messageIdRef.current) {
         return;
       }
       if (!streamingMsgId.current) return;
-
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.id === streamingMsgId.current);
         if (idx === -1) return prev;
         const updated = [...prev];
-
         if (error) {
-          // Surface LLM errors as a visible error message (#553)
           updated[idx] = {
             ...updated[idx]!,
             content: `**Error:** ${error}`,
@@ -191,14 +164,9 @@ function ChatPageContent() {
             streaming: !done,
           };
         }
-
         return updated;
       });
-
       if (done) {
-        // Delay clearing the streaming state to allow any remaining queued
-        // tokens to be processed (Centrifugo may deliver them slightly after
-        // the done packet). Without this, late tokens are silently dropped.
         setTimeout(() => {
           setStreaming(false);
           streamingMsgId.current = null;
@@ -208,7 +176,6 @@ function ChatPageContent() {
       }
     });
     sub.subscribe();
-
     return () => {
       sub.unsubscribe();
       sub.removeAllListeners();
@@ -221,19 +188,16 @@ function ChatPageContent() {
     const channelKey = selectedAgentId || selectedAgent;
     if (!centrifugoClient || !channelKey) return;
     const channel = `thoughts:${channelKey}`;
-
     const existing = centrifugoClient.getSubscription(channel);
     if (existing) {
       existing.unsubscribe();
       existing.removeAllListeners();
       centrifugoClient.removeSubscription(existing);
     }
-
     const sub = centrifugoClient.newSubscription(channel);
     sub.on('publication', (ctx: PublicationContext) => {
       const event = ctx.data as ThoughtPayload;
       if (!streamingMsgId.current) return;
-
       const thought: MessageThought = {
         timestamp: event.timestamp,
         stepType: event.stepType,
@@ -241,7 +205,6 @@ function ChatPageContent() {
         ...(event.toolName ? { toolName: event.toolName } : {}),
         ...(event.toolArgs ? { toolArgs: event.toolArgs } : {}),
       };
-
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === streamingMsgId.current ? { ...msg, thoughts: [...msg.thoughts, thought] } : msg
@@ -249,93 +212,12 @@ function ChatPageContent() {
       );
     });
     sub.subscribe();
-
     return () => {
       sub.unsubscribe();
       sub.removeAllListeners();
       centrifugoClient.removeSubscription(sub);
     };
   }, [centrifugoClient, selectedAgent, selectedAgentId]);
-
-  // ── Session actions ──────────────────────────────────────────────────────────
-
-  const loadSession = useCallback(
-    async (id: string) => {
-      try {
-        const data = await request<SessionDetail>(`/sessions/${id}`);
-        setSessionId(data.id);
-        if (data.agentName) setSelectedAgent(data.agentName);
-        if (data.agentInstanceId) {
-          setSelectedAgentId(data.agentInstanceId);
-        } else if (data.agentName && agents) {
-          // Fall back to looking up the instance ID from the agents list
-          const agent = agents.find((a) => a.name === data.agentName);
-          if (agent) setSelectedAgentId(agent.id);
-        }
-
-        const uiMessages: Message[] = (data.messages ?? [])
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({
-            id: m.id,
-            role: m.role === 'user' ? 'user' : 'agent',
-            content: m.content,
-            thoughts: Array.isArray(m.metadata?.thoughts) ? m.metadata!.thoughts! : [],
-            streaming: false,
-            createdAt: new Date(m.createdAt),
-          }));
-        setMessages(uiMessages);
-        streamingMsgId.current = null;
-        messageIdRef.current = null;
-      } catch (err) {
-        // Non-fatal but should notify user
-        const errMsg = err instanceof Error ? err.message : 'Failed to load session';
-        toast.error(errMsg);
-      }
-    },
-    [agents]
-  );
-
-  const startNewSession = useCallback(() => {
-    setSessionId(null);
-    setMessages([]);
-    setStreaming(false);
-    streamingMsgId.current = null;
-    messageIdRef.current = null;
-    messageQueue.current = [];
-    setQueueCount(0);
-    setExpandedThoughts(new Set());
-    inputRef.current?.focus();
-  }, []);
-
-  const deleteSession = useCallback(
-    async (id: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      try {
-        await request(`/sessions/${id}`, { method: 'DELETE' });
-        setSessions((prev) => prev.filter((s) => s.id !== id));
-        if (sessionId === id) startNewSession();
-      } catch (err) {
-        // Non-fatal but should notify user
-        const errMsg = err instanceof Error ? err.message : 'Failed to delete session';
-        toast.error(errMsg);
-      }
-    },
-    [sessionId, startNewSession]
-  );
-
-  const renameSession = useCallback(async (id: string, title: string) => {
-    try {
-      await request(`/sessions/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title }),
-      });
-      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Failed to rename session';
-      toast.error(errMsg);
-    }
-  }, []);
 
   const toggleThoughts = useCallback((msgId: string) => {
     setExpandedThoughts((prev) => {
@@ -346,24 +228,20 @@ function ChatPageContent() {
     });
   }, []);
 
-  // ── Send message ─────────────────────────────────────────────────────────────
+  const chatStream = useChatStream();
 
   const handleSend = useCallback(
     async (overrideText?: string) => {
       const text = (overrideText ?? input).trim();
       if (!text || !selectedAgent) return;
-
-      // Queue the message if the agent is still streaming
       if (streaming) {
         messageQueue.current.push(text);
         setQueueCount(messageQueue.current.length);
         setInput('');
         return;
       }
-
       const userMsgId = crypto.randomUUID();
       const agentMsgId = crypto.randomUUID();
-
       const userMsg: Message = {
         id: userMsgId,
         role: 'user',
@@ -380,23 +258,20 @@ function ChatPageContent() {
         streaming: true,
         createdAt: new Date(),
       };
-
       setMessages((prev) => [...prev, userMsg, agentMsg]);
       setInput('');
       setStreaming(true);
       setExpandedThoughts((prev) => new Set(prev).add(agentMsgId));
       streamingMsgId.current = agentMsgId;
-
       try {
-        const { sessionId: newSessionId, messageId } = await sendChatStream(
-          selectedAgent,
+        const { sessionId: newSessionId, messageId } = await chatStream.mutateAsync({
+          agentName: selectedAgent,
           text,
-          sessionId ?? undefined,
-          selectedAgentId || undefined
-        );
+          sessionId: sessionId ?? undefined,
+          agentInstanceId: selectedAgentId || undefined,
+        });
         setSessionId(newSessionId);
         messageIdRef.current = messageId;
-        // Refresh the session list so the sidebar shows the new/updated session
         void fetchSessions();
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Failed to send message';
@@ -411,7 +286,16 @@ function ChatPageContent() {
         messageIdRef.current = null;
       }
     },
-    [input, selectedAgent, selectedAgentId, streaming, sessionId, fetchSessions]
+    [
+      input,
+      selectedAgent,
+      selectedAgentId,
+      streaming,
+      sessionId,
+      fetchSessions,
+      setSessionId,
+      chatStream,
+    ]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -426,16 +310,14 @@ function ChatPageContent() {
       setSelectedAgent(name);
       const agent = agents?.find((a) => a.name === name);
       setSelectedAgentId(agent?.id ?? '');
-      // Reset session when switching agents
       setSessionId(null);
       setMessages([]);
     },
-    [agents]
+    [agents, setSessionId]
   );
 
   const handleCancel = useCallback(() => {
     if (!streaming) return;
-    // Stop listening — mark the current streaming message as complete
     setMessages((prev) =>
       prev.map((m) =>
         m.id === streamingMsgId.current
@@ -448,10 +330,8 @@ function ChatPageContent() {
     messageIdRef.current = null;
   }, [streaming]);
 
-  // ── Drain message queue when streaming finishes ──────────────────────────────
   const prevStreaming = useRef(false);
   useEffect(() => {
-    // Fire when streaming transitions from true → false
     if (prevStreaming.current && !streaming && messageQueue.current.length > 0) {
       const next = messageQueue.current.shift()!;
       setQueueCount(messageQueue.current.length);
@@ -460,14 +340,9 @@ function ChatPageContent() {
     prevStreaming.current = streaming;
   }, [streaming, handleSend]);
 
-  // ── Selected agent status ────────────────────────────────────────────────────
   const selectedAgentData = agents?.find((a) => a.name === selectedAgent);
-  const agentStatus = (selectedAgentData as Record<string, unknown> | undefined)?.status as
-    | string
-    | undefined;
+  const agentStatus = (selectedAgentData as Record<string, unknown> | undefined)?.status as string | undefined;
   const isAgentUnavailable = agentStatus === 'error' || agentStatus === 'stopped';
-
-  // ── Sidebar toggle button ─────────────────────────────────────────────────────
 
   const sidebarToggle = (
     <button
@@ -481,68 +356,6 @@ function ChatPageContent() {
     </button>
   );
 
-  // ── Empty state ───────────────────────────────────────────────────────────────
-
-  if (messages.length === 0 && !streaming) {
-    return (
-      <main className="flex h-full">
-        <ChatSidebar
-          sessions={sessions}
-          agents={agents}
-          agentsLoading={agentsLoading}
-          agentsError={agentsError}
-          selectedAgent={selectedAgent}
-          sessionId={sessionId}
-          sidebarOpen={sidebarOpen}
-          onAgentChange={handleAgentChange}
-          onStartNewSession={startNewSession}
-          onLoadSession={(id) => void loadSession(id)}
-          onDeleteSession={(id, e) => void deleteSession(id, e)}
-          onRenameSession={(id, title) => void renameSession(id, title)}
-          onRefetchAgents={() => void refetchAgents()}
-        />
-        <div className="flex-1 flex flex-col items-center justify-center px-8 relative">
-          <div className="absolute top-4 left-4">{sidebarToggle}</div>
-          <div className="flex-1 w-full flex flex-col items-center justify-center">
-            <EmptyState
-              icon={<Bot size={32} className="text-sera-accent" />}
-              title="How can I help you?"
-              description={
-                selectedAgent
-                  ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
-                  : 'Select an agent from the sidebar to get started.'
-              }
-            />
-            {isAgentUnavailable && (
-              <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
-                Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
-                <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
-                  agent detail page
-                </a>
-                .
-              </div>
-            )}
-          </div>
-          <div className="w-full max-w-2xl pb-8">
-            <ChatInputBar
-              inputRef={inputRef}
-              input={input}
-              setInput={setInput}
-              handleKeyDown={handleKeyDown}
-              streaming={streaming}
-              selectedAgent={selectedAgent}
-              handleSend={() => void handleSend()}
-              onCancel={handleCancel}
-              queueCount={queueCount}
-            />
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  // ── Conversation view ─────────────────────────────────────────────────────────
-
   return (
     <main className="flex h-full">
       <ChatSidebar
@@ -555,14 +368,12 @@ function ChatPageContent() {
         sidebarOpen={sidebarOpen}
         onAgentChange={handleAgentChange}
         onStartNewSession={startNewSession}
-        onLoadSession={(id) => void loadSession(id)}
+        onLoadSession={(id) => void loadSession(id, setSelectedAgent, setSelectedAgentId)}
         onDeleteSession={(id, e) => void deleteSession(id, e)}
         onRenameSession={(id, title) => void renameSession(id, title)}
         onRefetchAgents={() => void refetchAgents()}
       />
-
       <div className="flex-1 flex flex-col min-w-0 h-full">
-        {/* Top bar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-sera-border flex-shrink-0">
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {sidebarToggle}
@@ -586,25 +397,44 @@ function ChatPageContent() {
           </button>
         </div>
 
-        {/* Messages */}
-        <div
-          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0"
-          role="log"
-          aria-live="polite"
-        >
-          {messages.map((msg) => (
-            <ChatMessageBubble
-              key={msg.id}
-              msg={msg}
-              showThinking={showThinking}
-              isExpanded={expandedThoughts.has(msg.id)}
-              onToggleThoughts={toggleThoughts}
-            />
-          ))}
-          <div ref={messagesEndRef} />
+        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0" role="log" aria-live="polite">
+          {messages.length === 0 && !streaming ? (
+             <div className="h-full flex flex-col items-center justify-center">
+               <EmptyState
+                icon={<Bot size={32} className="text-sera-accent" />}
+                title="How can I help you?"
+                description={
+                  selectedAgent
+                    ? `Chatting with ${selectedAgentData?.display_name ?? selectedAgent}`
+                    : 'Select an agent from the sidebar to get started.'
+                }
+              />
+              {isAgentUnavailable && (
+                <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm max-w-md text-center">
+                  Agent is {agentStatus} — messages may not be delivered. Try restarting from the{' '}
+                  <a href={`/agents/${selectedAgentId}`} className="underline hover:text-red-300">
+                    agent detail page
+                  </a>
+                  .
+                </div>
+              )}
+             </div>
+          ) : (
+            <>
+              {messages.map((msg) => (
+                <ChatMessageBubble
+                  key={msg.id}
+                  msg={msg}
+                  showThinking={showThinking}
+                  isExpanded={expandedThoughts.has(msg.id)}
+                  onToggleThoughts={toggleThoughts}
+                />
+              ))}
+              <div ref={messagesEndRef} />
+            </>
+          )}
         </div>
 
-        {/* Input */}
         <div className="px-6 py-4 border-t border-sera-border flex-shrink-0">
           <div className="max-w-3xl mx-auto">
             <ChatInputBar

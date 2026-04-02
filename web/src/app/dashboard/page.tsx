@@ -15,28 +15,12 @@ import { EmptyState } from '@/components/EmptyState';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { useQuery } from '@tanstack/react-query';
 import { useAgents } from '@/hooks/useAgents';
 import { useHealthDetail } from '@/hooks/useHealth';
 import { useCircles } from '@/hooks/useCircles';
 import { useSchedules } from '@/hooks/useSchedules';
-import { request } from '@/lib/api/client';
+import { useSessions } from '@/hooks/useSessionManagement';
 import { cn, formatDistanceToNow } from '@/lib/utils';
-
-interface SessionSummary {
-  id: string;
-  agentName: string;
-  title: string;
-  messageCount: number;
-  updatedAt: string;
-}
-
-function useSessions() {
-  return useQuery({
-    queryKey: ['sessions-recent'],
-    queryFn: () => request<SessionSummary[]>('/sessions'),
-  });
-}
 
 function StatCard({
   label,

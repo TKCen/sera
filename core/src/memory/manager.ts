@@ -227,11 +227,12 @@ export class MemoryManager {
 
       const searchItems = vectorResults.map((res) => {
         const p = res.payload as Record<string, unknown> | undefined;
-        return {
+        const item: { id: string; type?: MemoryBlockType; title?: string } = {
           id: res.id as string,
-          type: p?.['type'] as MemoryBlockType | undefined,
-          title: p?.['title'] as string | undefined,
         };
+        if (p?.['type']) item.type = p['type'] as MemoryBlockType;
+        if (p?.['title']) item.title = p['title'] as string;
+        return item;
       });
       const entries = await this.getEntries(searchItems);
 

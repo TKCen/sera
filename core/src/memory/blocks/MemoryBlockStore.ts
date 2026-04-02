@@ -225,7 +225,7 @@ export class MemoryBlockStore {
   /** Retrieve a single entry by UUID. */
   async getEntry(id: string): Promise<MemoryEntry | null> {
     const entries = await this.getEntries([id]);
-    return entries.length > 0 ? entries[0] : null;
+    return entries.length > 0 ? entries[0]! : null;
   }
 
   /** Retrieve multiple entries by UUID. Metadata (type, title) can be provided for faster lookup. */
@@ -290,7 +290,9 @@ export class MemoryBlockStore {
     }
 
     // Preserve input order and handle missing entries (filter nulls)
-    return normalized.map((item) => resultsMap.get(item.id)).filter((e): e is MemoryEntry => !!e);
+    return normalized
+      .map((item) => resultsMap.get(item.id))
+      .filter((e): e is MemoryEntry => e !== undefined);
   }
 
   /** Update an entry's content. */

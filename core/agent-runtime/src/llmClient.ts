@@ -74,6 +74,8 @@ export interface ChatMessage {
   content: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  /** Internal messages are hidden from the chat UI (Story 5.12). */
+  internal?: boolean;
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';
@@ -100,6 +102,7 @@ export interface ILLMClient {
     tools?: ToolDefinition[],
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
+    timeoutMs?: number,
   ): Promise<LLMResponse>;
 }
 
@@ -141,6 +144,7 @@ export class LLMClient implements ILLMClient {
     tools?: ToolDefinition[],
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
+    timeoutMs?: number,
   ): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -171,7 +175,9 @@ export class LLMClient implements ILLMClient {
     }
 
     try {
-      const res = await this.http.post('/chat/completions', body);
+      const res = await this.http.post('/chat/completions', body, {
+        ...(timeoutMs ? { timeout: timeoutMs } : {}),
+      });
       const data = res.data as Record<string, unknown>;
 
       const choices = data['choices'] as Array<Record<string, unknown>> | undefined;

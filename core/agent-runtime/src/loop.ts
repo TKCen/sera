@@ -210,9 +210,10 @@ export class ReasoningLoop {
     const loopDetector = new ToolLoopDetector();
     let forceTextNext = false;
 
-    // ── Pre-compaction memory save hook (fires at most once per run) ───────
-    let preCompactionHookFired = false;
-    const hasKnowledgeStore = this.toolDefs.some((t) => t.function.name === 'knowledge-store');
+    // ── Pre-compaction memory flush (fires at most once per run) ───────
+    let memoryFlushFired = false;
+    const MEMORY_TOOLS = ['knowledge-store', 'store-memory', 'update-memory'];
+    const flushTools = this.allToolDefs.filter((t) => MEMORY_TOOLS.includes(t.function.name));
 
     // ── Retry state machine (per-run, reset on each invocation) ───────────
     const retryState: RetryState = {
@@ -257,24 +258,69 @@ export class ReasoningLoop {
 
         // Context window management — compact before each LLM call
         if (this.contextManager.isNearLimit(messages)) {
-          // Pre-compaction memory save hook (#506): give the agent one iteration
-          // to save important context before it's compacted away.
-          if (hasKnowledgeStore && !preCompactionHookFired) {
-            preCompactionHookFired = true;
-            await think(
-              'reflect',
-              'Context window nearly full — injecting save-reminder before compaction',
-              iteration
-            );
+          // Pre-compaction memory flush (Story 5.12): allow one turn with only
+          // memory tools before compaction.
+          if (
+            this.contextManager.isMemoryFlushEnabled() &&
+            flushTools.length > 0 &&
+            !memoryFlushFired
+          ) {
+            memoryFlushFired = true;
+            await think('reflect', 'Context window approaching limit — triggering memory flush', iteration, {
+              internal: true,
+            });
+
             messages.push({
               role: 'system',
               content:
-                'IMPORTANT: Your context window is nearly full and compaction will occur shortly. ' +
-                'If there is any critical information from this conversation that you want to ' +
-                'preserve long-term, call the knowledge-store tool NOW to save it. ' +
-                'After this turn, older messages will be dropped.',
+                'Your context window is about to be compacted. Before this happens, use your memory tools ' +
+                'to save any important information from the current conversation that you want to remember. ' +
+                'This is your last chance to persist this context.',
+              internal: true,
             });
-            continue; // Let the next iteration handle the save, then compact
+
+            // Execute one reasoning turn restricted to memory tools only (30s timeout)
+            try {
+              const flushResponse = await this.llm.chat(
+                messages,
+                flushTools,
+                this.manifest.model.temperature,
+                this.manifest.model.thinkingLevel as ThinkingLevel | undefined,
+                30_000
+              );
+
+              if (flushResponse.toolCalls && flushResponse.toolCalls.length > 0) {
+                messages.push({
+                  role: 'assistant',
+                  content: flushResponse.content || '',
+                  tool_calls: flushResponse.toolCalls,
+                  internal: true,
+                });
+
+                const toolResults = await this.tools.executeToolCalls(flushResponse.toolCalls);
+                let savedCount = 0;
+                for (const tr of toolResults) {
+                  tr.message.internal = true;
+                  messages.push(tr.message);
+                  if (MEMORY_TOOLS.includes(tr.toolName) && !tr.message.content.includes('Error:')) {
+                    savedCount++;
+                  }
+                  await think('reflect', `Flush tool result: ${tr.message.content.substring(0, 100)}`, iteration, {
+                    internal: true,
+                  });
+                }
+
+                log('info', `memory.flush: saved ${savedCount} block(s) before compaction`);
+              } else {
+                messages.push({
+                  role: 'assistant',
+                  content: flushResponse.content || '',
+                  internal: true,
+                });
+              }
+            } catch (flushErr) {
+              log('warn', `Memory flush failed: ${flushErr instanceof Error ? flushErr.message : String(flushErr)}`);
+            }
           }
 
           const compaction = this.contextManager.compact(messages);

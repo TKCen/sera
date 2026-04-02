@@ -39,6 +39,7 @@ export interface ThoughtEvent {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   anomaly?: boolean;
+  internal?: boolean;
 }
 
 export interface StreamToken {
@@ -93,6 +94,7 @@ export class CentrifugoPublisher {
       toolName?: string;
       toolArgs?: Record<string, unknown>;
       anomaly?: boolean;
+      internal?: boolean;
     },
   ): Promise<void> {
     const canonical = this.toCanonicalStep(step);
@@ -108,6 +110,7 @@ export class CentrifugoPublisher {
       ...(opts?.toolName !== undefined ? { toolName: opts.toolName } : {}),
       ...(opts?.toolArgs !== undefined ? { toolArgs: opts.toolArgs } : {}),
       ...(opts?.anomaly !== undefined ? { anomaly: opts.anomaly } : {}),
+      ...(opts?.internal !== undefined ? { internal: opts.internal } : {}),
     };
 
     await this.publish(channel, event);

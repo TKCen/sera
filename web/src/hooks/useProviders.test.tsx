@@ -56,7 +56,7 @@ describe('useProviders hooks', () => {
   describe('useCreateProvider', () => {
     it('calls createProvider and invalidates providers query on success', async () => {
       const mockCreateProvider = vi.mocked(providersApi.createProvider);
-      mockCreateProvider.mockResolvedValue({ success: true } as any);
+      mockCreateProvider.mockResolvedValue({ success: true });
       const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useCreateProvider(), { wrapper });
@@ -74,7 +74,7 @@ describe('useProviders hooks', () => {
   describe('useUpdateLLMConfig', () => {
     it('calls updateLLMConfig and invalidates llmConfig query on success', async () => {
       const mockUpdateLLMConfig = vi.mocked(providersApi.updateLLMConfig);
-      mockUpdateLLMConfig.mockResolvedValue({ success: true } as any);
+      mockUpdateLLMConfig.mockResolvedValue({ success: true });
       const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useUpdateLLMConfig(), { wrapper });
@@ -92,7 +92,7 @@ describe('useProviders hooks', () => {
   describe('useDeleteProvider', () => {
     it('calls deleteProvider and invalidates providers query on success', async () => {
       const mockDeleteProvider = vi.mocked(providersApi.deleteProvider);
-      mockDeleteProvider.mockResolvedValue({ success: true } as any);
+      mockDeleteProvider.mockResolvedValue({ success: true });
       const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useDeleteProvider(), { wrapper });

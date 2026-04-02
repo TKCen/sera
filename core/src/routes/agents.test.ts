@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createAgentRouter } from './agents.js';
@@ -7,8 +7,8 @@ import type { AgentRegistry } from '../agents/registry.service.js';
 
 describe('Agents Routes', () => {
   let app: express.Express;
-  let orchestratorMock: vi.Mocked<Orchestrator>;
-  let agentRegistryMock: vi.Mocked<AgentRegistry>;
+  let orchestratorMock: Mocked<Orchestrator>;
+  let agentRegistryMock: Mocked<AgentRegistry>;
   let skillRegistryMock: any;
   let intercomMock: {
     publish: ReturnType<typeof vi.fn>;
@@ -33,7 +33,7 @@ describe('Agents Routes', () => {
       getIntercom: vi.fn().mockReturnValue(intercomMock),
       ensureContainerRunning: vi.fn().mockResolvedValue('http://mock-container:8080'),
       registerEphemeralTTL: vi.fn(),
-    } as unknown as vi.Mocked<Orchestrator>;
+    } as unknown as Mocked<Orchestrator>;
 
     agentRegistryMock = {
       listInstances: vi.fn().mockResolvedValue([]),
@@ -43,7 +43,7 @@ describe('Agents Routes', () => {
       getInstance: vi.fn(),
       updateInstanceStatus: vi.fn(),
       deleteInstance: vi.fn(),
-    } as unknown as vi.Mocked<AgentRegistry>;
+    } as unknown as Mocked<AgentRegistry>;
 
     skillRegistryMock = {
       listForAgent: vi.fn(),
@@ -103,7 +103,7 @@ describe('Agents Routes', () => {
           usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
         })
       );
-      expect(intercomMock.publish.mock.calls[0][1].durationMs).toBeDefined();
+      expect(vi.mocked(intercomMock.publish).mock.calls[0]![1].durationMs).toBeDefined();
     });
   });
 

@@ -261,7 +261,7 @@ export function SchedulesTab({ id }: { id: string }) {
             </DialogClose>
             <Button
               size="sm"
-              variant="warning"
+              variant="secondary"
               onClick={() => forceTriggerId && void handleTrigger(forceTriggerId, true)}
             >
               Force Trigger

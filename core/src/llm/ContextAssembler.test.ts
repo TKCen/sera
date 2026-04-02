@@ -58,10 +58,10 @@ describe('ContextAssembler', () => {
     vi.mocked(mockOrchestrator.getManifest).mockReturnValue(manifest as unknown as AgentManifest);
     vi.mocked(AgentFactory.getInstance).mockResolvedValue({
       circle_id: 'circle-1',
-    } as unknown as never);
+    } as never);
     vi.mocked(mockPool.query).mockResolvedValue({
       rows: [{ constitution: 'Circle Constitution' }],
-    } as unknown as never);
+    } as never);
 
     const messages = [
       { role: 'system', content: 'fallback' },
@@ -75,7 +75,7 @@ describe('ContextAssembler', () => {
   });
 
   it('should skip assembly if manifest not found', async () => {
-    vi.mocked(mockOrchestrator.getManifest).mockReturnValue(null);
+    vi.mocked(mockOrchestrator.getManifest).mockReturnValue(undefined);
     const messages = [{ role: 'system', content: 'fallback' }] as unknown as never[];
     const result = await assembler.assemble('agent-1', messages);
     expect(result).toEqual(messages);
@@ -86,7 +86,7 @@ describe('ContextAssembler', () => {
       metadata: { name: 'Test Agent' },
       memory: { enabled: true },
     };
-    mockOrchestrator.getManifest.mockReturnValue(manifest);
+    vi.mocked(mockOrchestrator.getManifest).mockReturnValue(manifest as unknown as AgentManifest);
 
     const mockVectorSearch = vi.fn().mockResolvedValue([
       {

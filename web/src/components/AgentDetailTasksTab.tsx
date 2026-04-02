@@ -51,7 +51,7 @@ export function AgentDetailTasksTab({ id }: { id: string }) {
                   </Badge>
                   <span className="text-xs font-mono text-sera-text-dim truncate">{task.id}</span>
                   {task.exitReason && (
-                    <Badge variant="outline" className="text-[10px] uppercase">
+                    <Badge variant="default" className="text-[10px] uppercase">
                       {task.exitReason}
                     </Badge>
                   )}

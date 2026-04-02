@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createMemoryRouter } from './memory.js';
+import type { MemoryManager } from '../memory/manager.js';
 
 // Mock dependencies
 const mockMemoryManager = {

@@ -124,9 +124,9 @@ describe('EmbeddingRouter', () => {
       // Create config without 'apiKey' property to satisfy exactOptionalPropertyTypes
       const config: EmbeddingConfig = {
         ...baseOpenAIConfig,
-        apiKey: undefined,
         apiKeyEnvVar: 'CUSTOM_OPENAI_KEY',
       };
+      delete (config as Partial<EmbeddingConfig>).apiKey;
       process.env.CUSTOM_OPENAI_KEY = 'env-test-key';
 
       const router = new EmbeddingRouter(config);

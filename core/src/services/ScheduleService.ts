@@ -362,7 +362,7 @@ export class ScheduleService {
     } else {
       // Ephemeral agent
       // Check if already running (Story 11.2 skip fire)
-      if (status === 'running') {
+      if (status === 'running' && !force) {
         logger.warn(
           `Skipping scheduled task for ${schedule.agent_name}: ephemeral agent is already running.`
         );

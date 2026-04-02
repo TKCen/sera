@@ -2,13 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createAgentRouter } from './agents.js';
+import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { AgentRegistry } from '../agents/registry.service.js';
 
 describe('Agents Routes', () => {
   let app: express.Express;
-  let orchestratorMock: any;
-  let agentRegistryMock: any;
+  let orchestratorMock: vi.Mocked<Orchestrator>;
+  let agentRegistryMock: vi.Mocked<AgentRegistry>;
   let skillRegistryMock: any;
-  let intercomMock: any;
+  let intercomMock: {
+    publish: ReturnType<typeof vi.fn>;
+    getThoughts: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -28,7 +33,7 @@ describe('Agents Routes', () => {
       getIntercom: vi.fn().mockReturnValue(intercomMock),
       ensureContainerRunning: vi.fn().mockResolvedValue('http://mock-container:8080'),
       registerEphemeralTTL: vi.fn(),
-    };
+    } as unknown as vi.Mocked<Orchestrator>;
 
     agentRegistryMock = {
       listInstances: vi.fn().mockResolvedValue([]),
@@ -38,7 +43,7 @@ describe('Agents Routes', () => {
       getInstance: vi.fn(),
       updateInstanceStatus: vi.fn(),
       deleteInstance: vi.fn(),
-    };
+    } as unknown as vi.Mocked<AgentRegistry>;
 
     skillRegistryMock = {
       listForAgent: vi.fn(),
@@ -59,11 +64,11 @@ describe('Agents Routes', () => {
       const task = 'hello world';
       const instanceId = 'ephemeral-123';
 
-      agentRegistryMock.getTemplate.mockResolvedValue({ name: templateRef });
+      agentRegistryMock.getTemplate.mockResolvedValue({ name: templateRef } as unknown as never);
       agentRegistryMock.createInstance.mockResolvedValue({
         id: instanceId,
         name: 'ephemeral-name',
-      });
+      } as unknown as never);
 
       // Mock fetch for the container's chat endpoint
       const mockFetch = vi.fn().mockResolvedValue({

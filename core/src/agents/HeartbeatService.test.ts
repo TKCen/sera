@@ -5,8 +5,8 @@ import type { IntercomService } from '../intercom/IntercomService.js';
 
 describe('HeartbeatService', () => {
   let service: HeartbeatService;
-  let mockRegistry: any;
-  let mockIntercom: any;
+  let mockRegistry: unknown;
+  let mockIntercom: unknown;
 
   beforeEach(() => {
     vi.useFakeTimers();

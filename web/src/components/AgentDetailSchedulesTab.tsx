@@ -79,8 +79,8 @@ export function SchedulesTab({ id }: { id: string }) {
       } else if (res.status === 'skipped') {
         setForceTriggerId(schedId);
       }
-    } catch (err: any) {
-      if (err.status === 409) {
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'status' in err && err.status === 409) {
         setForceTriggerId(schedId);
       } else {
         toast.error('Failed to trigger schedule');

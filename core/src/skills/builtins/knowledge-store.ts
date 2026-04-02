@@ -34,7 +34,6 @@ function checkRateLimit(agentId: string): boolean {
   return recent.length <= 10;
 }
 
-const vectorService = new VectorService('_ks_unused');
 const embeddingService = EmbeddingService.getInstance();
 
 export function createKnowledgeStoreSkill(): SkillDefinition {
@@ -125,6 +124,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 
         if (embeddingService.isAvailable()) {
           try {
+            const vectorService = new VectorService('_ks_unused');
             const namespace: MemoryNamespace = `personal:${agentId}`;
             const vector = await embeddingService.embed(`${block.title}\n${block.content}`);
             await vectorService.upsert(block.id, namespace, vector, {

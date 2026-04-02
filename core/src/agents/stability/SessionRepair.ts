@@ -145,8 +145,14 @@ export class SessionRepair {
           newContent = `${prev.content}\n\n${current.content}`;
         } else {
           // If either is multi-part, normalize both to arrays and concat
-          const part1 = typeof prev.content === 'string' ? [{ type: 'text', text: prev.content }] : prev.content;
-          const part2 = typeof current.content === 'string' ? [{ type: 'text', text: current.content }] : current.content;
+          const part1 =
+            typeof prev.content === 'string'
+              ? [{ type: 'text', text: prev.content }]
+              : prev.content;
+          const part2 =
+            typeof current.content === 'string'
+              ? [{ type: 'text', text: current.content }]
+              : current.content;
           newContent = [...(part1 as any[]), ...(part2 as any[])];
         }
 

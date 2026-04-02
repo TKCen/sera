@@ -55,15 +55,20 @@ export class SkillInjector {
       }
     }
 
-    // 2. Resolve packages
-    for (const pkgName of declaredPackages) {
-      const pkg = await skillLibrary.getPackage(pkgName);
-      if (pkg) {
-        for (const s of pkg.skills) {
-          initialPins.push({ name: s.name, version: s.version });
+    // 2. Resolve packages (batch query to avoid N+1)
+    if (declaredPackages.length > 0) {
+      const packages = await skillLibrary.getPackages(declaredPackages);
+      const packageMap = new Map(packages.map((p) => [p.name, p]));
+
+      for (const pkgName of declaredPackages) {
+        const pkg = packageMap.get(pkgName);
+        if (pkg) {
+          for (const s of pkg.skills) {
+            initialPins.push({ name: s.name, version: s.version });
+          }
+        } else {
+          logger.warn(`Skill package not found: ${pkgName}`);
         }
-      } else {
-        logger.warn(`Skill package not found: ${pkgName}`);
       }
     }
 

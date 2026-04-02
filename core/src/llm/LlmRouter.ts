@@ -111,9 +111,30 @@ function toContext(request: ChatCompletionRequest): Context {
         break;
 
       case 'user': {
+        let content: string | (TextContent | ImageContent)[];
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          content = msg.content.map((block) => {
+            if (block.type === 'text') {
+              return { type: 'text', text: block.text };
+            } else if (block.type === 'image_url') {
+              const url = block.image_url.url;
+              const match = url.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+              if (match) {
+                return { type: 'image', mimeType: match[1]!, data: match[2]! };
+              }
+              return { type: 'text', text: '[unsupported image format]' };
+            }
+            return { type: 'text', text: '[unknown block]' };
+          });
+        } else {
+          content = '';
+        }
+
         const userMsg: UserMessage = {
           role: 'user',
-          content: msg.content ?? '',
+          content,
           timestamp: ts,
         };
         messages.push(userMsg);
@@ -382,7 +403,7 @@ export class LlmRouter {
       provider: (config.provider ?? 'openai') as Provider,
       baseUrl: config.baseUrl ?? '',
       reasoning,
-      input: ['text'],
+      input: (config.input as ('text' | 'image')[]) ?? ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: config.contextWindow ?? 128_000,
       maxTokens: config.maxTokens ?? 4_096,
@@ -485,6 +506,15 @@ export class LlmRouter {
     );
 
     const config = this.registry.resolve(request.model);
+
+    // If model config in registry doesn't have input defined, try to auto-detect vision support
+    if (!config.input) {
+      const lower = request.model.toLowerCase();
+      if (lower.includes('vision') || lower.includes('gpt-4o') || lower.includes('claude-3')) {
+        config.input = ['text', 'image'];
+      }
+    }
+
     const context = toContext(request);
     const opts: StreamOptions = {
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),

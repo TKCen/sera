@@ -69,9 +69,23 @@ export interface ToolDefinition {
   };
 }
 
+export interface ImageContentBlock {
+  type: 'image_url';
+  image_url: {
+    url: string; // base64 data URL
+  };
+}
+
+export interface TextContentBlock {
+  type: 'text';
+  text: string;
+}
+
+export type MessageContent = string | (TextContentBlock | ImageContentBlock)[];
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: MessageContent;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   /** Internal messages are hidden from the chat UI (Story 5.12). */

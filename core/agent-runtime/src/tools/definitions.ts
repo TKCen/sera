@@ -246,4 +246,111 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'image-view',
+      description: 'View an image file from the workspace to analyze its content with vision-capable models.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Relative path to the image file within the workspace.',
+          },
+          prompt: {
+            type: 'string',
+            description: 'What to look for or analyze in the image (optional).',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'pdf-read',
+      description: 'Extract text content from PDF files in the workspace. Supports page range selection.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Relative path to the PDF file within the workspace.',
+          },
+          pages: {
+            type: 'string',
+            description: 'Page range to extract, e.g., "1-5", "3", "1,3,5-7" (default: all).',
+          },
+          format: {
+            type: 'string',
+            enum: ['text', 'markdown'],
+            description: 'Output format (default: text).',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'code-eval',
+      description: 'Execute JavaScript/TypeScript code in a sandboxed context within the agent container.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: 'The code snippet to execute.',
+          },
+          language: {
+            type: 'string',
+            enum: ['javascript', 'typescript'],
+            description: 'The programming language (default: javascript).',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Execution timeout in milliseconds (default: 5000, max: 30000).',
+          },
+        },
+        required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'http-request',
+      description: 'Full HTTP client for API interaction. Supports GET, POST, PUT, PATCH, DELETE.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to fetch.',
+          },
+          method: {
+            type: 'string',
+            enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+            description: 'The HTTP method (default: GET).',
+          },
+          headers: {
+            type: 'object',
+            description: 'Optional HTTP headers (as a JSON object).',
+          },
+          body: {
+            type: 'string',
+            description: 'Optional HTTP request body.',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Timeout in milliseconds (default: 30000).',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
 ];

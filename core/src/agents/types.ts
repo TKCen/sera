@@ -1,8 +1,22 @@
 import type { ToolCall } from '../lib/llm/types.js';
 
+export interface ImageContentBlock {
+  type: 'image_url';
+  image_url: {
+    url: string; // base64 data URL
+  };
+}
+
+export interface TextContentBlock {
+  type: 'text';
+  text: string;
+}
+
+export type MessageContent = string | (TextContentBlock | ImageContentBlock)[] | null;
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string | null;
+  content: MessageContent;
   name?: string;
   /** Present on assistant messages that contain tool calls. */
   tool_calls?: ToolCall[];

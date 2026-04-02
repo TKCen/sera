@@ -37,6 +37,8 @@ export interface RuntimeManifest {
     name: string;
     temperature?: number;
     thinkingLevel?: string;
+    /** Model input capabilities, e.g. ['text', 'image'] */
+    input?: string[];
   };
   tools?: {
     allowed?: string[];

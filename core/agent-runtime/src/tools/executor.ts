@@ -17,6 +17,10 @@ import { PermissionDeniedError, AGENT_ID } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
 import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
 import { globFiles, grepFiles, readFilePartial } from './search-handlers.js';
+import { imageView } from './image-handler.js';
+import { pdfRead } from './pdf-handler.js';
+import { codeEval } from './code-eval-handler.js';
+import { httpRequest } from './http-handler.js';
 import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
@@ -43,6 +47,10 @@ const LOCAL_TOOLS = new Set([
   'spawn-subagent',
   'run-tool',
   'tool-search',
+  'image-view',
+  'pdf-read',
+  'code-eval',
+  'http-request',
 ]);
 
 /** Tools that modify state — executed with mutual exclusion to prevent races. */
@@ -283,6 +291,33 @@ export class RuntimeToolExecutor implements IToolExecutor {
           break;
         case 'tool-search':
           result = this.searchTools(params['query'] as string);
+          break;
+        case 'image-view':
+          result = imageView(this.workspacePath, params['path'] as string, params['prompt'] as string | undefined);
+          break;
+        case 'pdf-read':
+          result = await pdfRead(
+            this.workspacePath,
+            params['path'] as string,
+            params['pages'] as string | undefined,
+            params['format'] as string | undefined
+          );
+          break;
+        case 'code-eval':
+          result = await codeEval(
+            params['code'] as string,
+            params['language'] as string | undefined,
+            params['timeout'] as number | undefined
+          );
+          break;
+        case 'http-request':
+          result = await httpRequest(
+            params['url'] as string,
+            params['method'] as string | undefined,
+            params['headers'] as Record<string, string> | undefined,
+            params['body'] as string | undefined,
+            params['timeout'] as number | undefined
+          );
           break;
         default:
           // Route to core's invoke endpoint for remote tools (ADR-001)

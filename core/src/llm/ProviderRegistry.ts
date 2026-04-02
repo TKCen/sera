@@ -94,6 +94,11 @@ export interface ProviderConfig {
    * Default: auto-detected from model name (qwen3*, o1*, o3*, deepseek-r1*).
    */
   reasoning?: boolean | undefined;
+  /**
+   * Model input capabilities, e.g. ['text', 'image'].
+   * Default: ['text'].
+   */
+  input?: string[] | undefined;
 }
 
 export interface DynamicProviderConfig {
@@ -549,6 +554,7 @@ export class ProviderRegistry {
       contextHighWaterMark?: number;
       contextCompactionModel?: string;
       reasoning?: boolean;
+      input?: string[];
       description?: string;
     }
   ): void {
@@ -567,6 +573,7 @@ export class ProviderRegistry {
     if (overrides.contextCompactionModel !== undefined)
       existing.contextCompactionModel = overrides.contextCompactionModel;
     if (overrides.reasoning !== undefined) existing.reasoning = overrides.reasoning;
+    if (overrides.input !== undefined) existing.input = overrides.input;
     if (overrides.description !== undefined) existing.description = overrides.description;
 
     logger.info(`Updated config for model ${modelName}:`, overrides);

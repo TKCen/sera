@@ -36,6 +36,8 @@ export interface ModelConfig {
   name: string;
   temperature?: number;
   fallback?: ModelFallback[];
+  /** Model input capabilities, e.g. ['text', 'image'] */
+  input?: string[];
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────────

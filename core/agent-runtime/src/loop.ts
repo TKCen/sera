@@ -18,7 +18,7 @@ import {
   ContextOverflowError,
   LLMTimeoutError,
 } from './llmClient.js';
-import type { IToolExecutor } from './tools/index.js';
+import type { IToolExecutor, ToolExecutionResult } from './tools/index.js';
 import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
@@ -647,6 +647,30 @@ export class ReasoningLoop {
             });
           };
           const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
+
+          // Vision interception (#601): check for image-view tool results
+          // and inject image content blocks into the conversation.
+          const visionRequests: Array<{ dataUrl: string; prompt: string; path: string }> = [];
+
+          for (const result of toolResults) {
+            if (result.toolName === 'image-view' && !result.message.content.includes('Error:')) {
+              try {
+                const parsed = JSON.parse(result.message.content);
+                if (parsed.__sera_vision_request__) {
+                  visionRequests.push({
+                    dataUrl: parsed.dataUrl,
+                    prompt: parsed.prompt,
+                    path: parsed.path,
+                  });
+                  // Replace technical marker with success message
+                  result.message.content = `Successfully read and loaded image: ${parsed.path}. Analyzing content...`;
+                }
+              } catch {
+                /* ignore if not valid vision marker */
+              }
+            }
+          }
+
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);
@@ -675,6 +699,33 @@ export class ReasoningLoop {
             }
 
             messages.push(result.message);
+
+            // If this was a successful vision request, append the image content block
+            // as a subsequent 'user' observation turn so the LLM can "see" it.
+            const visionRequest = visionRequests.find(v => result.message.content.includes(v.path));
+            if (visionRequest) {
+              const supportsVision = this.manifest.model.input?.includes('image') ||
+                                    this.manifest.model.name.toLowerCase().includes('vision') ||
+                                    this.manifest.model.name.toLowerCase().includes('gpt-4o') ||
+                                    this.manifest.model.name.toLowerCase().includes('claude-3');
+
+              if (!supportsVision) {
+                messages.push({
+                  role: 'system',
+                  content: `ERROR: Model "${this.manifest.model.name}" does not support vision. Cannot analyze image "${visionRequest.path}".`,
+                });
+                await think('reflect', `Model ${this.manifest.model.name} lacks vision capability`, iteration, { anomaly: true });
+              } else {
+                messages.push({
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: visionRequest.prompt },
+                    { type: 'image_url', image_url: { url: visionRequest.dataUrl } }
+                  ],
+                });
+                await think('reflect', `Injected image block for ${visionRequest.path} into conversation`, iteration);
+              }
+            }
 
             // Emit reflect thought for argument repair
             if (result.argRepaired) {

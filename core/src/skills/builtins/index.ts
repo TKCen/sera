@@ -10,6 +10,10 @@ import { createKnowledgeQuerySkill } from './knowledge-query.js';
 import { shellExecSkill } from './shell-exec.js';
 import { scheduleTaskSkill } from './schedule-task.js';
 import { delegateTaskSkill } from './delegate-task.js';
+import { imageViewSkill } from './image-view.js';
+import { pdfReadSkill } from './pdf-read.js';
+import { codeEvalSkill } from './code-eval.js';
+import { httpRequestSkill } from './http-request.js';
 
 /**
  * Register all built-in skills with a SkillRegistry instance.
@@ -28,6 +32,10 @@ export function registerBuiltinSkills(
   registry.register(shellExecSkill);
   registry.register(scheduleTaskSkill);
   registry.register(delegateTaskSkill);
+  registry.register(imageViewSkill);
+  registry.register(pdfReadSkill);
+  registry.register(codeEvalSkill);
+  registry.register(httpRequestSkill);
   registry.register(createKnowledgeStoreSkill());
   registry.register(createKnowledgeQuerySkill());
 }

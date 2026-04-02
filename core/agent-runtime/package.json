@@ -16,11 +16,13 @@
     "js-tiktoken": "^1.0.21",
     "js-yaml": "^4.1.1",
     "json5": "^2.2.3",
+    "pdf-parse": "^1.1.1",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.5.0",
+    "@types/pdf-parse": "^1.1.4",
     "@types/uuid": "^11.0.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"

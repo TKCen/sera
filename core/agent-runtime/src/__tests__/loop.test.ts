@@ -57,6 +57,7 @@ describe('ReasoningLoop E2E', () => {
     expect(output.exitReason).toBe('success');
     expect(llm.getCallCount()).toBe(1);
     expect(publisher.publishThought).toHaveBeenCalledWith('observe', expect.stringContaining('Received task'), 0, undefined);
+    expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Completed task after 1 iteration(s)'), 1, undefined);
   });
 
   it('handles tool call cycle', async () => {
@@ -86,6 +87,7 @@ describe('ReasoningLoop E2E', () => {
     expect(llm.getCallCount()).toBe(2);
     expect(publisher.publishThought).toHaveBeenCalledWith('act', expect.stringContaining('Calling tool: echo'), 1, expect.any(Object));
     expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: hello'), 1, undefined);
+    expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Completed task after 2 iteration(s)'), 2, undefined);
   });
 
   it('handles unknown tool call by returning error to LLM', async () => {
@@ -110,5 +112,6 @@ describe('ReasoningLoop E2E', () => {
     expect(output.result).toBe('It failed as expected.');
     expect(llm.getCallCount()).toBe(2);
     expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: Error: Unknown tool "unknown"'), 1, undefined);
+    expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Completed task after 2 iteration(s)'), 2, undefined);
   });
 });

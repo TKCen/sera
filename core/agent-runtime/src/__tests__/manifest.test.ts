@@ -97,6 +97,10 @@ model:
     });
 
     it('includes all sections when fully configured', () => {
+      // Mock existsSync and readFileSync for Workspace Context
+      (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      (fs.readFileSync as ReturnType<typeof vi.fn>).mockReturnValue('test content');
+
       const manifest: RuntimeManifest = {
         apiVersion: 'v1',
         kind: 'Agent',
@@ -118,7 +122,7 @@ model:
           provider: 'openai',
           name: 'gpt-4',
         },
-        contextFiles: ['README.md'],
+        contextFiles: [{ path: 'README.md', label: 'README.md' }],
         outputFormat: 'Markdown',
       };
 
@@ -136,6 +140,7 @@ model:
         circleName: 'Engineering',
         circleMembers: ['alice', 'bob'],
         availableAgents: [{ name: 'sub-agent', role: 'Support' }],
+        workspacePath: tempDir,
       });
 
       expect(prompt).toContain('You are Test Agent, a SERA AI agent.');
@@ -151,7 +156,8 @@ model:
       expect(prompt).toContain('## Agent Notes');
       expect(prompt).toContain('Agent notes here.');
       expect(prompt).toContain('## Workspace Context');
-      expect(prompt).toContain('README.md');
+      expect(prompt).toContain('### README.md');
+      expect(prompt).toContain('test content');
       expect(prompt).toContain('## System Constraints');
       expect(prompt).toContain('## Output Format');
     });

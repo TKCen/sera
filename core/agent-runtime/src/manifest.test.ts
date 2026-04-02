@@ -70,6 +70,7 @@ describe('generateSystemPrompt', () => {
     (fs.readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(
       '# API Reference\nGET /api/v1/users'
     );
+    (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const manifest: RuntimeManifest = {
       ...baseManifest,
       contextFiles: [{ path: 'docs/api.md', label: 'API Docs' }],
@@ -103,6 +104,7 @@ describe('generateSystemPrompt', () => {
     (fs.readFileSync as ReturnType<typeof vi.fn>)
       .mockReturnValueOnce(highContent)
       .mockReturnValueOnce(lowContent);
+    (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const manifest: RuntimeManifest = {
       ...baseManifest,
@@ -124,6 +126,7 @@ describe('generateSystemPrompt', () => {
   it('truncates file content to per-file maxTokens', () => {
     const longContent = 'A'.repeat(10000);
     (fs.readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(longContent);
+    (fs.existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const manifest: RuntimeManifest = {
       ...baseManifest,
       contextFiles: [{ path: 'big.md', label: 'Big File', maxTokens: 100 }],

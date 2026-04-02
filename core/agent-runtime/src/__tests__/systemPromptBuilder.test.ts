@@ -1,9 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SystemPromptBuilder } from '../systemPromptBuilder.js';
 import type { RuntimeManifest } from '../manifest.js';
 import type { ToolDefinition } from '../llmClient.js';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 describe('SystemPromptBuilder', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-prompt-builder-test-'));
+    fs.writeFileSync(path.join(tempDir, 'README.md'), 'test content', 'utf-8');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
   const mockManifest: RuntimeManifest = {
     apiVersion: 'v1',
     kind: 'Agent',
@@ -53,7 +67,7 @@ describe('SystemPromptBuilder', () => {
       .addCircleContext('default', ['user1'])
       .addDelegationContext([{ name: 'sub-agent', role: 'Sub-agent role' }])
       .addAgentNotes(mockManifest)
-      .addWorkspaceContext(mockManifest)
+      .addWorkspaceContext(mockManifest, tempDir)
       .addReasoningHints('gpt-4-thinking')
       .addConstraints(1)
       .addOutputFormat(mockManifest.outputFormat);
@@ -76,7 +90,8 @@ describe('SystemPromptBuilder', () => {
     expect(prompt).toContain('## Agent Notes');
     expect(prompt).toContain('Some internal notes.');
     expect(prompt).toContain('## Workspace Context');
-    expect(prompt).toContain('- README.md');
+    expect(prompt).toContain('### README.md');
+    expect(prompt).toContain('test content');
     expect(prompt).toContain('## Reasoning Instructions');
     expect(prompt).toContain('## System Constraints');
     expect(prompt).toContain('## Output Format');

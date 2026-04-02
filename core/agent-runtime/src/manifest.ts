@@ -171,8 +171,11 @@ export function generateSystemPrompt(manifest: RuntimeManifest, context: SystemP
   // 10. Agent Notes (Priority 90)
   builder.addAgentNotes(manifest);
 
+  // 10.1 Notes (Priority 95)
+  builder.addNotes(manifest);
+
   // 11. Workspace Context (Priority 100)
-  builder.addWorkspaceContext(manifest);
+  builder.addWorkspaceContext(manifest, context.workspacePath);
 
   // 12. Reasoning Hints (Priority 110)
   builder.addReasoningHints(manifest.model.name);

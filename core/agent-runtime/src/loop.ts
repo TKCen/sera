@@ -25,6 +25,7 @@ import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
 import { log } from './logger.js';
+import type { SessionStore } from './session.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,7 @@ export class ReasoningLoop {
   private tools: IToolExecutor;
   private centrifugo: CentrifugoPublisher;
   private manifest: RuntimeManifest;
+  private sessionStore?: SessionStore;
   private systemPrompt: string;
   /** Core tools sent on every LLM call (up to CORE_TOOL_LIMIT). */
   private toolDefs: ToolDefinition[];
@@ -95,16 +97,22 @@ export class ReasoningLoop {
   /** Set to true when SIGTERM received; loop exits after current step. */
   shutdownRequested = false;
 
+  /** Last time the session was saved, for debouncing. */
+  private lastSaveTime = 0;
+  private SAVE_DEBOUNCE_MS = 5_000;
+
   constructor(
     llm: ILLMClient,
     tools: IToolExecutor,
     centrifugo: CentrifugoPublisher,
-    manifest: RuntimeManifest
+    manifest: RuntimeManifest,
+    sessionStore?: SessionStore
   ) {
     this.llm = llm;
     this.tools = tools;
     this.centrifugo = centrifugo;
     this.manifest = manifest;
+    this.sessionStore = sessionStore;
     this.allToolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
     this.contextManager = new ContextManager(manifest.model.name);
 
@@ -221,7 +229,7 @@ export class ReasoningLoop {
     };
 
     // Build initial message array
-    const messages: ChatMessage[] = [
+    let messages: ChatMessage[] = [
       { role: 'system', content: this.systemPrompt },
       ...history,
       {
@@ -229,6 +237,32 @@ export class ReasoningLoop {
         content: context ? `${context}\n\n${task}` : task,
       },
     ];
+
+    let iteration = 0;
+    let createdAt = new Date().toISOString();
+
+    // ── Session Restoration ───────────────────────────────────────────────
+    if (this.sessionStore) {
+      const saved = await this.sessionStore.load(taskId);
+      if (saved) {
+        messages = saved.messages;
+        iteration = saved.iteration;
+        createdAt = saved.createdAt;
+        totalPromptTokens = saved.totalUsage.promptTokens;
+        totalCompletionTokens = saved.totalUsage.completionTokens;
+        totalCacheCreationTokens = saved.totalUsage.cacheCreationTokens;
+        totalCacheReadTokens = saved.totalUsage.cacheReadTokens;
+        turnCount = messages.filter((m) => m.role === 'assistant').length;
+
+        // Ensure current system prompt is used if it changed
+        const systemIdx = messages.findIndex((m) => m.role === 'system');
+        if (systemIdx !== -1) {
+          messages[systemIdx]!.content = this.systemPrompt;
+        }
+
+        await think('observe', `Restored session from iteration ${iteration}`, iteration);
+      }
+    }
 
     const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
     await think(
@@ -256,8 +290,6 @@ export class ReasoningLoop {
     };
 
     try {
-      let iteration = 0;
-
       while (iteration < MAX_ITERATIONS) {
         if (this.shutdownRequested) {
           await think('reflect', 'Shutdown requested — stopping reasoning loop', iteration, {
@@ -531,6 +563,22 @@ export class ReasoningLoop {
           );
         }
 
+        // ── Auto-save after iteration ─────────────────────────────────────
+        if (this.sessionStore) {
+          const now = Date.now();
+          if (now - this.lastSaveTime > this.SAVE_DEBOUNCE_MS) {
+            this.lastSaveTime = now;
+            await this.sessionStore.save({
+              agentId: this.manifest.identity.name,
+              taskId,
+              iteration,
+              messages,
+              totalUsage: buildUsage(),
+              createdAt,
+            });
+          }
+        }
+
         // Emit chain-of-thought reasoning if present (e.g. Qwen / DeepSeek)
         if (response.reasoning) {
           await this.centrifugo.publishThought('observe', response.reasoning, iteration);
@@ -601,6 +649,7 @@ export class ReasoningLoop {
             role: 'assistant',
             content: response.content || '',
             tool_calls: response.toolCalls,
+            usage: response.usage,
           });
 
           // Execute tools and add results
@@ -698,7 +747,7 @@ export class ReasoningLoop {
           `ReasoningLoop complete after ${iteration} iteration(s) — ${finalReply.length} chars`
         );
 
-        return {
+        const output: TaskOutput = {
           taskId,
           result: finalReply,
           usage: buildUsage(),
@@ -706,6 +755,19 @@ export class ReasoningLoop {
           citations: citations.length > 0 ? citations : undefined,
           exitReason: 'success',
         };
+
+        // Attach usage to final assistant message
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant') {
+          lastMsg.usage = response.usage;
+        }
+
+        // Cleanup session on success
+        if (this.sessionStore) {
+          await this.sessionStore.delete();
+        }
+
+        return output;
       }
 
       // ── Max iterations reached ──────────────────────────────────────────────

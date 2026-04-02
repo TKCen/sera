@@ -37,10 +37,19 @@ describe('RuntimeToolExecutor — Command Logging', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-logging-test-'));
     executor = new RuntimeToolExecutor(tempDir, 2, manifest);
 
-    mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 201,
-      json: async () => ({ success: true }),
+    mockFetch = vi.fn().mockImplementation(async (url) => {
+      if (url.includes('/command-logs')) {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ success: true }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ([]),
+      };
     });
     vi.stubGlobal('fetch', mockFetch);
 
@@ -78,7 +87,11 @@ describe('RuntimeToolExecutor — Command Logging', () => {
       })
     );
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    // Filter for the call to command-logs
+    const logCall = mockFetch.mock.calls.find((c: any) => c[0].includes('/command-logs'));
+    expect(logCall).toBeDefined();
+
+    const body = JSON.parse(logCall[1].body);
     expect(body.sessionId).toBe('test-session-id');
     expect(body.toolName).toBe('file-read');
     expect(body.arguments).toEqual({ path: 'test.txt' });
@@ -97,7 +110,10 @@ describe('RuntimeToolExecutor — Command Logging', () => {
       },
     }, 'test-session-id');
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const logCall = mockFetch.mock.calls.find((c: any) => c[0].includes('/command-logs'));
+    expect(logCall).toBeDefined();
+
+    const body = JSON.parse(logCall[1].body);
     expect(body.arguments.query).toBe('test');
     expect(body.arguments.api_key).toBe('[REDACTED]');
     expect(body.arguments.password).toBe('[REDACTED]');
@@ -123,7 +139,10 @@ describe('RuntimeToolExecutor — Command Logging', () => {
       },
     }, 'test-session-id');
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const logCall = mockFetch.mock.calls.find((c: any) => c[0].includes('/command-logs'));
+    expect(logCall).toBeDefined();
+
+    const body = JSON.parse(logCall[1].body);
     expect(body.result.length).toBeLessThan(3000);
     expect(body.result).toContain('[TRUNCATED]');
   });

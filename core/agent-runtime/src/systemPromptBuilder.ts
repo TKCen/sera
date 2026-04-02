@@ -106,6 +106,18 @@ export class SystemPromptBuilder {
     });
   }
 
+  /** Notes: manifest-level notes (Optional, Priority 95) */
+  addNotes(manifest: RuntimeManifest): this {
+    if (!manifest.notes) return this;
+    const lines = ['## Notes', manifest.notes];
+    return this.addSection({
+      id: 'notes',
+      priority: 95,
+      content: lines.join('\n'),
+      required: false,
+    });
+  }
+
   /** Communication Style: free-form text (Optional, Priority 20) */
   addCommunicationStyle(manifest: RuntimeManifest): this {
     if (!manifest.identity.communicationStyle) return this;
@@ -132,10 +144,10 @@ export class SystemPromptBuilder {
   }
 
   /** Workspace Context: injected files (Optional, Priority 200) */
-  addWorkspaceContext(manifest: RuntimeManifest): this {
+  addWorkspaceContext(manifest: RuntimeManifest, workspacePathOverride?: string): this {
     if (!manifest.contextFiles?.length) return this;
     // Build context section inline to avoid circular dependency with manifest.ts
-    const workspacePath = process.env['WORKSPACE_PATH'] ?? '/workspace';
+    const workspacePath = workspacePathOverride ?? process.env['WORKSPACE_PATH'] ?? '/workspace';
     const budgetTokens = parseInt(process.env['CONTEXT_FILES_BUDGET'] ?? '8000', 10);
     const content = buildContextSectionInline(manifest.contextFiles, workspacePath, budgetTokens);
     if (!content) return this;
@@ -317,6 +329,12 @@ function buildContextSectionInline(
   };
 
   const entries: Entry[] = files.map((f) => {
+    if (typeof f === 'string') {
+      f = { path: f, label: f };
+    }
+    if (!f || !f.path) {
+      return { path: 'unknown', label: 'Unknown', content: '*Invalid context file entry*', tokens: 10, exists: false };
+    }
     const fullPath = path.join(workspacePath, f.path);
     const resolved = path.resolve(fullPath);
     const wsResolved = path.resolve(workspacePath);

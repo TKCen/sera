@@ -76,9 +76,19 @@ export interface ChatMessage {
   tool_call_id?: string;
   /** Internal messages are hidden from the chat UI (Story 5.12). */
   internal?: boolean;
+  /** Token usage for this message (assistant turns only). */
+  usage?: LLMUsage;
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';
+
+export interface LLMUsage {
+  promptTokens: number;
+  completionTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+}
 
 export interface LLMResponse {
   content: string;
@@ -86,13 +96,7 @@ export interface LLMResponse {
   reasoning?: string;
   toolCalls?: ToolCall[];
   citations?: Array<{ blockId: string; scope: string; relevance: number }>;
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    cacheCreationTokens: number;
-    cacheReadTokens: number;
-    totalTokens: number;
-  };
+  usage?: LLMUsage;
 }
 
 // ── Interface ─────────────────────────────────────────────────────────────────

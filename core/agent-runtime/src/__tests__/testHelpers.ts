@@ -97,5 +97,7 @@ export function createMockPublisher(): CentrifugoPublisher {
     publish: vi.fn().mockResolvedValue(undefined),
     publishThought: vi.fn().mockResolvedValue(undefined),
     publishStreamToken: vi.fn().mockResolvedValue(undefined),
+    publishToolOutput: vi.fn().mockResolvedValue(undefined),
+    publishStreamError: vi.fn().mockResolvedValue(undefined),
   } as unknown as CentrifugoPublisher;
 }

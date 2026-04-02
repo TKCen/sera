@@ -31,6 +31,7 @@ import { loadManifest } from './manifest.js';
 import { LLMClient } from './llmClient.js';
 import { RuntimeToolExecutor } from './tools/index.js';
 import { CentrifugoPublisher, CentrifugoSubscriber } from './centrifugo.js';
+import { SessionStore } from './session.js';
 import { ReasoningLoop } from './loop.js';
 import type { TaskInput, TaskOutput } from './loop.js';
 import { startHeartbeat } from './heartbeat.js';
@@ -103,7 +104,10 @@ async function main(): Promise<void> {
     manifest.metadata.name,
   );
 
-  const loop = new ReasoningLoop(llmClient, toolExecutor, centrifugo, manifest);
+  const sessionStore = new SessionStore();
+  await sessionStore.cleanupStale();
+
+  const loop = new ReasoningLoop(llmClient, toolExecutor, centrifugo, manifest, sessionStore);
 
   // ── Initialize Subscriber (Story 9.3) ────────────────────────────────────
   const CENTRIFUGO_WS_URL = CENTRIFUGO_API_URL.replace('/api', '/connection/websocket').replace('http', 'ws');

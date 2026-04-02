@@ -83,7 +83,7 @@ export class ScheduleService {
     // 2. Register/Update in pg-boss
     for (const schedule of dbSchedules) {
       try {
-        await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
+        await this.ensureQueueAndSchedule(schedule.id, schedule.expression);
 
         // Compute and store next_run_at
         const nextRunAt = computeNextRunAt(schedule.expression);
@@ -173,7 +173,7 @@ export class ScheduleService {
     const schedule = rows[0]!;
 
     if (this.boss && schedule.type === 'cron' && schedule.status === 'active') {
-      await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
+      await this.ensureQueueAndSchedule(schedule.id, schedule.expression);
     }
 
     await AuditService.getInstance().record({
@@ -220,9 +220,9 @@ export class ScheduleService {
 
     if (this.boss && schedule.type === 'cron') {
       if (schedule.status === 'active') {
-        await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
+        await this.ensureQueueAndSchedule(schedule.id, schedule.expression);
       } else {
-        await this.boss.unschedule(schedule.id);
+        await this.boss.unschedule(schedule.id).catch(() => {});
       }
     }
 
@@ -477,9 +477,9 @@ export class ScheduleService {
     // Register/unregister in pg-boss
     if (this.boss && schedule.type === 'cron') {
       if (schedule.status === 'active') {
-        await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
+        await this.ensureQueueAndSchedule(schedule.id, schedule.expression);
       } else {
-        await this.boss.unschedule(schedule.id);
+        await this.boss.unschedule(schedule.id).catch(() => {});
       }
     }
 
@@ -530,6 +530,16 @@ export class ScheduleService {
         },
       });
     }
+  }
+
+  /**
+   * Ensures the pg-boss queue exists before scheduling a cron job.
+   * pg-boss v9+ requires createQueue() before schedule().
+   */
+  private async ensureQueueAndSchedule(scheduleId: string, expression: string): Promise<void> {
+    if (!this.boss) return;
+    await this.boss.createQueue(scheduleId);
+    await this.boss.schedule(scheduleId, expression, { scheduleId });
   }
 
   public async stop(): Promise<void> {

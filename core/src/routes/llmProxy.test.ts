@@ -187,6 +187,9 @@ async function createTestSetup(
   const orchestrator = {
     getManifest: vi.fn(),
     getManifestByInstanceId: vi.fn(),
+    getIntercom: vi.fn().mockReturnValue({
+      publishThought: vi.fn().mockResolvedValue(undefined),
+    }),
   } as unknown as import('../agents/Orchestrator.js').Orchestrator;
   const router = createLlmProxyRouter(
     identityService,

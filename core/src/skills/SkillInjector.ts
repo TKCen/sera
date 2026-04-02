@@ -88,8 +88,7 @@ export class SkillInjector {
     }
 
     // 4. Fetch full documents and resolve dependencies
-    const loadedSkills: import('./schema.js').SkillDocument[] = [];
-    const processed = new Set<string>();
+    const resolvedSkills = new Map<string, import('./schema.js').SkillDocument>();
     const queue: SkillPin[] = Array.from(skillsToLoad.entries()).map(([name, version]) => ({
       name,
       version,
@@ -97,22 +96,28 @@ export class SkillInjector {
 
     while (queue.length > 0) {
       const pin = queue.shift()!;
-      if (processed.has(pin.name)) {
-        // # TODO: implement version conflict resolution
-        // Currently, first version encountered wins.
+      const existing = resolvedSkills.get(pin.name);
+
+      // If we already have this exact version, skip to avoid redundant DB calls
+      if (existing && pin.version === existing.version) {
         continue;
       }
-      processed.add(pin.name);
 
       const doc = await skillLibrary.getSkill(pin.name, pin.version);
       if (doc) {
-        loadedSkills.push(doc);
-        if (doc.requires && doc.requires.length > 0) {
-          // Dependencies usually don't have pinned versions in the front-matter schema yet
-          queue.push(...doc.requires.map((r) => ({ name: r })));
+        // Version conflict resolution: latest version wins.
+        if (!existing || this.compareVersions(doc.version, existing.version) > 0) {
+          resolvedSkills.set(pin.name, doc);
+          if (doc.requires && doc.requires.length > 0) {
+            // Dependencies usually don't have pinned versions in the front-matter schema yet.
+            // If they did, they would be handled by the next iteration's version check.
+            queue.push(...doc.requires.map((r) => ({ name: r })));
+          }
         }
       }
     }
+
+    const loadedSkills = Array.from(resolvedSkills.values());
 
     // 5. Token budgeting
     let currentTokens = 0;
@@ -171,6 +176,24 @@ export class SkillInjector {
     }
 
     return systemPrompt + '\n\n' + totalInjection;
+  }
+
+  /**
+   * Compares two semver-like version strings.
+   * Returns 1 if v1 > v2, -1 if v1 < v2, and 0 if v1 == v2.
+   */
+  private compareVersions(v1: string, v2: string): number {
+    const parts1 = v1.split('.').map((p) => parseInt(p, 10) || 0);
+    const parts2 = v2.split('.').map((p) => parseInt(p, 10) || 0);
+    const len = Math.max(parts1.length, parts2.length);
+
+    for (let i = 0; i < len; i++) {
+      const p1 = parts1[i] || 0;
+      const p2 = parts2[i] || 0;
+      if (p1 > p2) return 1;
+      if (p1 < p2) return -1;
+    }
+    return 0;
   }
 
   /**

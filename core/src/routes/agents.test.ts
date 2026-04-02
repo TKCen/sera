@@ -68,6 +68,10 @@ describe('Agents Routes', () => {
       agentRegistryMock.createInstance.mockResolvedValue({
         id: instanceId,
         name: 'ephemeral-name',
+        template_ref: templateRef,
+        status: 'created' as const,
+        updated_at: new Date(),
+        created_at: new Date(),
       } as unknown as never);
 
       // Mock fetch for the container's chat endpoint

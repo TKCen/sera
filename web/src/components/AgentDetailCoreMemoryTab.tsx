@@ -16,8 +16,13 @@ export function CoreMemoryTab({ id }: { id: string }) {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ name, updates }: { name: string; updates: { content?: string; characterLimit?: number; isReadOnly?: boolean } }) =>
-      updateCoreMemoryBlock(id, name, updates),
+    mutationFn: ({
+      name,
+      updates,
+    }: {
+      name: string;
+      updates: { content?: string; characterLimit?: number; isReadOnly?: boolean };
+    }) => updateCoreMemoryBlock(id, name, updates),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['agent-core-memory', id] });
       toast.success('Core memory block updated');
@@ -43,7 +48,9 @@ export function CoreMemoryTab({ id }: { id: string }) {
     <div className="p-6 space-y-6 max-w-4xl">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-sera-text font-mono uppercase tracking-wider">Core Memory Blocks</h3>
+          <h3 className="text-sm font-semibold text-sera-text font-mono uppercase tracking-wider">
+            Core Memory Blocks
+          </h3>
           <p className="text-xs text-sera-text-muted mt-1">
             Static memory blocks injected directly into the system prompt.
           </p>
@@ -67,7 +74,7 @@ export function CoreMemoryTab({ id }: { id: string }) {
 function BlockEditor({
   block,
   onSave,
-  isUpdating
+  isUpdating,
 }: {
   block: CoreMemoryBlock;
   onSave: (content: string) => void;
@@ -82,7 +89,9 @@ function BlockEditor({
     <div className="sera-card-static p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-sera-text uppercase tracking-tight">{block.name}</span>
+          <span className="text-xs font-bold text-sera-text uppercase tracking-tight">
+            {block.name}
+          </span>
           {block.isReadOnly ? (
             <Lock size={12} className="text-sera-text-dim" title="Read Only" />
           ) : (
@@ -110,7 +119,13 @@ function BlockEditor({
             onClick={() => onSave(content)}
             disabled={!hasChanged || isOverLimit || isUpdating}
           >
-            {isUpdating ? 'Saving...' : <><Save size={12} className="mr-1" /> Save</>}
+            {isUpdating ? (
+              'Saving...'
+            ) : (
+              <>
+                <Save size={12} className="mr-1" /> Save
+              </>
+            )}
           </Button>
         </div>
       </div>

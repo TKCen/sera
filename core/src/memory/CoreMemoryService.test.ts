@@ -18,21 +18,42 @@ describe('CoreMemoryService', () => {
     mockPool.query.mockResolvedValue({ rowCount: 1 });
     await service.initializeDefaultBlocks(agentId);
     expect(mockPool.query).toHaveBeenCalledTimes(2);
-    expect(mockPool.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO core_memory_blocks'), expect.arrayContaining([agentId, 'persona']));
-    expect(mockPool.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO core_memory_blocks'), expect.arrayContaining([agentId, 'human']));
+    expect(mockPool.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO core_memory_blocks'),
+      expect.arrayContaining([agentId, 'persona'])
+    );
+    expect(mockPool.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO core_memory_blocks'),
+      expect.arrayContaining([agentId, 'human'])
+    );
   });
 
   it('updates a block', async () => {
-    const mockBlock = { id: '1', name: 'persona', content: 'Updated Persona', characterLimit: 2000, isReadOnly: false };
+    const mockBlock = {
+      id: '1',
+      name: 'persona',
+      content: 'Updated Persona',
+      characterLimit: 2000,
+      isReadOnly: false,
+    };
     mockPool.query.mockResolvedValue({ rowCount: 1, rows: [mockBlock] });
 
     const updated = await service.updateBlock(agentId, 'persona', { content: 'Updated Persona' });
     expect(updated.content).toBe('Updated Persona');
-    expect(mockPool.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE core_memory_blocks'), expect.arrayContaining([agentId, 'persona', 'Updated Persona']));
+    expect(mockPool.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE core_memory_blocks'),
+      expect.arrayContaining([agentId, 'persona', 'Updated Persona'])
+    );
   });
 
   it('appends to a block', async () => {
-    const existingBlock = { id: '1', name: 'persona', content: 'Line 1', characterLimit: 2000, isReadOnly: false };
+    const existingBlock = {
+      id: '1',
+      name: 'persona',
+      content: 'Line 1',
+      characterLimit: 2000,
+      isReadOnly: false,
+    };
     const updatedBlock = { ...existingBlock, content: 'Line 1\nLine 2' };
 
     mockPool.query
@@ -44,7 +65,13 @@ describe('CoreMemoryService', () => {
   });
 
   it('replaces text in a block', async () => {
-    const existingBlock = { id: '1', name: 'persona', content: 'The quick brown fox', characterLimit: 2000, isReadOnly: false };
+    const existingBlock = {
+      id: '1',
+      name: 'persona',
+      content: 'The quick brown fox',
+      characterLimit: 2000,
+      isReadOnly: false,
+    };
     const updatedBlock = { ...existingBlock, content: 'The quick red fox' };
 
     mockPool.query
@@ -56,18 +83,32 @@ describe('CoreMemoryService', () => {
   });
 
   it('enforces character limits on append', async () => {
-    const existingBlock = { id: '1', name: 'persona', content: 'A', characterLimit: 2, isReadOnly: false };
+    const existingBlock = {
+      id: '1',
+      name: 'persona',
+      content: 'A',
+      characterLimit: 2,
+      isReadOnly: false,
+    };
     mockPool.query.mockResolvedValueOnce({ rows: [existingBlock] });
 
-    await expect(service.appendBlock(agentId, 'persona', 'Too long'))
-      .rejects.toThrow(/exceeds character limit/);
+    await expect(service.appendBlock(agentId, 'persona', 'Too long')).rejects.toThrow(
+      /exceeds character limit/
+    );
   });
 
   it('enforces read-only status', async () => {
-    const existingBlock = { id: '1', name: 'persona', content: 'Fixed', characterLimit: 2000, isReadOnly: true };
+    const existingBlock = {
+      id: '1',
+      name: 'persona',
+      content: 'Fixed',
+      characterLimit: 2000,
+      isReadOnly: true,
+    };
     mockPool.query.mockResolvedValueOnce({ rows: [existingBlock] });
 
-    await expect(service.appendBlock(agentId, 'persona', 'More text'))
-      .rejects.toThrow(/is read-only/);
+    await expect(service.appendBlock(agentId, 'persona', 'More text')).rejects.toThrow(
+      /is read-only/
+    );
   });
 });

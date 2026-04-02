@@ -27,11 +27,18 @@ describe('Core Memory Skills', () => {
         appendBlock: vi.fn().mockResolvedValue(mockUpdate),
       });
 
-      const result = await skill.handler({ block: 'persona', content: 'more info' }, context as any);
+      const result = await skill.handler(
+        { block: 'persona', content: 'more info' },
+        context as any
+      );
 
       expect(result.success).toBe(true);
       expect(result.data.content).toBe('new content');
-      expect(CoreMemoryService.getInstance(any).appendBlock).toHaveBeenCalledWith('agent-123', 'persona', 'more info');
+      expect(CoreMemoryService.getInstance(any).appendBlock).toHaveBeenCalledWith(
+        'agent-123',
+        'persona',
+        'more info'
+      );
     });
 
     it('returns error if append fails', async () => {
@@ -40,7 +47,10 @@ describe('Core Memory Skills', () => {
         appendBlock: vi.fn().mockRejectedValue(new Error('Append failed')),
       });
 
-      const result = await skill.handler({ block: 'persona', content: 'more info' }, context as any);
+      const result = await skill.handler(
+        { block: 'persona', content: 'more info' },
+        context as any
+      );
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Append failed');
@@ -55,13 +65,23 @@ describe('Core Memory Skills', () => {
         replaceInBlock: vi.fn().mockResolvedValue(mockUpdate),
       });
 
-      const result = await skill.handler({ block: 'persona', oldText: 'old', newText: 'new' }, context as any);
+      const result = await skill.handler(
+        { block: 'persona', oldText: 'old', newText: 'new' },
+        context as any
+      );
 
       expect(result.success).toBe(true);
       expect(result.data.content).toBe('replaced content');
-      expect(CoreMemoryService.getInstance(any).replaceInBlock).toHaveBeenCalledWith('agent-123', 'persona', 'old', 'new');
+      expect(CoreMemoryService.getInstance(any).replaceInBlock).toHaveBeenCalledWith(
+        'agent-123',
+        'persona',
+        'old',
+        'new'
+      );
     });
   });
 });
 
-function any() { return expect.anything(); }
+function any() {
+  return expect.anything();
+}

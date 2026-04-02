@@ -98,14 +98,20 @@ export class CoreMemoryService {
     return res.rows[0];
   }
 
-  async appendBlock(agentInstanceId: string, name: string, contentToAppend: string): Promise<CoreMemoryBlock> {
+  async appendBlock(
+    agentInstanceId: string,
+    name: string,
+    contentToAppend: string
+  ): Promise<CoreMemoryBlock> {
     const block = await this.getBlock(agentInstanceId, name);
     if (!block) throw new Error(`Block ${name} not found`);
     if (block.isReadOnly) throw new Error(`Block ${name} is read-only`);
 
     const newContent = (block.content + '\n' + contentToAppend).trim();
     if (newContent.length > block.characterLimit) {
-      throw new Error(`Append failed: Content exceeds character limit of ${block.characterLimit} for block ${name}`);
+      throw new Error(
+        `Append failed: Content exceeds character limit of ${block.characterLimit} for block ${name}`
+      );
     }
 
     return this.updateBlock(agentInstanceId, name, { content: newContent });
@@ -127,7 +133,9 @@ export class CoreMemoryService {
 
     const newContent = block.content.replace(oldText, newText);
     if (newContent.length > block.characterLimit) {
-      throw new Error(`Replace failed: New content exceeds character limit of ${block.characterLimit} for block ${name}`);
+      throw new Error(
+        `Replace failed: New content exceeds character limit of ${block.characterLimit} for block ${name}`
+      );
     }
 
     return this.updateBlock(agentInstanceId, name, { content: newContent });
@@ -135,8 +143,18 @@ export class CoreMemoryService {
 
   async initializeDefaultBlocks(agentInstanceId: string): Promise<void> {
     const defaults = [
-      { name: 'persona', content: 'You are a helpful AI assistant.', characterLimit: 2000, isReadOnly: false },
-      { name: 'human', content: 'No information about the user yet.', characterLimit: 2000, isReadOnly: false },
+      {
+        name: 'persona',
+        content: 'You are a helpful AI assistant.',
+        characterLimit: 2000,
+        isReadOnly: false,
+      },
+      {
+        name: 'human',
+        content: 'No information about the user yet.',
+        characterLimit: 2000,
+        isReadOnly: false,
+      },
     ];
 
     for (const block of defaults) {

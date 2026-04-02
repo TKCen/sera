@@ -589,7 +589,9 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
         res.json(updated);
       } else if (action === 'replace') {
         if (typeof oldText !== 'string' || typeof newText !== 'string') {
-          return res.status(400).json({ error: 'oldText and newText are required for replace action' });
+          return res
+            .status(400)
+            .json({ error: 'oldText and newText are required for replace action' });
         }
         const updated = await coreMemoryService.replaceInBlock(agentId, name, oldText, newText);
         res.json(updated);

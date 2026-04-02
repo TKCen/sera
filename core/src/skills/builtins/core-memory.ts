@@ -85,7 +85,11 @@ export function createCoreMemoryReplaceSkill(): SkillDefinition {
       },
     ],
     handler: async (params, context) => {
-      const { block, oldText, newText } = params as { block: string; oldText: string; newText: string };
+      const { block, oldText, newText } = params as {
+        block: string;
+        oldText: string;
+        newText: string;
+      };
       const agentId = context.agentInstanceId;
 
       if (!agentId) {

@@ -90,6 +90,19 @@ describe('IntercomService', () => {
     it('publishes to the correct thoughts channel', async () => {
       await service.publishThought('architect-prime', 'Winston', 'observe', 'Looking at code...');
     });
+
+    it('publishes with detail to the correct thoughts channel', async () => {
+      const detail = { key: 'value' };
+      await service.publishThought(
+        'architect-prime',
+        'Winston',
+        'context-assembly',
+        'Context assembly started',
+        'task-1',
+        1,
+        detail
+      );
+    });
   });
 
   describe('broadcastToCircle', () => {

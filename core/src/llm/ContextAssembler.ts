@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import type { Pool } from 'pg';
 import { SkillInjector } from '../skills/SkillInjector.js';
 import type { ChatMessage } from './LlmRouter.js';
@@ -36,9 +37,29 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
+/** All possible stages for context assembly events. */
+export type ContextAssemblyStage =
+  | 'context.assembly_started'
+  | 'context.circle_constitution_injected'
+  | 'context.circle_constitution_skipped'
+  | 'context.skills_injected'
+  | 'context.memory_retrieved'
+  | 'context.memory_skipped'
+  | 'context.tools_resolved'
+  | 'context.token_budget'
+  | 'context.assembly_completed'
+  | 'context.assembly_skipped'
+  | 'context.assembly_error'
+  | 'compaction.skipped'
+  | 'compaction.started'
+  | 'compaction.summarizing'
+  | 'compaction.summarized'
+  | 'compaction.completed'
+  | 'compaction.fallback';
+
 /** Structured event emitted during context assembly for debugging/introspection. */
 export interface ContextAssemblyEvent {
-  stage: string;
+  stage: ContextAssemblyStage;
   detail: Record<string, unknown>;
   durationMs?: number;
 }
@@ -84,18 +105,26 @@ export class ContextAssembler {
       this.orchestrator.getManifestByInstanceId(agentId) || this.orchestrator.getManifest(agentId);
 
     if (!manifest) {
-      emit({ stage: 'assembly.skipped', detail: { reason: 'manifest not found', agentId } });
+      emit({
+        stage: 'context.assembly_skipped',
+        detail: { reason: 'manifest not found', agentId },
+      });
       return messages;
     }
 
     // Fetch instance for circle inheritance and metadata
     const instance = await AgentFactory.getInstance(agentId);
 
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+    const currentMessage = lastUserMessage?.content ?? '';
+    const messageHash = crypto.createHash('sha256').update(currentMessage).digest('hex');
+
     emit({
-      stage: 'assembly.started',
+      stage: 'context.assembly_started',
       detail: {
         agentId,
         agentName: manifest.metadata.name,
+        messageHash,
         hasMemoryConfig: !!(manifest.memory || manifest.spec?.memory),
         skillCount: (manifest.skills ?? []).length,
         messageCount: messages.length,
@@ -103,14 +132,32 @@ export class ContextAssembler {
       },
     });
 
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
-    const currentMessage = lastUserMessage?.content ?? '';
-
     // ── 1. Generate rich base prompt (replaces Runtime's bare fallback) ──────
     // IdentityService.generateStreamingSystemPrompt includes: identity, response
     // format, stability guidelines, subagents, circle context, and tier info.
     // The circle constitution is embedded as ## Project Context in the prompt.
+    const circleContextStart = Date.now();
     const circleContext = await this.loadCircleConstitution(instance?.circle_id);
+
+    if (circleContext) {
+      emit({
+        stage: 'context.circle_constitution_injected',
+        detail: {
+          circleId: instance?.circle_id,
+          charCount: circleContext.length,
+        },
+        durationMs: Date.now() - circleContextStart,
+      });
+    } else {
+      emit({
+        stage: 'context.circle_constitution_skipped',
+        detail: {
+          reason: instance?.circle_id ? 'constitution empty or not found' : 'no circle assigned',
+          circleId: instance?.circle_id ?? null,
+        },
+      });
+    }
+
     const richPrompt = IdentityService.generateStreamingSystemPrompt(manifest, circleContext);
 
     // ── 2. Inject skills (and constitution if not already in rich prompt) ────
@@ -125,15 +172,32 @@ export class ContextAssembler {
       null // circleId null — constitution already in richPrompt
     );
     emit({
-      stage: 'skills.injected',
+      stage: 'context.skills_injected',
       detail: {
         skillNames: manifest.skills ?? [],
         skillPackages: manifest.skillPackages ?? [],
         circleId: instance?.circle_id ?? null,
         promptLengthChars: skillsPrompt.length,
+        tokenCount: Math.ceil(skillsPrompt.length / 4),
         promptSource: 'IdentityService.generateStreamingSystemPrompt',
       },
       durationMs: Date.now() - skillsStart,
+    });
+
+    // ── 2.5 Resolve Tools ────────────────────────────────────────────────────
+    const allowedTools = manifest.spec?.tools?.allowed ?? manifest.tools?.allowed ?? [];
+    const toolExecutor = this.orchestrator.getToolExecutor();
+    const availableTools = toolExecutor?.getToolDefinitions(manifest) ?? [];
+    const availableToolNames = new Set(availableTools.map((t) => t.function.name));
+    const unresolvedNames = allowedTools.filter((name) => !availableToolNames.has(name));
+
+    emit({
+      stage: 'context.tools_resolved',
+      detail: {
+        registeredCount: allowedTools.length,
+        resolvedCount: allowedTools.length - unresolvedNames.length,
+        unresolvedNames,
+      },
     });
 
     // ── 3. RAG memory retrieval (only if agent has memory config) ────────────
@@ -144,7 +208,7 @@ export class ContextAssembler {
 
     if (!hasMemory) {
       emit({
-        stage: 'memory.skipped',
+        stage: 'context.memory_skipped',
         detail: { reason: 'no memory configuration' },
       });
     }
@@ -162,6 +226,10 @@ export class ContextAssembler {
 
     const modelName = manifest.spec?.model?.name ?? manifest.model?.name ?? 'default';
     const contextWindow = MODEL_CONTEXT_WINDOWS[modelName] ?? DEFAULT_CONTEXT_WINDOW;
+    const remaining = Math.max(
+      0,
+      contextWindow - systemPromptTokens - skillTokens - memoryTokens - historyTokens
+    );
 
     emit({
       stage: 'context.token_budget',
@@ -172,19 +240,22 @@ export class ContextAssembler {
         skillTokens,
         memoryTokens,
         historyTokens,
+        remaining,
         model: modelName,
       },
     });
 
+    const totalDurationMs = Date.now() - assemblyStart;
     emit({
-      stage: 'assembly.completed',
+      stage: 'context.assembly_completed',
       detail: {
         finalPromptLengthChars: newSystemContent.length,
-        estimatedTokens: Math.ceil(newSystemContent.length / 4),
+        finalTokenCount: Math.ceil(newSystemContent.length / 4),
         memoryInjected: !!memoryContext,
         promptSource: 'IdentityService.generateStreamingSystemPrompt',
+        totalDurationMs,
       },
-      durationMs: Date.now() - assemblyStart,
+      durationMs: totalDurationMs,
     });
 
     return messages.map((m) => (m.role === 'system' ? { ...m, content: newSystemContent } : m));
@@ -219,7 +290,7 @@ export class ContextAssembler {
   ): Promise<string | null> {
     if (!this.embeddingService.isAvailable()) {
       emit({
-        stage: 'memory.skipped',
+        stage: 'context.memory_skipped',
         detail: { reason: 'embedding service unavailable' },
       });
       logger.debug(`ContextAssembler: embedding unavailable for agent ${agentId}, skipping RAG`);
@@ -227,7 +298,7 @@ export class ContextAssembler {
     }
     if (!currentMessage.trim()) {
       emit({
-        stage: 'memory.skipped',
+        stage: 'context.memory_skipped',
         detail: { reason: 'empty user message' },
       });
       return null;
@@ -259,7 +330,7 @@ export class ContextAssembler {
       queryVector = await this.embeddingService.embed(currentMessage);
     } catch (err) {
       emit({
-        stage: 'memory.skipped',
+        stage: 'context.memory_skipped',
         detail: { reason: 'embedding failed', error: (err as Error).message },
       });
       logger.debug('ContextAssembler: failed to embed message, skipping RAG', err);
@@ -272,7 +343,7 @@ export class ContextAssembler {
       results = await this.vectorService.search(namespaces, queryVector, DEFAULT_TOP_K, filter);
     } catch (err) {
       emit({
-        stage: 'memory.skipped',
+        stage: 'context.memory_skipped',
         detail: { reason: 'vector search failed', error: (err as Error).message },
       });
       logger.debug('ContextAssembler: vector search failed, skipping RAG', err);
@@ -281,10 +352,13 @@ export class ContextAssembler {
 
     if (results.length === 0) {
       emit({
-        stage: 'memory.retrieved',
+        stage: 'context.memory_retrieved',
         detail: {
           namespaces,
           blockCount: 0,
+          injectedBlockCount: 0,
+          tokenCount: 0,
+          scores: [],
           topK: DEFAULT_TOP_K,
         },
         durationMs: Date.now() - start,
@@ -313,11 +387,12 @@ export class ContextAssembler {
     const elapsed = Date.now() - start;
 
     emit({
-      stage: 'memory.retrieved',
+      stage: 'context.memory_retrieved',
       detail: {
         namespaces,
-        searchResultCount: results.length,
+        blockCount: results.length,
         injectedBlockCount: blocks.length,
+        tokenCount: Math.ceil(charCount / 4),
         charBudget,
         charsUsed: charCount,
         topK: DEFAULT_TOP_K,

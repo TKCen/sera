@@ -444,7 +444,7 @@ export abstract class BaseAgent {
           messages as import('../llm/LlmRouter.js').ChatMessage[],
           modelName,
           (event) => {
-            if (event.stage !== 'compaction.skipped') {
+            if ((event.stage as string) !== 'compaction.skipped') {
               void this.publishThought('context-assembly', JSON.stringify(event));
             }
           }

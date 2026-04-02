@@ -183,7 +183,8 @@ export class IntercomService {
     stepType: ThoughtStepType,
     content: string,
     taskId?: string,
-    iteration?: number
+    iteration?: number,
+    detail?: Record<string, unknown>
   ): Promise<void> {
     const channel = ChannelNamespace.thoughts(agentId);
     const timestamp = new Date().toISOString();
@@ -193,9 +194,10 @@ export class IntercomService {
       content,
       agentId,
       agentDisplayName,
-      taskId,
-      iteration,
     };
+    if (taskId !== undefined) event.taskId = taskId;
+    if (iteration !== undefined) event.iteration = iteration;
+    if (detail !== undefined) event.detail = detail;
 
     // Story 9.7: Persist thought to database (non-blocking).
     // Skip persistence for YAML-loaded agents that use their manifest name (not a UUID)
@@ -205,9 +207,9 @@ export class IntercomService {
       if (!UUID_RE.test(agentId)) return; // not a DB-registered instance — skip
       try {
         await pool.query(
-          `INSERT INTO thought_events (agent_instance_id, task_id, step, content, iteration, published_at)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [agentId, taskId || null, stepType, content, iteration || 0, timestamp]
+          `INSERT INTO thought_events (agent_instance_id, task_id, step, content, iteration, detail, published_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [agentId, taskId || null, stepType, content, iteration || 0, detail || null, timestamp]
         );
       } catch (err: unknown) {
         logger.error(`Failed to persist thought for ${agentId}: ${(err as Error).message}`);
@@ -248,6 +250,7 @@ export class IntercomService {
       agentDisplayName: '', // Display name not in DB for now
       taskId: row.task_id,
       iteration: row.iteration,
+      detail: row.detail,
     }));
   }
 

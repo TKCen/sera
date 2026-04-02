@@ -772,7 +772,7 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         });
       } catch (err) {
         events.push({
-          stage: 'assembly.error',
+          stage: 'context.assembly_error',
           detail: { error: (err as Error).message },
         });
       }

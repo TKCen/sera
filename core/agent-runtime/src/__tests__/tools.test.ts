@@ -296,17 +296,21 @@ describe('RuntimeToolExecutor', () => {
   });
 
   describe('getToolDefinitions()', () => {
-    it('returns all 11 built-in tools when no filter given', () => {
+    it('returns all built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(11);
+      expect(tools.length).toBe(15);
       const names = tools.map((t) => t.function.name).sort();
       expect(names).toEqual([
+        'code-eval',
         'file-delete',
         'file-list',
         'file-read',
         'file-write',
         'glob',
         'grep',
+        'http-request',
+        'image-view',
+        'pdf-read',
         'read_file',
         'run-tool',
         'shell-exec',

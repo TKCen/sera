@@ -648,6 +648,50 @@ export class ReasoningLoop {
           };
           const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
           for (const result of toolResults) {
+            // Handle image-view vision request (#NEW)
+            if (result.toolName === 'image-view' && result.message.content.includes('"vision_request"')) {
+              try {
+                const parsed = JSON.parse(result.message.content);
+                if (parsed.__type === 'vision_request') {
+                  const hasVision = this.manifest.model.name.toLowerCase().includes('vision') ||
+                                   this.manifest.model.name.toLowerCase().includes('gpt-4o') ||
+                                   this.manifest.model.name.toLowerCase().includes('claude-3');
+
+                  if (!hasVision) {
+                    result.message.content = "Error: Current model does not support vision/image analysis. Please switch to a vision-capable model.";
+                  } else {
+                    // Inject a vision block in the NEXT turn's user message
+                    // We transform the tool result into a directive for the loop
+                    // But for now, we'll follow the requirement to return it as a vision content block.
+                    // Actually, the requirement says "Include as a vision content block in the next LLM call"
+                    // and "The image content block should be added as a user message with image_url type"
+
+                    // We can't easily add a user message *between* tool results and the next LLM call in this loop
+                    // without modifying how messages are handled.
+                    // Strategy: Replace the tool result content with a placeholder,
+                    // and push a NEW user message with the image block.
+
+                    result.message.content = `[Image "${parsed.path}" loaded and sent to model for analysis]`;
+                    messages.push(result.message);
+
+                    const visionPrompt = parsed.prompt || 'Analyze this image.';
+                    messages.push({
+                      role: 'user',
+                      content: [
+                        { type: 'text', text: visionPrompt },
+                        { type: 'image_url', image_url: { url: parsed.image_url } }
+                      ]
+                    });
+
+                    await think('reflect', `Image "${parsed.path}" loaded and injected into conversation`, iteration);
+                    continue; // Skip standard message.push below
+                  }
+                }
+              } catch (e) {
+                // Not a valid vision request JSON, treat as regular text
+              }
+            }
+
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);
 

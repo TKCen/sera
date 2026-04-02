@@ -15,8 +15,18 @@ import {
 import { log } from '../logger.js';
 import { PermissionDeniedError, AGENT_ID } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
-import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
+import {
+  imageView,
+  fileRead,
+  fileWrite,
+  fileList,
+  fileDelete,
+  truncateOutput,
+} from './file-handlers.js';
 import { globFiles, grepFiles, readFilePartial } from './search-handlers.js';
+import { pdfRead } from './pdf-handler.js';
+import { codeEval } from './code-handler.js';
+import { httpRequest } from './http-handler.js';
 import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
@@ -34,6 +44,10 @@ export interface ToolExecutionResult {
 const LOCAL_TOOLS = new Set([
   'file-read',
   'file-write',
+  'image-view',
+  'pdf-read',
+  'code-eval',
+  'http-request',
   'file-list',
   'file-delete',
   'read_file',
@@ -198,6 +212,37 @@ export class RuntimeToolExecutor implements IToolExecutor {
       let result: string;
 
       switch (toolName) {
+        case 'image-view':
+          result = imageView(
+            this.workspacePath,
+            params['path'] as string,
+            params['prompt'] as string | undefined
+          );
+          break;
+        case 'pdf-read':
+          result = await pdfRead(
+            this.workspacePath,
+            params['path'] as string,
+            params['pages'] as string | undefined,
+            params['format'] as 'text' | 'markdown' | undefined
+          );
+          break;
+        case 'code-eval':
+          result = await codeEval(
+            params['code'] as string,
+            params['language'] as 'javascript' | 'typescript' | undefined,
+            params['timeout'] as number | undefined
+          );
+          break;
+        case 'http-request':
+          result = await httpRequest(
+            params['url'] as string,
+            params['method'] as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | undefined,
+            params['headers'] as Record<string, string> | undefined,
+            params['body'] as string | undefined,
+            params['timeout'] as number | undefined
+          );
+          break;
         case 'file-read':
           result = fileRead(this.workspacePath, params['path'] as string);
           break;

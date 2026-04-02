@@ -7,6 +7,34 @@ import fs from 'fs';
 import path from 'path';
 import { PermissionDeniedError, MAX_RESULT_BYTES } from './types.js';
 
+export function imageView(workspacePath: string, filePath: string, prompt?: string): string {
+  const resolved = resolveSafe(workspacePath, filePath);
+  if (!fs.existsSync(resolved)) {
+    return `Error: Image file not found: ${filePath}`;
+  }
+
+  const stat = fs.statSync(resolved);
+  if (stat.size > 5 * 1024 * 1024) {
+    return `Error: Image too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). Max size is 5MB.`;
+  }
+
+  const mime = guessMime(resolved);
+  if (!mime.startsWith('image/')) {
+    return `Error: File is not an image: ${filePath} (${mime})`;
+  }
+
+  const buf = fs.readFileSync(resolved);
+  const base64 = buf.toString('base64');
+  const dataUrl = `data:${mime};base64,${base64}`;
+
+  return JSON.stringify({
+    __type: 'vision_request',
+    path: filePath,
+    prompt: prompt ?? 'Analyze this image.',
+    image_url: dataUrl,
+  });
+}
+
 export function fileRead(workspacePath: string, filePath: string): string {
   const resolved = resolveSafe(workspacePath, filePath);
   if (!fs.existsSync(resolved)) {

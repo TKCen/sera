@@ -41,5 +41,8 @@
     "pre-commit": "bun run typecheck && bun run lint && bun run test:web",
     "hooks:install": "bun run scripts/install-hooks.js",
     "tui:build": "cd tui && go build -o tui.exe ."
+  },
+  "dependencies": {
+    "js-tiktoken": "^1.0.21"
   }
 }

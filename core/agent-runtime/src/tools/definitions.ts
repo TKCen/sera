@@ -12,6 +12,113 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'http-request',
+      description: 'Make a raw HTTP request. Supports custom methods, headers, and body.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to request.',
+          },
+          method: {
+            type: 'string',
+            enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+            description: 'HTTP method. Defaults to GET.',
+          },
+          headers: {
+            type: 'object',
+            description: 'Optional request headers.',
+          },
+          body: {
+            type: 'string',
+            description: 'Optional request body (JSON string).',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Request timeout in ms. Defaults to 30000.',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'code-eval',
+      description: 'Execute JavaScript/TypeScript code in an isolated sandbox. Capture stdout and return value.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: 'The code to execute.',
+          },
+          language: {
+            type: 'string',
+            enum: ['javascript', 'typescript'],
+            description: 'The language of the code. Defaults to javascript.',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Maximum execution time in ms. Defaults to 5000, max 30000.',
+          },
+        },
+        required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'pdf-read',
+      description: 'Extract text from a PDF file. Supports page ranges (e.g., "1-5", "1,3,5").',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Relative path to the PDF file.',
+          },
+          pages: {
+            type: 'string',
+            description: 'Optional page range (e.g., "1-5", "3", "1,3,5-7"). Defaults to all.',
+          },
+          format: {
+            type: 'string',
+            enum: ['text', 'markdown'],
+            description: 'Output format. Defaults to text.',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'image-view',
+      description: 'Analyze an image using the models vision capabilities.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Relative path to the image file (PNG, JPEG, GIF, WebP).',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Optional question or focus for the image analysis.',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'file-read',
       description: 'Read the contents of a file from the workspace.',
       parameters: {

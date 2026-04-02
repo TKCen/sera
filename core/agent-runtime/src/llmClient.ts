@@ -71,13 +71,22 @@ export interface ToolDefinition {
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | MessageContentBlock[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   /** Internal messages are hidden from the chat UI (Story 5.12). */
   internal?: boolean;
   /** Estimated token count for this message. */
   tokens?: number;
+}
+
+export interface MessageContentBlock {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: {
+    url: string;
+    detail?: 'auto' | 'low' | 'high';
+  };
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';

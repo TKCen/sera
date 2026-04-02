@@ -16,7 +16,13 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 
-export function SchedulesTab({ id, agentName: parentAgentName }: { id: string; agentName?: string }) {
+export function SchedulesTab({
+  id,
+  agentName: parentAgentName,
+}: {
+  id: string;
+  agentName?: string;
+}) {
   const { data: schedules, isLoading, refetch } = useAgentSchedules(id);
   const clearStaleTasks = useClearStaleTasks();
   const [showCreate, setShowCreate] = useState(false);

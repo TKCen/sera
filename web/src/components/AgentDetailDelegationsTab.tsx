@@ -59,7 +59,10 @@ export function DelegationsTab({ id }: { id: string }) {
       await issueDelegation.mutateAsync({
         agentId: id,
         service: newDelegation.service,
-        permissions: newDelegation.permissions.split(',').map((p) => p.trim()).filter(Boolean),
+        permissions: newDelegation.permissions
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean),
         credentialSecretName: newDelegation.credentialSecretName,
         grantType: newDelegation.grantType,
         expiresAt: newDelegation.expiresAt || undefined,
@@ -290,7 +293,9 @@ export function DelegationsTab({ id }: { id: string }) {
               <label className="text-xs text-sera-text-muted">Permissions (comma-separated)</label>
               <Input
                 value={newDelegation.permissions}
-                onChange={(e) => setNewDelegation({ ...newDelegation, permissions: e.target.value })}
+                onChange={(e) =>
+                  setNewDelegation({ ...newDelegation, permissions: e.target.value })
+                }
                 placeholder="e.g. repo:read, repo:write"
               />
             </div>
@@ -327,7 +332,9 @@ export function DelegationsTab({ id }: { id: string }) {
                 <Input
                   type="datetime-local"
                   value={newDelegation.expiresAt}
-                  onChange={(e) => setNewDelegation({ ...newDelegation, expiresAt: e.target.value })}
+                  onChange={(e) =>
+                    setNewDelegation({ ...newDelegation, expiresAt: e.target.value })
+                  }
                   className="text-xs"
                 />
               </div>

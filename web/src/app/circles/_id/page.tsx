@@ -517,7 +517,12 @@ export default function CircleDetailPage() {
       {activeTab === 'channels' && (
         <div>
           <div className="flex justify-end mb-4">
-            <Button size="sm" onClick={() => setShowEditChannel({ index: -1, channel: { name: '', type: 'persistent' } })}>
+            <Button
+              size="sm"
+              onClick={() =>
+                setShowEditChannel({ index: -1, channel: { name: '', type: 'persistent' } })
+              }
+            >
               <Plus size={14} /> Add Channel
             </Button>
           </div>
@@ -578,29 +583,31 @@ export default function CircleDetailPage() {
             <div className="space-y-4">
               <div className="flex justify-end">
                 <Button asChild size="sm" variant="outline">
-                  <Link to={`/memory?scope=circle&search=${encodeURIComponent(knowledge.qdrantCollection)}`}>
+                  <Link
+                    to={`/memory?scope=circle&search=${encodeURIComponent(knowledge.qdrantCollection)}`}
+                  >
                     <Database size={14} /> Browse Knowledge
                   </Link>
                 </Button>
               </div>
               <div className="sera-card-static rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-sera-text-muted w-36">Qdrant Collection</span>
-                <span className="text-xs text-sera-text font-mono">
-                  {knowledge.qdrantCollection}
-                </span>
-              </div>
-              {knowledge.postgresSchema && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-sera-text-muted w-36">Postgres Schema</span>
+                  <span className="text-xs text-sera-text-muted w-36">Qdrant Collection</span>
                   <span className="text-xs text-sera-text font-mono">
-                    {knowledge.postgresSchema}
+                    {knowledge.qdrantCollection}
                   </span>
                 </div>
-              )}
+                {knowledge.postgresSchema && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-sera-text-muted w-36">Postgres Schema</span>
+                    <span className="text-xs text-sera-text font-mono">
+                      {knowledge.postgresSchema}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
         </div>
       )}
 
@@ -676,9 +683,7 @@ export default function CircleDetailPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Add Members</DialogTitle>
-            <DialogDescription>
-              Select agents to add to this circle.
-            </DialogDescription>
+            <DialogDescription>Select agents to add to this circle.</DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <MultiSelectPicker
@@ -694,7 +699,11 @@ export default function CircleDetailPage() {
             <Button variant="ghost" size="sm" onClick={() => setShowAddMember(false)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={() => void handleAddMembers()} disabled={selectedAgentsForCircle.length === 0}>
+            <Button
+              size="sm"
+              onClick={() => void handleAddMembers()}
+              disabled={selectedAgentsForCircle.length === 0}
+            >
               Add Selected
             </Button>
           </DialogFooter>
@@ -722,18 +731,26 @@ export default function CircleDetailPage() {
                 <label className="text-xs text-sera-text-muted">Orchestrator Agent</label>
                 <select
                   value={partyMode.orchestrator ?? ''}
-                  onChange={(e) => handleSavePartyMode({ ...partyMode, orchestrator: e.target.value })}
+                  onChange={(e) =>
+                    handleSavePartyMode({ ...partyMode, orchestrator: e.target.value })
+                  }
                   className="sera-input text-xs w-full"
                 >
                   <option value="">None</option>
-                  {agents.map(a => <option key={a} value={a}>{a}</option>)}
+                  {agents.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs text-sera-text-muted">Selection Strategy</label>
                 <select
                   value={partyMode.selectionStrategy ?? 'relevance'}
-                  onChange={(e) => handleSavePartyMode({ ...partyMode, selectionStrategy: e.target.value })}
+                  onChange={(e) =>
+                    handleSavePartyMode({ ...partyMode, selectionStrategy: e.target.value })
+                  }
                   className="sera-input text-xs w-full"
                 >
                   <option value="relevance">Relevance</option>
@@ -743,7 +760,9 @@ export default function CircleDetailPage() {
               </div>
             </div>
             <DialogFooter>
-              <Button size="sm" variant="ghost" onClick={() => setShowEditParty(false)}>Close</Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowEditParty(false)}>
+                Close
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -753,14 +772,21 @@ export default function CircleDetailPage() {
       <Dialog open={!!showEditChannel} onOpenChange={(o) => !o && setShowEditChannel(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{showEditChannel?.index === -1 ? 'Add Channel' : 'Edit Channel'}</DialogTitle>
+            <DialogTitle>
+              {showEditChannel?.index === -1 ? 'Add Channel' : 'Edit Channel'}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-4">
             <div className="space-y-1.5">
               <label className="text-xs text-sera-text-muted">Channel Name</label>
               <Input
                 value={showEditChannel?.channel?.name ?? ''}
-                onChange={(e) => setShowEditChannel(prev => ({ ...prev!, channel: { ...prev!.channel, name: e.target.value } }))}
+                onChange={(e) =>
+                  setShowEditChannel((prev) => ({
+                    ...prev!,
+                    channel: { ...prev!.channel, name: e.target.value },
+                  }))
+                }
                 placeholder="e.g. general"
               />
             </div>
@@ -768,7 +794,12 @@ export default function CircleDetailPage() {
               <label className="text-xs text-sera-text-muted">Description</label>
               <Input
                 value={showEditChannel?.channel?.description ?? ''}
-                onChange={(e) => setShowEditChannel(prev => ({ ...prev!, channel: { ...prev!.channel, description: e.target.value } }))}
+                onChange={(e) =>
+                  setShowEditChannel((prev) => ({
+                    ...prev!,
+                    channel: { ...prev!.channel, description: e.target.value },
+                  }))
+                }
                 placeholder="Channel purpose..."
               />
             </div>
@@ -776,7 +807,12 @@ export default function CircleDetailPage() {
               <label className="text-xs text-sera-text-muted">Type</label>
               <select
                 value={showEditChannel?.channel?.type ?? 'persistent'}
-                onChange={(e) => setShowEditChannel(prev => ({ ...prev!, channel: { ...prev!.channel, type: e.target.value } }))}
+                onChange={(e) =>
+                  setShowEditChannel((prev) => ({
+                    ...prev!,
+                    channel: { ...prev!.channel, type: e.target.value },
+                  }))
+                }
                 className="sera-input text-xs w-full"
               >
                 <option value="persistent">Persistent</option>
@@ -785,8 +821,18 @@ export default function CircleDetailPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setShowEditChannel(null)}>Cancel</Button>
-            <Button size="sm" onClick={() => handleSaveChannel(showEditChannel?.channel, showEditChannel?.index === -1 ? undefined : showEditChannel?.index)}>
+            <Button variant="ghost" size="sm" onClick={() => setShowEditChannel(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() =>
+                handleSaveChannel(
+                  showEditChannel?.channel,
+                  showEditChannel?.index === -1 ? undefined : showEditChannel?.index
+                )
+              }
+            >
               Save Channel
             </Button>
           </DialogFooter>

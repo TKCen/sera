@@ -411,10 +411,7 @@ export default function TemplatesPage() {
         }}
       />
 
-      <TemplateEditDialog
-        template={editTemplate}
-        onClose={() => setEditTemplate(null)}
-      />
+      <TemplateEditDialog template={editTemplate} onClose={() => setEditTemplate(null)} />
     </div>
   );
 }

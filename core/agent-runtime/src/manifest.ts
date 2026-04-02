@@ -43,6 +43,10 @@ export interface RuntimeManifest {
     denied?: string[];
     /** Explicit core tools always sent to LLM. Remaining allowed tools are deferred. */
     coreTools?: string[];
+    hooks?: Array<{
+      command: string;
+      events: Array<'before_tool_call' | 'after_tool_call'>;
+    }>;
   };
   skills?: string[];
   logging?: {

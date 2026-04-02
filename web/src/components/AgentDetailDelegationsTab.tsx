@@ -4,7 +4,6 @@ import { Badge } from './ui/badge';
 import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft } from 'lucide-react';
 import { formatDistanceToNow } from '@/lib/utils';
 
-
 export function DelegationsTab({ id }: { id: string }) {
   const { data: delegations, isLoading } = useAgentDelegations(id);
   const { data: tasks } = useAgentTasks(id, 'all');

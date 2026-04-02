@@ -10,7 +10,6 @@ interface ContextAssemblyEvent {
   durationMs?: number;
 }
 
-
 function stageIcon(stage: string) {
   if (stage.includes('error') || stage.includes('skip')) {
     return <AlertCircle size={14} className="text-sera-warning shrink-0" />;
@@ -79,13 +78,7 @@ function TokenBar({ events }: { events: ContextAssemblyEvent[] }) {
   );
 }
 
-function EventCard({
-  event,
-  defaultOpen,
-}: {
-  event: ContextAssemblyEvent;
-  defaultOpen?: boolean;
-}) {
+function EventCard({ event, defaultOpen }: { event: ContextAssemblyEvent; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen ?? false);
   const detailKeys = Object.keys(event.detail);
 
@@ -121,10 +114,7 @@ export function ContextTab({ id }: { id: string }) {
   const [testMessage, setTestMessage] = useState('Hello');
   const [queryMessage, setQueryMessage] = useState('Hello');
 
-  const { data, isLoading, isError, error, refetch } = useContextDebug(
-    id,
-    queryMessage
-  ) as any;
+  const { data, isLoading, isError, error, refetch } = useContextDebug(id, queryMessage) as any;
 
   const handleRun = () => {
     setQueryMessage(testMessage);

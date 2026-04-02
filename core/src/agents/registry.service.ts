@@ -146,37 +146,47 @@ export class AgentRegistry {
   }
 
   /**
-   * Syncs schedules declared in the agent manifest with the schedules table.
-   * Story 11.2
+   * Syncs schedules declared in the agent template with the schedules table.
+   * Uses upsert semantics: new schedules are created, existing manifest schedules
+   * are updated, and stale manifest schedules (removed from template) are deleted.
+   * Operator-created API schedules are never touched.
    */
   private async syncManifestSchedules(instanceId: string, templateRef: string) {
     const template = await this.getTemplate(templateRef);
-    if (!template || !template.spec?.schedules) return;
-
     const scheduleService = ScheduleService.getInstance();
-    const manifestSchedules = template.spec.schedules;
 
+    const manifestSchedules = (template?.spec?.schedules ?? []) as Array<{
+      name: string;
+      description?: string;
+      type: 'cron' | 'once';
+      expression: string;
+      task: string;
+      status: 'active' | 'paused' | 'completed' | 'error';
+      category?: string;
+    }>;
+
+    // Upsert each manifest schedule
     for (const s of manifestSchedules) {
       await scheduleService
-        .createSchedule({
+        .upsertManifestSchedule({
           agent_instance_id: instanceId,
           agent_name: templateRef,
           name: s.name,
-          description: s.description,
+          ...(s.description !== undefined ? { description: s.description } : {}),
           type: s.type,
           expression: s.expression,
           task: s.task,
           status: s.status,
-          category: s.category,
-          source: 'manifest',
+          ...(s.category !== undefined ? { category: s.category } : {}),
         })
         .catch((err) => {
-          // Ignore duplicates
-          if (!err.message.includes('unique constraint')) {
-            logger.error(`Failed to sync manifest schedule ${s.name}:`, err);
-          }
+          logger.error(`Failed to sync manifest schedule ${s.name}:`, err);
         });
     }
+
+    // Remove schedules no longer in the manifest
+    const manifestNames = manifestSchedules.map((s) => s.name);
+    await scheduleService.removeStaleManifestSchedules(instanceId, manifestNames);
   }
 
   async getInstance(id: string): Promise<AgentInstance | null> {

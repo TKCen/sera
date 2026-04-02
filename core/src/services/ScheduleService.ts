@@ -4,6 +4,7 @@ import { Logger } from '../lib/logger.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { AuditService } from '../audit/AuditService.js';
 import { v4 as uuidv4 } from 'uuid';
+import { validateCronExpression, computeNextRunAt } from '../lib/cron-utils.js';
 
 const logger = new Logger('ScheduleService');
 
@@ -84,9 +85,14 @@ export class ScheduleService {
       try {
         await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
 
-        // Update next_run_at in DB
-        // pg-boss doesn't easily expose next run time, but we can compute it if needed
-        // For now, we rely on pg-boss to fire it.
+        // Compute and store next_run_at
+        const nextRunAt = computeNextRunAt(schedule.expression);
+        if (nextRunAt) {
+          await pool.query('UPDATE schedules SET next_run_at = $1 WHERE id = $2', [
+            nextRunAt,
+            schedule.id,
+          ]);
+        }
       } catch (err) {
         logger.error(`Failed to schedule ${schedule.name} (${schedule.id}):`, err);
         await pool.query(
@@ -129,36 +135,38 @@ export class ScheduleService {
       throw new Error('Missing required fields for schedule');
     }
 
+    // Validate cron expression
+    if (type === 'cron') {
+      const cronError = validateCronExpression(expression);
+      if (cronError) throw new Error(`Invalid cron expression: ${cronError}`);
+    }
+
     // Normalize task to valid JSON for the JSONB column.
     // Plain strings (e.g. from template YAML) are wrapped as { prompt: "..." }.
-    let taskJson: string;
-    if (typeof task === 'string') {
-      try {
-        JSON.parse(task);
-        taskJson = task; // Already valid JSON
-      } catch {
-        taskJson = JSON.stringify({ prompt: task }); // Wrap plain string
-      }
-    } else {
-      taskJson = JSON.stringify(task);
-    }
+    const taskJson = normalizeTaskJson(task);
+
+    // Compute next_run_at for active cron schedules
+    const nextRunAt =
+      type === 'cron' && initialStatus === 'active' ? computeNextRunAt(expression) : null;
 
     const { rows } = await pool.query<Schedule>(
       `INSERT INTO schedules
-       (id, agent_instance_id, agent_name, name, type, expression, task, status, source, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       (id, agent_instance_id, agent_name, name, description, type, expression, task, status, source, category, next_run_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         id,
         agent_instance_id,
         agent_name,
         name,
+        data.description ?? null,
         type,
         expression,
         taskJson,
         initialStatus,
         source,
         category ?? null,
+        nextRunAt,
       ]
     );
 
@@ -185,8 +193,14 @@ export class ScheduleService {
 
   public async updateSchedule(id: string, updates: Partial<Schedule>): Promise<Schedule> {
     const fields = Object.keys(updates).filter((k) =>
-      ['name', 'expression', 'task', 'status', 'category'].includes(k)
+      ['name', 'description', 'expression', 'task', 'status', 'category'].includes(k)
     );
+
+    // Validate cron expression if being updated
+    if (updates.expression) {
+      const cronError = validateCronExpression(updates.expression);
+      if (cronError) throw new Error(`Invalid cron expression: ${cronError}`);
+    }
 
     if (fields.length === 0) {
       const { rows } = await pool.query<Schedule>('SELECT * FROM schedules WHERE id = $1', [id]);
@@ -210,6 +224,25 @@ export class ScheduleService {
       } else {
         await this.boss.unschedule(schedule.id);
       }
+    }
+
+    // Recompute next_run_at when expression or status changes
+    if (
+      (updates.expression || updates.status) &&
+      schedule.type === 'cron' &&
+      schedule.status === 'active'
+    ) {
+      const nextRunAt = computeNextRunAt(schedule.expression);
+      if (nextRunAt) {
+        await pool.query('UPDATE schedules SET next_run_at = $1 WHERE id = $2', [
+          nextRunAt,
+          schedule.id,
+        ]);
+        schedule.next_run_at = nextRunAt;
+      }
+    } else if (schedule.status !== 'active') {
+      await pool.query('UPDATE schedules SET next_run_at = NULL WHERE id = $1', [schedule.id]);
+      delete schedule.next_run_at;
     }
 
     await AuditService.getInstance().record({
@@ -254,6 +287,10 @@ export class ScheduleService {
     const { rows } = await pool.query<Schedule>('SELECT * FROM schedules WHERE id = $1', [id]);
     const schedule = rows[0];
     if (!schedule) return;
+
+    // schedule.task is JSONB — PostgreSQL deserializes it to a JS object on SELECT.
+    // Extract the prompt string for downstream consumers that expect plain text.
+    const taskPrompt = resolveTaskPrompt(schedule.task);
 
     logger.info(`Triggering schedule ${schedule.name} for agent ${schedule.agent_name}`);
 
@@ -304,7 +341,7 @@ export class ScheduleService {
       });
       await pool.query(
         `INSERT INTO task_queue (id, agent_instance_id, task, context, status) VALUES ($1, $2, $3, $4, 'queued')`,
-        [taskId, schedule.agent_instance_id, schedule.task, scheduleContext]
+        [taskId, schedule.agent_instance_id, taskPrompt, scheduleContext]
       );
 
       // If agent not running, start it
@@ -327,7 +364,7 @@ export class ScheduleService {
       // Start with task
       // Note: We need to update Orchestrator.startInstance to accept a task
       await this.orchestrator
-        .startInstance(schedule.agent_instance_id, undefined, schedule.task)
+        .startInstance(schedule.agent_instance_id, undefined, taskPrompt)
         .catch((err: Error) => {
           logger.error(`Failed to spawn ephemeral agent ${schedule.agent_name} for schedule:`, err);
         });
@@ -349,14 +386,150 @@ export class ScheduleService {
     runStatus: string,
     errorMessage?: string
   ): Promise<void> {
+    // Fetch the schedule to recompute next_run_at for cron schedules
+    const { rows } = await pool.query<Schedule>('SELECT * FROM schedules WHERE id = $1', [id]);
+    const schedule = rows[0];
+
+    let nextRunAt: Date | null = null;
+    if (schedule && schedule.type === 'cron' && runStatus === 'success') {
+      nextRunAt = computeNextRunAt(schedule.expression);
+    }
+
     await pool.query(
-      `UPDATE schedules SET 
-        last_run_at = now(), 
+      `UPDATE schedules SET
+        last_run_at = now(),
         last_run_status = $1,
+        next_run_at = $3,
         status = CASE WHEN type = 'once' AND $1 = 'success' THEN 'completed' ELSE status END
        WHERE id = $2`,
-      [errorMessage || runStatus, id]
+      [errorMessage || runStatus, id, nextRunAt]
     );
+  }
+
+  /**
+   * Upserts a manifest-sourced schedule. Updates existing manifest schedules
+   * in-place; never overwrites operator-created API schedules.
+   */
+  public async upsertManifestSchedule(data: {
+    agent_instance_id: string;
+    agent_name: string;
+    name: string;
+    description?: string;
+    type: 'cron' | 'once';
+    expression: string;
+    task: string;
+    status: 'active' | 'paused' | 'completed' | 'error';
+    category?: string;
+  }): Promise<Schedule> {
+    // Validate cron expression
+    if (data.type === 'cron') {
+      const cronError = validateCronExpression(data.expression);
+      if (cronError) throw new Error(`Invalid cron expression: ${cronError}`);
+    }
+
+    const taskJson = normalizeTaskJson(data.task);
+    const nextRunAt =
+      data.type === 'cron' && data.status === 'active' ? computeNextRunAt(data.expression) : null;
+
+    const id = uuidv4();
+    const { rows } = await pool.query<Schedule>(
+      `INSERT INTO schedules
+       (id, agent_instance_id, agent_name, name, description, type, expression, task, status, source, category, next_run_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'manifest', $10, $11)
+       ON CONFLICT (agent_instance_id, name) WHERE agent_instance_id IS NOT NULL
+       DO UPDATE SET
+         expression = EXCLUDED.expression,
+         task = EXCLUDED.task,
+         status = EXCLUDED.status,
+         category = EXCLUDED.category,
+         description = EXCLUDED.description,
+         type = EXCLUDED.type,
+         next_run_at = EXCLUDED.next_run_at,
+         updated_at = now()
+       WHERE schedules.source = 'manifest'
+       RETURNING *`,
+      [
+        id,
+        data.agent_instance_id,
+        data.agent_name,
+        data.name,
+        data.description ?? null,
+        data.type,
+        data.expression,
+        taskJson,
+        data.status,
+        data.category ?? null,
+        nextRunAt,
+      ]
+    );
+
+    const schedule = rows[0];
+    if (!schedule) {
+      // ON CONFLICT matched but WHERE source='manifest' failed — an API schedule exists with same name.
+      // Return the existing schedule unchanged.
+      const { rows: existing } = await pool.query<Schedule>(
+        'SELECT * FROM schedules WHERE agent_instance_id = $1 AND name = $2',
+        [data.agent_instance_id, data.name]
+      );
+      return existing[0]!;
+    }
+
+    // Register/unregister in pg-boss
+    if (this.boss && schedule.type === 'cron') {
+      if (schedule.status === 'active') {
+        await this.boss.schedule(schedule.id, schedule.expression, { scheduleId: schedule.id });
+      } else {
+        await this.boss.unschedule(schedule.id);
+      }
+    }
+
+    return schedule;
+  }
+
+  /**
+   * Removes manifest schedules that are no longer in the template.
+   * Only deletes schedules where source='manifest'.
+   */
+  public async removeStaleManifestSchedules(
+    agentInstanceId: string,
+    currentManifestNames: string[]
+  ): Promise<void> {
+    let query: string;
+    let params: unknown[];
+
+    if (currentManifestNames.length === 0) {
+      // No manifest schedules — remove all manifest-sourced schedules for this instance
+      query = `SELECT id, name FROM schedules WHERE agent_instance_id = $1 AND source = 'manifest'`;
+      params = [agentInstanceId];
+    } else {
+      // Remove manifest schedules whose name is not in the current list
+      const placeholders = currentManifestNames.map((_, i) => `$${i + 2}`).join(', ');
+      query = `SELECT id, name FROM schedules WHERE agent_instance_id = $1 AND source = 'manifest' AND name NOT IN (${placeholders})`;
+      params = [agentInstanceId, ...currentManifestNames];
+    }
+
+    const { rows: stale } = await pool.query<{ id: string; name: string }>(query, params);
+
+    for (const row of stale) {
+      if (this.boss) {
+        await this.boss.unschedule(row.id);
+      }
+      await pool.query('DELETE FROM schedules WHERE id = $1', [row.id]);
+      logger.info(`Removed stale manifest schedule "${row.name}" (${row.id})`);
+
+      await AuditService.getInstance().record({
+        actorType: 'system',
+        actorId: 'system',
+        actingContext: null,
+        eventType: 'schedule.deleted',
+        payload: {
+          scheduleId: row.id,
+          name: row.name,
+          agentId: agentInstanceId,
+          reason: 'removed_from_manifest',
+        },
+      });
+    }
   }
 
   public async stop(): Promise<void> {
@@ -364,6 +537,33 @@ export class ScheduleService {
     this.boss = null;
     this.initialized = false;
   }
+}
+
+/** Normalize a task value to valid JSON for the JSONB column. */
+function normalizeTaskJson(task: unknown): string {
+  if (typeof task === 'string') {
+    try {
+      JSON.parse(task);
+      return task; // Already valid JSON
+    } catch {
+      return JSON.stringify({ prompt: task }); // Wrap plain string
+    }
+  }
+  return JSON.stringify(task);
+}
+
+/**
+ * Resolves a schedule task (JSONB-deserialized) to a plain prompt string.
+ * Handles: string, {prompt: "..."}, or arbitrary object (re-serialized to JSON).
+ */
+function resolveTaskPrompt(task: unknown): string {
+  if (typeof task === 'string') return task;
+  if (task && typeof task === 'object') {
+    const obj = task as Record<string, unknown>;
+    if (typeof obj.prompt === 'string') return obj.prompt;
+    return JSON.stringify(task);
+  }
+  return String(task);
 }
 
 function uuidValidate(uuid: string): boolean {

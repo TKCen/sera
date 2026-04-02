@@ -1742,7 +1742,7 @@ paths:
   /api/chat:
     post:
       tags: [chat]
-      summary: Send chat message (sync response)
+      summary: Send chat message (sync or streaming response)
       operationId: sendChatMessage
       requestBody:
         required: true
@@ -1750,29 +1750,22 @@ paths:
           application/json:
             schema:
               type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                sessionId:
+                  type: string
+                agentName:
+                  type: string
+                agentInstanceId:
+                  type: string
+                stream:
+                  type: boolean
+                  description: If true, returns immediately with {sessionId, messageId} and streams via Centrifugo.
       responses:
         '200':
-          description: Chat response
-          content:
-            application/json:
-              schema:
-                type: object
-        '401':
-          $ref: '#/components/responses/UnauthorizedError'
-  /api/chat/stream:
-    post:
-      tags: [chat]
-      summary: Send chat message (streaming via Centrifugo)
-      operationId: sendChatMessageStream
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        '200':
-          description: Stream initiated
+          description: Chat response (full reply if stream:false, or {sessionId, messageId} if stream:true)
           content:
             application/json:
               schema:

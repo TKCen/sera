@@ -45,13 +45,14 @@ func (c *APIClient) GetInstances() ([]AgentInstance, error) {
 
 // SendChatStream triggers a streaming chat response.
 func (c *APIClient) SendChatStream(req ChatRequest) (*ChatResponse, error) {
+	req.Stream = true
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
 	resp, err := c.client.Post(
-		fmt.Sprintf("%s/api/chat/stream", c.BaseURL),
+		fmt.Sprintf("%s/api/chat", c.BaseURL),
 		"application/json",
 		bytes.NewBuffer(body),
 	)

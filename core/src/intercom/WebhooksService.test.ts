@@ -99,9 +99,15 @@ describe('WebhooksService', () => {
 
       // Wait for async publishAndLog to complete its database updates
       await vi.waitFor(() => {
-        if (vi.mocked(pool.query).mock.calls.some(call =>
-          typeof call[0] === 'string' && call[0].includes('UPDATE webhook_deliveries SET status = $1')
-        )) {
+        if (
+          vi
+            .mocked(pool.query)
+            .mock.calls.some(
+              (call) =>
+                typeof call[0] === 'string' &&
+                call[0].includes('UPDATE webhook_deliveries SET status = $1')
+            )
+        ) {
           return true;
         }
         throw new Error('Not updated yet');

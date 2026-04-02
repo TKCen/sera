@@ -93,7 +93,7 @@ describe('LlmRouter', () => {
     });
 
     it('handles tool calls in request and response', async () => {
-       const config: ProviderConfig = {
+      const config: ProviderConfig = {
         modelName: 'gpt-4o',
         api: 'openai-completions',
         provider: 'openai',
@@ -104,7 +104,7 @@ describe('LlmRouter', () => {
         role: 'assistant',
         content: [
           { type: 'text', text: 'Thinking...' },
-          { type: 'toolCall', id: 'call_1', name: 'get_weather', arguments: { city: 'London' } }
+          { type: 'toolCall', id: 'call_1', name: 'get_weather', arguments: { city: 'London' } },
         ],
         usage: { input: 50, output: 20, totalTokens: 70 },
         stopReason: 'toolUse',
@@ -114,7 +114,7 @@ describe('LlmRouter', () => {
       const request: ChatCompletionRequest = {
         model: 'gpt-4o',
         messages: [{ role: 'user', content: 'Weather in London?' }],
-        tools: [{ type: 'function', function: { name: 'get_weather', parameters: {} } }]
+        tools: [{ type: 'function', function: { name: 'get_weather', parameters: {} } }],
       };
 
       const { response } = await router.chatCompletion(request, 'agent-1');
@@ -122,7 +122,7 @@ describe('LlmRouter', () => {
       expect(response.choices[0].message.tool_calls).toHaveLength(1);
       expect(response.choices[0].message.tool_calls?.[0]).toMatchObject({
         id: 'call_1',
-        function: { name: 'get_weather', arguments: '{"city":"London"}' }
+        function: { name: 'get_weather', arguments: '{"city":"London"}' },
       });
       expect(response.choices[0].finish_reason).toBe('tool_calls');
     });
@@ -132,7 +132,7 @@ describe('LlmRouter', () => {
     it('returns ok for successful ping', async () => {
       registry.resolve.mockReturnValue({
         modelName: 'test-model',
-        api: 'openai-completions'
+        api: 'openai-completions',
       });
       mockStream.result.mockResolvedValue({ usage: {} });
 
@@ -143,7 +143,7 @@ describe('LlmRouter', () => {
     it('returns error for failed ping', async () => {
       registry.resolve.mockReturnValue({
         modelName: 'test-model',
-        api: 'openai-completions'
+        api: 'openai-completions',
       });
       mockStream.result.mockRejectedValue(new Error('Connection failed'));
 
@@ -156,7 +156,12 @@ describe('LlmRouter', () => {
   describe('listModels', () => {
     it('returns models from registry without sensitive info', async () => {
       registry.listWithStatus.mockReturnValue([
-        { modelName: 'm1', api: 'openai-completions', authStatus: 'configured', apiKey: '***' } as any
+        {
+          modelName: 'm1',
+          api: 'openai-completions',
+          authStatus: 'configured',
+          apiKey: '***',
+        } as any,
       ]);
 
       const models = await router.listModels();

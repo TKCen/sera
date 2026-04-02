@@ -35,10 +35,12 @@ describe('config', () => {
 
     it('loads legacy config from llm.json', () => {
       vi.mocked(fs.existsSync).mockImplementation((p: any) => p.includes('llm.json'));
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
-        baseUrl: 'http://custom:1234/v1',
-        model: 'custom-model'
-      }));
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          baseUrl: 'http://custom:1234/v1',
+          model: 'custom-model',
+        })
+      );
 
       const llm = config.llm;
       expect(llm.baseUrl).toBe('http://custom:1234/v1');
@@ -47,16 +49,18 @@ describe('config', () => {
 
     it('derives llm config from active provider in providers.json', () => {
       vi.mocked(fs.existsSync).mockImplementation((p: any) => p.includes('providers.json'));
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
-        activeProvider: 'openai',
-        providers: {
-          openai: {
-            baseUrl: 'https://api.openai.com/v1',
-            apiKey: 'sk-123',
-            model: 'gpt-4o'
-          }
-        }
-      }));
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          activeProvider: 'openai',
+          providers: {
+            openai: {
+              baseUrl: 'https://api.openai.com/v1',
+              apiKey: 'sk-123',
+              model: 'gpt-4o',
+            },
+          },
+        })
+      );
 
       const llm = config.llm;
       expect(llm.baseUrl).toBe('https://api.openai.com/v1');
@@ -75,12 +79,14 @@ describe('config', () => {
 
     it('loads providers config from file', () => {
       vi.mocked(fs.existsSync).mockImplementation((p: any) => p.includes('providers.json'));
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
-        activeProvider: 'ollama',
-        providers: {
-          ollama: { baseUrl: 'http://localhost:11434/v1', model: 'llama3' }
-        }
-      }));
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          activeProvider: 'ollama',
+          providers: {
+            ollama: { baseUrl: 'http://localhost:11434/v1', model: 'llama3' },
+          },
+        })
+      );
 
       const providers = config.providers;
       expect(providers.activeProvider).toBe('ollama');
@@ -91,10 +97,12 @@ describe('config', () => {
   describe('saveProviderConfig', () => {
     it('updates and saves the provider config', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
-        activeProvider: 'lmstudio',
-        providers: {}
-      }));
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          activeProvider: 'lmstudio',
+          providers: {},
+        })
+      );
 
       config.saveProviderConfig('new-p', { baseUrl: 'url', apiKey: 'key', model: 'm' });
 
@@ -108,10 +116,12 @@ describe('config', () => {
   describe('setActiveProvider', () => {
     it('updates and saves the active provider', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
-        activeProvider: 'lmstudio',
-        providers: {}
-      }));
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          activeProvider: 'lmstudio',
+          providers: {},
+        })
+      );
 
       config.setActiveProvider('openai');
 

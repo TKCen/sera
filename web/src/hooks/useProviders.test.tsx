@@ -1,7 +1,12 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useCreateProvider, useUpdateLLMConfig, useDeleteProvider, providersKeys } from './useProviders';
+import {
+  useCreateProvider,
+  useUpdateLLMConfig,
+  useDeleteProvider,
+  providersKeys,
+} from './useProviders';
 import * as providersApi from '../lib/api/providers';
 import React from 'react';
 
@@ -24,16 +29,17 @@ vi.mock('../lib/api/providers', () => ({
   discoverModels: vi.fn(),
 }));
 
-const createTestQueryClient = () => new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: false,
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+      mutations: {
+        retry: false,
+      },
     },
-    mutations: {
-      retry: false,
-    },
-  },
-});
+  });
 
 describe('useProviders hooks', () => {
   let queryClient: QueryClient;

@@ -5,8 +5,15 @@ import { createMemoryRouter } from './memory.js';
 import type { MemoryManager } from '../memory/manager.js';
 
 // Mock dependencies
+const mockVectorService = {
+  delete: vi.fn(),
+  search: vi.fn(),
+  getCollectionInfo: vi.fn(),
+};
+
 const mockMemoryManager = {
   deleteEntry: vi.fn(),
+  vectorService: mockVectorService,
 };
 
 const mockScopedStore = {
@@ -15,11 +22,7 @@ const mockScopedStore = {
   listAgentIds: vi.fn().mockResolvedValue([]),
 };
 
-const mockVectorService = {
-  delete: vi.fn(),
-};
-
-// We need to mock the constructor of ScopedMemoryBlockStore and VectorService inside the router file
+// We need to mock the constructor of ScopedMemoryBlockStore inside the router file
 // or just mock the entire modules if we want to control the instances created inside createMemoryRouter.
 // Since createMemoryRouter instantiates them internally, we'll mock the modules.
 
@@ -27,14 +30,6 @@ vi.mock('../memory/blocks/ScopedMemoryBlockStore.js', () => {
   return {
     ScopedMemoryBlockStore: vi.fn().mockImplementation(function () {
       return mockScopedStore;
-    }),
-  };
-});
-
-vi.mock('../services/vector.service.js', () => {
-  return {
-    VectorService: vi.fn().mockImplementation(function () {
-      return mockVectorService;
     }),
   };
 });

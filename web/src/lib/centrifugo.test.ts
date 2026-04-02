@@ -139,9 +139,7 @@ describe('centrifugo lib', () => {
       const messageId = 'msg-123';
       subscribeToStream(messageId, vi.fn(), vi.fn());
 
-      expect(mockCentrifuge.newSubscription).toHaveBeenCalledWith(
-        `internal:stream:${messageId}`
-      );
+      expect(mockCentrifuge.newSubscription).toHaveBeenCalledWith(`internal:stream:${messageId}`);
     });
 
     it('should call onToken and onDone correctly', () => {

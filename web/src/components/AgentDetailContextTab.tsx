@@ -114,10 +114,7 @@ export function ContextTab({ id }: { id: string }) {
   const [testMessage, setTestMessage] = useState('Hello');
   const [queryMessage, setQueryMessage] = useState('Hello');
 
-  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(
-    id,
-    queryMessage
-  ) as any;
+  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(id, queryMessage);
 
   const handleRun = () => {
     setQueryMessage(testMessage);
@@ -172,7 +169,7 @@ export function ContextTab({ id }: { id: string }) {
           {/* Event pipeline */}
           <div className="space-y-1.5">
             <h3 className="text-sm font-medium text-sera-text mb-2">Assembly Pipeline</h3>
-            {(data as any).events.map((event: any, i: number) => (
+            {data.events.map((event: ContextAssemblyEvent, i: number) => (
               <EventCard
                 key={`${event.stage}-${i}`}
                 event={event}

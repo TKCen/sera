@@ -75,3 +75,12 @@ AggregateError [ECONNREFUSED]:
 12:50:06 PM [vite] (client) hmr update /src/components/AgentDetailContextTab.tsx, /src/index.css
 12:50:06 PM [vite] (client) hmr update /src/components/AgentDetailDelegationsTab.tsx, /src/index.css
 12:50:07 PM [vite] (client) page reload src/components/SidebarManager.tsx
+1:02:01 PM [vite] (client) page reload src/lib/api/types.ts
+1:02:06 PM [vite] (client) hmr update /src/app/agents/page.tsx, /src/index.css, /src/app/schedules/page.tsx, /src/app/dashboard/page.tsx, /src/app/memory/page.tsx, /src/app/chat/page.tsx, /src/app/agents/_id/memory-graph/page.tsx, /src/app/agents/_id/page.tsx, /src/components/AgentForm.tsx, /src/components/CreateChannelDialog.tsx, /src/components/AgentDetailManifestTab.tsx, /src/components/AgentDetailGrantsTab.tsx, /src/components/AgentDetailLogsTab.tsx, /src/components/AgentDetailSchedulesTab.tsx, /src/components/AgentDetailMemoryTab.tsx, /src/components/AgentDetailDelegationsTab.tsx, /src/components/AgentDetailContextTab.tsx
+1:02:28 PM [vite] (client) hmr update /src/components/AgentDetailContextTab.tsx, /src/index.css
+1:02:37 PM [vite] (client) hmr update /src/app/agents/_id/page.tsx, /src/index.css
+1:02:44 PM [vite] (client) hmr update /src/components/AgentDetailDelegationsTab.tsx, /src/index.css
+1:03:02 PM [vite] (client) page reload src/components/SidebarManager.tsx
+1:04:16 PM [vite] (client) hmr update /src/app/agents/page.tsx, /src/index.css, /src/app/schedules/page.tsx, /src/app/dashboard/page.tsx, /src/app/memory/page.tsx, /src/app/chat/page.tsx, /src/app/agents/_id/memory-graph/page.tsx, /src/app/agents/_id/page.tsx, /src/components/AgentForm.tsx, /src/components/CreateChannelDialog.tsx, /src/components/AgentDetailManifestTab.tsx, /src/components/AgentDetailGrantsTab.tsx, /src/components/AgentDetailLogsTab.tsx, /src/components/AgentDetailSchedulesTab.tsx, /src/components/AgentDetailMemoryTab.tsx, /src/components/AgentDetailDelegationsTab.tsx, /src/components/AgentDetailContextTab.tsx
+1:04:22 PM [vite] (client) hmr update /src/app/agents/_id/page.tsx, /src/index.css
+1:04:54 PM [vite] (client) hmr update /src/components/AgentDetailContextTab.tsx, /src/index.css

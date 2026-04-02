@@ -9,8 +9,8 @@ export function DelegationsTab({ id }: { id: string }) {
   const { data: tasks } = useAgentTasks(id, 'all');
 
   // Separate delegated tasks: tasks received from other agents vs tasks this agent sent
-  const receivedTasks = (tasks ?? []).filter((t: any) => {
-    const ctx = t.context as Record<string, unknown> | null;
+  const receivedTasks = (tasks ?? []).filter((t) => {
+    const ctx = (t as any).context as Record<string, unknown> | null;
     return ctx?.delegation;
   });
 
@@ -160,8 +160,8 @@ export function DelegationsTab({ id }: { id: string }) {
             Received Task Delegations
           </h3>
           <div className="space-y-2">
-            {receivedTasks.map((t: any) => {
-              const delegation = (t.context as Record<string, unknown>)?.delegation as
+            {receivedTasks.map((t) => {
+              const delegation = ((t as any).context as Record<string, unknown>)?.delegation as
                 | { fromAgent?: string; delegatedAt?: string }
                 | undefined;
               return (

@@ -339,19 +339,20 @@ function HealthCheckTab({ id }: { id: string }) {
           </div>
 
           <div className="sera-card-static divide-y divide-sera-border/50">
-            {Object.entries(data.checks as Record<string, any>).map(([name, check]) => (
-              <div key={name} className="flex items-center gap-3 px-4 py-3">
-                {check.ok ? (
-                  <Check size={14} className="text-sera-success flex-shrink-0" />
-                ) : (
-                  <AlertCircle size={14} className="text-sera-error flex-shrink-0" />
-                )}
-                <span className="text-sm text-sera-text font-medium flex-1">{name}</span>
-                {check.detail && (
-                  <span className="text-xs text-sera-text-muted">{check.detail}</span>
-                )}
-              </div>
-            ))}
+            {Object.entries(data.checks).map(([name, check]) => {
+              const c = check as { ok: boolean; detail?: string };
+              return (
+                <div key={name} className="flex items-center gap-3 px-4 py-3">
+                  {c.ok ? (
+                    <Check size={14} className="text-sera-success flex-shrink-0" />
+                  ) : (
+                    <AlertCircle size={14} className="text-sera-error flex-shrink-0" />
+                  )}
+                  <span className="text-sm text-sera-text font-medium flex-1">{name}</span>
+                  {c.detail && <span className="text-xs text-sera-text-muted">{c.detail}</span>}
+                </div>
+              );
+            })}
           </div>
         </>
       )}

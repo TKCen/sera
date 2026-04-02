@@ -2,10 +2,11 @@ import { memo } from 'react';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import type { SessionInfo } from '@/hooks/useSessionManagement';
+import type { AgentInstance } from '@/lib/api/types';
 
 interface SidebarManagerProps {
   sessions: SessionInfo[];
-  agents: any[] | undefined;
+  agents: AgentInstance[] | undefined;
   agentsLoading: boolean;
   agentsError: boolean;
   selectedAgent: string;

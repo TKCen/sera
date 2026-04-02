@@ -575,3 +575,24 @@ export interface AgentBudget {
   currentHourTokens: number;
   currentDayTokens: number;
 }
+
+export interface ContextAssemblyEvent {
+  stage: string;
+  detail: Record<string, unknown>;
+  durationMs?: number;
+}
+
+export interface ContextDebugResponse {
+  agentId: string;
+  agentName: string;
+  testMessage: string;
+  systemPromptLength: number;
+  events: ContextAssemblyEvent[];
+}
+
+export interface HealthCheckResult {
+  agentId: string;
+  agentName?: string;
+  overallStatus: string;
+  checks: Record<string, { ok: boolean; detail?: string }>;
+}

@@ -135,8 +135,11 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 
       if (analyzeOnSave && analyst) {
         try {
-          const config = context.router?.getRegistry().resolve(context.manifest?.model.name || 'default');
-          const analystModel = config?.contextCompactionModel || context.manifest?.model.name || 'default';
+          const config = context.router
+            ?.getRegistry()
+            .resolve(context.manifest?.model.name || 'default');
+          const analystModel =
+            config?.contextCompactionModel || context.manifest?.model.name || 'default';
           const analysis = await analyst.analyze(content, analystModel);
 
           if (analysis.facts.length > 0) {

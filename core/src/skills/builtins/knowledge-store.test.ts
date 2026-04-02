@@ -76,11 +76,14 @@ describe('knowledge-store skill', () => {
       ],
     });
 
-    (ScopedMemoryBlockStore.prototype.write as any) = vi.fn().mockImplementation(async (opts) => ({
-      id: `block-${opts.content === 'content 1' ? '1' : '2'}`,
-      ...opts,
-      timestamp: new Date().toISOString(),
-    } as any));
+    (ScopedMemoryBlockStore.prototype.write as any) = vi.fn().mockImplementation(
+      async (opts) =>
+        ({
+          id: `block-${opts.content === 'content 1' ? '1' : '2'}`,
+          ...opts,
+          timestamp: new Date().toISOString(),
+        }) as any
+    );
 
     const result = await skill.handler(params, mockContext as any);
 

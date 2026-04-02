@@ -74,12 +74,14 @@ export class MemoryAnalyst {
         throw new Error('Invalid analysis result structure');
       }
 
-      result.facts = result.facts.map(fact => ({
+      result.facts = result.facts.map((fact) => ({
         title: fact.title || 'Untitled Fact',
         content: fact.content || '',
         importance: Math.max(1, Math.min(5, Math.round(fact.importance || 3))) as Importance,
         tags: Array.isArray(fact.tags) ? fact.tags : [],
-        scope: (['personal', 'circle', 'global'].includes(fact.scope) ? fact.scope : 'personal') as MemoryScope,
+        scope: (['personal', 'circle', 'global'].includes(fact.scope)
+          ? fact.scope
+          : 'personal') as MemoryScope,
       }));
 
       return result;

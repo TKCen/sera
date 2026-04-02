@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
 import { AgentDetailManifestTab as ManifestTab } from '@/components/AgentDetailManifestTab';
 import { AgentDetailGrantsTab as GrantsTab } from '@/components/AgentDetailGrantsTab';
+import { AgentDetailToolsTab as ToolsTab } from '@/components/AgentDetailToolsTab';
 import { AgentDetailLogsTab as LogsTab } from '@/components/AgentDetailLogsTab';
 import { MemoryTab } from '@/components/AgentDetailMemoryTab';
 import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
@@ -39,6 +40,7 @@ import { ContextTab } from '@/components/AgentDetailContextTab';
 type Tab =
   | 'overview'
   | 'grants'
+  | 'tools'
   | 'delegations'
   | 'logs'
   | 'memory'
@@ -189,6 +191,7 @@ export default function AgentDetailPage() {
             [
               'overview',
               'grants',
+              'tools',
               'delegations',
               'logs',
               'memory',
@@ -219,6 +222,7 @@ export default function AgentDetailPage() {
       <div className="flex-1 overflow-y-auto">
         {tab === 'overview' && <ManifestTab id={id} />}
         {tab === 'grants' && <GrantsTab id={id} />}
+        {tab === 'tools' && <ToolsTab id={id} />}
         {tab === 'delegations' && <DelegationsTab id={id} />}
         {tab === 'logs' && <LogsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}

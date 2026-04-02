@@ -8,6 +8,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
+import type { SkillRegistry } from '../skills/SkillRegistry.js';
 import { AgentManifestLoader } from '../agents/manifest/AgentManifestLoader.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
@@ -18,7 +19,11 @@ import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('AgentRouter');
 
-export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: AgentRegistry) {
+export function createAgentRouter(
+  orchestrator: Orchestrator,
+  agentRegistry: AgentRegistry,
+  skillRegistry: SkillRegistry
+) {
   const router = Router();
 
   // ── List all agent instances (primary endpoint for the web UI) ────────────
@@ -155,7 +160,6 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         parentInstanceId,
         ttlMinutes = 30,
         overrides,
-        additionalMounts,
         async: asyncMode,
       } = req.body as {
         templateRef: string;
@@ -163,7 +167,6 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         parentInstanceId?: string;
         ttlMinutes?: number;
         overrides?: Record<string, unknown>;
-        additionalMounts?: Array<{ hostPath: string; containerPath: string; mode?: 'ro' | 'rw' }>;
         async?: boolean;
       };
 
@@ -688,6 +691,78 @@ export function createAgentRouter(orchestrator: Orchestrator, agentRegistry: Age
         overallStatus,
         checks,
       });
+    })
+  );
+
+  // ── Agent Tools (#Issue-Tools) ───────────────────────────────────────────
+  /**
+   * GET /api/agents/:id/tools
+   * Returns tools available to the agent and tools requested but unavailable.
+   */
+  router.get(
+    '/instances/:id/tools',
+    asyncHandler(async (req, res) => {
+      const instanceId = req.params.id as string;
+      const instance = await agentRegistry.getInstance(instanceId);
+      if (!instance) {
+        res.status(404).json({ error: 'Agent instance not found' });
+        return;
+      }
+
+      // Resolve manifest (same logic as context-debug)
+      let manifest: AgentManifest | undefined =
+        orchestrator.getManifestByInstanceId(instanceId) ?? orchestrator.getManifest(instance.name);
+
+      if (!manifest && instance.template_ref) {
+        const template = await agentRegistry.getTemplate(instance.template_ref);
+        if (template) {
+          const overrides = (instance.overrides ?? {}) as Record<string, unknown>;
+          const modelOv = (overrides.model as Record<string, unknown>) ?? {};
+          const identityOv = (overrides.identity as Record<string, unknown>) ?? {};
+          const tplSpec = template.spec ?? {};
+          const tplModel = tplSpec.model ?? {};
+          const tplIdentity = tplSpec.identity ?? {};
+          manifest = {
+            apiVersion: 'sera/v1',
+            kind: 'Agent',
+            metadata: {
+              name: instance.name,
+              displayName: instance.display_name ?? instance.name,
+              icon: tplIdentity.icon ?? '',
+              tier: 2 as const,
+              ...(instance.circle ? { circle: instance.circle } : {}),
+            },
+            identity: {
+              role: (tplIdentity.role as string) ?? (identityOv.role as string) ?? instance.name,
+              description:
+                (tplIdentity.description as string) ?? (identityOv.description as string) ?? '',
+            },
+            model: {
+              provider: (modelOv.provider as string) ?? (tplModel.provider as string) ?? 'default',
+              name: (modelOv.name as string) ?? (tplModel.name as string) ?? 'default',
+              ...(tplModel.temperature !== undefined
+                ? { temperature: tplModel.temperature as number }
+                : {}),
+            },
+            spec: tplSpec,
+          };
+        }
+      }
+
+      if (!manifest) {
+        res.status(404).json({ error: 'Agent manifest not found' });
+        return;
+      }
+
+      const available = skillRegistry.listForAgent(manifest);
+      const validationErrors = skillRegistry.validateManifestSkills(manifest);
+
+      // Filter out dependency cycle errors, keeping only missing skill/tool IDs
+      const unavailable = validationErrors.filter(
+        (err) => !err.includes('Circular skill dependency')
+      );
+
+      res.json({ available, unavailable });
     })
   );
 

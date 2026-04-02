@@ -66,8 +66,8 @@ afterEach(() => {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('ReasoningLoop — pre-compaction memory save hook', () => {
-  it('injects save-reminder when knowledge-store is available and context is near limit', async () => {
+describe('ReasoningLoop — memory flush (formerly pre-compaction memory save hook)', () => {
+  it('injects memory flush turn when knowledge-store is available and context is near limit', async () => {
     // Small context window → isNearLimit triggers immediately
     process.env['CONTEXT_WINDOW'] = '100';
     delete process.env['MAX_CONTEXT_TOKENS'];
@@ -79,10 +79,10 @@ describe('ReasoningLoop — pre-compaction memory save hook', () => {
     };
     mockGetToolDefinitions.mockReturnValue([knowledgeStoreDef]);
 
-    // First LLM call: agent responds to the save reminder
+    // First LLM call: Flush turn
     // Second LLM call: after compaction, agent produces final answer
     mockChat
-      .mockResolvedValueOnce(successResponse('I will save my findings now'))
+      .mockResolvedValueOnce(successResponse('Saving...'))
       .mockResolvedValueOnce(successResponse('Final answer'));
 
     const loop = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
@@ -91,11 +91,11 @@ describe('ReasoningLoop — pre-compaction memory save hook', () => {
 
     expect(result.exitReason).toBe('success');
 
-    // Verify the save-reminder system message was injected
-    const saveThoughts = result.thoughtStream.filter(
-      (t) => t.step === 'reflect' && t.content.includes('save-reminder'),
+    // Verify the memory flush reflect thought was emitted
+    const flushThoughts = result.thoughtStream.filter(
+      (t) => t.step === 'reflect' && t.content.includes('triggering memory flush'),
     );
-    expect(saveThoughts.length).toBeGreaterThan(0);
+    expect(flushThoughts.length).toBeGreaterThan(0);
   });
 
   it('skips hook when knowledge-store is NOT in tool definitions', async () => {
@@ -120,7 +120,7 @@ describe('ReasoningLoop — pre-compaction memory save hook', () => {
     expect(saveThoughts).toHaveLength(0);
   });
 
-  it('hook fires at most once per run', async () => {
+  it('flush fires at most once per run', async () => {
     process.env['CONTEXT_WINDOW'] = '100';
     delete process.env['MAX_CONTEXT_TOKENS'];
 
@@ -140,14 +140,14 @@ describe('ReasoningLoop — pre-compaction memory save hook', () => {
     const longTask = 'Big task: ' + 'word '.repeat(20);
     const result = await loop.run({ taskId: 'task-1', task: longTask });
 
-    // Save-reminder should appear exactly once
-    const saveThoughts = result.thoughtStream.filter(
-      (t) => t.step === 'reflect' && t.content.includes('save-reminder'),
+    // Flush should appear exactly once
+    const flushThoughts = result.thoughtStream.filter(
+      (t) => t.step === 'reflect' && t.content.includes('triggering memory flush'),
     );
-    expect(saveThoughts).toHaveLength(1);
+    expect(flushThoughts).toHaveLength(1);
   });
 
-  it('emits reflect thought for the hook', async () => {
+  it('emits internal reflect thought for the flush', async () => {
     process.env['CONTEXT_WINDOW'] = '100';
     delete process.env['MAX_CONTEXT_TOKENS'];
 
@@ -162,13 +162,14 @@ describe('ReasoningLoop — pre-compaction memory save hook', () => {
       .mockResolvedValueOnce(successResponse('Done'));
 
     const loop = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
-    const result = await loop.run({ taskId: 'task-1', task: 'Big task: ' + 'word '.repeat(20) });
+    await loop.run({ taskId: 'task-1', task: 'Big task: ' + 'word '.repeat(20) });
 
-    // publishThought should have been called with the save-reminder reflect
+    // publishThought should have been called with the triggering memory flush reflect
     const publishCalls = mockPublishThought.mock.calls;
-    const hookCall = publishCalls.find(
-      (c: unknown[]) => c[0] === 'reflect' && (c[1] as string).includes('save-reminder'),
+    const flushCall = publishCalls.find(
+      (c: unknown[]) => c[0] === 'reflect' && (c[1] as string).includes('triggering memory flush'),
     );
-    expect(hookCall).toBeDefined();
+    expect(flushCall).toBeDefined();
+    expect(flushCall[3]?.internal).toBe(true);
   });
 });

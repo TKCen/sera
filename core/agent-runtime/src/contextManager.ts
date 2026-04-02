@@ -63,6 +63,7 @@ export class ContextManager {
   private strategy: CompactionStrategy;
   private toolOutputMaxTokens: number;
   private preserveRecentMessages: number;
+  private memoryFlushEnabled: boolean;
 
   constructor(modelName: string, contextWindowOverride?: number) {
     this.modelName = modelName;
@@ -73,10 +74,13 @@ export class ContextManager {
       (envContextWindow ? parseInt(envContextWindow, 10) : undefined) ??
       this.resolveContextWindow(modelName);
 
+    const thresholdPctEnv = process.env['CONTEXT_COMPACTION_THRESHOLD'];
+    const highWaterPct = thresholdPctEnv ? parseFloat(thresholdPctEnv) : DEFAULT_HIGH_WATER_PCT;
+
     const maxTokensEnv = process.env['MAX_CONTEXT_TOKENS'];
     this.highWaterMark = maxTokensEnv
       ? parseInt(maxTokensEnv, 10)
-      : Math.floor(this.contextWindow * DEFAULT_HIGH_WATER_PCT);
+      : Math.floor(this.contextWindow * highWaterPct);
 
     const strategyEnv = process.env['CONTEXT_COMPACTION_STRATEGY'] as CompactionStrategy | undefined;
     this.strategy = strategyEnv === 'summarise' ? 'summarise' : 'sliding-window';
@@ -90,6 +94,9 @@ export class ContextManager {
     this.preserveRecentMessages = preserveEnv
       ? parseInt(preserveEnv, 10)
       : DEFAULT_PRESERVE_RECENT_MESSAGES;
+
+    const flushEnabledEnv = process.env['MEMORY_FLUSH_BEFORE_COMPACTION'];
+    this.memoryFlushEnabled = flushEnabledEnv !== 'false';
 
     // Use cl100k_base encoding as a universal approximation for any model.
     // 5-10% error is acceptable per the spec.
@@ -158,6 +165,10 @@ export class ContextManager {
    */
   isNearLimit(messages: ChatMessage[]): boolean {
     return this.countMessageTokens(messages) >= this.highWaterMark;
+  }
+
+  isMemoryFlushEnabled(): boolean {
+    return this.memoryFlushEnabled;
   }
 
   /**

@@ -15,6 +15,7 @@ export class ScriptedLLMClient implements ILLMClient {
     _tools?: ToolDefinition[],
     _temperature?: number,
     _thinkingLevel?: ThinkingLevel,
+    _timeoutMs?: number,
   ): Promise<LLMResponse> {
     const response = this.responses[this.callCount];
     if (!response) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Zap,
   CheckCircle,
@@ -20,9 +20,9 @@ import {
   useDynamicProviderStatuses,
   useAddDynamicProvider,
   useRemoveDynamicProvider,
+  useTestDynamicConnection,
 } from '@/hooks/useProviders';
 import { useCircuitBreakers, useResetCircuitBreaker } from '@/hooks/useHealth';
-import * as providersApi from '@/lib/api/providers';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { CloudProviderSection } from '@/components/CloudProviderSection';
@@ -66,6 +66,7 @@ function SettingsPageContent() {
   const { data: statusesData } = useDynamicProviderStatuses();
   const addDynamic = useAddDynamicProvider();
   const removeDynamic = useRemoveDynamicProvider();
+  const testDynamicConnection = useTestDynamicConnection();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future LLM config UI
   const { data: _llmConfig } = useLLMConfig();
   const { data: circuitBreakers, refetch: refetchCB } = useCircuitBreakers();
@@ -81,7 +82,7 @@ function SettingsPageContent() {
     void refetchDynamic();
   };
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
     { id: 'providers', label: 'Providers', icon: <Layers size={14} /> },
     { id: 'models', label: 'Models', icon: <Settings2 size={14} /> },
     { id: 'circuit-breakers', label: 'Circuit Breakers', icon: <Activity size={14} /> },
@@ -260,15 +261,14 @@ function SettingsPageContent() {
                       <Button
                         variant="outline"
                         className="flex-1 text-xs h-10"
-                        disabled={isTesting || !newDynamic.baseUrl}
+                        disabled={testDynamicConnection.isPending || !newDynamic.baseUrl}
                         onClick={async () => {
-                          setIsTesting(true);
                           setTestResult(null);
                           try {
-                            const res = await providersApi.testDynamicConnection(
-                              newDynamic.baseUrl,
-                              newDynamic.apiKey
-                            );
+                            const res = await testDynamicConnection.mutateAsync({
+                              baseUrl: newDynamic.baseUrl,
+                              apiKey: newDynamic.apiKey,
+                            });
                             setTestResult(res);
                           } catch (err: unknown) {
                             setTestResult({
@@ -276,12 +276,10 @@ function SettingsPageContent() {
                               models: [],
                               error: err instanceof Error ? err.message : String(err),
                             });
-                          } finally {
-                            setIsTesting(false);
                           }
                         }}
                       >
-                        {isTesting ? (
+                        {testDynamicConnection.isPending ? (
                           <RefreshCw className="animate-spin" size={14} />
                         ) : (
                           <Zap size={14} />

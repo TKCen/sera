@@ -13,8 +13,9 @@ import {
   useUpdateEmbeddingConfig,
   useTestEmbeddingConfig,
   useEmbeddingModels,
+  EMBEDDING_PROVIDERS,
+  type EmbeddingProvider,
 } from '@/hooks/useEmbedding';
-import { EMBEDDING_PROVIDERS, type EmbeddingProvider } from '@/lib/api/embedding';
 import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';

@@ -8,7 +8,7 @@ import {
   Trash2,
   ExternalLink,
 } from 'lucide-react';
-import * as providersApi from '@/lib/api/providers';
+import type { DynamicProviderConfig, DynamicProviderStatus } from '@/hooks/useProviders';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
@@ -17,8 +17,8 @@ export function DynamicProviderCard({
   status,
   onRemove,
 }: {
-  provider: providersApi.DynamicProviderConfig;
-  status?: providersApi.DynamicProviderStatus;
+  provider: DynamicProviderConfig;
+  status?: DynamicProviderStatus;
   onRemove: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);

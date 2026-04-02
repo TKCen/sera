@@ -1,11 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
-import { useAgents } from '@/hooks/useAgents';
+import { useAgents, useRequest } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
-import { useSessions, useDeleteSession, useRenameSession } from '@/hooks/useSessions';
-import { sendChatStream } from '@/lib/api/chat';
-import { request } from '@/lib/api/client';
+import { useSessions, useDeleteSession, useRenameSession, useChatStream } from '@/hooks/useSessions';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -128,7 +126,8 @@ function ChatPageContent() {
   const { data: sessions = [], refetch: fetchSessions } = useSessions(
     selectedAgent,
     selectedAgentId
-  );
+  ) as any;
+  const { sendChatStream } = useChatStream();
 
   // ── Token stream — direct subscription ──────────────────────────────────────
   // Bypasses the useChannel→useState→useEffect chain which loses tokens when

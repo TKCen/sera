@@ -21,7 +21,10 @@ import {
   useProviderTemplates,
   useAddProvider,
   useDiscoverModels,
+  useTestProvider,
 } from '@/hooks/useProviders';
+import { useRequest } from '@/hooks/useAgents';
+import { ActivateDialog } from '@/components/ActivateDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -36,9 +39,6 @@ import {
 } from '@/components/ui/dialog';
 import type { ProviderConfig } from '@/lib/api/types';
 import type { ProviderTemplate } from '@/lib/api/providers';
-import { request } from '@/lib/api/client';
-import { ActivateDialog } from '@/components/ActivateDialog';
-
 function providerIcon(provider?: string) {
   if (!provider) return <Server size={14} className="text-sera-text-muted" />;
   if (provider === 'ollama' || provider === 'lmstudio')
@@ -60,13 +60,12 @@ function groupByProvider(providers: ProviderConfig[]) {
 
 function TestConnectionButton({ modelName }: { modelName: string }) {
   const [status, setStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const testProvider = useTestProvider();
 
   const handleTest = async () => {
     setStatus('testing');
     try {
-      await request<{ ok: boolean }>(`/providers/${encodeURIComponent(modelName)}/test`, {
-        method: 'POST',
-      });
+      await testProvider.mutateAsync(modelName);
       setStatus('ok');
     } catch {
       setStatus('fail');

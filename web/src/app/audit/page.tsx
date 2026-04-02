@@ -9,9 +9,8 @@ import {
   XCircle,
   Filter,
 } from 'lucide-react';
-import { useAuditEvents, useVerifyAuditChain } from '@/hooks/useAudit';
+import { useAuditEvents, useVerifyAuditChain, useAuditExport } from '@/hooks/useAudit';
 import { useAuth } from '@/hooks/useAuth';
-import { getAuditExportUrl } from '@/lib/api/audit';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -105,6 +104,7 @@ export default function AuditPage() {
   const [exportFormat, setExportFormat] = useState<'jsonl' | 'csv'>('jsonl');
 
   const verify = useVerifyAuditChain();
+  const { getAuditExportUrl } = useAuditExport();
 
   const { data, isLoading } = useAuditEvents({
     actorId: actorId || undefined,

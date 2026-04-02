@@ -1,6 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as providersApi from '../lib/api/providers';
-import type { NewProviderPayload, AddProviderPayload } from '@/lib/api/providers';
+import type {
+  NewProviderPayload,
+  AddProviderPayload,
+  DynamicProviderConfig,
+  DynamicProviderStatus,
+} from '@/lib/api/providers';
+
+export type { DynamicProviderConfig, DynamicProviderStatus };
 
 export const providersKeys = {
   all: ['providers'] as const,
@@ -165,5 +172,18 @@ export function useAddProvider() {
 export function useDiscoverModels() {
   return useMutation({
     mutationFn: (modelName: string) => providersApi.discoverModels(modelName),
+  });
+}
+
+export function useTestDynamicConnection() {
+  return useMutation({
+    mutationFn: ({ baseUrl, apiKey }: { baseUrl: string; apiKey?: string }) =>
+      providersApi.testDynamicConnection(baseUrl, apiKey),
+  });
+}
+
+export function useTestProvider() {
+  return useMutation({
+    mutationFn: (modelName: string) => providersApi.testProvider(modelName),
   });
 }

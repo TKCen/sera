@@ -1,34 +1,30 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import * as notificationsApi from '@/lib/api/notifications';
 import {
-  listChannels,
-  createChannel,
-  deleteChannel,
-  testChannel,
-  listRoutingRules,
-  createRoutingRule,
-  updateRoutingRule,
-  deleteRoutingRule,
-  updateChannel,
   type CreateChannelPayload,
   type CreateRoutingRulePayload,
+  type NotificationChannel,
+  type RoutingRule,
 } from '@/lib/api/notifications';
+
+export type { NotificationChannel, RoutingRule, CreateChannelPayload, CreateRoutingRulePayload };
 
 const CHANNELS_KEY = ['notification-channels'] as const;
 const RULES_KEY = ['notification-routing-rules'] as const;
 
 export function useChannels() {
-  return useQuery({ queryKey: CHANNELS_KEY, queryFn: listChannels });
+  return useQuery({ queryKey: CHANNELS_KEY, queryFn: notificationsApi.listChannels });
 }
 
 export function useRoutingRules() {
-  return useQuery({ queryKey: RULES_KEY, queryFn: listRoutingRules });
+  return useQuery({ queryKey: RULES_KEY, queryFn: notificationsApi.listRoutingRules });
 }
 
 export function useCreateChannel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: CreateChannelPayload) => createChannel(data),
+    mutationFn: (data: CreateChannelPayload) => notificationsApi.createChannel(data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: CHANNELS_KEY });
       toast.success('Channel created');
@@ -41,7 +37,7 @@ export function useUpdateChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<CreateChannelPayload> }) =>
-      updateChannel(id, data),
+      notificationsApi.updateChannel(id, data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: CHANNELS_KEY });
       toast.success('Channel updated');
@@ -53,7 +49,7 @@ export function useUpdateChannel() {
 export function useDeleteChannel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => deleteChannel(id),
+    mutationFn: (id: string) => notificationsApi.deleteChannel(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: CHANNELS_KEY });
       void qc.invalidateQueries({ queryKey: RULES_KEY });
@@ -65,7 +61,7 @@ export function useDeleteChannel() {
 
 export function useTestChannel() {
   return useMutation({
-    mutationFn: (id: string) => testChannel(id),
+    mutationFn: (id: string) => notificationsApi.testChannel(id),
     onSuccess: (result) => {
       if (result.ok) {
         toast.success('Test notification delivered');
@@ -80,7 +76,7 @@ export function useTestChannel() {
 export function useCreateRoutingRule() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: CreateRoutingRulePayload) => createRoutingRule(data),
+    mutationFn: (data: CreateRoutingRulePayload) => notificationsApi.createRoutingRule(data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: RULES_KEY });
       toast.success('Routing rule created');
@@ -93,7 +89,7 @@ export function useUpdateRoutingRule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<CreateRoutingRulePayload> }) =>
-      updateRoutingRule(id, data),
+      notificationsApi.updateRoutingRule(id, data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: RULES_KEY });
       toast.success('Routing rule updated');
@@ -105,7 +101,7 @@ export function useUpdateRoutingRule() {
 export function useDeleteRoutingRule() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => deleteRoutingRule(id),
+    mutationFn: (id: string) => notificationsApi.deleteRoutingRule(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: RULES_KEY });
       toast.success('Routing rule deleted');

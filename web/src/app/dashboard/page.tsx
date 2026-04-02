@@ -15,30 +15,14 @@ import { EmptyState } from '@/components/EmptyState';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { useQuery } from '@tanstack/react-query';
 import { useAgents } from '@/hooks/useAgents';
 import { useHealthDetail } from '@/hooks/useHealth';
 import { useCircles } from '@/hooks/useCircles';
 import { useSchedules } from '@/hooks/useSchedules';
-import { request } from '@/lib/api/client';
+import { useSessions } from '@/hooks/useSessions';
 import { cn, formatDistanceToNow } from '@/lib/utils';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { queryClient } from '@/lib/query-client';
-
-interface SessionSummary {
-  id: string;
-  agentName: string;
-  title: string;
-  messageCount: number;
-  updatedAt: string;
-}
-
-function useSessions() {
-  return useQuery({
-    queryKey: ['sessions-recent'],
-    queryFn: () => request<SessionSummary[]>('/sessions'),
-  });
-}
 
 function StatCard({
   label,
@@ -119,7 +103,7 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
 }
 
 function RecentSessions() {
-  const { data: sessions, isLoading, error } = useSessions();
+  const { data: sessions, isLoading, error } = useSessions() as { data: any[]; isLoading: boolean; error: any };
   const recent = (sessions ?? [])
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 5);

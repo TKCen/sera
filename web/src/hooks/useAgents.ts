@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '@/lib/api/agents';
+import { request } from '@/lib/api/client';
 import type {
   CreateAgentInstanceParams,
   CreateGrantParams,
@@ -38,6 +39,10 @@ export function useAgent(id: string) {
     queryFn: () => agentsApi.getAgentInstance(id),
     enabled: id.length > 0,
   });
+}
+
+export function useRequest() {
+  return { request };
 }
 
 export function useAgentTools(id: string) {

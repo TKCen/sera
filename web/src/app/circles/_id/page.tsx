@@ -37,7 +37,7 @@ type Tab = 'overview' | 'channels' | 'knowledge' | 'context';
 export default function CircleDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data: circle, isLoading } = useCircle(id);
+  const { data: circle, isLoading, refetch } = useCircle(id);
   const updateCircle = useUpdateCircle();
   const deleteCircle = useDeleteCircle();
   const updateCircleContext = useUpdateCircleContext();
@@ -110,7 +110,7 @@ export default function CircleDetailPage() {
             displayName: circle.displayName ?? circle.metadata?.displayName ?? id,
             description: descDraft.trim() || undefined,
           },
-        },
+        } as any,
       });
       toast.success('Description updated');
       setEditingDesc(false);

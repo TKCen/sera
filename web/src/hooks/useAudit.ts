@@ -20,3 +20,7 @@ export function useVerifyAuditChain() {
     mutationFn: () => auditApi.verifyAuditChain(),
   });
 }
+
+export function useAuditExport() {
+  return { getAuditExportUrl: auditApi.getAuditExportUrl };
+}

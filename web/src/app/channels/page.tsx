@@ -13,7 +13,7 @@ import {
 import type {
   NotificationChannel,
   RoutingRule,
-} from '@/lib/api/notifications';
+} from '@/hooks/useNotifications';
 import { useAuth } from '@/hooks/useAuth';
 import { ForbiddenView } from '@/views/ForbiddenView';
 import { ChannelDialog } from '@/components/ChannelDialog';

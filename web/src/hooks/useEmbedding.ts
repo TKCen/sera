@@ -1,6 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as embeddingApi from '@/lib/api/embedding';
-import type { EmbeddingConfig } from '@/lib/api/embedding';
+import { EMBEDDING_PROVIDERS, type EmbeddingProvider, type EmbeddingConfig } from '@/lib/api/embedding';
+
+export { EMBEDDING_PROVIDERS };
+export type { EmbeddingProvider, EmbeddingConfig };
 
 export const embeddingKeys = {
   config: ['embedding', 'config'] as const,

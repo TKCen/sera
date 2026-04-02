@@ -1,7 +1,7 @@
 import './index.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -24,8 +24,6 @@ import SchedulesPage from '@/app/schedules/page';
 import SettingsPage from '@/app/settings/page';
 import ToolsPage from '@/app/tools/page';
 import MemoryExplorerPage from '@/app/memory/page';
-import MemoryDetailPage from '@/pages/MemoryDetailPage';
-import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
 import ChannelsPage from '@/app/channels/page';
 import TemplatesPage from '@/app/templates/page';
 import ProvidersPage from '@/app/providers/page';
@@ -33,6 +31,16 @@ import LoginPage from '@/app/login/page';
 import AuthCallbackPage from '@/app/auth/callback/page';
 import { ForbiddenView } from '@/views/ForbiddenView';
 import { NotFoundView } from '@/views/NotFoundView';
+
+function AgentMemoryGraphRedirect() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/memory?agent=${id}`} replace />;
+}
+
+function MemoryDetailRedirect() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/memory?agent=${id}`} replace />;
+}
 
 const el = document.getElementById('root');
 if (!el) throw new Error('Root element not found');
@@ -61,7 +69,7 @@ createRoot(el).render(
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="templates" element={<TemplatesPage />} />
                 <Route path="agents/:id" element={<AgentDetailPage />} />
-                <Route path="agents/:id/memory-graph" element={<AgentMemoryGraphPage />} />
+                <Route path="agents/:id/memory-graph" element={<AgentMemoryGraphRedirect />} />
                 <Route path="circles" element={<CirclesPage />} />
                 <Route path="circles/:id" element={<CircleDetailPage />} />
                 <Route path="insights" element={<InsightsPage />} />
@@ -73,7 +81,7 @@ createRoot(el).render(
                 <Route path="channels" element={<ChannelsPage />} />
                 <Route path="providers" element={<ProvidersPage />} />
                 <Route path="memory" element={<MemoryExplorerPage />} />
-                <Route path="memory/:id" element={<MemoryDetailPage />} />
+                <Route path="memory/:id" element={<MemoryDetailRedirect />} />
                 <Route path="403" element={<ForbiddenView />} />
               </Route>
               <Route path="*" element={<NotFoundView />} />

@@ -11,6 +11,7 @@ import {
   updateAgentBlock,
   deleteAgentBlock,
   triggerCompaction,
+  getAgentStats,
 } from '@/lib/api/memory';
 
 export const memoryExplorerKeys = {
@@ -74,6 +75,14 @@ export function useAgentBlockList(agentId: string) {
   return useQuery({
     queryKey: memoryExplorerKeys.agentBlocks(agentId),
     queryFn: () => getAgentBlocks(agentId),
+    enabled: agentId.length > 0,
+  });
+}
+
+export function useAgentStats(agentId: string) {
+  return useQuery({
+    queryKey: ['memory-explorer', 'agent-stats', agentId],
+    queryFn: () => getAgentStats(agentId),
     enabled: agentId.length > 0,
   });
 }

@@ -74,7 +74,7 @@ export default function MemoryGraph({
       if (onNodeDoubleClick) {
         onNodeDoubleClick(node);
       } else {
-        void navigate(`/memory/${node.id}`);
+        void navigate(`/memory?block=${node.id}`);
       }
     },
     [onNodeDoubleClick, navigate]

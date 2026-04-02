@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   Brain,
   Plus,
@@ -14,13 +15,17 @@ import { MemoryContent } from '@/components/memory/MemoryContent';
 import { MemoryGraphMinimap } from '@/components/memory/MemoryGraphMinimap';
 import { MemoryStatsHeader } from '@/components/memory/MemoryStatsHeader';
 import { Button } from '@/components/ui/button';
-import { usePromoteBlock } from '@/hooks/useMemoryExplorer';
+import { usePromoteBlock, useBlockDetail } from '@/hooks/useMemoryExplorer';
 import { useAgents } from '@/hooks/useAgents';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import type { MemoryScope } from '@/components/memory/MemorySidebar';
 import type { ScopedBlock } from '@/lib/api/memory';
 
 function MemoryExplorerContent() {
+  const [searchParams] = useSearchParams();
+  const agentIdParam = searchParams.get('agent');
+  const blockIdParam = searchParams.get('block');
+
   const [scope, setScope] = useState<MemoryScope>({ kind: 'global' });
   const [selectedBlock, setSelectedBlock] = useState<ScopedBlock | null>(null);
   const [tagFilter, setTagFilter] = useState('');
@@ -28,6 +33,21 @@ function MemoryExplorerContent() {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const { data: agents } = useAgents();
+
+  const { data: blockDetail } = useBlockDetail(agentIdParam ?? '', blockIdParam ?? '');
+
+  // Handle URL parameters for initial state
+  useEffect(() => {
+    if (agentIdParam) {
+      setScope({ kind: 'agent', agentId: agentIdParam });
+    }
+  }, [agentIdParam]);
+
+  useEffect(() => {
+    if (blockDetail) {
+      setSelectedBlock(blockDetail);
+    }
+  }, [blockDetail]);
 
   // Build agent UUID → display name lookup
   const agentNameMap = new Map<string, string>();

@@ -6,6 +6,7 @@ import { MemoryCompactionService } from '../memory/MemoryCompactionService.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { extractLinks } from '../memory/blocks/scoped-types.js';
 import type { KnowledgeBlock, KnowledgeBlockType } from '../memory/blocks/scoped-types.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
 import { Logger } from '../lib/logger.js';
 
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';
@@ -46,6 +47,29 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
         req.body as import('../memory/blocks/types.js').CreateEntryOptions
       );
       res.status(201).json(entry);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Core Memory blocks (Persona, Human, etc.) ──────────────────────────────
+
+  router.get('/:agentId/core', async (req, res) => {
+    try {
+      const { agentId } = req.params;
+      const blocks = await CoreMemoryService.getInstance().getBlocks(agentId);
+      res.json(blocks);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/:agentId/core/:name', async (req, res) => {
+    try {
+      const { agentId, name } = req.params;
+      const { content } = req.body as { content: string };
+      const block = await CoreMemoryService.getInstance().updateBlock(agentId, name, content);
+      res.json(block);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

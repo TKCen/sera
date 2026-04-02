@@ -14,6 +14,7 @@ import type { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { Logger } from '../lib/logger.js';
 import { AuditService } from '../audit/AuditService.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
 
 /** Maximum tool-call loop iterations before forcing a text response. */
 const MAX_TOOL_ITERATIONS = 10;
@@ -166,6 +167,22 @@ export abstract class BaseAgent {
     // Resolve circle project context (if agent belongs to a circle)
     const circleContext = this.circleContextResolver?.();
 
+    // Fetch core memory blocks if agent instance ID is available
+    let coreMemoryBlocks: Array<{ name: string; content: string; charLimit: number; isReadonly: boolean }> = [];
+    if (this.agentInstanceId) {
+      try {
+        const blocks = await CoreMemoryService.getInstance().getBlocks(this.agentInstanceId);
+        coreMemoryBlocks = blocks.map(b => ({
+          name: b.name,
+          content: b.content,
+          charLimit: b.charLimit,
+          isReadonly: b.isReadonly
+        }));
+      } catch (err) {
+        this.logger.error(`Failed to fetch core memory blocks for agent ${this.agentInstanceId}:`, err);
+      }
+    }
+
     // Add degradation notice if memory is unavailable
     const degradationNotice = memoryDegraded
       ? '\n\n**Note:** Knowledge search is currently unavailable (embedding service down). ' +
@@ -179,7 +196,8 @@ export abstract class BaseAgent {
           IdentityService.generateStreamingSystemPrompt(
             this.manifest,
             circleContext,
-            dynamicContext
+            dynamicContext,
+            coreMemoryBlocks
           ) + degradationNotice,
       },
       ...cleanHistory,

@@ -36,11 +36,13 @@ export class IdentityService {
   /**
    * Generate a complete system prompt from an agent manifest.
    * Optionally injects circle project context and dynamic memory context into the prompt.
+   * Also injects core memory blocks (persona, human, etc.) as XML if provided.
    */
   static generateSystemPrompt(
     manifest: AgentManifest,
     circleContext?: string,
-    dynamicMemoryContext?: string
+    dynamicMemoryContext?: string,
+    coreMemoryBlocks?: Array<{ name: string; content: string; charLimit: number; isReadonly: boolean }>
   ): string {
     const sections: string[] = [];
     const identity = IdentityService.resolveIdentity(manifest);
@@ -146,6 +148,28 @@ export class IdentityService {
         `}`
     );
 
+    // ── Core Memory Blocks (Persona, Human, Context) ──────────────────────────
+    if (coreMemoryBlocks && coreMemoryBlocks.length > 0) {
+      const blocksXml = coreMemoryBlocks
+        .map((b) => {
+          const currentChars = b.content.length;
+          const limitChars = b.charLimit;
+          const readonlyAttr = b.isReadonly ? ' readonly="true"' : '';
+          return (
+            `<${b.name} chars_current="${currentChars}" chars_limit="${limitChars}"${readonlyAttr}>\n` +
+            `${b.content.trim() || '(empty)'}\n` +
+            `</${b.name}>`
+          );
+        })
+        .join('\n');
+
+      sections.push(
+        `## Core Memory Blocks\n` +
+          `The following are persistent, editable memory blocks. You can self-edit them using \`core_memory_append\` and \`core_memory_replace\` tools.\n\n` +
+          `<memory_blocks>\n${blocksXml}\n</memory_blocks>`
+      );
+    }
+
     // ── Memory Context & Citations ────────────────────────────────────────────
     if (dynamicMemoryContext) {
       sections.push(dynamicMemoryContext);
@@ -182,12 +206,14 @@ export class IdentityService {
   static generateStreamingSystemPrompt(
     manifest: AgentManifest,
     circleContext?: string,
-    dynamicMemoryContext?: string
+    dynamicMemoryContext?: string,
+    coreMemoryBlocks?: Array<{ name: string; content: string; charLimit: number; isReadonly: boolean }>
   ): string {
     const base = IdentityService.generateSystemPrompt(
       manifest,
       circleContext,
-      dynamicMemoryContext
+      dynamicMemoryContext,
+      coreMemoryBlocks
     );
 
     // Replace the JSON response format with a natural-language instruction.

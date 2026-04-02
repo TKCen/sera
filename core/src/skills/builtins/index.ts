@@ -10,6 +10,7 @@ import { createKnowledgeQuerySkill } from './knowledge-query.js';
 import { shellExecSkill } from './shell-exec.js';
 import { scheduleTaskSkill } from './schedule-task.js';
 import { delegateTaskSkill } from './delegate-task.js';
+import { coreMemoryAppendSkill, coreMemoryReplaceSkill } from './core-memory.js';
 
 /**
  * Register all built-in skills with a SkillRegistry instance.
@@ -28,6 +29,8 @@ export function registerBuiltinSkills(
   registry.register(shellExecSkill);
   registry.register(scheduleTaskSkill);
   registry.register(delegateTaskSkill);
+  registry.register(coreMemoryAppendSkill);
+  registry.register(coreMemoryReplaceSkill);
   registry.register(createKnowledgeStoreSkill());
   registry.register(createKnowledgeQuerySkill());
 }

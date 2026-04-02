@@ -10,12 +10,105 @@ import {
   Link2,
   ChevronDown,
   ChevronRight,
+  Edit2,
+  Save,
+  X,
+  Lock,
 } from 'lucide-react';
-import { getAgentBlocks, getAgentStats, getAgentLinks } from '@/lib/api/memory';
-import type { ScopedBlock } from '@/lib/api/memory';
+import {
+  getAgentBlocks,
+  getAgentStats,
+  getAgentLinks,
+  getCoreMemory,
+  updateCoreMemory,
+} from '@/lib/api/memory';
+import type { ScopedBlock, CoreMemoryBlock } from '@/lib/api/memory';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { MEMORY_TYPE_TAILWIND } from '@/components/memory/constants';
+
+function CoreMemoryCard({ block, agentId }: { block: CoreMemoryBlock; agentId: string }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [content, setContent] = useState(block.content);
+  const queryClient = useQueryClient();
+
+  const updateMutation = useMutation({
+    mutationFn: (newContent: string) => updateCoreMemory(agentId, block.name, newContent),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['core-memory', agentId] });
+      setIsEditing(false);
+      toast.success(`Core memory "${block.name}" updated`);
+    },
+    onError: (err: Error) => {
+      toast.error(`Failed to update core memory: ${err.message}`);
+    },
+  });
+
+  const handleSave = () => {
+    updateMutation.mutate(content);
+  };
+
+  const handleCancel = () => {
+    setContent(block.content);
+    setIsEditing(false);
+  };
+
+  return (
+    <div className="sera-card-static p-4 border-l-4 border-l-sera-accent">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-sera-text uppercase tracking-tight">
+            {block.name}
+          </span>
+          {block.isReadonly && <Lock size={12} className="text-sera-text-dim" />}
+          <span className="text-[10px] text-sera-text-dim font-mono">
+            {content.length} / {block.charLimit} chars
+          </span>
+        </div>
+        {!block.isReadonly && !isEditing && (
+          <button
+            onClick={() => setIsEditing(true)}
+            className="p-1 hover:bg-sera-surface rounded text-sera-text-muted hover:text-sera-accent transition-colors"
+          >
+            <Edit2 size={14} />
+          </button>
+        )}
+        {isEditing && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSave}
+              disabled={updateMutation.isPending}
+              className="p-1 hover:bg-sera-surface rounded text-green-500 hover:text-green-400 transition-colors"
+            >
+              <Save size={14} />
+            </button>
+            <button
+              onClick={handleCancel}
+              className="p-1 hover:bg-sera-surface rounded text-red-500 hover:text-red-400 transition-colors"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isEditing ? (
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          className="w-full h-32 sera-input text-xs font-mono p-3 leading-relaxed"
+          placeholder={`Enter ${block.name} content…`}
+        />
+      ) : (
+        <pre className="text-xs text-sera-text leading-relaxed whitespace-pre-wrap font-mono bg-sera-bg/50 rounded-lg p-3">
+          {block.content || <span className="italic text-sera-text-dim">(empty)</span>}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 function BlockCard({ block, agentId }: { block: ScopedBlock; agentId: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -114,6 +207,12 @@ export default function MemoryDetailPage() {
   const { data: stats } = useQuery({
     queryKey: ['memory-stats', agentId],
     queryFn: () => getAgentStats(agentId),
+    enabled: !!agentId,
+  });
+
+  const { data: coreMemory, isLoading: isCoreLoading } = useQuery({
+    queryKey: ['core-memory', agentId],
+    queryFn: () => getCoreMemory(agentId),
     enabled: !!agentId,
   });
 
@@ -216,7 +315,29 @@ export default function MemoryDetailPage() {
         )}
       </div>
 
+      {/* Core Memory Blocks */}
+      <div className="space-y-3">
+        <h2 className="text-xs font-bold text-sera-text-dim uppercase tracking-widest flex items-center gap-2">
+          <Brain size={14} /> Core Memory Blocks
+        </h2>
+        {isCoreLoading ? (
+          <Spinner size="sm" />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {(coreMemory ?? []).map((block) => (
+              <CoreMemoryCard key={block.id} block={block} agentId={agentId} />
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Blocks */}
+      <div className="space-y-3 pt-4 border-t border-sera-border">
+        <h2 className="text-xs font-bold text-sera-text-dim uppercase tracking-widest flex items-center gap-2">
+          <FileText size={14} /> Archival Memory Blocks
+        </h2>
+      </div>
+
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Spinner />

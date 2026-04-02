@@ -30,6 +30,17 @@ export interface ScopedBlock {
   content: string;
 }
 
+export interface CoreMemoryBlock {
+  id: string;
+  agentId: string;
+  name: string;
+  content: string;
+  charLimit: number;
+  isReadonly: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ScopedStats {
   blockCount: number;
   vectorCount: number;
@@ -85,6 +96,21 @@ export function triggerCompaction(agentId: string): Promise<{ compacted: number 
 
 export function getAgentStats(agentId: string): Promise<ScopedStats> {
   return request<ScopedStats>(`/memory/${encodeURIComponent(agentId)}/stats`);
+}
+
+export function getCoreMemory(agentId: string): Promise<CoreMemoryBlock[]> {
+  return request<CoreMemoryBlock[]>(`/memory/${encodeURIComponent(agentId)}/core`);
+}
+
+export function updateCoreMemory(
+  agentId: string,
+  name: string,
+  content: string
+): Promise<CoreMemoryBlock> {
+  return request<CoreMemoryBlock>(
+    `/memory/${encodeURIComponent(agentId)}/core/${encodeURIComponent(name)}`,
+    { method: 'PUT', body: JSON.stringify({ content }) }
+  );
 }
 
 export function getAgentGraph(agentId: string): Promise<GraphData> {

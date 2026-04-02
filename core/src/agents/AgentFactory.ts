@@ -8,6 +8,7 @@ import type { BaseAgent } from './BaseAgent.js';
 import type { AgentInstance } from './types.js';
 import { query } from '../lib/database.js';
 import { MemoryManager } from '../memory/manager.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
 import type { LlmRouter } from '../llm/LlmRouter.js';
 
 export class AgentFactory {
@@ -29,7 +30,21 @@ export class AgentFactory {
     if (manifest.metadata.circle) memOpts.circleId = manifest.metadata.circle;
     if (agentInstanceId) memOpts.agentId = agentInstanceId;
     const memoryManager = new MemoryManager(memOpts);
-    return new WorkerAgent(manifest, provider, intercom, agentInstanceId, memoryManager);
+    const agent = new WorkerAgent(manifest, provider, intercom, agentInstanceId, memoryManager);
+
+    // Initialize core memory defaults
+    if (agentInstanceId) {
+      CoreMemoryService.getInstance()
+        .initializeDefaults(agentInstanceId)
+        .catch((err) => {
+          console.error(
+            `Failed to initialize core memory defaults for agent ${agentInstanceId}:`,
+            err
+          );
+        });
+    }
+
+    return agent;
   }
 
   /**

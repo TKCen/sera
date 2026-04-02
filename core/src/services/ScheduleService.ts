@@ -81,26 +81,28 @@ export class ScheduleService {
     );
 
     // 2. Register/Update in pg-boss
-    for (const schedule of dbSchedules) {
-      try {
-        await this.ensureQueueAndSchedule(schedule.id, schedule.expression);
+    await Promise.all(
+      dbSchedules.map(async (schedule) => {
+        try {
+          await this.ensureQueueAndSchedule(schedule.id, schedule.expression);
 
-        // Compute and store next_run_at
-        const nextRunAt = computeNextRunAt(schedule.expression);
-        if (nextRunAt) {
-          await pool.query('UPDATE schedules SET next_run_at = $1 WHERE id = $2', [
-            nextRunAt,
-            schedule.id,
-          ]);
+          // Compute and store next_run_at
+          const nextRunAt = computeNextRunAt(schedule.expression);
+          if (nextRunAt) {
+            await pool.query('UPDATE schedules SET next_run_at = $1 WHERE id = $2', [
+              nextRunAt,
+              schedule.id,
+            ]);
+          }
+        } catch (err) {
+          logger.error(`Failed to schedule ${schedule.name} (${schedule.id}):`, err);
+          await pool.query(
+            "UPDATE schedules SET status = 'error', last_run_status = $1 WHERE id = $2",
+            [(err as Error).message, schedule.id]
+          );
         }
-      } catch (err) {
-        logger.error(`Failed to schedule ${schedule.name} (${schedule.id}):`, err);
-        await pool.query(
-          "UPDATE schedules SET status = 'error', last_run_status = $1 WHERE id = $2",
-          [(err as Error).message, schedule.id]
-        );
-      }
-    }
+      })
+    );
 
     // 3. Remove stale schedules from pg-boss
     // We can query pgboss.schedule table directly
@@ -108,13 +110,15 @@ export class ScheduleService {
       "SELECT name FROM pgboss.schedule WHERE name NOT IN (SELECT id::text FROM schedules WHERE type = 'cron' AND status = 'active')"
     );
 
-    for (const row of pgbossSchedules) {
-      // Ignore internal jobs like 'memory-compaction'
-      if (uuidValidate(row.name)) {
-        logger.info(`Removing stale pg-boss schedule: ${row.name}`);
-        await this.boss.unschedule(row.name);
-      }
-    }
+    await Promise.all(
+      pgbossSchedules.map(async (row) => {
+        // Ignore internal jobs like 'memory-compaction'
+        if (uuidValidate(row.name)) {
+          logger.info(`Removing stale pg-boss schedule: ${row.name}`);
+          await this.boss!.unschedule(row.name);
+        }
+      })
+    );
   }
 
   public async createSchedule(data: Partial<Schedule>): Promise<Schedule> {
@@ -521,26 +525,28 @@ export class ScheduleService {
 
     const { rows: stale } = await pool.query<{ id: string; name: string }>(query, params);
 
-    for (const row of stale) {
-      if (this.boss) {
-        await this.boss.unschedule(row.id);
-      }
-      await pool.query('DELETE FROM schedules WHERE id = $1', [row.id]);
-      logger.info(`Removed stale manifest schedule "${row.name}" (${row.id})`);
+    await Promise.all(
+      stale.map(async (row) => {
+        if (this.boss) {
+          await this.boss.unschedule(row.id);
+        }
+        await pool.query('DELETE FROM schedules WHERE id = $1', [row.id]);
+        logger.info(`Removed stale manifest schedule "${row.name}" (${row.id})`);
 
-      await AuditService.getInstance().record({
-        actorType: 'system',
-        actorId: 'system',
-        actingContext: null,
-        eventType: 'schedule.deleted',
-        payload: {
-          scheduleId: row.id,
-          name: row.name,
-          agentId: agentInstanceId,
-          reason: 'removed_from_manifest',
-        },
-      });
-    }
+        await AuditService.getInstance().record({
+          actorType: 'system',
+          actorId: 'system',
+          actingContext: null,
+          eventType: 'schedule.deleted',
+          payload: {
+            scheduleId: row.id,
+            name: row.name,
+            agentId: agentInstanceId,
+            reason: 'removed_from_manifest',
+          },
+        });
+      })
+    );
   }
 
   /**

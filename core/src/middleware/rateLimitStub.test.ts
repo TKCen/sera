@@ -29,7 +29,15 @@ describe('rateLimitStub', () => {
   it('sets rate limit headers with default limits and calls next', () => {
     const now = 1600000000000;
     vi.setSystemTime(new Date(now));
-    req.agentIdentity = { agentId: 'agent-1', agentName: 'A1', circleId: 'C1', capabilities: [], scope: 'agent', iat: 0, exp: 0 };
+    req.agentIdentity = {
+      agentId: 'agent-1',
+      agentName: 'A1',
+      circleId: 'C1',
+      capabilities: [],
+      scope: 'agent',
+      iat: 0,
+      exp: 0,
+    };
 
     rateLimitStub(req as Request, res as Response, next);
 
@@ -42,7 +50,15 @@ describe('rateLimitStub', () => {
     const now = 1600000000000;
     vi.setSystemTime(new Date(now));
     const agentId = 'agent-limit-test';
-    req.agentIdentity = { agentId, agentName: 'A', circleId: 'C', capabilities: [], scope: 'agent', iat: 0, exp: 0 };
+    req.agentIdentity = {
+      agentId,
+      agentName: 'A',
+      circleId: 'C',
+      capabilities: [],
+      scope: 'agent',
+      iat: 0,
+      exp: 0,
+    };
 
     // Consume all 60 tokens
     for (let i = 0; i < 60; i++) {
@@ -54,7 +70,9 @@ describe('rateLimitStub', () => {
     // 61st request should fail
     rateLimitStub(req as Request, res as Response, next);
     expect(res.status).toHaveBeenCalledWith(429);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'rate_limit_exceeded' }));
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'rate_limit_exceeded' })
+    );
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -62,7 +80,15 @@ describe('rateLimitStub', () => {
     const now = 1600000000000;
     vi.setSystemTime(new Date(now));
     const agentId = 'agent-refill-test';
-    req.agentIdentity = { agentId, agentName: 'A', circleId: 'C', capabilities: [], scope: 'agent', iat: 0, exp: 0 };
+    req.agentIdentity = {
+      agentId,
+      agentName: 'A',
+      circleId: 'C',
+      capabilities: [],
+      scope: 'agent',
+      iat: 0,
+      exp: 0,
+    };
 
     // Consume all 60 tokens
     for (let i = 0; i < 60; i++) {

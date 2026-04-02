@@ -104,7 +104,9 @@ describe('ContextAssembler', () => {
 
     expect(result[0]!.content).toContain('Prompt with Skills');
     expect(result[0]!.content).toContain('<injected_memory>');
-    expect(result[0]!.content).toContain('<memory source="personal:agent-1" id="1" relevance="0.900">Memory Content</memory>');
+    expect(result[0]!.content).toContain(
+      '<memory source="personal:agent-1" id="1" relevance="0.900">Memory Content</memory>'
+    );
   });
 
   it('should handle missing system message', async () => {

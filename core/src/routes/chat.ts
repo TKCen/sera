@@ -145,8 +145,13 @@ async function persistAndFinalize(
     sessionId,
     role: 'assistant',
     content: reply,
-    ...((thoughts?.length || citations?.length)
-      ? { metadata: { ...(thoughts?.length ? { thoughts } : {}), ...(citations?.length ? { citations } : {}) } }
+    ...(thoughts?.length || citations?.length
+      ? {
+          metadata: {
+            ...(thoughts?.length ? { thoughts } : {}),
+            ...(citations?.length ? { citations } : {}),
+          },
+        }
       : {}),
   });
 

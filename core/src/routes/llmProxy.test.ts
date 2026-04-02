@@ -169,7 +169,12 @@ async function createTestSetup(
         stage: 'memory.retrieved',
         detail: {
           blocks: [
-            { id: 'block-1', source: 'personal:agent-1', relevance: 0.95, content: 'Some knowledge content' },
+            {
+              id: 'block-1',
+              source: 'personal:agent-1',
+              relevance: 0.95,
+              content: 'Some knowledge content',
+            },
           ],
         },
       });
@@ -535,9 +540,7 @@ describe('LLM Proxy Router', () => {
 
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          citations: [
-            { blockId: 'block-1', scope: 'personal:agent-1', relevance: 0.95 },
-          ],
+          citations: [{ blockId: 'block-1', scope: 'personal:agent-1', relevance: 0.95 }],
         })
       );
     });
@@ -547,8 +550,10 @@ describe('LLM Proxy Router', () => {
 
       // Mock LLM response with content overlap but no explicit citation
       // The overlap heuristic checks if a 50-char fragment of the block content is in the response.
-      const overlapContent = 'This knowledge content should trigger overlap detection because it is long.';
-      const responseContent = 'The agent says: This knowledge content should trigger overlap detection because it is long.';
+      const overlapContent =
+        'This knowledge content should trigger overlap detection because it is long.';
+      const responseContent =
+        'The agent says: This knowledge content should trigger overlap detection because it is long.';
 
       vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
         async (agentId, messages, onEvent) => {
@@ -560,7 +565,7 @@ describe('LLM Proxy Router', () => {
                   id: 'block-overlap',
                   source: 'personal:agent-1',
                   relevance: 0.88,
-                  content: overlapContent
+                  content: overlapContent,
                 },
               ],
             },
@@ -615,9 +620,11 @@ describe('LLM Proxy Router', () => {
       const jsonResponse = vi.mocked(res.json).mock.calls[0][0];
       expect(jsonResponse).toBeDefined();
       expect(jsonResponse.citations).toBeDefined();
-      expect(jsonResponse.citations).toContainEqual(
-        { blockId: 'block-overlap', scope: 'personal:agent-1', relevance: 0.88 }
-      );
+      expect(jsonResponse.citations).toContainEqual({
+        blockId: 'block-overlap',
+        scope: 'personal:agent-1',
+        relevance: 0.88,
+      });
     });
 
     it('should return 503 when circuit breaker is open', async () => {

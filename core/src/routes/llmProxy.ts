@@ -325,7 +325,11 @@ export function createLlmProxyRouter(
             const blockId = match[1].trim();
             const block = injectedBlocks.find((b) => b.id === blockId);
             if (block && !seenIds.has(block.id)) {
-              citations.push({ blockId: block.id, scope: block.source, relevance: block.relevance });
+              citations.push({
+                blockId: block.id,
+                scope: block.source,
+                relevance: block.relevance,
+              });
               seenIds.add(block.id);
             }
           }
@@ -341,8 +345,12 @@ export function createLlmProxyRouter(
                 // If a significant fragment of the memory block is in the response, count it
                 const fragmentToCheck = fragment.substring(0, Math.min(fragment.length, 50));
                 if (content.toLowerCase().includes(fragmentToCheck)) {
-                   citations.push({ blockId: block.id, scope: block.source, relevance: block.relevance });
-                   seenIds.add(block.id);
+                  citations.push({
+                    blockId: block.id,
+                    scope: block.source,
+                    relevance: block.relevance,
+                  });
+                  seenIds.add(block.id);
                 }
               }
             }

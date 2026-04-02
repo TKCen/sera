@@ -108,10 +108,10 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
         return { success: false, error: 'Rate limit exceeded: max 10 writes per minute' };
       }
 
-      let tags = Array.isArray(params['tags']) ? (params['tags'] as string[]) : [];
-      let title = typeof params['title'] === 'string' ? params['title'] : undefined;
+      const tags = Array.isArray(params['tags']) ? (params['tags'] as string[]) : [];
+      const title = typeof params['title'] === 'string' ? params['title'] : undefined;
       const importanceRaw = typeof params['importance'] === 'number' ? params['importance'] : 3;
-      let importance = Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance;
+      const importance = Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance;
 
       // ── LLM-guided Categorization ───────────────────────────────────────
       const memoryConfig = context.manifest.spec?.memory ?? context.manifest.memory;

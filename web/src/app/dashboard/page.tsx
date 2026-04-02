@@ -22,6 +22,8 @@ import { useCircles } from '@/hooks/useCircles';
 import { useSchedules } from '@/hooks/useSchedules';
 import { request } from '@/lib/api/client';
 import { cn, formatDistanceToNow } from '@/lib/utils';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { queryClient } from '@/lib/query-client';
 
 interface SessionSummary {
   id: string;
@@ -213,162 +215,186 @@ export default function DashboardPage() {
   const totalAgents = agents?.length ?? 0;
   const activeSchedules = schedules?.filter((s) => s.status === 'active').length ?? 0;
 
+  const handleReset = () => {
+    void queryClient.invalidateQueries();
+  };
+
   return (
     <main className="p-8 max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="sera-page-title">Dashboard</h1>
-          <p className="text-sm text-sera-text-muted mt-1">SERA platform overview</p>
-        </div>
-        {!healthLoading && health && !healthError && <HealthBanner status={health.status} />}
-        {healthLoading && <Skeleton className="h-8 w-48" />}
-        {healthError && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-sera-error/20 bg-sera-error/10 text-sera-error text-xs">
-            <XCircle size={14} aria-hidden="true" /> Health status unavailable
+      <ErrorBoundary
+        fallbackMessage="The dashboard header encountered an error."
+        onReset={handleReset}
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="sera-page-title">Dashboard</h1>
+            <p className="text-sm text-sera-text-muted mt-1">SERA platform overview</p>
           </div>
-        )}
-      </div>
+          {!healthLoading && health && !healthError && <HealthBanner status={health.status} />}
+          {healthLoading && <Skeleton className="h-8 w-48" />}
+          {healthError && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-sera-error/20 bg-sera-error/10 text-sera-error text-xs">
+              <XCircle size={14} aria-hidden="true" /> Health status unavailable
+            </div>
+          )}
+        </div>
+      </ErrorBoundary>
 
       {/* Stats grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {agentsError ? (
-          <>
+      <ErrorBoundary
+        fallbackMessage="The dashboard statistics encountered an error."
+        onReset={handleReset}
+      >
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {agentsError ? (
+            <>
+              <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
+                Failed to load agents
+              </div>
+              <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
+                Failed to load status
+              </div>
+            </>
+          ) : (
+            <>
+              <StatCard
+                label="Total agents"
+                value={totalAgents}
+                icon={Bot}
+                to="/agents"
+                isLoading={agentsLoading}
+              />
+              <StatCard
+                label="Running"
+                value={running}
+                icon={Activity}
+                to="/agents"
+                accent="text-sera-success"
+                isLoading={agentsLoading}
+              />
+            </>
+          )}
+          {circlesError ? (
             <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
-              Failed to load agents
+              Failed to load circles
             </div>
+          ) : (
+            <StatCard
+              label="Circles"
+              value={circles?.length ?? 0}
+              icon={Circle}
+              to="/circles"
+              isLoading={circlesLoading}
+            />
+          )}
+          {schedulesError ? (
             <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
-              Failed to load status
+              Failed to load schedules
             </div>
-          </>
-        ) : (
-          <>
+          ) : (
             <StatCard
-              label="Total agents"
-              value={totalAgents}
-              icon={Bot}
-              to="/agents"
-              isLoading={agentsLoading}
+              label="Active schedules"
+              value={activeSchedules}
+              icon={Clock}
+              to="/schedules"
+              isLoading={schedulesLoading}
             />
-            <StatCard
-              label="Running"
-              value={running}
-              icon={Activity}
-              to="/agents"
-              accent="text-sera-success"
-              isLoading={agentsLoading}
-            />
-          </>
-        )}
-        {circlesError ? (
-          <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
-            Failed to load circles
-          </div>
-        ) : (
-          <StatCard
-            label="Circles"
-            value={circles?.length ?? 0}
-            icon={Circle}
-            to="/circles"
-            isLoading={circlesLoading}
-          />
-        )}
-        {schedulesError ? (
-          <div className="sera-card-static p-4 border-sera-error/30 text-sera-error text-xs">
-            Failed to load schedules
-          </div>
-        ) : (
-          <StatCard
-            label="Active schedules"
-            value={activeSchedules}
-            icon={Clock}
-            to="/schedules"
-            isLoading={schedulesLoading}
-          />
-        )}
-      </div>
+          )}
+        </div>
+      </ErrorBoundary>
 
       {/* Agent status breakdown */}
-      <section className="sera-card-static p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
-            Agents
-          </h2>
-          <Link
-            to="/agents"
-            className="text-[11px] text-sera-accent hover:underline"
-            aria-label="View all agents"
-          >
-            View all
-          </Link>
-        </div>
-
-        {agentsLoading ? (
-          <div className="space-y-1.5" aria-busy="true">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
+      <ErrorBoundary
+        fallbackMessage="The agent status breakdown encountered an error."
+        onReset={handleReset}
+      >
+        <section className="sera-card-static p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
+              Agents
+            </h2>
+            <Link
+              to="/agents"
+              className="text-[11px] text-sera-accent hover:underline"
+              aria-label="View all agents"
+            >
+              View all
+            </Link>
           </div>
-        ) : agentsError ? (
-          <Alert variant="error" title="Failed to load agents">
-            {agentsError.message}
-          </Alert>
-        ) : agents && agents.length > 0 ? (
-          <ul className="space-y-1.5">
-            {agents.map((agent) => (
-              <li key={agent.id}>
-                <Link
-                  to={`/agents/${agent.id}`}
-                  className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sera-surface-hover transition-colors"
-                >
-                  <span
-                    className={cn(
-                      'w-2 h-2 rounded-full flex-shrink-0',
-                      agent.status === 'running'
-                        ? 'bg-sera-success'
-                        : agent.status === 'error'
-                          ? 'bg-sera-error'
-                          : 'bg-sera-text-dim'
-                    )}
-                    aria-hidden="true"
-                  />
-                  <span className="text-sm text-sera-text flex-1">
-                    {agent.display_name ?? agent.name}
-                  </span>
-                  <span className="text-[11px] text-sera-text-muted">{agent.template_ref}</span>
-                  <Badge
-                    variant={
-                      agent.status === 'running'
-                        ? 'success'
-                        : agent.status === 'error'
-                          ? 'error'
-                          : 'default'
-                    }
+
+          {agentsLoading ? (
+            <div className="space-y-1.5" aria-busy="true">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : agentsError ? (
+            <Alert variant="error" title="Failed to load agents">
+              {agentsError.message}
+            </Alert>
+          ) : agents && agents.length > 0 ? (
+            <ul className="space-y-1.5">
+              {agents.map((agent) => (
+                <li key={agent.id}>
+                  <Link
+                    to={`/agents/${agent.id}`}
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sera-surface-hover transition-colors"
                   >
-                    {agent.status}
-                  </Badge>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState
-            icon={<Bot size={24} />}
-            title="No agents found"
-            description="Create your first agent to start using SERA."
-            action={
-              <Button size="sm" asChild>
-                <Link to="/agents/new">
-                  <Plus size={14} className="mr-2" />
-                  Create Agent
-                </Link>
-              </Button>
-            }
-          />
-        )}
-      </section>
+                    <span
+                      className={cn(
+                        'w-2 h-2 rounded-full flex-shrink-0',
+                        agent.status === 'running'
+                          ? 'bg-sera-success'
+                          : agent.status === 'error'
+                            ? 'bg-sera-error'
+                            : 'bg-sera-text-dim'
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="text-sm text-sera-text flex-1">
+                      {agent.display_name ?? agent.name}
+                    </span>
+                    <span className="text-[11px] text-sera-text-muted">{agent.template_ref}</span>
+                    <Badge
+                      variant={
+                        agent.status === 'running'
+                          ? 'success'
+                          : agent.status === 'error'
+                            ? 'error'
+                            : 'default'
+                      }
+                    >
+                      {agent.status}
+                    </Badge>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState
+              icon={<Bot size={24} />}
+              title="No agents found"
+              description="Create your first agent to start using SERA."
+              action={
+                <Button size="sm" asChild>
+                  <Link to="/agents/new">
+                    <Plus size={14} className="mr-2" />
+                    Create Agent
+                  </Link>
+                </Button>
+              }
+            />
+          )}
+        </section>
+      </ErrorBoundary>
 
       {/* Recent sessions */}
-      <RecentSessions />
+      <ErrorBoundary
+        fallbackMessage="Recent sessions could not be displayed."
+        onReset={handleReset}
+      >
+        <RecentSessions />
+      </ErrorBoundary>
 
       {/* Quick actions */}
       <nav className="flex items-center gap-3 flex-wrap" aria-label="Quick actions">

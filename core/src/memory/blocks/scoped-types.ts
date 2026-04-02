@@ -50,6 +50,12 @@ export interface KnowledgeLink {
   relationship: LinkRelationship;
 }
 
+export interface SourceRef {
+  scheduleId?: string;
+  taskId?: string;
+  blockId?: string;
+}
+
 export interface KnowledgeBlock {
   id: string;
   agentId: string;
@@ -60,6 +66,7 @@ export interface KnowledgeBlock {
   title: string;
   content: string;
   compacted?: boolean;
+  sourceRef?: SourceRef;
 }
 
 // ── Link extraction from markdown content ────────────────────────────────
@@ -97,6 +104,7 @@ export interface KnowledgeBlockCreateOpts {
   tags?: string[];
   importance?: Importance;
   title?: string;
+  sourceRef?: SourceRef;
 }
 
 export interface KnowledgeBlockListFilters {

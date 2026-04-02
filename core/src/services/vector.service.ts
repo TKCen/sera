@@ -28,6 +28,8 @@ export interface VectorPayload {
   title?: string;
   content?: string;
   namespace: MemoryNamespace;
+  importance?: number;
+  source_ref?: { scheduleId?: string; taskId?: string; blockId?: string };
   [key: string]: unknown;
 }
 

@@ -14,10 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { updateProviderConfig } from '@/lib/api/providers';
-import {
-  useProviders,
-  useLLMConfig,
-} from '@/hooks/useProviders';
+import { useProviders, useLLMConfig } from '@/hooks/useProviders';
 import { useCircuitBreakers, useResetCircuitBreaker } from '@/hooks/useHealth';
 import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';

@@ -21,7 +21,8 @@ export function MemoryTab({ id }: { id: string }) {
         <div>
           <h3 className="text-lg font-semibold text-sera-text">Agent Memory</h3>
           <p className="text-sm text-sera-text-muted mt-1 max-w-sm">
-            This agent manages its own long-term memory, including facts, preferences, and past experiences.
+            This agent manages its own long-term memory, including facts, preferences, and past
+            experiences.
           </p>
         </div>
 

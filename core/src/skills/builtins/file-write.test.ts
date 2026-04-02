@@ -28,7 +28,8 @@ describe('fileWriteSkill security', () => {
     },
     agentInstanceId: 'test-instance',
     containerId: 'test-container',
-    sandboxManager: mockSandboxManager as unknown as import('../../sandbox/SandboxManager.js').SandboxManager,
+    sandboxManager:
+      mockSandboxManager as unknown as import('../../sandbox/SandboxManager.js').SandboxManager,
     sessionId: 'test-session',
   };
 

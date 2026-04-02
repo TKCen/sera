@@ -73,62 +73,52 @@ export class SkillRegistry {
   }
 
   /**
+   * Check if a tool/skill is allowed for an agent based on its manifest.
+   *
+   * Logic:
+   * 1. If tool matches any pattern in `tools.denied`, it's REJECTED.
+   * 2. If tool is explicitly listed in `skills[]`, it's ALLOWED.
+   * 3. If `tools.allowed` is defined:
+   *    - If tool matches any pattern in `tools.allowed`, it's ALLOWED.
+   *    - Otherwise, it's REJECTED.
+   * 4. If NEITHER `skills[]` nor `tools.allowed` are defined, it's ALLOWED (open access).
+   * 5. Otherwise, if not in `skills[]`, it's REJECTED.
+   */
+  isToolAllowedForAgent(manifest: AgentManifest, toolId: string): boolean {
+    const denied = manifest.tools?.denied || [];
+    if (denied.some((p) => SkillRegistry.matches(p, toolId))) {
+      return false;
+    }
+
+    // Explicitly allowed via skills array
+    if (manifest.skills) {
+      const isExplicitSkill = manifest.skills.some((s) => {
+        const id = typeof s === 'string' ? s : s.name;
+        return id === toolId;
+      });
+      if (isExplicitSkill) return true;
+    }
+
+    // Allowed via tools.allowed patterns
+    if (manifest.tools?.allowed) {
+      return manifest.tools.allowed.some((p) => SkillRegistry.matches(p, toolId));
+    }
+
+    // Open access if neither is specified
+    if (!manifest.skills && !manifest.tools?.allowed) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * List skills available to an agent based on its manifest.
-   * Returns all skills referenced in `manifest.skills` plus any
-   * tools in `manifest.tools.allowed` that are registered as skills.
+   * Returns all registered skills that pass the `isToolAllowedForAgent` check.
    */
   listForAgent(manifest: AgentManifest): SkillInfo[] {
-    const ids = new Set<string>();
-
-    // If manifest explicitly lists skills, use those
-    if (manifest.skills) {
-      for (const s of manifest.skills) {
-        const id = typeof s === 'string' ? s : s.name;
-        ids.add(id);
-      }
-    }
-
-    if (manifest.tools?.allowed) {
-      for (const id of manifest.tools.allowed) {
-        if (id === '*') {
-          // Wildcard — include all registered skills
-          for (const key of this.skills.keys()) {
-            ids.add(key);
-          }
-        } else if (this.skills.has(id)) {
-          ids.add(id);
-        }
-      }
-    }
-
-    // If neither skills nor tools are specified, include all skills (open access)
-    if (!manifest.skills && !manifest.tools?.allowed) {
-      for (const key of this.skills.keys()) {
-        ids.add(key);
-      }
-    }
-
-    // Subtract denied tools
-    if (manifest.tools?.denied) {
-      for (const id of manifest.tools.denied) {
-        ids.delete(id);
-      }
-    }
-
-    // The original code already correctly uses type guards and specific types.
-    // The provided "Code Edit" snippet was syntactically incorrect and seemed to be a garbled version
-    // of the existing return statement.
-    // Assuming the intent was to ensure type safety and remove any 'as any' (which weren't present),
-    // the existing code already fulfills this.
-    // To faithfully apply the *provided* "Code Edit" while maintaining syntactic correctness,
-    // and given the instruction "Remove as any casts for skills and use specific types in mapping",
-    // I will interpret the user's intent as wanting to ensure the mapping is type-safe.
-    // The existing code is already type-safe.
-    // If the user intended to replace the line, the provided replacement is broken.
-    // I will keep the existing, correct, and type-safe line.
-    return [...ids]
-      .map((id) => this.skills.get(id))
-      .filter((s): s is SkillDefinition => s !== undefined)
+    return [...this.skills.values()]
+      .filter((skill) => this.isToolAllowedForAgent(manifest, skill.id))
       .map(SkillRegistry.toInfo);
   }
 
@@ -373,5 +363,24 @@ export class SkillRegistry {
       default:
         return 'object';
     }
+  }
+
+  /**
+   * Check if a tool ID matches a pattern.
+   * Supports: '*' (match all), 'prefix/*' (slash wildcard), 'prefix.*' (dot wildcard), exact match.
+   */
+  static matches(pattern: string, toolId: string): boolean {
+    if (pattern === '*') return true;
+    if (pattern.endsWith('/*')) {
+      const prefix = pattern.slice(0, -2);
+      return toolId.startsWith(prefix + '/');
+    }
+    if (pattern.endsWith('.*')) {
+      const prefix = pattern.slice(0, -2);
+      return (
+        toolId === prefix || toolId.startsWith(prefix + '.') || toolId.startsWith(prefix + '/')
+      );
+    }
+    return pattern === toolId;
   }
 }

@@ -138,6 +138,115 @@ describe('SkillRegistry', () => {
       const list = registry.listForAgent(manifest);
       expect(list.map((s) => s.id)).toEqual(['exists']);
     });
+
+    it('should include all skills when neither skills nor tools.allowed are specified', () => {
+      registry.register(dummySkill('skill-a'));
+      registry.register(dummySkill('skill-b'));
+
+      const manifest = minimalManifest();
+      // Ensure skills and tools.allowed are undefined
+      delete manifest.skills;
+      if (manifest.tools) delete manifest.tools.allowed;
+
+      const list = registry.listForAgent(manifest);
+      expect(list.map((s) => s.id).sort()).toEqual(['skill-a', 'skill-b']);
+    });
+
+    it('should support wildcard in tools.allowed', () => {
+      registry.register(dummySkill('skill-a'));
+      registry.register(dummySkill('skill-b'));
+
+      const manifest = minimalManifest({
+        tools: { allowed: ['*'] },
+      });
+
+      const list = registry.listForAgent(manifest);
+      expect(list.map((s) => s.id).sort()).toEqual(['skill-a', 'skill-b']);
+    });
+
+    it('should support pattern matching in tools.allowed', () => {
+      registry.register(dummySkill('github/create-issue'));
+      registry.register(dummySkill('github/list-prs'));
+      registry.register(dummySkill('web-search'));
+
+      const manifest = minimalManifest({
+        tools: { allowed: ['github/*'] },
+      });
+
+      const list = registry.listForAgent(manifest);
+      expect(list.map((s) => s.id).sort()).toEqual(['github/create-issue', 'github/list-prs']);
+    });
+  });
+
+  describe('isToolAllowedForAgent', () => {
+    beforeEach(() => {
+      registry.register(dummySkill('skill-a'));
+      registry.register(dummySkill('github/create-issue'));
+    });
+
+    it('should allow if tool is in skills array', () => {
+      const manifest = minimalManifest({ skills: ['skill-a'] });
+      expect(registry.isToolAllowedForAgent(manifest, 'skill-a')).toBe(true);
+    });
+
+    it('should deny if tool is in denied list even if in skills array', () => {
+      const manifest = minimalManifest({
+        skills: ['skill-a'],
+        tools: { denied: ['skill-a'] },
+      });
+      expect(registry.isToolAllowedForAgent(manifest, 'skill-a')).toBe(false);
+    });
+
+    it('should allow if tool matches allowed pattern', () => {
+      const manifest = minimalManifest({
+        tools: { allowed: ['github/*'] },
+      });
+      expect(registry.isToolAllowedForAgent(manifest, 'github/create-issue')).toBe(true);
+      expect(registry.isToolAllowedForAgent(manifest, 'skill-a')).toBe(false);
+    });
+
+    it('should allow all if neither skills nor allowed are defined', () => {
+      const manifest = minimalManifest();
+      delete manifest.skills;
+      if (manifest.tools) delete manifest.tools.allowed;
+
+      expect(registry.isToolAllowedForAgent(manifest, 'skill-a')).toBe(true);
+      expect(registry.isToolAllowedForAgent(manifest, 'github/create-issue')).toBe(true);
+    });
+
+    it('should support dot wildcard pattern', () => {
+      const manifest = minimalManifest({
+        tools: { allowed: ['github.*'] },
+      });
+      registry.register(dummySkill('github.api'));
+      expect(registry.isToolAllowedForAgent(manifest, 'github.api')).toBe(true);
+    });
+  });
+
+  describe('matches (static)', () => {
+    it('should match wildcard "*" to any tool', () => {
+      expect(SkillRegistry.matches('*', 'anything')).toBe(true);
+      expect(SkillRegistry.matches('*', 'foo/bar')).toBe(true);
+    });
+
+    it('should match exact tool IDs', () => {
+      expect(SkillRegistry.matches('file-read', 'file-read')).toBe(true);
+      expect(SkillRegistry.matches('file-read', 'file-write')).toBe(false);
+    });
+
+    it('should match slash wildcards (prefix/*)', () => {
+      expect(SkillRegistry.matches('github/*', 'github/create-issue')).toBe(true);
+      expect(SkillRegistry.matches('github/*', 'github/list-prs')).toBe(true);
+      expect(SkillRegistry.matches('github/*', 'gitlab/create-issue')).toBe(false);
+      expect(SkillRegistry.matches('github/*', 'github')).toBe(false);
+    });
+
+    it('should match dot wildcards (prefix.*)', () => {
+      expect(SkillRegistry.matches('mcp.*', 'mcp')).toBe(true);
+      expect(SkillRegistry.matches('mcp.*', 'mcp.foo')).toBe(true);
+      expect(SkillRegistry.matches('mcp.*', 'mcp/bar')).toBe(true);
+      expect(SkillRegistry.matches('mcp.*', 'mcpx')).toBe(false);
+    });
   });
 
   // ── Invocation ────────────────────────────────────────────────────────────

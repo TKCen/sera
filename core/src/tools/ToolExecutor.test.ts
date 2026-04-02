@@ -41,9 +41,14 @@ function minimalManifest(): AgentManifest {
   };
 }
 
-function createMockRegistry(skills: SkillInfo[] = [], invokeResult?: SkillResult): SkillRegistry {
+function createMockRegistry(
+  skills: SkillInfo[] = [],
+  invokeResult?: SkillResult,
+  isAllowed = true
+): SkillRegistry {
   return {
     listForAgent: vi.fn().mockReturnValue(skills),
+    isToolAllowedForAgent: vi.fn().mockReturnValue(isAllowed),
     invoke: vi.fn().mockResolvedValue(invokeResult ?? { success: true, data: 'mock result' }),
     // Other methods not needed by ToolExecutor
     register: vi.fn(),
@@ -276,6 +281,15 @@ describe('ToolExecutor', () => {
       expect(result.role).toBe('tool');
       expect(result.content ?? '').toContain('Unexpected crash');
     });
+
+    it('should return error when tool is not permitted', async () => {
+      const registry = createMockRegistry([], { success: true, data: 'ok' }, false);
+      const executor = new ToolExecutor(registry);
+
+      const result = await executor.executeTool(makeToolCall('forbidden', {}), minimalManifest());
+      expect(result.content).toContain('tool_not_permitted');
+      expect(registry.invoke).not.toHaveBeenCalled();
+    });
   });
 
   // ── executeToolCalls ───────────────────────────────────────────────────
@@ -296,34 +310,6 @@ describe('ToolExecutor', () => {
       expect(results[0]!.tool_call_id).toBe('tc-1');
       expect(results[1]!.tool_call_id).toBe('tc-2');
       expect(registry.invoke).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  // ── matches (static) ──────────────────────────────────────────────────
-
-  describe('matches', () => {
-    it('should match wildcard "*" to any tool', () => {
-      expect(ToolExecutor.matches('*', 'anything')).toBe(true);
-      expect(ToolExecutor.matches('*', 'foo/bar')).toBe(true);
-    });
-
-    it('should match exact tool IDs', () => {
-      expect(ToolExecutor.matches('file-read', 'file-read')).toBe(true);
-      expect(ToolExecutor.matches('file-read', 'file-write')).toBe(false);
-    });
-
-    it('should match slash wildcards (prefix/*)', () => {
-      expect(ToolExecutor.matches('github/*', 'github/create-issue')).toBe(true);
-      expect(ToolExecutor.matches('github/*', 'github/list-prs')).toBe(true);
-      expect(ToolExecutor.matches('github/*', 'gitlab/create-issue')).toBe(false);
-      expect(ToolExecutor.matches('github/*', 'github')).toBe(false);
-    });
-
-    it('should match dot wildcards (prefix.*)', () => {
-      expect(ToolExecutor.matches('mcp.*', 'mcp')).toBe(true);
-      expect(ToolExecutor.matches('mcp.*', 'mcp.foo')).toBe(true);
-      expect(ToolExecutor.matches('mcp.*', 'mcp/bar')).toBe(true);
-      expect(ToolExecutor.matches('mcp.*', 'mcpx')).toBe(false);
     });
   });
 

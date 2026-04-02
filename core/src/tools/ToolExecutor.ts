@@ -6,7 +6,7 @@
  */
 
 import type { AgentManifest } from '../agents/manifest/types.js';
-import type { SkillRegistry } from '../skills/SkillRegistry.js';
+import { SkillRegistry } from '../skills/SkillRegistry.js';
 import type { SkillInfo, SkillParameter } from '../skills/types.js';
 import type { ToolDefinition, ToolCall } from '../lib/llm/types.js';
 import type { ChatMessage } from '../agents/types.js';
@@ -36,19 +36,7 @@ export class ToolExecutor {
    */
   getToolDefinitions(manifest: AgentManifest): ToolDefinition[] {
     const skills = this.skillRegistry.listForAgent(manifest);
-
-    // Story 7.4: Filter tools based on allow/deny lists
-    const tools = manifest.tools || { allowed: ['*'], denied: [] };
-    const allowed = tools.allowed ?? ['*'];
-    const denied = tools.denied ?? [];
-
-    return skills
-      .filter((skill) => {
-        const isDenied = denied.some((p) => ToolExecutor.matches(p, skill.id));
-        const isAllowed = allowed.some((p) => ToolExecutor.matches(p, skill.id));
-        return isAllowed && !isDenied;
-      })
-      .map((skill) => ToolExecutor.skillToToolDef(skill));
+    return skills.map((skill) => ToolExecutor.skillToToolDef(skill));
   }
 
   // ── Execution ─────────────────────────────────────────────────────────────
@@ -67,14 +55,9 @@ export class ToolExecutor {
     const skillId = fn.name;
 
     // Story 7.4: Access Control
-    const tools = manifest.tools || { allowed: ['*'], denied: [] };
-    const allowed = tools.allowed ?? ['*'];
-    const denied = tools.denied ?? [];
+    const isAllowed = this.skillRegistry.isToolAllowedForAgent(manifest, skillId);
 
-    const isDenied = denied.some((p) => ToolExecutor.matches(p, skillId));
-    const isAllowed = allowed.some((p) => ToolExecutor.matches(p, skillId));
-
-    if (isDenied || !isAllowed) {
+    if (!isAllowed) {
       await AuditService.getInstance()
         .record({
           actorType: 'agent',
@@ -237,32 +220,13 @@ export class ToolExecutor {
 
     for (const pattern of allowed) {
       if (pattern === '*') continue;
-      const hasMatch = allSkills.some((s) => ToolExecutor.matches(pattern, s.id));
+      const hasMatch = allSkills.some((s) => SkillRegistry.matches(pattern, s.id));
       if (!hasMatch) {
         logger.warn(
           `Agent "${manifest.metadata.name}": tools.allowed pattern "${pattern}" matches no registered tools`
         );
       }
     }
-  }
-
-  /**
-   * Check if a tool ID matches a pattern.
-   * Supports: '*' (match all), 'prefix/*' (slash wildcard), 'prefix.*' (dot wildcard), exact match.
-   */
-  static matches(pattern: string, toolId: string): boolean {
-    if (pattern === '*') return true;
-    if (pattern.endsWith('/*')) {
-      const prefix = pattern.slice(0, -2);
-      return toolId.startsWith(prefix + '/');
-    }
-    if (pattern.endsWith('.*')) {
-      const prefix = pattern.slice(0, -2);
-      return (
-        toolId === prefix || toolId.startsWith(prefix + '.') || toolId.startsWith(prefix + '/')
-      );
-    }
-    return pattern === toolId;
   }
 
   /**

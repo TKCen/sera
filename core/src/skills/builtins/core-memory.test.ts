@@ -15,7 +15,7 @@ vi.mock('../../memory/CoreMemoryService.js', () => {
 });
 
 describe('Core Memory Skills', () => {
-  const mockContext: any = { agentInstanceId: 'agent-1' };
+  const mockContext = { agentInstanceId: 'agent-1' } as any;
   let mockService: any;
 
   beforeEach(() => {

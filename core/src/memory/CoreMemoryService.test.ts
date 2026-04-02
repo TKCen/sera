@@ -22,7 +22,7 @@ describe('CoreMemoryService', () => {
 
     const blocks = await service.getBlocks('agent-1');
     expect(blocks).toHaveLength(1);
-    expect(blocks[0].name).toBe('persona');
+    expect(blocks[0]!.name).toBe('persona');
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('SELECT'), ['agent-1']);
   });
 

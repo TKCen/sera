@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCircle, useUpdateCircle, useDeleteCircle } from '@/hooks/useCircles';
+import { useAgents } from '@/hooks/useAgents';
 import * as circlesApi from '@/lib/api/circles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,8 +32,10 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { MultiSelectPicker } from '@/components/MultiSelectPicker';
 
 type Tab = 'overview' | 'channels' | 'knowledge' | 'context';
 
@@ -46,9 +49,21 @@ export default function CircleDetailPage() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [showDelete, setShowDelete] = useState(false);
 
-  // Inline editing for description
+  // Inline editing for name & description
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState('');
+
+  // Modals
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [showEditParty, setShowEditParty] = useState(false);
+  const [showEditChannel, setShowEditChannel] = useState<{
+    index: number;
+    channel: any;
+  } | null>(null);
+
+  const { data: allAgents } = useAgents();
 
   // Project context editing
   const [editingContext, setEditingContext] = useState(false);
@@ -99,25 +114,116 @@ export default function CircleDetailPage() {
     }
   }
 
-  async function handleSaveDescription() {
+  async function handleSaveBasicInfo() {
     if (!id || !circle) return;
     try {
+      const manifest = { ...(circle as any) };
+      if (manifest.metadata) {
+        manifest.metadata.displayName = nameDraft.trim() || id;
+        manifest.metadata.description = descDraft.trim() || undefined;
+      } else {
+        manifest.displayName = nameDraft.trim() || id;
+        manifest.description = descDraft.trim() || undefined;
+      }
+
       await updateCircle.mutateAsync({
         name: id,
-        manifest: {
-          ...circle,
-          metadata: {
-            name: circle.name ?? circle.metadata?.name ?? id,
-            displayName: circle.displayName ?? circle.metadata?.displayName ?? id,
-            description: descDraft.trim() || undefined,
-          },
-        },
+        manifest,
       });
-      toast.success('Description updated');
+      toast.success('Circle updated');
+      setEditingName(false);
       setEditingDesc(false);
       void refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update');
+    }
+  }
+
+  const [selectedAgentsForCircle, setSelectedAgentsForCircle] = useState<string[]>([]);
+
+  async function handleAddMembers() {
+    if (!id || !circle || selectedAgentsForCircle.length === 0) return;
+    try {
+      const currentMembers = circle.agents ?? [];
+      const newMembers = [...new Set([...currentMembers, ...selectedAgentsForCircle])];
+
+      await updateCircle.mutateAsync({
+        name: id,
+        manifest: { ...circle, agents: newMembers } as any,
+      });
+      toast.success('Members added');
+      setShowAddMember(false);
+      setSelectedAgentsForCircle([]);
+      void refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add members');
+    }
+  }
+
+  async function handleRemoveMember(agent: string) {
+    if (!id || !circle) return;
+    try {
+      const newMembers = (circle.agents ?? []).filter((a) => a !== agent);
+      await updateCircle.mutateAsync({
+        name: id,
+        manifest: { ...circle, agents: newMembers } as any,
+      });
+      toast.success(`Removed ${agent}`);
+      void refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove member');
+    }
+  }
+
+  async function handleSavePartyMode(config: any) {
+    if (!id || !circle) return;
+    try {
+      await updateCircle.mutateAsync({
+        name: id,
+        manifest: { ...circle, partyMode: config } as any,
+      });
+      toast.success('Party Mode updated');
+      setShowEditParty(false);
+      void refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update Party Mode');
+    }
+  }
+
+  async function handleSaveChannel(channel: any, index?: number) {
+    if (!id || !circle) return;
+    try {
+      const channels = [...(circle.channels ?? [])];
+      if (index !== undefined && index >= 0) {
+        channels[index] = channel;
+      } else {
+        channels.push(channel);
+      }
+
+      await updateCircle.mutateAsync({
+        name: id,
+        manifest: { ...circle, channels } as any,
+      });
+      toast.success(index !== undefined ? 'Channel updated' : 'Channel added');
+      setShowEditChannel(null);
+      void refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save channel');
+    }
+  }
+
+  async function handleDeleteChannel(index: number) {
+    if (!id || !circle) return;
+    try {
+      const channels = (circle.channels ?? []).filter((_, i) => i !== index);
+      await updateCircle.mutateAsync({
+        name: id,
+        manifest: { ...circle, channels } as any,
+      });
+      toast.success('Channel deleted');
+      void refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete channel');
     }
   }
 
@@ -160,9 +266,44 @@ export default function CircleDetailPage() {
           <Users size={24} className="text-sera-accent" />
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold text-sera-text">
-            {circle.displayName ?? circle.metadata?.displayName}
-          </h1>
+          {editingName ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                className="text-lg font-bold h-8 max-w-md"
+                autoFocus
+              />
+              <button
+                onClick={() => void handleSaveBasicInfo()}
+                className="p-1.5 rounded text-sera-success hover:bg-sera-success/10"
+              >
+                <Check size={18} />
+              </button>
+              <button
+                onClick={() => setEditingName(false)}
+                className="p-1.5 rounded text-sera-text-muted hover:bg-sera-surface-hover"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 group/name">
+              <h1 className="text-xl font-bold text-sera-text">
+                {circle.displayName ?? circle.metadata?.displayName}
+              </h1>
+              <button
+                onClick={() => {
+                  setNameDraft(circle.displayName ?? circle.metadata?.displayName ?? '');
+                  setEditingName(true);
+                }}
+                className="p-1 rounded text-sera-text-dim opacity-0 group-hover/name:opacity-100 hover:bg-sera-surface-hover transition-opacity"
+              >
+                <Pencil size={14} />
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center gap-1">
             <span className="text-xs text-sera-text-dim font-mono">
               {circle.name ?? circle.metadata?.name}
@@ -182,7 +323,7 @@ export default function CircleDetailPage() {
                 />
                 <button
                   onClick={() => {
-                    void handleSaveDescription();
+                    void handleSaveBasicInfo();
                   }}
                   className="p-1 rounded text-sera-success hover:bg-sera-success/10"
                 >
@@ -250,29 +391,45 @@ export default function CircleDetailPage() {
         <div className="space-y-6">
           {/* Agents membership */}
           <section>
-            <h2 className="text-sm font-semibold text-sera-text mb-3 flex items-center gap-2">
-              <Bot size={15} />
-              Members ({agents.length})
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                <Bot size={15} />
+                Members ({agents.length})
+              </h2>
+              <Button size="sm" variant="outline" onClick={() => setShowAddMember(true)}>
+                <Plus size={12} /> Add Member
+              </Button>
+            </div>
             {agents.length === 0 ? (
               <p className="text-xs text-sera-text-dim">No agents in this circle.</p>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {agents.map((agent) => (
-                  <Link
+                  <div
                     key={agent}
-                    to={`/agents?search=${encodeURIComponent(agent)}`}
-                    className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3 hover:bg-sera-surface-hover transition-colors"
+                    className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3 group/member"
                   >
-                    <div className="h-8 w-8 rounded-full bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
-                      <Bot size={14} className="text-sera-accent" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-sm font-medium text-sera-text truncate block">
-                        {agent}
-                      </span>
-                    </div>
-                  </Link>
+                    <Link
+                      to={`/agents?search=${encodeURIComponent(agent)}`}
+                      className="flex-1 flex items-center gap-3 min-w-0"
+                    >
+                      <div className="h-8 w-8 rounded-full bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
+                        <Bot size={14} className="text-sera-accent" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium text-sera-text truncate block">
+                          {agent}
+                        </span>
+                      </div>
+                    </Link>
+                    <button
+                      onClick={() => void handleRemoveMember(agent)}
+                      className="p-1 rounded text-sera-text-dim opacity-0 group-hover/member:opacity-100 hover:bg-sera-error/10 hover:text-sera-error transition-all"
+                      title="Remove from circle"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -281,10 +438,15 @@ export default function CircleDetailPage() {
           {/* Party Mode */}
           {partyMode && (
             <section>
-              <h2 className="text-sm font-semibold text-sera-text mb-3 flex items-center gap-2">
-                <Zap size={15} />
-                Party Mode
-              </h2>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Zap size={15} />
+                  Party Mode
+                </h2>
+                <Button size="sm" variant="outline" onClick={() => setShowEditParty(true)}>
+                  <Pencil size={12} /> Edit
+                </Button>
+              </div>
               <div className="sera-card-static rounded-lg p-4 space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-sera-text-muted w-28">Status</span>
@@ -354,6 +516,16 @@ export default function CircleDetailPage() {
 
       {activeTab === 'channels' && (
         <div>
+          <div className="flex justify-end mb-4">
+            <Button
+              size="sm"
+              onClick={() =>
+                setShowEditChannel({ index: -1, channel: { name: '', type: 'persistent' } })
+              }
+            >
+              <Plus size={14} /> Add Channel
+            </Button>
+          </div>
           {channels.length === 0 ? (
             <p className="text-xs text-sera-text-dim py-8 text-center">
               No channels configured for this circle.
@@ -363,7 +535,7 @@ export default function CircleDetailPage() {
               {channels.map((ch, i) => (
                 <div
                   key={ch.id ?? ch.name ?? i}
-                  className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3"
+                  className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3 group/channel"
                 >
                   <Radio size={14} className="text-sera-text-muted flex-shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -372,14 +544,28 @@ export default function CircleDetailPage() {
                       <p className="text-xs text-sera-text-dim mt-0.5">{ch.description}</p>
                     )}
                   </div>
-                  {ch.type && (
-                    <Badge variant={ch.type === 'persistent' ? 'accent' : 'warning'}>
-                      {ch.type}
-                    </Badge>
-                  )}
-                  {ch.id && (
-                    <span className="text-[10px] text-sera-text-dim font-mono">{ch.id}</span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {ch.type && (
+                      <Badge variant={ch.type === 'persistent' ? 'accent' : 'warning'}>
+                        {ch.type}
+                      </Badge>
+                    )}
+                    {ch.id && (
+                      <span className="text-[10px] text-sera-text-dim font-mono">{ch.id}</span>
+                    )}
+                    <button
+                      onClick={() => setShowEditChannel({ index: i, channel: ch })}
+                      className="p-1 rounded text-sera-text-dim opacity-0 group-hover/channel:opacity-100 hover:bg-sera-surface-hover transition-all"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      onClick={() => void handleDeleteChannel(i)}
+                      className="p-1 rounded text-sera-text-dim opacity-0 group-hover/channel:opacity-100 hover:bg-sera-error/10 hover:text-sera-error transition-all"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -394,21 +580,32 @@ export default function CircleDetailPage() {
               No knowledge configuration for this circle.
             </p>
           ) : (
-            <div className="sera-card-static rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-sera-text-muted w-36">Qdrant Collection</span>
-                <span className="text-xs text-sera-text font-mono">
-                  {knowledge.qdrantCollection}
-                </span>
+            <div className="space-y-4">
+              <div className="flex justify-end">
+                <Button asChild size="sm" variant="outline">
+                  <Link
+                    to={`/memory?scope=circle&search=${encodeURIComponent(knowledge.qdrantCollection)}`}
+                  >
+                    <Database size={14} /> Browse Knowledge
+                  </Link>
+                </Button>
               </div>
-              {knowledge.postgresSchema && (
+              <div className="sera-card-static rounded-lg p-4 space-y-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-sera-text-muted w-36">Postgres Schema</span>
+                  <span className="text-xs text-sera-text-muted w-36">Qdrant Collection</span>
                   <span className="text-xs text-sera-text font-mono">
-                    {knowledge.postgresSchema}
+                    {knowledge.qdrantCollection}
                   </span>
                 </div>
-              )}
+                {knowledge.postgresSchema && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-sera-text-muted w-36">Postgres Schema</span>
+                    <span className="text-xs text-sera-text font-mono">
+                      {knowledge.postgresSchema}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -480,6 +677,167 @@ export default function CircleDetailPage() {
           )}
         </div>
       )}
+
+      {/* Add Members Dialog */}
+      <Dialog open={showAddMember} onOpenChange={setShowAddMember}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Members</DialogTitle>
+            <DialogDescription>Select agents to add to this circle.</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <MultiSelectPicker
+              items={(allAgents ?? [])
+                .filter((a) => !agents.includes(a.name))
+                .map((a) => ({ id: a.name, label: a.display_name ?? a.name }))}
+              selected={selectedAgentsForCircle}
+              onChange={setSelectedAgentsForCircle}
+              placeholder="Search agents..."
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setShowAddMember(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void handleAddMembers()}
+              disabled={selectedAgentsForCircle.length === 0}
+            >
+              Add Selected
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Party Mode Dialog */}
+      {partyMode && (
+        <Dialog open={showEditParty} onOpenChange={setShowEditParty}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Party Mode Settings</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">Enabled</label>
+                <input
+                  type="checkbox"
+                  checked={partyMode.enabled}
+                  onChange={(e) => handleSavePartyMode({ ...partyMode, enabled: e.target.checked })}
+                  className="h-4 w-4 rounded border-sera-border bg-sera-surface text-sera-accent"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-sera-text-muted">Orchestrator Agent</label>
+                <select
+                  value={partyMode.orchestrator ?? ''}
+                  onChange={(e) =>
+                    handleSavePartyMode({ ...partyMode, orchestrator: e.target.value })
+                  }
+                  className="sera-input text-xs w-full"
+                >
+                  <option value="">None</option>
+                  {agents.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-sera-text-muted">Selection Strategy</label>
+                <select
+                  value={partyMode.selectionStrategy ?? 'relevance'}
+                  onChange={(e) =>
+                    handleSavePartyMode({ ...partyMode, selectionStrategy: e.target.value })
+                  }
+                  className="sera-input text-xs w-full"
+                >
+                  <option value="relevance">Relevance</option>
+                  <option value="round-robin">Round Robin</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button size="sm" variant="ghost" onClick={() => setShowEditParty(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Edit Channel Dialog */}
+      <Dialog open={!!showEditChannel} onOpenChange={(o) => !o && setShowEditChannel(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {showEditChannel?.index === -1 ? 'Add Channel' : 'Edit Channel'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-4">
+            <div className="space-y-1.5">
+              <label className="text-xs text-sera-text-muted">Channel Name</label>
+              <Input
+                value={showEditChannel?.channel?.name ?? ''}
+                onChange={(e) =>
+                  setShowEditChannel((prev) => ({
+                    ...prev!,
+                    channel: { ...prev!.channel, name: e.target.value },
+                  }))
+                }
+                placeholder="e.g. general"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-sera-text-muted">Description</label>
+              <Input
+                value={showEditChannel?.channel?.description ?? ''}
+                onChange={(e) =>
+                  setShowEditChannel((prev) => ({
+                    ...prev!,
+                    channel: { ...prev!.channel, description: e.target.value },
+                  }))
+                }
+                placeholder="Channel purpose..."
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-sera-text-muted">Type</label>
+              <select
+                value={showEditChannel?.channel?.type ?? 'persistent'}
+                onChange={(e) =>
+                  setShowEditChannel((prev) => ({
+                    ...prev!,
+                    channel: { ...prev!.channel, type: e.target.value },
+                  }))
+                }
+                className="sera-input text-xs w-full"
+              >
+                <option value="persistent">Persistent</option>
+                <option value="ephemeral">Ephemeral</option>
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setShowEditChannel(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() =>
+                handleSaveChannel(
+                  showEditChannel?.channel,
+                  showEditChannel?.index === -1 ? undefined : showEditChannel?.index
+                )
+              }
+            >
+              Save Channel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation */}
       <Dialog open={showDelete} onOpenChange={setShowDelete}>

@@ -16,7 +16,13 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 
-export function SchedulesTab({ id }: { id: string }) {
+export function SchedulesTab({
+  id,
+  agentName: parentAgentName,
+}: {
+  id: string;
+  agentName?: string;
+}) {
   const { data: schedules, isLoading, refetch } = useAgentSchedules(id);
   const clearStaleTasks = useClearStaleTasks();
   const [showCreate, setShowCreate] = useState(false);
@@ -31,7 +37,7 @@ export function SchedulesTab({ id }: { id: string }) {
 
   // We need the agent name from the schedule data or the parent — extract from existing schedules
   // For new schedules, we need to resolve agent name from ID
-  const agentName = schedules?.[0]?.agentName ?? '';
+  const agentName = parentAgentName ?? schedules?.[0]?.agentName ?? '';
 
   const handleCreate = useCallback(async () => {
     if (!newSchedule.name.trim() || !newSchedule.expression.trim()) {

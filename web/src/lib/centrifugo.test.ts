@@ -67,13 +67,19 @@ describe('centrifugo utility', () => {
     it('uses SSR fallback URL when window is undefined', () => {
       vi.stubGlobal('window', undefined);
       getClient();
-      expect(Centrifuge).toHaveBeenCalledWith('ws://localhost:10001/connection/websocket', expect.any(Object));
+      expect(Centrifuge).toHaveBeenCalledWith(
+        'ws://localhost:10001/connection/websocket',
+        expect.any(Object)
+      );
     });
 
     it('uses NEXT_PUBLIC_CENTRIFUGO_URL if set', () => {
       vi.stubEnv('NEXT_PUBLIC_CENTRIFUGO_URL', 'wss://custom-centrifugo.com/connection/websocket');
       getClient();
-      expect(Centrifuge).toHaveBeenCalledWith('wss://custom-centrifugo.com/connection/websocket', expect.any(Object));
+      expect(Centrifuge).toHaveBeenCalledWith(
+        'wss://custom-centrifugo.com/connection/websocket',
+        expect.any(Object)
+      );
     });
 
     it('constructs URL from window.location (http)', () => {
@@ -84,7 +90,10 @@ describe('centrifugo utility', () => {
         },
       });
       getClient();
-      expect(Centrifuge).toHaveBeenCalledWith('ws://app.example.com:10001/connection/websocket', expect.any(Object));
+      expect(Centrifuge).toHaveBeenCalledWith(
+        'ws://app.example.com:10001/connection/websocket',
+        expect.any(Object)
+      );
     });
 
     it('constructs URL from window.location (https)', () => {
@@ -95,7 +104,10 @@ describe('centrifugo utility', () => {
         },
       });
       getClient();
-      expect(Centrifuge).toHaveBeenCalledWith('wss://app.example.com:10001/connection/websocket', expect.any(Object));
+      expect(Centrifuge).toHaveBeenCalledWith(
+        'wss://app.example.com:10001/connection/websocket',
+        expect.any(Object)
+      );
     });
   });
 
@@ -129,7 +141,9 @@ describe('centrifugo utility', () => {
       expect(sub.subscribe).toHaveBeenCalled();
 
       // Simulate publication
-      const publicationCallback = vi.mocked(sub.on).mock.calls.find(call => call[0] === 'publication')![1];
+      const publicationCallback = vi
+        .mocked(sub.on)
+        .mock.calls.find((call) => call[0] === 'publication')![1];
       publicationCallback({ data: { text: 'hello' } });
       expect(onThought).toHaveBeenCalledWith({ text: 'hello' });
 
@@ -159,7 +173,9 @@ describe('centrifugo utility', () => {
       expect(client.newSubscription).toHaveBeenCalledWith(`internal:stream:${messageId}`);
 
       const sub = vi.mocked(client.newSubscription).mock.results[0].value;
-      const publicationCallback = vi.mocked(sub.on).mock.calls.find(call => call[0] === 'publication')![1];
+      const publicationCallback = vi
+        .mocked(sub.on)
+        .mock.calls.find((call) => call[0] === 'publication')![1];
 
       // Simulate token
       publicationCallback({ data: { token: 'part1', done: false, messageId } });

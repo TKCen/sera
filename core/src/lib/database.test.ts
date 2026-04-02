@@ -21,14 +21,18 @@ vi.mock('pg', () => {
   };
 });
 
+const { mockMigrate } = vi.hoisted(() => ({
+  mockMigrate: vi.fn(),
+}));
+
 vi.mock('node-pg-migrate', () => {
   return {
-    default: vi.fn(),
+    default: mockMigrate,
   };
 });
 
 import { query, initDb } from './database.js';
-import migrate from 'node-pg-migrate';
+import * as migrate from 'node-pg-migrate';
 import path from 'path';
 
 describe('database', () => {
@@ -62,11 +66,11 @@ describe('database', () => {
   describe('initDb', () => {
     it('runs migrations successfully', async () => {
       process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
-      (migrate as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+      mockMigrate.mockResolvedValueOnce(undefined);
 
       await initDb();
 
-      expect(migrate).toHaveBeenCalledWith({
+      expect(mockMigrate).toHaveBeenCalledWith({
         databaseUrl: 'postgres://test:test@localhost:5432/test',
         dir: path.resolve(import.meta.dirname, '..', '..', 'src', 'db', 'migrations'),
         direction: 'up',
@@ -78,7 +82,7 @@ describe('database', () => {
     it('throws error when migration fails', async () => {
       process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
       const error = new Error('Migration failed');
-      (migrate as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(error);
+      mockMigrate.mockRejectedValueOnce(error);
 
       await expect(initDb()).rejects.toThrow('Migration failed');
     });

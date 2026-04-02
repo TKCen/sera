@@ -97,16 +97,16 @@ export class OpenAIProvider implements LLMProvider {
 
       const choice = response.choices[0];
       const rawToolCalls = choice?.message?.tool_calls;
-      const toolCalls: ToolCall[] = rawToolCalls
-        ? rawToolCalls.map((tc) => ({
-            id: tc.id as string,
-            type: 'function' as const,
-            function: {
-              name: tc.function.name as string,
-              arguments: tc.function.arguments as string,
-            },
-          }))
-        : [];
+      const toolCalls: ToolCall[] = (rawToolCalls ?? [])
+        .filter((tc): tc is typeof tc & { function: object } => tc.type === 'function')
+        .map((tc) => ({
+          id: tc.id as string,
+          type: 'function' as const,
+          function: {
+            name: (tc.function as any).name as string,
+            arguments: (tc.function as any).arguments as string,
+          },
+        }));
 
       const reasoning = (choice?.message as unknown as { reasoning_content?: string })
         ?.reasoning_content;

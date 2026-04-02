@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { Logger } from './logger.js';
-import migrate from 'node-pg-migrate';
+import * as migrate from 'node-pg-migrate';
 import path from 'path';
 
 const logger = new Logger('Database');
@@ -19,7 +19,7 @@ export const initDb = async () => {
 
     const runner =
       (migrate as unknown as { default: (o: Record<string, unknown>) => Promise<void> }).default ||
-      migrate;
+      (migrate as unknown as (o: Record<string, unknown>) => Promise<void>);
     await runner({
       databaseUrl: process.env.DATABASE_URL!,
       dir: migrationsDir,

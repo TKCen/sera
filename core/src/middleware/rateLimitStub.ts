@@ -31,15 +31,18 @@ interface TokenBucket {
 const buckets = new Map<string, TokenBucket>();
 
 // Periodic cleanup to avoid memory leaks (every 10 minutes)
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, bucket] of buckets.entries()) {
-    // If the bucket has been full and inactive for more than 10 minutes, remove it
-    if (bucket.tokens >= bucket.limit && now - bucket.lastRefill > 10 * 60 * 1000) {
-      buckets.delete(id);
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [id, bucket] of buckets.entries()) {
+      // If the bucket has been full and inactive for more than 10 minutes, remove it
+      if (bucket.tokens >= bucket.limit && now - bucket.lastRefill > 10 * 60 * 1000) {
+        buckets.delete(id);
+      }
     }
-  }
-}, 10 * 60 * 1000).unref();
+  },
+  10 * 60 * 1000
+).unref();
 
 /**
  * Rate limiting middleware using a token-bucket algorithm.
@@ -76,7 +79,10 @@ export function rateLimitStub(req: Request, res: Response, next: NextFunction): 
   res.setHeader('X-RateLimit-Limit', limit);
   // If we can't proceed, current remaining tokens are floor(tokens)
   // If we can proceed, remaining tokens after this request will be floor(tokens - 1)
-  res.setHeader('X-RateLimit-Remaining', Math.floor(canProceed ? bucket.tokens - 1 : bucket.tokens));
+  res.setHeader(
+    'X-RateLimit-Remaining',
+    Math.floor(canProceed ? bucket.tokens - 1 : bucket.tokens)
+  );
   res.setHeader('X-RateLimit-Reset', Math.floor(now / 1000) + 60);
 
   if (!canProceed) {

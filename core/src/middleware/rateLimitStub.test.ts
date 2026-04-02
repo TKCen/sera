@@ -53,9 +53,7 @@ describe('rateLimitStub', () => {
     rateLimitStub(req as Request, res as Response, next);
 
     expect(res.status).toHaveBeenCalledWith(429);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'rate_limit' })
-    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ reason: 'rate_limit' }));
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', 0);
     expect(next).not.toHaveBeenCalled();
   });

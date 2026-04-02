@@ -558,10 +558,10 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
       };
       const coreMemoryService = CoreMemoryService.getInstance(pool);
       const updated = await coreMemoryService.updateBlock(agentId, name, {
-        content,
-        characterLimit,
-        isReadOnly,
-      });
+        ...(content !== undefined ? { content } : {}),
+        ...(characterLimit !== undefined ? { characterLimit } : {}),
+        ...(isReadOnly !== undefined ? { isReadOnly } : {}),
+      } as any);
       res.json(updated);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

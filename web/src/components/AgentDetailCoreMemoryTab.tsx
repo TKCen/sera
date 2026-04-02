@@ -6,7 +6,7 @@ import { getCoreMemoryBlocks, updateCoreMemoryBlock, type CoreMemoryBlock } from
 import { Button } from '@/components/ui/button';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
 import { EmptyState } from '@/components/EmptyState';
-import { Progress } from '@/components/ui/progress';
+import { cn } from '@/lib/utils';
 
 export function CoreMemoryTab({ id }: { id: string }) {
   const queryClient = useQueryClient();
@@ -93,9 +93,9 @@ function BlockEditor({
             {block.name}
           </span>
           {block.isReadOnly ? (
-            <Lock size={12} className="text-sera-text-dim" title="Read Only" />
+            <Lock size={12} className="text-sera-text-dim" />
           ) : (
-            <Unlock size={12} className="text-sera-accent" title="Editable by Agent" />
+            <Unlock size={12} className="text-sera-accent" />
           )}
         </div>
         <div className="flex items-center gap-3">
@@ -107,14 +107,18 @@ function BlockEditor({
               <span className="text-sera-text-dim">/</span>
               <span className="text-sera-text-dim">{block.characterLimit.toLocaleString()}</span>
             </div>
-            <Progress
-              value={(charCount / block.characterLimit) * 100}
-              className="h-1 w-24"
-              variant={isOverLimit ? 'danger' : 'default'}
-            />
+            <div className="h-1 w-24 bg-sera-border rounded-full overflow-hidden">
+              <div
+                className={cn(
+                  'h-full transition-all',
+                  isOverLimit ? 'bg-sera-error' : 'bg-sera-accent'
+                )}
+                style={{ width: `${Math.min(100, (charCount / block.characterLimit) * 100)}%` }}
+              />
+            </div>
           </div>
           <Button
-            size="xs"
+            size="sm"
             variant="ghost"
             onClick={() => onSave(content)}
             disabled={!hasChanged || isOverLimit || isUpdating}

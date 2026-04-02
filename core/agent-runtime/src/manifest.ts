@@ -7,6 +7,8 @@
 
 import fs from 'fs';
 import yaml from 'js-yaml';
+import type { ToolDefinition } from './llmClient.js';
+import { SystemPromptBuilder } from './systemPromptBuilder.js';
 
 // ── Minimal Manifest Types (mirrors Core's AgentManifest) ───────────────────
 
@@ -26,7 +28,9 @@ export interface RuntimeManifest {
     description: string;
     communicationStyle?: string;
     principles?: string[];
+    notes?: string;
   };
+  notes?: string;
   model: {
     provider: string;
     name: string;
@@ -48,6 +52,14 @@ export interface RuntimeManifest {
       subscribe?: string[];
     };
   };
+  subagents?: {
+    allowed?: Array<{
+      role: string;
+      templateRef?: string;
+    }>;
+  };
+  contextFiles?: string[];
+  outputFormat?: string;
 }
 
 /**
@@ -71,6 +83,10 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
     if (spec['skills'] && !raw['skills']) raw['skills'] = spec['skills'];
     if (spec['memory'] && !raw['memory']) raw['memory'] = spec['memory'];
     if (spec['intercom'] && !raw['intercom']) raw['intercom'] = spec['intercom'];
+    if (spec['subagents'] && !raw['subagents']) raw['subagents'] = spec['subagents'];
+    if (spec['contextFiles'] && !raw['contextFiles']) raw['contextFiles'] = spec['contextFiles'];
+    if (spec['outputFormat'] && !raw['outputFormat']) raw['outputFormat'] = spec['outputFormat'];
+    if (spec['notes'] && !raw['notes']) raw['notes'] = spec['notes'];
   }
 
   const parsed = raw as unknown as RuntimeManifest;
@@ -87,39 +103,73 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
 }
 
 /**
- * Generate a bootstrap system prompt from a manifest.
- *
- * This is a lightweight fallback prompt. In the primary chat path, ContextAssembler
- * on the Core side replaces this with the full IdentityService-generated prompt
- * (which includes stability guidelines, response format, subagents, circle context,
- * and memory). Tools are provided via the function-calling API — listing them in the
- * system prompt causes models to hallucinate XML-style tool calls.
+ * Context for generating the system prompt.
  */
-export function generateSystemPrompt(manifest: RuntimeManifest): string {
-  const lines: string[] = [
-    `You are ${manifest.metadata.displayName}, a SERA AI agent.`,
-    `Role: ${manifest.identity.role}`,
-    `Description: ${manifest.identity.description}`,
-  ];
+export interface SystemPromptContext {
+  tools?: ToolDefinition[];
+  timezone?: string;
+  circleName?: string;
+  circleMembers?: string[];
+  circleConstitution?: string;
+  availableAgents?: Array<{ name: string; role: string }>;
+  tokenBudget?: number;
+}
 
-  if (manifest.identity.communicationStyle) {
-    lines.push(`Communication Style: ${manifest.identity.communicationStyle}`);
+/**
+ * Generate a rich, composable system prompt from a manifest and runtime context.
+ */
+export function generateSystemPrompt(manifest: RuntimeManifest, context: SystemPromptContext = {}): string {
+  const builder = new SystemPromptBuilder();
+
+  // 1. Identity (Priority 0, Required)
+  builder.addIdentity(manifest);
+
+  // 2. Principles (Priority 10)
+  builder.addPrinciples(manifest);
+
+  // 3. Communication Style (Priority 20)
+  builder.addCommunicationStyle(manifest);
+
+  // 4. Available Tools (Priority 30, Required)
+  builder.addAvailableTools(context.tools || []);
+
+  // 5. Tool Usage Guidelines (Priority 40, Required)
+  builder.addToolUsageGuidelines();
+
+  // 6. Memory Instructions (Priority 50, Required)
+  builder.addMemoryInstructions();
+
+  // 7. Time & Context (Priority 60, Required)
+  builder.addTimeContext(context.timezone);
+
+  // 8. Circle Context (Priority 70)
+  if (context.circleName) {
+    builder.addCircleContext(
+      context.circleName,
+      context.circleMembers || [],
+      context.circleConstitution
+    );
   }
 
-  if (manifest.identity.principles?.length) {
-    lines.push('Principles:');
-    for (const p of manifest.identity.principles) {
-      lines.push(`  - ${p}`);
-    }
+  // 9. Delegation Context (Priority 80)
+  if (context.availableAgents) {
+    builder.addDelegationContext(context.availableAgents);
   }
 
-  lines.push('');
-  lines.push('## Tool Usage Guidelines');
-  lines.push('- When you need to accomplish a task, USE the available tools via function calls.');
-  lines.push('- Report results clearly. If a tool errors, explain what happened.');
-  lines.push('- Do not call the same tool with identical arguments repeatedly.');
-  lines.push('- If you cannot accomplish a task with the tools available, say so.');
-  lines.push('- Only use tools provided via function calling. Do NOT fabricate tool calls in XML, JSON, or any other text format.');
+  // 10. Agent Notes (Priority 90)
+  builder.addAgentNotes(manifest);
 
-  return lines.join('\n');
+  // 11. Workspace Context (Priority 100)
+  builder.addWorkspaceContext(manifest);
+
+  // 12. Reasoning Hints (Priority 110)
+  builder.addReasoningHints(manifest.model.name);
+
+  // 13. Constraints (Priority 120, Required)
+  builder.addConstraints(manifest.metadata.tier || 2);
+
+  // 14. Output Format (Priority 130)
+  builder.addOutputFormat(manifest.outputFormat);
+
+  return builder.build(context.tokenBudget);
 }

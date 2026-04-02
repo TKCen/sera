@@ -581,7 +581,7 @@ export class ReasoningLoop {
           });
 
           // Execute tools and add results
-          const toolResults = await this.tools.executeToolCalls(response.toolCalls);
+          const toolResults = await this.tools.executeToolCalls(response.toolCalls, taskId);
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);

@@ -44,6 +44,9 @@ export interface RuntimeManifest {
     coreTools?: string[];
   };
   skills?: string[];
+  logging?: {
+    commands?: boolean;
+  };
   memory?: {
     citations?: 'full' | 'brief' | 'off';
   } & Record<string, unknown>;
@@ -83,6 +86,7 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
     if (spec['model'] && !raw['model']) raw['model'] = spec['model'];
     if (spec['tools'] && !raw['tools']) raw['tools'] = spec['tools'];
     if (spec['skills'] && !raw['skills']) raw['skills'] = spec['skills'];
+    if (spec['logging'] && !raw['logging']) raw['logging'] = spec['logging'];
     if (spec['memory'] && !raw['memory']) raw['memory'] = spec['memory'];
     if (spec['intercom'] && !raw['intercom']) raw['intercom'] = spec['intercom'];
     if (spec['subagents'] && !raw['subagents']) raw['subagents'] = spec['subagents'];

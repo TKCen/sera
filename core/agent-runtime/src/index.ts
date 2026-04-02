@@ -88,7 +88,7 @@ async function main(): Promise<void> {
 
   // ── Initialize Services ──────────────────────────────────────────────────
   const llmClient = new LLMClient(SERA_CORE_URL, SERA_IDENTITY_TOKEN, manifest.model.name);
-  const toolExecutor = new RuntimeToolExecutor(WORKSPACE_PATH, TIER);
+  const toolExecutor = new RuntimeToolExecutor(WORKSPACE_PATH, TIER, manifest);
 
   // Fetch dynamic tool catalog from core (Story 7.6, ADR-001)
   await toolExecutor.fetchCatalog().catch((err: unknown) => {

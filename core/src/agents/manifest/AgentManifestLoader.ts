@@ -194,6 +194,14 @@ export class AgentManifestLoader {
       }
     }
 
+    // ── logging ───────────────────────────────────────────────────────────────
+    if (obj['logging']) {
+      const logging = obj['logging'] as Record<string, unknown>;
+      if (logging['commands'] !== undefined && typeof logging['commands'] !== 'boolean') {
+        throw new ManifestValidationError(`"commands" must be a boolean${ctx}`, 'logging.commands');
+      }
+    }
+
     // ── capabilities ──────────────────────────────────────────────────────────
     if (obj['capabilities']) {
       if (

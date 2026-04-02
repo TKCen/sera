@@ -42,8 +42,9 @@ describe('CleanupService', () => {
     ];
 
     mockRegistry.listInstances.mockImplementation(async (filters?: { status?: string }) => {
-      if (filters?.status === 'stopped') return instances.filter(i => i.status === 'stopped') as any;
-      if (filters?.status === 'error') return instances.filter(i => i.status === 'error') as any;
+      if (filters?.status === 'stopped')
+        return instances.filter((i) => i.status === 'stopped') as any;
+      if (filters?.status === 'error') return instances.filter((i) => i.status === 'error') as any;
       return [];
     });
 

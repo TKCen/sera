@@ -314,18 +314,22 @@ export class ScheduleService {
 
     const { lifecycle_mode, status } = agentInstance.rows[0];
 
-    // Concurrent execution guard
-    // For persistent agents, check task_queue
+    // Dedup guard for persistent agents: skip only if THIS schedule already has a pending task.
+    // Other schedules can enqueue freely — the agent processes them sequentially.
     if (lifecycle_mode === 'persistent') {
-      const runningTask = await pool.query(
-        "SELECT id FROM task_queue WHERE agent_instance_id = $1 AND status = 'running' LIMIT 1",
-        [schedule.agent_instance_id]
+      const existingTask = await pool.query(
+        `SELECT id FROM task_queue
+         WHERE agent_instance_id = $1
+           AND status IN ('queued', 'running')
+           AND context->'schedule'->>'scheduleId' = $2
+         LIMIT 1`,
+        [schedule.agent_instance_id, schedule.id]
       );
-      if (runningTask.rows.length > 0) {
-        logger.warn(
-          `Skipping scheduled task for ${schedule.agent_name}: agent is already running a task.`
+      if (existingTask.rows.length > 0) {
+        logger.info(
+          `Schedule ${schedule.name} already has a queued/running task — skipping duplicate`
         );
-        await this.updateRunStatus(id, 'skipped', 'Agent already running a task');
+        await this.updateRunStatus(id, 'skipped', 'Schedule already has a pending task');
         return;
       }
 

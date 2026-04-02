@@ -224,16 +224,75 @@ export class MemoryBlockStore {
 
   /** Retrieve a single entry by UUID. */
   async getEntry(id: string): Promise<MemoryEntry | null> {
-    // Check cache first
-    for (const block of this.cache.values()) {
-      const cachedEntry = block.entries.find((e) => e.id === id);
-      if (cachedEntry) return cachedEntry;
+    const entries = await this.getEntries([id]);
+    return entries.length > 0 ? entries[0]! : null;
+  }
+
+  /** Retrieve multiple entries by UUID. Metadata (type, title) can be provided for faster lookup. */
+  async getEntries(
+    items: Array<string | { id: string; type?: MemoryBlockType; title?: string }>
+  ): Promise<MemoryEntry[]> {
+    if (items.length === 0) return [];
+
+    // Normalize items to { id, type, title }
+    const normalized = items.map((item) => (typeof item === 'string' ? { id: item } : item));
+
+    const resultsMap = new Map<string, MemoryEntry>();
+    const missing = normalized.filter((item) => {
+      // 1. Check cache (O(1) per block type)
+      for (const block of this.cache.values()) {
+        const cached = block.entries.find((e) => e.id === item.id);
+        if (cached) {
+          resultsMap.set(item.id, cached);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (missing.length > 0) {
+      // 2. Fast path: try targeted disk reads if metadata is available
+      const stillMissing: typeof missing = [];
+      for (const item of missing) {
+        if (item.type && item.title) {
+          try {
+            const filename = `${this.slugify(item.title)}.md`;
+            const filepath = path.join(this.blockDir(item.type), filename);
+            const raw = await fs.readFile(filepath, 'utf8');
+            const entry = this.parse(raw);
+            if (entry.id === item.id) {
+              resultsMap.set(item.id, entry);
+              // We don't populate the full cache here to avoid partial block loads,
+              // but we could if we wanted to. For now, just return the entry.
+              continue;
+            }
+          } catch {
+            // Fall through to search
+          }
+        }
+        stillMissing.push(item);
+      }
+
+      // 3. Slow path: scan all blocks for remaining IDs (O(N) single pass through all files)
+      if (stillMissing.length > 0) {
+        const missingIds = new Set(stillMissing.map((m) => m.id));
+        for (const type of MEMORY_BLOCK_TYPES) {
+          if (missingIds.size === 0) break;
+          const block = await this.loadBlock(type);
+          for (const entry of block.entries) {
+            if (missingIds.has(entry.id)) {
+              resultsMap.set(entry.id, entry);
+              missingIds.delete(entry.id);
+            }
+          }
+        }
+      }
     }
 
-    const result = await this.findEntryFile(id);
-    if (!result) return null;
-    const raw = await fs.readFile(result.filepath, 'utf8');
-    return this.parse(raw);
+    // Preserve input order and handle missing entries (filter nulls)
+    return normalized
+      .map((item) => resultsMap.get(item.id))
+      .filter((e): e is MemoryEntry => e !== undefined);
   }
 
   /** Update an entry's content. */

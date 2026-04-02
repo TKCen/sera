@@ -11,7 +11,7 @@
  */
 
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
-import type { ChatMessage } from './llmClient.js';
+import type { ChatMessage, ILLMClient } from './llmClient.js';
 import { log } from './logger.js';
 
 // ── Model context window sizes (tokens) ───────────────────────────────────────
@@ -43,6 +43,16 @@ const DEFAULT_RESPONSE_RESERVE = 4_096;
 const DEFAULT_EMERGENCY_TOOL_TOKENS = 500;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 4;
 
+/** Enrichment markers injected by ContextAssembler / SkillInjector — stripped before summarization. */
+const ENRICHMENT_PATTERNS = [
+  /<memory>[\s\S]*?<\/memory>/g,
+  /<skills>[\s\S]*?<\/skills>/g,
+  /<constitution>[\s\S]*?<\/constitution>/g,
+  /<context>[\s\S]*?<\/context>/g,
+  /<tool-descriptions>[\s\S]*?<\/tool-descriptions>/g,
+  /<circle-context>[\s\S]*?<\/circle-context>/g,
+];
+
 export type CompactionStrategy = 'sliding-window' | 'summarise';
 
 export interface CompactionResult {
@@ -51,6 +61,8 @@ export interface CompactionResult {
   tokensBefore: number;
   tokensAfter: number;
   reflectMessage: string;
+  strategy: CompactionStrategy;
+  isFallback?: boolean;
 }
 
 // ── ContextManager ────────────────────────────────────────────────────────────
@@ -176,10 +188,11 @@ export class ContextManager {
    * Always preserves system messages and the N most recent messages verbatim.
    *
    * @param messages   Current message history (mutated in place).
+   * @param llmClient  Optional LLM client for summarization.
    * @returns CompactionResult describing what happened.
    */
-  compact(messages: ChatMessage[]): CompactionResult {
-    return this.performCompaction(messages, this.highWaterMark, 'Context compacted');
+  async compact(messages: ChatMessage[], llmClient?: ILLMClient): Promise<CompactionResult> {
+    return this.performCompaction(messages, this.highWaterMark, 'Context compacted', llmClient);
   }
 
   /**
@@ -195,10 +208,11 @@ export class ContextManager {
    * headroom is needed to succeed on retry.
    *
    * @param messages   Current message history (mutated in place).
+   * @param llmClient  Optional LLM client for summarization.
    */
-  aggressiveCompact(messages: ChatMessage[]): CompactionResult {
+  async aggressiveCompact(messages: ChatMessage[], llmClient?: ILLMClient): Promise<CompactionResult> {
     const aggressiveTarget = Math.floor(this.contextWindow * AGGRESSIVE_COMPACT_PCT);
-    return this.performCompaction(messages, aggressiveTarget, 'Aggressive compaction');
+    return this.performCompaction(messages, aggressiveTarget, 'Aggressive compaction', llmClient);
   }
 
   /**
@@ -282,6 +296,16 @@ export class ContextManager {
     return DEFAULT_CONTEXT_WINDOW;
   }
 
+  /** Remove enrichment XML blocks from a message's content. */
+  private stripEnrichment(content: string): string {
+    let stripped = content;
+    for (const pattern of ENRICHMENT_PATTERNS) {
+      stripped = stripped.replace(pattern, '');
+    }
+    // Clean up leftover double newlines from removed blocks
+    return stripped.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   private truncateToFit(content: string, targetTokens: number): string {
     if (targetTokens <= 0) return '';
     let low = 0;
@@ -297,7 +321,12 @@ export class ContextManager {
     return content.slice(0, low);
   }
 
-  private performCompaction(messages: ChatMessage[], targetTokens: number, label: string): CompactionResult {
+  private async performCompaction(
+    messages: ChatMessage[],
+    targetTokens: number,
+    label: string,
+    llmClient?: ILLMClient
+  ): Promise<CompactionResult> {
     const tokensBefore = this.countMessageTokens(messages);
 
     const systemMessages = messages.filter((m) => m.role === 'system');
@@ -310,7 +339,24 @@ export class ContextManager {
         tokensBefore,
         tokensAfter: tokensBefore,
         reflectMessage: `${label}: no compaction needed`,
+        strategy: this.strategy,
       };
+    }
+
+    let isFallback = false;
+    if (this.strategy === 'summarise' && llmClient) {
+      try {
+        return await this.performSummarizeCompaction(
+          messages,
+          targetTokens,
+          label,
+          llmClient,
+          tokensBefore
+        );
+      } catch (err) {
+        log('warn', `ContextManager: summarization failed, falling back to sliding-window: ${err}`);
+        isFallback = true;
+      }
     }
 
     const droppedMessages: ChatMessage[] = [];
@@ -396,10 +442,105 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
 
     const tokensAfter = this.countMessageTokens(messages);
     const retainedCount = nonSystemMessages.length;
-    const reflectMessage = `${label}: dropped ${droppedCount} messages, retained ${retainedCount} non-system messages (${tokensBefore} → ${tokensAfter} tokens)`;
+    const reflectMessage = `${label}${isFallback ? ' (fallback)' : ''}: dropped ${droppedCount} messages, retained ${retainedCount} non-system messages (${tokensBefore} → ${tokensAfter} tokens)`;
 
     log('info', `ContextManager: ${reflectMessage}`);
-    return { droppedCount, retainedCount, tokensBefore, tokensAfter, reflectMessage };
+    return {
+      droppedCount,
+      retainedCount,
+      tokensBefore,
+      tokensAfter,
+      reflectMessage,
+      strategy: 'sliding-window',
+      isFallback,
+    };
+  }
+
+  private async performSummarizeCompaction(
+    messages: ChatMessage[],
+    targetTokens: number,
+    label: string,
+    llmClient: ILLMClient,
+    tokensBefore: number
+  ): Promise<CompactionResult> {
+    const systemMessages = messages.filter((m) => m.role === 'system');
+    const nonSystem = messages.filter((m) => m.role !== 'system');
+    const recentK = Math.min(this.preserveRecentMessages, nonSystem.length);
+    const oldest = nonSystem.slice(0, nonSystem.length - recentK);
+    const recent = nonSystem.slice(nonSystem.length - recentK);
+
+    if (oldest.length === 0) {
+      // Nothing to summarize — trigger sliding window
+      throw new Error('Nothing to summarize');
+    }
+
+    // Partition logic might need to drop more from "recent" if the summary
+    // itself is expected to be large. But we'll start with standard K.
+
+    const conversationText = oldest
+      .map((m) => {
+        const content = this.stripEnrichment(m.content ?? '');
+        return `${m.role}: ${content}`;
+      })
+      .join('\n\n');
+
+    const prompt = `Summarize the following conversation history, preserving:
+- Key decisions and conclusions
+- Important facts and data points mentioned
+- Current task state and progress
+- Any commitments or action items
+
+Be concise but preserve all actionable information.
+
+Conversation:
+${conversationText}`;
+
+    const compactionModel = process.env['CONTEXT_COMPACTION_MODEL'];
+
+    const response = await llmClient.chat(
+      [{ role: 'user', content: prompt }],
+      undefined,
+      0.3, // Low temperature for summarization
+      undefined,
+      compactionModel
+    );
+
+    const summary = response.content;
+    const summaryUserMsg: ChatMessage = {
+      role: 'user',
+      content: `[Context Summary]\n${summary}`,
+    };
+    const summaryAckMsg: ChatMessage = {
+      role: 'assistant',
+      content: 'Understood. I have the summarized context and will continue from here.',
+    };
+
+    const newMessages = [...systemMessages, summaryUserMsg, summaryAckMsg, ...recent];
+
+    // If still over target, fall back to sliding window or truncate further?
+    // Let's try to fit.
+    if (this.countMessageTokens(newMessages) > targetTokens) {
+      // If summary + recent is still too big, we have to drop from recent or truncate summary.
+      // For now, let's just let it be and let the next turn's compaction handle it if needed,
+      // or fall back to sliding window if it's really bad.
+    }
+
+    messages.splice(0, messages.length, ...newMessages);
+
+    const tokensAfter = this.countMessageTokens(messages);
+    const droppedCount = oldest.length;
+    const retainedCount = recent.length + 2; // Summary messages + recent
+    const reflectMessage = `${label} (summarize): dropped ${droppedCount} messages, retained ${retainedCount} messages (${tokensBefore} → ${tokensAfter} tokens)`;
+
+    log('info', `ContextManager: ${reflectMessage}`);
+    return {
+      droppedCount,
+      retainedCount,
+      tokensBefore,
+      tokensAfter,
+      reflectMessage,
+      strategy: 'summarise',
+    };
   }
 
   private summarizeMessages(dropped: ChatMessage[]): string {

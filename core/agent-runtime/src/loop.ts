@@ -295,7 +295,6 @@ export class ReasoningLoop {
             await think('reflect', 'Context window approaching limit — triggering memory flush', iteration, {
               internal: true,
             });
-
             messages.push({
               role: 'system',
               content:
@@ -347,10 +346,15 @@ export class ReasoningLoop {
             } catch (flushErr) {
               log('warn', `Memory flush failed: ${flushErr instanceof Error ? flushErr.message : String(flushErr)}`);
             }
+          } else {
+            // Flush already fired or no memory tools — proceed with compaction
+            await think('reflect', 'compaction.started', iteration);
+            const compaction = await this.contextManager.compact(messages, this.llm);
+            const event = compaction.isFallback ? 'compaction.fallback' : 'compaction.completed';
+            await think('reflect', `${event}: ${compaction.reflectMessage}`, iteration, {
+              anomaly: compaction.isFallback,
+            });
           }
-
-          const compaction = this.contextManager.compact(messages);
-          await think('reflect', compaction.reflectMessage, iteration);
         }
 
         log(
@@ -385,10 +389,12 @@ export class ReasoningLoop {
               retryState.overflowCompactionAttempts++;
               const attempt = retryState.overflowCompactionAttempts;
 
-              const compaction = this.contextManager.aggressiveCompact(messages);
+              await think('reflect', 'compaction.started (aggressive)', iteration);
+              const compaction = await this.contextManager.aggressiveCompact(messages, this.llm);
+              const event = compaction.isFallback ? 'compaction.fallback' : 'compaction.completed';
               await think(
                 'reflect',
-                `Context overflow detected (attempt ${attempt}/${MAX_OVERFLOW_RETRIES}) — ${compaction.reflectMessage}`,
+                `${event}: Context overflow detected (attempt ${attempt}/${MAX_OVERFLOW_RETRIES}) — ${compaction.reflectMessage}`,
                 iteration,
                 { anomaly: true }
               );
@@ -443,10 +449,12 @@ export class ReasoningLoop {
               retryState.timeoutCompactionAttempts++;
               const attempt = retryState.timeoutCompactionAttempts;
 
-              const compaction = this.contextManager.aggressiveCompact(messages);
+              await think('reflect', 'compaction.started (aggressive)', iteration);
+              const compaction = await this.contextManager.aggressiveCompact(messages, this.llm);
+              const event = compaction.isFallback ? 'compaction.fallback' : 'compaction.completed';
               await think(
                 'reflect',
-                `LLM timeout with ${(utilization * 100).toFixed(0)}% context utilization (attempt ${attempt}/${MAX_TIMEOUT_RETRIES}) — ${compaction.reflectMessage}`,
+                `${event}: LLM timeout with ${(utilization * 100).toFixed(0)}% context utilization (attempt ${attempt}/${MAX_TIMEOUT_RETRIES}) — ${compaction.reflectMessage}`,
                 iteration,
                 { anomaly: true }
               );
@@ -584,10 +592,12 @@ export class ReasoningLoop {
               messages
             );
             if (budgetCheck.compactionNeeded) {
-              const compaction = this.contextManager.compact(messages);
+              await think('reflect', 'compaction.started (pre-result)', iteration);
+              const compaction = await this.contextManager.compact(messages, this.llm);
+              const event = compaction.isFallback ? 'compaction.fallback' : 'compaction.completed';
               await think(
                 'reflect',
-                `Pre-result compaction: ${compaction.reflectMessage}`,
+                `${event} (pre-result): ${compaction.reflectMessage}`,
                 iteration
               );
               const recheck = this.contextManager.truncateToContextBudget(

@@ -172,4 +172,47 @@ describe('ReasoningLoop — memory flush (formerly pre-compaction memory save ho
     expect(flushCall).toBeDefined();
     expect(flushCall[3]?.internal).toBe(true);
   });
+
+  it('delays actual compaction by one iteration when hook fires', async () => {
+    // 1. Setup: near limit, has knowledge-store
+    process.env['CONTEXT_WINDOW'] = '100';
+    delete process.env['MAX_CONTEXT_TOKENS'];
+
+    const knowledgeStoreDef: ToolDefinition = {
+      type: 'function',
+      function: { name: 'knowledge-store', description: 'Store knowledge', parameters: {} },
+    };
+    mockGetToolDefinitions.mockReturnValue([knowledgeStoreDef]);
+
+    // Responses: first one must be a tool call to keep the loop going
+    mockChat
+      .mockResolvedValueOnce({
+        content: 'Saving findings...',
+        toolCalls: [{ id: 'c1', type: 'function', function: { name: 'knowledge-store', arguments: '{}' } }],
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
+      })
+      .mockResolvedValueOnce(successResponse('Final answer'));
+
+    const loop = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
+    const result = await loop.run({ taskId: 'task-delay', task: 'word '.repeat(30) });
+
+    // 2. Verify sequence:
+    // Iteration 1: detect near limit -> fire hook -> continue (no LLM call yet)
+    // Iteration 2: respond to task (first LLM call) -> still near limit after response?
+    // ... we need to ensure it's still near limit to trigger the 2nd call's compaction.
+
+    expect(mockChat).toHaveBeenCalledTimes(2);
+
+    // First LLM call should HAVE the save-reminder message
+    const firstCallMsgs = mockChat.mock.calls[0]![0];
+    expect(firstCallMsgs.some(m => m.content.includes('IMPORTANT: Your context window is nearly full'))).toBe(true);
+
+    // Second LLM call should be AFTER compaction (system prompt should be there, but maybe some old messages gone)
+    // The "compaction.started" thought should have fired before the 2nd LLM call.
+    const compactionStartingThought = result.thoughtStream.find(t => t.content === 'compaction.started');
+    expect(compactionStartingThought).toBeDefined();
+
+    // Iteration check
+    expect(compactionStartingThought!.iteration).toBe(2);
+  });
 });

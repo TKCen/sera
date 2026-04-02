@@ -81,7 +81,12 @@ describe('useSchedules hooks', () => {
 
   describe('useCreateSchedule', () => {
     it('should create a schedule and invalidate queries', async () => {
-      const newSchedule = { agentName: 'agent', name: 'new', type: 'cron', expression: '* * * * *' };
+      const newSchedule = {
+        agentName: 'agent',
+        name: 'new',
+        type: 'cron',
+        expression: '* * * * *',
+      };
       vi.mocked(schedulesApi.createSchedule).mockResolvedValue({ id: '1', ...newSchedule } as any);
 
       const { result } = renderHook(() => useCreateSchedule(), { wrapper });

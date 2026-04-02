@@ -72,6 +72,14 @@ export function createAgentRouter(
     })
   );
 
+  router.get(
+    '/pending-updates',
+    asyncHandler(async (_req, res) => {
+      const updates = await agentRegistry.getInstancesWithPendingUpdates();
+      res.json(updates);
+    })
+  );
+
   // ── List all agent instances (raw DB) ─────────────────────────────────────
   router.get(
     '/instances',
@@ -606,6 +614,45 @@ export function createAgentRouter(
       const prompt = IdentityService.generateSystemPrompt(manifest);
 
       res.json({ prompt });
+    })
+  );
+
+  // ── Template Diff ────────────────────────────────────────────────────────
+  /**
+   * GET /api/agents/:id/template-diff
+   * Returns a structured diff between the current template spec and the instance's applied config.
+   */
+  router.get(
+    '/:id/template-diff',
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      const diff = await agentRegistry.getTemplateDiff(id as string);
+      res.json(diff);
+    })
+  );
+
+  // ── Apply Template Update ────────────────────────────────────────────────
+  /**
+   * POST /api/agents/:id/apply-template-update
+   * Applies pending template changes to the instance. Optional { paths } for partial apply.
+   */
+  router.post(
+    '/:id/apply-template-update',
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      const { paths } = req.body as { paths?: string[] };
+      // Validate paths against actual diff to prevent arbitrary config injection
+      if (paths && paths.length > 0) {
+        const diff = await agentRegistry.getTemplateDiff(id as string);
+        const validPaths = new Set(diff.changes.map((c: { path: string }) => c.path));
+        const invalid = paths.filter((p) => !validPaths.has(p));
+        if (invalid.length > 0) {
+          res.status(400).json({ error: `Paths not in pending diff: ${invalid.join(', ')}` });
+          return;
+        }
+      }
+      await agentRegistry.applyTemplateUpdate(id as string, paths);
+      res.json({ success: true });
     })
   );
 

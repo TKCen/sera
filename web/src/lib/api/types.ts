@@ -304,8 +304,10 @@ export interface MessageThought {
   timestamp: string;
   stepType: string;
   content: string;
+  agentId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
+  toolCallId?: string;
 }
 
 export interface Message {
@@ -323,6 +325,9 @@ export interface ThoughtEvent {
   content: string;
   agentId: string;
   agentDisplayName?: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolCallId?: string;
 }
 
 export interface AgentTemplate {
@@ -586,4 +591,21 @@ export interface AgentBudget {
   maxLlmTokensPerDay?: number;
   currentHourTokens: number;
   currentDayTokens: number;
+}
+
+export interface TemplateDiffChange {
+  path: string;
+  type: 'added' | 'removed' | 'changed';
+  oldValue?: unknown;
+  newValue?: unknown;
+  impact: 'info' | 'permission' | 'resource' | 'breaking';
+}
+
+export interface TemplateDiff {
+  hasChanges: boolean;
+  instanceId: string;
+  templateName: string;
+  templateUpdatedAt: string;
+  instanceAppliedAt: string | null;
+  changes: TemplateDiffChange[];
 }

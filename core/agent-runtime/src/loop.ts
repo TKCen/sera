@@ -19,7 +19,7 @@ import {
   LLMTimeoutError,
 } from './llmClient.js';
 import type { IToolExecutor } from './tools/index.js';
-import type { CentrifugoPublisher } from './centrifugo.js';
+import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
 import { ContextManager } from './contextManager.js';
@@ -208,7 +208,13 @@ export class ReasoningLoop {
       step: 'observe' | 'plan' | 'act' | 'reflect',
       content: string,
       iteration: number,
-      opts?: { toolName?: string; toolArgs?: Record<string, unknown>; anomaly?: boolean }
+      opts?: {
+        toolName?: string;
+        toolArgs?: Record<string, unknown>;
+        toolCallId?: string;
+        anomaly?: boolean;
+        internal?: boolean;
+      }
     ) => {
       thoughtStream.push({ step, content, iteration, timestamp: new Date().toISOString() });
       await this.centrifugo.publishThought(step, content, iteration, opts);
@@ -292,9 +298,14 @@ export class ReasoningLoop {
             !memoryFlushFired
           ) {
             memoryFlushFired = true;
-            await think('reflect', 'Context window approaching limit — triggering memory flush', iteration, {
-              internal: true,
-            });
+            await think(
+              'reflect',
+              'Context window approaching limit — triggering memory flush',
+              iteration,
+              {
+                internal: true,
+              }
+            );
             messages.push({
               role: 'system',
               content:
@@ -327,12 +338,20 @@ export class ReasoningLoop {
                 for (const tr of toolResults) {
                   tr.message.internal = true;
                   messages.push(tr.message);
-                  if (MEMORY_TOOLS.includes(tr.toolName) && !tr.message.content.includes('Error:')) {
+                  if (
+                    MEMORY_TOOLS.includes(tr.toolName) &&
+                    !tr.message.content.includes('Error:')
+                  ) {
                     savedCount++;
                   }
-                  await think('reflect', `Flush tool result: ${tr.message.content.substring(0, 100)}`, iteration, {
-                    internal: true,
-                  });
+                  await think(
+                    'reflect',
+                    `Flush tool result: ${tr.message.content.substring(0, 100)}`,
+                    iteration,
+                    {
+                      internal: true,
+                    }
+                  );
                 }
 
                 log('info', `memory.flush: saved ${savedCount} block(s) before compaction`);
@@ -344,7 +363,10 @@ export class ReasoningLoop {
                 });
               }
             } catch (flushErr) {
-              log('warn', `Memory flush failed: ${flushErr instanceof Error ? flushErr.message : String(flushErr)}`);
+              log(
+                'warn',
+                `Memory flush failed: ${flushErr instanceof Error ? flushErr.message : String(flushErr)}`
+              );
             }
           } else {
             // Flush already fired or no memory tools — proceed with compaction
@@ -569,6 +591,7 @@ export class ReasoningLoop {
               {
                 toolName: tc.function.name,
                 toolArgs: sanitized,
+                toolCallId: tc.id,
               }
             );
           }
@@ -581,7 +604,16 @@ export class ReasoningLoop {
           });
 
           // Execute tools and add results
-          const toolResults = await this.tools.executeToolCalls(response.toolCalls, taskId);
+
+          const onToolOutput: ToolOutputCallback = (event) => {
+            this.centrifugo.publishToolOutput(event).catch((err) => {
+              log(
+                'warn',
+                `Failed to publish tool output: ${err instanceof Error ? err.message : String(err)}`
+              );
+            });
+          };
+          const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);
@@ -640,9 +672,9 @@ export class ReasoningLoop {
         let finalReply = reply;
         const citationsMode = this.manifest.memory?.citations ?? 'off';
         if (citationsMode === 'brief') {
-           finalReply = reply.replace(/\[from:\s*[^\]]+\]/g, '').trim();
-           // Clean up multiple spaces left by removal
-           finalReply = finalReply.replace(/\s{2,}/g, ' ');
+          finalReply = reply.replace(/\[from:\s*[^\]]+\]/g, '').trim();
+          // Clean up multiple spaces left by removal
+          finalReply = finalReply.replace(/\s{2,}/g, ' ');
         }
 
         // Accumulate citations from the final text-producing turn

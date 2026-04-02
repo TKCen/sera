@@ -6,6 +6,10 @@ import type {
   PermissionDecisionParams,
 } from '@/lib/api/types';
 
+export const templateDiffKeys = {
+  diff: (agentId: string) => ['template-diff', agentId] as const,
+};
+
 export const agentsKeys = {
   all: ['agents'] as const,
   detail: (id: string) => ['agents', id] as const,
@@ -18,6 +22,7 @@ export const agentsKeys = {
   grants: (id: string) => ['agents', id, 'grants'] as const,
   delegations: (id: string) => ['agents', id, 'delegations'] as const,
   permissionRequests: (agentId?: string) => ['permission-requests', agentId] as const,
+  pendingUpdates: () => ['agents', 'pending-updates'] as const,
 };
 
 export function useAgents() {
@@ -209,6 +214,14 @@ export function useAgentGrants(id: string) {
   });
 }
 
+export function usePendingUpdates() {
+  return useQuery({
+    queryKey: agentsKeys.pendingUpdates(),
+    queryFn: agentsApi.getPendingUpdates,
+    refetchInterval: 30000, // Poll every 30s
+  });
+}
+
 export function useCreateGrant() {
   const qc = useQueryClient();
   return useMutation({
@@ -255,6 +268,25 @@ export function useDecidePermission() {
     onSuccess: (_data, { agentId }) => {
       void qc.invalidateQueries({ queryKey: agentsKeys.permissionRequests(agentId) });
       void qc.invalidateQueries({ queryKey: agentsKeys.grants(agentId) });
+    },
+  });
+}
+
+export function useTemplateDiff(agentId: string) {
+  return useQuery({
+    queryKey: templateDiffKeys.diff(agentId),
+    queryFn: () => agentsApi.getTemplateDiff(agentId),
+    enabled: agentId.length > 0,
+  });
+}
+
+export function useApplyTemplateUpdate(agentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (paths?: string[]) => agentsApi.applyTemplateUpdate(agentId, paths),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: templateDiffKeys.diff(agentId) });
+      void qc.invalidateQueries({ queryKey: agentsKeys.detail(agentId) });
     },
   });
 }

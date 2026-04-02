@@ -2,8 +2,9 @@
  * Shell execution handler — tier-gated bash command execution.
  */
 
-import { spawnSync } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import { NotPermittedError, DEFAULT_SHELL_TIMEOUT_MS } from './types.js';
+import type { ToolOutputCallback } from '../centrifugo.js';
 
 /**
  * Execute a shell command in the workspace directory.
@@ -37,6 +38,155 @@ export function shellExec(
   }
 
   return `Exit code: ${exitCode}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`;
+}
+
+/**
+ * Execute a shell command with streaming stdout/stderr via onOutput callback.
+ * Uses spawn() for live output instead of spawnSync().
+ * Falls back to shellExec() if spawn fails to start.
+ */
+export async function shellExecStreaming(
+  workspacePath: string,
+  tier: number,
+  command: string,
+  timeoutMs: number | undefined,
+  onOutput: ToolOutputCallback,
+  toolCallId: string
+): Promise<string> {
+  if (tier === 1) {
+    throw new NotPermittedError('shell-exec is not available for tier-1 agents');
+  }
+
+  const timeout = timeoutMs ?? DEFAULT_SHELL_TIMEOUT_MS;
+  const start = Date.now();
+
+  return new Promise<string>((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('bash', ['-c', command], {
+        cwd: workspacePath,
+        shell: false,
+      });
+    } catch (err) {
+      // Spawn failed to start — fall back to sync variant
+      resolve(shellExec(workspacePath, tier, command, timeoutMs));
+      return;
+    }
+
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    const MAX_STREAM_BYTES = 2 * 1024 * 1024; // 2 MB, same as sync variant
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeout);
+
+    const emitLines = (buffer: string, type: 'stdout' | 'stderr', pending: string[]): string => {
+      const parts = (pending.join('') + buffer).split('\n');
+      // Last element may be incomplete — keep it as pending
+      const incomplete = parts.pop() ?? '';
+      for (const line of parts) {
+        onOutput({
+          toolCallId,
+          toolName: 'shell-exec',
+          type,
+          content: line,
+          done: false,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      pending.length = 0;
+      if (incomplete) pending.push(incomplete);
+      return incomplete;
+    };
+
+    const stdoutPending: string[] = [];
+    const stderrPending: string[] = [];
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf-8');
+      stdoutBytes += Buffer.byteLength(text);
+      if (stdoutBytes <= MAX_STREAM_BYTES) {
+        stdoutChunks.push(text);
+      } else if (!timedOut) {
+        child.kill('SIGKILL');
+      }
+      emitLines(text, 'stdout', stdoutPending);
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf-8');
+      stderrBytes += Buffer.byteLength(text);
+      if (stderrBytes <= MAX_STREAM_BYTES) {
+        stderrChunks.push(text);
+      } else if (!timedOut) {
+        child.kill('SIGKILL');
+      }
+      emitLines(text, 'stderr', stderrPending);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      onOutput({
+        toolCallId,
+        toolName: 'shell-exec',
+        type: 'error',
+        content: err.message,
+        done: true,
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - start,
+      });
+      resolve(shellExec(workspacePath, tier, command, timeoutMs));
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+
+      // Flush any remaining partial lines
+      for (const pending of [stdoutPending, stderrPending]) {
+        const remainder = pending.join('');
+        if (remainder) {
+          const type = pending === stdoutPending ? 'stdout' : 'stderr';
+          onOutput({
+            toolCallId,
+            toolName: 'shell-exec',
+            type,
+            content: remainder,
+            done: false,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      const stdout = stdoutChunks.join('');
+      const stderr = stderrChunks.join('');
+      const exitCode = timedOut ? -1 : (code ?? -1);
+      const durationMs = Date.now() - start;
+
+      let resultStr: string;
+      if (exitCode === 0) {
+        resultStr = stdout;
+      } else {
+        resultStr = `Exit code: ${exitCode}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`;
+      }
+
+      onOutput({
+        toolCallId,
+        toolName: 'shell-exec',
+        type: 'result',
+        content: resultStr.substring(0, 500),
+        done: true,
+        timestamp: new Date().toISOString(),
+        durationMs,
+      });
+
+      resolve(resultStr);
+    });
+  });
 }
 
 /**

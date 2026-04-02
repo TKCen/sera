@@ -6,6 +6,96 @@ import { DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA } from '../metering/MeteringS
 
 import { Logger } from '../lib/logger.js';
 
+export interface TemplateDiffChange {
+  path: string;
+  type: 'added' | 'removed' | 'changed';
+  oldValue?: unknown;
+  newValue?: unknown;
+  impact: 'info' | 'permission' | 'resource' | 'breaking';
+}
+
+export interface TemplateDiff {
+  hasChanges: boolean;
+  instanceId: string;
+  templateName: string;
+  templateUpdatedAt: string;
+  instanceAppliedAt: string | null;
+  changes: TemplateDiffChange[];
+}
+
+export interface PendingUpdateEntry {
+  instanceId: string;
+  instanceName: string;
+  templateName: string;
+  templateUpdatedAt: string;
+}
+
+function classifyImpact(
+  path: string,
+  type: 'added' | 'removed' | 'changed'
+): TemplateDiffChange['impact'] {
+  const permissionKeywords = [
+    'capabilities',
+    'tools',
+    'permissions',
+    'sandboxBoundary',
+    'policyRef',
+  ];
+  const resourceKeywords = ['resources', 'memory', 'cpu', 'maxLlm'];
+  if (permissionKeywords.some((k) => path.includes(k))) return 'permission';
+  if (resourceKeywords.some((k) => path.includes(k))) return 'resource';
+  if (type === 'removed') return 'breaking';
+  return 'info';
+}
+
+function deepDiff(
+  oldObj: unknown,
+  newObj: unknown,
+  path: string,
+  changes: TemplateDiffChange[]
+): void {
+  if (oldObj === newObj) return;
+
+  const oldIsObj = oldObj !== null && typeof oldObj === 'object' && !Array.isArray(oldObj);
+  const newIsObj = newObj !== null && typeof newObj === 'object' && !Array.isArray(newObj);
+
+  if (oldIsObj && newIsObj) {
+    const oldRecord = oldObj as Record<string, unknown>;
+    const newRecord = newObj as Record<string, unknown>;
+    const allKeys = new Set([...Object.keys(oldRecord), ...Object.keys(newRecord)]);
+    for (const key of allKeys) {
+      deepDiff(oldRecord[key], newRecord[key], path ? `${path}.${key}` : key, changes);
+    }
+    return;
+  }
+
+  if (oldObj === undefined && newObj !== undefined) {
+    changes.push({ path, type: 'added', newValue: newObj, impact: classifyImpact(path, 'added') });
+    return;
+  }
+  if (oldObj !== undefined && newObj === undefined) {
+    changes.push({
+      path,
+      type: 'removed',
+      oldValue: oldObj,
+      impact: classifyImpact(path, 'removed'),
+    });
+    return;
+  }
+
+  const oldSer = JSON.stringify(oldObj);
+  const newSer = JSON.stringify(newObj);
+  if (oldSer !== newSer) {
+    changes.push({
+      path,
+      type: 'changed',
+      oldValue: oldObj,
+      newValue: newObj,
+      impact: classifyImpact(path, 'changed'),
+    });
+  }
+}
+
 const logger = new Logger('AgentRegistry');
 
 export class AgentRegistry {
@@ -660,5 +750,141 @@ export class AgentRegistry {
       }
     }
     return { removed, errors };
+  }
+
+  // ── Template Diff & Update ────────────────────────────────────────────────
+
+  async getTemplateDiff(instanceId: string): Promise<TemplateDiff> {
+    const instanceRes = await this.pool.query(
+      'SELECT id, name, template_ref, resolved_config, overrides, template_applied_at FROM agent_instances WHERE id = $1',
+      [instanceId]
+    );
+    const instance = instanceRes.rows[0];
+    if (!instance)
+      throw Object.assign(new Error(`Instance ${instanceId} not found`), { status: 404 });
+
+    const templateRef = instance.template_ref as string;
+    const templateRes = await this.pool.query(
+      'SELECT name, spec, updated_at FROM agent_templates WHERE name = $1',
+      [templateRef]
+    );
+    const template = templateRes.rows[0];
+    if (!template)
+      throw Object.assign(new Error(`Template ${templateRef} not found`), { status: 404 });
+
+    const templateUpdatedAt = (template.updated_at as Date).toISOString();
+    const instanceAppliedAt = instance.template_applied_at
+      ? (instance.template_applied_at as Date).toISOString()
+      : null;
+
+    const templateSpec = (template.spec ?? {}) as Record<string, unknown>;
+    const instanceSpec = (instance.resolved_config ?? instance.overrides ?? {}) as Record<
+      string,
+      unknown
+    >;
+
+    const changes: TemplateDiffChange[] = [];
+    deepDiff(instanceSpec, templateSpec, '', changes);
+
+    const hasChanges =
+      changes.length > 0 ||
+      instanceAppliedAt === null ||
+      new Date(templateUpdatedAt) > new Date(instanceAppliedAt);
+
+    return {
+      hasChanges,
+      instanceId,
+      templateName: templateRef,
+      templateUpdatedAt,
+      instanceAppliedAt,
+      changes,
+    };
+  }
+
+  async applyTemplateUpdate(instanceId: string, paths?: string[]): Promise<void> {
+    const diff = await this.getTemplateDiff(instanceId);
+
+    if (!diff.hasChanges) return;
+
+    const templateRes = await this.pool.query('SELECT spec FROM agent_templates WHERE name = $1', [
+      diff.templateName,
+    ]);
+    const template = templateRes.rows[0];
+    if (!template)
+      throw Object.assign(new Error(`Template ${diff.templateName} not found`), { status: 404 });
+
+    const templateSpec = (template.spec ?? {}) as Record<string, unknown>;
+
+    if (paths && paths.length > 0) {
+      // Partial apply: fetch current instance config and overlay only the requested paths
+      const instanceRes = await this.pool.query(
+        'SELECT resolved_config, overrides FROM agent_instances WHERE id = $1',
+        [instanceId]
+      );
+      const inst = instanceRes.rows[0];
+      const current = (inst?.resolved_config ?? inst?.overrides ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...current };
+
+      for (const path of paths) {
+        const keys = path.split('.');
+        let src: unknown = templateSpec;
+        let dst: Record<string, unknown> = merged;
+
+        for (let i = 0; i < keys.length - 1; i++) {
+          const key = keys[i]!;
+          src = (src as Record<string, unknown>)[key];
+          if (!(key in dst) || typeof dst[key] !== 'object' || dst[key] === null) {
+            dst[key] = {};
+          }
+          dst = dst[key] as Record<string, unknown>;
+        }
+
+        const lastKey = keys[keys.length - 1]!;
+        dst[lastKey] = (src as Record<string, unknown>)[lastKey];
+      }
+
+      await this.pool.query(
+        'UPDATE agent_instances SET resolved_config = $2, template_applied_at = NOW(), updated_at = NOW() WHERE id = $1',
+        [instanceId, merged]
+      );
+    } else {
+      // Full apply: set resolved_config to the template spec
+      await this.pool.query(
+        'UPDATE agent_instances SET resolved_config = $2, template_applied_at = NOW(), updated_at = NOW() WHERE id = $1',
+        [instanceId, templateSpec]
+      );
+    }
+
+    // Re-sync schedules and budgets
+    await this.syncManifestSchedules(instanceId, diff.templateName);
+    await this.syncManifestBudget(instanceId, diff.templateName);
+  }
+
+  async getInstancesWithPendingUpdates(): Promise<PendingUpdateEntry[]> {
+    const res = await this.pool.query(`
+      SELECT
+        ai.id AS "instanceId",
+        ai.name AS "instanceName",
+        at.name AS "templateName",
+        at.updated_at AS "templateUpdatedAt"
+      FROM agent_instances ai
+      JOIN agent_templates at ON at.name = ai.template_ref
+      WHERE ai.template_applied_at IS NULL
+         OR at.updated_at > ai.template_applied_at
+      ORDER BY at.updated_at DESC
+    `);
+    return (
+      res.rows as Array<{
+        instanceId: string;
+        instanceName: string;
+        templateName: string;
+        templateUpdatedAt: Date;
+      }>
+    ).map((r) => ({
+      instanceId: r.instanceId,
+      instanceName: r.instanceName,
+      templateName: r.templateName,
+      templateUpdatedAt: r.templateUpdatedAt.toISOString(),
+    }));
   }
 }

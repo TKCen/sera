@@ -706,18 +706,14 @@ export default function ProvidersPage() {
               onRemove={(id) => removeDynamic.mutate(id)}
             />
           ))}
-          {!isLoadingDynamic &&
-            (dynamicData?.dynamicProviders ?? []).length === 0 &&
-            !showAddDynamic && (
-              <div className="col-span-full sera-card-static border-dashed border-sera-border p-8 text-center">
-                <p className="text-xs text-sera-text-muted mb-3">
-                  No dynamic providers configured.
-                </p>
-                <Button size="sm" variant="outline" onClick={() => setShowAddDynamic(true)}>
-                  <Plus size={12} /> Configure Local Provider
-                </Button>
-              </div>
-            )}
+          {!isLoadingDynamic && (dynamicData?.dynamicProviders ?? []).length === 0 && !showAddDynamic && (
+            <div className="col-span-full sera-card-static border-dashed border-sera-border p-8 text-center">
+              <p className="text-xs text-sera-text-muted mb-3">No dynamic providers configured.</p>
+              <Button size="sm" variant="outline" onClick={() => setShowAddDynamic(true)}>
+                <Plus size={12} /> Configure Local Provider
+              </Button>
+            </div>
+          )}
         </div>
       </section>
 
@@ -728,9 +724,7 @@ export default function ProvidersPage() {
           <h2 className="text-xs font-semibold tracking-[0.1em] text-sera-text-dim uppercase">
             Cloud Providers
           </h2>
-          <span className="text-[11px] text-sera-text-dim/60">
-            — OpenAI, Anthropic, Google, etc.
-          </span>
+          <span className="text-[11px] text-sera-text-dim/60">— OpenAI, Anthropic, Google, etc.</span>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

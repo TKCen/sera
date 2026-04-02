@@ -157,6 +157,18 @@ vi.mock('../agents/HeartbeatService.js', () => {
   };
 });
 
+vi.mock('../agents/CleanupService.js', () => {
+  return {
+    CleanupService: class {
+      setRegistry = vi.fn();
+      setSandboxManager = vi.fn();
+      registerEphemeralTTL = vi.fn();
+      runCleanupJob = vi.fn().mockResolvedValue(undefined);
+      stop = vi.fn();
+    },
+  };
+});
+
 vi.mock('../agents/Orchestrator.js', () => {
   return {
     Orchestrator: class {
@@ -190,6 +202,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setContextCompactionService = vi.fn();
       setCircleContextResolver = vi.fn();
       setHeartbeatService = vi.fn();
+      setCleanupService = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
       watchAgentsDirectory = vi.fn();

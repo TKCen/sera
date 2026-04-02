@@ -43,7 +43,6 @@ describe('Delegation Security', () => {
     // which now uses a random secret.
     // We can't easily sign a token that it will accept unless we can get that secret,
     // but the point is that it's random.
-
     // We can however verify that if we sign a token with SOME key, it's NOT accepted
     // (which we did above for the hardcoded one).
   });

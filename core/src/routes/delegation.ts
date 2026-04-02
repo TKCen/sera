@@ -504,33 +504,34 @@ async function revokeChildrenCascade(
     [parentId]
   );
 
-  let count = 0;
-  for (const child of rows) {
-    // Recurse first
-    count += await revokeChildrenCascade(child.id as string, now, intercomService);
+  const results = await Promise.all(
+    rows.map(async (child) => {
+      // Recurse first
+      const childCount = await revokeChildrenCascade(child.id as string, now, intercomService);
 
-    // Revoke this child
-    await pool.query(`UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`, [now, child.id]);
-    addToBlocklist(child.id as string, child.expires_at ? new Date(child.expires_at) : null);
+      // Revoke this child
+      await pool.query(`UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`, [now, child.id]);
+      addToBlocklist(child.id as string, child.expires_at ? new Date(child.expires_at) : null);
 
-    if (intercomService) {
-      const targetChannel = child.actor_instance_id
-        ? `agent:${child.actor_instance_id}`
-        : `agent:${child.actor_agent_id}`;
-      intercomService
-        .publish(targetChannel, {
-          type: 'system.delegation-revoked',
-          delegationTokenId: child.id,
-          service: (child.scope as DelegationScope).service,
-          reason: 'parent-revoked',
-        })
-        .catch(() => {});
-    }
+      if (intercomService) {
+        const targetChannel = child.actor_instance_id
+          ? `agent:${child.actor_instance_id}`
+          : `agent:${child.actor_agent_id}`;
+        intercomService
+          .publish(targetChannel, {
+            type: 'system.delegation-revoked',
+            delegationTokenId: child.id,
+            service: (child.scope as DelegationScope).service,
+            reason: 'parent-revoked',
+          })
+          .catch(() => {});
+      }
 
-    count++;
-  }
+      return childCount + 1;
+    })
+  );
 
-  return count;
+  return results.reduce((acc, c) => acc + c, 0);
 }
 
 // ── JWT verification helper (used by auth middleware extension) ───────────

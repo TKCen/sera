@@ -1,5 +1,9 @@
 import { SignJWT, jwtVerify } from 'jose';
+import crypto from 'crypto';
 import type { RequestType } from './channel.interface.js';
+import { Logger } from '../lib/logger.js';
+
+const logger = new Logger('ActionTokenService');
 
 export interface ActionTokenClaims {
   sub: string; // requestId
@@ -15,8 +19,20 @@ export interface ActionTokenPair {
   expiresAt: string;
 }
 
+let ephemeralSecret: Uint8Array | undefined;
+
 function getSignKey(): Uint8Array {
-  return new TextEncoder().encode(process.env['JWT_SECRET'] ?? 'sera-channel-action-secret');
+  if (process.env['JWT_SECRET']) {
+    return new TextEncoder().encode(process.env['JWT_SECRET']);
+  }
+  if (!ephemeralSecret) {
+    ephemeralSecret = crypto.randomBytes(32);
+    logger.warn(
+      'JWT_SECRET not set for action tokens — using a random ephemeral secret. ' +
+        'Action tokens will not survive server restarts. Set JWT_SECRET in production.'
+    );
+  }
+  return ephemeralSecret;
 }
 
 const TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes

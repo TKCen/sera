@@ -49,6 +49,19 @@ export interface SessionGrant {
   grantedAt: string;
 }
 
+export interface PersistentGrant {
+  id: string;
+  agent_instance_id: string;
+  grant_type: 'persistent';
+  resource_type: string;
+  resource_value: string;
+  mode: string;
+  approved_by: string | null;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+
 // ── Service ──────────────────────────────────────────────────────────────────
 
 export class PermissionRequestService {
@@ -58,6 +71,9 @@ export class PermissionRequestService {
   /** Session grants keyed by agentInstanceId → grant list */
   private sessionGrants = new Map<string, SessionGrant[]>();
 
+  /** Persistent grants keyed by agentInstanceId → grant list (hydrated from DB) */
+  private persistentGrants = new Map<string, PersistentGrant[]>();
+
   /** Optional hook — called after a permission request is created (Epic 18 channel dispatch). */
   private onRequestCreated?: (req: PermissionRequest) => void;
 
@@ -65,6 +81,25 @@ export class PermissionRequestService {
     private registry: AgentRegistry,
     private intercom: IntercomService
   ) {}
+
+  /**
+   * Hydrate persistent grants from the database on startup.
+   */
+  async initialize(): Promise<void> {
+    try {
+      const active = (await this.registry.listActivePermissionGrants()) as PersistentGrant[];
+      for (const grant of active) {
+        if (grant.grant_type === 'persistent') {
+          const existing = this.persistentGrants.get(grant.agent_instance_id) ?? [];
+          existing.push(grant);
+          this.persistentGrants.set(grant.agent_instance_id, existing);
+        }
+      }
+      logger.info(`Hydrated ${active.length} active persistent grants from database`);
+    } catch (err) {
+      logger.error('Failed to hydrate persistent grants:', err);
+    }
+  }
 
   setOnRequestCreated(hook: (req: PermissionRequest) => void): void {
     this.onRequestCreated = hook;
@@ -212,21 +247,38 @@ export class PermissionRequestService {
         this.sessionGrants.set(req.agentId, existing);
         logger.info(`Session grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`);
       } else if (grantType === 'persistent') {
-        await this.registry.createCapabilityGrant({
+        const grant = (await this.registry.createPermissionGrant({
           agentInstanceId: req.agentId,
-          dimension: req.dimension,
-          value: req.value,
           grantType: 'persistent',
-          ...(operatorId !== undefined ? { grantedBy: operatorId } : {}),
-          ...(operatorEmail !== undefined ? { grantedByEmail: operatorEmail } : {}),
-          ...(operatorName !== undefined ? { grantedByName: operatorName } : {}),
-          ...(decision.expiresAt !== undefined ? { expiresAt: decision.expiresAt } : {}),
-        });
+          resourceType: req.dimension,
+          resourceValue: req.value,
+          mode: 'ro',
+          approvedBy: operatorId,
+          expiresAt: decision.expiresAt,
+        })) as PersistentGrant;
+
+        const existing = this.persistentGrants.get(req.agentId) ?? [];
+        existing.push(grant);
+        this.persistentGrants.set(req.agentId, existing);
+
         logger.info(
           `Persistent grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`
         );
+      } else if (grantType === 'one-time') {
+        const grant: SessionGrant = {
+          grantId: uuidv4(),
+          agentInstanceId: req.agentId,
+          dimension: req.dimension,
+          value: req.value,
+          grantType: 'one-time',
+          expiresAt: decision.expiresAt,
+          grantedAt: new Date().toISOString(),
+        };
+        const existing = this.sessionGrants.get(req.agentId) ?? [];
+        existing.push(grant);
+        this.sessionGrants.set(req.agentId, existing);
+        logger.info(`One-time grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`);
       }
-      // one-time: nothing persisted — just returned to caller
     }
 
     // Notify agent via Centrifugo (agent specific channel, using system.* prefix for notification if appropriate,
@@ -283,16 +335,26 @@ export class PermissionRequestService {
   }
 
   /**
-   * Check if an agent has a session or one-time grant for a specific dimension/value.
+   * Check if an agent has a session, one-time, or persistent grant for a specific dimension/value.
    * Used by the file proxy in Story 3.10.
    */
   hasActiveGrant(agentInstanceId: string, dimension: string, value: string): boolean {
-    const grants = this.sessionGrants.get(agentInstanceId) ?? [];
-    return grants.some((g) => {
+    const sGrants = this.sessionGrants.get(agentInstanceId) ?? [];
+    const sessionActive = sGrants.some((g) => {
       if (g.dimension !== dimension) return false;
       if (g.expiresAt && new Date(g.expiresAt) < new Date()) return false;
       // Value match: exact or prefix (for filesystem paths)
       return g.value === value || value.startsWith(g.value);
+    });
+    if (sessionActive) return true;
+
+    const pGrants = this.persistentGrants.get(agentInstanceId) ?? [];
+    return pGrants.some((g) => {
+      if (g.resource_type !== dimension) return false;
+      if (g.expires_at && new Date(g.expires_at) < new Date()) return false;
+      if (g.revoked_at) return false;
+      // Value match: exact or prefix (for filesystem paths)
+      return g.resource_value === value || value.startsWith(g.resource_value);
     });
   }
 }

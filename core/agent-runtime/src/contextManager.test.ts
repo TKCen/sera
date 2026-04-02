@@ -104,7 +104,7 @@ describe('ContextManager', () => {
   });
 
   describe('aggressiveCompact()', () => {
-    it('drops more messages than regular compact for the same input', () => {
+    it('drops more messages than regular compact for the same input', async () => {
       // Use a small context window so that both compact (80% = 80 tokens)
       // and aggressiveCompact (50% = 50 tokens) actually trigger compaction.
       process.env['CONTEXT_WINDOW'] = '100';
@@ -121,10 +121,10 @@ describe('ContextManager', () => {
       ];
 
       const msgs1 = makeMessages();
-      const regular = smallMgr.compact(msgs1);
+      const regular = await smallMgr.compact(msgs1);
 
       const msgs2 = makeMessages();
-      const aggressive = smallMgr.aggressiveCompact(msgs2);
+      const aggressive = await smallMgr.aggressiveCompact(msgs2);
 
       expect(aggressive.droppedCount).toBeGreaterThanOrEqual(regular.droppedCount);
       expect(aggressive.tokensAfter).toBeLessThanOrEqual(regular.tokensAfter);
@@ -132,7 +132,7 @@ describe('ContextManager', () => {
       delete process.env['CONTEXT_WINDOW'];
     });
 
-    it('always preserves system message', () => {
+    it('always preserves system message', async () => {
       process.env['CONTEXT_WINDOW'] = '60';
       delete process.env['MAX_CONTEXT_TOKENS'];
       const smallMgr = new ContextManager('gpt-4o-mini');
@@ -142,7 +142,7 @@ describe('ContextManager', () => {
         { role: 'assistant', content: 'Response 1 with many words.' },
         { role: 'user', content: 'Message 2 with many words.' },
       ];
-      smallMgr.aggressiveCompact(messages);
+      await smallMgr.aggressiveCompact(messages);
       expect(messages[0]!.role).toBe('system');
       expect(messages[0]!.content).toBe('You are a helpful assistant.');
       smallMgr.free();
@@ -265,7 +265,7 @@ describe('ContextManager', () => {
   });
 
   describe('compact() — summary-based', () => {
-    it('always preserves system messages', () => {
+    it('always preserves system messages', async () => {
       process.env['MAX_CONTEXT_TOKENS'] = '50';
       const smallMgr = new ContextManager('gpt-4o-mini');
       const systemContent = 'You are a helpful assistant.';
@@ -277,14 +277,14 @@ describe('ContextManager', () => {
         { role: 'assistant', content: 'Response 2 — this should push us over the limit for sure.' },
       ];
 
-      smallMgr.compact(messages);
+      await smallMgr.compact(messages);
       expect(messages[0]!.role).toBe('system');
       expect(messages[0]!.content).toBe(systemContent);
       smallMgr.free();
       delete process.env['MAX_CONTEXT_TOKENS'];
     });
 
-    it('injects continuation message with summary after system prompt', () => {
+    it('injects continuation message with summary after system prompt', async () => {
       process.env['MAX_CONTEXT_TOKENS'] = '50';
       process.env['CONTEXT_WINDOW'] = '50';
       const smallMgr = new ContextManager('gpt-4o-mini');
@@ -298,7 +298,8 @@ describe('ContextManager', () => {
         { role: 'assistant', content: 'Ok.' },
       ];
 
-      smallMgr.compact(messages);
+      await smallMgr.compact(messages);
+      await smallMgr.compact(messages);
 
       // messages[0] is system prompt
       // messages[1] is continuation message
@@ -326,7 +327,7 @@ describe('ContextManager', () => {
       delete process.env['CONTEXT_WINDOW'];
     });
 
-    it('preserves N most recent messages verbatim', () => {
+    it('preserves N most recent messages verbatim', async () => {
       process.env['MAX_CONTEXT_TOKENS'] = '1000';
       process.env['CONTEXT_WINDOW'] = '1000';
       process.env['PRESERVE_RECENT_MESSAGES'] = '2';
@@ -358,7 +359,7 @@ describe('ContextManager', () => {
         return realCount.call(this, msgs);
       };
 
-      smallMgr.compact(messages);
+      await smallMgr.compact(messages);
 
       // System, Continuation, m3, m4
       expect(messages.length).toBe(4);
@@ -374,7 +375,7 @@ describe('ContextManager', () => {
       delete process.env['PRESERVE_RECENT_MESSAGES'];
     });
 
-    it('returns compaction stats', () => {
+    it('returns compaction stats', async () => {
       process.env['MAX_CONTEXT_TOKENS'] = '30';
       const smallMgr = new ContextManager('gpt-4o-mini');
       const messages: ChatMessage[] = [
@@ -385,7 +386,7 @@ describe('ContextManager', () => {
       ];
 
       const before = smallMgr.countMessageTokens(messages);
-      const result = smallMgr.compact(messages);
+      const result = await smallMgr.compact(messages);
       const after = smallMgr.countMessageTokens(messages);
 
       expect(result.tokensBefore).toBe(before);
@@ -393,6 +394,132 @@ describe('ContextManager', () => {
       expect(result.reflectMessage).toContain('Context compacted');
       smallMgr.free();
       delete process.env['MAX_CONTEXT_TOKENS'];
+    });
+  });
+
+  describe('compact() — LLM-based summarize strategy', () => {
+    it('uses LLM to summarize and preserves recent messages', async () => {
+      process.env['CONTEXT_COMPACTION_STRATEGY'] = 'summarise';
+      process.env['CONTEXT_WINDOW'] = '100';
+      const smallMgr = new ContextManager('gpt-4o-mini');
+
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System prompt.' },
+        { role: 'user', content: 'Old message 1'.repeat(100) },
+        { role: 'assistant', content: 'Old response 1'.repeat(100) },
+        { role: 'user', content: 'Recent message 1' },
+        { role: 'assistant', content: 'Recent response 1' },
+      ];
+
+      // Mock LLM client
+      const mockLLM = {
+        chat: vi.fn().mockResolvedValue({
+          content: 'This is a summary of the old conversation.',
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        }),
+      };
+
+      // We want to ensure it summarizes "Old" and keeps "Recent".
+      // By default PRESERVE_RECENT_MESSAGES=4, but we only have 4 non-system messages.
+      // Let's set PRESERVE_RECENT_MESSAGES=2.
+      process.env['PRESERVE_RECENT_MESSAGES'] = '2';
+      const mgrWithK2 = new ContextManager('gpt-4o-mini', 100);
+
+      const result = await mgrWithK2.compact(messages, mockLLM as any);
+
+      expect(result.strategy).toBe('summarise');
+      expect(mockLLM.chat).toHaveBeenCalled();
+      const lastCall = mockLLM.chat.mock.calls[0];
+      expect(lastCall[0][0].content).toContain('Summarize');
+      expect(lastCall[0][0].content).toContain('Old message 1');
+
+      // Check messages array: [system, summary-user, summary-ack, recent1, recent2]
+      expect(messages.length).toBe(5);
+      expect(messages[0]!.role).toBe('system');
+      expect(messages[1]!.content).toContain('[Context Summary]');
+      expect(messages[1]!.content).toContain('This is a summary');
+      expect(messages[2]!.role).toBe('assistant');
+      expect(messages[3]!.content).toBe('Recent message 1');
+      expect(messages[4]!.content).toBe('Recent response 1');
+
+      delete process.env['CONTEXT_COMPACTION_STRATEGY'];
+      delete process.env['CONTEXT_WINDOW'];
+      delete process.env['PRESERVE_RECENT_MESSAGES'];
+    });
+
+    it('falls back to sliding-window if LLM fails', async () => {
+      process.env['CONTEXT_COMPACTION_STRATEGY'] = 'summarise';
+      process.env['CONTEXT_WINDOW'] = '2000';
+      process.env['MAX_CONTEXT_TOKENS'] = '500';
+      process.env['PRESERVE_RECENT_MESSAGES'] = '1';
+      const smallMgr = new ContextManager('gpt-4o-mini');
+
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'System.' },
+        { role: 'user', content: 'Message to drop'.repeat(200) },
+        { role: 'user', content: 'Message to keep' },
+      ];
+
+      const mockLLM = {
+        chat: vi.fn().mockRejectedValue(new Error('LLM down')),
+      };
+
+      // Context tokens before: 1 (system) + ~300 (large user) + ~4 (small user) ≈ 305
+      // Target is 50. PRESERVE_RECENT_MESSAGES is 1.
+      // Sliding window should drop "Message to drop" and keep "Message to keep".
+
+      const result = await smallMgr.compact(messages, mockLLM as any);
+
+      expect(result.strategy).toBe('sliding-window');
+      expect(result.isFallback).toBe(true);
+      expect(result.reflectMessage).toContain('fallback');
+
+      // Verification:
+      // systemMessages is [system]
+      // nonSystemMessages starts as [largeUser, smallUser]
+      // keepLimit = min(2, 1) = 1.
+      // while loop:
+      // nonSystemMessages.length (2) > keepLimit (1) AND tokens (305) >= target (50)
+      // -> drops largeUser, nonSystemMessages is [smallUser]
+      // nonSystemMessages.length (1) > keepLimit (1) -> FALSE
+      // result is [system, continuation, smallUser]
+
+      expect(messages.length).toBe(3);
+      expect(messages[0]!.role).toBe('system');
+      expect(messages[1]!.role).toBe('system');
+      expect(messages[1]!.content).toContain('Summary:');
+      expect(messages[2]!.content).toContain('Message to keep');
+
+      delete process.env['CONTEXT_COMPACTION_STRATEGY'];
+      delete process.env['CONTEXT_WINDOW'];
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      delete process.env['PRESERVE_RECENT_MESSAGES'];
+    });
+
+    it('strips enrichment tags before summarizing', async () => {
+      process.env['CONTEXT_COMPACTION_STRATEGY'] = 'summarise';
+      process.env['CONTEXT_WINDOW'] = '100';
+      process.env['PRESERVE_RECENT_MESSAGES'] = '0';
+      const smallMgr = new ContextManager('gpt-4o-mini');
+
+      const messages: ChatMessage[] = [
+        { role: 'user', content: ('<memory>Secret knowledge</memory>Tell me about the task.' + ' ').repeat(50) },
+      ];
+
+      const mockLLM = {
+        chat: vi.fn().mockResolvedValue({ content: 'Summary' }),
+      };
+
+      await smallMgr.compact(messages, mockLLM as any);
+
+      const promptUsed = mockLLM.chat.mock.calls[0][0][0].content;
+      expect(promptUsed).not.toContain('<memory>');
+      expect(promptUsed).not.toContain('Secret knowledge');
+      expect(promptUsed).toContain('Tell me about the task.');
+
+      delete process.env['CONTEXT_COMPACTION_STRATEGY'];
+      delete process.env['CONTEXT_WINDOW'];
+      delete process.env['PRESERVE_RECENT_MESSAGES'];
     });
   });
 });

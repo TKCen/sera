@@ -104,6 +104,7 @@ export interface ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
+    model?: string,
   ): Promise<LLMResponse>;
 }
 
@@ -146,9 +147,10 @@ export class LLMClient implements ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
+    model?: string,
   ): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
-      model: this.model,
+      model: model || this.model,
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,

@@ -334,7 +334,11 @@ export class ReasoningLoop {
                   internal: true,
                 });
 
-                const toolResults = await this.tools.executeToolCalls(flushResponse.toolCalls);
+                const toolResults = await this.tools.executeToolCalls(
+                  flushResponse.toolCalls,
+                  undefined,
+                  taskId
+                );
                 let savedCount = 0;
                 for (const tr of toolResults) {
                   tr.message.internal = true;
@@ -614,7 +618,11 @@ export class ReasoningLoop {
               );
             });
           };
-          const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
+          const toolResults = await this.tools.executeToolCalls(
+            response.toolCalls,
+            onToolOutput,
+            taskId
+          );
 
           // Track consecutive errors for guidance (Story 5.4)
           let turnHasError = false;

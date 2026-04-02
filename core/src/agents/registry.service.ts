@@ -707,14 +707,16 @@ export class AgentRegistry {
     const removed: string[] = [];
     const errors: string[] = [];
 
-    for (const r of toRemove) {
+    if (toRemove.length > 0) {
+      const names = toRemove.map((r) => r.name);
       try {
-        await this.pool.query('DELETE FROM named_lists WHERE name = $1', [r.name]);
-        removed.push(r.name);
+        await this.pool.query('DELETE FROM named_lists WHERE name = ANY($1)', [names]);
+        removed.push(...names);
       } catch (err: unknown) {
-        errors.push(`${r.name}: ${(err as Error).message}`);
+        errors.push(`Failed to delete named lists: ${(err as Error).message}`);
       }
     }
+
     return { removed, errors };
   }
 
@@ -724,14 +726,16 @@ export class AgentRegistry {
     const removed: string[] = [];
     const errors: string[] = [];
 
-    for (const r of toRemove) {
+    if (toRemove.length > 0) {
+      const names = toRemove.map((r) => r.name);
       try {
-        await this.pool.query('DELETE FROM capability_policies WHERE name = $1', [r.name]);
-        removed.push(r.name);
+        await this.pool.query('DELETE FROM capability_policies WHERE name = ANY($1)', [names]);
+        removed.push(...names);
       } catch (err: unknown) {
-        errors.push(`${r.name}: ${(err as Error).message}`);
+        errors.push(`Failed to delete capability policies: ${(err as Error).message}`);
       }
     }
+
     return { removed, errors };
   }
 
@@ -741,14 +745,16 @@ export class AgentRegistry {
     const removed: string[] = [];
     const errors: string[] = [];
 
-    for (const r of toRemove) {
+    if (toRemove.length > 0) {
+      const names = toRemove.map((r) => r.name);
       try {
-        await this.pool.query('DELETE FROM sandbox_boundaries WHERE name = $1', [r.name]);
-        removed.push(r.name);
+        await this.pool.query('DELETE FROM sandbox_boundaries WHERE name = ANY($1)', [names]);
+        removed.push(...names);
       } catch (err: unknown) {
-        errors.push(`${r.name}: ${(err as Error).message}`);
+        errors.push(`Failed to delete sandbox boundaries: ${(err as Error).message}`);
       }
     }
+
     return { removed, errors };
   }
 

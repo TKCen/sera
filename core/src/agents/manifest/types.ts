@@ -84,6 +84,8 @@ export interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
   citations?: 'full' | 'brief' | 'off';
+  /** Whether to use LLM to categorize and split memories on save. */
+  categorize?: boolean;
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────────────
@@ -148,7 +150,7 @@ export interface AgentManifest {
       maxLlmTokensPerDay?: number;
     };
     workspace?: Record<string, unknown>;
-    memory?: Record<string, unknown>;
+    memory?: MemoryConfig;
     schedules?: Array<{
       name: string;
       description?: string;

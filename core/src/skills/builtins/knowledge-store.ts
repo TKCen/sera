@@ -18,6 +18,9 @@ import type { MemoryNamespace } from '../../services/vector.service.js';
 import { KnowledgeGitService } from '../../memory/KnowledgeGitService.js';
 import { AuditService } from '../../audit/AuditService.js';
 import { Logger } from '../../lib/logger.js';
+import { MemoryCategorizationService } from '../../memory/MemoryCategorizationService.js';
+import { getLlmRouter } from '../../llm/LlmRouter.js';
+import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
 
 const logger = new Logger('knowledge-store');
 
@@ -105,149 +108,216 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
         return { success: false, error: 'Rate limit exceeded: max 10 writes per minute' };
       }
 
-      const tags = Array.isArray(params['tags']) ? (params['tags'] as string[]) : [];
-      const title = typeof params['title'] === 'string' ? params['title'] : undefined;
+      let tags = Array.isArray(params['tags']) ? (params['tags'] as string[]) : [];
+      let title = typeof params['title'] === 'string' ? params['title'] : undefined;
       const importanceRaw = typeof params['importance'] === 'number' ? params['importance'] : 3;
-      const importance = Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance;
+      let importance = Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance;
 
-      // ── Personal scope ──────────────────────────────────────────────────
-      if (scope === 'personal') {
-        const store = new ScopedMemoryBlockStore(MEMORY_ROOT);
-        const block = await store.write({
+      // ── LLM-guided Categorization ───────────────────────────────────────
+      const memoryConfig = context.manifest.spec?.memory ?? context.manifest.memory;
+      const categorizationEnabled = memoryConfig?.categorize === true;
+      let blocksToStore = [{ content, type, tags, title, importance }];
+
+      if (categorizationEnabled) {
+        const registry = new ProviderRegistry();
+        const router = getLlmRouter(registry);
+        const mainModel = context.manifest.model.name;
+        let explorationModel = 'default';
+
+        try {
+          const config = registry.resolve(mainModel);
+          explorationModel = config.contextCompactionModel || mainModel;
+        } catch {
+          // ignore
+        }
+
+        const facts = await MemoryCategorizationService.categorize(
           content,
-          type,
-          agentId,
-          tags,
-          importance,
-          ...(title ? { title } : {}),
-        });
+          explorationModel,
+          router,
+          agentId
+        );
 
-        if (embeddingService.isAvailable()) {
-          try {
-            const vectorService = new VectorService('_ks_unused');
-            const namespace: MemoryNamespace = `personal:${agentId}`;
-            const vector = await embeddingService.embed(`${block.title}\n${block.content}`);
-            await vectorService.upsert(block.id, namespace, vector, {
-              agent_id: agentId,
-              created_at: block.timestamp,
-              tags: block.tags,
-              type: block.type,
-              title: block.title,
-              content: block.content,
-              importance: block.importance,
-              namespace,
+        if (facts.length > 0) {
+          blocksToStore = facts.map((f) => ({
+            content: f.content,
+            type: f.type,
+            tags: [...new Set([...tags, ...f.tags])],
+            title: f.title,
+            importance: f.importance,
+          }));
+        }
+      }
+
+      const results = [];
+
+      for (const blockData of blocksToStore) {
+        const {
+          content: bContent,
+          type: bType,
+          tags: bTags,
+          title: bTitle,
+          importance: bImportance,
+        } = blockData;
+
+        // ── Personal scope ──────────────────────────────────────────────────
+        if (scope === 'personal') {
+          const store = new ScopedMemoryBlockStore(MEMORY_ROOT);
+          const block = await store.write({
+            content: bContent,
+            type: bType,
+            agentId,
+            tags: bTags,
+            importance: bImportance,
+            ...(bTitle ? { title: bTitle } : {}),
+          });
+
+          if (embeddingService.isAvailable()) {
+            try {
+              const vectorService = new VectorService('_ks_unused');
+              const namespace: MemoryNamespace = `personal:${agentId}`;
+              const vector = await embeddingService.embed(`${block.title}\n${block.content}`);
+              await vectorService.upsert(block.id, namespace, vector, {
+                agent_id: agentId,
+                created_at: block.timestamp,
+                tags: block.tags,
+                type: block.type,
+                title: block.title,
+                content: block.content,
+                importance: block.importance,
+                namespace,
+              });
+            } catch (err) {
+              logger.warn(`Failed to index personal block ${block.id}:`, err);
+            }
+          }
+
+          await recordAudit(agentId, 'knowledge.committed', {
+            blockId: block.id,
+            type: bType,
+            scope,
+          });
+          results.push({ id: block.id, scope, success: true });
+          continue;
+        }
+
+        // ── Circle scope ────────────────────────────────────────────────────
+        if (scope === 'circle') {
+          const capabilities: string[] = context.manifest?.capabilities ?? [];
+          if (
+            !capabilities.includes('knowledgeWrite:circle') &&
+            !capabilities.includes('knowledgeWrite:merge-without-approval')
+          ) {
+            return {
+              success: false,
+              error: 'Insufficient capability: knowledgeWrite:circle required',
+            };
+          }
+
+          const circleId =
+            typeof params['circleId'] === 'string' && params['circleId']
+              ? params['circleId']
+              : context.manifest?.metadata?.circle;
+
+          if (!circleId) {
+            return {
+              success: false,
+              error: 'No circleId available — agent is not a circle member',
+            };
+          }
+
+          const gitService = KnowledgeGitService.getInstance();
+          const { block } = await gitService.write(circleId, agentId, context.agentName, {
+            content: bContent,
+            type: bType,
+            agentId,
+            tags: bTags,
+            importance: bImportance,
+            ...(bTitle ? { title: bTitle } : {}),
+          });
+
+          const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
+          let pendingMerge = false;
+          if (canAutoMerge) {
+            try {
+              await gitService.autoMerge(circleId, agentId);
+            } catch (err) {
+              logger.warn(`Auto-merge failed for agent ${agentId} in circle ${circleId}:`, err);
+              pendingMerge = true;
+            }
+          } else {
+            await gitService.createMergeRequest(circleId, agentId, context.agentName).catch((err) => {
+              logger.warn('Failed to create merge request:', err);
             });
-          } catch (err) {
-            logger.warn(`Failed to index personal block ${block.id}:`, err);
-          }
-        }
-
-        await recordAudit(agentId, 'knowledge.committed', { blockId: block.id, type, scope });
-        return { success: true, data: { id: block.id, scope, success: true } };
-      }
-
-      // ── Circle scope ────────────────────────────────────────────────────
-      if (scope === 'circle') {
-        const capabilities: string[] = context.manifest?.capabilities ?? [];
-        if (
-          !capabilities.includes('knowledgeWrite:circle') &&
-          !capabilities.includes('knowledgeWrite:merge-without-approval')
-        ) {
-          return {
-            success: false,
-            error: 'Insufficient capability: knowledgeWrite:circle required',
-          };
-        }
-
-        const circleId =
-          typeof params['circleId'] === 'string' && params['circleId']
-            ? params['circleId']
-            : context.manifest?.metadata?.circle;
-
-        if (!circleId) {
-          return { success: false, error: 'No circleId available — agent is not a circle member' };
-        }
-
-        const gitService = KnowledgeGitService.getInstance();
-        const { block } = await gitService.write(circleId, agentId, context.agentName, {
-          content,
-          type,
-          agentId,
-          tags,
-          importance,
-          ...(title ? { title } : {}),
-        });
-
-        const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
-        let pendingMerge = false;
-        if (canAutoMerge) {
-          try {
-            await gitService.autoMerge(circleId, agentId);
-          } catch (err) {
-            logger.warn(`Auto-merge failed for agent ${agentId} in circle ${circleId}:`, err);
             pendingMerge = true;
           }
-        } else {
-          await gitService.createMergeRequest(circleId, agentId, context.agentName).catch((err) => {
-            logger.warn('Failed to create merge request:', err);
+
+          await recordAudit(agentId, 'knowledge.committed', {
+            blockId: block.id,
+            type: bType,
+            scope,
+            circleId,
           });
-          pendingMerge = true;
+          results.push({ id: block.id, scope, success: true, pendingMerge });
+          continue;
         }
 
-        await recordAudit(agentId, 'knowledge.committed', {
-          blockId: block.id,
-          type,
-          scope,
-          circleId,
-        });
-        return { success: true, data: { id: block.id, scope, success: true, pendingMerge } };
-      }
+        // ── Global scope ────────────────────────────────────────────────────
+        if (scope === 'global') {
+          const capabilities: string[] = context.manifest?.capabilities ?? [];
+          if (
+            !capabilities.includes('knowledgeWrite:global') &&
+            !capabilities.includes('knowledgeWrite:merge-without-approval')
+          ) {
+            return {
+              success: false,
+              error: 'Insufficient capability: knowledgeWrite:global required',
+            };
+          }
 
-      // ── Global scope ────────────────────────────────────────────────────
-      if (scope === 'global') {
-        const capabilities: string[] = context.manifest?.capabilities ?? [];
-        if (
-          !capabilities.includes('knowledgeWrite:global') &&
-          !capabilities.includes('knowledgeWrite:merge-without-approval')
-        ) {
-          return {
-            success: false,
-            error: 'Insufficient capability: knowledgeWrite:global required',
-          };
-        }
+          const gitService = KnowledgeGitService.getInstance();
+          const { block } = await gitService.write('system', agentId, context.agentName, {
+            content: bContent,
+            type: bType,
+            agentId,
+            tags: bTags,
+            importance: bImportance,
+            ...(bTitle ? { title: bTitle } : {}),
+          });
 
-        const gitService = KnowledgeGitService.getInstance();
-        const { block } = await gitService.write('system', agentId, context.agentName, {
-          content,
-          type,
-          agentId,
-          tags,
-          importance,
-          ...(title ? { title } : {}),
-        });
-
-        const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
-        let pendingMerge = false;
-        if (canAutoMerge) {
-          try {
-            await gitService.autoMerge('system', agentId);
-          } catch (err) {
-            logger.warn(`Auto-merge failed for agent ${agentId} in system circle:`, err);
+          const canAutoMerge = capabilities.includes('knowledgeWrite:merge-without-approval');
+          let pendingMerge = false;
+          if (canAutoMerge) {
+            try {
+              await gitService.autoMerge('system', agentId);
+            } catch (err) {
+              logger.warn(`Auto-merge failed for agent ${agentId} in system circle:`, err);
+              pendingMerge = true;
+            }
+          } else {
+            await gitService.createMergeRequest('system', agentId, context.agentName).catch((err) => {
+              logger.warn('Failed to create merge request:', err);
+            });
             pendingMerge = true;
           }
-        } else {
-          await gitService.createMergeRequest('system', agentId, context.agentName).catch((err) => {
-            logger.warn('Failed to create merge request:', err);
+
+          await recordAudit(agentId, 'knowledge.committed', {
+            blockId: block.id,
+            type: bType,
+            scope,
           });
-          pendingMerge = true;
+          results.push({ id: block.id, scope, success: true, pendingMerge });
+          continue;
         }
 
-        await recordAudit(agentId, 'knowledge.committed', { blockId: block.id, type, scope });
-        return { success: true, data: { id: block.id, scope, success: true, pendingMerge } };
+        return { success: false, error: `Unknown scope: ${scope as string}` };
       }
 
-      return { success: false, error: `Unknown scope: ${scope as string}` };
-    },
+    return {
+      success: true,
+      data: results.length === 1 ? results[0] : { blocks: results, success: true },
+    };
+  },
   };
 }
 

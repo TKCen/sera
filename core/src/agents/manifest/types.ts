@@ -83,6 +83,7 @@ export interface WorkspaceConfig {
 export interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
+  citations?: 'full' | 'brief' | 'off';
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────────────

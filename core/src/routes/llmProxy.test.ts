@@ -98,6 +98,7 @@ vi.mock('../middleware/rateLimitStub.js', () => ({
     .mockImplementation((_req: unknown, _res: unknown, next: () => void) => next()),
 }));
 
+import { ContextAssembler } from '../llm/ContextAssembler.js';
 import { createLlmProxyRouter } from './llmProxy.js';
 import { IdentityService } from '../auth/IdentityService.js';
 import { AuthService } from '../auth/auth-service.js';
@@ -160,6 +161,21 @@ async function createTestSetup(
     ...budgetOverride,
   });
   vi.spyOn(meteringService, 'recordUsage').mockResolvedValue(undefined);
+
+  // Mock ContextAssembler to simulate memory injection
+  vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
+    async (agentId, messages, onEvent) => {
+      onEvent?.({
+        stage: 'memory.retrieved',
+        detail: {
+          blocks: [
+            { id: 'block-1', source: 'personal:agent-1', relevance: 0.95, content: 'Some knowledge content' },
+          ],
+        },
+      });
+      return messages;
+    }
+  );
 
   const authService = new AuthService();
   const pool = {} as unknown as import('pg').Pool;
@@ -473,6 +489,135 @@ describe('LLM Proxy Router', () => {
       expect(
         (llmRouter as unknown as { chatCompletion: import('vitest').Mock }).chatCompletion
       ).not.toHaveBeenCalled();
+    });
+
+    it('should include citations in response when agent uses injected memory', async () => {
+      const { router, validToken, llmRouter } = await createTestSetup();
+
+      // Mock LLM response with an explicit citation
+      vi.mocked(llmRouter.chatCompletion).mockResolvedValue({
+        response: {
+          id: 'chatcmpl-test',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Based on the knowledge, here is the answer [from: block-1].',
+              },
+            },
+          ],
+          usage: { total_tokens: 20 },
+        },
+        latencyMs: 150,
+      });
+
+      const handlers = getHandler(router, 'post', '/chat/completions')! as unknown as Array<
+        (
+          req: import('express').Request,
+          res: import('express').Response,
+          next: import('express').NextFunction
+        ) => void | Promise<void>
+      >;
+
+      const { req, res } = createMockReqRes({
+        headers: { authorization: `Bearer ${validToken}` },
+        agentIdentity: {
+          agentId: 'test-agent',
+          circleId: 'test-circle',
+          scope: 'agent',
+        },
+        body: {
+          messages: [{ role: 'user', content: 'What is the knowledge?' }],
+        },
+      });
+
+      await executeHandlers(handlers, req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          citations: [
+            { blockId: 'block-1', scope: 'personal:agent-1', relevance: 0.95 },
+          ],
+        })
+      );
+    });
+
+    it('should include citations based on content overlap when no explicit citation is present', async () => {
+      const { router, validToken, llmRouter } = await createTestSetup();
+
+      // Mock LLM response with content overlap but no explicit citation
+      // The overlap heuristic checks if a 50-char fragment of the block content is in the response.
+      const overlapContent = 'This knowledge content should trigger overlap detection because it is long.';
+      const responseContent = 'The agent says: This knowledge content should trigger overlap detection because it is long.';
+
+      vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
+        async (agentId, messages, onEvent) => {
+          onEvent?.({
+            stage: 'memory.retrieved',
+            detail: {
+              blocks: [
+                {
+                  id: 'block-overlap',
+                  source: 'personal:agent-1',
+                  relevance: 0.88,
+                  content: overlapContent
+                },
+              ],
+            },
+          });
+          return messages;
+        }
+      );
+
+      vi.mocked(llmRouter.chatCompletion).mockResolvedValue({
+        response: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          created: 1234567890,
+          model: 'test-model',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: responseContent,
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+        },
+        latencyMs: 150,
+      });
+
+      const handlers = getHandler(router, 'post', '/chat/completions')! as unknown as Array<
+        (
+          req: import('express').Request,
+          res: import('express').Response,
+          next: import('express').NextFunction
+        ) => void | Promise<void>
+      >;
+
+      const { req, res } = createMockReqRes({
+        headers: { authorization: `Bearer ${validToken}` },
+        agentIdentity: {
+          agentId: 'test-agent',
+          circleId: 'test-circle',
+          scope: 'agent',
+        },
+        body: {
+          messages: [{ role: 'user', content: 'What is the knowledge?' }],
+        },
+      });
+
+      await executeHandlers(handlers, req, res);
+
+      const jsonResponse = vi.mocked(res.json).mock.calls[0][0];
+      expect(jsonResponse).toBeDefined();
+      expect(jsonResponse.citations).toBeDefined();
+      expect(jsonResponse.citations).toContainEqual(
+        { blockId: 'block-overlap', scope: 'personal:agent-1', relevance: 0.88 }
+      );
     });
 
     it('should return 503 when circuit breaker is open', async () => {

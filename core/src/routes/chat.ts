@@ -15,6 +15,7 @@ interface ContainerChatResponse {
   result: string | null;
   error?: string;
   thoughts?: Array<{ step: string; content: string }>;
+  citations?: Array<{ blockId: string; scope: string; relevance: number }>;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
@@ -99,7 +100,12 @@ async function forwardToContainer(
     history: ChatMessage[];
     messageId?: string;
   }
-): Promise<{ reply: string; thought?: string; thoughts?: ContainerChatResponse['thoughts'] }> {
+): Promise<{
+  reply: string;
+  thought?: string;
+  thoughts?: ContainerChatResponse['thoughts'];
+  citations?: ContainerChatResponse['citations'];
+}> {
   const res = await fetch(`${chatUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -117,6 +123,7 @@ async function forwardToContainer(
     reply: body.result || 'No response generated.',
     ...(body.error ? { thought: `Error: ${body.error}` } : {}),
     ...(body.thoughts?.length ? { thoughts: body.thoughts } : {}),
+    ...(body.citations?.length ? { citations: body.citations } : {}),
   };
 }
 
@@ -130,14 +137,17 @@ async function persistAndFinalize(
   message: string,
   reply: string,
   isNew: boolean,
-  thoughts?: ContainerChatResponse['thoughts']
+  thoughts?: ContainerChatResponse['thoughts'],
+  citations?: ContainerChatResponse['citations']
 ): Promise<void> {
   await sessionStore.addMessage({ sessionId, role: 'user', content: message });
   await sessionStore.addMessage({
     sessionId,
     role: 'assistant',
     content: reply,
-    ...(thoughts?.length ? { metadata: { thoughts } } : {}),
+    ...((thoughts?.length || citations?.length)
+      ? { metadata: { ...(thoughts?.length ? { thoughts } : {}), ...(citations?.length ? { citations } : {}) } }
+      : {}),
   });
 
   if (isNew) {
@@ -227,7 +237,7 @@ export function createChatRouter(
         // Background processing — errors are logged, not returned
         (async () => {
           try {
-            const { reply, thoughts } = await forwardToContainer(chatUrl, {
+            const { reply, thoughts, citations } = await forwardToContainer(chatUrl, {
               message,
               sessionId,
               history,
@@ -240,7 +250,8 @@ export function createChatRouter(
               message,
               reply,
               isNew,
-              thoughts
+              thoughts,
+              citations
             );
           } catch (err) {
             logger.error(`[${agent.name}] Stream processing error:`, err);
@@ -248,7 +259,7 @@ export function createChatRouter(
         })();
       } else {
         // ── Synchronous mode: wait for response ─────────────────────────
-        const { reply, thought, thoughts } = await forwardToContainer(chatUrl, {
+        const { reply, thought, thoughts, citations } = await forwardToContainer(chatUrl, {
           message,
           sessionId,
           history,
@@ -261,9 +272,10 @@ export function createChatRouter(
           message,
           reply,
           isNew,
-          thoughts
+          thoughts,
+          citations
         );
-        res.json({ sessionId, reply, thought });
+        res.json({ sessionId, reply, thought, citations });
       }
     } catch (error: unknown) {
       const err = error as Error & { status?: number };

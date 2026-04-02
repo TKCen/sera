@@ -39,6 +39,7 @@ export interface TaskOutput {
   taskId: string;
   result: string | null;
   error?: string;
+  citations?: Array<{ blockId: string; scope: string; relevance: number }>;
   usage: {
     promptTokens: number;
     completionTokens: number;
@@ -183,6 +184,8 @@ export class ReasoningLoop {
 
     const hasTools = this.toolDefs.length > 0;
     const thoughtStream: TaskOutput['thoughtStream'] = [];
+    const citations: Array<{ blockId: string; scope: string; relevance: number }> = [];
+    const seenCitationIds = new Set<string>();
 
     // ── Usage tracking with cache awareness (#547) ────────────────────────
     let totalPromptTokens = 0;
@@ -576,22 +579,43 @@ export class ReasoningLoop {
         // Reasoning models (Qwen3, DeepSeek-R1) may produce reasoning_content
         // but empty content. Use reasoning as fallback so the response isn't lost.
         const reply = response.content || response.reasoning || 'No response generated.';
+
+        // Strip explicit citations from reply if citations mode is 'brief'
+        let finalReply = reply;
+        const citationsMode = this.manifest.memory?.citations ?? 'off';
+        if (citationsMode === 'brief') {
+           finalReply = reply.replace(/\[from:\s*[^\]]+\]/g, '').trim();
+           // Clean up multiple spaces left by removal
+           finalReply = finalReply.replace(/\s{2,}/g, ' ');
+        }
+
+        // Accumulate citations from the final text-producing turn
+        if (response.citations && citationsMode !== 'off') {
+          for (const c of response.citations) {
+            if (!seenCitationIds.has(c.blockId)) {
+              citations.push(c);
+              seenCitationIds.add(c.blockId);
+            }
+          }
+        }
+
         await think('reflect', `Completed task after ${iteration} iteration(s)`, iteration);
 
         // Stream response tokens — use the caller-provided taskId so the
         // web frontend can subscribe to the correct Centrifugo channel.
-        await this.streamResponse(reply, taskId);
+        await this.streamResponse(finalReply, taskId);
 
         log(
           'info',
-          `ReasoningLoop complete after ${iteration} iteration(s) — ${reply.length} chars`
+          `ReasoningLoop complete after ${iteration} iteration(s) — ${finalReply.length} chars`
         );
 
         return {
           taskId,
-          result: reply,
+          result: finalReply,
           usage: buildUsage(),
           thoughtStream,
+          citations: citations.length > 0 ? citations : undefined,
           exitReason: 'success',
         };
       }

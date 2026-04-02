@@ -44,7 +44,9 @@ export interface RuntimeManifest {
     coreTools?: string[];
   };
   skills?: string[];
-  memory?: Record<string, unknown>;
+  memory?: {
+    citations?: 'full' | 'brief' | 'off';
+  } & Record<string, unknown>;
   intercom?: {
     canMessage?: string[];
     channels?: {

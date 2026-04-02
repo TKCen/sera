@@ -28,6 +28,7 @@ interface ChatResponse {
   result: string | null;
   thoughts: TaskOutput['thoughtStream'];
   usage: TaskOutput['usage'];
+  citations?: TaskOutput['citations'];
   error?: string;
 }
 
@@ -99,6 +100,7 @@ export function startChatServer(
           result: output.result,
           thoughts: output.thoughtStream,
           usage: output.usage,
+          ...(output.citations ? { citations: output.citations } : {}),
           ...(output.error ? { error: output.error } : {}),
         };
 

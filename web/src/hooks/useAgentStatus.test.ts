@@ -36,7 +36,7 @@ describe('useAgentStatus', () => {
   it('should return null if payload exists but status is missing', () => {
     vi.mocked(useChannel).mockReturnValue({
       agentId: 'agent-123',
-    } as any);
+    } as unknown as { status: string; agentId: string });
     const { result } = renderHook(() => useAgentStatus('agent-123'));
     expect(result.current).toBeNull();
   });

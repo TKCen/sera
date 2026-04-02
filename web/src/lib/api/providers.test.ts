@@ -7,7 +7,7 @@ import {
   updateProviderConfig,
   testProvider,
   setDefaultModel,
-  getDefaultModel
+  getDefaultModel,
 } from './providers';
 
 // Mock global fetch
@@ -114,7 +114,7 @@ describe('providers api', () => {
       const payload = {
         name: 'new-provider',
         type: 'cloud' as const,
-        modelId: 'gpt-3.5-turbo'
+        modelId: 'gpt-3.5-turbo',
       };
       const result = await createProvider(payload);
 
@@ -182,7 +182,10 @@ describe('providers api', () => {
       });
 
       const result = await getDefaultModel();
-      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/providers/default-model'), expect.any(Object));
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/providers/default-model'),
+        expect.any(Object)
+      );
       expect(result).toEqual({ defaultModel: 'gpt-4' });
     });
 
@@ -198,7 +201,7 @@ describe('providers api', () => {
         expect.stringContaining('/api/providers/default-model'),
         expect.objectContaining({
           method: 'PUT',
-          body: JSON.stringify({ modelName: 'gpt-4' })
+          body: JSON.stringify({ modelName: 'gpt-4' }),
         })
       );
       expect(result).toEqual({ success: true, defaultModel: 'gpt-4' });

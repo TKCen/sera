@@ -703,53 +703,53 @@ export class AgentRegistry {
 
   async deleteNamedListsExcept(validNames: string[]) {
     const res = await this.pool.query("SELECT name FROM named_lists WHERE source = 'file'");
-    const toRemove = res.rows.filter((r) => !validNames.includes(r.name));
-    const removed: string[] = [];
-    const errors: string[] = [];
+    const toRemove = res.rows.filter((r) => !validNames.includes(r.name)).map((r) => r.name);
+    if (toRemove.length === 0) return { removed: [], errors: [] };
 
-    for (const r of toRemove) {
-      try {
-        await this.pool.query('DELETE FROM named_lists WHERE name = $1', [r.name]);
-        removed.push(r.name);
-      } catch (err: unknown) {
-        errors.push(`${r.name}: ${(err as Error).message}`);
-      }
+    try {
+      const delRes = await this.pool.query(
+        "DELETE FROM named_lists WHERE source = 'file' AND name = ANY($1) RETURNING name",
+        [toRemove]
+      );
+      return { removed: delRes.rows.map((r) => r.name), errors: [] };
+    } catch (err: unknown) {
+      logger.error('Failed to batch delete named lists:', err);
+      return { removed: [], errors: [(err as Error).message] };
     }
-    return { removed, errors };
   }
 
   async deleteCapabilityPoliciesExcept(validNames: string[]) {
     const res = await this.pool.query("SELECT name FROM capability_policies WHERE source = 'file'");
-    const toRemove = res.rows.filter((r) => !validNames.includes(r.name));
-    const removed: string[] = [];
-    const errors: string[] = [];
+    const toRemove = res.rows.filter((r) => !validNames.includes(r.name)).map((r) => r.name);
+    if (toRemove.length === 0) return { removed: [], errors: [] };
 
-    for (const r of toRemove) {
-      try {
-        await this.pool.query('DELETE FROM capability_policies WHERE name = $1', [r.name]);
-        removed.push(r.name);
-      } catch (err: unknown) {
-        errors.push(`${r.name}: ${(err as Error).message}`);
-      }
+    try {
+      const delRes = await this.pool.query(
+        "DELETE FROM capability_policies WHERE source = 'file' AND name = ANY($1) RETURNING name",
+        [toRemove]
+      );
+      return { removed: delRes.rows.map((r) => r.name), errors: [] };
+    } catch (err: unknown) {
+      logger.error('Failed to batch delete capability policies:', err);
+      return { removed: [], errors: [(err as Error).message] };
     }
-    return { removed, errors };
   }
 
   async deleteSandboxBoundariesExcept(validNames: string[]) {
     const res = await this.pool.query("SELECT name FROM sandbox_boundaries WHERE source = 'file'");
-    const toRemove = res.rows.filter((r) => !validNames.includes(r.name));
-    const removed: string[] = [];
-    const errors: string[] = [];
+    const toRemove = res.rows.filter((r) => !validNames.includes(r.name)).map((r) => r.name);
+    if (toRemove.length === 0) return { removed: [], errors: [] };
 
-    for (const r of toRemove) {
-      try {
-        await this.pool.query('DELETE FROM sandbox_boundaries WHERE name = $1', [r.name]);
-        removed.push(r.name);
-      } catch (err: unknown) {
-        errors.push(`${r.name}: ${(err as Error).message}`);
-      }
+    try {
+      const delRes = await this.pool.query(
+        "DELETE FROM sandbox_boundaries WHERE source = 'file' AND name = ANY($1) RETURNING name",
+        [toRemove]
+      );
+      return { removed: delRes.rows.map((r) => r.name), errors: [] };
+    } catch (err: unknown) {
+      logger.error('Failed to batch delete sandbox boundaries:', err);
+      return { removed: [], errors: [(err as Error).message] };
     }
-    return { removed, errors };
   }
 
   // ── Template Diff & Update ────────────────────────────────────────────────

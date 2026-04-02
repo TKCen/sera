@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import type { AgentTemplate, NamedList, CapabilityPolicy, SandboxBoundary } from './schemas.js';
 import type { AgentInstance } from './types.js';
 import { ScheduleService } from '../services/ScheduleService.js';
+import { DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA } from '../metering/MeteringService.js';
 
 import { Logger } from '../lib/logger.js';
 
@@ -29,17 +30,19 @@ export class AgentRegistry {
     `;
     const res = await this.pool.query(query, [name, displayName, builtin, category, template.spec]);
 
-    // Sync manifest schedules to all existing instances of this template.
-    // New schedules are created; duplicates are silently skipped (unique constraint).
+    // Sync manifest schedules and budgets to all existing instances of this template.
     const spec = template.spec as Record<string, unknown> | undefined;
+    const instances = await this.pool.query(
+      'SELECT id FROM agent_instances WHERE template_ref = $1',
+      [name]
+    );
     if ((spec?.schedules as unknown[] | undefined)?.length) {
-      const instances = await this.pool.query(
-        'SELECT id FROM agent_instances WHERE template_ref = $1',
-        [name]
-      );
       for (const inst of instances.rows) {
         await this.syncManifestSchedules(inst.id as string, name);
       }
+    }
+    for (const inst of instances.rows) {
+      await this.syncManifestBudget(inst.id as string, name);
     }
 
     return {
@@ -142,6 +145,9 @@ export class AgentRegistry {
     // Story 11.2: Import manifest schedules
     await this.syncManifestSchedules(instance.id, data.templateRef);
 
+    // Sync manifest budget limits to token_quotas
+    await this.syncManifestBudget(instance.id, data.templateRef);
+
     return instance;
   }
 
@@ -187,6 +193,42 @@ export class AgentRegistry {
     // Remove schedules no longer in the manifest
     const manifestNames = manifestSchedules.map((s) => s.name);
     await scheduleService.removeStaleManifestSchedules(instanceId, manifestNames);
+  }
+
+  /**
+   * Syncs token budget limits from the template spec.resources to token_quotas.
+   * Only writes if the template defines maxLlmTokensPerHour or maxLlmTokensPerDay.
+   * Uses 0 as "unlimited" sentinel.
+   */
+  private async syncManifestBudget(instanceId: string, templateRef: string) {
+    const template = await this.getTemplate(templateRef);
+    if (!template?.spec) return;
+
+    const resources = (template.spec as Record<string, unknown>).resources as
+      | { maxLlmTokensPerHour?: number; maxLlmTokensPerDay?: number }
+      | undefined;
+    if (!resources) return;
+
+    const hourly = resources.maxLlmTokensPerHour;
+    const daily = resources.maxLlmTokensPerDay;
+
+    // Only sync if the template defines at least one budget field
+    if (hourly === undefined && daily === undefined) return;
+
+    await this.pool
+      .query(
+        `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (agent_id)
+         DO UPDATE SET
+           max_tokens_per_hour = $2,
+           max_tokens_per_day = $3,
+           updated_at = NOW()`,
+        [instanceId, hourly ?? DEFAULT_HOURLY_QUOTA, daily ?? DEFAULT_DAILY_QUOTA]
+      )
+      .catch((err) => {
+        logger.error(`Failed to sync manifest budget for ${instanceId}:`, err);
+      });
   }
 
   async getInstance(id: string): Promise<AgentInstance | null> {

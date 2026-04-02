@@ -207,5 +207,88 @@ describe('MeteringService', () => {
       // Should use the default quota (100000 hourly)
       expect(status.hourlyQuota).toBe(100000);
     });
+
+    it('should allow when hourly quota is 0 (unlimited) regardless of usage', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ max_tokens_per_hour: 0, max_tokens_per_day: 1000000 }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ total: '999999' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ total: '100' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+
+      const status = await service.checkBudget('agent-unlimited-hourly');
+      expect(status.allowed).toBe(true);
+      expect(status.hourlyQuota).toBe(0);
+    });
+
+    it('should allow when daily quota is 0 (unlimited) regardless of usage', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ max_tokens_per_hour: 10000, max_tokens_per_day: 0 }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ total: '100' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ total: '99999999' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+
+      const status = await service.checkBudget('agent-unlimited-daily');
+      expect(status.allowed).toBe(true);
+      expect(status.dailyQuota).toBe(0);
+    });
+
+    it('should allow when both quotas are 0 (fully unlimited)', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ max_tokens_per_hour: 0, max_tokens_per_day: 0 }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ total: '999999' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ total: '999999' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      });
+
+      const status = await service.checkBudget('agent-fully-unlimited');
+      expect(status.allowed).toBe(true);
+    });
   });
 });

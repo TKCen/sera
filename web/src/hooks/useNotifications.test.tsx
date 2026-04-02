@@ -58,8 +58,8 @@ describe('useNotifications hooks', () => {
 
   describe('useChannels', () => {
     it('fetches channels successfully', async () => {
-      const mockChannels = [{ id: '1', name: 'Channel 1' }];
-      vi.mocked(api.listChannels).mockResolvedValue(mockChannels as any);
+      const mockChannels = [{ id: '1', name: 'Channel 1' }] as api.NotificationChannel[];
+      vi.mocked(api.listChannels).mockResolvedValue(mockChannels);
 
       const { result } = renderHook(() => useChannels(), { wrapper });
 
@@ -71,8 +71,8 @@ describe('useNotifications hooks', () => {
 
   describe('useRoutingRules', () => {
     it('fetches routing rules successfully', async () => {
-      const mockRules = [{ id: '1', eventType: 'test' }];
-      vi.mocked(api.listRoutingRules).mockResolvedValue(mockRules as any);
+      const mockRules = [{ id: '1', eventType: 'test' }] as api.RoutingRule[];
+      vi.mocked(api.listRoutingRules).mockResolvedValue(mockRules);
 
       const { result } = renderHook(() => useRoutingRules(), { wrapper });
 
@@ -84,8 +84,13 @@ describe('useNotifications hooks', () => {
 
   describe('useCreateChannel', () => {
     it('creates a channel and invalidates cache', async () => {
-      const payload = { name: 'New Channel', type: 'webhook', config: {} };
-      vi.mocked(api.createChannel).mockResolvedValue({ id: '2', ...payload } as any);
+      const payload: api.CreateChannelPayload = {
+        name: 'New Channel',
+        type: 'webhook',
+        config: {},
+      };
+      const mockResponse = { id: '2', ...payload } as api.NotificationChannel;
+      vi.mocked(api.createChannel).mockResolvedValue(mockResponse);
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useCreateChannel(), { wrapper });
@@ -100,7 +105,7 @@ describe('useNotifications hooks', () => {
     it('shows error toast on failure', async () => {
       vi.mocked(api.createChannel).mockRejectedValue(new Error('Failed'));
       const { result } = renderHook(() => useCreateChannel(), { wrapper });
-      result.current.mutate({ name: 'Fail' } as any);
+      result.current.mutate({ name: 'Fail' } as api.CreateChannelPayload);
 
       await waitFor(() => expect(result.current.isError).toBe(true));
       expect(toast.error).toHaveBeenCalledWith('Failed to create channel: Failed');
@@ -111,7 +116,8 @@ describe('useNotifications hooks', () => {
     it('updates a channel and invalidates cache', async () => {
       const id = '1';
       const data = { name: 'Updated Name' };
-      vi.mocked(api.updateChannel).mockResolvedValue({ id, ...data } as any);
+      const mockResponse = { id, ...data } as api.NotificationChannel;
+      vi.mocked(api.updateChannel).mockResolvedValue(mockResponse);
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useUpdateChannel(), { wrapper });
@@ -168,8 +174,9 @@ describe('useNotifications hooks', () => {
 
   describe('useCreateRoutingRule', () => {
     it('creates a routing rule and invalidates cache', async () => {
-      const payload = { eventType: 'test', channelIds: ['1'] };
-      vi.mocked(api.createRoutingRule).mockResolvedValue({ id: 'rule-1', ...payload } as any);
+      const payload: api.CreateRoutingRulePayload = { eventType: 'test', channelIds: ['1'] };
+      const mockResponse = { id: 'rule-1', ...payload } as api.RoutingRule;
+      vi.mocked(api.createRoutingRule).mockResolvedValue(mockResponse);
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useCreateRoutingRule(), { wrapper });
@@ -186,7 +193,8 @@ describe('useNotifications hooks', () => {
     it('updates a routing rule and invalidates cache', async () => {
       const id = 'rule-1';
       const data = { eventType: 'updated' };
-      vi.mocked(api.updateRoutingRule).mockResolvedValue({ id, ...data } as any);
+      const mockResponse = { id, ...data } as api.RoutingRule;
+      vi.mocked(api.updateRoutingRule).mockResolvedValue(mockResponse);
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(() => useUpdateRoutingRule(), { wrapper });

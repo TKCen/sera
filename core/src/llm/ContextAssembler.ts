@@ -7,7 +7,12 @@ import { AgentFactory } from '../agents/AgentFactory.js';
 import { IdentityService } from '../agents/identity/IdentityService.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
-import type { MemoryNamespace, SearchFilter, HybridSearchConfig, SearchResult } from '../services/vector.service.js';
+import type {
+  MemoryNamespace,
+  SearchFilter,
+  HybridSearchConfig,
+  SearchResult,
+} from '../services/vector.service.js';
 import { Logger } from '../lib/logger.js';
 import { MemoryBlockStore } from '../memory/blocks/MemoryBlockStore.js';
 

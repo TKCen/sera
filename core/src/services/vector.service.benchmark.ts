@@ -14,14 +14,14 @@ async function runBenchmark() {
     score: Math.random(),
     vector: Array.from({ length: vectorSize }, () => Math.random()),
     payload: { created_at: new Date().toISOString() } as any,
-    namespace: 'personal:agent'
+    namespace: 'personal:agent',
   }));
 
   const textResults: SearchResult[] = Array.from({ length: 40 }, (_, i) => ({
     id: `t-${i}`,
     score: Math.random() * 10,
     payload: { created_at: new Date().toISOString() } as any,
-    namespace: 'personal:agent'
+    namespace: 'personal:agent',
   }));
 
   const config: HybridSearchConfig = {
@@ -37,7 +37,7 @@ async function runBenchmark() {
     temporalDecay: {
       enabled: true,
       halfLifeDays: 30,
-    }
+    },
   };
 
   console.log('Running hybridSearch benchmark...');

@@ -350,10 +350,11 @@ export class MemoryBlockStore {
 
     // Sync to PostgreSQL
     try {
-      await pool.query(
-        `UPDATE memory_blocks SET content = $1, updated_at = $2 WHERE id = $3`,
-        [entry.content, entry.updatedAt, entry.id]
-      );
+      await pool.query(`UPDATE memory_blocks SET content = $1, updated_at = $2 WHERE id = $3`, [
+        entry.content,
+        entry.updatedAt,
+        entry.id,
+      ]);
     } catch (err) {
       logger.error('Failed to sync updated memory block to PostgreSQL:', err);
     }
@@ -399,10 +400,11 @@ export class MemoryBlockStore {
 
     // Sync to PostgreSQL
     try {
-      await pool.query(
-        `UPDATE memory_blocks SET type = $1, updated_at = $2 WHERE id = $3`,
-        [entry.type, entry.updatedAt, entry.id]
-      );
+      await pool.query(`UPDATE memory_blocks SET type = $1, updated_at = $2 WHERE id = $3`, [
+        entry.type,
+        entry.updatedAt,
+        entry.id,
+      ]);
     } catch (err) {
       logger.error('Failed to sync moved memory block to PostgreSQL:', err);
     }

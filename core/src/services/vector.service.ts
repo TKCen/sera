@@ -194,16 +194,19 @@ export class VectorService {
     textResults: SearchResult[],
     config: HybridSearchConfig
   ): Promise<SearchResult[]> {
-    const combinedMap = new Map<string | number, SearchResult & { vectorScore?: number; textScore?: number }>();
+    const combinedMap = new Map<
+      string | number,
+      SearchResult & { vectorScore?: number; textScore?: number }
+    >();
 
     // Normalize and add vector results
-    const maxVectorScore = Math.max(...vectorResults.map(r => r.score), 0) || 1;
+    const maxVectorScore = Math.max(...vectorResults.map((r) => r.score), 0) || 1;
     for (const r of vectorResults) {
       combinedMap.set(r.id, { ...r, vectorScore: r.score / maxVectorScore });
     }
 
     // Normalize and add text results
-    const maxTextScore = Math.max(...textResults.map(r => r.score), 0) || 1;
+    const maxTextScore = Math.max(...textResults.map((r) => r.score), 0) || 1;
     for (const r of textResults) {
       const existing = combinedMap.get(r.id);
       if (existing) {
@@ -223,20 +226,21 @@ export class VectorService {
 
       // Apply Temporal Decay
       if (config.temporalDecay?.enabled && r.payload.created_at) {
-        const ageInDays = (Date.now() - new Date(r.payload.created_at).getTime()) / (1000 * 60 * 60 * 24);
+        const ageInDays =
+          (Date.now() - new Date(r.payload.created_at).getTime()) / (1000 * 60 * 60 * 24);
         const decayFactor = Math.pow(2, -ageInDays / config.temporalDecay.halfLifeDays);
         r.score *= decayFactor;
       }
     }
 
     // Filter by minScore and sort
-    results = results.filter(r => r.score >= config.minScore);
+    results = results.filter((r) => r.score >= config.minScore);
     results.sort((a, b) => b.score - a.score);
 
     // Apply MMR Re-ranking
     if (config.mmr?.enabled && results.length > 0) {
       // Ensure all candidates have vectors
-      const missingVectorIds = results.filter(r => !r.vector).map(r => r.id);
+      const missingVectorIds = results.filter((r) => !r.vector).map((r) => r.id);
       if (missingVectorIds.length > 0) {
         // Fetch missing vectors from Qdrant
         // Note: Qdrant client retrieve can fetch by IDs
@@ -252,22 +256,24 @@ export class VectorService {
           }
         }
 
-        await Promise.all(Array.from(namespaceGroups.entries()).map(async ([ns, ids]) => {
-          try {
-            const points = await this.client.retrieve(collectionName(ns), {
-              ids,
-              with_vector: true,
-            });
-            for (const p of points) {
-              const res = results.find(r => r.id === p.id);
-              if (res && p.vector) {
-                res.vector = p.vector as number[];
+        await Promise.all(
+          Array.from(namespaceGroups.entries()).map(async ([ns, ids]) => {
+            try {
+              const points = await this.client.retrieve(collectionName(ns), {
+                ids,
+                with_vector: true,
+              });
+              for (const p of points) {
+                const res = results.find((r) => r.id === p.id);
+                if (res && p.vector) {
+                  res.vector = p.vector as number[];
+                }
               }
+            } catch (err) {
+              logger.warn(`Failed to retrieve vectors for MMR from ${ns}`, err);
             }
-          } catch (err) {
-            logger.warn(`Failed to retrieve vectors for MMR from ${ns}`, err);
-          }
-        }));
+          })
+        );
       }
 
       results = this.applyMMR(results, queryVector, config.mmr.lambda, config.maxResults);

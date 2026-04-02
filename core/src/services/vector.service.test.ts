@@ -11,12 +11,32 @@ describe('VectorService Hybrid Search', () => {
   it('should combine and normalize scores from vector and text search', async () => {
     const queryVector = [0.1, 0.2];
     const vectorResults: SearchResult[] = [
-      { id: '1', score: 0.8, payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
-      { id: '2', score: 0.4, payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
+      {
+        id: '1',
+        score: 0.8,
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
+      {
+        id: '2',
+        score: 0.4,
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
     ];
     const textResults: SearchResult[] = [
-      { id: '2', score: 10.0, payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
-      { id: '3', score: 5.0, payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
+      {
+        id: '2',
+        score: 10.0,
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
+      {
+        id: '3',
+        score: 5.0,
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
     ];
 
     const config: HybridSearchConfig = {
@@ -26,7 +46,12 @@ describe('VectorService Hybrid Search', () => {
       maxResults: 5,
     };
 
-    const results = await vectorService.hybridSearch(queryVector, vectorResults, textResults, config);
+    const results = await vectorService.hybridSearch(
+      queryVector,
+      vectorResults,
+      textResults,
+      config
+    );
 
     // ID 2: Vector Score 0.4 (norm 0.5), Text Score 10.0 (norm 1.0) -> Hybrid Score 0.5*0.5 + 0.5*1.0 = 0.75
     // ID 1: Vector Score 0.8 (norm 1.0), Text Score 0 (norm 0) -> Hybrid Score 0.5*1.0 + 0.5*0 = 0.5
@@ -47,8 +72,18 @@ describe('VectorService Hybrid Search', () => {
     thirtyDaysAgo.setDate(now.getDate() - 30);
 
     const vectorResults: SearchResult[] = [
-      { id: 'recent', score: 1.0, payload: { created_at: now.toISOString() } as any, namespace: 'personal:agent' },
-      { id: 'old', score: 1.0, payload: { created_at: thirtyDaysAgo.toISOString() } as any, namespace: 'personal:agent' },
+      {
+        id: 'recent',
+        score: 1.0,
+        payload: { created_at: now.toISOString() } as any,
+        namespace: 'personal:agent',
+      },
+      {
+        id: 'old',
+        score: 1.0,
+        payload: { created_at: thirtyDaysAgo.toISOString() } as any,
+        namespace: 'personal:agent',
+      },
     ];
 
     const config: HybridSearchConfig = {
@@ -73,9 +108,27 @@ describe('VectorService Hybrid Search', () => {
   it('should apply MMR re-ranking', async () => {
     const queryVector = [1, 0];
     const vectorResults: SearchResult[] = [
-      { id: '1', score: 1.0, vector: [1, 0], payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
-      { id: '2', score: 0.9, vector: [0.99, 0.01], payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
-      { id: '3', score: 0.8, vector: [0, 1], payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
+      {
+        id: '1',
+        score: 1.0,
+        vector: [1, 0],
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
+      {
+        id: '2',
+        score: 0.9,
+        vector: [0.99, 0.01],
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
+      {
+        id: '3',
+        score: 0.8,
+        vector: [0, 1],
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
     ];
 
     const config: HybridSearchConfig = {
@@ -106,17 +159,26 @@ describe('VectorService Hybrid Search', () => {
   it('should fetch missing vectors for MMR', async () => {
     const queryVector = [1, 0];
     const vectorResults: SearchResult[] = [
-      { id: '1', score: 1.0, vector: [1, 0], payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
+      {
+        id: '1',
+        score: 1.0,
+        vector: [1, 0],
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
     ];
     const textResults: SearchResult[] = [
-      { id: '2', score: 0.9, payload: { created_at: new Date().toISOString() } as any, namespace: 'personal:agent' },
+      {
+        id: '2',
+        score: 0.9,
+        payload: { created_at: new Date().toISOString() } as any,
+        namespace: 'personal:agent',
+      },
     ];
 
-    const mockRetrieve = vi.fn().mockResolvedValue([
-      { id: '2', vector: [0, 1] }
-    ]);
+    const mockRetrieve = vi.fn().mockResolvedValue([{ id: '2', vector: [0, 1] }]);
     (vectorService as any).client = {
-      retrieve: mockRetrieve
+      retrieve: mockRetrieve,
     };
 
     const config: HybridSearchConfig = {
@@ -131,7 +193,12 @@ describe('VectorService Hybrid Search', () => {
       },
     };
 
-    const results = await vectorService.hybridSearch(queryVector, vectorResults, textResults, config);
+    const results = await vectorService.hybridSearch(
+      queryVector,
+      vectorResults,
+      textResults,
+      config
+    );
 
     expect(mockRetrieve).toHaveBeenCalled();
     expect(results).toHaveLength(2);

@@ -3,7 +3,8 @@ import { request } from './client';
 export interface NotificationChannel {
   id: string;
   name: string;
-  type: 'webhook' | 'email' | 'discord' | 'slack';
+  description?: string;
+  type: 'webhook' | 'email' | 'discord' | 'slack' | 'discord-chat';
   config: Record<string, unknown>;
   enabled: boolean;
   createdAt: string;
@@ -15,13 +16,18 @@ export interface RoutingRule {
   channelIds: string[];
   filter: Record<string, unknown> | null;
   minSeverity: 'info' | 'warning' | 'critical';
+  enabled: boolean;
+  priority: number;
+  targetAgentId: string | null;
   createdAt: string;
 }
 
 export interface CreateChannelPayload {
   name: string;
+  description?: string;
   type: string;
   config: Record<string, unknown>;
+  enabled?: boolean;
 }
 
 export interface CreateRoutingRulePayload {
@@ -29,6 +35,9 @@ export interface CreateRoutingRulePayload {
   channelIds: string[];
   filter?: Record<string, unknown>;
   minSeverity?: string;
+  enabled?: boolean;
+  priority?: number;
+  targetAgentId?: string | null;
 }
 
 export function listChannels(): Promise<NotificationChannel[]> {
@@ -38,6 +47,16 @@ export function listChannels(): Promise<NotificationChannel[]> {
 export function createChannel(data: CreateChannelPayload): Promise<NotificationChannel> {
   return request<NotificationChannel>('/channels', {
     method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateChannel(
+  id: string,
+  data: Partial<CreateChannelPayload>
+): Promise<NotificationChannel> {
+  return request<NotificationChannel>(`/channels/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
     body: JSON.stringify(data),
   });
 }
@@ -61,6 +80,16 @@ export function listRoutingRules(): Promise<RoutingRule[]> {
 export function createRoutingRule(data: CreateRoutingRulePayload): Promise<RoutingRule> {
   return request<RoutingRule>('/notifications/routing', {
     method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateRoutingRule(
+  id: string,
+  data: Partial<CreateRoutingRulePayload>
+): Promise<RoutingRule> {
+  return request<RoutingRule>(`/notifications/routing/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
     body: JSON.stringify(data),
   });
 }

@@ -111,24 +111,36 @@ export function createNotificationsRouter(): {
     }
   }) as RequestHandler);
 
-  /** PATCH /api/channels/:id — update channel name, config, or enabled status */
+  /** PATCH /api/channels/:id — update channel name, description, config, or enabled status */
   protectedRouter.patch('/:id', requireRole(['admin', 'operator']), (async (req, res) => {
     const { id } = req.params as IdParam;
-    const { name, config, enabled } = req.body as {
+    const { name, description, config, enabled } = req.body as {
       name?: string;
+      description?: string;
       config?: Record<string, unknown>;
       enabled?: boolean;
     };
 
-    if (name === undefined && config === undefined && enabled === undefined) {
+    if (
+      name === undefined &&
+      description === undefined &&
+      config === undefined &&
+      enabled === undefined
+    ) {
       return void res
         .status(400)
-        .json({ error: 'No update fields provided (name, config, enabled)' });
+        .json({ error: 'No update fields provided (name, description, config, enabled)' });
     }
 
     try {
-      const updates: { name?: string; config?: Record<string, unknown>; enabled?: boolean } = {};
+      const updates: {
+        name?: string;
+        description?: string;
+        config?: Record<string, unknown>;
+        enabled?: boolean;
+      } = {};
       if (name !== undefined) updates.name = name;
+      if (description !== undefined) updates.description = description;
       if (config !== undefined) updates.config = config;
       if (enabled !== undefined) updates.enabled = enabled;
       const updated = await NotificationService.getInstance().updateChannel(id, updates);
@@ -202,11 +214,17 @@ export function createNotificationsRouter(): {
       channelIds,
       filter,
       minSeverity = 'info',
+      enabled = true,
+      priority = 0,
+      targetAgentId = null,
     } = req.body as {
       eventType?: string;
       channelIds?: string[];
       filter?: Record<string, unknown>;
       minSeverity?: string;
+      enabled?: boolean;
+      priority?: number;
+      targetAgentId?: string | null;
     };
 
     if (!eventType || !channelIds || channelIds.length === 0) {
@@ -221,12 +239,24 @@ export function createNotificationsRouter(): {
         channel_ids: string[];
         filter: unknown;
         min_severity: string;
+        enabled: boolean;
+        priority: number;
+        target_agent_id: string | null;
         created_at: Date;
       }>(
-        `INSERT INTO notification_routing_rules (id, event_type, channel_ids, filter, min_severity)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO notification_routing_rules (id, event_type, channel_ids, filter, min_severity, enabled, priority, target_agent_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
-        [id, eventType, channelIds, filter ? JSON.stringify(filter) : null, minSeverity]
+        [
+          id,
+          eventType,
+          channelIds,
+          filter ? JSON.stringify(filter) : null,
+          minSeverity,
+          enabled,
+          priority,
+          targetAgentId,
+        ]
       )
       .catch((err: unknown) => {
         logger.error('Create routing rule error:', err);
@@ -252,8 +282,11 @@ export function createNotificationsRouter(): {
       channel_ids: string[];
       filter: unknown;
       min_severity: string;
+      enabled: boolean;
+      priority: number;
+      target_agent_id: string | null;
       created_at: Date;
-    }>('SELECT * FROM notification_routing_rules ORDER BY created_at');
+    }>('SELECT * FROM notification_routing_rules ORDER BY priority DESC, created_at ASC');
 
     res.json(
       rows.map((r) => ({
@@ -262,6 +295,9 @@ export function createNotificationsRouter(): {
         channelIds: r.channel_ids,
         filter: r.filter,
         minSeverity: r.min_severity,
+        enabled: r.enabled,
+        priority: r.priority,
+        targetAgentId: r.target_agent_id,
         createdAt: r.created_at.toISOString(),
       }))
     );
@@ -270,15 +306,24 @@ export function createNotificationsRouter(): {
   /** PATCH /api/notifications/routing/:id */
   protectedRouter.patch('/routing/:id', requireRole(['admin']), (async (req, res) => {
     const { id } = req.params as IdParam;
-    const { channelIds, minSeverity, filter } = req.body as {
-      channelIds?: string[];
-      minSeverity?: string;
-      filter?: Record<string, unknown> | null;
-    };
+    const { eventType, channelIds, minSeverity, filter, enabled, priority, targetAgentId } =
+      req.body as {
+        eventType?: string;
+        channelIds?: string[];
+        minSeverity?: string;
+        filter?: Record<string, unknown> | null;
+        enabled?: boolean;
+        priority?: number;
+        targetAgentId?: string | null;
+      };
 
     const updates: string[] = [];
     const params: unknown[] = [id];
 
+    if (eventType !== undefined) {
+      params.push(eventType);
+      updates.push(`event_type = $${params.length}`);
+    }
     if (channelIds !== undefined) {
       params.push(channelIds);
       updates.push(`channel_ids = $${params.length}`);
@@ -291,6 +336,18 @@ export function createNotificationsRouter(): {
       params.push(filter ? JSON.stringify(filter) : null);
       updates.push(`filter = $${params.length}`);
     }
+    if (enabled !== undefined) {
+      params.push(enabled);
+      updates.push(`enabled = $${params.length}`);
+    }
+    if (priority !== undefined) {
+      params.push(priority);
+      updates.push(`priority = $${params.length}`);
+    }
+    if (targetAgentId !== undefined) {
+      params.push(targetAgentId);
+      updates.push(`target_agent_id = $${params.length}`);
+    }
 
     if (updates.length === 0) {
       return void res.status(400).json({ error: 'No fields to update' });
@@ -302,6 +359,9 @@ export function createNotificationsRouter(): {
       channel_ids: string[];
       filter: unknown;
       min_severity: string;
+      enabled: boolean;
+      priority: number;
+      target_agent_id: string | null;
       created_at: Date;
     }>(
       `UPDATE notification_routing_rules SET ${updates.join(', ')} WHERE id = $1 RETURNING *`,
@@ -316,6 +376,9 @@ export function createNotificationsRouter(): {
       channelIds: row.channel_ids,
       filter: row.filter,
       minSeverity: row.min_severity,
+      enabled: row.enabled,
+      priority: row.priority,
+      targetAgentId: row.target_agent_id,
       createdAt: row.created_at.toISOString(),
     });
   }) as RequestHandler);

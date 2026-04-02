@@ -26,7 +26,7 @@ import ToolsPage from '@/pages/ToolsPage';
 import MemoryExplorerPage from '@/app/memory/page';
 import MemoryDetailPage from '@/pages/MemoryDetailPage';
 import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
-import ChannelsPage from '@/pages/ChannelsPage';
+import ChannelsPage from '@/app/channels/page';
 import TemplatesPage from '@/pages/TemplatesPage';
 import ProvidersPage from '@/pages/ProvidersPage';
 import LoginPage from '@/app/login/page';

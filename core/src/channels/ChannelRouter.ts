@@ -17,6 +17,9 @@ interface RoutingRule {
   channelIds: string[];
   minSeverity: ChannelSeverity;
   filter: Record<string, unknown> | null;
+  enabled: boolean;
+  priority: number;
+  targetAgentId: string | null;
 }
 
 /** Wildcard matching: 'permission.*' matches 'permission.requested', '*' matches everything. */
@@ -90,8 +93,11 @@ export class ChannelRouter {
         channel_ids: string[];
         min_severity: string;
         filter: Record<string, unknown> | null;
+        enabled: boolean;
+        priority: number;
+        target_agent_id: string | null;
       }>(
-        'SELECT id, event_type, channel_ids, min_severity, filter FROM notification_routing_rules'
+        'SELECT * FROM notification_routing_rules WHERE enabled = true ORDER BY priority DESC, created_at ASC'
       );
 
       rules = rows.map((r) => ({
@@ -100,6 +106,9 @@ export class ChannelRouter {
         channelIds: r.channel_ids,
         minSeverity: (r.min_severity ?? 'info') as ChannelSeverity,
         filter: r.filter,
+        enabled: r.enabled,
+        priority: r.priority,
+        targetAgentId: r.target_agent_id,
       }));
     } catch (err) {
       logger.warn('Failed to load routing rules — skipping dispatch:', err);
@@ -108,9 +117,18 @@ export class ChannelRouter {
 
     const matchedChannelIds = new Set<string>();
     for (const rule of rules) {
+      // 1. Match event type pattern
       if (!matchesPattern(rule.eventType, event.eventType)) continue;
+
+      // 2. Match minimum severity
       if (!meetsMinSeverity(event.severity, rule.minSeverity)) continue;
+
+      // 3. Match target agent if specified
+      if (rule.targetAgentId && event.metadata['agentId'] !== rule.targetAgentId) continue;
+
+      // 4. Match metadata filter
       if (!matchesFilter(event, rule.filter)) continue;
+
       for (const cid of rule.channelIds) matchedChannelIds.add(cid);
     }
 

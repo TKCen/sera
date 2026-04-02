@@ -1,5 +1,5 @@
-import type { AgentRegistry } from './registry.service.js';
-import type { ResourceImporter } from './importer.service.js';
+import type { AgentRegistry } from "./registry.service.js";
+import type { ResourceImporter } from "./importer.service.js";
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('Bootstrap');

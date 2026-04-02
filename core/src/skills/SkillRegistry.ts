@@ -1,5 +1,5 @@
-import type { AgentManifest } from '../agents/manifest/types.js';
-import type { MCPRegistry } from '../mcp/registry.js';
+import type { AgentManifest } from '../agents/index.js';
+import type { MCPRegistry } from '../mcp/index.js';
 import type { SkillDefinition, SkillResult, SkillInfo, ToolInfoResponse } from './types.js';
 import { TOOL_TIER_REQUIREMENTS } from './types.js';
 

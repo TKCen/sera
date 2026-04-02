@@ -20,12 +20,12 @@ import { Router } from 'express';
 import type { Request, Response, RequestHandler } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { CapabilityResolver } from '../capability/resolver.js';
-import { WorktreeManager } from '../sandbox/WorktreeManager.js';
-import type { AgentRegistry } from '../agents/registry.service.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import type { SandboxManager } from '../sandbox/SandboxManager.js';
-import { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
-import type { PermissionDecision } from '../sandbox/PermissionRequestService.js';
+import { WorktreeManager } from '../sandbox/index.js';
+import type { AgentRegistry } from '../agents/index.js';
+import type { Orchestrator } from '../agents/index.js';
+import type { SandboxManager } from '../sandbox/index.js';
+import { PermissionRequestService } from '../sandbox/index.js';
+import type { PermissionDecision } from '../sandbox/index.js';
 
 export function createLifecycleRouter(
   registry: AgentRegistry,

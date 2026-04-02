@@ -1,12 +1,12 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { v4 as uuidv4 } from 'uuid';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { Orchestrator } from '../agents/index.js';
 import { CircleService } from '../circles/CircleService.js';
 import { pool } from '../lib/database.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
-import type { ProcessTask } from '../agents/process/types.js';
+import type { ProcessTask } from '../agents/index.js';
 
 /**
  * SeraMCPServer — an embedded MCP server that exposes platform management tools.

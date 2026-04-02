@@ -3,10 +3,10 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { PlatformPath } from '../lib/PlatformPath.js';
 import { Logger } from '../lib/logger.js';
-import type { AgentManifest, ResolvedCapabilities } from '../agents/manifest/types.js';
+import type { AgentManifest, ResolvedCapabilities } from '../agents/index.js';
 import type { SpawnRequest } from './types.js';
 import type { StorageProviderFactory } from '../storage/StorageProvider.js';
-import type { AgentRegistry } from '../agents/registry.service.js';
+import type { AgentRegistry } from '../agents/index.js';
 
 const logger = new Logger('BindMountBuilder');
 

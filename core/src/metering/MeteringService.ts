@@ -10,7 +10,7 @@
 
 import { query } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('MeteringService');
 

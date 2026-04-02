@@ -11,13 +11,13 @@
  * @see #387
  */
 
-import type { LlmRouter, ChatMessage } from './LlmRouter.js';
-import type { ProviderRegistry } from './ProviderRegistry.js';
+import type { LlmRouter, ChatMessage } from "./LlmRouter.js";
+import type { ProviderRegistry } from "./ProviderRegistry.js";
 import type {
   ContextAssemblyEvent,
   ContextEventListener,
   ContextAssemblyStage,
-} from './ContextAssembler.js';
+} from './index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('ContextCompactionService');

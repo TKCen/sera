@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { Orchestrator } from '../agents/index.js';
 import { PipelineService } from '../services/PipelineService.js';
 import type { PipelineStep } from '../services/PipelineService.js';
 import { Logger } from '../lib/logger.js';

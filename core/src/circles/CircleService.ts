@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
-import { KnowledgeGitService } from '../memory/KnowledgeGitService.js';
-import { AuditService } from '../audit/AuditService.js';
+import { KnowledgeGitService } from '../memory/index.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('CircleService');
 

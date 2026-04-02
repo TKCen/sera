@@ -5,14 +5,14 @@
  * executes tool calls via the SkillRegistry, and handles timeout + truncation.
  */
 
-import type { AgentManifest } from '../agents/manifest/types.js';
-import type { SkillRegistry } from '../skills/SkillRegistry.js';
-import type { SkillInfo, SkillParameter } from '../skills/types.js';
+import type { AgentManifest } from '../agents/index.js';
+import type { SkillRegistry } from '../skills/index.js';
+import type { SkillInfo, SkillParameter } from '../skills/index.js';
 import type { ToolDefinition, ToolCall } from '../lib/llm/types.js';
-import type { ChatMessage } from '../agents/types.js';
+import type { ChatMessage } from '../agents/index.js';
 import { Logger } from '../lib/logger.js';
 import { parseJson } from '../lib/json.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('ToolExecutor');
 

@@ -1,6 +1,6 @@
 import { Logger } from '../lib/logger.js';
-import type { AgentRegistry } from './registry.service.js';
-import type { SandboxManager } from '../sandbox/SandboxManager.js';
+import type { AgentRegistry } from "./registry.service.js";
+import type { SandboxManager } from '../sandbox/index.js';
 
 const logger = new Logger('CleanupService');
 

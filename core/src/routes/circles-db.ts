@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { CircleService } from '../circles/CircleService.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { Orchestrator } from '../agents/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('CirclesDbRouter');

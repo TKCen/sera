@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('PartyMode');
-import type { BaseAgent } from '../agents/BaseAgent.js';
+import type { BaseAgent } from '../agents/index.js';
 import type { CircleManifest, SelectionStrategy } from './types.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────────

@@ -1,20 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Pool } from 'pg';
 import { ContextAssembler } from './ContextAssembler.js';
-import { Orchestrator } from '../agents/Orchestrator.js';
-import { AgentFactory } from '../agents/AgentFactory.js';
-import { IdentityService } from '../agents/identity/IdentityService.js';
+import { Orchestrator, AgentFactory, IdentityService } from '../agents/index.js';
 import type { AgentManifest } from '../agents/manifest/types.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
-import { SkillInjector } from '../skills/SkillInjector.js';
+import { SkillInjector } from '../skills/index.js';
 
-vi.mock('../skills/SkillInjector.js');
+vi.mock('../skills/index.js');
 vi.mock('../services/vector.service.js');
 vi.mock('../services/embedding.service.js');
-vi.mock('../agents/AgentFactory.js');
-vi.mock('../agents/identity/IdentityService.js');
-vi.mock('../agents/Orchestrator.js');
+vi.mock('../agents/index.js');
 
 describe('ContextAssembler', () => {
   let assembler: ContextAssembler;

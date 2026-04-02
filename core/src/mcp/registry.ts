@@ -4,7 +4,7 @@ import yaml from 'js-yaml';
 import chokidar from 'chokidar';
 import { MCPClient, type MCPClientOptions } from './client.js';
 import { Logger } from '../lib/logger.js';
-import type { MCPServerManager, MCPServerManifest } from './MCPServerManager.js';
+import type { MCPServerManager, MCPServerManifest } from './index.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 
 const logger = new Logger('MCPRegistry');

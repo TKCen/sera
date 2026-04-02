@@ -7,7 +7,7 @@ import {
   CapabilityPolicySchema,
   SandboxBoundarySchema,
 } from './schemas.js';
-import { AgentRegistry } from './registry.service.js';
+import { AgentRegistry } from "./registry.service.js";
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('ResourceImporter');

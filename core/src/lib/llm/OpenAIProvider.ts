@@ -6,7 +6,7 @@ import type {
   ToolDefinition,
   ToolCall,
 } from './types.js';
-import type { ChatMessage } from '../../agents/types.js';
+import type { ChatMessage } from '../../agents/index.js';
 import { config } from '../config.js';
 import { Logger } from '../logger.js';
 

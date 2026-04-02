@@ -41,8 +41,8 @@ import { streamOpenAICompletions } from '@mariozechner/pi-ai/openai-completions'
 import { streamAnthropic } from '@mariozechner/pi-ai/anthropic';
 import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { Logger } from '../lib/logger.js';
-import type { ProviderConfig, ProviderRegistry } from './ProviderRegistry.js';
-import type { ChatMessage } from '../agents/types.js';
+import type { ProviderConfig, ProviderRegistry } from "./ProviderRegistry.js";
+import type { ChatMessage } from '../agents/index.js';
 
 const logger = new Logger('LlmRouter');
 

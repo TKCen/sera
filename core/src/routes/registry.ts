@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { AgentRegistry } from '../agents/registry.service.js';
-import { ResourceImporter } from '../agents/importer.service.js';
-import { AgentInstanceSchema } from '../agents/schemas.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import { AgentRegistry } from '../agents/index.js';
+import { ResourceImporter } from '../agents/index.js';
+import { AgentInstanceSchema } from '../agents/index.js';
+import type { Orchestrator } from '../agents/index.js';
 
 export function createRegistryRouter(
   registry: AgentRegistry,

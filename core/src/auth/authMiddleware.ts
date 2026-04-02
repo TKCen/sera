@@ -8,11 +8,11 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import type { IdentityService } from './IdentityService.js';
+import type { IdentityService } from './index.js';
 import type { AgentTokenClaims } from './types.js';
 import type { OperatorIdentity, OperatorRole } from './interfaces.js';
-import type { AuthService } from './auth-service.js';
-import type { WebSessionStore } from './web-session-store.js';
+import type { AuthService } from './index.js';
+import type { WebSessionStore } from './index.js';
 
 // ── Express type augmentation ───────────────────────────────────────────────
 

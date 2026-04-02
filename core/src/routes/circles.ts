@@ -9,8 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { CircleRegistry } from '../circles/CircleRegistry.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
+import type { AgentManifest } from '../agents/index.js';
+import type { Orchestrator } from '../agents/index.js';
 
 export function createCircleRouter(
   circleRegistry: CircleRegistry,

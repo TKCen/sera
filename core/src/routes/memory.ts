@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import type { MemoryManager } from '../memory/manager.js';
-import { ScopedMemoryBlockStore } from '../memory/blocks/ScopedMemoryBlockStore.js';
+import type { MemoryManager } from '../memory/index.js';
+import { ScopedMemoryBlockStore } from '../memory/index.js';
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace } from '../services/vector.service.js';
-import { MemoryCompactionService } from '../memory/MemoryCompactionService.js';
+import { MemoryCompactionService } from '../memory/index.js';
 import { EmbeddingService } from '../services/embedding.service.js';
-import { extractLinks } from '../memory/blocks/scoped-types.js';
-import type { KnowledgeBlock, KnowledgeBlockType } from '../memory/blocks/scoped-types.js';
+import { extractLinks } from '../memory/index.js';
+import type { KnowledgeBlock, KnowledgeBlockType } from '../memory/index.js';
 import { Logger } from '../lib/logger.js';
 
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';

@@ -14,9 +14,9 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../lib/logger.js';
-import type { AgentRegistry } from '../agents/registry.service.js';
+import type { AgentRegistry } from '../agents/index.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('PermissionRequestService');
 

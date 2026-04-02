@@ -14,9 +14,9 @@
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
 import { Logger } from '../../lib/logger.js';
-import type { Orchestrator } from '../../agents/Orchestrator.js';
-import type { SessionStore } from '../../sessions/SessionStore.js';
-import type { ChatMessage } from '../../agents/types.js';
+import type { Orchestrator } from '../../agents/index.js';
+import type { SessionStore } from '../../sessions/index.js';
+import type { ChatMessage } from '../../agents/index.js';
 
 const logger = new Logger('DiscordChatAdapter');
 

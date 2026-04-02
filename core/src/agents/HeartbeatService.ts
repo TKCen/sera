@@ -1,5 +1,5 @@
 import { Logger } from '../lib/logger.js';
-import type { AgentRegistry } from './registry.service.js';
+import type { AgentRegistry } from "./registry.service.js";
 import type { IntercomService } from '../intercom/IntercomService.js';
 
 const logger = new Logger('HeartbeatService');

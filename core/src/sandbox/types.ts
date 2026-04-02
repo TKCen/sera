@@ -2,7 +2,7 @@
  * Sandbox types — interfaces for the container management layer.
  */
 
-import type { SecurityTier } from '../agents/manifest/types.js';
+import type { SecurityTier } from '../agents/index.js';
 
 // ── Container Type ──────────────────────────────────────────────────────────────
 

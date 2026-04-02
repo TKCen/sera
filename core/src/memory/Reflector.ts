@@ -1,5 +1,5 @@
 import type { LLMProvider } from '../lib/llm/types.js';
-import type { MemoryManager } from './manager.js';
+import type { MemoryManager } from "./manager.js";
 import type { MemoryEntry } from './blocks/types.js';
 import { Logger } from '../lib/logger.js';
 

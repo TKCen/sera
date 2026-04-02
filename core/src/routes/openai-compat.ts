@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { Orchestrator } from '../agents/Orchestrator.js';
-import { AgentFactory } from '../agents/AgentFactory.js';
+import { Orchestrator } from '../agents/index.js';
+import { AgentFactory } from '../agents/index.js';
 import { IntercomService } from '../intercom/IntercomService.js';
-import type { ChatMessage } from '../agents/types.js';
+import type { ChatMessage } from '../agents/index.js';
 import type { ToolCall } from '../lib/llm/types.js';
 
 class SSEIntercom extends IntercomService {

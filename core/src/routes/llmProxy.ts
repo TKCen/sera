@@ -17,18 +17,18 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { IdentityService } from '../auth/IdentityService.js';
-import { createAuthMiddleware } from '../auth/authMiddleware.js';
-import type { AuthService } from '../auth/auth-service.js';
+import type { IdentityService } from '../auth/index.js';
+import { createAuthMiddleware } from '../auth/index.js';
+import type { AuthService } from '../auth/index.js';
 import type { MeteringService } from '../metering/MeteringService.js';
 import { rateLimitStub } from '../middleware/rateLimitStub.js';
-import type { LlmRouter } from '../llm/LlmRouter.js';
-import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
+import type { LlmRouter } from '../llm/index.js';
+import type { CircuitBreakerService } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';
 import type { Pool } from 'pg';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import { ContextAssembler } from '../llm/ContextAssembler.js';
-import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
+import type { Orchestrator } from '../agents/index.js';
+import { ContextAssembler } from '../llm/index.js';
+import type { ContextCompactionService } from '../llm/index.js';
 
 const logger = new Logger('LLMProxy');
 

@@ -7,17 +7,17 @@
 
 import Docker from 'dockerode';
 import { v4 as uuidv4 } from 'uuid';
-import type { AgentManifest, ResolvedCapabilities } from '../agents/manifest/types.js';
+import type { AgentManifest, ResolvedCapabilities } from '../agents/index.js';
 import type { SandboxInfo, SpawnRequest, ExecRequest, DockerLifecycleEvent } from './types.js';
 import { PolicyViolationError } from './TierPolicy.js';
 import { StorageProviderFactory } from '../storage/StorageProvider.js';
 import { LocalStorageProvider } from '../storage/LocalStorageProvider.js';
 import { Logger } from '../lib/logger.js';
-import type { EgressAclManager } from './EgressAclManager.js';
+import type { EgressAclManager } from './index.js';
 import { BindMountBuilder } from './BindMountBuilder.js';
 import { ContainerSecurityMapper } from './ContainerSecurityMapper.js';
 
-import type { AgentRegistry } from '../agents/registry.service.js';
+import type { AgentRegistry } from '../agents/index.js';
 
 const logger = new Logger('SandboxManager');
 

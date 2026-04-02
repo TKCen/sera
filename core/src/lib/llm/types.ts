@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../../agents/types.js';
+import type { ChatMessage } from '../../agents/index.js';
 
 // ── Tool Definitions (OpenAI format) ────────────────────────────────────────────
 

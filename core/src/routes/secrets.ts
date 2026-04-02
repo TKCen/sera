@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { SecretsManager } from '../secrets/secrets-manager.js';
-import { requireRole } from '../auth/authMiddleware.js';
+import { requireRole } from '../auth/index.js';
 
 export function createSecretsRouter() {
   const router = Router();

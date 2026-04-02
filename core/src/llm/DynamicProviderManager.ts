@@ -5,7 +5,7 @@ import type {
   DynamicProviderStatus,
   ProviderConfig,
   ProviderRegistry,
-} from './ProviderRegistry.js';
+} from "./ProviderRegistry.js";
 
 const logger = new Logger('DynamicProviderManager');
 

@@ -8,7 +8,7 @@
  * @see sera/docs/reimplementation/implementation-backlog.md § Epic 8
  */
 
-import type { FilesystemMode } from '../sandbox/types.js';
+import type { FilesystemMode } from '../sandbox/index.js';
 import type { StorageProvider, MountResult } from './StorageProvider.js';
 import { PlatformPath } from '../lib/PlatformPath.js';
 

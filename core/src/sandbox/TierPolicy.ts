@@ -12,7 +12,7 @@
  * @see sera/docs/reimplementation/agent-workspace-architecture.md § Security Tiers
  */
 
-import type { SecurityTier, AgentManifest } from '../agents/manifest/types.js';
+import type { SecurityTier, AgentManifest } from '../agents/index.js';
 import type { TierLimits, SpawnRequest, ToolRunRequest } from './types.js';
 
 // ── Tier Limit Definitions ──────────────────────────────────────────────────────

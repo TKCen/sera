@@ -8,7 +8,7 @@
  * @see sera/docs/reimplementation/implementation-backlog.md § Epic 8
  */
 
-import type { FilesystemMode } from '../sandbox/types.js';
+import type { FilesystemMode } from '../sandbox/index.js';
 
 // ── Mount Result ────────────────────────────────────────────────────────────────
 

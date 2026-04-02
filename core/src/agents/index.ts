@@ -1,8 +1,12 @@
 export { Orchestrator, RecursionLimitError } from './Orchestrator.js';
-export { HeartbeatService } from './HeartbeatService.js';
-export { CleanupService } from './CleanupService.js';
+export { AgentRegistry } from './registry.service.js';
+export type { AgentManifest } from './manifest/types.js';
+export { AgentManifestLoader, ManifestValidationError } from './manifest/AgentManifestLoader.js';
+export { ResourceImporter } from './importer.service.js';
+export { AgentInstanceSchema } from './schemas.js';
+export * from './types.js';
 export { BaseAgent } from './BaseAgent.js';
 export { AgentFactory } from './AgentFactory.js';
-export { AgentRegistry } from './registry.service.js';
-export { WorkerAgent } from './WorkerAgent.js';
+export { HeartbeatService } from './HeartbeatService.js';
+export { CleanupService } from './CleanupService.js';
 export { SubagentRunner } from './SubagentRunner.js';

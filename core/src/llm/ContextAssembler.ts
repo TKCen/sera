@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import type { Pool } from 'pg';
-import { SkillInjector } from '../skills/SkillInjector.js';
-import type { ChatMessage } from './LlmRouter.js';
-import { Orchestrator } from '../agents/Orchestrator.js';
-import { AgentFactory } from '../agents/AgentFactory.js';
-import { IdentityService } from '../agents/identity/IdentityService.js';
+import { SkillInjector } from '../skills/index.js';
+import type { ChatMessage } from './index.js';
+import { Orchestrator } from '../agents/index.js';
+import { AgentFactory } from '../agents/index.js';
+import { IdentityService } from '../agents/index.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
 import type { MemoryNamespace, SearchFilter } from '../services/vector.service.js';

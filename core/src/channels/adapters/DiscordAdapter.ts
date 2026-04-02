@@ -1,8 +1,8 @@
 import WebSocket from 'ws';
 import axios from 'axios';
 import { ChannelAdapter, type IncomingMessage } from '../ChannelAdapter.js';
-import type { Orchestrator } from '../../agents/Orchestrator.js';
-import type { SessionStore } from '../../sessions/SessionStore.js';
+import type { Orchestrator } from '../../agents/index.js';
+import type { SessionStore } from '../../sessions/index.js';
 
 export class DiscordAdapter extends ChannelAdapter {
   private ws: WebSocket | null = null;

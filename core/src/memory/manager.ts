@@ -3,7 +3,7 @@ import { MemoryBlockStore } from './blocks/MemoryBlockStore.js';
 import { VectorService } from '../services/vector.service.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { Logger } from '../lib/logger.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 const logger = new Logger('MemoryManager');
 import type {

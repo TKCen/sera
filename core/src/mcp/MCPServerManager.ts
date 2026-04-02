@@ -1,5 +1,5 @@
-import { SandboxManager } from '../sandbox/SandboxManager.js';
-import type { SandboxInfo } from '../sandbox/types.js';
+import { SandboxManager } from '../sandbox/index.js';
+import type { SandboxInfo } from '../sandbox/index.js';
 import { Logger } from '../lib/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 

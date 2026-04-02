@@ -3,7 +3,7 @@
  */
 
 import { Router } from 'express';
-import type { SessionStore } from '../sessions/SessionStore.js';
+import type { SessionStore } from '../sessions/index.js';
 
 export function createSessionRouter(sessionStore: SessionStore): Router {
   const router = Router();

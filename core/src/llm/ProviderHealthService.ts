@@ -10,7 +10,7 @@
  * @see core/src/llm/ProviderRegistry.ts
  */
 
-import type { ProviderConfig } from './ProviderRegistry.js';
+import type { ProviderConfig } from './index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('ProviderHealth');

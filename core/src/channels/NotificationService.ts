@@ -11,10 +11,10 @@ import { DiscordChannel } from './adapters/DiscordChannel.js';
 import { SlackChannel } from './adapters/SlackChannel.js';
 import { DiscordChatAdapter } from './adapters/DiscordChatAdapter.js';
 import type { DiscordChatConfig } from './adapters/DiscordChatAdapter.js';
-import { AuditService } from '../audit/AuditService.js';
-import type { PermissionRequestService } from '../sandbox/PermissionRequestService.js';
-import type { Orchestrator } from '../agents/Orchestrator.js';
-import type { SessionStore } from '../sessions/SessionStore.js';
+import { AuditService } from '../audit/index.js';
+import type { PermissionRequestService } from '../sandbox/index.js';
+import type { Orchestrator } from '../agents/index.js';
+import type { SessionStore } from '../sessions/index.js';
 
 const logger = new Logger('NotificationService');
 

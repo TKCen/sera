@@ -14,7 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'node:crypto';
 import type { RequestHandler } from 'express';
 import { pool } from '../lib/database.js';
-import { requireRole } from '../auth/authMiddleware.js';
+import { requireRole } from '../auth/index.js';
 import { NotificationService } from '../channels/NotificationService.js';
 import { ChannelRouter } from '../channels/ChannelRouter.js';
 import { ActionTokenService } from '../channels/ActionTokenService.js';

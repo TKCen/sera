@@ -4,8 +4,8 @@ import path from 'path';
 import yaml from 'js-yaml';
 import type { CircleManifest } from './types.js';
 import { KNOWN_CIRCLE_FIELDS } from './types.js';
-import { ManifestValidationError } from '../agents/manifest/AgentManifestLoader.js';
-import type { AgentManifest } from '../agents/manifest/types.js';
+import { ManifestValidationError } from '../agents/index.js';
+import type { AgentManifest } from '../agents/index.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('CircleRegistry');

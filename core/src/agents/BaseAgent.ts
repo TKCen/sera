@@ -4,8 +4,8 @@ import type { AgentManifest } from './manifest/types.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import type { ThoughtStepType } from '../intercom/types.js';
 import type { ToolExecutor } from '../tools/ToolExecutor.js';
-import type { MemoryManager } from '../memory/manager.js';
-import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
+import type { MemoryManager } from '../memory/index.js';
+import type { ContextCompactionService } from '../llm/index.js';
 import { ChannelNamespace } from '../intercom/ChannelNamespace.js';
 import { IdentityService } from './identity/IdentityService.js';
 import { LoopGuard } from './stability/LoopGuard.js';
@@ -13,7 +13,7 @@ import { SessionRepair } from './stability/SessionRepair.js';
 import type { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { Logger } from '../lib/logger.js';
-import { AuditService } from '../audit/AuditService.js';
+import { AuditService } from '../audit/index.js';
 
 /** Maximum tool-call loop iterations before forcing a text response. */
 const MAX_TOOL_ITERATIONS = 10;

@@ -1,7 +1,7 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { Logger } from '../lib/logger.js';
 import { EmbeddingService, getEmbeddingDimension } from './embedding.service.js';
-import type { ScopedMemoryBlockStore } from '../memory/blocks/ScopedMemoryBlockStore.js';
+import type { ScopedMemoryBlockStore } from '../memory/index.js';
 
 const logger = new Logger('VectorService');
 

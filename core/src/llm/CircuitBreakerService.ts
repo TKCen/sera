@@ -16,7 +16,7 @@
 
 import CircuitBreaker from 'opossum';
 import { Logger } from '../lib/logger.js';
-import type { LlmRouter, ChatCompletionRequest, ChatCompletionResponse } from './LlmRouter.js';
+import type { LlmRouter, ChatCompletionRequest, ChatCompletionResponse } from "./LlmRouter.js";
 
 const logger = new Logger('CircuitBreakerService');
 

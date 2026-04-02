@@ -1,25 +1,25 @@
 import fs from 'fs';
 import { execSync } from 'child_process';
-import { BaseAgent } from './BaseAgent.js';
-import { AgentFactory } from './AgentFactory.js';
+import { BaseAgent } from "./BaseAgent.js";
+import { AgentFactory } from "./AgentFactory.js";
 import { ProcessManager } from './process/ProcessManager.js';
 import type { ProcessType, ProcessTask, ProcessRunResult } from './process/types.js';
 import type { LLMProvider } from '../lib/llm/types.js';
 import type { AgentManifest, ResolvedCapabilities } from './manifest/types.js';
-import type { LlmRouter } from '../llm/LlmRouter.js';
+import type { LlmRouter } from '../llm/index.js';
 import { Logger } from '../lib/logger.js';
 import { CapabilityResolver } from '../capability/resolver.js';
-import type { AgentRegistry } from './registry.service.js';
+import type { AgentRegistry } from "./registry.service.js";
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { ToolExecutor } from '../tools/ToolExecutor.js';
-import { IdentityService } from '../auth/IdentityService.js';
+import { IdentityService } from '../auth/index.js';
 import { MeteringEngine } from '../metering/MeteringEngine.js';
 import type { AgentScheduler } from '../metering/AgentScheduler.js';
 import { query } from '../lib/database.js';
-import { AuditService } from '../audit/AuditService.js';
-import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
-import type { HeartbeatService } from './HeartbeatService.js';
-import type { CleanupService } from './CleanupService.js';
+import { AuditService } from '../audit/index.js';
+import type { ContextCompactionService } from '../llm/index.js';
+import type { HeartbeatService } from "./HeartbeatService.js";
+import type { CleanupService } from "./CleanupService.js";
 
 const logger = new Logger('Orchestrator');
 

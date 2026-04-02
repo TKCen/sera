@@ -89,7 +89,7 @@ export const fileReadSkill: SkillDefinition = {
         const result = await context.sandboxManager.exec(context.manifest, {
           containerId: context.containerId,
           agentName: context.agentName,
-          command: ['cat', containerPath],
+          command: ['cat', '--', containerPath],
         });
 
         if (result.exitCode !== 0) {

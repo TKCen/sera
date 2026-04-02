@@ -88,7 +88,7 @@ export const fileListSkill: SkillDefinition = {
                 '-printf',
                 '%y %p %s\\n',
               ]
-            : ['ls', '-F', '--color=never', containerPath];
+            : ['ls', '-F', '--color=never', '--', containerPath];
 
           const result = await context.sandboxManager.exec(context.manifest, {
             containerId: context.containerId,

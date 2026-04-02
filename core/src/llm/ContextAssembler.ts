@@ -96,7 +96,10 @@ export class ContextAssembler {
       this.orchestrator.getManifestByInstanceId(agentId) || this.orchestrator.getManifest(agentId);
 
     if (!manifest) {
-      emit({ stage: 'context.assembly_skipped', detail: { reason: 'manifest not found', agentId } });
+      emit({
+        stage: 'context.assembly_skipped',
+        detail: { reason: 'manifest not found', agentId },
+      });
       return messages;
     }
 
@@ -214,6 +217,10 @@ export class ContextAssembler {
 
     const modelName = manifest.spec?.model?.name ?? manifest.model?.name ?? 'default';
     const contextWindow = MODEL_CONTEXT_WINDOWS[modelName] ?? DEFAULT_CONTEXT_WINDOW;
+    const remaining = Math.max(
+      0,
+      contextWindow - systemPromptTokens - skillTokens - memoryTokens - historyTokens
+    );
 
     emit({
       stage: 'context.token_budget',
@@ -224,10 +231,12 @@ export class ContextAssembler {
         skillTokens,
         memoryTokens,
         historyTokens,
+        remaining,
         model: modelName,
       },
     });
 
+    const totalDurationMs = Date.now() - assemblyStart;
     emit({
       stage: 'context.assembly_completed',
       detail: {
@@ -235,8 +244,9 @@ export class ContextAssembler {
         finalTokenCount: Math.ceil(newSystemContent.length / 4),
         memoryInjected: !!memoryContext,
         promptSource: 'IdentityService.generateStreamingSystemPrompt',
+        totalDurationMs,
       },
-      durationMs: Date.now() - assemblyStart,
+      durationMs: totalDurationMs,
     });
 
     return messages.map((m) => (m.role === 'system' ? { ...m, content: newSystemContent } : m));

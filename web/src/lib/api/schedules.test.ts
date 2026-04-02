@@ -8,6 +8,7 @@ import {
   listScheduleRuns,
   getScheduleRuns,
 } from './schedules';
+import type { Schedule } from './types';
 
 describe('schedules API', () => {
   const mockFetch = vi.fn();
@@ -46,14 +47,17 @@ describe('schedules API', () => {
 
   describe('createSchedule', () => {
     it('calls POST /schedules with data', async () => {
-      const data = {
+      const data: Omit<
+        Schedule,
+        'id' | 'source' | 'lastRunAt' | 'lastRunStatus' | 'lastRunOutput' | 'nextRunAt'
+      > = {
         agentName: 'my-agent',
         name: 'test-schedule',
-        type: 'cron' as const,
+        type: 'cron',
         expression: '0 * * * *',
-        status: 'active' as const,
+        status: 'active',
       };
-      await createSchedule(data as any);
+      await createSchedule(data);
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringMatching(/\/api\/schedules$/),
         expect.objectContaining({

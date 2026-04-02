@@ -203,16 +203,23 @@ describe('ReasoningLoop — memory flush (formerly pre-compaction memory save ho
 
     expect(mockChat).toHaveBeenCalledTimes(2);
 
-    // First LLM call should HAVE the save-reminder message
+    // With Story 5.12, memory flush turn happens BEFORE any LLM call when near limit.
+    // So mockChat.mock.calls[0] is the FIRST turn's main reasoning call,
+    // which happens AFTER the flush turn.
+
+    // Total chat calls: 1 (flush turn) + 1 (main reasoning turn) = 2
+    expect(mockChat).toHaveBeenCalledTimes(2);
+
+    // The flush turn happens in the ReasoningLoop.run() before calling this.llm.chat the first time in the while loop
+    // BUT the flush turn itself calls this.llm.chat!
+
+    // First LLM call should be the flush turn
     const firstCallMsgs = mockChat.mock.calls[0]![0];
-    expect(firstCallMsgs.some(m => m.content.includes('IMPORTANT: Your context window is nearly full'))).toBe(true);
+    expect(firstCallMsgs.some(m => m.content.includes('Your context window is about to be compacted'))).toBe(true);
 
-    // Second LLM call should be AFTER compaction (system prompt should be there, but maybe some old messages gone)
-    // The "compaction.started" thought should have fired before the 2nd LLM call.
-    const compactionStartingThought = result.thoughtStream.find(t => t.content === 'compaction.started');
-    expect(compactionStartingThought).toBeDefined();
-
-    // Iteration check
-    expect(compactionStartingThought!.iteration).toBe(2);
+    // Second LLM call should be the main reasoning turn, AFTER flush.
+    // It SHOULD include the assistant message from the flush turn (Saving findings...).
+    const secondCallMsgs = mockChat.mock.calls[1]![0];
+    expect(secondCallMsgs.some(m => m.content.includes('Saving findings'))).toBe(true);
   });
 });

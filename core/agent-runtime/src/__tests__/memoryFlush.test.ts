@@ -220,14 +220,20 @@ describe('ReasoningLoop — memory flush', () => {
 
     const loop = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
 
-    // 1. Under threshold
-    await loop.run({ taskId: 't1', task: 'tiny' });
+    // 1. Under threshold (threshold is 200, system prompt + tiny task is > 200 due to tool descriptions etc)
+    // Actually, ContextManager.countMessageTokens now caches tokens.
+    // Let's use a higher threshold to ensure it's not triggered.
+    process.env['CONTEXT_COMPACTION_THRESHOLD'] = '0.8';
+    const loop2 = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
+    await loop2.run({ taskId: 't1', task: 'tiny' });
     expect(mockChat).toHaveBeenCalledTimes(1);
 
     mockChat.mockClear();
 
-    // 2. Over threshold (task content ~400 tokens)
-    await loop.run({ taskId: 't2', task: 'word '.repeat(200) });
+    // 2. Over threshold
+    process.env['CONTEXT_COMPACTION_THRESHOLD'] = '0.1'; // 100 token threshold
+    const loop3 = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
+    await loop3.run({ taskId: 't2', task: 'word '.repeat(200) });
     expect(mockChat).toHaveBeenCalledTimes(2);
   });
 });

@@ -36,7 +36,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 const DEFAULT_CONTEXT_WINDOW = 32_768;
-const DEFAULT_HIGH_WATER_PCT = 0.8;
+const DEFAULT_HIGH_WATER_PCT = 0.95;
+const DEFAULT_CLEAR_THRESHOLD_PCT = 0.8;
 const AGGRESSIVE_COMPACT_PCT = 0.5;
 const DEFAULT_TOOL_OUTPUT_MAX_TOKENS = 4_000;
 const DEFAULT_RESPONSE_RESERVE = 4_096;
@@ -72,6 +73,7 @@ export class ContextManager {
   private modelName: string;
   private contextWindow: number;
   private highWaterMark: number;
+  private clearThreshold: number;
   private strategy: CompactionStrategy;
   private toolOutputMaxTokens: number;
   private preserveRecentMessages: number;
@@ -89,10 +91,17 @@ export class ContextManager {
     const thresholdPctEnv = process.env['CONTEXT_COMPACTION_THRESHOLD'];
     const highWaterPct = thresholdPctEnv ? parseFloat(thresholdPctEnv) : DEFAULT_HIGH_WATER_PCT;
 
+    const clearThresholdPctEnv = process.env['CONTEXT_CLEAR_THRESHOLD'];
+    const clearThresholdPct = clearThresholdPctEnv
+      ? parseFloat(clearThresholdPctEnv)
+      : DEFAULT_CLEAR_THRESHOLD_PCT;
+
     const maxTokensEnv = process.env['MAX_CONTEXT_TOKENS'];
     this.highWaterMark = maxTokensEnv
       ? parseInt(maxTokensEnv, 10)
       : Math.floor(this.contextWindow * highWaterPct);
+
+    this.clearThreshold = Math.floor(this.contextWindow * clearThresholdPct);
 
     const strategyEnv = process.env['CONTEXT_COMPACTION_STRATEGY'] as
       | CompactionStrategy
@@ -137,14 +146,23 @@ export class ContextManager {
   countMessageTokens(messages: ChatMessage[]): number {
     let total = 0;
     for (const msg of messages) {
-      // ~4 tokens per-message overhead (role + delimiters) per OpenAI docs
-      total += 4;
-      total += this.countTokens(msg.content);
-      if (msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          total += this.countTokens(tc.function.name);
-          total += this.countTokens(tc.function.arguments);
-        }
+      if (msg.tokens === undefined) {
+        msg.tokens = this.estimateMessageTokens(msg);
+      }
+      total += msg.tokens;
+    }
+    return total;
+  }
+
+  /** Estimate tokens for a single message. */
+  estimateMessageTokens(msg: ChatMessage): number {
+    // ~4 tokens per-message overhead (role + delimiters) per OpenAI docs
+    let total = 4;
+    total += this.countTokens(msg.content);
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        total += this.countTokens(tc.function.name);
+        total += this.countTokens(tc.function.arguments);
       }
     }
     return total;
@@ -182,6 +200,42 @@ export class ContextManager {
    */
   isNearLimit(messages: ChatMessage[]): boolean {
     return this.countMessageTokens(messages) >= this.highWaterMark;
+  }
+
+  /** Get the threshold for clearing old tool results. */
+  getClearThreshold(): number {
+    return this.clearThreshold;
+  }
+
+  /**
+   * Replace tool results with a placeholder if they are not among the most
+   * recent `preserveCount` tool results.
+   */
+  clearOldToolResults(messages: ChatMessage[], preserveCount: number = 3): number {
+    const placeholder = '[cleared — re-read if needed]';
+    let clearedCount = 0;
+
+    // Find indices of all tool messages
+    const toolIndices: number[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i]!.role === 'tool') {
+        toolIndices.push(i);
+      }
+    }
+
+    // Determine which tool results to clear (all but the last `preserveCount`)
+    const toClear = toolIndices.slice(0, Math.max(0, toolIndices.length - preserveCount));
+
+    for (const index of toClear) {
+      const msg = messages[index]!;
+      if (msg.content !== placeholder) {
+        msg.content = placeholder;
+        msg.tokens = this.estimateMessageTokens(msg);
+        clearedCount++;
+      }
+    }
+
+    return clearedCount;
   }
 
   isMemoryFlushEnabled(): boolean {
@@ -239,6 +293,7 @@ export class ContextManager {
         const notice = `\n\n[SERA: tool result retroactively truncated to ${maxTokens} tokens for overflow recovery]`;
         const noticeTokens = this.countTokens(notice);
         msg.content = this.truncateToFit(msg.content, maxTokens - noticeTokens) + notice;
+        msg.tokens = undefined; // Force recalculation
         truncatedCount++;
       }
     }
@@ -451,6 +506,7 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
         } else {
           first.content = notice;
         }
+        first.tokens = undefined; // Force recalculation
       }
       messages.splice(0, messages.length, ...systemMessages, continuationMsg, ...nonSystemMessages);
     } else {
@@ -471,6 +527,7 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
         } else {
           first.content = notice;
         }
+        first.tokens = undefined; // Force recalculation
       }
       messages.splice(0, messages.length, ...systemMessages, ...nonSystemMessages);
     }

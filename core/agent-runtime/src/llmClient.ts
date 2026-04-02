@@ -76,6 +76,8 @@ export interface ChatMessage {
   tool_call_id?: string;
   /** Internal messages are hidden from the chat UI (Story 5.12). */
   internal?: boolean;
+  /** Estimated token count for this message. */
+  tokens?: number;
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';

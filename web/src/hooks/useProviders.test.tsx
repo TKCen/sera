@@ -95,8 +95,8 @@ describe('useProviders hooks', () => {
     });
 
     it('useLLMConfig should fetch LLM config', async () => {
-      const mockData = { defaultModel: 'test', providers: {} };
-      vi.mocked(providersApi.getLLMConfig).mockResolvedValue(mockData as any);
+      const mockData: providersApi.LLMConfig = { model: 'test', baseUrl: 'url' };
+      vi.mocked(providersApi.getLLMConfig).mockResolvedValue(mockData);
 
       const { result } = renderHook(() => useLLMConfig(), { wrapper: TestWrapper });
 
@@ -143,8 +143,8 @@ describe('useProviders hooks', () => {
       vi.mocked(providersApi.updateLLMConfig).mockResolvedValue({ success: true });
       const { result } = renderHook(() => useUpdateLLMConfig(), { wrapper: TestWrapper });
 
-      const config = { defaultModel: 'test', providers: {} };
-      await result.current.mutateAsync(config as any);
+      const config: providersApi.LLMConfig = { model: 'test', baseUrl: 'url' };
+      await result.current.mutateAsync(config);
 
       expect(providersApi.updateLLMConfig).toHaveBeenCalledWith(config);
     });
@@ -169,18 +169,26 @@ describe('useProviders hooks', () => {
     });
 
     it('useAddDynamicProvider should add dynamic provider and invalidate dynamicProviders query', async () => {
-      const mockResult = { id: '1', name: 'test' };
-      vi.mocked(providersApi.addDynamicProvider).mockResolvedValue(mockResult as any);
-      const { result } = renderHook(() => useAddDynamicProvider(), { wrapper: TestWrapper });
-
-      const config = {
+      const mockResult: providersApi.DynamicProviderConfig = {
+        id: '1',
         name: 'test',
-        type: 'lm-studio' as const,
+        type: 'lm-studio',
         baseUrl: 'url',
         enabled: true,
         intervalMs: 1000,
       };
-      await result.current.mutateAsync(config as any);
+      vi.mocked(providersApi.addDynamicProvider).mockResolvedValue(mockResult);
+      const { result } = renderHook(() => useAddDynamicProvider(), { wrapper: TestWrapper });
+
+      const config: providersApi.DynamicProviderConfig = {
+        id: '1',
+        name: 'test',
+        type: 'lm-studio',
+        baseUrl: 'url',
+        enabled: true,
+        intervalMs: 1000,
+      };
+      await result.current.mutateAsync(config);
 
       expect(providersApi.addDynamicProvider).toHaveBeenCalledWith(config);
     });

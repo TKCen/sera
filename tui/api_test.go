@@ -5,7 +5,26 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestNewAPIClient(t *testing.T) {
+	baseURL := "http://example.com"
+	client := NewAPIClient(baseURL)
+
+	if client.BaseURL != baseURL {
+		t.Errorf("expected BaseURL %s, got %s", baseURL, client.BaseURL)
+	}
+
+	if client.client == nil {
+		t.Fatal("expected http.Client to be initialized, got nil")
+	}
+
+	expectedTimeout := 10 * time.Second
+	if client.client.Timeout != expectedTimeout {
+		t.Errorf("expected timeout %v, got %v", expectedTimeout, client.client.Timeout)
+	}
+}
 
 func TestGetInstances(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

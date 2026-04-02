@@ -26,7 +26,7 @@ const mockCentrifuge = {
 
 vi.mock('centrifuge', () => {
   return {
-    Centrifuge: vi.fn().mockImplementation(function (this: any) {
+    Centrifuge: vi.fn().mockImplementation(function () {
       return mockCentrifuge;
     }),
   };
@@ -164,7 +164,6 @@ describe('centrifugo lib', () => {
 
   describe('safeNewSubscription', () => {
     it('should remove existing subscription if it exists', () => {
-      const channel = 'test-channel';
       mockCentrifuge.getSubscription.mockReturnValueOnce(mockSubscription);
 
       subscribeToThoughts('agent', vi.fn());

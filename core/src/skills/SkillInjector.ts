@@ -44,14 +44,14 @@ export class SkillInjector {
       }
     }
 
-    // 1. Identify skills to load (Map name -> version)
-    const skillsToLoad = new Map<string, string | undefined>();
+    // 1. Identify initial pins to load
+    const initialPins: SkillPin[] = [];
 
     for (const s of declaredSkills) {
       if (typeof s === 'string') {
-        skillsToLoad.set(s, undefined);
+        initialPins.push({ name: s });
       } else {
-        skillsToLoad.set(s.name, s.version);
+        initialPins.push(s);
       }
     }
 
@@ -60,9 +60,7 @@ export class SkillInjector {
       const pkg = await skillLibrary.getPackage(pkgName);
       if (pkg) {
         for (const s of pkg.skills) {
-          if (!skillsToLoad.has(s.name)) {
-            skillsToLoad.set(s.name, s.version);
-          }
+          initialPins.push({ name: s.name, version: s.version });
         }
       } else {
         logger.warn(`Skill package not found: ${pkgName}`);
@@ -77,34 +75,40 @@ export class SkillInjector {
           messageContent.toLowerCase().includes(trigger.toLowerCase())
         )
       ) {
-        if (!skillsToLoad.has(skill.name)) {
-          skillsToLoad.set(skill.name, undefined);
-        }
+        initialPins.push({ name: skill.name });
       }
     }
 
-    if (skillsToLoad.size === 0) {
+    if (initialPins.length === 0) {
       return constitutionXml ? systemPrompt + '\n\n' + constitutionXml.trim() : systemPrompt;
     }
 
     // 4. Fetch full documents and resolve dependencies
     const resolvedSkills = new Map<string, import('./schema.js').SkillDocument>();
-    const queue: SkillPin[] = Array.from(skillsToLoad.entries()).map(([name, version]) => ({
-      name,
-      version,
-    }));
+    const resolvedLatest = new Set<string>();
+    const queue: SkillPin[] = [...initialPins];
 
     while (queue.length > 0) {
       const pin = queue.shift()!;
       const existing = resolvedSkills.get(pin.name);
 
-      // If we already have this exact version, skip to avoid redundant DB calls
-      if (existing && pin.version === existing.version) {
-        continue;
+      // Avoid redundant DB calls:
+      // If we are requesting the latest version and already did so, skip.
+      if (pin.version === undefined) {
+        if (resolvedLatest.has(pin.name)) continue;
+      } else {
+        // If we are requesting a specific version and already have it or a newer one, skip.
+        if (existing && this.compareVersions(existing.version, pin.version) >= 0) {
+          continue;
+        }
       }
 
       const doc = await skillLibrary.getSkill(pin.name, pin.version);
       if (doc) {
+        if (pin.version === undefined) {
+          resolvedLatest.add(pin.name);
+        }
+
         // Version conflict resolution: latest version wins.
         if (!existing || this.compareVersions(doc.version, existing.version) > 0) {
           resolvedSkills.set(pin.name, doc);

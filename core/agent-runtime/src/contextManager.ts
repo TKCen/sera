@@ -136,10 +136,25 @@ export class ContextManager {
     return this.contextWindow;
   }
 
-  /** Count tokens in a string. */
-  countTokens(text: string): number {
-    if (!text) return 0;
-    return this.enc.encode(text).length;
+  /** Count tokens in message content. */
+  countTokens(content: any): number {
+    if (!content) return 0;
+    if (typeof content === 'string') {
+      return this.enc.encode(content).length;
+    }
+    if (Array.isArray(content)) {
+      let total = 0;
+      for (const block of content) {
+        if (block.type === 'text') {
+          total += this.enc.encode(block.text).length;
+        } else if (block.type === 'image_url') {
+          // Heuristic for image tokens (similar to OpenAI high-res)
+          total += 1105;
+        }
+      }
+      return total;
+    }
+    return 0;
   }
 
   /** Count tokens across all messages. */
@@ -378,8 +393,20 @@ export class ContextManager {
     return stripped.replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  private truncateToFit(content: string, targetTokens: number): string {
+  private truncateToFit(content: any, targetTokens: number): any {
     if (targetTokens <= 0) return '';
+    if (typeof content !== 'string') {
+      // For multi-part, we just drop non-text parts or convert to text
+      if (Array.isArray(content)) {
+        const textOnly = content
+          .map((c) => (c.type === 'text' ? c.text : ''))
+          .join('')
+          .trim();
+        return this.truncateToFit(textOnly, targetTokens);
+      }
+      return '';
+    }
+
     let low = 0;
     let high = content.length;
     while (low < high) {
@@ -501,8 +528,8 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
         ]);
         const available = targetTokens - otherTokens;
         if (available > noticeTokens) {
-          first.content =
-            this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
+          const truncated = this.truncateToFit(first.content, available - noticeTokens);
+          first.content = (typeof truncated === 'string' ? truncated : '') + '\n' + notice;
         } else {
           first.content = notice;
         }
@@ -522,8 +549,8 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
         ]);
         const available = targetTokens - otherTokens;
         if (available > noticeTokens) {
-          first.content =
-            this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
+          const truncated = this.truncateToFit(first.content, available - noticeTokens);
+          first.content = (typeof truncated === 'string' ? truncated : '') + '\n' + notice;
         } else {
           first.content = notice;
         }
@@ -571,8 +598,17 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
 
     const conversationText = oldest
       .map((m) => {
-        const content = this.stripEnrichment(m.content ?? '');
-        return `${m.role}: ${content}`;
+        let content = '';
+        if (typeof m.content === 'string') {
+          content = m.content;
+        } else if (Array.isArray(m.content)) {
+          content = m.content
+            .map((c) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        }
+        const stripped = this.stripEnrichment(content ?? '');
+        return `${m.role}: ${stripped}`;
       })
       .join('\n\n');
 
@@ -665,7 +701,16 @@ ${conversationText}`;
         if (name) tools.add(name);
       }
 
-      const content = msg.content || '';
+      let content = '';
+      if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        content = msg.content
+          .map((c) => (c.type === 'text' ? c.text : ''))
+          .join('')
+          .trim();
+      }
+
       if (msg.role === 'user' && content.trim()) {
         userRequests.push(content.trim().slice(0, 160));
       }
@@ -691,7 +736,16 @@ ${conversationText}`;
 
     const timeline = dropped
       .map((msg) => {
-        const truncated = (msg.content || '').trim().slice(0, 160).replace(/\s+/g, ' ');
+        let content = '';
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          content = msg.content
+            .map((c) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        }
+        const truncated = content.trim().slice(0, 160).replace(/\s+/g, ' ');
         return `- ${msg.role}: ${truncated}`;
       })
       .join('\n');

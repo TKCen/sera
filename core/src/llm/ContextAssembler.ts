@@ -116,7 +116,15 @@ export class ContextAssembler {
     const instance = await AgentFactory.getInstance(agentId);
 
     const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
-    const currentMessage = lastUserMessage?.content ?? '';
+    let currentMessage = '';
+    if (typeof lastUserMessage?.content === 'string') {
+      currentMessage = lastUserMessage.content;
+    } else if (Array.isArray(lastUserMessage?.content)) {
+      currentMessage = lastUserMessage.content
+        .map((c) => (c.type === 'text' ? c.text : ''))
+        .join('')
+        .trim();
+    }
     const messageHash = crypto.createHash('sha256').update(currentMessage).digest('hex');
 
     emit({
@@ -222,7 +230,18 @@ export class ContextAssembler {
     const memoryTokens = memoryContext ? estimateTokens(memoryContext) : 0;
     const historyTokens = messages
       .filter((m) => m.role !== 'system')
-      .reduce((sum, m) => sum + estimateTokens(m.content ?? ''), 0);
+      .reduce((sum, m) => {
+        let content = '';
+        if (typeof m.content === 'string') {
+          content = m.content;
+        } else if (Array.isArray(m.content)) {
+          content = m.content
+            .map((c) => (c.type === 'text' ? c.text : '[image]'))
+            .join('')
+            .trim();
+        }
+        return sum + estimateTokens(content);
+      }, 0);
 
     const modelName = manifest.spec?.model?.name ?? manifest.model?.name ?? 'default';
     const contextWindow = MODEL_CONTEXT_WINDOWS[modelName] ?? DEFAULT_CONTEXT_WINDOW;

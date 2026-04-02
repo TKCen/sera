@@ -174,10 +174,21 @@ export class ContextCompactionService {
     }
 
     // Strip enrichment markers from messages before summarizing
-    const cleanOldest = oldest.map((m) => ({
-      ...m,
-      content: stripEnrichment(m.content ?? ''),
-    }));
+    const cleanOldest = oldest.map((m) => {
+      let content = '';
+      if (typeof m.content === 'string') {
+        content = m.content;
+      } else if (Array.isArray(m.content)) {
+        content = m.content
+          .map((c) => (c.type === 'text' ? c.text : '[image]'))
+          .join('')
+          .trim();
+      }
+      return {
+        ...m,
+        content: stripEnrichment(content),
+      };
+    });
 
     // Format conversation for the summarization prompt
     const conversationText = cleanOldest.map((m) => `${m.role}: ${m.content ?? ''}`).join('\n\n');
@@ -256,7 +267,16 @@ function estimateTokens(messages: ChatMessage[]): number {
   for (const m of messages) {
     // ~4 tokens overhead per message (role, delimiters)
     chars += 16;
-    chars += (m.content ?? '').length;
+    let content = '';
+    if (typeof m.content === 'string') {
+      content = m.content;
+    } else if (Array.isArray(m.content)) {
+      content = m.content
+        .map((c) => (c.type === 'text' ? c.text : '[image]'))
+        .join('')
+        .trim();
+    }
+    chars += content.length;
     if (m.tool_calls) {
       chars += JSON.stringify(m.tool_calls).length;
     }

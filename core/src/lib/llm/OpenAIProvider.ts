@@ -44,16 +44,38 @@ export class OpenAIProvider implements LLMProvider {
   ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
     return messages.map((msg) => {
       if (msg.role === 'tool') {
+        let content: any;
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          // Normalize tool results to text blocks only for OpenAI compatibility
+          content = msg.content
+            .map((c) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        }
+
         return {
           role: 'tool' as const,
-          content: msg.content ?? '',
+          content: content ?? '',
           tool_call_id: msg.tool_call_id ?? '',
         };
       }
+
       if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        let content: any;
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          content = msg.content
+            .map((c) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        }
+
         return {
           role: 'assistant' as const,
-          content: msg.content || null,
+          content: content || null,
           tool_calls: msg.tool_calls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
@@ -64,9 +86,26 @@ export class OpenAIProvider implements LLMProvider {
           })),
         };
       }
+
+      let content: any;
+      if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        content = msg.content.map((block) => {
+          if (block.type === 'text') {
+            return { type: 'text' as const, text: block.text };
+          } else {
+            return {
+              type: 'image_url' as const,
+              image_url: { url: block.image_url.url },
+            };
+          }
+        });
+      }
+
       return {
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content ?? '',
+        content: content ?? '',
       };
     });
   }

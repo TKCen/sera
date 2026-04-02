@@ -44,12 +44,21 @@ export class SessionRepair {
     const beforeEmpty = result.length;
     result = result.filter((msg) => {
       if (msg.role === 'tool') return true; // tool messages checked in pass 2
-      const content = (msg.content ?? '').trim();
+      let content = '';
+      if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        content = msg.content
+          .map((c) => (c.type === 'text' ? c.text : ''))
+          .join('')
+          .trim();
+      }
+
       // Allow assistant messages with tool_calls even if content is empty
       if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
         return true;
       }
-      return content.length > 0;
+      return content.trim().length > 0;
     });
     report.emptyMessages = beforeEmpty - result.length;
 
@@ -131,9 +140,19 @@ export class SessionRepair {
 
       if (canMerge) {
         // Merge content
+        let newContent: any;
+        if (typeof prev.content === 'string' && typeof current.content === 'string') {
+          newContent = `${prev.content}\n\n${current.content}`;
+        } else {
+          // If either is multi-part, normalize both to arrays and concat
+          const part1 = typeof prev.content === 'string' ? [{ type: 'text', text: prev.content }] : prev.content;
+          const part2 = typeof current.content === 'string' ? [{ type: 'text', text: current.content }] : current.content;
+          newContent = [...(part1 as any[]), ...(part2 as any[])];
+        }
+
         merged[merged.length - 1] = {
           ...prev,
-          content: `${prev.content}\n\n${current.content}`,
+          content: newContent,
         };
         mergeCount++;
       } else {

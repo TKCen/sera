@@ -11,6 +11,9 @@ import type {
   ToolDefinition,
   LLMResponse,
   ThinkingLevel,
+  TextContentBlock,
+  ImageContentBlock,
+  MessageContent,
 } from './llmClient.js';
 import {
   BudgetExceededError,
@@ -239,15 +242,27 @@ export class ReasoningLoop {
     }
 
     messages.push(...history);
+    const userContent = context ? `${context}\n\n${task}` : task;
     messages.push({
       role: 'user',
-      content: context ? `${context}\n\n${task}` : task,
+      content: userContent as MessageContent,
     });
 
     const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
+    let taskPreview = '';
+    const rawTask = task as any;
+    if (typeof rawTask === 'string') {
+      taskPreview = rawTask;
+    } else if (Array.isArray(rawTask)) {
+      taskPreview = rawTask
+        .map((c: any) => (c.type === 'text' ? c.text : '[image]'))
+        .join('')
+        .trim();
+    }
+
     await think(
       'observe',
-      `Received task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`,
+      `Received task: "${taskPreview.substring(0, 100)}${taskPreview.length > 100 ? '...' : ''}"`,
       0
     );
     await think('plan', `Planning approach. Available tools: ${toolNames}`, 0);
@@ -294,7 +309,7 @@ export class ReasoningLoop {
           const msg = this.incomingMessages.shift()!;
           const chanSuffix = msg.channel ? ` (on ${msg.channel})` : '';
           const content = `[INTERCOM] Message from ${msg.source}${chanSuffix}: ${msg.content}`;
-          messages.push({ role: 'user', content });
+          messages.push({ role: 'user', content: content as MessageContent });
           await think(
             'observe',
             `Received intercom message from ${msg.source}${chanSuffix}`,
@@ -332,19 +347,16 @@ export class ReasoningLoop {
                 internal: true,
               }
             );
+            const flushNotice = 'Your context window is about to be compacted. Before this happens, use your memory tools ' +
+                'to save any important information from the current conversation that you want to remember. ' +
+                'This is your last chance to persist this context.';
             messages.push({
               role: 'system',
-              content:
-                'Your context window is about to be compacted. Before this happens, use your memory tools ' +
-                'to save any important information from the current conversation that you want to remember. ' +
-                'This is your last chance to persist this context.',
+              content: flushNotice as MessageContent,
               internal: true,
               tokens: this.contextManager.estimateMessageTokens({
                 role: 'system',
-                content:
-                  'Your context window is about to be compacted. Before this happens, use your memory tools ' +
-                  'to save any important information from the current conversation that you want to remember. ' +
-                  'This is your last chance to persist this context.',
+                content: flushNotice as MessageContent,
               }),
             });
 
@@ -361,7 +373,7 @@ export class ReasoningLoop {
               if (flushResponse.toolCalls && flushResponse.toolCalls.length > 0) {
                 messages.push({
                   role: 'assistant',
-                  content: flushResponse.content || '',
+                content: (flushResponse.content || '') as MessageContent,
                   tool_calls: flushResponse.toolCalls,
                   internal: true,
                 });
@@ -371,20 +383,22 @@ export class ReasoningLoop {
                 for (const tr of toolResults) {
                   tr.message.internal = true;
                   messages.push(tr.message);
-                  if (
-                    MEMORY_TOOLS.includes(tr.toolName) &&
-                    !tr.message.content.includes('Error:')
-                  ) {
+                let content = '';
+                if (typeof tr.message.content === 'string') {
+                  content = tr.message.content;
+                } else if (Array.isArray(tr.message.content)) {
+                  content = tr.message.content
+                    .map((c) => (c.type === 'text' ? c.text : ''))
+                    .join('')
+                    .trim();
+                }
+
+                if (MEMORY_TOOLS.includes(tr.toolName) && !content.includes('Error:')) {
                     savedCount++;
                   }
-                  await think(
-                    'reflect',
-                    `Flush tool result: ${tr.message.content.substring(0, 100)}`,
-                    iteration,
-                    {
-                      internal: true,
-                    }
-                  );
+                await think('reflect', `Flush tool result: ${content.substring(0, 100)}`, iteration, {
+                  internal: true,
+                });
                 }
 
                 log('info', `memory.flush: saved ${savedCount} block(s) before compaction`);
@@ -632,7 +646,7 @@ export class ReasoningLoop {
           // Add assistant turn with tool_calls
           messages.push({
             role: 'assistant',
-            content: response.content || '',
+            content: (response.content || '') as MessageContent,
             tool_calls: response.toolCalls,
           });
 
@@ -653,9 +667,19 @@ export class ReasoningLoop {
           const visionRequests: Array<{ dataUrl: string; prompt: string; path: string }> = [];
 
           for (const result of toolResults) {
-            if (result.toolName === 'image-view' && !result.message.content.includes('Error:')) {
+            let content = '';
+            if (typeof result.message.content === 'string') {
+              content = result.message.content;
+            } else if (Array.isArray(result.message.content)) {
+              content = result.message.content
+                .map((c) => (c.type === 'text' ? c.text : ''))
+                .join('')
+                .trim();
+            }
+
+            if (result.toolName === 'image-view' && !content.includes('Error:')) {
               try {
-                const parsed = JSON.parse(result.message.content);
+                const parsed = JSON.parse(content);
                 if (parsed.__sera_vision_request__) {
                   visionRequests.push({
                     dataUrl: parsed.dataUrl,
@@ -673,11 +697,18 @@ export class ReasoningLoop {
 
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
-            result.message.content = this.contextManager.truncateToolOutput(result.message.content);
+            const trContent = typeof result.message.content === 'string'
+              ? result.message.content
+              : '[multi-part content]';
+
+            result.message.content = this.contextManager.truncateToolOutput(trContent) as MessageContent;
 
             // 2. Context-aware budget guard — truncate further if remaining budget is tight
+            const contentToTruncate = typeof result.message.content === 'string'
+              ? result.message.content
+              : '';
             const budgetCheck = this.contextManager.truncateToContextBudget(
-              result.message.content,
+              contentToTruncate,
               messages
             );
             if (budgetCheck.compactionNeeded) {
@@ -690,19 +721,30 @@ export class ReasoningLoop {
                 iteration
               );
               const recheck = this.contextManager.truncateToContextBudget(
-                result.message.content,
+                result.message.content as string,
                 messages
               );
-              result.message.content = recheck.content;
+              result.message.content = recheck.content as MessageContent;
             } else {
-              result.message.content = budgetCheck.content;
+              result.message.content = budgetCheck.content as MessageContent;
             }
 
             messages.push(result.message);
 
             // If this was a successful vision request, append the image content block
             // as a subsequent 'user' observation turn so the LLM can "see" it.
-            const visionRequest = visionRequests.find(v => result.message.content.includes(v.path));
+            let resContent = '';
+            const rawResContent = result.message.content as any;
+            if (typeof rawResContent === 'string') {
+              resContent = rawResContent;
+            } else if (Array.isArray(rawResContent)) {
+              resContent = rawResContent
+                .map((c: any) => (c.type === 'text' ? c.text : ''))
+                .join('')
+                .trim();
+            }
+
+            const visionRequest = visionRequests.find(v => resContent.includes(v.path));
             if (visionRequest) {
               const supportsVision = this.manifest.model.input?.includes('image') ||
                                     this.manifest.model.name.toLowerCase().includes('vision') ||
@@ -714,16 +756,26 @@ export class ReasoningLoop {
                   role: 'system',
                   content: `ERROR: Model "${this.manifest.model.name}" does not support vision. Cannot analyze image "${visionRequest.path}".`,
                 });
-                await think('reflect', `Model ${this.manifest.model.name} lacks vision capability`, iteration, { anomaly: true });
+                await think(
+                  'reflect',
+                  `Model ${this.manifest.model.name} lacks vision capability`,
+                  iteration,
+                  { anomaly: true }
+                );
               } else {
+                const multiPartContent: (TextContentBlock | ImageContentBlock)[] = [
+                  { type: 'text', text: visionRequest.prompt },
+                  { type: 'image_url', image_url: { url: visionRequest.dataUrl } },
+                ];
                 messages.push({
                   role: 'user',
-                  content: [
-                    { type: 'text', text: visionRequest.prompt },
-                    { type: 'image_url', image_url: { url: visionRequest.dataUrl } }
-                  ],
+                  content: multiPartContent,
                 });
-                await think('reflect', `Injected image block for ${visionRequest.path} into conversation`, iteration);
+                await think(
+                  'reflect',
+                  `Injected image block for ${visionRequest.path} into conversation`,
+                  iteration
+                );
               }
             }
 
@@ -737,10 +789,10 @@ export class ReasoningLoop {
               );
             }
 
-            const preview =
-              result.message.content.length > 200
-                ? result.message.content.substring(0, 200) + '...'
-                : result.message.content;
+            const rawContent = result.message.content;
+            const preview = typeof rawContent === 'string'
+              ? (rawContent.length > 200 ? rawContent.substring(0, 200) + '...' : rawContent)
+              : '[multi-part content]';
             await think('reflect', `Tool result: ${preview}`, iteration);
           }
 
@@ -777,9 +829,10 @@ export class ReasoningLoop {
         // web frontend can subscribe to the correct Centrifugo channel.
         await this.streamResponse(finalReply, taskId);
 
+        const replyLen = typeof finalReply === 'string' ? finalReply.length : 0;
         log(
           'info',
-          `ReasoningLoop complete after ${iteration} iteration(s) — ${finalReply.length} chars`
+          `ReasoningLoop complete after ${iteration} iteration(s) — ${replyLen} chars`
         );
 
         return {

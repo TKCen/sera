@@ -88,7 +88,7 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
 
     // Map request messages to internal ChatMessage format
     const chatMessages: ChatMessage[] = messages.map(
-      (m: { role: string; content?: string; tool_calls?: unknown[]; tool_call_id?: string }) => {
+      (m: { role: string; content?: any; tool_calls?: unknown[]; tool_call_id?: string }) => {
         const msg: ChatMessage = {
           role: m.role as 'user' | 'assistant' | 'system' | 'tool',
           content: m.content || '',
@@ -101,7 +101,15 @@ export function createOpenAICompatRouter(orchestrator: Orchestrator) {
 
     const lastMsg = chatMessages[chatMessages.length - 1];
     const history = chatMessages.slice(0, -1);
-    const input = lastMsg?.content || '';
+    let input = '';
+    if (typeof lastMsg?.content === 'string') {
+      input = lastMsg.content;
+    } else if (Array.isArray(lastMsg?.content)) {
+      input = lastMsg.content
+        .map((c: any) => (c.type === 'text' ? c.text : ''))
+        .join('')
+        .trim();
+    }
 
     if (stream) {
       const messageId = uuidv4();

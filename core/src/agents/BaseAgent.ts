@@ -321,7 +321,13 @@ export abstract class BaseAgent {
             await Promise.all(
               activeCalls.map(async (tc, i) => {
                 const tr = toolResults[i]!;
-                const trContent = tr.content ?? '';
+                let trContent = '';
+                if (typeof tr.content === 'string') {
+                  trContent = tr.content;
+                } else if (Array.isArray(tr.content)) {
+                  trContent = '[multi-part content]';
+                }
+
                 try {
                   await AuditService.getInstance().record({
                     actorType: 'agent',
@@ -343,8 +349,15 @@ export abstract class BaseAgent {
 
             // Publish results and add to conversation
             for (const result of toolResults) {
-              const content = result.content ?? '';
-              const preview = content.length > 2000 ? content.substring(0, 2000) + '...' : content;
+              let preview = '';
+              if (typeof result.content === 'string') {
+                preview =
+                  result.content.length > 2000
+                    ? result.content.substring(0, 2000) + '...'
+                    : result.content;
+              } else if (Array.isArray(result.content)) {
+                preview = '[multi-part content]';
+              }
               await this.publishThought('tool-result', `Result: ${preview}`);
               messages.push(result);
             }

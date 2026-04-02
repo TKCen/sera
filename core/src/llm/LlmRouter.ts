@@ -34,6 +34,7 @@ import type {
   UserMessage,
   ToolResultMessage,
   TextContent,
+  ImageContent,
   ToolCall,
   StreamOptions,
 } from '@mariozechner/pi-ai';
@@ -103,19 +104,29 @@ function toContext(request: ChatCompletionRequest): Context {
   let systemPrompt: string | undefined;
 
   for (const msg of request.messages) {
+    let msgContent: any = msg.content;
     const ts = Date.now();
 
     switch (msg.role) {
       case 'system':
-        systemPrompt = msg.content ?? '';
+        if (typeof msgContent === 'string') {
+          systemPrompt = msgContent;
+        } else if (Array.isArray(msgContent)) {
+          systemPrompt = msgContent
+            .map((c: any) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        } else {
+          systemPrompt = '';
+        }
         break;
 
       case 'user': {
         let content: string | (TextContent | ImageContent)[];
-        if (typeof msg.content === 'string') {
-          content = msg.content;
-        } else if (Array.isArray(msg.content)) {
-          content = msg.content.map((block) => {
+        if (typeof msgContent === 'string') {
+          content = msgContent;
+        } else if (Array.isArray(msgContent)) {
+          content = msgContent.map((block: any) => {
             if (block.type === 'text') {
               return { type: 'text', text: block.text };
             } else if (block.type === 'image_url') {
@@ -144,8 +155,16 @@ function toContext(request: ChatCompletionRequest): Context {
       case 'assistant': {
         const content: (TextContent | ToolCall)[] = [];
 
-        if (msg.content) {
-          content.push({ type: 'text', text: msg.content });
+        if (msgContent) {
+          if (typeof msgContent === 'string') {
+            content.push({ type: 'text', text: msgContent });
+          } else if (Array.isArray(msgContent)) {
+            msgContent.forEach((c: any) => {
+              if (c.type === 'text') {
+                content.push({ type: 'text', text: c.text });
+              }
+            });
+          }
         }
 
         if (Array.isArray(msg.tool_calls)) {
@@ -188,11 +207,21 @@ function toContext(request: ChatCompletionRequest): Context {
 
       case 'tool': {
         // OpenAI tool-result messages don't include toolName; pass empty string.
+        let text = '';
+        if (typeof msgContent === 'string') {
+          text = msgContent;
+        } else if (Array.isArray(msgContent)) {
+          text = msgContent
+            .map((c: any) => (c.type === 'text' ? c.text : ''))
+            .join('')
+            .trim();
+        }
+
         const toolResult: ToolResultMessage = {
           role: 'toolResult',
           toolCallId: msg.tool_call_id ?? '',
           toolName: '',
-          content: [{ type: 'text', text: msg.content ?? '' }],
+          content: [{ type: 'text', text }],
           isError: false,
           timestamp: ts,
         };

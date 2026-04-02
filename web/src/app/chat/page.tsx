@@ -131,7 +131,7 @@ function ChatPageContent() {
   const { data: sessions = [], refetch: fetchSessions } = useSessions(
     selectedAgent,
     selectedAgentId
-  ) as { data: SessionInfo[]; refetch: () => void };
+  );
   const { sendChatStream } = useChatStream();
 
   // ── Token stream — direct subscription ──────────────────────────────────────
@@ -249,8 +249,7 @@ function ChatPageContent() {
   const loadSession = useCallback(
     async (id: string) => {
       try {
-        const { request } = await import('@/lib/api/client');
-        const data = await request<SessionDetail>(`/sessions/${id}`);
+        const data = await (await import('@/lib/api/client')).request<SessionDetail>(`/sessions/${id}`);
         setSessionId(data.id);
         if (data.agentName) setSelectedAgent(data.agentName);
         if (data.agentInstanceId) {

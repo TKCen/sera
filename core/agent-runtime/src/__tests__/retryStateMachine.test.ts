@@ -8,14 +8,28 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReasoningLoop } from '../loop.js';
-import { ContextOverflowError, LLMTimeoutError, type LLMResponse, type ToolDefinition, type ChatMessage } from '../llmClient.js';
+import {
+  ContextOverflowError,
+  LLMTimeoutError,
+  type LLMResponse,
+  type ToolDefinition,
+  type ChatMessage,
+} from '../llmClient.js';
 import type { RuntimeManifest } from '../manifest.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-const mockChat = vi.fn<(messages: ChatMessage[], tools?: ToolDefinition[], temperature?: number) => Promise<LLMResponse>>();
+const mockChat =
+  vi.fn<
+    (
+      messages: ChatMessage[],
+      tools?: ToolDefinition[],
+      temperature?: number
+    ) => Promise<LLMResponse>
+  >();
 const mockPublishThought = vi.fn();
 const mockPublishStreamToken = vi.fn();
+const mockPublishStreamError = vi.fn();
 const mockGetToolDefinitions = vi.fn();
 const mockExecuteToolCalls = vi.fn();
 
@@ -23,6 +37,7 @@ const mockLlm = { chat: mockChat } as any;
 const mockCentrifugo = {
   publishThought: mockPublishThought,
   publishStreamToken: mockPublishStreamToken,
+  publishStreamError: mockPublishStreamError,
 } as any;
 const mockTools = {
   getToolDefinitions: mockGetToolDefinitions,
@@ -38,7 +53,16 @@ const manifest: RuntimeManifest = {
 };
 
 function successResponse(content: string): LLMResponse {
-  return { content, usage: { promptTokens: 10, completionTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 15 } };
+  return {
+    content,
+    usage: {
+      promptTokens: 10,
+      completionTokens: 5,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 15,
+    },
+  };
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────
@@ -52,6 +76,7 @@ beforeEach(() => {
   // Re-establish stable mock implementations after reset
   mockPublishThought.mockResolvedValue(undefined);
   mockPublishStreamToken.mockResolvedValue(undefined);
+  mockPublishStreamError.mockResolvedValue(undefined);
   mockGetToolDefinitions.mockReturnValue([]);
   mockExecuteToolCalls.mockResolvedValue([]);
 
@@ -84,7 +109,7 @@ describe('ReasoningLoop retry state machine', () => {
       expect(result.result).toBe('Done!');
       expect(mockChat).toHaveBeenCalledTimes(2);
       const overflowThoughts = result.thoughtStream.filter(
-        (t) => t.step === 'reflect' && t.content.toLowerCase().includes('overflow'),
+        (t) => t.step === 'reflect' && t.content.toLowerCase().includes('overflow')
       );
       expect(overflowThoughts.length).toBeGreaterThan(0);
     });
@@ -109,7 +134,13 @@ describe('ReasoningLoop retry state machine', () => {
 
     it('attempts tool result truncation on 2nd overflow', async () => {
       const history: ChatMessage[] = [
-        { role: 'assistant', content: '', tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'shell-exec', arguments: '{}' } }] },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: 'tc1', type: 'function', function: { name: 'shell-exec', arguments: '{}' } },
+          ],
+        },
         { role: 'tool', content: 'word '.repeat(3000), tool_call_id: 'tc1' },
       ];
 
@@ -124,14 +155,20 @@ describe('ReasoningLoop retry state machine', () => {
       expect(result.exitReason).toBe('success');
       // Should see a truncation reflect thought
       const truncThoughts = result.thoughtStream.filter(
-        (t) => t.step === 'reflect' && t.content.includes('truncated'),
+        (t) => t.step === 'reflect' && t.content.includes('truncated')
       );
       expect(truncThoughts.length).toBeGreaterThan(0);
     });
 
     it('tool result truncation is one-shot (not repeated on 3rd overflow)', async () => {
       const history: ChatMessage[] = [
-        { role: 'assistant', content: '', tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'shell-exec', arguments: '{}' } }] },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: 'tc1', type: 'function', function: { name: 'shell-exec', arguments: '{}' } },
+          ],
+        },
         { role: 'tool', content: 'word '.repeat(3000), tool_call_id: 'tc1' },
       ];
 
@@ -149,7 +186,7 @@ describe('ReasoningLoop retry state machine', () => {
 
       // Truncation should happen exactly once (on the 2nd overflow attempt)
       const truncThoughts = result.thoughtStream.filter(
-        (t) => t.step === 'reflect' && t.content.includes('Retroactively truncated'),
+        (t) => t.step === 'reflect' && t.content.includes('Retroactively truncated')
       );
       expect(truncThoughts).toHaveLength(1);
     });
@@ -179,7 +216,7 @@ describe('ReasoningLoop retry state machine', () => {
         expect(result.result).toBe('Done after timeout');
         expect(mockChat).toHaveBeenCalledTimes(2);
         const timeoutThoughts = result.thoughtStream.filter(
-          (t) => t.step === 'reflect' && t.content.toLowerCase().includes('timeout'),
+          (t) => t.step === 'reflect' && t.content.toLowerCase().includes('timeout')
         );
         expect(timeoutThoughts.length).toBeGreaterThan(0);
       } else {
@@ -258,7 +295,7 @@ describe('ReasoningLoop retry state machine', () => {
       expect(result.exitReason).toBe('success');
       // The "Completed task" thought should show iteration 1, not 2
       const completedThought = result.thoughtStream.find(
-        (t) => t.step === 'reflect' && t.content.includes('Completed task'),
+        (t) => t.step === 'reflect' && t.content.includes('Completed task')
       );
       expect(completedThought).toBeDefined();
       expect(completedThought!.content).toContain('1 iteration');
@@ -277,15 +314,45 @@ describe('ReasoningLoop retry state machine', () => {
       expect(mockChat).toHaveBeenCalledTimes(1);
     });
 
-    it('ProviderUnavailableError is not retried', async () => {
+    it('ProviderUnavailableError is retried with exponential backoff', async () => {
+      vi.useFakeTimers();
       const { ProviderUnavailableError } = await import('../llmClient.js');
-      mockChat.mockRejectedValueOnce(new ProviderUnavailableError('circuit open'));
+      mockChat
+        .mockRejectedValueOnce(new ProviderUnavailableError('circuit open'))
+        .mockResolvedValueOnce(successResponse('Recovered!'));
 
       const loop = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
-      const result = await loop.run({ taskId: 'task-1', task: 'Do something' });
+      const resultPromise = loop.run({ taskId: 'task-1', task: 'Do something' });
+
+      // Advance past the 2s backoff delay
+      await vi.advanceTimersByTimeAsync(2500);
+
+      const result = await resultPromise;
+
+      expect(result.exitReason).toBe('success');
+      expect(result.result).toBe('Recovered!');
+      expect(mockChat).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+
+    it('ProviderUnavailableError exhausts retries after MAX_PROVIDER_RETRIES', async () => {
+      vi.useFakeTimers();
+      const { ProviderUnavailableError } = await import('../llmClient.js');
+      // 3 retries + 1 original = 4 calls, all failing
+      mockChat.mockRejectedValue(new ProviderUnavailableError('circuit open'));
+
+      const loop = new ReasoningLoop(mockLlm, mockTools, mockCentrifugo, manifest);
+      const resultPromise = loop.run({ taskId: 'task-1', task: 'Do something' });
+
+      // Advance past all backoff delays (2s + 4s + 8s = 14s)
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      const result = await resultPromise;
 
       expect(result.exitReason).toBe('provider_unavailable');
-      expect(mockChat).toHaveBeenCalledTimes(1);
+      // 1 initial + 3 retries = 4 calls
+      expect(mockChat).toHaveBeenCalledTimes(4);
+      vi.useRealTimers();
     });
 
     it('generic errors are not retried', async () => {

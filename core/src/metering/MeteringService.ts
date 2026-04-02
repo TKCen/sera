@@ -14,8 +14,10 @@ import { AuditService } from '../audit/AuditService.js';
 
 const logger = new Logger('MeteringService');
 
-const DEFAULT_HOURLY_QUOTA = parseInt(process.env.DEFAULT_HOURLY_QUOTA ?? '100000', 10);
-const DEFAULT_DAILY_QUOTA = parseInt(process.env.DEFAULT_DAILY_QUOTA ?? '1000000', 10);
+/** Default hourly token quota. Use 0 to mean unlimited. */
+export const DEFAULT_HOURLY_QUOTA = parseInt(process.env.DEFAULT_HOURLY_QUOTA ?? '100000', 10);
+/** Default daily token quota. Use 0 to mean unlimited. */
+export const DEFAULT_DAILY_QUOTA = parseInt(process.env.DEFAULT_DAILY_QUOTA ?? '1000000', 10);
 
 export interface UsageRecord {
   agentId: string;
@@ -131,7 +133,10 @@ export class MeteringService {
     const hourlyUsed = await this.getUsage(agentId, 1);
     const dailyUsed = await this.getUsage(agentId, 24);
 
-    const allowed = hourlyUsed < hourlyQuota && dailyUsed < dailyQuota;
+    // 0 means unlimited — skip enforcement for that window
+    const hourlyOk = hourlyQuota === 0 || hourlyUsed < hourlyQuota;
+    const dailyOk = dailyQuota === 0 || dailyUsed < dailyQuota;
+    const allowed = hourlyOk && dailyOk;
 
     if (!allowed) {
       await AuditService.getInstance()

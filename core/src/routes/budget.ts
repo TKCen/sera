@@ -2,11 +2,10 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { query } from '../lib/database.js';
 import type { MeteringService } from '../metering/MeteringService.js';
+import { DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA } from '../metering/MeteringService.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('BudgetRoute');
-const DEFAULT_HOURLY_QUOTA = parseInt(process.env.DEFAULT_HOURLY_QUOTA ?? '100000', 10);
-const DEFAULT_DAILY_QUOTA = parseInt(process.env.DEFAULT_DAILY_QUOTA ?? '1000000', 10);
 
 export function createBudgetRouter(meteringService?: MeteringService): Router {
   const router = Router();
@@ -121,7 +120,12 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
     try {
       const agentId = String(req.params['id']);
       const status = await meteringService.checkBudget(agentId);
-      res.json({ agentId, ...status });
+      res.json({
+        agentId,
+        ...status,
+        hourlyUnlimited: status.hourlyQuota === 0,
+        dailyUnlimited: status.dailyQuota === 0,
+      });
     } catch (err: unknown) {
       logger.error(`Error fetching budget for agent ${String(req.params['id'])}:`, err);
       res.status(500).json({ error: 'Internal server error' });
@@ -141,22 +145,47 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
         maxLlmTokensPerDay?: number | null;
       };
 
-      // Use provided values, or fall back to existing values, or defaults for new rows
-      const hourly = maxLlmTokensPerHour !== undefined ? maxLlmTokensPerHour : null;
-      const daily = maxLlmTokensPerDay !== undefined ? maxLlmTokensPerDay : null;
+      // Resolve values: null or 0 → 0 (unlimited), undefined → keep existing, positive → use as-is
+      const resolveQuota = (val: number | null | undefined, _fallback: number): number | null => {
+        if (val === undefined) return null; // not in request — keep existing
+        if (val === null || val === 0) return 0; // explicit unlimited
+        return val;
+      };
 
-      await query(
-        `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
-         VALUES ($1, COALESCE($2, $4), COALESCE($3, $5), NOW())
-         ON CONFLICT (agent_id)
-         DO UPDATE SET
-           max_tokens_per_hour = COALESCE($2, token_quotas.max_tokens_per_hour),
-           max_tokens_per_day = COALESCE($3, token_quotas.max_tokens_per_day),
-           updated_at = NOW()`,
-        [agentId, hourly, daily, DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA]
+      const hourly = resolveQuota(maxLlmTokensPerHour, DEFAULT_HOURLY_QUOTA);
+      const daily = resolveQuota(maxLlmTokensPerDay, DEFAULT_DAILY_QUOTA);
+
+      // Build the upsert dynamically to handle "keep existing" (null = not provided)
+      if (hourly !== null && daily !== null) {
+        await query(
+          `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (agent_id)
+           DO UPDATE SET max_tokens_per_hour = $2, max_tokens_per_day = $3, updated_at = NOW()`,
+          [agentId, hourly, daily]
+        );
+      } else if (hourly !== null) {
+        await query(
+          `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (agent_id)
+           DO UPDATE SET max_tokens_per_hour = $2, updated_at = NOW()`,
+          [agentId, hourly, DEFAULT_DAILY_QUOTA]
+        );
+      } else if (daily !== null) {
+        await query(
+          `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (agent_id)
+           DO UPDATE SET max_tokens_per_day = $3, updated_at = NOW()`,
+          [agentId, DEFAULT_HOURLY_QUOTA, daily]
+        );
+      }
+      // If both are null (undefined in request), nothing to update
+
+      logger.info(
+        `Budget updated for agent=${agentId} hourly=${hourly ?? 'unchanged'} daily=${daily ?? 'unchanged'}`
       );
-
-      logger.info(`Budget updated for agent=${agentId} hourly=${hourly} daily=${daily}`);
       res.json({ success: true });
     } catch (err: unknown) {
       logger.error(`Error updating budget for agent ${String(req.params['id'])}:`, err);

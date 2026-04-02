@@ -353,6 +353,55 @@ export class SeraMCPServer {
           required: ['agentName', 'task'],
         },
       },
+      // ── Schedule Introspection (#647) ──────────────────────────────────
+      {
+        name: 'schedules.list',
+        description:
+          "List an agent's schedules including cron expression, status, next run, and last run.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID' },
+          },
+          required: ['agentId'],
+        },
+      },
+      {
+        name: 'schedules.get',
+        description: 'Get detailed status of a specific schedule by ID.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID (for ownership check)' },
+            scheduleId: { type: 'string', description: 'Schedule UUID' },
+          },
+          required: ['agentId', 'scheduleId'],
+        },
+      },
+      {
+        name: 'schedules.pause',
+        description: 'Pause an active schedule (sets status to paused).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID (for ownership check)' },
+            scheduleId: { type: 'string', description: 'Schedule UUID' },
+          },
+          required: ['agentId', 'scheduleId'],
+        },
+      },
+      {
+        name: 'schedules.resume',
+        description: 'Resume a paused schedule (sets status to active).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID (for ownership check)' },
+            scheduleId: { type: 'string', description: 'Schedule UUID' },
+          },
+          required: ['agentId', 'scheduleId'],
+        },
+      },
       // ── Subagent Spawning (Story 10.5 / 10.4 / 17.4) ──────────────────
       {
         name: 'agents.spawn_subagent',
@@ -501,6 +550,23 @@ export class SeraMCPServer {
             toolArgs['agentName'] as string,
             toolArgs['task'] as string,
             toolArgs['context'] as string | undefined
+          );
+        case 'schedules.list':
+          return this.handleListSchedules(toolArgs['agentId'] as string);
+        case 'schedules.get':
+          return this.handleGetSchedule(
+            toolArgs['agentId'] as string,
+            toolArgs['scheduleId'] as string
+          );
+        case 'schedules.pause':
+          return this.handlePauseSchedule(
+            toolArgs['agentId'] as string,
+            toolArgs['scheduleId'] as string
+          );
+        case 'schedules.resume':
+          return this.handleResumeSchedule(
+            toolArgs['agentId'] as string,
+            toolArgs['scheduleId'] as string
           );
         case 'agents.spawn_subagent':
           return this.handleSpawnSubagent(
@@ -1047,6 +1113,68 @@ export class SeraMCPServer {
 
     return {
       content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
+    };
+  }
+
+  // ── Schedule Introspection (#647) ──────────────────────────────────────────
+
+  private async handleListSchedules(agentId: string) {
+    if (!agentId) throw new Error('agentId is required');
+    const { rows } = await pool.query(
+      `SELECT id, name, expression AS cron, task, status, category, source, description,
+              last_run_at, next_run_at, last_run_status, created_at, updated_at
+       FROM schedules WHERE agent_instance_id = $1
+       ORDER BY created_at DESC`,
+      [agentId]
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }],
+    };
+  }
+
+  private async handleGetSchedule(agentId: string, scheduleId: string) {
+    if (!agentId || !scheduleId) throw new Error('agentId and scheduleId are required');
+    const { rows } = await pool.query(
+      `SELECT id, name, expression AS cron, task, status, category, source, description,
+              last_run_at, next_run_at, last_run_status, created_at, updated_at
+       FROM schedules WHERE id = $1 AND agent_instance_id = $2`,
+      [scheduleId, agentId]
+    );
+    if (rows.length === 0) {
+      throw new Error('Schedule not found or not owned by this agent.');
+    }
+    return {
+      content: [{ type: 'text', text: JSON.stringify(rows[0], null, 2) }],
+    };
+  }
+
+  private async handlePauseSchedule(agentId: string, scheduleId: string) {
+    if (!agentId || !scheduleId) throw new Error('agentId and scheduleId are required');
+    const { rowCount } = await pool.query(
+      `UPDATE schedules SET status = 'paused', updated_at = NOW()
+       WHERE id = $1 AND agent_instance_id = $2 AND status = 'active'`,
+      [scheduleId, agentId]
+    );
+    if (rowCount === 0) {
+      throw new Error('Schedule not found, not owned by this agent, or not currently active.');
+    }
+    return {
+      content: [{ type: 'text', text: `Schedule "${scheduleId}" paused.` }],
+    };
+  }
+
+  private async handleResumeSchedule(agentId: string, scheduleId: string) {
+    if (!agentId || !scheduleId) throw new Error('agentId and scheduleId are required');
+    const { rowCount } = await pool.query(
+      `UPDATE schedules SET status = 'active', updated_at = NOW()
+       WHERE id = $1 AND agent_instance_id = $2 AND status = 'paused'`,
+      [scheduleId, agentId]
+    );
+    if (rowCount === 0) {
+      throw new Error('Schedule not found, not owned by this agent, or not currently paused.');
+    }
+    return {
+      content: [{ type: 'text', text: `Schedule "${scheduleId}" resumed.` }],
     };
   }
 

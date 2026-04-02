@@ -45,17 +45,33 @@ export class ApiKeyProvider implements AuthPlugin {
       'SELECT id, key_hash, owner_sub, roles FROM api_keys WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())'
     );
 
-    for (const row of result.rows) {
-      if (row.key_hash && (await argon2.verify(row.key_hash, key))) {
-        // Update last_used_at async
-        query('UPDATE api_keys SET last_used_at = NOW() WHERE id = $1', [row.id]).catch(() => {});
+    const verificationResults = await Promise.all(
+      result.rows.map(async (row) => {
+        try {
+          if (row.key_hash && (await argon2.verify(row.key_hash, key))) {
+            return row;
+          }
+        } catch (error) {
+          // Ignore errors from invalid hashes to prevent crashing the entire check
+          logger.warn(`Failed to verify API key hash for key ID ${row.id}: ${error}`);
+        }
+        return null;
+      })
+    );
 
-        return {
-          sub: row.owner_sub,
-          roles: row.roles as OperatorRole[],
-          authMethod: 'api-key',
-        };
-      }
+    const validRow = verificationResults.find((row) => row !== null);
+
+    if (validRow) {
+      // Update last_used_at async
+      query('UPDATE api_keys SET last_used_at = NOW() WHERE id = $1', [validRow.id]).catch(
+        () => {}
+      );
+
+      return {
+        sub: validRow.owner_sub,
+        roles: validRow.roles as OperatorRole[],
+        authMethod: 'api-key',
+      };
     }
 
     throw new Error('Invalid API key');

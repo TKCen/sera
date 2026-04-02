@@ -51,14 +51,15 @@ export const fileWriteSkill: SkillDefinition = {
         const containerPath = path.posix.join('/workspace', relativePath.replace(/\\/g, '/'));
         const dirPath = path.posix.dirname(containerPath);
 
-        // We use base64 to safely transfer content without escaping issues
+        // We use base64 to safely transfer content without escaping issues.
+        // We use positional parameters to avoid shell injection via file paths.
         const b64 = Buffer.from(content).toString('base64');
-        const script = `mkdir -p "${dirPath}" && echo "${b64}" | base64 -d > "${containerPath}"`;
+        const script = 'mkdir -p "$1" && echo "$2" | base64 -d > "$3"';
 
         const result = await context.sandboxManager.exec(context.manifest, {
           containerId: context.containerId,
           agentName: context.agentName,
-          command: ['sh', '-c', script],
+          command: ['sh', '-c', script, '--', dirPath, b64, containerPath],
         });
 
         if (result.exitCode !== 0) {

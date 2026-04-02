@@ -510,7 +510,10 @@ async function revokeChildrenCascade(
       const childCount = await revokeChildrenCascade(child.id as string, now, intercomService);
 
       // Revoke this child
-      await pool.query(`UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`, [now, child.id]);
+      await pool.query(`UPDATE delegation_tokens SET revoked_at = $1 WHERE id = $2`, [
+        now,
+        child.id,
+      ]);
       addToBlocklist(child.id as string, child.expires_at ? new Date(child.expires_at) : null);
 
       if (intercomService) {

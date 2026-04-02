@@ -51,7 +51,7 @@ export function createAgentRouter(
             lifecycle_mode: inst.lifecycle_mode,
             icon: template?.spec?.identity?.icon ?? template?.spec?.icon,
             sandbox_boundary:
-              (inst as unknown as Record<string, unknown>).sandbox_boundary ??
+              (inst as unknown as { sandbox_boundary: unknown }).sandbox_boundary ??
               template?.spec?.sandboxBoundary,
             created_at: inst.created_at,
             updated_at: inst.updated_at,
@@ -313,7 +313,7 @@ export function createAgentRouter(
       const caps = instance.resolved_capabilities as
         | Record<string, Record<string, unknown>>
         | undefined;
-      const workspaceLimitGB = caps?.filesystem?.maxWorkspaceSizeGB as number | undefined;
+      const workspaceLimitGB = caps?.['filesystem']?.['maxWorkspaceSizeGB'] as number | undefined;
       res.json({
         ...instance,
         lineageDepth,

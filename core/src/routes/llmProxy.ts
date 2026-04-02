@@ -169,7 +169,10 @@ export function createLlmProxyRouter(
               }
 
               // Collect injected memory blocks for citation metadata
-              if (event.stage === 'context.memory_retrieved' && Array.isArray(event.detail?.blocks)) {
+              if (
+                event.stage === 'context.memory_retrieved' &&
+                Array.isArray(event.detail?.blocks)
+              ) {
                 injectedBlocks.push(...(event.detail.blocks as typeof injectedBlocks));
               }
             }
@@ -310,9 +313,11 @@ export function createLlmProxyRouter(
             `tokens=${usage?.total_tokens ?? 0} latency=${llmResponse.latencyMs}ms`
         );
 
-        const response = { ...llmResponse.response } as Record<string, unknown>;
-        const choice = (response['choices'] as any[])?.[0];
-        const content = choice?.message?.content as string | undefined;
+        const response = {
+          ...llmResponse.response,
+        } as import('../llm/LlmRouter.js').ChatCompletionResponse & { citations?: unknown[] };
+        const choice = response.choices?.[0];
+        const content = choice?.message?.content;
 
         if (content && injectedBlocks.length > 0) {
           const citations: Array<{ blockId: string; scope: string; relevance: number }> = [];

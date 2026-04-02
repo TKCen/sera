@@ -4,12 +4,14 @@ import express from 'express';
 import { createAgentRouter } from './agents.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import type { AgentRegistry } from '../agents/registry.service.js';
+import type { SecurityTier } from '../agents/manifest/types.js';
+import type { SkillRegistry } from '../skills/SkillRegistry.js';
 
 describe('Agents Routes', () => {
   let app: express.Express;
   let orchestratorMock: Mocked<Orchestrator>;
   let agentRegistryMock: Mocked<AgentRegistry>;
-  let skillRegistryMock: any;
+  let skillRegistryMock: Mocked<SkillRegistry>;
   let intercomMock: {
     publish: ReturnType<typeof vi.fn>;
     getThoughts: ReturnType<typeof vi.fn>;
@@ -48,7 +50,7 @@ describe('Agents Routes', () => {
     skillRegistryMock = {
       listForAgent: vi.fn(),
       validateManifestSkills: vi.fn(),
-    };
+    } as unknown as Mocked<SkillRegistry>;
 
     app = express();
     app.use(express.json());
@@ -68,7 +70,11 @@ describe('Agents Routes', () => {
       agentRegistryMock.createInstance.mockResolvedValue({
         id: instanceId,
         name: 'ephemeral-name',
-      } as unknown as never);
+        template_ref: templateRef,
+        status: 'created',
+        updated_at: new Date(),
+        created_at: new Date(),
+      } as any);
 
       // Mock fetch for the container's chat endpoint
       const mockFetch = vi.fn().mockResolvedValue({
@@ -114,22 +120,31 @@ describe('Agents Routes', () => {
         id: instanceId,
         name: 'test-agent',
         template_ref: 'test-template',
+        status: 'active',
+        updated_at: new Date(),
+        created_at: new Date(),
       };
       const mockManifest = {
-        metadata: { name: 'test-agent' },
+        apiVersion: 'sera/v1',
+        kind: 'Agent' as const,
+        metadata: { name: 'test-agent', displayName: 'Test Agent', icon: 'agent', tier: 1 as SecurityTier },
+        identity: { role: 'tester', description: 'testing' },
+        model: { provider: 'openai', name: 'gpt-4o' },
         tools: { allowed: ['tool1', 'tool2'] },
       };
 
-      agentRegistryMock.getInstance.mockResolvedValue(mockInstance);
+      agentRegistryMock.getInstance.mockResolvedValue(mockInstance as any);
       orchestratorMock.getManifestByInstanceId.mockReturnValue(mockManifest);
-      skillRegistryMock.listForAgent.mockReturnValue([{ id: 'tool1', description: 'Tool 1' }]);
+      skillRegistryMock.listForAgent.mockReturnValue([
+        { id: 'tool1', description: 'Tool 1', parameters: [], source: 'builtin' },
+      ]);
       skillRegistryMock.validateManifestSkills.mockReturnValue(['tool2']);
 
       const res = await request(app).get(`/api/agents/instances/${instanceId}/tools`);
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
-        available: [{ id: 'tool1', description: 'Tool 1' }],
+        available: [{ id: 'tool1', description: 'Tool 1', parameters: [], source: 'builtin' }],
         unavailable: ['tool2'],
       });
       expect(skillRegistryMock.listForAgent).toHaveBeenCalledWith(mockManifest);
@@ -144,10 +159,18 @@ describe('Agents Routes', () => {
     });
 
     it('returns 404 if manifest cannot be resolved', async () => {
-      agentRegistryMock.getInstance.mockResolvedValue({ id: 'id', name: 'name' });
-      orchestratorMock.getManifestByInstanceId.mockReturnValue(null);
-      orchestratorMock.getManifest.mockReturnValue(null);
-      agentRegistryMock.getTemplate.mockResolvedValue(null);
+      const mockInstance = {
+        id: 'id',
+        name: 'name',
+        template_ref: 'tpl',
+        status: 'created',
+        updated_at: new Date(),
+        created_at: new Date(),
+      };
+      agentRegistryMock.getInstance.mockResolvedValue(mockInstance as any);
+      orchestratorMock.getManifestByInstanceId.mockReturnValue(undefined);
+      orchestratorMock.getManifest.mockReturnValue(undefined);
+      agentRegistryMock.getTemplate.mockResolvedValue(undefined as any);
 
       const res = await request(app).get('/api/agents/instances/id/tools');
       expect(res.status).toBe(404);

@@ -166,7 +166,7 @@ async function createTestSetup(
   vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
     async (agentId, messages, onEvent) => {
       onEvent?.({
-        stage: 'memory.retrieved',
+        stage: 'context.memory_retrieved',
         detail: {
           blocks: [
             {
@@ -187,6 +187,7 @@ async function createTestSetup(
   const orchestrator = {
     getManifest: vi.fn(),
     getManifestByInstanceId: vi.fn(),
+    getIntercom: vi.fn().mockReturnValue(null),
   } as unknown as import('../agents/Orchestrator.js').Orchestrator;
   const router = createLlmProxyRouter(
     identityService,
@@ -563,7 +564,7 @@ describe('LLM Proxy Router', () => {
       vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
         async (agentId, messages, onEvent) => {
           onEvent?.({
-            stage: 'memory.retrieved',
+            stage: 'context.memory_retrieved',
             detail: {
               blocks: [
                 {

@@ -6,15 +6,13 @@ vi.mock('pg', () => {
   return {
     default: {
       Pool: class {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mock argument matching signature
-        query(text: string, params?: any[]) {
+        query(text: string, params?: unknown[]) {
           return mockQuery(text, params);
         }
       },
     },
     Pool: class {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mock argument matching signature
-      query(text: string, params?: any[]) {
+      query(text: string, params?: unknown[]) {
         return mockQuery(text, params);
       }
     },

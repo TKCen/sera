@@ -339,6 +339,25 @@ export class SkillLibrary {
     };
   }
 
+  /**
+   * Fetches the latest version of multiple skill packages in a single query.
+   */
+  async getPackages(names: string[]): Promise<SkillPackage[]> {
+    if (names.length === 0) return [];
+
+    const { rows } = await this.pool.query(
+      'SELECT DISTINCT ON (name) name, version, description, skills FROM skill_packages WHERE name = ANY($1) ORDER BY name, version DESC',
+      [names]
+    );
+
+    return rows.map((row) => ({
+      name: row.name,
+      version: row.version,
+      description: row.description,
+      skills: row.skills,
+    }));
+  }
+
   async listSkills(): Promise<Array<SkillFrontMatter & { maxTokens?: number; source?: string }>> {
     const { rows } = await this.pool.query(
       'SELECT name, version, description, triggers, category, tags, max_tokens, source FROM skills ORDER BY name, version DESC'

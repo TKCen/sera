@@ -178,4 +178,35 @@ describe('Agents Routes', () => {
       expect(res.body.error).toBe('Agent manifest not found');
     });
   });
+
+  describe('GET /api/agents/:id/boot-context', () => {
+    it('fetches boot context from the agent instance', async () => {
+      const instanceId = 'agent-123';
+      agentRegistryMock.getInstance.mockResolvedValue({ id: instanceId } as any);
+      orchestratorMock.ensureContainerRunning.mockResolvedValue('http://agent-runtime:3100');
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ content: 'Boot context content' }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await request(app).get(`/api/agents/${instanceId}/boot-context`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ content: 'Boot context content' });
+      expect(mockFetch).toHaveBeenCalledWith('http://agent-runtime:3100/boot-context', expect.any(Object));
+    });
+
+    it('returns 503 if agent is not reachable', async () => {
+      const instanceId = 'agent-123';
+      agentRegistryMock.getInstance.mockResolvedValue({ id: instanceId } as any);
+      orchestratorMock.ensureContainerRunning.mockRejectedValue(new Error('Container not starting'));
+
+      const res = await request(app).get(`/api/agents/${instanceId}/boot-context`);
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toContain('Agent not reachable: Container not starting');
+    });
+  });
 });

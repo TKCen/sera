@@ -617,6 +617,40 @@ export function createAgentRouter(
     })
   );
 
+  /**
+   * GET /api/agents/:id/boot-context
+   * Returns the injected boot context for a running agent instance.
+   */
+  router.get(
+    '/:id/boot-context',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
+      const instance = await agentRegistry.getInstance(id);
+      if (!instance) {
+        res.status(404).json({ error: 'Agent instance not found' });
+        return;
+      }
+
+      try {
+        const chatUrl = await orchestrator.ensureContainerRunning(id);
+        const chatRes = await fetch(`${chatUrl}/boot-context`, {
+          signal: AbortSignal.timeout(5_000),
+        });
+
+        if (!chatRes.ok) {
+          throw new Error(`Agent returned ${chatRes.status}`);
+        }
+
+        const body = (await chatRes.json()) as { content: string };
+        res.json(body);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`Failed to fetch boot context for agent ${id}: ${msg}`);
+        res.status(503).json({ error: `Agent not reachable: ${msg}` });
+      }
+    })
+  );
+
   // ── Template Diff ────────────────────────────────────────────────────────
   /**
    * GET /api/agents/:id/template-diff

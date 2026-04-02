@@ -1,10 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
 import { ReasoningLoop } from '../loop.js';
 import { ScriptedLLMClient, StaticToolExecutor, createMockPublisher } from './testHelpers.js';
 import type { RuntimeManifest } from '../manifest.js';
 import type { ToolDefinition } from '../llmClient.js';
 
+vi.mock('fs');
+
 describe('ReasoningLoop E2E', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
   const mockManifest: RuntimeManifest = {
     apiVersion: 'sera.io/v1',
     kind: 'Agent',
@@ -110,5 +117,40 @@ describe('ReasoningLoop E2E', () => {
     expect(output.result).toBe('It failed as expected.');
     expect(llm.getCallCount()).toBe(2);
     expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: Error: Unknown tool "unknown"'), 1, undefined);
+  });
+
+  it('injects boot context into message history', async () => {
+    const manifestWithBoot: RuntimeManifest = {
+      ...mockManifest,
+      bootContext: {
+        files: [{ path: 'boot.md', label: 'Boot File' }]
+      }
+    };
+
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue('Boot context content');
+
+    let capturedMessages: any[] = [];
+    const llm = {
+      chat: vi.fn().mockImplementation((messages) => {
+        capturedMessages = messages;
+        return Promise.resolve({ content: 'Acknowledged boot context.' });
+      }),
+      getCallCount: () => 1
+    } as any;
+
+    const tools = new StaticToolExecutor();
+    const publisher = createMockPublisher();
+    const loop = new ReasoningLoop(llm, tools, publisher, manifestWithBoot);
+
+    await loop.run({
+      taskId: 'task-boot',
+      task: 'Check boot context',
+    });
+
+    const bootMsg = capturedMessages.find(m => m.role === 'system' && m.internal === true);
+    expect(bootMsg).toBeDefined();
+    expect(bootMsg.content).toContain('Boot File');
+    expect(bootMsg.content).toContain('Boot context content');
   });
 });

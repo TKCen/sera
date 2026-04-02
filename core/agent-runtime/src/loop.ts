@@ -22,6 +22,7 @@ import type { IToolExecutor } from './tools/index.js';
 import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
+import { loadBootContext } from './bootContext.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
 import { log } from './logger.js';
@@ -91,6 +92,7 @@ export class ReasoningLoop {
   /** All tools including deferred ones (for tool-search). */
   private allToolDefs: ToolDefinition[];
   private contextManager: ContextManager;
+  private bootContext: string = '';
 
   /** Set to true when SIGTERM received; loop exits after current step. */
   shutdownRequested = false;
@@ -107,6 +109,9 @@ export class ReasoningLoop {
     this.manifest = manifest;
     this.allToolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
     this.contextManager = new ContextManager(manifest.model.name);
+
+    const workspacePath = process.env['WORKSPACE_PATH'] || '/workspace';
+    this.bootContext = loadBootContext(manifest, workspacePath);
 
     // Initial system prompt — will be refreshed per task with current time/tools
     this.systemPrompt = this.refreshSystemPrompt();
@@ -223,12 +228,21 @@ export class ReasoningLoop {
     // Build initial message array
     const messages: ChatMessage[] = [
       { role: 'system', content: this.systemPrompt },
-      ...history,
-      {
-        role: 'user',
-        content: context ? `${context}\n\n${task}` : task,
-      },
     ];
+
+    if (this.bootContext) {
+      messages.push({
+        role: 'system',
+        content: `The following documents are provided for initial context:\n\n${this.bootContext}`,
+        internal: true,
+      });
+    }
+
+    messages.push(...history);
+    messages.push({
+      role: 'user',
+      content: context ? `${context}\n\n${task}` : task,
+    });
 
     const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
     await think(

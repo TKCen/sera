@@ -164,6 +164,14 @@ export interface AgentManifest {
       maxTokens?: number;
       priority?: 'high' | 'normal' | 'low';
     }>;
+    bootContext?: {
+      files?: Array<{
+        path: string;
+        label: string;
+        maxTokens?: number;
+      }>;
+      directory?: string;
+    };
     notes?: string;
   };
   tools?: ToolsConfig;
@@ -178,6 +186,14 @@ export interface AgentManifest {
   capabilities?: string[];
   logging?: {
     commands?: boolean;
+  };
+  bootContext?: {
+    files?: Array<{
+      path: string;
+      label: string;
+      maxTokens?: number;
+    }>;
+    directory?: string;
   };
   schedules?: ScheduleManifest[];
   mounts?: Array<{ hostPath: string; containerPath: string; mode: 'ro' | 'rw' }>;
@@ -233,6 +249,7 @@ export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'permissions',
   'capabilities',
   'logging',
+  'bootContext',
   'schedules',
   'mounts',
   'overrides',

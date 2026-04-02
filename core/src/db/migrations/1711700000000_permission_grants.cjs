@@ -8,43 +8,43 @@ exports.up = (pgm) => {
     id: {
       type: 'uuid',
       primaryKey: true,
-      default: pgm.func('gen_random_uuid()')
+      default: pgm.func('gen_random_uuid()'),
     },
     agent_instance_id: {
       type: 'uuid',
       references: 'agent_instances(id)',
-      onDelete: 'CASCADE'
+      onDelete: 'CASCADE',
     },
     grant_type: {
       type: 'text',
       notNull: true,
-      check: "grant_type IN ('session', 'one-time', 'persistent')"
+      check: "grant_type IN ('session', 'one-time', 'persistent')",
     },
     resource_type: {
       type: 'text',
-      notNull: true
+      notNull: true,
     },
     resource_value: {
       type: 'text',
-      notNull: true
+      notNull: true,
     },
     mode: {
       type: 'text',
-      default: 'ro'
+      default: 'ro',
     },
     approved_by: {
-      type: 'text'
+      type: 'text',
     },
     created_at: {
       type: 'timestamptz',
-      default: pgm.func('now()')
+      default: pgm.func('now()'),
     },
     expires_at: {
-      type: 'timestamptz'
+      type: 'timestamptz',
     },
     revoked_at: {
-      type: 'timestamptz'
-    }
+      type: 'timestamptz',
+    },
   });
 
   pgm.createIndex('permission_grants', 'agent_instance_id');

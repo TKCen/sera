@@ -20,7 +20,10 @@ describe('PermissionRequestService', () => {
     mockIntercom = {
       publishSystemEvent: vi.fn().mockResolvedValue(undefined),
     };
-    service = new PermissionRequestService(mockRegistry as unknown as AgentRegistry, mockIntercom as unknown as IntercomService);
+    service = new PermissionRequestService(
+      mockRegistry as unknown as AgentRegistry,
+      mockIntercom as unknown as IntercomService
+    );
   });
 
   describe('initialize', () => {
@@ -77,39 +80,39 @@ describe('PermissionRequestService', () => {
     });
 
     it('should store session grants only in-memory', async () => {
-        (service as any).pending.set(requestId, {
-          requestId,
-          agentId,
-          agentName: 'TestAgent',
-          dimension: 'network',
-          value: 'google.com',
-          status: 'pending',
-        });
+      (service as any).pending.set(requestId, {
+        requestId,
+        agentId,
+        agentName: 'TestAgent',
+        dimension: 'network',
+        value: 'google.com',
+        status: 'pending',
+      });
 
-        const decision = { decision: 'grant', grantType: 'session' };
+      const decision = { decision: 'grant', grantType: 'session' };
 
-        await service.decide(requestId, decision as any);
+      await service.decide(requestId, decision as any);
 
-        expect(mockRegistry.createPermissionGrant).not.toHaveBeenCalled();
-        expect(service.hasActiveGrant(agentId, 'network', 'google.com')).toBe(true);
+      expect(mockRegistry.createPermissionGrant).not.toHaveBeenCalled();
+      expect(service.hasActiveGrant(agentId, 'network', 'google.com')).toBe(true);
     });
   });
 
   describe('hasActiveGrant', () => {
     it('should support prefix matching for filesystem paths', async () => {
-        const mockGrants = [
-            {
-              agent_instance_id: agentId,
-              grant_type: 'persistent',
-              resource_type: 'filesystem',
-              resource_value: '/var/log',
-            },
-          ];
-          mockRegistry.listActivePermissionGrants.mockResolvedValue(mockGrants);
-          await service.initialize();
+      const mockGrants = [
+        {
+          agent_instance_id: agentId,
+          grant_type: 'persistent',
+          resource_type: 'filesystem',
+          resource_value: '/var/log',
+        },
+      ];
+      mockRegistry.listActivePermissionGrants.mockResolvedValue(mockGrants);
+      await service.initialize();
 
-          expect(service.hasActiveGrant(agentId, 'filesystem', '/var/log/syslog')).toBe(true);
-          expect(service.hasActiveGrant(agentId, 'filesystem', '/var/lib')).toBe(false);
+      expect(service.hasActiveGrant(agentId, 'filesystem', '/var/log/syslog')).toBe(true);
+      expect(service.hasActiveGrant(agentId, 'filesystem', '/var/lib')).toBe(false);
     });
   });
 });

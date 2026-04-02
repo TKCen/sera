@@ -277,7 +277,9 @@ export class PermissionRequestService {
         const existing = this.sessionGrants.get(req.agentId) ?? [];
         existing.push(grant);
         this.sessionGrants.set(req.agentId, existing);
-        logger.info(`One-time grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`);
+        logger.info(
+          `One-time grant stored for agent ${req.agentId}: ${req.dimension}=${req.value}`
+        );
       }
     }
 

@@ -1,7 +1,7 @@
 import './index.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router';
+import { BrowserRouter, Routes, Route } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -31,16 +31,10 @@ import LoginPage from '@/app/login/page';
 import AuthCallbackPage from '@/app/auth/callback/page';
 import { ForbiddenView } from '@/views/ForbiddenView';
 import { NotFoundView } from '@/views/NotFoundView';
-
-function AgentMemoryGraphRedirect() {
-  const { id } = useParams<{ id: string }>();
-  return <Navigate to={`/memory?agent=${id}`} replace />;
-}
-
-function MemoryDetailRedirect() {
-  const { id } = useParams<{ id: string }>();
-  return <Navigate to={`/memory?agent=${id}`} replace />;
-}
+import {
+  AgentMemoryGraphRedirect,
+  MemoryDetailRedirect,
+} from '@/components/memory/MemoryRedirects';
 
 const el = document.getElementById('root');
 if (!el) throw new Error('Root element not found');

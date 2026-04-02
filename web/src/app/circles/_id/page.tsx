@@ -23,6 +23,7 @@ import * as circlesApi from '@/lib/api/circles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { CopyButton } from '@/components/CopyButton';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Dialog,
@@ -162,9 +163,12 @@ export default function CircleDetailPage() {
           <h1 className="text-xl font-bold text-sera-text">
             {circle.displayName ?? circle.metadata?.displayName}
           </h1>
-          <span className="text-xs text-sera-text-dim font-mono">
-            {circle.name ?? circle.metadata?.name}
-          </span>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-sera-text-dim font-mono">
+              {circle.name ?? circle.metadata?.name}
+            </span>
+            <CopyButton value={circle.name ?? circle.metadata?.name ?? id ?? ''} />
+          </div>
 
           {/* Description — inline editable */}
           <div className="mt-1">

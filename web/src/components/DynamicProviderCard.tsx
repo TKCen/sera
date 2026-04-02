@@ -11,6 +11,7 @@ import {
 import * as providersApi from '@/lib/api/providers';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CopyButton } from '@/components/CopyButton';
 
 export function DynamicProviderCard({
   provider,
@@ -53,9 +54,12 @@ export function DynamicProviderCard({
                 </Badge>
               )}
             </div>
-            <p className="text-[11px] text-sera-text-muted mt-0.5 font-mono select-all">
-              {provider.baseUrl}
-            </p>
+            <div className="flex items-center gap-1 mt-0.5">
+              <p className="text-[11px] text-sera-text-muted font-mono select-all truncate">
+                {provider.baseUrl}
+              </p>
+              <CopyButton value={provider.baseUrl} />
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-3">

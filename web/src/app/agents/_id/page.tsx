@@ -14,6 +14,7 @@ import {
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { CopyButton } from '@/components/CopyButton';
 import { AgentForm, type AgentFormInitialValues } from '@/components/AgentForm';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -145,7 +146,10 @@ export default function AgentDetailPage() {
             <div>
               <h1 className="text-xl font-semibold text-sera-text leading-tight">{displayName}</h1>
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-sera-text-dim">{id}</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-sera-text-dim">{id}</span>
+                  <CopyButton value={id} />
+                </div>
                 {agent?.template_ref && <Badge variant="default">{agent.template_ref}</Badge>}
                 {agent?.circle && <Badge variant="default">{agent.circle}</Badge>}
               </div>

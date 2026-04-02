@@ -19,6 +19,7 @@ import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './fil
 import { globFiles, grepFiles, readFilePartial } from './search-handlers.js';
 import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
+import { webFetchStreaming } from './web-handler.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
 import { spawnSubagent, runTool, executeProxiedTool, isProxyAvailable } from './proxy.js';
 
@@ -40,6 +41,7 @@ const LOCAL_TOOLS = new Set([
   'glob',
   'grep',
   'shell-exec',
+  'web-fetch',
   'spawn-subagent',
   'run-tool',
   'tool-search',
@@ -199,14 +201,16 @@ export class RuntimeToolExecutor implements IToolExecutor {
 
       switch (toolName) {
         case 'file-read':
-          result = fileRead(this.workspacePath, params['path'] as string);
+          result = fileRead(this.workspacePath, params['path'] as string, onOutput, id);
           break;
         case 'read_file':
           result = await readFilePartial(
             this.workspacePath,
             params['path'] as string,
             params['offset'] as number | undefined,
-            params['limit'] as number | undefined
+            params['limit'] as number | undefined,
+            onOutput,
+            id
           );
           break;
         case 'glob':
@@ -236,6 +240,14 @@ export class RuntimeToolExecutor implements IToolExecutor {
             params['path'] as string,
             params['recursive'] as boolean | undefined
           );
+          break;
+        case 'web-fetch':
+          if (onOutput) {
+            result = await webFetchStreaming(params['url'] as string, onOutput, id);
+          } else {
+            // Re-use streaming logic even for sync-style calls for consistency
+            result = await webFetchStreaming(params['url'] as string, () => {}, id);
+          }
           break;
         case 'shell-exec': {
           const outsidePath = checkShellPathRestriction(
@@ -297,15 +309,14 @@ export class RuntimeToolExecutor implements IToolExecutor {
       this.logInvocation(toolName, 'success', durationMs);
       const finalResult = truncateOutput(result);
 
-      if (onOutput && toolName !== 'shell-exec') {
+      if (onOutput && toolName !== 'shell-exec' && toolName !== 'web-fetch') {
         onOutput({
           toolCallId: id,
           toolName,
-          type: 'result',
-          content: result.substring(0, 500),
-          done: true,
+          result: result.substring(0, 500),
+          duration: durationMs,
+          error: result.startsWith('Error:'),
           timestamp: new Date().toISOString(),
-          durationMs,
         });
       }
 

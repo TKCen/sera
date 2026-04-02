@@ -3,6 +3,7 @@
  */
 
 import { spawnSync, spawn } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 import { NotPermittedError, DEFAULT_SHELL_TIMEOUT_MS } from './types.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
 
@@ -106,10 +107,12 @@ export async function shellExecStreaming(
 
     const stdoutPending: string[] = [];
     const stderrPending: string[] = [];
+    const stdoutDecoder = new StringDecoder('utf-8');
+    const stderrDecoder = new StringDecoder('utf-8');
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf-8');
-      stdoutBytes += Buffer.byteLength(text);
+      const text = stdoutDecoder.write(chunk);
+      stdoutBytes += chunk.length;
       if (stdoutBytes <= MAX_STREAM_BYTES) {
         stdoutChunks.push(text);
       } else if (!timedOut) {
@@ -119,8 +122,8 @@ export async function shellExecStreaming(
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf-8');
-      stderrBytes += Buffer.byteLength(text);
+      const text = stderrDecoder.write(chunk);
+      stderrBytes += chunk.length;
       if (stderrBytes <= MAX_STREAM_BYTES) {
         stderrChunks.push(text);
       } else if (!timedOut) {
@@ -145,6 +148,18 @@ export async function shellExecStreaming(
 
     child.on('close', (code) => {
       clearTimeout(timer);
+
+      const finalStdout = stdoutDecoder.end();
+      if (finalStdout) {
+        stdoutChunks.push(finalStdout);
+        emitLines(finalStdout, 'stdout', stdoutPending);
+      }
+
+      const finalStderr = stderrDecoder.end();
+      if (finalStderr) {
+        stderrChunks.push(finalStderr);
+        emitLines(finalStderr, 'stderr', stderrPending);
+      }
 
       // Flush any remaining partial lines
       for (const pending of [stdoutPending, stderrPending]) {
@@ -177,11 +192,10 @@ export async function shellExecStreaming(
       onOutput({
         toolCallId,
         toolName: 'shell-exec',
-        type: 'result',
-        content: resultStr.substring(0, 500),
-        done: true,
+        result: resultStr.substring(0, 500),
+        duration: durationMs,
+        error: exitCode !== 0,
         timestamp: new Date().toISOString(),
-        durationMs,
       });
 
       resolve(resultStr);

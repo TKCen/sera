@@ -6,8 +6,14 @@
 import fs from 'fs';
 import path from 'path';
 import { PermissionDeniedError, MAX_RESULT_BYTES } from './types.js';
+import type { ToolOutputCallback } from '../centrifugo.js';
 
-export function fileRead(workspacePath: string, filePath: string): string {
+export function fileRead(
+  workspacePath: string,
+  filePath: string,
+  onOutput?: ToolOutputCallback,
+  toolCallId?: string
+): string {
   const resolved = resolveSafe(workspacePath, filePath);
   if (!fs.existsSync(resolved)) {
     return `Error: File not found: ${filePath}`;
@@ -17,6 +23,24 @@ export function fileRead(workspacePath: string, filePath: string): string {
     const buf = fs.readFileSync(resolved);
     const mime = guessMime(resolved);
     return `[binary:${mime}]\n${buf.toString('base64')}`;
+  }
+
+  const stats = fs.statSync(resolved);
+  // Stream if file is > 16KB and we have a callback
+  if (onOutput && toolCallId && stats.size > 16384) {
+    const content = fs.readFileSync(resolved, 'utf-8');
+    const chunkSize = 16384;
+    for (let i = 0; i < content.length; i += chunkSize) {
+      onOutput({
+        toolCallId,
+        toolName: 'file-read',
+        type: 'progress',
+        content: content.substring(i, i + chunkSize),
+        done: false,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return content;
   }
 
   return fs.readFileSync(resolved, 'utf-8');

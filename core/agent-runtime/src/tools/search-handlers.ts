@@ -8,6 +8,7 @@ import readline from 'readline';
 import { spawnSync } from 'child_process';
 import { resolveSafe } from './file-handlers.js';
 import { log } from '../logger.js';
+import type { ToolOutputCallback } from '../centrifugo.js';
 
 /**
  * Find files using a glob pattern.
@@ -151,7 +152,9 @@ export async function readFilePartial(
   workspacePath: string,
   filePath: string,
   offset: number = 1,
-  limit: number = 500
+  limit: number = 500,
+  onOutput?: ToolOutputCallback,
+  toolCallId?: string
 ): Promise<string> {
   const resolved = resolveSafe(workspacePath, filePath);
   if (!fs.existsSync(resolved)) {
@@ -181,10 +184,19 @@ export async function readFilePartial(
     currentLineNum++;
     totalLines++;
     if (currentLineNum >= startLine && currentLineNum <= endLine) {
-      if (line.length > MAX_LINE_LENGTH) {
-        processedLines.push(line.substring(0, MAX_LINE_LENGTH) + '... [TRUNCATED]');
-      } else {
-        processedLines.push(line);
+      const contentLine =
+        line.length > MAX_LINE_LENGTH ? line.substring(0, MAX_LINE_LENGTH) + '... [TRUNCATED]' : line;
+      processedLines.push(contentLine);
+
+      if (onOutput && toolCallId) {
+        onOutput({
+          toolCallId,
+          toolName: 'read_file',
+          type: 'progress',
+          content: contentLine + '\n',
+          done: false,
+          timestamp: new Date().toISOString(),
+        });
       }
     }
     // We keep counting total lines, but if the file is massive we might want to stop

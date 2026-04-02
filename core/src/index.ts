@@ -397,7 +397,11 @@ app.use(
   authMiddleware,
   createLifecycleRouter(agentRegistry, orchestrator, sandboxManager, permissionService)
 );
-app.use('/api/agents', authMiddleware, createAgentRouter(orchestrator, agentRegistry, skillRegistry));
+app.use(
+  '/api/agents',
+  authMiddleware,
+  createAgentRouter(orchestrator, agentRegistry, skillRegistry)
+);
 app.use(
   '/v1/tools',
   createToolProxyRouter(

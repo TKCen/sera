@@ -38,7 +38,10 @@ export function AgentDetailToolsTab({ id }: { id: string }) {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {available.map((tool) => (
-              <div key={tool.id} className="sera-card-static p-3 hover:bg-sera-surface-hover transition-colors border-sera-border/40">
+              <div
+                key={tool.id}
+                className="sera-card-static p-3 hover:bg-sera-surface-hover transition-colors border-sera-border/40"
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <Wrench size={13} className="text-sera-accent shrink-0" />
@@ -80,14 +83,20 @@ export function AgentDetailToolsTab({ id }: { id: string }) {
             </Badge>
           </div>
           <p className="text-xs text-sera-text-muted mb-4 leading-relaxed">
-            These tools are requested in the agent&apos;s manifest or template but are not currently registered in the system.
-            They may belong to an MCP server that is offline or misconfigured.
+            These tools are requested in the agent&apos;s manifest or template but are not currently
+            registered in the system. They may belong to an MCP server that is offline or
+            misconfigured.
           </p>
           <div className="sera-card-static divide-y divide-sera-border/30 overflow-hidden">
             {unavailable.map((toolId) => (
-              <div key={toolId} className="px-4 py-2.5 flex items-center justify-between gap-3 bg-sera-warning/5">
+              <div
+                key={toolId}
+                className="px-4 py-2.5 flex items-center justify-between gap-3 bg-sera-warning/5"
+              >
                 <span className="text-xs font-mono text-sera-warning font-medium">{toolId}</span>
-                <span className="text-[10px] text-sera-warning/70 uppercase font-bold tracking-wider">Unregistered</span>
+                <span className="text-[10px] text-sera-warning/70 uppercase font-bold tracking-wider">
+                  Unregistered
+                </span>
               </div>
             ))}
           </div>

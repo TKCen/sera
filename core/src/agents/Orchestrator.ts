@@ -176,12 +176,12 @@ export class Orchestrator {
       );
     }
 
-    // Convert the DB template row into an AgentManifest shape.
+    // Convert the DB template row or instance snapshot into an AgentManifest shape.
     // getTemplate() returns a raw DB row ({ name, display_name, spec, ... })
     // but AgentFactory.createAgent expects { metadata, identity, model, spec }.
-    // All spec-wrapped fields are normalized to top-level so consumers don't
-    // need to check both paths. (#539)
-    const s = templateRow.spec ?? {};
+    // We use the instance's resolved_config as the base spec to ensure stability
+    // and operator awareness of template updates.
+    const s = (instance.resolved_config as Record<string, any>) ?? templateRow.spec ?? {};
     const manifest: AgentManifest = {
       apiVersion: 'sera/v1',
       kind: 'Agent',
@@ -189,7 +189,7 @@ export class Orchestrator {
         name: templateRow.name,
         displayName: templateRow.display_name ?? templateRow.name,
         icon: s.identity?.icon ?? '',
-        circle: s.circle ?? instance.circle,
+        circle: s.circle ?? instance.circle ?? '',
         tier: s.sandboxBoundary === 'tier-3' ? 3 : s.sandboxBoundary === 'tier-2' ? 2 : 1,
       },
       identity: {
@@ -339,11 +339,12 @@ export class Orchestrator {
     const resolver = new CapabilityResolver(this.registry);
     const { resolvedCapabilities } = await resolver.resolve(instance.id);
 
-    // Store resolved capabilities as immutable audit record
+    // Store resolved capabilities as immutable audit record.
+    // Preserve the current resolved_config baseline.
     await this.registry.updateInstanceConfig(
       instance.id,
       instance.overrides,
-      null,
+      instance.resolved_config,
       resolvedCapabilities
     );
 

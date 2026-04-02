@@ -29,8 +29,10 @@ export class CapabilityResolver {
     const template = await this.registry.getTemplate(instance.template_ref);
     if (!template) throw new Error(`Template ${instance.template_ref} not found`);
 
-    // Merge template spec with instance overrides
-    const spec = this.deepMerge(template.spec, instance.overrides) as {
+    // Merge baseline snapshot with instance overrides.
+    // If resolved_config is missing (should not happen after migration), fall back to template.
+    const baseline = instance.resolved_config ?? template.spec;
+    const spec = this.deepMerge(baseline, instance.overrides) as {
       sandboxBoundary: string;
       policyRef?: string;
       capabilities?: Record<string, unknown>;

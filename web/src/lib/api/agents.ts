@@ -209,6 +209,15 @@ export function applyTemplateUpdate(
   );
 }
 
+export function skipTemplateUpdate(agentId: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/agents/${encodeURIComponent(agentId)}/skip-template-update`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
 export interface PendingUpdate {
   instanceId: string;
   instanceName: string;

@@ -85,6 +85,17 @@ export function useCancelTask() {
   });
 }
 
+export function useSkipTemplateUpdate(agentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => agentsApi.skipTemplateUpdate(agentId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: templateDiffKeys.diff(agentId) });
+      void qc.invalidateQueries({ queryKey: agentsKeys.detail(agentId) });
+    },
+  });
+}
+
 export function useClearStaleTasks() {
   const qc = useQueryClient();
   return useMutation({

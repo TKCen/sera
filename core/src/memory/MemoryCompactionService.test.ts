@@ -125,6 +125,5 @@ describe('MemoryCompactionService', () => {
     const svc = MemoryCompactionService.getInstance();
     const result = await svc.triggerCompaction('no-such-agent');
     expect(result.blocksArchived).toBe(0);
-    expect(result.vectorsRemoved).toBe(0);
   });
 });

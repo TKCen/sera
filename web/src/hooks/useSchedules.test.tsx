@@ -2,6 +2,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as schedulesApi from '@/lib/api/schedules';
+import type { Schedule, ScheduleRun } from '@/lib/api/types';
 import {
   useSchedules,
   useCreateSchedule,
@@ -43,7 +44,7 @@ describe('useSchedules hooks', () => {
     vi.clearAllMocks();
     vi.mocked(useQueryClient).mockReturnValue({
       invalidateQueries: mockInvalidateQueries,
-    } as any);
+    } as unknown as ReturnType<typeof useQueryClient>);
   });
 
   it('should be defined', () => {
@@ -59,7 +60,9 @@ describe('useSchedules hooks', () => {
   describe('useSchedules', () => {
     it('should fetch schedules', async () => {
       const mockSchedules = [{ id: '1', name: 'Test Schedule' }];
-      vi.mocked(schedulesApi.listSchedules).mockResolvedValue(mockSchedules as any);
+      vi.mocked(schedulesApi.listSchedules).mockResolvedValue(
+        mockSchedules as unknown as Schedule[]
+      );
 
       const { result } = renderHook(() => useSchedules(), { wrapper });
 
@@ -84,14 +87,17 @@ describe('useSchedules hooks', () => {
       const newSchedule = {
         agentName: 'agent',
         name: 'new',
-        type: 'cron',
+        type: 'cron' as const,
         expression: '* * * * *',
       };
-      vi.mocked(schedulesApi.createSchedule).mockResolvedValue({ id: '1', ...newSchedule } as any);
+      vi.mocked(schedulesApi.createSchedule).mockResolvedValue({
+        id: '1',
+        ...newSchedule,
+      } as unknown as Schedule);
 
       const { result } = renderHook(() => useCreateSchedule(), { wrapper });
 
-      await result.current.mutateAsync(newSchedule as any);
+      await result.current.mutateAsync(newSchedule as unknown as Schedule);
 
       expect(schedulesApi.createSchedule).toHaveBeenCalledWith(newSchedule);
       expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['schedules'] });
@@ -104,8 +110,8 @@ describe('useSchedules hooks', () => {
       const { result } = renderHook(() => useCreateSchedule(), { wrapper });
 
       try {
-        await result.current.mutateAsync({} as any);
-      } catch (e) {
+        await result.current.mutateAsync({} as unknown as Schedule);
+      } catch {
         // Expected
       }
 
@@ -118,7 +124,10 @@ describe('useSchedules hooks', () => {
     it('should update a schedule and invalidate queries', async () => {
       const id = '1';
       const updateData = { name: 'Updated' };
-      vi.mocked(schedulesApi.updateSchedule).mockResolvedValue({ id, ...updateData } as any);
+      vi.mocked(schedulesApi.updateSchedule).mockResolvedValue({
+        id,
+        ...updateData,
+      } as unknown as Schedule);
 
       const { result } = renderHook(() => useUpdateSchedule(), { wrapper });
 
@@ -160,7 +169,9 @@ describe('useSchedules hooks', () => {
   describe('useScheduleRuns', () => {
     it('should fetch schedule runs', async () => {
       const mockRuns = [{ taskId: 'task-1', scheduleId: '1' }];
-      vi.mocked(schedulesApi.listScheduleRuns).mockResolvedValue(mockRuns as any);
+      vi.mocked(schedulesApi.listScheduleRuns).mockResolvedValue(
+        mockRuns as unknown as ScheduleRun[]
+      );
 
       const { result } = renderHook(() => useScheduleRuns(), { wrapper });
 
@@ -174,7 +185,9 @@ describe('useSchedules hooks', () => {
     it('should fetch schedule runs for a specific schedule', async () => {
       const id = '1';
       const mockRuns = [{ taskId: 'task-1', scheduleId: id }];
-      vi.mocked(schedulesApi.getScheduleRuns).mockResolvedValue(mockRuns as any);
+      vi.mocked(schedulesApi.getScheduleRuns).mockResolvedValue(
+        mockRuns as unknown as ScheduleRun[]
+      );
 
       const { result } = renderHook(() => useScheduleRunsBySchedule(id), { wrapper });
 

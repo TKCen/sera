@@ -1,6 +1,6 @@
 import { LlmRouter } from '../llm/LlmRouter.js';
 import { Logger } from '../lib/logger.js';
-import { MemoryScope, Importance } from './blocks/scoped-types.js';
+import type { MemoryScope, Importance } from './blocks/scoped-types.js';
 
 const logger = new Logger('MemoryAnalyst');
 
@@ -39,14 +39,14 @@ Return the results as a JSON object with the following structure:
 }`;
 
 export class MemoryAnalyst {
-  constructor(private readonly llmRouter: LlmRouter) {}
+  constructor(public readonly router: LlmRouter) {}
 
   /**
    * Analyze memory content using an LLM to extract importance, scope, tags, and atomic facts.
    */
   async analyze(content: string, modelName: string): Promise<AnalysisResult> {
     try {
-      const { response } = await this.llmRouter.chatCompletion(
+      const { response } = await this.router.chatCompletion(
         {
           model: modelName,
           messages: [

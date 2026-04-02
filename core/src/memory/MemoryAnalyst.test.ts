@@ -49,10 +49,10 @@ describe('MemoryAnalyst', () => {
     const result = await analyst.analyze(mockContent, 'test-model');
 
     expect(result.facts).toHaveLength(2);
-    expect(result.facts[0].title).toBe('Project Deadline');
-    expect(result.facts[1].title).toBe('Main Contact');
-    expect(result.facts[0].importance).toBe(4);
-    expect(result.facts[1].scope).toBe('personal');
+    expect(result.facts[0]!.title).toBe('Project Deadline');
+    expect(result.facts[1]!.title).toBe('Main Contact');
+    expect(result.facts[0]!.importance).toBe(4);
+    expect(result.facts[1]!.scope).toBe('personal');
   });
 
   it('should handle malformed JSON from LLM by returning fallback', async () => {
@@ -66,9 +66,9 @@ describe('MemoryAnalyst', () => {
     const result = await analyst.analyze(mockContent, 'test-model');
 
     expect(result.facts).toHaveLength(1);
-    expect(result.facts[0].content).toBe(mockContent);
-    expect(result.facts[0].importance).toBe(3);
-    expect(result.facts[0].scope).toBe('personal');
+    expect(result.facts[0]!.content).toBe(mockContent);
+    expect(result.facts[0]!.importance).toBe(3);
+    expect(result.facts[0]!.scope).toBe('personal');
   });
 
   it('should extract JSON from markdown blocks', async () => {
@@ -85,8 +85,8 @@ describe('MemoryAnalyst', () => {
     const result = await analyst.analyze(mockContent, 'test-model');
 
     expect(result.facts).toHaveLength(1);
-    expect(result.facts[0].title).toBe('Test');
-    expect(result.facts[0].importance).toBe(5);
-    expect(result.facts[0].scope).toBe('global');
+    expect(result.facts[0]!.title).toBe('Test');
+    expect(result.facts[0]!.importance).toBe(5);
+    expect(result.facts[0]!.scope).toBe('global');
   });
 });

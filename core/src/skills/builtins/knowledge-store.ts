@@ -17,6 +17,7 @@ import { VectorService } from '../../services/vector.service.js';
 import type { MemoryNamespace } from '../../services/vector.service.js';
 import { KnowledgeGitService } from '../../memory/KnowledgeGitService.js';
 import { MemoryAnalyst } from '../../memory/MemoryAnalyst.js';
+import type { LlmRouter } from '../../llm/LlmRouter.js';
 import { AuditService } from '../../audit/AuditService.js';
 import { Logger } from '../../lib/logger.js';
 
@@ -110,16 +111,17 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
       const title = typeof params['title'] === 'string' ? params['title'] : undefined;
 
       // Keep original params for use in processFact
-      context.params = params;
+      (context as any).params = params;
       const importanceRaw = typeof params['importance'] === 'number' ? params['importance'] : 3;
       const importance = Math.max(1, Math.min(5, Math.round(importanceRaw))) as Importance;
 
       // ── Analysis Step ───────────────────────────────────────────────────
       const analyzeOnSave = context.manifest?.memory?.analyzeOnSave || false;
-      const analyst = context.router ? new MemoryAnalyst(context.router) : null;
+      const router = (context as any).router as LlmRouter | undefined;
+      const analyst = router ? new MemoryAnalyst(router) : null;
       let finalFacts: Array<{
         content: string;
-        title?: string;
+        title?: string | undefined;
         tags: string[];
         importance: Importance;
         scope: MemoryScope;
@@ -135,17 +137,16 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 
       if (analyzeOnSave && analyst) {
         try {
-          const config = context.router
-            ?.getRegistry()
-            .resolve(context.manifest?.model.name || 'default');
-          const analystModel =
-            config?.contextCompactionModel || context.manifest?.model.name || 'default';
+          const modelName =
+            context.manifest?.spec?.model?.name ?? context.manifest?.model?.name ?? 'default';
+          const config = analyst.router.getRegistry().resolve(modelName);
+          const analystModel = config?.contextCompactionModel || modelName;
           const analysis = await analyst.analyze(content, analystModel);
 
           if (analysis.facts.length > 0) {
             finalFacts = analysis.facts.map((f) => ({
               content: f.content,
-              title: f.title,
+              title: f.title || undefined,
               tags: [...new Set([...tags, ...f.tags])],
               importance: params['importance'] !== undefined ? importance : f.importance,
               scope: params['scope'] !== undefined ? scope : f.scope,
@@ -190,7 +191,7 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
 async function processFact(
   fact: {
     content: string;
-    title?: string;
+    title?: string | undefined;
     tags: string[];
     importance: Importance;
     scope: MemoryScope;

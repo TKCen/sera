@@ -5,7 +5,14 @@ import { MemoryAnalyst } from '../../memory/MemoryAnalyst.js';
 import { EmbeddingService } from '../../services/embedding.service.js';
 
 vi.mock('../../memory/blocks/ScopedMemoryBlockStore.js');
-vi.mock('../../memory/MemoryAnalyst.js');
+vi.mock('../../memory/MemoryAnalyst.js', () => {
+  return {
+    MemoryAnalyst: vi.fn().mockImplementation(function (this: any, router: any) {
+      this.router = router;
+      this.analyze = vi.fn();
+    }),
+  };
+});
 vi.mock('../../services/embedding.service.js');
 vi.mock('../../audit/AuditService.js', () => ({
   AuditService: {
@@ -51,7 +58,7 @@ describe('knowledge-store skill', () => {
     const result = await skill.handler(params, mockContext as any);
 
     expect(result.success).toBe(true);
-    expect(result.data.id).toBe('block-123');
+    expect((result.data as any).id).toBe('block-123');
     expect(MemoryAnalyst).not.toHaveBeenCalled();
   });
 
@@ -69,11 +76,20 @@ describe('knowledge-store skill', () => {
     };
     const params = { content: 'complex content', type: 'fact', scope: 'personal' };
 
-    (MemoryAnalyst.prototype.analyze as any) = vi.fn().mockResolvedValue({
-      facts: [
-        { title: 'Fact 1', content: 'content 1', importance: 4, tags: ['tag1'], scope: 'circle' },
-        { title: 'Fact 2', content: 'content 2', importance: 2, tags: ['tag2'], scope: 'personal' },
-      ],
+    vi.mocked(MemoryAnalyst).mockImplementation(function (this: any, router: any) {
+      this.router = router;
+      this.analyze = vi.fn().mockResolvedValue({
+        facts: [
+          { title: 'Fact 1', content: 'content 1', importance: 4, tags: ['tag1'], scope: 'circle' },
+          {
+            title: 'Fact 2',
+            content: 'content 2',
+            importance: 2,
+            tags: ['tag2'],
+            scope: 'personal',
+          },
+        ],
+      });
     });
 
     (ScopedMemoryBlockStore.prototype.write as any) = vi.fn().mockImplementation(
@@ -88,8 +104,8 @@ describe('knowledge-store skill', () => {
     const result = await skill.handler(params, mockContext as any);
 
     expect(result.success).toBe(true);
-    expect(result.data.count).toBe(2);
-    expect(result.data.ids).toEqual(['block-1', 'block-2']);
+    expect((result.data as any).count).toBe(2);
+    expect((result.data as any).ids).toEqual(['block-1', 'block-2']);
     expect(MemoryAnalyst).toHaveBeenCalled();
   });
 });

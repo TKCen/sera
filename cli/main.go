@@ -17,6 +17,10 @@ func main() {
 	switch cmd {
 	case "auth":
 		runAuth(os.Args[2:])
+	case "agents":
+		runAgents(os.Args[2:])
+	case "tasks":
+		runTasks(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -31,9 +35,19 @@ func printUsage() {
 
 Usage:
   sera auth login              Authenticate via OIDC device flow
-  sera auth login --api-key    Create a long-lived API key for scripting
   sera auth logout             Revoke session and delete stored credentials
   sera auth status             Show current identity and token expiry
+
+  sera agents list             List all agent instances
+  sera agents start <id|name>  Start an agent
+  sera agents stop <id|name>   Stop an agent
+  sera agents restart <id|name> Restart an agent
+  sera agents logs <id|name>   Show agent container logs
+
+  sera tasks list <agent>      List tasks for an agent
+  sera tasks create <agent> <prompt> Create a new task
+  sera tasks get <agent> <id>  Show task details
+  sera tasks cancel <agent> <id> Cancel a queued task
 
 Global flags:
   --api-key <key>   Bypass stored credentials; use this API key instead

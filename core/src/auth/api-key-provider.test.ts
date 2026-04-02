@@ -81,6 +81,39 @@ describe('ApiKeyProvider', () => {
     expect(db.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE api_keys'), ['key-id']);
   });
 
+  it('should exit early when a match is found', async () => {
+    const key = 'sera_matching_key';
+    const req = {
+      headers: { authorization: `Bearer ${key}` },
+    } as unknown as import('express').Request;
+
+    vi.mocked(db.query).mockResolvedValueOnce({
+      rowCount: 3,
+      rows: [
+        { id: 'key-1', key_hash: 'hash-1', owner_sub: 'sub-1', roles: [] },
+        { id: 'key-2', key_hash: 'hash-2', owner_sub: 'sub-2', roles: [] },
+        { id: 'key-3', key_hash: 'hash-3', owner_sub: 'sub-3', roles: [] },
+      ],
+    } as unknown as import('pg').QueryResult);
+
+    // First hash doesn't match, second one does
+    vi.mocked(argon2.verify)
+      .mockResolvedValueOnce(false) // key-1
+      .mockResolvedValueOnce(true); // key-2
+
+    // Mock the UPDATE last_used_at query
+    vi.mocked(db.query).mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [],
+    } as unknown as import('pg').QueryResult);
+
+    const identity = await provider.authenticate(req);
+
+    expect(identity?.sub).toBe('sub-2');
+    expect(argon2.verify).toHaveBeenCalledTimes(2); // Should not be called for key-3
+    expect(argon2.verify).not.toHaveBeenCalledWith('hash-3', key);
+  });
+
   it('should throw if database key is invalid', async () => {
     const key = 'sera_invalid_key';
     const req = {

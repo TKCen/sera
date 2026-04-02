@@ -95,5 +95,94 @@ model:
       expect(prompt).toContain('Role: Helpful Assistant');
       expect(prompt).toContain('Description: A test agent.');
     });
+
+    it('includes all sections when fully configured', () => {
+      const manifest: RuntimeManifest = {
+        apiVersion: 'v1',
+        kind: 'Agent',
+        metadata: {
+          name: 'test-agent',
+          displayName: 'Test Agent',
+          icon: 'robot',
+          circle: 'default',
+          tier: 1,
+        },
+        identity: {
+          role: 'Helpful Assistant',
+          description: 'A test agent.',
+          principles: ['Always honest'],
+          communicationStyle: 'Brief',
+          notes: 'Agent notes here.',
+        },
+        model: {
+          provider: 'openai',
+          name: 'gpt-4',
+        },
+        contextFiles: ['README.md'],
+        outputFormat: 'Markdown',
+      };
+
+      const prompt = generateSystemPrompt(manifest, {
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'test-tool',
+              description: 'A test tool.',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        circleName: 'Engineering',
+        circleMembers: ['alice', 'bob'],
+        availableAgents: [{ name: 'sub-agent', role: 'Support' }],
+      });
+
+      expect(prompt).toContain('You are Test Agent, a SERA AI agent.');
+      expect(prompt).toContain('## Principles');
+      expect(prompt).toContain('Always honest');
+      expect(prompt).toContain('## Communication Style');
+      expect(prompt).toContain('Brief');
+      expect(prompt).toContain('## Available Tools');
+      expect(prompt).toContain('test-tool');
+      expect(prompt).toContain('## System Context');
+      expect(prompt).toContain('## Circle: Engineering');
+      expect(prompt).toContain('## Delegation');
+      expect(prompt).toContain('## Agent Notes');
+      expect(prompt).toContain('Agent notes here.');
+      expect(prompt).toContain('## Workspace Context');
+      expect(prompt).toContain('README.md');
+      expect(prompt).toContain('## System Constraints');
+      expect(prompt).toContain('## Output Format');
+    });
+
+    it('respects the token budget', () => {
+      const manifest: RuntimeManifest = {
+        apiVersion: 'v1',
+        kind: 'Agent',
+        metadata: {
+          name: 'test-agent',
+          displayName: 'Test Agent',
+          icon: 'robot',
+          circle: 'default',
+          tier: 1,
+        },
+        identity: {
+          role: 'Helpful Assistant',
+          description: 'A test agent.',
+          principles: ['A very long principle that will definitely add many tokens to the prompt to make sure budget is exceeded'],
+        },
+        model: {
+          provider: 'openai',
+          name: 'gpt-4',
+        },
+      };
+
+      // Set a tiny budget to force dropping optional sections
+      const prompt = generateSystemPrompt(manifest, { tokenBudget: 20 });
+      expect(prompt).toContain('You are Test Agent');
+      // identity (required) should be there, but principles (optional) should be dropped
+      expect(prompt).not.toContain('## Principles');
+    });
   });
 });

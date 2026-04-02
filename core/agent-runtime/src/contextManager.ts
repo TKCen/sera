@@ -98,6 +98,11 @@ export class ContextManager {
     log('info', `ContextManager init: model=${modelName} window=${this.contextWindow} highWater=${this.highWaterMark} strategy=${this.strategy}`);
   }
 
+  /** Get the configured context window size. */
+  getContextWindow(): number {
+    return this.contextWindow;
+  }
+
   /** Count tokens in a string. */
   countTokens(text: string): number {
     if (!text) return 0;

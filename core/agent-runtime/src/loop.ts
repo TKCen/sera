@@ -105,8 +105,10 @@ export class ReasoningLoop {
     this.centrifugo = centrifugo;
     this.manifest = manifest;
     this.allToolDefs = tools.getToolDefinitions(manifest.tools?.allowed);
-    this.systemPrompt = generateSystemPrompt(manifest);
     this.contextManager = new ContextManager(manifest.model.name);
+
+    // Initial system prompt — will be refreshed per task with current time/tools
+    this.systemPrompt = this.refreshSystemPrompt();
 
     // Dynamic tool exposure (#535): if tool count exceeds CORE_TOOL_LIMIT,
     // defer the excess tools and keep tool-search in the core set.
@@ -153,11 +155,32 @@ export class ReasoningLoop {
     this.incomingMessages.push({ source: from, content, channel });
   }
 
+  /** Refresh the system prompt with current runtime state. */
+  private refreshSystemPrompt(): string {
+    const availableAgents = this.manifest.subagents?.allowed?.map((sa) => ({
+      name: sa.role, // In this context, name/role are interchangeable for fallback
+      role: sa.role,
+    }));
+
+    return generateSystemPrompt(this.manifest, {
+      tools: this.toolDefs,
+      timezone: process.env['TZ'] || 'UTC',
+      circleName: this.manifest.metadata.circle,
+      availableAgents,
+      // Budget: 15% of context window per requirement
+      tokenBudget: Math.floor(this.contextManager.getContextWindow() * 0.15),
+    });
+  }
+
   /**
    * Run the reasoning loop for the given task.
    */
   async run(input: TaskInput): Promise<TaskOutput> {
     const { taskId, task, context, history = [] } = input;
+
+    // Refresh prompt to get current UTC time and current tool set
+    this.systemPrompt = this.refreshSystemPrompt();
+
     const hasTools = this.toolDefs.length > 0;
     const thoughtStream: TaskOutput['thoughtStream'] = [];
 

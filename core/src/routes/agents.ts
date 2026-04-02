@@ -160,7 +160,6 @@ export function createAgentRouter(
         parentInstanceId,
         ttlMinutes = 30,
         overrides,
-        additionalMounts,
         async: asyncMode,
       } = req.body as {
         templateRef: string;
@@ -168,7 +167,6 @@ export function createAgentRouter(
         parentInstanceId?: string;
         ttlMinutes?: number;
         overrides?: Record<string, unknown>;
-        additionalMounts?: Array<{ hostPath: string; containerPath: string; mode?: 'ro' | 'rw' }>;
         async?: boolean;
       };
 

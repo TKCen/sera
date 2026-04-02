@@ -26,7 +26,7 @@ export function AgentDetailToolsTab({ id }: { id: string }) {
             <ShieldCheck size={14} className="text-sera-success" />
             Available Tools
           </h3>
-          <Badge variant="outline" className="text-[10px] h-4">
+          <Badge variant="default" className="text-[10px] h-4">
             {available.length} Registered
           </Badge>
         </div>
@@ -49,7 +49,7 @@ export function AgentDetailToolsTab({ id }: { id: string }) {
                       {tool.id}
                     </span>
                   </div>
-                  <Badge variant="secondary" className="text-[10px] h-4 shrink-0">
+                  <Badge variant="default" className="text-[10px] h-4 shrink-0">
                     {tool.source}
                   </Badge>
                 </div>

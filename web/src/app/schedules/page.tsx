@@ -21,6 +21,7 @@ import {
 } from '@/hooks/useSchedules';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Dialog,
@@ -124,13 +125,19 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
         </td>
         <td className="py-3 px-4">
           {editing ? (
-            <input
-              type="text"
-              value={expr}
-              onChange={(e) => setExpr(e.target.value)}
-              className="sera-input text-xs font-mono w-40"
-              autoFocus
-            />
+            <div className="flex flex-col gap-1">
+              <label htmlFor={`edit-expr-${sched.id}`} className="sr-only">
+                Cron Expression
+              </label>
+              <Input
+                id={`edit-expr-${sched.id}`}
+                type="text"
+                value={expr}
+                onChange={(e) => setExpr(e.target.value)}
+                className="text-xs font-mono w-40 h-8"
+                autoFocus
+              />
+            </div>
           ) : (
             <span className="font-mono text-xs text-sera-accent">{sched.expression}</span>
           )}
@@ -144,7 +151,10 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
             {sched.lastRunOutput && (
               <button
                 onClick={() => setExpanded((e) => !e)}
-                className="text-sera-text-dim hover:text-sera-text"
+                className="text-sera-text-dim hover:text-sera-text p-1 rounded-md transition-colors hover:bg-sera-surface-hover"
+                aria-label="Toggle output"
+                aria-expanded={expanded}
+                aria-controls={`output-${sched.id}`}
               >
                 {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               </button>
@@ -166,6 +176,8 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
                     : 'bg-sera-surface-hover border border-sera-border'
                 }`}
                 title={sched.status === 'active' ? 'Pause schedule' : 'Activate schedule'}
+                aria-label="Toggle status"
+                aria-pressed={sched.status === 'active'}
               >
                 <span
                   className={`inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transition-transform ${
@@ -180,8 +192,9 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
                   onClick={() => {
                     void handleSave();
                   }}
-                  className="text-sera-success hover:opacity-80 p-1"
+                  className="text-sera-success hover:opacity-80 p-1 rounded-md transition-colors hover:bg-sera-success/10"
                   title="Save"
+                  aria-label="Save changes"
                 >
                   <Check size={14} />
                 </button>
@@ -191,8 +204,9 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
                     setExpr(sched.expression);
                     setPrompt(sched.taskPrompt ?? '');
                   }}
-                  className="text-sera-text-dim hover:text-sera-text p-1"
+                  className="text-sera-text-dim hover:text-sera-text p-1 rounded-md transition-colors hover:bg-sera-surface-hover"
                   title="Cancel"
+                  aria-label="Cancel editing"
                 >
                   <X size={14} />
                 </button>
@@ -202,24 +216,27 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
                 {!isManifest && (
                   <button
                     onClick={() => setEditing(true)}
-                    className="p-1 text-sera-text-dim hover:text-sera-text transition-colors"
+                    className="p-1 text-sera-text-dim hover:text-sera-text transition-colors rounded-md hover:bg-sera-surface-hover"
                     title="Edit"
+                    aria-label="Edit schedule"
                   >
                     <Pencil size={13} />
                   </button>
                 )}
                 <button
                   onClick={() => setConfirmTrigger(true)}
-                  className="p-1 text-sera-text-dim hover:text-sera-success transition-colors"
+                  className="p-1 text-sera-text-dim hover:text-sera-success transition-colors rounded-md hover:bg-sera-success/10"
                   title="Run now"
+                  aria-label="Run schedule now"
                 >
                   <Play size={13} />
                 </button>
                 {!isManifest && (
                   <button
                     onClick={() => setConfirmDelete(true)}
-                    className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
+                    className="p-1 text-sera-text-dim hover:text-sera-error transition-colors rounded-md hover:bg-sera-error/10"
                     title="Delete"
+                    aria-label="Delete schedule"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -235,14 +252,18 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
         <tr className="border-b border-sera-border/50 bg-sera-bg/30">
           <td colSpan={8} className="px-4 py-3">
             <div className="space-y-1">
-              <label className="text-[11px] text-sera-text-dim uppercase tracking-wider">
+              <label
+                htmlFor={`edit-prompt-${sched.id}`}
+                className="text-[11px] text-sera-text-dim uppercase tracking-wider"
+              >
                 Task Prompt
               </label>
               <textarea
+                id={`edit-prompt-${sched.id}`}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
-                className="sera-input text-xs w-full resize-none"
+                className="sera-input text-xs w-full resize-none focus:ring-1 focus:ring-sera-accent"
                 placeholder="Prompt to run for this schedule…"
               />
             </div>
@@ -252,7 +273,12 @@ function ScheduleRow({ sched }: { sched: Schedule }) {
 
       {/* Last run output */}
       {expanded && sched.lastRunOutput && (
-        <tr className="border-b border-sera-border/50 bg-sera-bg/50">
+        <tr
+          id={`output-${sched.id}`}
+          role="region"
+          aria-label="Last run output"
+          className="border-b border-sera-border/50 bg-sera-bg/50"
+        >
           <td colSpan={8} className="px-8 py-3">
             <pre className="text-xs font-mono text-sera-text-muted leading-relaxed whitespace-pre-wrap">
               {/VIOLATES NOT NULL CONSTRAINT|syntax error|column .* does not exist/i.test(
@@ -370,11 +396,11 @@ export default function SchedulesPage() {
   }, [createSchedule, newSchedule]);
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
-      <div className="sera-page-header">
+    <main className="p-8 max-w-7xl mx-auto space-y-6">
+      <header className="sera-page-header">
         <div>
           <h1 className="sera-page-title">Schedules</h1>
-          <p className="text-sm text-sera-text-muted mt-1">
+          <p className="text-sm text-sera-text-muted mt-1" aria-live="polite">
             {schedules
               ? `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`
               : 'Loading…'}
@@ -383,7 +409,7 @@ export default function SchedulesPage() {
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus size={13} /> Create Schedule
         </Button>
-      </div>
+      </header>
 
       {/* Create Schedule Dialog */}
       <Dialog open={showCreate} onOpenChange={(o: boolean) => !o && setShowCreate(false)}>
@@ -394,11 +420,14 @@ export default function SchedulesPage() {
           </DialogHeader>
           <div className="space-y-3 mt-2">
             <div>
-              <label className="block text-xs text-sera-text-muted mb-1">Agent</label>
+              <label htmlFor="create-agent" className="block text-xs text-sera-text-muted mb-1">
+                Agent
+              </label>
               <select
+                id="create-agent"
                 value={newSchedule.agentName}
                 onChange={(e) => setNewSchedule((s) => ({ ...s, agentName: e.target.value }))}
-                className="sera-input text-xs w-full"
+                className="sera-input text-xs w-full focus:ring-1 focus:ring-sera-accent"
               >
                 <option value="">Select agent…</option>
                 {agentNames.map((n) => (
@@ -409,38 +438,45 @@ export default function SchedulesPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-sera-text-muted mb-1">Name</label>
-              <input
+              <label htmlFor="create-name" className="block text-xs text-sera-text-muted mb-1">
+                Name
+              </label>
+              <Input
+                id="create-name"
                 type="text"
                 value={newSchedule.name}
                 onChange={(e) => setNewSchedule((s) => ({ ...s, name: e.target.value }))}
                 placeholder="e.g. Daily knowledge sync"
-                className="sera-input text-xs w-full"
+                className="text-xs w-full"
               />
             </div>
             <div>
-              <label className="block text-xs text-sera-text-muted mb-1">Cron Expression</label>
-              <input
+              <label htmlFor="create-expr" className="block text-xs text-sera-text-muted mb-1">
+                Cron Expression
+              </label>
+              <Input
+                id="create-expr"
                 type="text"
                 value={newSchedule.expression}
                 onChange={(e) => setNewSchedule((s) => ({ ...s, expression: e.target.value }))}
                 placeholder="0 */6 * * *"
-                className="sera-input text-xs w-full font-mono"
+                className="text-xs w-full font-mono"
               />
               <p className="text-[10px] text-sera-text-dim mt-1">
                 Standard 5-field cron: minute hour day month weekday
               </p>
             </div>
             <div>
-              <label className="block text-xs text-sera-text-muted mb-1">
+              <label htmlFor="create-prompt" className="block text-xs text-sera-text-muted mb-1">
                 Task Prompt (optional)
               </label>
               <textarea
+                id="create-prompt"
                 value={newSchedule.taskPrompt}
                 onChange={(e) => setNewSchedule((s) => ({ ...s, taskPrompt: e.target.value }))}
                 placeholder="What should the agent do when this schedule fires?"
                 rows={3}
-                className="sera-input text-xs w-full resize-none"
+                className="sera-input text-xs w-full resize-none focus:ring-1 focus:ring-sera-accent"
               />
             </div>
           </div>
@@ -462,21 +498,32 @@ export default function SchedulesPage() {
       </Dialog>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <select
-          value={agentFilter}
-          onChange={(e) => setAgentFilter(e.target.value)}
-          className="sera-input text-xs appearance-none pr-6"
-        >
-          <option value="">All agents</option>
-          {agentNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+      <section className="flex items-center gap-3 flex-wrap" aria-label="Filters">
+        <div className="relative">
+          <select
+            value={agentFilter}
+            onChange={(e) => setAgentFilter(e.target.value)}
+            className="sera-input text-xs appearance-none pr-8 focus:ring-1 focus:ring-sera-accent"
+            aria-label="Filter by agent"
+          >
+            <option value="">All agents</option>
+            {agentNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={14}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none"
+          />
+        </div>
 
-        <div className="flex items-center gap-1 border border-sera-border rounded-lg p-1">
+        <div
+          className="flex items-center gap-1 border border-sera-border rounded-lg p-1"
+          role="group"
+          aria-label="Filter by status"
+        >
           {(
             [
               ['', 'All'],
@@ -492,27 +539,42 @@ export default function SchedulesPage() {
                   ? 'bg-sera-accent-soft text-sera-accent'
                   : 'text-sera-text-muted hover:text-sera-text'
               }`}
+              aria-pressed={statusFilter === val}
             >
               {label}
             </button>
           ))}
         </div>
-      </div>
+      </section>
 
       {/* Table */}
       <div className="sera-card-static overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" aria-label="Schedules">
             <thead>
               <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
-                <th className="text-left py-3 px-4">Agent</th>
-                <th className="text-left py-3 px-4">Name</th>
-                <th className="text-left py-3 px-4">Type</th>
-                <th className="text-left py-3 px-4">Expression</th>
-                <th className="text-left py-3 px-4">Next Run</th>
-                <th className="text-left py-3 px-4">Last Run</th>
-                <th className="text-left py-3 px-4">Status</th>
-                <th className="py-3 px-4" />
+                <th scope="col" className="text-left py-3 px-4">
+                  Agent
+                </th>
+                <th scope="col" className="text-left py-3 px-4">
+                  Name
+                </th>
+                <th scope="col" className="text-left py-3 px-4">
+                  Type
+                </th>
+                <th scope="col" className="text-left py-3 px-4">
+                  Expression
+                </th>
+                <th scope="col" className="text-left py-3 px-4">
+                  Next Run
+                </th>
+                <th scope="col" className="text-left py-3 px-4">
+                  Last Run
+                </th>
+                <th scope="col" className="text-left py-3 px-4">
+                  Status
+                </th>
+                <th scope="col" className="py-3 px-4" aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -539,6 +601,6 @@ export default function SchedulesPage() {
           </table>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

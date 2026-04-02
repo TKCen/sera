@@ -23,6 +23,7 @@ const DISPATCH_JOB = 'notification.dispatch';
 export interface ChannelRecord {
   id: string;
   name: string;
+  description?: string | null;
   type: string;
   config: Record<string, unknown>;
   enabled: boolean;
@@ -114,10 +115,13 @@ export class NotificationService {
       const { rows } = await pool.query<{
         id: string;
         name: string;
+        description?: string | null;
         type: string;
         config: Record<string, unknown>;
         enabled: boolean;
-      }>('SELECT id, name, type, config, enabled FROM notification_channels WHERE enabled = true');
+      }>(
+        'SELECT id, name, description, type, config, enabled FROM notification_channels WHERE enabled = true'
+      );
 
       for (const row of rows) {
         try {
@@ -251,21 +255,23 @@ export class NotificationService {
   async createChannel(
     name: string,
     type: string,
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    description?: string | null
   ): Promise<ChannelRecord> {
     const id = uuidv4();
     const { rows } = await pool.query<{
       id: string;
       name: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
       created_at: Date;
     }>(
-      `INSERT INTO notification_channels (id, name, type, config)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO notification_channels (id, name, type, config, description)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [id, name, type, JSON.stringify(config)]
+      [id, name, type, JSON.stringify(config), description]
     );
 
     const row = rows[0]!;
@@ -280,6 +286,7 @@ export class NotificationService {
     return {
       id: row.id,
       name: row.name,
+      description: row.description ?? null,
       type: row.type,
       config: this.redactConfig(row.type, row.config),
       enabled: row.enabled,
@@ -289,12 +296,18 @@ export class NotificationService {
 
   async updateChannel(
     id: string,
-    updates: { name?: string; config?: Record<string, unknown>; enabled?: boolean }
+    updates: {
+      name?: string;
+      description?: string | null;
+      config?: Record<string, unknown>;
+      enabled?: boolean;
+    }
   ): Promise<ChannelRecord | null> {
     // Fetch existing channel (with full unredacted config)
     const existing = await pool.query<{
       id: string;
       name: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
@@ -304,25 +317,38 @@ export class NotificationService {
     const row = existing.rows[0];
     if (!row) return null;
 
-    // Merge config: new values override existing, but unmentioned keys are preserved
-    const mergedConfig =
-      updates.config !== undefined ? { ...row.config, ...updates.config } : row.config;
+    // Merge config: new values override existing, but unmentioned keys are preserved.
+    // Also, if a new value is '[redacted]', keep the existing unredacted value.
+    let mergedConfig = row.config;
+    if (updates.config !== undefined) {
+      mergedConfig = { ...row.config };
+      for (const [k, v] of Object.entries(updates.config)) {
+        if (v === '[redacted]') {
+          // Keep existing
+          continue;
+        }
+        mergedConfig[k] = v;
+      }
+    }
+
     const mergedName = updates.name ?? row.name;
+    const mergedDescription = updates.description ?? row.description;
     const mergedEnabled = updates.enabled ?? row.enabled;
 
     const { rows } = await pool.query<{
       id: string;
       name: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
       created_at: Date;
     }>(
       `UPDATE notification_channels
-         SET name = $2, config = $3, enabled = $4
+         SET name = $2, config = $3, enabled = $4, description = $5
        WHERE id = $1
        RETURNING *`,
-      [id, mergedName, JSON.stringify(mergedConfig), mergedEnabled]
+      [id, mergedName, JSON.stringify(mergedConfig), mergedEnabled, mergedDescription]
     );
 
     const updated = rows[0]!;
@@ -342,6 +368,7 @@ export class NotificationService {
     return {
       id: updated.id,
       name: updated.name,
+      description: updated.description ?? null,
       type: updated.type,
       config: this.redactConfig(updated.type, updated.config),
       enabled: updated.enabled,
@@ -361,17 +388,19 @@ export class NotificationService {
     const { rows } = await pool.query<{
       id: string;
       name: string;
+      description?: string | null;
       type: string;
       config: Record<string, unknown>;
       enabled: boolean;
       created_at: Date;
     }>(
-      'SELECT id, name, type, config, enabled, created_at FROM notification_channels ORDER BY created_at'
+      'SELECT id, name, description, type, config, enabled, created_at FROM notification_channels ORDER BY created_at'
     );
 
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
+      description: r.description ?? null,
       type: r.type,
       config: this.redactConfig(r.type, r.config),
       enabled: r.enabled,

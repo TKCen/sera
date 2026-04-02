@@ -98,6 +98,9 @@ describe('ChannelRouter', () => {
             channel_ids: ['c1'],
             min_severity: 'info',
             filter: null,
+            enabled: true,
+            priority: 0,
+            target_agent_id: null,
           },
         ],
         rowCount: 1,
@@ -121,6 +124,9 @@ describe('ChannelRouter', () => {
             channel_ids: ['c2'],
             min_severity: 'info',
             filter: null,
+            enabled: true,
+            priority: 0,
+            target_agent_id: null,
           },
         ],
         rowCount: 1,
@@ -144,6 +150,9 @@ describe('ChannelRouter', () => {
             channel_ids: ['c3'],
             min_severity: 'critical',
             filter: null,
+            enabled: true,
+            priority: 0,
+            target_agent_id: null,
           },
         ],
         rowCount: 1,
@@ -167,6 +176,9 @@ describe('ChannelRouter', () => {
             channel_ids: ['c4'],
             min_severity: 'info',
             filter: { agentId: 'agent-x' },
+            enabled: true,
+            priority: 0,
+            target_agent_id: null,
           },
         ],
         rowCount: 1,
@@ -196,6 +208,9 @@ describe('ChannelRouter', () => {
             channel_ids: ['c5'],
             min_severity: 'info',
             filter: null,
+            enabled: true,
+            priority: 0,
+            target_agent_id: null,
           },
         ],
         rowCount: 1,
@@ -203,5 +218,58 @@ describe('ChannelRouter', () => {
       .mockResolvedValue({ rows: [], rowCount: 0 } as never);
 
     await expect(router.routeAsync(makeEvent('something'))).resolves.not.toThrow();
+  });
+
+  it('respects target_agent_id in rule', async () => {
+    const chX = makeChannel('cX');
+    const chY = makeChannel('cY');
+    router.register(chX);
+    router.register(chY);
+
+    vi.mocked(pool.query).mockResolvedValue({
+      rows: [
+        {
+          id: 'rule-X',
+          event_type: '*',
+          channel_ids: ['cX'],
+          min_severity: 'info',
+          filter: null,
+          enabled: true,
+          priority: 0,
+          target_agent_id: 'agent-X',
+        },
+        {
+          id: 'rule-Y',
+          event_type: '*',
+          channel_ids: ['cY'],
+          min_severity: 'info',
+          filter: null,
+          enabled: true,
+          priority: 0,
+          target_agent_id: 'agent-Y',
+        },
+      ],
+      rowCount: 2,
+    } as never);
+
+    const event = makeEvent('test');
+    event.metadata = { agentId: 'agent-X' };
+
+    await router.routeAsync(event);
+    expect(chX.sent).toHaveLength(1);
+    expect(chY.sent).toHaveLength(0);
+  });
+
+  it('respects enabled flag in rule', async () => {
+    const ch = makeChannel('cEnabled');
+    router.register(ch);
+
+    vi.mocked(pool.query).mockResolvedValue({
+      rows: [],
+      rowCount: 0,
+    } as never);
+
+    await router.routeAsync(makeEvent('test'));
+    expect(ch.sent).toHaveLength(0);
   });
 });

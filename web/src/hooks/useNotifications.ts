@@ -7,7 +7,9 @@ import {
   testChannel,
   listRoutingRules,
   createRoutingRule,
+  updateRoutingRule,
   deleteRoutingRule,
+  updateChannel,
   type CreateChannelPayload,
   type CreateRoutingRulePayload,
 } from '@/lib/api/notifications';
@@ -32,6 +34,19 @@ export function useCreateChannel() {
       toast.success('Channel created');
     },
     onError: (err: Error) => toast.error(`Failed to create channel: ${err.message}`),
+  });
+}
+
+export function useUpdateChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<CreateChannelPayload> }) =>
+      updateChannel(id, data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CHANNELS_KEY });
+      toast.success('Channel updated');
+    },
+    onError: (err: Error) => toast.error(`Failed to update channel: ${err.message}`),
   });
 }
 
@@ -71,6 +86,19 @@ export function useCreateRoutingRule() {
       toast.success('Routing rule created');
     },
     onError: (err: Error) => toast.error(`Failed to create routing rule: ${err.message}`),
+  });
+}
+
+export function useUpdateRoutingRule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<CreateRoutingRulePayload> }) =>
+      updateRoutingRule(id, data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: RULES_KEY });
+      toast.success('Routing rule updated');
+    },
+    onError: (err: Error) => toast.error(`Failed to update routing rule: ${err.message}`),
   });
 }
 

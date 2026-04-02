@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mocked } from 'vi
 import { CleanupService } from './CleanupService.js';
 import type { AgentRegistry } from './registry.service.js';
 import type { SandboxManager } from '../sandbox/SandboxManager.js';
-
 describe('CleanupService', () => {
   let cleanupService: CleanupService;
   let mockRegistry: Mocked<AgentRegistry>;
@@ -43,8 +42,9 @@ describe('CleanupService', () => {
 
     mockRegistry.listInstances.mockImplementation(async (filters?: { status?: string }) => {
       if (filters?.status === 'stopped')
-        return instances.filter((i) => i.status === 'stopped') as any;
-      if (filters?.status === 'error') return instances.filter((i) => i.status === 'error') as any;
+        return instances.filter((i) => i.status === 'stopped') as unknown as never;
+      if (filters?.status === 'error')
+        return instances.filter((i) => i.status === 'error') as unknown as never;
       return [];
     });
 
@@ -68,7 +68,7 @@ describe('CleanupService', () => {
     // Advance time by another 31 seconds - expired
     vi.advanceTimersByTime(31000);
     mockSandboxManager.teardown.mockResolvedValue(undefined);
-    mockRegistry.updateInstanceStatus.mockResolvedValue({} as any);
+    mockRegistry.updateInstanceStatus.mockResolvedValue({} as unknown as never);
 
     await cleanupService.runCleanupJob();
     expect(mockSandboxManager.teardown).toHaveBeenCalledWith('agent-1');

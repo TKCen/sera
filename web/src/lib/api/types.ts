@@ -337,14 +337,22 @@ export interface AgentTemplate {
 
 export interface AgentTask {
   id: string;
-  agentName: string;
-  type: 'chat' | 'cron' | 'event';
-  status: 'pending' | 'running' | 'done' | 'error';
-  input?: string;
-  output?: string;
-  messageId?: string;
-  createdAt?: string;
+  agentInstanceId: string;
+  task: string;
+  context?: unknown;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  priority: number;
+  retryCount: number;
+  maxRetries: number;
+  createdAt: string;
+  startedAt?: string;
   completedAt?: string;
+  result?: unknown;
+  error?: string;
+  usage?: unknown;
+  thoughtStream?: unknown[];
+  exitReason?: string;
+  resultTruncated: boolean;
 }
 
 export interface AgentSchedule {

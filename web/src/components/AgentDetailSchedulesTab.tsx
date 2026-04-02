@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { Calendar, Clock, Plus, Trash2, Play } from 'lucide-react';
+import { Calendar, Clock, Plus, Trash2, Play, Eraser, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAgentSchedules } from '@/hooks/useAgents';
+import { useAgentSchedules, useClearStaleTasks } from '@/hooks/useAgents';
 import { createSchedule, deleteSchedule, triggerSchedule } from '@/lib/api/schedules';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,9 +18,11 @@ import {
 
 export function SchedulesTab({ id }: { id: string }) {
   const { data: schedules, isLoading, refetch } = useAgentSchedules(id);
+  const clearStaleTasks = useClearStaleTasks();
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [forceTriggerId, setForceTriggerId] = useState<string | null>(null);
   const [newSchedule, setNewSchedule] = useState({
     name: '',
     expression: '',
@@ -68,12 +70,30 @@ export function SchedulesTab({ id }: { id: string }) {
     setConfirmDelete(null);
   };
 
-  const handleTrigger = async (schedId: string) => {
+  const handleTrigger = async (schedId: string, force = false) => {
     try {
-      await triggerSchedule(schedId);
-      toast.success('Schedule triggered');
-    } catch {
-      toast.error('Failed to trigger schedule');
+      const res = await triggerSchedule(schedId, force);
+      if (res.status === 'triggered') {
+        toast.success('Schedule triggered');
+        setForceTriggerId(null);
+      } else if (res.status === 'skipped') {
+        setForceTriggerId(schedId);
+      }
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'status' in err && err.status === 409) {
+        setForceTriggerId(schedId);
+      } else {
+        toast.error('Failed to trigger schedule');
+      }
+    }
+  };
+
+  const handleClearStale = async () => {
+    try {
+      const res = await clearStaleTasks.mutateAsync({ agentId: id });
+      toast.success(`Cleared ${res.cleared} stale tasks`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to clear stale tasks');
     }
   };
 
@@ -85,9 +105,20 @@ export function SchedulesTab({ id }: { id: string }) {
         <h2 className="text-sm font-semibold text-sera-text">
           Schedules{schedules?.length ? ` (${schedules.length})` : ''}
         </h2>
-        <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
-          <Plus size={12} /> Add Schedule
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleClearStale()}
+            disabled={clearStaleTasks.isPending}
+            title="Clear tasks stuck in running state"
+          >
+            <Eraser size={12} /> Clear Stale
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
+            <Plus size={12} /> Add Schedule
+          </Button>
+        </div>
       </div>
 
       {!schedules?.length ? (
@@ -201,6 +232,39 @@ export function SchedulesTab({ id }: { id: string }) {
             </DialogClose>
             <Button size="sm" onClick={() => void handleCreate()} disabled={creating}>
               {creating ? 'Creating…' : 'Create'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Force Trigger Confirmation */}
+      <Dialog open={!!forceTriggerId} onOpenChange={(o: boolean) => !o && setForceTriggerId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="text-warning" size={18} />
+              Schedule Skip Warning
+            </DialogTitle>
+            <DialogDescription>
+              This schedule is being skipped because a task from it is already queued or running.
+              Persistent agents process tasks one-by-one.
+              <br />
+              <br />
+              Do you want to bypass this guard and enqueue the task anyway?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end mt-4">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => forceTriggerId && void handleTrigger(forceTriggerId, true)}
+            >
+              Force Trigger
             </Button>
           </div>
         </DialogContent>

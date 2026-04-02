@@ -53,8 +53,8 @@ describe('PipelineService', () => {
       };
 
       vi.mocked(query)
-        .mockResolvedValueOnce({ rows: [] } as any) // first call (INSERT ignores return rows currently)
-        .mockResolvedValueOnce({ rows: [mockCreatedRow] } as any); // second call is get()
+        .mockResolvedValueOnce({ rows: [] } as unknown as never) // first call (INSERT ignores return rows currently)
+        .mockResolvedValueOnce({ rows: [mockCreatedRow] } as unknown as never); // second call is get()
 
       const result = await pipelineService.create('sequential', mockSteps);
 
@@ -75,7 +75,7 @@ describe('PipelineService', () => {
 
   describe('get', () => {
     it('returns null if pipeline is not found', async () => {
-      vi.mocked(query).mockResolvedValue({ rows: [] } as any);
+      vi.mocked(query).mockResolvedValue({ rows: [] } as unknown as never);
 
       const result = await pipelineService.get('nonexistent');
 
@@ -92,7 +92,7 @@ describe('PipelineService', () => {
         created_at: new Date('2023-10-10T10:00:00Z'),
         completed_at: new Date('2023-10-10T10:05:00Z'),
       };
-      vi.mocked(query).mockResolvedValue({ rows: [mockRow] } as any);
+      vi.mocked(query).mockResolvedValue({ rows: [mockRow] } as unknown as never);
 
       const result = await pipelineService.get('123');
 

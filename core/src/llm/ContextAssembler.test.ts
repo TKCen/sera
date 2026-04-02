@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Pool } from 'pg';
 import { ContextAssembler } from './ContextAssembler.js';
 import { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
 import { IdentityService } from '../agents/identity/IdentityService.js';
+import type { AgentManifest } from '../agents/manifest/types.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
 import { SkillInjector } from '../skills/SkillInjector.js';
@@ -16,19 +18,19 @@ vi.mock('../agents/Orchestrator.js');
 
 describe('ContextAssembler', () => {
   let assembler: ContextAssembler;
-  let mockOrchestrator: any;
-  let mockPool: any;
+  let mockOrchestrator: Orchestrator;
+  let mockPool: Pool;
 
   beforeEach(() => {
     mockOrchestrator = {
       getManifestByInstanceId: vi.fn(),
       getManifest: vi.fn(),
       getToolExecutor: vi.fn(),
-    };
+    } as unknown as Orchestrator;
     mockPool = {
       query: vi.fn().mockResolvedValue({ rows: [] }),
-    };
-    assembler = new ContextAssembler(mockPool, mockOrchestrator as unknown as Orchestrator);
+    } as unknown as Pool;
+    assembler = new ContextAssembler(mockPool, mockOrchestrator);
 
     // Default mocks
     vi.mocked(IdentityService.generateStreamingSystemPrompt).mockReturnValue('Base Prompt');
@@ -39,7 +41,9 @@ describe('ContextAssembler', () => {
       embed: vi.fn().mockResolvedValue([0.1, 0.2]),
       getInstance: vi.fn().mockReturnThis(),
     };
-    vi.mocked(EmbeddingService.getInstance).mockReturnValue(mockEmbeddingService as any);
+    vi.mocked(EmbeddingService.getInstance).mockReturnValue(
+      mockEmbeddingService as unknown as EmbeddingService
+    );
   });
 
   afterEach(() => {
@@ -51,15 +55,19 @@ describe('ContextAssembler', () => {
       metadata: { name: 'Test Agent' },
       skills: [],
     };
-    mockOrchestrator.getManifest.mockReturnValue(manifest);
-    vi.mocked(AgentFactory.getInstance).mockResolvedValue({ circle_id: 'circle-1' } as any);
-    mockPool.query.mockResolvedValue({ rows: [{ constitution: 'Circle Constitution' }] });
+    vi.mocked(mockOrchestrator.getManifest).mockReturnValue(manifest as unknown as AgentManifest);
+    vi.mocked(AgentFactory.getInstance).mockResolvedValue({
+      circle_id: 'circle-1',
+    } as never);
+    vi.mocked(mockPool.query).mockResolvedValue({
+      rows: [{ constitution: 'Circle Constitution' }],
+    } as never);
 
     const messages = [
       { role: 'system', content: 'fallback' },
       { role: 'user', content: 'hello' },
-    ];
-    const result = await assembler.assemble('agent-1', messages as any);
+    ] as unknown as never[];
+    const result = await assembler.assemble('agent-1', messages);
 
     expect(result[0]!.content).toBe('Prompt with Skills');
     expect(IdentityService.generateStreamingSystemPrompt).toHaveBeenCalled();
@@ -67,9 +75,9 @@ describe('ContextAssembler', () => {
   });
 
   it('should skip assembly if manifest not found', async () => {
-    mockOrchestrator.getManifest.mockReturnValue(null);
-    const messages = [{ role: 'system', content: 'fallback' }];
-    const result = await assembler.assemble('agent-1', messages as any);
+    vi.mocked(mockOrchestrator.getManifest).mockReturnValue(undefined);
+    const messages = [{ role: 'system', content: 'fallback' }] as unknown as never[];
+    const result = await assembler.assemble('agent-1', messages);
     expect(result).toEqual(messages);
   });
 
@@ -78,7 +86,7 @@ describe('ContextAssembler', () => {
       metadata: { name: 'Test Agent' },
       memory: { enabled: true },
     };
-    mockOrchestrator.getManifest.mockReturnValue(manifest);
+    vi.mocked(mockOrchestrator.getManifest).mockReturnValue(manifest as unknown as AgentManifest);
 
     const mockVectorSearch = vi.fn().mockResolvedValue([
       {
@@ -91,16 +99,16 @@ describe('ContextAssembler', () => {
     vi.mocked(VectorService).mockImplementation(function () {
       return {
         search: mockVectorSearch,
-      } as any;
+      } as unknown as VectorService;
     });
     // Need to re-instantiate assembler because VectorService is instantiated in constructor
-    assembler = new ContextAssembler(mockPool, mockOrchestrator as unknown as Orchestrator);
+    assembler = new ContextAssembler(mockPool, mockOrchestrator);
 
     const messages = [
       { role: 'system', content: 'fallback' },
       { role: 'user', content: 'hello' },
-    ];
-    const result = await assembler.assemble('agent-1', messages as any);
+    ] as unknown as never[];
+    const result = await assembler.assemble('agent-1', messages);
 
     expect(result[0]!.content).toContain('Prompt with Skills');
     expect(result[0]!.content).toContain('<injected_memory>');
@@ -110,8 +118,8 @@ describe('ContextAssembler', () => {
   });
 
   it('should handle missing system message', async () => {
-    const messages = [{ role: 'user', content: 'hello' }];
-    const result = await assembler.assemble('agent-1', messages as any);
+    const messages = [{ role: 'user', content: 'hello' }] as unknown as never[];
+    const result = await assembler.assemble('agent-1', messages);
     expect(result).toEqual(messages);
   });
 });

@@ -1,22 +1,22 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mocked } from 'vitest';
 import { HeartbeatService } from './HeartbeatService.js';
 import type { AgentRegistry } from './registry.service.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 
 describe('HeartbeatService', () => {
   let service: HeartbeatService;
-  let mockRegistry: any;
-  let mockIntercom: any;
+  let mockRegistry: Mocked<AgentRegistry>;
+  let mockIntercom: Mocked<IntercomService>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     mockRegistry = {
       updateLastHeartbeat: vi.fn().mockResolvedValue(undefined),
       updateInstanceStatus: vi.fn().mockResolvedValue(undefined),
-    };
+    } as unknown as Mocked<AgentRegistry>;
     mockIntercom = {
       publish: vi.fn().mockResolvedValue(undefined),
-    };
+    } as unknown as Mocked<IntercomService>;
     service = new HeartbeatService();
   });
 
@@ -27,14 +27,14 @@ describe('HeartbeatService', () => {
   });
 
   it('should register a heartbeat and update the registry', async () => {
-    service.setRegistry(mockRegistry as unknown as AgentRegistry);
+    service.setRegistry(mockRegistry);
     await service.registerHeartbeat('agent-1');
     expect(mockRegistry.updateLastHeartbeat).toHaveBeenCalledWith('agent-1');
   });
 
   it('should detect and mark stale instances as unresponsive', async () => {
-    service.setRegistry(mockRegistry as unknown as AgentRegistry);
-    service.setIntercom(mockIntercom as unknown as IntercomService);
+    service.setRegistry(mockRegistry);
+    service.setIntercom(mockIntercom);
 
     // Register heartbeat at T=0
     await service.registerHeartbeat('agent-1');
@@ -83,7 +83,7 @@ describe('HeartbeatService', () => {
   });
 
   it('should handle checkStaleInstances through interval', async () => {
-    service.setRegistry(mockRegistry as unknown as AgentRegistry);
+    service.setRegistry(mockRegistry);
     await service.registerHeartbeat('agent-1');
 
     // Advance 130s. The interval runs every 30s.

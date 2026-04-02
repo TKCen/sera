@@ -107,9 +107,24 @@ export async function getAgentSchedules(id: string): Promise<AgentSchedule[]> {
   }));
 }
 
-export function getAgentTasks(id: string, type?: string): Promise<AgentTask[]> {
-  const params = type ? `?type=${encodeURIComponent(type)}` : '';
+export function getAgentTasks(id: string, status?: string): Promise<AgentTask[]> {
+  const params = status ? `?status=${encodeURIComponent(status)}` : '';
   return request<AgentTask[]>(`/agents/${encodeURIComponent(id)}/tasks${params}`);
+}
+
+export function cancelAgentTask(agentId: string, taskId: string): Promise<{ taskId: string }> {
+  return request<{ taskId: string }>(
+    `/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/cancel`,
+    { method: 'POST' }
+  );
+}
+
+export function clearStaleTasks(agentId: string, timeout?: number): Promise<{ cleared: number }> {
+  const params = timeout ? `?timeout=${timeout}` : '';
+  return request<{ cleared: number }>(
+    `/agents/${encodeURIComponent(agentId)}/tasks/clear-stale${params}`,
+    { method: 'POST' }
+  );
 }
 
 export function createAgentTask(id: string, input: string): Promise<AgentTask> {

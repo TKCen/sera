@@ -607,6 +607,9 @@ const startServer = async () => {
 
   if (process.env.NODE_ENV !== 'test') {
     await initDb();
+    await orchestrator.reconcileTasks().catch((err) => {
+      logger.error('Failed to reconcile tasks on startup:', err);
+    });
   }
 
   // Re-import templates and resources from filesystem on every startup.

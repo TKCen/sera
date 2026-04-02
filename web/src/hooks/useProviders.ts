@@ -79,7 +79,7 @@ export function useSetActiveProvider() {
 export function useUpdateLLMConfig() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: updateLLMConfig,
+    mutationFn: (config: Parameters<typeof updateLLMConfig>[0]) => updateLLMConfig(config),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: providersKeys.llmConfig });
     },
@@ -109,7 +109,7 @@ export function useDeleteProvider() {
 export function useAddDynamicProvider() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: addDynamicProvider,
+    mutationFn: (config: Parameters<typeof addDynamicProvider>[0]) => addDynamicProvider(config),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: providersKeys.dynamicProviders });
     },
@@ -119,7 +119,7 @@ export function useAddDynamicProvider() {
 export function useRemoveDynamicProvider() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: removeDynamicProvider,
+    mutationFn: (id: string) => removeDynamicProvider(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: providersKeys.dynamicProviders });
       queryClient.invalidateQueries({ queryKey: providersKeys.all });
@@ -129,7 +129,7 @@ export function useRemoveDynamicProvider() {
 
 export function useTestLLMConfig() {
   return useMutation({
-    mutationFn: testLLMConfig,
+    mutationFn: () => testLLMConfig(),
   });
 }
 

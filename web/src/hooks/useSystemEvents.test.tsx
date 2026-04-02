@@ -1,35 +1,37 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Subscription, Centrifuge, PublicationContext } from 'centrifuge';
 import { useSystemEvents, type SystemEvent } from './useSystemEvents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 
 vi.mock('@/hooks/useCentrifugo');
 
 describe('useSystemEvents', () => {
-  let mockSubscription: any;
-  let mockClient: any;
-  let publicationCallback: ((ctx: any) => void) | undefined;
+  let mockSubscription: Subscription;
+  let mockClient: Centrifuge;
+  let publicationCallback: ((ctx: PublicationContext) => void) | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     publicationCallback = undefined;
 
     mockSubscription = {
-      on: vi.fn((event, cb) => {
+      on: vi.fn((event: string, cb: (ctx: PublicationContext) => void) => {
         if (event === 'publication') {
           publicationCallback = cb;
         }
+        return mockSubscription;
       }),
       subscribe: vi.fn(),
       unsubscribe: vi.fn(),
       removeAllListeners: vi.fn(),
-    };
+    } as unknown as Subscription;
 
     mockClient = {
       getSubscription: vi.fn().mockReturnValue(null),
       newSubscription: vi.fn().mockReturnValue(mockSubscription),
       removeSubscription: vi.fn(),
-    };
+    } as unknown as Centrifuge;
 
     vi.mocked(useCentrifugoContext).mockReturnValue({
       client: mockClient,
@@ -60,7 +62,7 @@ describe('useSystemEvents', () => {
 
     act(() => {
       if (publicationCallback) {
-        publicationCallback({ data: event });
+        publicationCallback({ data: event } as PublicationContext);
       }
     });
 
@@ -80,8 +82,8 @@ describe('useSystemEvents', () => {
     const existingSub = {
       unsubscribe: vi.fn(),
       removeAllListeners: vi.fn(),
-    };
-    mockClient.getSubscription.mockReturnValue(existingSub);
+    } as unknown as Subscription;
+    vi.mocked(mockClient.getSubscription).mockReturnValue(existingSub);
 
     renderHook(() => useSystemEvents());
 

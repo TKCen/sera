@@ -7,20 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
-
-const credentialsFile = ".sera/credentials"
-
-// Credentials written to ~/.sera/credentials (mode 0600).
-// JSON format: { "apiKey": "...", "issuer": "...", "expiresAt": "..." }
-type Credentials struct {
-	APIKey    string `json:"apiKey"`
-	Issuer    string `json:"issuer"`
-	ExpiresAt string `json:"expiresAt"`
-}
 
 // deviceAuthResponse mirrors the RFC 8628 device authorization response.
 type deviceAuthResponse struct {
@@ -75,7 +64,7 @@ func runAuth(args []string) {
 func runAuthLogin(args []string) {
 	serviceAccount := len(args) > 0 && args[0] == "--service-account"
 
-	apiURL := getenv("SERA_API_URL", "http://localhost:3001")
+	apiURL := Getenv("SERA_API_URL", "http://localhost:3001")
 
 	// Resolve OIDC metadata from sera-core
 	issuerURL, clientID, err := resolveOIDCConfig(apiURL)
@@ -141,10 +130,10 @@ func runAuthLogin(args []string) {
 			Issuer:    issuerURL,
 			ExpiresAt: "", // API keys don't expire by default
 		}
-		if writeErr := writeCredentials(creds); writeErr != nil {
+		if writeErr := WriteCredentials(creds); writeErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write credentials: %v\n", writeErr)
 		}
-		fmt.Printf("\nService account key created and stored in ~/%s\n", credentialsFile)
+		fmt.Printf("\nService account key created and stored in ~/%s\n", CredentialsFile)
 		fmt.Println("Use --api-key or set SERA_API_KEY for non-interactive use.")
 		return
 	}
@@ -155,11 +144,11 @@ func runAuthLogin(args []string) {
 		Issuer:    issuerURL,
 		ExpiresAt: expiresAt,
 	}
-	if writeErr := writeCredentials(creds); writeErr != nil {
+	if writeErr := WriteCredentials(creds); writeErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write credentials: %v\n", writeErr)
 	}
 
-	fmt.Printf("\nAuthenticated successfully. Credentials stored in ~/%s\n", credentialsFile)
+	fmt.Printf("\nAuthenticated successfully. Credentials stored in ~/%s\n", CredentialsFile)
 	if tokens.ExpiresIn > 0 {
 		fmt.Printf("Token expires: %s\n", expiresAt)
 	}
@@ -168,14 +157,14 @@ func runAuthLogin(args []string) {
 // ── sera auth logout ─────────────────────────────────────────────────────────
 
 func runAuthLogout() {
-	creds, err := readCredentials()
+	creds, err := ReadCredentials()
 	if err == nil && creds.APIKey != "" {
 		// Best-effort token revocation
-		apiURL := getenv("SERA_API_URL", "http://localhost:3001")
+		apiURL := Getenv("SERA_API_URL", "http://localhost:3001")
 		revokeToken(apiURL, creds)
 	}
 
-	path := credentialsPath()
+	path := CredentialsPath()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "warning: could not remove credentials file: %v\n", err)
 	}
@@ -186,9 +175,9 @@ func runAuthLogout() {
 
 func runAuthStatus() {
 	// Check for --api-key override
-	apiKey := getenv("SERA_API_KEY", "")
+	apiKey := Getenv("SERA_API_KEY", "")
 	if apiKey == "" {
-		creds, err := readCredentials()
+		creds, err := ReadCredentials()
 		if err != nil {
 			fmt.Println("Not logged in. Run: sera auth login")
 			return
@@ -203,7 +192,7 @@ func runAuthStatus() {
 		}
 	}
 
-	apiURL := getenv("SERA_API_URL", "http://localhost:3001")
+	apiURL := Getenv("SERA_API_URL", "http://localhost:3001")
 	me, err := fetchMe(apiURL, apiKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "could not fetch identity: %v\n", err)
@@ -225,49 +214,12 @@ func runAuthStatus() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func credentialsPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, credentialsFile)
-}
-
-func writeCredentials(creds Credentials) error {
-	path := credentialsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(creds, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0600)
-}
-
-func readCredentials() (Credentials, error) {
-	path := credentialsPath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Credentials{}, err
-	}
-	var creds Credentials
-	return creds, json.Unmarshal(data, &creds)
-}
-
 func resolveOIDCConfig(apiURL string) (issuerURL, clientID string, err error) {
 	resp, err := http.Get(apiURL + "/api/auth/oidc-config")
 	if err != nil {
 		// sera-core might not have this endpoint — fall back to env
-		issuerURL = getenv("OIDC_ISSUER_URL", "")
-		clientID = getenv("OIDC_CLIENT_ID", "sera-web")
+		issuerURL = Getenv("OIDC_ISSUER_URL", "")
+		clientID = Getenv("OIDC_CLIENT_ID", "sera-web")
 		if issuerURL == "" {
 			return "", "", fmt.Errorf("OIDC_ISSUER_URL not set and /api/auth/oidc-config unavailable")
 		}
@@ -280,8 +232,8 @@ func resolveOIDCConfig(apiURL string) (issuerURL, clientID string, err error) {
 		ClientID  string `json:"clientId"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil || cfg.IssuerURL == "" {
-		issuerURL = getenv("OIDC_ISSUER_URL", "")
-		clientID = getenv("OIDC_CLIENT_ID", "sera-web")
+		issuerURL = Getenv("OIDC_ISSUER_URL", "")
+		clientID = Getenv("OIDC_CLIENT_ID", "sera-web")
 		if issuerURL == "" {
 			return "", "", fmt.Errorf("could not resolve OIDC issuer URL")
 		}
@@ -289,6 +241,7 @@ func resolveOIDCConfig(apiURL string) (issuerURL, clientID string, err error) {
 	}
 	return cfg.IssuerURL, cfg.ClientID, nil
 }
+
 
 func resolveDeviceAuthEndpoint(issuerURL string) string {
 	base := strings.TrimRight(issuerURL, "/")

@@ -79,7 +79,7 @@ describe('useProviders hooks', () => {
 
       const { result } = renderHook(() => useUpdateLLMConfig(), { wrapper });
 
-      const config = { defaultModel: 'gpt-4' };
+      const config = { baseUrl: 'http://localhost', model: 'gpt-4' };
       result.current.mutate(config);
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
 import { LlmRouter } from './LlmRouter.js';
 import type { ProviderRegistry, ProviderConfig } from './ProviderRegistry.js';
-import type { ChatCompletionRequest, ChatCompletionResponse } from './LlmRouter.js';
+import type { ChatCompletionRequest } from './LlmRouter.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 
 // Mock pi-ai
@@ -23,7 +23,7 @@ vi.mock('@mariozechner/pi-ai/anthropic', () => ({
 }));
 
 describe('LlmRouter', () => {
-  let registry: vi.Mocked<ProviderRegistry>;
+  let registry: Mocked<ProviderRegistry>;
   let router: LlmRouter;
 
   beforeEach(() => {
@@ -34,7 +34,7 @@ describe('LlmRouter', () => {
       register: vi.fn(),
       unregister: vi.fn(),
       save: vi.fn(),
-    } as unknown as vi.Mocked<ProviderRegistry>;
+    } as unknown as Mocked<ProviderRegistry>;
     router = new LlmRouter(registry);
   });
 
@@ -53,19 +53,18 @@ describe('LlmRouter', () => {
         usage: { input: 10, output: 5, totalTokens: 15 },
         stopReason: 'stop',
       };
-      mockStream.result.mockResolvedValue(mockResponse);
+      mockStream.result.mockResolvedValue(mockResponse as AssistantMessage);
 
       const request: ChatCompletionRequest = {
         model: 'gpt-4o',
         messages: [{ role: 'user', content: 'Hi' }],
       };
 
-      const { response } = (await router.chatCompletion(request, 'agent-1')) as {
-        response: ChatCompletionResponse;
-      };
+      const result = await router.chatCompletion(request, 'agent-1');
+      const response = result.response;
 
       expect(registry.resolve).toHaveBeenCalledWith('gpt-4o');
-      expect(response.choices[0].message.content).toBe('Hello');
+      expect(response.choices[0]!.message.content).toBe('Hello');
       expect(response.usage?.total_tokens).toBe(15);
     });
 
@@ -90,11 +89,10 @@ describe('LlmRouter', () => {
         messages: [{ role: 'user', content: 'Hi' }],
       };
 
-      const { response } = (await router.chatCompletion(request, 'agent-1')) as {
-        response: ChatCompletionResponse;
-      };
+      const result = await router.chatCompletion(request, 'agent-1');
+      const response = result.response;
 
-      expect(response.choices[0].message.content).toBe('Hello from Claude');
+      expect(response.choices[0]!.message.content).toBe('Hello from Claude');
     });
 
     it('handles tool calls in request and response', async () => {
@@ -127,16 +125,15 @@ describe('LlmRouter', () => {
         tools: [{ type: 'function', function: { name: 'get_weather', parameters: {} } }],
       };
 
-      const { response } = (await router.chatCompletion(request, 'agent-1')) as {
-        response: ChatCompletionResponse;
-      };
+      const result = await router.chatCompletion(request, 'agent-1');
+      const response = result.response;
 
-      expect(response.choices[0].message.tool_calls).toHaveLength(1);
-      expect(response.choices[0].message.tool_calls?.[0]).toMatchObject({
+      expect(response.choices[0]!.message.tool_calls).toHaveLength(1);
+      expect(response.choices[0]!.message.tool_calls?.[0]).toMatchObject({
         id: 'call_1',
         function: { name: 'get_weather', arguments: '{"city":"London"}' },
       });
-      expect(response.choices[0].finish_reason).toBe('tool_calls');
+      expect(response.choices[0]!.finish_reason).toBe('tool_calls');
     });
   });
 
@@ -178,8 +175,8 @@ describe('LlmRouter', () => {
 
       const models = await router.listModels();
       expect(models).toHaveLength(1);
-      expect(models[0].modelName).toBe('m1');
-      expect((models[0] as Record<string, unknown>).apiKey).toBeUndefined();
+      expect(models[0]!.modelName).toBe('m1');
+      expect((models[0] as unknown as Record<string, unknown>)['apiKey']).toBeUndefined();
     });
   });
 });

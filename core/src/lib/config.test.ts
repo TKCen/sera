@@ -93,7 +93,6 @@ describe('config', () => {
 
       const providers = config.providers;
       expect(providers.activeProvider).toBe('ollama');
-      // @ts-expect-error - testing dynamic properties
       expect(providers.providers['ollama']?.model).toBe('llama3');
     });
   });

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mocked } from 'vitest';
 import crypto from 'crypto';
 import { WebhooksService } from './WebhooksService.js';
-import type { IntercomService } from './IntercomService.js';
+import { IntercomService } from './IntercomService.js';
 import { pool } from '../lib/database.js';
 
 vi.mock('../lib/database.js', () => ({
@@ -12,13 +12,13 @@ vi.mock('../lib/database.js', () => ({
 
 describe('WebhooksService', () => {
   let webhooksService: WebhooksService;
-  let mockIntercom: vi.Mocked<IntercomService>;
+  let mockIntercom: Mocked<IntercomService>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     mockIntercom = {
       publishSystemEvent: vi.fn(),
-    } as unknown as vi.Mocked<IntercomService>;
+    } as unknown as Mocked<IntercomService>;
     webhooksService = new WebhooksService(mockIntercom);
   });
 
@@ -26,7 +26,6 @@ describe('WebhooksService', () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     // Stop the interval to allow tests to exit
-    // @ts-expect-error - accessing private property for cleanup
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     clearInterval((webhooksService as any).nonceCleanupInterval);
   });
@@ -86,7 +85,7 @@ describe('WebhooksService', () => {
         command: 'SELECT',
         oid: 0,
         fields: [],
-      });
+      } as any);
 
       vi.mocked(pool.query).mockResolvedValueOnce({
         rows: [{ id: 'delivery-1' }],
@@ -94,7 +93,7 @@ describe('WebhooksService', () => {
         command: 'INSERT',
         oid: 0,
         fields: [],
-      });
+      } as any);
 
       await webhooksService.handleIncoming(slug, rawBody, signature, timestamp);
 
@@ -141,7 +140,7 @@ describe('WebhooksService', () => {
         command: 'SELECT',
         oid: 0,
         fields: [],
-      });
+      } as any);
 
       await expect(
         webhooksService.handleIncoming(slug, rawBody, signature, timestamp)
@@ -155,7 +154,7 @@ describe('WebhooksService', () => {
         command: 'SELECT',
         oid: 0,
         fields: [],
-      });
+      } as any);
 
       await expect(
         webhooksService.handleIncoming(slug, rawBody, 'wrong-sig', timestamp)

@@ -5,8 +5,19 @@
  * and returns a structured result with usage stats.
  */
 
-import type { ILLMClient, ChatMessage, ToolDefinition, LLMResponse, ThinkingLevel } from './llmClient.js';
-import { BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError } from './llmClient.js';
+import type {
+  ILLMClient,
+  ChatMessage,
+  ToolDefinition,
+  LLMResponse,
+  ThinkingLevel,
+} from './llmClient.js';
+import {
+  BudgetExceededError,
+  ProviderUnavailableError,
+  ContextOverflowError,
+  LLMTimeoutError,
+} from './llmClient.js';
 import type { IToolExecutor } from './tools/index.js';
 import type { CentrifugoPublisher } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
@@ -38,7 +49,14 @@ export interface TaskOutput {
   };
   /** Ordered list of thought events for Story 5.9. */
   thoughtStream: Array<{ step: string; content: string; iteration: number; timestamp: string }>;
-  exitReason: 'success' | 'max_iterations_exceeded' | 'budget_exceeded' | 'provider_unavailable' | 'context_overflow' | 'error' | 'shutdown';
+  exitReason:
+    | 'success'
+    | 'max_iterations_exceeded'
+    | 'budget_exceeded'
+    | 'provider_unavailable'
+    | 'context_overflow'
+    | 'error'
+    | 'shutdown';
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -46,6 +64,8 @@ export interface TaskOutput {
 const MAX_ITERATIONS = 10;
 const MAX_OVERFLOW_RETRIES = 3;
 const MAX_TIMEOUT_RETRIES = 2;
+const MAX_PROVIDER_RETRIES = 3;
+const PROVIDER_RETRY_BASE_MS = 2000;
 const TIMEOUT_COMPACTION_THRESHOLD = 0.65;
 /** Max tools sent per LLM call. Beyond this, remaining tools are deferred and discoverable via tool-search. */
 const CORE_TOOL_LIMIT = 12;
@@ -53,6 +73,7 @@ const CORE_TOOL_LIMIT = 12;
 interface RetryState {
   overflowCompactionAttempts: number;
   timeoutCompactionAttempts: number;
+  providerUnavailableAttempts: number;
   toolResultTruncationAttempted: boolean;
 }
 
@@ -77,7 +98,7 @@ export class ReasoningLoop {
     llm: ILLMClient,
     tools: IToolExecutor,
     centrifugo: CentrifugoPublisher,
-    manifest: RuntimeManifest,
+    manifest: RuntimeManifest
   ) {
     this.llm = llm;
     this.tools = tools;
@@ -90,7 +111,9 @@ export class ReasoningLoop {
     // Dynamic tool exposure (#535): if tool count exceeds CORE_TOOL_LIMIT,
     // defer the excess tools and keep tool-search in the core set.
     const coreLimit = manifest.tools?.coreTools
-      ? this.allToolDefs.filter((t) => (manifest.tools!.coreTools as string[]).includes(t.function.name))
+      ? this.allToolDefs.filter((t) =>
+          (manifest.tools!.coreTools as string[]).includes(t.function.name)
+        )
       : undefined;
 
     if (coreLimit) {
@@ -101,8 +124,14 @@ export class ReasoningLoop {
       // Auto-defer: keep first CORE_TOOL_LIMIT tools + tool-search
       const searchTool = this.allToolDefs.find((t) => t.function.name === 'tool-search');
       const withoutSearch = this.allToolDefs.filter((t) => t.function.name !== 'tool-search');
-      this.toolDefs = [...withoutSearch.slice(0, CORE_TOOL_LIMIT), ...(searchTool ? [searchTool] : [])];
-      log('info', `Tool deferral active: ${this.toolDefs.length} core + ${withoutSearch.length - CORE_TOOL_LIMIT} deferred of ${this.allToolDefs.length} total`);
+      this.toolDefs = [
+        ...withoutSearch.slice(0, CORE_TOOL_LIMIT),
+        ...(searchTool ? [searchTool] : []),
+      ];
+      log(
+        'info',
+        `Tool deferral active: ${this.toolDefs.length} core + ${withoutSearch.length - CORE_TOOL_LIMIT} deferred of ${this.allToolDefs.length} total`
+      );
     } else {
       this.toolDefs = this.allToolDefs;
     }
@@ -117,7 +146,10 @@ export class ReasoningLoop {
    * Inject a message from another agent into the next reasoning step.
    */
   public receiveIncomingMessage(from: string, content: string, channel?: string): void {
-    log('info', `Received message from ${from}${channel ? ` on ${channel}` : ''}: ${content.substring(0, 50)}...`);
+    log(
+      'info',
+      `Received message from ${from}${channel ? ` on ${channel}` : ''}: ${content.substring(0, 50)}...`
+    );
     this.incomingMessages.push({ source: from, content, channel });
   }
 
@@ -150,7 +182,7 @@ export class ReasoningLoop {
       step: 'observe' | 'plan' | 'act' | 'reflect',
       content: string,
       iteration: number,
-      opts?: { toolName?: string; toolArgs?: Record<string, unknown>; anomaly?: boolean },
+      opts?: { toolName?: string; toolArgs?: Record<string, unknown>; anomaly?: boolean }
     ) => {
       thoughtStream.push({ step, content, iteration, timestamp: new Date().toISOString() });
       await this.centrifugo.publishThought(step, content, iteration, opts);
@@ -167,7 +199,11 @@ export class ReasoningLoop {
     ];
 
     const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
-    await think('observe', `Received task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`, 0);
+    await think(
+      'observe',
+      `Received task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`,
+      0
+    );
     await think('plan', `Planning approach. Available tools: ${toolNames}`, 0);
 
     // ── Tool loop detection (per-run) ──────────────────────────────────────
@@ -182,6 +218,7 @@ export class ReasoningLoop {
     const retryState: RetryState = {
       overflowCompactionAttempts: 0,
       timeoutCompactionAttempts: 0,
+      providerUnavailableAttempts: 0,
       toolResultTruncationAttempted: false,
     };
 
@@ -190,7 +227,9 @@ export class ReasoningLoop {
 
       while (iteration < MAX_ITERATIONS) {
         if (this.shutdownRequested) {
-          await think('reflect', 'Shutdown requested — stopping reasoning loop', iteration, { anomaly: false });
+          await think('reflect', 'Shutdown requested — stopping reasoning loop', iteration, {
+            anomaly: false,
+          });
           return {
             taskId,
             result: null,
@@ -209,7 +248,11 @@ export class ReasoningLoop {
           const chanSuffix = msg.channel ? ` (on ${msg.channel})` : '';
           const content = `[INTERCOM] Message from ${msg.source}${chanSuffix}: ${msg.content}`;
           messages.push({ role: 'user', content });
-          await think('observe', `Received intercom message from ${msg.source}${chanSuffix}`, iteration);
+          await think(
+            'observe',
+            `Received intercom message from ${msg.source}${chanSuffix}`,
+            iteration
+          );
         }
 
         // Context window management — compact before each LLM call
@@ -218,7 +261,11 @@ export class ReasoningLoop {
           // to save important context before it's compacted away.
           if (hasKnowledgeStore && !preCompactionHookFired) {
             preCompactionHookFired = true;
-            await think('reflect', 'Context window nearly full — injecting save-reminder before compaction', iteration);
+            await think(
+              'reflect',
+              'Context window nearly full — injecting save-reminder before compaction',
+              iteration
+            );
             messages.push({
               role: 'system',
               content:
@@ -234,7 +281,10 @@ export class ReasoningLoop {
           await think('reflect', compaction.reflectMessage, iteration);
         }
 
-        log('debug', `Iteration ${iteration}/${MAX_ITERATIONS} — messages=${messages.length} approxTokens=${this.contextManager.countMessageTokens(messages)}`);
+        log(
+          'debug',
+          `Iteration ${iteration}/${MAX_ITERATIONS} — messages=${messages.length} approxTokens=${this.contextManager.countMessageTokens(messages)}`
+        );
 
         // ── LLM call with retry recovery ──────────────────────────────────
         let response: LLMResponse;
@@ -242,9 +292,19 @@ export class ReasoningLoop {
           const useTools = hasTools && !forceTextNext;
           forceTextNext = false; // reset after use
           if (useTools) {
-            response = await this.llm.chat(messages, this.toolDefs, this.manifest.model.temperature, this.manifest.model.thinkingLevel as ThinkingLevel | undefined);
+            response = await this.llm.chat(
+              messages,
+              this.toolDefs,
+              this.manifest.model.temperature,
+              this.manifest.model.thinkingLevel as ThinkingLevel | undefined
+            );
           } else {
-            response = await this.llm.chat(messages, undefined, this.manifest.model.temperature, this.manifest.model.thinkingLevel as ThinkingLevel | undefined);
+            response = await this.llm.chat(
+              messages,
+              undefined,
+              this.manifest.model.temperature,
+              this.manifest.model.thinkingLevel as ThinkingLevel | undefined
+            );
           }
         } catch (llmErr) {
           // ── Context overflow recovery ────────────────────────────────────
@@ -254,14 +314,24 @@ export class ReasoningLoop {
               const attempt = retryState.overflowCompactionAttempts;
 
               const compaction = this.contextManager.aggressiveCompact(messages);
-              await think('reflect', `Context overflow detected (attempt ${attempt}/${MAX_OVERFLOW_RETRIES}) — ${compaction.reflectMessage}`, iteration, { anomaly: true });
+              await think(
+                'reflect',
+                `Context overflow detected (attempt ${attempt}/${MAX_OVERFLOW_RETRIES}) — ${compaction.reflectMessage}`,
+                iteration,
+                { anomaly: true }
+              );
 
               // On 2nd+ attempt, try one-shot tool result truncation
               if (attempt >= 2 && !retryState.toolResultTruncationAttempted) {
                 retryState.toolResultTruncationAttempted = true;
                 const truncated = this.contextManager.truncateAllToolResults(messages);
                 if (truncated > 0) {
-                  await think('reflect', `Retroactively truncated ${truncated} tool result(s) for overflow recovery`, iteration, { anomaly: true });
+                  await think(
+                    'reflect',
+                    `Retroactively truncated ${truncated} tool result(s) for overflow recovery`,
+                    iteration,
+                    { anomaly: true }
+                  );
                 }
               }
 
@@ -271,8 +341,16 @@ export class ReasoningLoop {
             }
 
             // All overflow retries exhausted
-            log('error', `Context overflow: all ${MAX_OVERFLOW_RETRIES} compaction retries exhausted`);
-            await think('reflect', `Context overflow unrecoverable after ${MAX_OVERFLOW_RETRIES} compaction attempts`, iteration, { anomaly: true });
+            log(
+              'error',
+              `Context overflow: all ${MAX_OVERFLOW_RETRIES} compaction retries exhausted`
+            );
+            await think(
+              'reflect',
+              `Context overflow unrecoverable after ${MAX_OVERFLOW_RETRIES} compaction attempts`,
+              iteration,
+              { anomaly: true }
+            );
             return {
               taskId,
               result: null,
@@ -286,12 +364,20 @@ export class ReasoningLoop {
           // ── Timeout recovery ────────────────────────────────────────────
           if (llmErr instanceof LLMTimeoutError) {
             const utilization = this.contextManager.getUtilization(messages);
-            if (utilization > TIMEOUT_COMPACTION_THRESHOLD && retryState.timeoutCompactionAttempts < MAX_TIMEOUT_RETRIES) {
+            if (
+              utilization > TIMEOUT_COMPACTION_THRESHOLD &&
+              retryState.timeoutCompactionAttempts < MAX_TIMEOUT_RETRIES
+            ) {
               retryState.timeoutCompactionAttempts++;
               const attempt = retryState.timeoutCompactionAttempts;
 
               const compaction = this.contextManager.aggressiveCompact(messages);
-              await think('reflect', `LLM timeout with ${(utilization * 100).toFixed(0)}% context utilization (attempt ${attempt}/${MAX_TIMEOUT_RETRIES}) — ${compaction.reflectMessage}`, iteration, { anomaly: true });
+              await think(
+                'reflect',
+                `LLM timeout with ${(utilization * 100).toFixed(0)}% context utilization (attempt ${attempt}/${MAX_TIMEOUT_RETRIES}) — ${compaction.reflectMessage}`,
+                iteration,
+                { anomaly: true }
+              );
 
               // Retry — does NOT increment iteration
               iteration--;
@@ -299,6 +385,30 @@ export class ReasoningLoop {
             }
 
             // Low utilization or retries exhausted — propagate to outer catch
+            throw llmErr;
+          }
+
+          // ── Provider unavailable recovery (#584) ────────────────────────
+          if (llmErr instanceof ProviderUnavailableError) {
+            if (retryState.providerUnavailableAttempts < MAX_PROVIDER_RETRIES) {
+              retryState.providerUnavailableAttempts++;
+              const attempt = retryState.providerUnavailableAttempts;
+              const delayMs = PROVIDER_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+
+              await think(
+                'reflect',
+                `Provider unavailable (attempt ${attempt}/${MAX_PROVIDER_RETRIES}) — retrying in ${(delayMs / 1000).toFixed(0)}s`,
+                iteration,
+                { anomaly: true }
+              );
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+              // Retry — does NOT increment iteration (not forward progress)
+              iteration--;
+              continue;
+            }
+
+            // All provider retries exhausted — propagate to outer catch
             throw llmErr;
           }
 
@@ -313,7 +423,10 @@ export class ReasoningLoop {
           totalCacheCreationTokens += response.usage.cacheCreationTokens;
           totalCacheReadTokens += response.usage.cacheReadTokens;
           turnCount++;
-          log('debug', `Iteration ${iteration} usage: prompt=${response.usage.promptTokens} completion=${response.usage.completionTokens} cacheRead=${response.usage.cacheReadTokens} turn=${turnCount}`);
+          log(
+            'debug',
+            `Iteration ${iteration} usage: prompt=${response.usage.promptTokens} completion=${response.usage.completionTokens} cacheRead=${response.usage.cacheReadTokens} turn=${turnCount}`
+          );
         }
 
         // Emit chain-of-thought reasoning if present (e.g. Qwen / DeepSeek)
@@ -327,15 +440,29 @@ export class ReasoningLoop {
           // Semantic loop detection — feed each tool call into the detector
           for (const tc of response.toolCalls) {
             let parsedArgs: Record<string, unknown> = {};
-            try { parsedArgs = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { /* best effort for detection */ }
+            try {
+              parsedArgs = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>;
+            } catch {
+              /* best effort for detection */
+            }
 
             const verdict = loopDetector.record(tc.function.name, parsedArgs);
             if (verdict.detected) {
-              await think('reflect', `Loop detected (${verdict.kind}): ${verdict.description}`, iteration, { anomaly: true });
+              await think(
+                'reflect',
+                `Loop detected (${verdict.kind}): ${verdict.description}`,
+                iteration,
+                { anomaly: true }
+              );
 
               if (loopDetector.shouldForceTextResponse()) {
                 forceTextNext = true;
-                await think('reflect', 'Multiple loop warnings issued — forcing text-only response on next iteration', iteration, { anomaly: true });
+                await think(
+                  'reflect',
+                  'Multiple loop warnings issued — forcing text-only response on next iteration',
+                  iteration,
+                  { anomaly: true }
+                );
               } else {
                 messages.push({
                   role: 'system',
@@ -349,12 +476,21 @@ export class ReasoningLoop {
           // Emit act thoughts for each tool call (sanitized args)
           for (const tc of response.toolCalls) {
             let parsedArgs: Record<string, unknown> = {};
-            try { parsedArgs = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { /* ignore */ }
+            try {
+              parsedArgs = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>;
+            } catch {
+              /* ignore */
+            }
             const sanitized = sanitizeArgs(parsedArgs);
-            await think('act', `Calling tool: ${tc.function.name}(${JSON.stringify(sanitized)})`, iteration, {
-              toolName: tc.function.name,
-              toolArgs: sanitized,
-            });
+            await think(
+              'act',
+              `Calling tool: ${tc.function.name}(${JSON.stringify(sanitized)})`,
+              iteration,
+              {
+                toolName: tc.function.name,
+                toolArgs: sanitized,
+              }
+            );
           }
 
           // Add assistant turn with tool_calls
@@ -371,11 +507,21 @@ export class ReasoningLoop {
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);
 
             // 2. Context-aware budget guard — truncate further if remaining budget is tight
-            const budgetCheck = this.contextManager.truncateToContextBudget(result.message.content, messages);
+            const budgetCheck = this.contextManager.truncateToContextBudget(
+              result.message.content,
+              messages
+            );
             if (budgetCheck.compactionNeeded) {
               const compaction = this.contextManager.compact(messages);
-              await think('reflect', `Pre-result compaction: ${compaction.reflectMessage}`, iteration);
-              const recheck = this.contextManager.truncateToContextBudget(result.message.content, messages);
+              await think(
+                'reflect',
+                `Pre-result compaction: ${compaction.reflectMessage}`,
+                iteration
+              );
+              const recheck = this.contextManager.truncateToContextBudget(
+                result.message.content,
+                messages
+              );
               result.message.content = recheck.content;
             } else {
               result.message.content = budgetCheck.content;
@@ -385,12 +531,18 @@ export class ReasoningLoop {
 
             // Emit reflect thought for argument repair
             if (result.argRepaired) {
-              await think('reflect', `Repaired malformed tool arguments for ${result.toolName} (strategy: ${result.repairStrategy})`, iteration, { anomaly: true });
+              await think(
+                'reflect',
+                `Repaired malformed tool arguments for ${result.toolName} (strategy: ${result.repairStrategy})`,
+                iteration,
+                { anomaly: true }
+              );
             }
 
-            const preview = result.message.content.length > 200
-              ? result.message.content.substring(0, 200) + '...'
-              : result.message.content;
+            const preview =
+              result.message.content.length > 200
+                ? result.message.content.substring(0, 200) + '...'
+                : result.message.content;
             await think('reflect', `Tool result: ${preview}`, iteration);
           }
 
@@ -407,7 +559,10 @@ export class ReasoningLoop {
         // web frontend can subscribe to the correct Centrifugo channel.
         await this.streamResponse(reply, taskId);
 
-        log('info', `ReasoningLoop complete after ${iteration} iteration(s) — ${reply.length} chars`);
+        log(
+          'info',
+          `ReasoningLoop complete after ${iteration} iteration(s) — ${reply.length} chars`
+        );
 
         return {
           taskId,
@@ -420,7 +575,11 @@ export class ReasoningLoop {
 
       // ── Max iterations reached ──────────────────────────────────────────────
       log('warn', `ReasoningLoop hit max iterations (${MAX_ITERATIONS})`);
-      await think('reflect', `Reached maximum iterations (${MAX_ITERATIONS}) — stopping`, MAX_ITERATIONS);
+      await think(
+        'reflect',
+        `Reached maximum iterations (${MAX_ITERATIONS}) — stopping`,
+        MAX_ITERATIONS
+      );
 
       return {
         taskId,
@@ -430,7 +589,6 @@ export class ReasoningLoop {
         thoughtStream,
         exitReason: 'max_iterations_exceeded',
       };
-
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log('error', `ReasoningLoop error: ${errMsg}`);
@@ -440,7 +598,10 @@ export class ReasoningLoop {
       try {
         await this.centrifugo.publishStreamError(taskId, errMsg);
       } catch (pubErr) {
-        log('warn', `Failed to publish stream error: ${pubErr instanceof Error ? pubErr.message : String(pubErr)}`);
+        log(
+          'warn',
+          `Failed to publish stream error: ${pubErr instanceof Error ? pubErr.message : String(pubErr)}`
+        );
       }
 
       let exitReason: TaskOutput['exitReason'] = 'error';
@@ -472,7 +633,16 @@ export class ReasoningLoop {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const SECRET_ARG_KEYS = new Set(['token', 'key', 'secret', 'password', 'api_key', 'apikey', 'auth', 'credential']);
+const SECRET_ARG_KEYS = new Set([
+  'token',
+  'key',
+  'secret',
+  'password',
+  'api_key',
+  'apikey',
+  'auth',
+  'credential',
+]);
 
 /** Remove secret-looking values from tool arguments before publishing. */
 function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {

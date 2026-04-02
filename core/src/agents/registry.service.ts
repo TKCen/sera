@@ -676,9 +676,9 @@ export class AgentRegistry {
     grantType: 'session' | 'one-time' | 'persistent';
     resourceType: string;
     resourceValue: string;
-    mode?: string;
-    approvedBy?: string;
-    expiresAt?: string;
+    mode?: string | undefined;
+    approvedBy?: string | undefined;
+    expiresAt?: string | undefined;
   }) {
     const query = `
       INSERT INTO permission_grants

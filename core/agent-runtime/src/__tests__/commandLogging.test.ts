@@ -68,7 +68,7 @@ describe('RuntimeToolExecutor — Command Logging', () => {
         name: 'file-read',
         arguments: JSON.stringify({ path: 'test.txt' }),
       },
-    }, 'test-session-id');
+    }, undefined, 'test-session-id');
 
     expect(mockFetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/agents/test-instance-id/command-logs'),
@@ -95,7 +95,7 @@ describe('RuntimeToolExecutor — Command Logging', () => {
         name: 'tool-search',
         arguments: JSON.stringify({ query: 'test', api_key: 'secret-123', password: 'hidden-password' }),
       },
-    }, 'test-session-id');
+    }, undefined, 'test-session-id');
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.arguments.query).toBe('test');
@@ -121,7 +121,7 @@ describe('RuntimeToolExecutor — Command Logging', () => {
         name: 'file-read',
         arguments: JSON.stringify({ path: 'large.txt' }),
       },
-    }, 'test-session-id');
+    }, undefined, 'test-session-id');
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.result.length).toBeLessThan(3000);
@@ -140,7 +140,7 @@ describe('RuntimeToolExecutor — Command Logging', () => {
         name: 'file-read',
         arguments: JSON.stringify({ path: 'test.txt' }),
       },
-    }, 'test-session-id');
+    }, undefined, 'test-session-id');
 
     expect(mockFetch).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/agents/test-instance-id/command-logs'),

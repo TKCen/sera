@@ -296,11 +296,23 @@ describe('RuntimeToolExecutor', () => {
   });
 
   describe('getToolDefinitions()', () => {
-    it('returns all 8 built-in tools when no filter given', () => {
+    it('returns all 11 built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(8);
+      expect(tools.length).toBe(11);
       const names = tools.map((t) => t.function.name).sort();
-      expect(names).toEqual(['file-delete', 'file-list', 'file-read', 'file-write', 'run-tool', 'shell-exec', 'spawn-subagent', 'tool-search']);
+      expect(names).toEqual([
+        'file-delete',
+        'file-list',
+        'file-read',
+        'file-write',
+        'glob',
+        'grep',
+        'read_file',
+        'run-tool',
+        'shell-exec',
+        'spawn-subagent',
+        'tool-search',
+      ]);
     });
 
     it('filters to allowed list', () => {

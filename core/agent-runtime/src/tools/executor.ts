@@ -16,6 +16,7 @@ import { log } from '../logger.js';
 import { PermissionDeniedError, AGENT_ID } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
 import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
+import { globFiles, grepFiles, readFilePartial } from './search-handlers.js';
 import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
@@ -35,6 +36,9 @@ const LOCAL_TOOLS = new Set([
   'file-write',
   'file-list',
   'file-delete',
+  'read_file',
+  'glob',
+  'grep',
   'shell-exec',
   'spawn-subagent',
   'run-tool',
@@ -163,6 +167,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
     onOutput?: ToolOutputCallback,
     sessionId?: string
   ): Promise<ToolExecutionResult> {
+
     const { id, function: fn } = toolCall;
     const toolName = sanitizeToolName(fn.name);
     const start = Date.now();
@@ -195,6 +200,25 @@ export class RuntimeToolExecutor implements IToolExecutor {
       switch (toolName) {
         case 'file-read':
           result = fileRead(this.workspacePath, params['path'] as string);
+          break;
+        case 'read_file':
+          result = await readFilePartial(
+            this.workspacePath,
+            params['path'] as string,
+            params['offset'] as number | undefined,
+            params['limit'] as number | undefined
+          );
+          break;
+        case 'glob':
+          result = globFiles(this.workspacePath, params['pattern'] as string);
+          break;
+        case 'grep':
+          result = grepFiles(
+            this.workspacePath,
+            params['pattern'] as string,
+            params['path'] as string | undefined,
+            params['mode'] as any
+          );
           break;
         case 'file-write':
           result = fileWrite(

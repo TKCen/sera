@@ -2,6 +2,7 @@ import { useAgentTasks, useCancelTask } from '@/hooks/useAgents';
 import { TabLoading } from './AgentDetailTabLoading';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { CopyButton } from './CopyButton';
 import { Clock, XCircle, AlertCircle, CheckCircle2, Timer } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -49,7 +50,10 @@ export function AgentDetailTasksTab({ id }: { id: string }) {
                   >
                     {task.status}
                   </Badge>
-                  <span className="text-xs font-mono text-sera-text-dim truncate">{task.id}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs font-mono text-sera-text-dim truncate">{task.id}</span>
+                    <CopyButton value={task.id} />
+                  </div>
                   {task.exitReason && (
                     <Badge variant="default" className="text-[10px] uppercase">
                       {task.exitReason}

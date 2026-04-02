@@ -30,6 +30,7 @@ import * as providersApi from '@/lib/api/providers';
 import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CopyButton } from '@/components/CopyButton';
 import { CloudProviderSection } from '@/components/CloudProviderSection';
 import { DynamicProviderCard } from '@/components/DynamicProviderCard';
 import { GeneralTab } from '@/components/GeneralTab';
@@ -109,7 +110,10 @@ function ModelConfigRow({
         className="w-full flex items-center justify-between p-3 hover:bg-sera-surface/50 transition-colors text-left"
       >
         <div className="flex items-center gap-3">
-          <span className="text-sera-text font-mono text-xs">{model.modelName}</span>
+          <div className="flex items-center gap-1">
+            <span className="text-sera-text font-mono text-xs">{model.modelName}</span>
+            <CopyButton value={model.modelName} />
+          </div>
           <span className="text-sera-text-dim text-[10px]">{model.provider ?? ''}</span>
           <Badge
             variant={

@@ -195,13 +195,18 @@ describe('Agents Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ content: 'Boot context content' });
-      expect(mockFetch).toHaveBeenCalledWith('http://agent-runtime:3100/boot-context', expect.any(Object));
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://agent-runtime:3100/boot-context',
+        expect.any(Object)
+      );
     });
 
     it('returns 503 if agent is not reachable', async () => {
       const instanceId = 'agent-123';
       agentRegistryMock.getInstance.mockResolvedValue({ id: instanceId } as any);
-      orchestratorMock.ensureContainerRunning.mockRejectedValue(new Error('Container not starting'));
+      orchestratorMock.ensureContainerRunning.mockRejectedValue(
+        new Error('Container not starting')
+      );
 
       const res = await request(app).get(`/api/agents/${instanceId}/boot-context`);
 

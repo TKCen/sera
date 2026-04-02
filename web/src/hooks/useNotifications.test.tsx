@@ -58,7 +58,9 @@ describe('useNotifications hooks', () => {
   describe('useChannels', () => {
     it('calls listChannels', async () => {
       const mockChannels = [{ id: '1', name: 'Channel 1' }];
-      vi.mocked(api.listChannels).mockResolvedValue(mockChannels as unknown as api.NotificationChannel[]);
+      vi.mocked(api.listChannels).mockResolvedValue(
+        mockChannels as unknown as api.NotificationChannel[]
+      );
 
       const { result } = renderHook(() => useChannels(), { wrapper });
 
@@ -84,7 +86,10 @@ describe('useNotifications hooks', () => {
   describe('useCreateChannel', () => {
     it('calls createChannel and shows success toast on success', async () => {
       const payload = { name: 'New Channel', type: 'webhook', config: {} };
-      vi.mocked(api.createChannel).mockResolvedValue({ id: '1', ...payload } as unknown as api.NotificationChannel);
+      vi.mocked(api.createChannel).mockResolvedValue({
+        id: '1',
+        ...payload,
+      } as unknown as api.NotificationChannel);
 
       const { result } = renderHook(() => useCreateChannel(), { wrapper });
 
@@ -113,7 +118,10 @@ describe('useNotifications hooks', () => {
   describe('useUpdateChannel', () => {
     it('calls updateChannel and shows success toast on success', async () => {
       const data = { name: 'Updated Name' };
-      vi.mocked(api.updateChannel).mockResolvedValue({ id: '1', ...data } as unknown as api.NotificationChannel);
+      vi.mocked(api.updateChannel).mockResolvedValue({
+        id: '1',
+        ...data,
+      } as unknown as api.NotificationChannel);
 
       const { result } = renderHook(() => useUpdateChannel(), { wrapper });
 
@@ -163,7 +171,10 @@ describe('useNotifications hooks', () => {
   describe('useCreateRoutingRule', () => {
     it('calls createRoutingRule and shows success toast on success', async () => {
       const payload = { eventType: 'test', channelIds: ['1'] };
-      vi.mocked(api.createRoutingRule).mockResolvedValue({ id: '1', ...payload } as unknown as api.RoutingRule);
+      vi.mocked(api.createRoutingRule).mockResolvedValue({
+        id: '1',
+        ...payload,
+      } as unknown as api.RoutingRule);
 
       const { result } = renderHook(() => useCreateRoutingRule(), { wrapper });
 
@@ -177,7 +188,10 @@ describe('useNotifications hooks', () => {
   describe('useUpdateRoutingRule', () => {
     it('calls updateRoutingRule and shows success toast on success', async () => {
       const data = { eventType: 'updated' };
-      vi.mocked(api.updateRoutingRule).mockResolvedValue({ id: '1', ...data } as unknown as api.RoutingRule);
+      vi.mocked(api.updateRoutingRule).mockResolvedValue({
+        id: '1',
+        ...data,
+      } as unknown as api.RoutingRule);
 
       const { result } = renderHook(() => useUpdateRoutingRule(), { wrapper });
 

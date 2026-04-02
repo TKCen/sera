@@ -766,6 +766,74 @@ export function createAgentRouter(
     })
   );
 
+  // ── Command Logs ─────────────────────────────────────────────────────────
+
+  /**
+   * POST /api/agents/:id/command-logs
+   * Record a tool invocation in the command log.
+   */
+  router.post(
+    '/:id/command-logs',
+    asyncHandler(async (req, res) => {
+      const { sessionId, toolName, arguments: toolArgs, result, durationMs, status } = req.body;
+      const agentInstanceId = req.params['id'] as string;
+
+      if (!sessionId || !toolName || !status) {
+        res.status(400).json({ error: 'sessionId, toolName, and status are required' });
+        return;
+      }
+
+      await dbPool.query(
+        `INSERT INTO agent_command_log
+           (session_id, agent_instance_id, tool_name, arguments, result, duration_ms, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          sessionId,
+          agentInstanceId,
+          toolName,
+          JSON.stringify(toolArgs ?? {}),
+          result,
+          durationMs,
+          status,
+        ]
+      );
+
+      res.status(201).json({ success: true });
+    })
+  );
+
+  /**
+   * GET /api/agents/:id/sessions/:sessionId/commands
+   * Retrieve command logs for a specific session.
+   */
+  router.get(
+    '/:id/sessions/:sessionId/commands',
+    asyncHandler(async (req, res) => {
+      const { sessionId } = req.params;
+
+      const rows = await dbPool.query(
+        `SELECT * FROM agent_command_log
+         WHERE session_id = $1
+         ORDER BY created_at ASC`,
+        [sessionId]
+      );
+
+      res.json(
+        rows.rows.map((r) => ({
+          id: r.id,
+          sessionId: r.session_id,
+          agentInstanceId: r.agent_instance_id,
+          toolName: r.tool_name,
+          arguments: r.arguments,
+          result: r.result,
+          durationMs: r.duration_ms,
+          status: r.status,
+          createdAt: r.created_at,
+        }))
+      );
+    })
+  );
+
   // ── Context Debug (#305) ─────────────────────────────────────────────────
   /**
    * GET /api/agents/:id/context-debug?message=...

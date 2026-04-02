@@ -36,6 +36,7 @@ import { BudgetTab } from '@/components/AgentDetailBudgetTab';
 import { InnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 import { ContextTab } from '@/components/AgentDetailContextTab';
+import { CommandLogTimeline } from '@/components/CommandLogTimeline';
 
 type Tab =
   | 'overview'
@@ -43,6 +44,7 @@ type Tab =
   | 'tools'
   | 'delegations'
   | 'logs'
+  | 'commands'
   | 'memory'
   | 'schedules'
   | 'inner-life'
@@ -194,6 +196,7 @@ export default function AgentDetailPage() {
               'tools',
               'delegations',
               'logs',
+              'commands',
               'memory',
               'schedules',
               'inner-life',
@@ -225,6 +228,7 @@ export default function AgentDetailPage() {
         {tab === 'tools' && <ToolsTab id={id} />}
         {tab === 'delegations' && <DelegationsTab id={id} />}
         {tab === 'logs' && <LogsTab id={id} />}
+        {tab === 'commands' && <CommandsTab id={id} />}
         {tab === 'memory' && <MemoryTab id={id} />}
         {tab === 'schedules' && <SchedulesTab id={id} />}
         {tab === 'inner-life' && <InnerLifeTab id={id} />}
@@ -306,6 +310,61 @@ export default function AgentDetailPage() {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function CommandsTab({ id }: { id: string }) {
+  const { data: sessions, isLoading } = useQuery({
+    queryKey: ['agent-sessions', id],
+    queryFn: () => request<Array<{ id: string; title: string; updatedAt: string }>>(`/sessions?agentInstanceId=${encodeURIComponent(id)}`),
+  });
+
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  if (isLoading) return <TabLoading />;
+
+  const sortedSessions = [...(sessions ?? [])].sort((a, b) =>
+    new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  );
+
+  // Auto-select most recent session
+  if (!selectedSessionId && sortedSessions.length > 0) {
+    setSelectedSessionId(sortedSessions[0]!.id);
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex-shrink-0 border-b border-sera-border bg-sera-surface-bright/20 p-3">
+        <div className="flex items-center gap-3">
+          <label className="text-[10px] font-bold text-sera-text-muted uppercase tracking-wider flex items-center gap-1.5">
+            Session Context:
+          </label>
+          <select
+            value={selectedSessionId ?? ''}
+            onChange={(e) => setSelectedSessionId(e.target.value)}
+            className="text-xs bg-sera-surface border border-sera-border rounded-md px-3 py-1.5 min-w-[240px] font-medium outline-none focus:ring-1 focus:ring-sera-accent"
+          >
+            {sortedSessions.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.title || 'Untitled Session'} — {new Date(s.updatedAt).toLocaleDateString()}
+              </option>
+            ))}
+            {sortedSessions.length === 0 && <option value="">No sessions found</option>}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {selectedSessionId ? (
+          <CommandLogTimeline agentId={id} sessionId={selectedSessionId} />
+        ) : (
+          <div className="flex flex-col items-center justify-center p-12 text-sera-text-muted opacity-50">
+             <Bot size={40} className="mb-4 text-sera-accent-soft" />
+             <p className="text-sm font-medium">Select a session to view its command log</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -169,6 +169,9 @@ export interface AgentManifest {
   memory?: MemoryConfig;
   permissions?: PermissionsConfig;
   capabilities?: string[];
+  logging?: {
+    commands?: boolean;
+  };
   schedules?: ScheduleManifest[];
   mounts?: Array<{ hostPath: string; containerPath: string; mode: 'ro' | 'rw' }>;
   overrides?: Record<string, unknown>;
@@ -222,6 +225,7 @@ export const KNOWN_TOP_LEVEL_FIELDS = new Set([
   'memory',
   'permissions',
   'capabilities',
+  'logging',
   'schedules',
   'mounts',
   'overrides',

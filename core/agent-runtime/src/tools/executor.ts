@@ -12,6 +12,7 @@ import { log } from '../logger.js';
 import { PermissionDeniedError, AGENT_ID } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
 import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
+import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, checkShellPathRestriction } from './shell-handler.js';
 import { spawnSubagent, runTool, executeProxiedTool, isProxyAvailable } from './proxy.js';
 
@@ -60,6 +61,7 @@ class Semaphore {
 export class RuntimeToolExecutor implements IToolExecutor {
   private workspacePath: string;
   private tier: number;
+  private manifest?: RuntimeManifest;
   /** Remote tools fetched from core's catalog. */
   private remoteCatalog: ToolDefinition[] = [];
   /** Mutex for write tools — at most 1 write tool at a time. */
@@ -67,9 +69,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
   /** Max concurrent tool executions. */
   private concurrency: number;
 
-  constructor(workspacePath: string = '/workspace', tier?: number) {
+  constructor(workspacePath: string = '/workspace', tier?: number, manifest?: RuntimeManifest) {
     this.workspacePath = workspacePath;
     this.tier = tier ?? (process.env['AGENT_TIER'] ? parseInt(process.env['AGENT_TIER'], 10) : 2);
+    this.manifest = manifest;
     const envConcurrency = process.env['MAX_TOOL_CONCURRENCY'];
     this.concurrency = envConcurrency ? parseInt(envConcurrency, 10) : DEFAULT_MAX_TOOL_CONCURRENCY;
   }
@@ -124,7 +127,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
   }
 
   /** Execute a single tool call and return a tool-role ChatMessage with repair metadata. */
-  async executeTool(toolCall: ToolCall): Promise<ToolExecutionResult> {
+  async executeTool(toolCall: ToolCall, sessionId?: string): Promise<ToolExecutionResult> {
     const { id, function: fn } = toolCall;
     const toolName = sanitizeToolName(fn.name);
     const start = Date.now();
@@ -206,14 +209,22 @@ export class RuntimeToolExecutor implements IToolExecutor {
           }
       }
 
-      this.logInvocation(toolName, 'success', Date.now() - start);
+      const durationMs = Date.now() - start;
+      this.logInvocation(toolName, 'success', durationMs);
+      const finalResult = truncateOutput(result);
+
+      if (this.manifest?.logging?.commands && sessionId) {
+        this.sendCommandLog(sessionId, toolName, params, finalResult, durationMs, 'success');
+      }
+
       return {
-        message: { role: 'tool', tool_call_id: id, content: truncateOutput(result) },
+        message: { role: 'tool', tool_call_id: id, content: finalResult },
         toolName,
         argRepaired,
         repairStrategy,
       };
     } catch (err) {
+      const durationMs = Date.now() - start;
       // Story 3.10: If a file tool path is outside workspace, try proxying
       if (err instanceof PermissionDeniedError && isProxyAvailable()) {
         const fileTools = new Set(['file-read', 'file-write', 'file-list', 'file-delete']);
@@ -225,7 +236,18 @@ export class RuntimeToolExecutor implements IToolExecutor {
       }
 
       const errorMsg = err instanceof Error ? err.message : String(err);
-      this.logInvocation(toolName, 'error', Date.now() - start);
+      this.logInvocation(toolName, 'error', durationMs);
+
+      if (this.manifest?.logging?.commands && sessionId) {
+        let parsedArgs = {};
+        try {
+          parsedArgs = JSON.parse(fn.arguments || '{}');
+        } catch {
+          /* best effort */
+        }
+        this.sendCommandLog(sessionId, toolName, parsedArgs, errorMsg, durationMs, 'error');
+      }
+
       return {
         message: { role: 'tool', tool_call_id: id, content: `Error: ${errorMsg}` },
         toolName,
@@ -240,12 +262,12 @@ export class RuntimeToolExecutor implements IToolExecutor {
    * read-only tools run in parallel up to the configured concurrency limit.
    * Results maintain the same order as the input tool calls.
    */
-  async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolExecutionResult[]> {
+  async executeToolCalls(toolCalls: ToolCall[], sessionId?: string): Promise<ToolExecutionResult[]> {
     // Fast path: single call, no concurrency overhead
     if (toolCalls.length <= 1) {
       const results: ToolExecutionResult[] = [];
       for (const tc of toolCalls) {
-        results.push(await this.executeTool(tc));
+        results.push(await this.executeTool(tc, sessionId));
       }
       return results;
     }
@@ -260,7 +282,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
         const isWrite = WRITE_TOOLS.has(toolName);
         if (isWrite) await this.writeMutex.acquire();
         try {
-          results[index] = await this.executeTool(tc);
+          results[index] = await this.executeTool(tc, sessionId);
         } finally {
           if (isWrite) this.writeMutex.release();
         }
@@ -326,4 +348,69 @@ export class RuntimeToolExecutor implements IToolExecutor {
   private logInvocation(toolName: string, status: 'success' | 'error', elapsedMs: number): void {
     log('debug', `tool=${toolName} agent=${AGENT_ID} status=${status} elapsed=${elapsedMs}ms`);
   }
+
+  /** Send tool invocation details to core for debugging (Story 5.10) */
+  private async sendCommandLog(
+    sessionId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    result: string,
+    durationMs: number,
+    status: 'success' | 'error'
+  ): Promise<void> {
+    const coreUrl = process.env['SERA_CORE_URL'] ?? '';
+    const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
+    const agentId = process.env['AGENT_INSTANCE_ID'] ?? AGENT_ID;
+
+    // Truncate result to 2KB
+    const MAX_LOG_RESULT_BYTES = 2048;
+    const truncatedResult =
+      result.length > MAX_LOG_RESULT_BYTES
+        ? result.substring(0, MAX_LOG_RESULT_BYTES) + '... [TRUNCATED]'
+        : result;
+
+    try {
+      await fetch(`${coreUrl}/api/agents/${encodeURIComponent(agentId)}/command-logs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          sessionId,
+          toolName,
+          arguments: sanitizeArgs(args),
+          result: truncatedResult,
+          durationMs,
+          status,
+        }),
+      });
+    } catch (err) {
+      log('warn', `Failed to send command log to core: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
+const SECRET_ARG_KEYS = new Set([
+  'token',
+  'key',
+  'secret',
+  'password',
+  'api_key',
+  'apikey',
+  'auth',
+  'credential',
+]);
+
+/** Remove secret-looking values from tool arguments before logging. */
+function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (SECRET_ARG_KEYS.has(k.toLowerCase())) {
+      out[k] = '[REDACTED]';
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }

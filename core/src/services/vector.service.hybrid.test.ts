@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { VectorService } from './vector.service.js';
+import { VectorService, SearchResult } from './vector.service.js';
 
 // Mock database pool
 vi.mock('../lib/database.js', () => ({
@@ -31,7 +31,7 @@ vi.mock('./embedding.service.js', () => ({
   EmbeddingService: {
     getInstance: () => ({
       isAvailable: () => true,
-      embed: async (text: string) => new Array(768).fill(0.1),
+      embed: async (_text: string) => new Array(768).fill(0.1),
     }),
   },
   getEmbeddingDimension: () => 768,
@@ -44,7 +44,7 @@ describe('VectorService Hybrid Search Logic', () => {
     const now = new Date();
     const oldDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
 
-    // @ts-ignore - accessing internal helper for testing
+    // @ts-expect-error - accessing internal helper for testing
     const decayedScore = service.applyTemporalDecay(1.0, oldDate.toISOString(), 30);
     expect(decayedScore).toBeCloseTo(0.5, 5); // Half-life of 30 days should halve the score
   });
@@ -54,9 +54,9 @@ describe('VectorService Hybrid Search Logic', () => {
       { id: 1, score: 10, payload: {}, namespace: 'global' },
       { id: 2, score: 5, payload: {}, namespace: 'global' },
       { id: 3, score: 0, payload: {}, namespace: 'global' },
-    ] as any;
+    ] as unknown as SearchResult[];
 
-    // @ts-ignore
+    // @ts-expect-error - accessing internal helper
     const normalized = service.normalizeScores(results);
     expect(normalized[0].score).toBe(1);
     expect(normalized[1].score).toBe(0.5);
@@ -72,10 +72,10 @@ describe('VectorService Hybrid Search Logic', () => {
       { id: '1', score: 1.0, vector: v1, payload: {}, namespace: 'global' },
       { id: '2', score: 0.9, vector: v2, payload: {}, namespace: 'global' },
       { id: '3', score: 0.8, vector: v3, payload: {}, namespace: 'global' },
-    ] as any;
+    ] as unknown as SearchResult[];
 
     // With lambda = 0.5, v3 should be preferred over v2 because it's more diverse
-    // @ts-ignore
+    // @ts-expect-error - accessing internal helper
     const reranked = service.reRankWithMMR(candidates, 2, 0.5);
 
     expect(reranked[0].id).toBe('1');
@@ -84,7 +84,7 @@ describe('VectorService Hybrid Search Logic', () => {
 
   it('should complete hybrid search within 100ms', async () => {
     // Mock Qdrant client
-    (service as any).client = {
+    (service as unknown as { client: unknown }).client = {
       search: vi.fn(async () => {
         const results = [];
         for (let i = 0; i < 100; i++) {

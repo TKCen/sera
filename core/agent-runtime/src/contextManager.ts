@@ -36,8 +36,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 const DEFAULT_CONTEXT_WINDOW = 32_768;
-const DEFAULT_HIGH_WATER_PCT = 0.80;
-const AGGRESSIVE_COMPACT_PCT = 0.50;
+const DEFAULT_HIGH_WATER_PCT = 0.8;
+const AGGRESSIVE_COMPACT_PCT = 0.5;
 const DEFAULT_TOOL_OUTPUT_MAX_TOKENS = 4_000;
 const DEFAULT_RESPONSE_RESERVE = 4_096;
 const DEFAULT_EMERGENCY_TOOL_TOKENS = 500;
@@ -94,7 +94,9 @@ export class ContextManager {
       ? parseInt(maxTokensEnv, 10)
       : Math.floor(this.contextWindow * highWaterPct);
 
-    const strategyEnv = process.env['CONTEXT_COMPACTION_STRATEGY'] as CompactionStrategy | undefined;
+    const strategyEnv = process.env['CONTEXT_COMPACTION_STRATEGY'] as
+      | CompactionStrategy
+      | undefined;
     this.strategy = strategyEnv === 'summarise' ? 'summarise' : 'sliding-window';
 
     const toolMaxEnv = process.env['TOOL_OUTPUT_MAX_TOKENS'];
@@ -114,7 +116,10 @@ export class ContextManager {
     // 5-10% error is acceptable per the spec.
     this.enc = getEncoding('cl100k_base');
 
-    log('info', `ContextManager init: model=${modelName} window=${this.contextWindow} highWater=${this.highWaterMark} strategy=${this.strategy}`);
+    log(
+      'info',
+      `ContextManager init: model=${modelName} window=${this.contextWindow} highWater=${this.highWaterMark} strategy=${this.strategy}`
+    );
   }
 
   /** Get the configured context window size. */
@@ -210,7 +215,10 @@ export class ContextManager {
    * @param messages   Current message history (mutated in place).
    * @param llmClient  Optional LLM client for summarization.
    */
-  async aggressiveCompact(messages: ChatMessage[], llmClient?: ILLMClient): Promise<CompactionResult> {
+  async aggressiveCompact(
+    messages: ChatMessage[],
+    llmClient?: ILLMClient
+  ): Promise<CompactionResult> {
     const aggressiveTarget = Math.floor(this.contextWindow * AGGRESSIVE_COMPACT_PCT);
     return this.performCompaction(messages, aggressiveTarget, 'Aggressive compaction', llmClient);
   }
@@ -221,7 +229,10 @@ export class ContextManager {
    *
    * @returns The number of tool messages that were truncated.
    */
-  truncateAllToolResults(messages: ChatMessage[], maxTokens: number = DEFAULT_EMERGENCY_TOOL_TOKENS): number {
+  truncateAllToolResults(
+    messages: ChatMessage[],
+    maxTokens: number = DEFAULT_EMERGENCY_TOOL_TOKENS
+  ): number {
     let truncatedCount = 0;
     for (const msg of messages) {
       if (msg.role === 'tool' && this.countTokens(msg.content) > maxTokens) {
@@ -232,7 +243,10 @@ export class ContextManager {
       }
     }
     if (truncatedCount > 0) {
-      log('info', `ContextManager: retroactively truncated ${truncatedCount} tool result(s) to ${maxTokens} tokens`);
+      log(
+        'info',
+        `ContextManager: retroactively truncated ${truncatedCount} tool result(s) to ${maxTokens} tokens`
+      );
     }
     return truncatedCount;
   }
@@ -241,7 +255,10 @@ export class ContextManager {
    * Returns how many tokens remain before hitting the high-water mark,
    * minus a reserve for the LLM's response. Clamped to 0.
    */
-  getAvailableBudget(messages: ChatMessage[], responseReserve: number = DEFAULT_RESPONSE_RESERVE): number {
+  getAvailableBudget(
+    messages: ChatMessage[],
+    responseReserve: number = DEFAULT_RESPONSE_RESERVE
+  ): number {
     return Math.max(0, this.highWaterMark - this.countMessageTokens(messages) - responseReserve);
   }
 
@@ -255,7 +272,7 @@ export class ContextManager {
   truncateToContextBudget(
     content: string,
     messages: ChatMessage[],
-    responseReserve: number = DEFAULT_RESPONSE_RESERVE,
+    responseReserve: number = DEFAULT_RESPONSE_RESERVE
   ): { content: string; budgetExceeded: boolean; compactionNeeded: boolean } {
     const budget = this.getAvailableBudget(messages, responseReserve);
 
@@ -371,7 +388,11 @@ export class ContextManager {
     }
 
     // Force at least one drop if we are over limit, to trigger summary injection logic
-    if (droppedMessages.length === 0 && nonSystemMessages.length > 1 && tokensBefore >= targetTokens) {
+    if (
+      droppedMessages.length === 0 &&
+      nonSystemMessages.length > 1 &&
+      tokensBefore >= targetTokens
+    ) {
       droppedMessages.push(nonSystemMessages.shift()!);
     }
 
@@ -397,7 +418,8 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
       // If summary overhead pushes us back over, drop more if allowed
       while (
         nonSystemMessages.length > 1 &&
-        this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages]) >= targetTokens
+        this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages]) >=
+          targetTokens
       ) {
         droppedMessages.push(nonSystemMessages.shift()!);
         droppedCount++;
@@ -408,15 +430,24 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
       // keep 1 but it will be truncated later.
 
       // If still over, truncate the first retained message
-      const total = this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages]);
+      const total = this.countMessageTokens([
+        ...systemMessages,
+        continuationMsg,
+        ...nonSystemMessages,
+      ]);
       if (total > targetTokens && nonSystemMessages.length > 0) {
         const first = nonSystemMessages[0]!;
         const notice = '[SERA: message truncated due to context window overflow]';
         const noticeTokens = this.countTokens(notice);
-        const otherTokens = this.countMessageTokens([...systemMessages, continuationMsg, ...nonSystemMessages.slice(1)]);
+        const otherTokens = this.countMessageTokens([
+          ...systemMessages,
+          continuationMsg,
+          ...nonSystemMessages.slice(1),
+        ]);
         const available = targetTokens - otherTokens;
         if (available > noticeTokens) {
-          first.content = this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
+          first.content =
+            this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
         } else {
           first.content = notice;
         }
@@ -429,10 +460,14 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
         const first = nonSystemMessages[0]!;
         const notice = '[SERA: message truncated due to context window overflow]';
         const noticeTokens = this.countTokens(notice);
-        const otherTokens = this.countMessageTokens([...systemMessages, ...nonSystemMessages.slice(1)]);
+        const otherTokens = this.countMessageTokens([
+          ...systemMessages,
+          ...nonSystemMessages.slice(1),
+        ]);
         const available = targetTokens - otherTokens;
         if (available > noticeTokens) {
-          first.content = this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
+          first.content =
+            this.truncateToFit(first.content, available - noticeTokens) + '\n' + notice;
         } else {
           first.content = notice;
         }
@@ -501,6 +536,7 @@ ${conversationText}`;
       [{ role: 'user', content: prompt }],
       undefined,
       0.3, // Low temperature for summarization
+      undefined,
       undefined,
       compactionModel
     );
@@ -607,7 +643,12 @@ ${conversationText}`;
       `Scope: ${counts['user']} user, ${counts['assistant']} assistant, ${counts['tool']} tool`,
       `Tools mentioned: ${Array.from(tools).join(', ') || 'none'}`,
       `Recent user requests:\n${last3UserRequests.map((r) => `- ${r}`).join('\n') || 'none'}`,
-      `Pending work:\n${pendingWork.slice(-5).map((p) => `- ${p}`).join('\n') || 'none'}`,
+      `Pending work:\n${
+        pendingWork
+          .slice(-5)
+          .map((p) => `- ${p}`)
+          .join('\n') || 'none'
+      }`,
       `Key files: ${Array.from(keyFiles).join(', ') || 'none'}`,
       `Current work: ${currentWork.slice(0, 500)}${currentWork.length > 500 ? '...' : ''}`,
       `Key timeline:\n${timeline}`,

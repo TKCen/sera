@@ -114,9 +114,22 @@ describe('Agents Routes', () => {
         id: instanceId,
         name: 'test-agent',
         template_ref: 'test-template',
+        status: 'running' as const,
+        updated_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
       };
       const mockManifest = {
-        metadata: { name: 'test-agent' },
+        apiVersion: 'sera.ai/v1',
+        kind: 'Agent' as const,
+        metadata: {
+          name: 'test-agent',
+          displayName: 'Test Agent',
+          icon: '',
+          circle: 'default',
+          tier: 2 as const,
+        },
+        identity: { role: 'assistant', description: 'Test' },
+        model: { provider: 'openai', name: 'gpt-4' },
         tools: { allowed: ['tool1', 'tool2'] },
       };
 
@@ -144,10 +157,17 @@ describe('Agents Routes', () => {
     });
 
     it('returns 404 if manifest cannot be resolved', async () => {
-      agentRegistryMock.getInstance.mockResolvedValue({ id: 'id', name: 'name' });
-      orchestratorMock.getManifestByInstanceId.mockReturnValue(null);
-      orchestratorMock.getManifest.mockReturnValue(null);
-      agentRegistryMock.getTemplate.mockResolvedValue(null);
+      agentRegistryMock.getInstance.mockResolvedValue({
+        id: 'id',
+        name: 'name',
+        template_ref: '',
+        status: 'stopped' as const,
+        updated_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      });
+      orchestratorMock.getManifestByInstanceId.mockReturnValue(undefined);
+      orchestratorMock.getManifest.mockReturnValue(undefined);
+      agentRegistryMock.getTemplate.mockResolvedValue(undefined);
 
       const res = await request(app).get('/api/agents/instances/id/tools');
       expect(res.status).toBe(404);

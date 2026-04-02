@@ -24,6 +24,7 @@ export class ScriptedLLMClient implements ILLMClient {
 
     _thinkingLevel?: ThinkingLevel,
     _timeoutMs?: number,
+    _model?: string
   ): Promise<LLMResponse> {
     const response = this.responses[this.callCount];
     if (!response) {

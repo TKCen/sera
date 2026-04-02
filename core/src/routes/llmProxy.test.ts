@@ -166,7 +166,7 @@ async function createTestSetup(
   vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
     async (agentId, messages, onEvent) => {
       onEvent?.({
-        stage: 'memory.retrieved',
+        stage: 'context.memory_retrieved',
         detail: {
           blocks: [
             {
@@ -563,7 +563,7 @@ describe('LLM Proxy Router', () => {
       vi.spyOn(ContextAssembler.prototype, 'assemble').mockImplementation(
         async (agentId, messages, onEvent) => {
           onEvent?.({
-            stage: 'memory.retrieved',
+            stage: 'context.memory_retrieved',
             detail: {
               blocks: [
                 {

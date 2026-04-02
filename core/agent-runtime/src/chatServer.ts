@@ -65,6 +65,12 @@ export function startChatServer(
       return;
     }
 
+    // Boot context preview
+    if (req.method === 'GET' && url.pathname === '/boot-context') {
+      sendJson(res, 200, { content: (loop as unknown as { bootContext: string }).bootContext || '' });
+      return;
+    }
+
     // Chat endpoint
     if (req.method === 'POST' && url.pathname === '/chat') {
       if (!ready) {

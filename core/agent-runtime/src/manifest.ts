@@ -70,6 +70,14 @@ export interface RuntimeManifest {
     maxTokens?: number;
     priority?: 'high' | 'normal' | 'low';
   }>;
+  bootContext?: {
+    files?: Array<{
+      path: string;
+      label: string;
+      maxTokens?: number;
+    }>;
+    directory?: string;
+  };
   outputFormat?: string;
 }
 
@@ -97,6 +105,7 @@ export function loadManifest(manifestPath: string): RuntimeManifest {
     if (spec['intercom'] && !raw['intercom']) raw['intercom'] = spec['intercom'];
     if (spec['subagents'] && !raw['subagents']) raw['subagents'] = spec['subagents'];
     if (spec['contextFiles'] && !raw['contextFiles']) raw['contextFiles'] = spec['contextFiles'];
+    if (spec['bootContext'] && !raw['bootContext']) raw['bootContext'] = spec['bootContext'];
     if (spec['outputFormat'] && !raw['outputFormat']) raw['outputFormat'] = spec['outputFormat'];
     if (spec['notes'] && !raw['notes']) raw['notes'] = spec['notes'];
   }

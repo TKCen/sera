@@ -822,7 +822,15 @@ export function createAgentRouter(
   router.post(
     '/:id/command-logs',
     asyncHandler(async (req, res) => {
-      const { sessionId, toolName, arguments: toolArgs, result, durationMs, status, errorType } = req.body;
+      const {
+        sessionId,
+        toolName,
+        arguments: toolArgs,
+        result,
+        durationMs,
+        status,
+        errorType,
+      } = req.body;
       const agentInstanceId = req.params['id'] as string;
 
       if (!sessionId || !toolName || !status) {

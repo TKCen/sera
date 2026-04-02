@@ -322,7 +322,7 @@ export function createLlmProxyRouter(
           const citationRegex = /\[from:\s*([^\]]+)\]/g;
           let match;
           while ((match = citationRegex.exec(content)) !== null) {
-            const blockId = match[1].trim();
+            const blockId = match[1]!.trim();
             const block = injectedBlocks.find((b) => b.id === blockId);
             if (block && !seenIds.has(block.id)) {
               citations.push({

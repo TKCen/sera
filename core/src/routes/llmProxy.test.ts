@@ -503,15 +503,20 @@ describe('LLM Proxy Router', () => {
       vi.mocked(llmRouter.chatCompletion).mockResolvedValue({
         response: {
           id: 'chatcmpl-test',
+          object: 'chat.completion',
+          created: 1234567890,
+          model: 'test-model',
           choices: [
             {
+              index: 0,
               message: {
                 role: 'assistant',
                 content: 'Based on the knowledge, here is the answer [from: block-1].',
               },
+              finish_reason: 'stop',
             },
           ],
-          usage: { total_tokens: 20 },
+          usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
         },
         latencyMs: 150,
       });
@@ -617,7 +622,7 @@ describe('LLM Proxy Router', () => {
 
       await executeHandlers(handlers, req, res);
 
-      const jsonResponse = vi.mocked(res.json).mock.calls[0][0];
+      const jsonResponse = vi.mocked(res.json).mock.calls[0]![0] as any;
       expect(jsonResponse).toBeDefined();
       expect(jsonResponse.citations).toBeDefined();
       expect(jsonResponse.citations).toContainEqual({

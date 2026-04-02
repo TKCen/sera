@@ -388,7 +388,7 @@ export class ContextAssembler {
       blocks.push(blockXml);
       scores.push(r.score);
       injectedBlocksMetadata.push({
-        id: r.id,
+        id: String(r.id),
         source: r.namespace,
         relevance: r.score,
         content,

@@ -856,7 +856,9 @@ export class AgentRegistry {
     );
     const template = templateRes.rows[0];
     if (!template)
-      throw Object.assign(new Error(`Template ${instance.template_ref} not found`), { status: 404 });
+      throw Object.assign(new Error(`Template ${instance.template_ref} not found`), {
+        status: 404,
+      });
 
     await this.pool.query(
       'UPDATE agent_instances SET template_applied_at = $2, updated_at = NOW() WHERE id = $1',

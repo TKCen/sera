@@ -67,7 +67,7 @@ export function SchedulesTab({ id }: { id: string }) {
     setConfirmDelete(null);
   };
 
-  const handleTrigger = async (schedId: string, force = false) => {
+  const handleTrigger = async (schedId: string, _force = false) => {
     try {
       const res = await triggerScheduleMutation.mutateAsync(schedId);
       if (res.status === 'triggered') {
@@ -227,7 +227,11 @@ export function SchedulesTab({ id }: { id: string }) {
                 Cancel
               </Button>
             </DialogClose>
-            <Button size="sm" onClick={() => void handleCreate()} disabled={createScheduleMutation.isPending}>
+            <Button
+              size="sm"
+              onClick={() => void handleCreate()}
+              disabled={createScheduleMutation.isPending}
+            >
               {createScheduleMutation.isPending ? 'Creating…' : 'Create'}
             </Button>
           </div>

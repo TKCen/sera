@@ -1,12 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  Zap,
-  CheckCircle,
-  XCircle,
-  Save,
-  Search,
-  AlertTriangle,
-} from 'lucide-react';
+import { Zap, CheckCircle, XCircle, Save, AlertTriangle } from 'lucide-react';
 import {
   useEmbeddingConfig,
   useEmbeddingStatus,

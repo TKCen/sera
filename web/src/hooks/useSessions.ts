@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
-import { useRequest } from './useAgents';
 import { sendChatStream } from '@/lib/api/chat';
 import type { MessageThought } from '@/lib/api/types';
 
@@ -93,6 +92,5 @@ export function useCommandLogs(agentId: string, sessionId: string) {
 }
 
 export function useChatStream() {
-  const { request } = useRequest();
   return { sendChatStream };
 }

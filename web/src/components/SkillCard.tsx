@@ -1,14 +1,5 @@
-import {
-  Badge,
-} from '@/components/ui/badge';
-import {
-  Tag,
-  Cpu,
-  Bot,
-  Zap,
-  Edit2,
-  Trash2,
-} from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Tag, Cpu, Bot, Zap, Edit2, Trash2 } from 'lucide-react';
 import type { GuidanceSkillInfo } from '@/lib/api/types';
 
 export function SkillCard({

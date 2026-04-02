@@ -18,7 +18,12 @@ import {
   Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useCircle, useUpdateCircle, useDeleteCircle, useUpdateCircleContext } from '@/hooks/useCircles';
+import {
+  useCircle,
+  useUpdateCircle,
+  useDeleteCircle,
+  useUpdateCircleContext,
+} from '@/hooks/useCircles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';

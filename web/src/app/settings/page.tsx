@@ -49,7 +49,6 @@ function SettingsPageContent() {
     models: string[];
     error?: string;
   } | null>(null);
-  const [isTesting, setIsTesting] = useState(false);
 
   const {
     data: providersData,

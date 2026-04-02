@@ -1,12 +1,5 @@
 import { useState } from 'react';
-import {
-  ChevronDown,
-  ChevronRight,
-  Shield,
-  Server,
-  Zap,
-  Bot,
-} from 'lucide-react';
+import { ChevronDown, ChevronRight, Shield, Server, Zap, Bot } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { ToolInfo } from '@/lib/api/types';
 

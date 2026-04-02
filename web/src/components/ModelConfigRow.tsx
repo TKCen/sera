@@ -31,7 +31,6 @@ export function ModelConfigRow({
   onSaved: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [localCtxWindow, setLocalCtxWindow] = useState(String(contextWindow ?? ''));
   const [localMaxTokens, setLocalMaxTokens] = useState(String(maxTokens ?? ''));
   const [localStrategy, setLocalStrategy] = useState(contextStrategy ?? 'sliding-window');
@@ -48,7 +47,10 @@ export function ModelConfigRow({
       if (localHighWater) overrides.contextHighWaterMark = parseFloat(localHighWater);
       overrides.reasoning = localReasoning;
 
-      await updateProviderConfigMutation.mutateAsync({ modelName: model.modelName, config: overrides });
+      await updateProviderConfigMutation.mutateAsync({
+        modelName: model.modelName,
+        config: overrides,
+      });
       toast.success(`Config updated for ${model.modelName}`);
       onSaved();
     } catch (err) {
@@ -163,7 +165,11 @@ export function ModelConfigRow({
             </div>
           </div>
           <div className="flex justify-end pt-1">
-            <Button size="sm" onClick={handleSave} disabled={updateProviderConfigMutation.isPending}>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={updateProviderConfigMutation.isPending}
+            >
               <Save size={12} className="mr-1" />
               {updateProviderConfigMutation.isPending ? 'Saving...' : 'Save Config'}
             </Button>

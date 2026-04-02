@@ -10,10 +10,7 @@ import {
   useTestChannel,
   useDeleteRoutingRule,
 } from '@/hooks/useNotifications';
-import type {
-  NotificationChannel,
-  RoutingRule,
-} from '@/hooks/useNotifications';
+import type { NotificationChannel, RoutingRule } from '@/hooks/useNotifications';
 import { useAuth } from '@/hooks/useAuth';
 import { ForbiddenView } from '@/views/ForbiddenView';
 import { ChannelDialog } from '@/components/ChannelDialog';

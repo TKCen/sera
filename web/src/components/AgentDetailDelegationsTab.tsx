@@ -4,26 +4,6 @@ import { Badge } from './ui/badge';
 import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft } from 'lucide-react';
 import { formatDistanceToNow } from '@/lib/utils';
 
-interface TaskDelegation {
-  id: string;
-  agent_instance_id: string;
-  task: string;
-  context: Record<string, unknown> | null;
-  status: string;
-  created_at: string;
-  completed_at: string | null;
-  result: unknown;
-  error: string | null;
-}
-
-function useDelegatedTasks(agentId: string) {
-  return useQuery({
-    queryKey: ['agent-delegated-tasks', agentId],
-    queryFn: () =>
-      request<TaskDelegation[]>(`/agents/${encodeURIComponent(agentId)}/tasks?status=all`),
-    enabled: agentId.length > 0,
-  });
-}
 
 export function DelegationsTab({ id }: { id: string }) {
   const { data: delegations, isLoading } = useAgentDelegations(id);
@@ -212,7 +192,7 @@ export function DelegationsTab({ id }: { id: string }) {
                     <p className="text-xs text-sera-text truncate">{t.task}</p>
                   </div>
                   <span className="text-[10px] text-sera-text-dim flex-shrink-0">
-                    {formatDistanceToNow(t.created_at)}
+                    {formatDistanceToNow(t.createdAt)}
                   </span>
                 </div>
               );

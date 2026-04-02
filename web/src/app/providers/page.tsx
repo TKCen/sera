@@ -23,7 +23,6 @@ import {
   useDiscoverModels,
   useTestProvider,
 } from '@/hooks/useProviders';
-import { useRequest } from '@/hooks/useAgents';
 import { ActivateDialog } from '@/components/ActivateDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';

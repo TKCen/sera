@@ -1,12 +1,7 @@
 import { useState } from 'react';
-import {
-  Plus,
-  Loader2,
-} from 'lucide-react';
+import { Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  useAddProvider,
-} from '@/hooks/useProviders';
+import { useAddProvider } from '@/hooks/useProviders';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {

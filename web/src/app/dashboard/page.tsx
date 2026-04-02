@@ -103,7 +103,11 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
 }
 
 function RecentSessions() {
-  const { data: sessions, isLoading, error } = useSessions() as { data: any[]; isLoading: boolean; error: any };
+  const {
+    data: sessions,
+    isLoading,
+    error,
+  } = useSessions() as { data: any[]; isLoading: boolean; error: any };
   const recent = (sessions ?? [])
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 5);

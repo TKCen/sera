@@ -8,10 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import {
-  useCreateRoutingRule,
-  useUpdateRoutingRule,
-} from '@/hooks/useNotifications';
+import { useCreateRoutingRule, useUpdateRoutingRule } from '@/hooks/useNotifications';
 import { useAgents } from '@/hooks/useAgents';
 import type { NotificationChannel, RoutingRule } from '@/lib/api/notifications';
 

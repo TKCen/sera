@@ -1,9 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Bot, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { PublicationContext } from 'centrifuge';
-import { useAgents, useRequest } from '@/hooks/useAgents';
+import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
-import { useSessions, useDeleteSession, useRenameSession, useChatStream } from '@/hooks/useSessions';
+import {
+  useSessions,
+  useDeleteSession,
+  useRenameSession,
+  useChatStream,
+} from '@/hooks/useSessions';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -126,7 +131,7 @@ function ChatPageContent() {
   const { data: sessions = [], refetch: fetchSessions } = useSessions(
     selectedAgent,
     selectedAgentId
-  ) as any;
+  ) as { data: SessionInfo[]; refetch: () => void };
   const { sendChatStream } = useChatStream();
 
   // ── Token stream — direct subscription ──────────────────────────────────────
@@ -244,6 +249,7 @@ function ChatPageContent() {
   const loadSession = useCallback(
     async (id: string) => {
       try {
+        const { request } = await import('@/lib/api/client');
         const data = await request<SessionDetail>(`/sessions/${id}`);
         setSessionId(data.id);
         if (data.agentName) setSelectedAgent(data.agentName);
@@ -256,8 +262,8 @@ function ChatPageContent() {
         }
 
         const uiMessages: Message[] = (data.messages ?? [])
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({
+          .filter((m: SessionMessage) => m.role === 'user' || m.role === 'assistant')
+          .map((m: SessionMessage) => ({
             id: m.id,
             role: m.role === 'user' ? 'user' : 'agent',
             content: m.content,

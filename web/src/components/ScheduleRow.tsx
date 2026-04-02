@@ -1,21 +1,8 @@
 import { useState, useCallback } from 'react';
-import {
-  Play,
-  Pencil,
-  Trash2,
-  Check,
-  X,
-  Info,
-  ChevronDown,
-  ChevronRight,
-} from 'lucide-react';
+import { Play, Pencil, Trash2, Check, X, Info, ChevronDown, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from '@/lib/utils';
-import {
-  useUpdateSchedule,
-  useDeleteSchedule,
-  useTriggerSchedule,
-} from '@/hooks/useSchedules';
+import { useUpdateSchedule, useDeleteSchedule, useTriggerSchedule } from '@/hooks/useSchedules';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

@@ -123,7 +123,7 @@ export function Sidebar() {
   const location = useLocation();
   const { user, roles, logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
-  const { data: health, isLoading: healthLoading, isError: healthError } = useHealth();
+  const { isLoading: healthLoading, isError: healthError } = useHealth();
   const { client: centrifugoClient, connectionState: wsState } = useCentrifugoContext();
 
   const coreStatus = healthLoading ? 'checking' : healthError ? 'offline' : 'online';

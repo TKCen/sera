@@ -1,13 +1,7 @@
 import { useState, useCallback } from 'react';
-import {
-  ChevronDown,
-  Plus,
-} from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  useSchedules,
-  useCreateSchedule,
-} from '@/hooks/useSchedules';
+import { useSchedules, useCreateSchedule } from '@/hooks/useSchedules';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';

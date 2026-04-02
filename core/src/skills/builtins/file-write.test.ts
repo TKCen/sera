@@ -28,7 +28,7 @@ describe('fileWriteSkill security', () => {
     },
     agentInstanceId: 'test-instance',
     containerId: 'test-container',
-    sandboxManager: mockSandboxManager as any,
+    sandboxManager: mockSandboxManager as unknown as import('../../sandbox/SandboxManager.js').SandboxManager,
     sessionId: 'test-session',
   };
 
@@ -42,7 +42,7 @@ describe('fileWriteSkill security', () => {
     await fileWriteSkill.handler(params, mockContext);
 
     expect(mockSandboxManager.exec).toHaveBeenCalled();
-    const execArgs = mockSandboxManager.exec.mock.calls[0][1];
+    const execArgs = mockSandboxManager.exec.mock.calls[0]![1];
     const command = execArgs.command;
 
     // The command is ['sh', '-c', script, '--', ...]

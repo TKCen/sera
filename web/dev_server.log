@@ -41,3 +41,4 @@ Error: Loading PostCSS Plugin failed: Cannot find native binding. npm has a bug 
   Plugin: vite:css
   File: /app/web/src/index.css
 12:19:02 PM [vite] (client) hmr update /src/app/channels/page.tsx
+12:24:45 PM [vite] (client) hmr update /src/app/channels/page.tsx

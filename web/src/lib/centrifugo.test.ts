@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Centrifuge } from 'centrifuge';
+import { Centrifuge, type Subscription } from 'centrifuge';
 import {
   getClient,
   disconnectClient,
@@ -17,14 +17,18 @@ vi.mock('centrifuge', () => {
     removeAllListeners = vi.fn();
   }
 
-  const CentrifugeMock = vi.fn().mockImplementation(function (this: any) {
-    return {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      newSubscription: vi.fn().mockImplementation(() => new SubscriptionMock()),
-      getSubscription: vi.fn().mockReturnValue(null),
-      removeSubscription: vi.fn(),
-    };
+  const CentrifugeMock = vi.fn().mockImplementation(function (this: {
+    connect: unknown;
+    disconnect: unknown;
+    newSubscription: unknown;
+    getSubscription: unknown;
+    removeSubscription: unknown;
+  }) {
+    this.connect = vi.fn();
+    this.disconnect = vi.fn();
+    this.newSubscription = vi.fn().mockImplementation(() => new SubscriptionMock());
+    this.getSubscription = vi.fn().mockReturnValue(null);
+    this.removeSubscription = vi.fn();
   });
 
   return {
@@ -198,7 +202,7 @@ describe('centrifugo utility', () => {
         removeAllListeners: vi.fn(),
       };
 
-      vi.mocked(client.getSubscription).mockReturnValue(existingSub as any);
+      vi.mocked(client.getSubscription).mockReturnValue(existingSub as unknown as Subscription);
 
       subscribeToThoughts('agent-1', vi.fn());
 

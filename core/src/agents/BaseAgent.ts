@@ -168,18 +168,26 @@ export abstract class BaseAgent {
     const circleContext = this.circleContextResolver?.();
 
     // Fetch core memory blocks if agent instance ID is available
-    let coreMemoryBlocks: Array<{ name: string; content: string; charLimit: number; isReadonly: boolean }> = [];
+    let coreMemoryBlocks: Array<{
+      name: string;
+      content: string;
+      charLimit: number;
+      isReadonly: boolean;
+    }> = [];
     if (this.agentInstanceId) {
       try {
         const blocks = await CoreMemoryService.getInstance().getBlocks(this.agentInstanceId);
-        coreMemoryBlocks = blocks.map(b => ({
+        coreMemoryBlocks = blocks.map((b) => ({
           name: b.name,
           content: b.content,
           charLimit: b.charLimit,
-          isReadonly: b.isReadonly
+          isReadonly: b.isReadonly,
         }));
       } catch (err) {
-        this.logger.error(`Failed to fetch core memory blocks for agent ${this.agentInstanceId}:`, err);
+        this.logger.error(
+          `Failed to fetch core memory blocks for agent ${this.agentInstanceId}:`,
+          err
+        );
       }
     }
 

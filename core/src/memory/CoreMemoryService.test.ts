@@ -17,9 +17,7 @@ describe('CoreMemoryService', () => {
   });
 
   it('should fetch blocks for an agent', async () => {
-    const mockRows = [
-      { id: '1', agent_id: 'agent-1', name: 'persona', content: 'test persona' },
-    ];
+    const mockRows = [{ id: '1', agent_id: 'agent-1', name: 'persona', content: 'test persona' }];
     vi.mocked(pool.query).mockResolvedValueOnce({ rows: mockRows } as any);
 
     const blocks = await service.getBlocks('agent-1');
@@ -38,7 +36,9 @@ describe('CoreMemoryService', () => {
       is_readonly: false,
     };
     vi.mocked(pool.query).mockResolvedValueOnce({ rows: [mockBlock] } as any);
-    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{ ...mockBlock, content: 'new' }] } as any);
+    vi.mocked(pool.query).mockResolvedValueOnce({
+      rows: [{ ...mockBlock, content: 'new' }],
+    } as any);
 
     const updated = await service.updateBlock('agent-1', 'persona', 'new');
     expect(updated.content).toBe('new');

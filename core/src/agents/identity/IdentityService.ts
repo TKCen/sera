@@ -42,7 +42,12 @@ export class IdentityService {
     manifest: AgentManifest,
     circleContext?: string,
     dynamicMemoryContext?: string,
-    coreMemoryBlocks?: Array<{ name: string; content: string; charLimit: number; isReadonly: boolean }>
+    coreMemoryBlocks?: Array<{
+      name: string;
+      content: string;
+      charLimit: number;
+      isReadonly: boolean;
+    }>
   ): string {
     const sections: string[] = [];
     const identity = IdentityService.resolveIdentity(manifest);
@@ -207,7 +212,12 @@ export class IdentityService {
     manifest: AgentManifest,
     circleContext?: string,
     dynamicMemoryContext?: string,
-    coreMemoryBlocks?: Array<{ name: string; content: string; charLimit: number; isReadonly: boolean }>
+    coreMemoryBlocks?: Array<{
+      name: string;
+      content: string;
+      charLimit: number;
+      isReadonly: boolean;
+    }>
   ): string {
     const base = IdentityService.generateSystemPrompt(
       manifest,

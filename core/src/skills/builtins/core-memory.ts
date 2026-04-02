@@ -102,7 +102,9 @@ export const coreMemoryReplaceSkill: SkillDefinition = {
         return { success: false, error: `String "${old_content}" not found in block "${block}"` };
       }
 
-      const updatedContent = existing.content.split(old_content as string).join(new_content as string);
+      const updatedContent = existing.content
+        .split(old_content as string)
+        .join(new_content as string);
       await service.updateBlock(agentId, block as string, updatedContent);
 
       return {

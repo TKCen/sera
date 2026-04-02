@@ -235,9 +235,7 @@ export class MemoryBlockStore {
     if (items.length === 0) return [];
 
     // Normalize items to { id, type, title }
-    const normalized = items.map((item) =>
-      typeof item === 'string' ? { id: item } : item
-    );
+    const normalized = items.map((item) => (typeof item === 'string' ? { id: item } : item));
 
     const resultsMap = new Map<string, MemoryEntry>();
     const missing = normalized.filter((item) => {
@@ -292,9 +290,7 @@ export class MemoryBlockStore {
     }
 
     // Preserve input order and handle missing entries (filter nulls)
-    return normalized
-      .map((item) => resultsMap.get(item.id))
-      .filter((e): e is MemoryEntry => !!e);
+    return normalized.map((item) => resultsMap.get(item.id)).filter((e): e is MemoryEntry => !!e);
   }
 
   /** Update an entry's content. */

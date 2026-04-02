@@ -338,7 +338,8 @@ export class ContextAssembler {
     }
 
     const filter: SearchFilter = {};
-    const searchConfig = manifest.spec?.memory?.search || manifest.memory?.search;
+    const searchConfig = (manifest.spec?.memory?.search ||
+      manifest.memory?.search) as import('../agents/manifest/types.js').MemorySearchConfig;
     let results;
     try {
       results = await this.vectorService.search(

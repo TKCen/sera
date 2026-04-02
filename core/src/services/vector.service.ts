@@ -43,9 +43,9 @@ export interface SearchResult {
   score: number;
   payload: VectorPayload;
   namespace: MemoryNamespace;
-  vector?: number[];
-  timestamp?: string;
-  textScore?: number;
+  vector?: number[] | undefined;
+  timestamp?: string | undefined;
+  textScore?: number | undefined;
 }
 
 export interface SearchFilter {
@@ -61,11 +61,11 @@ export interface SearchFilter {
 
 export class VectorService {
   /** @internal exported for testing */
-  public normalizeScores = normalizeScores;
+  public readonly normalizeScores = normalizeScores;
   /** @internal exported for testing */
-  public applyTemporalDecay = applyTemporalDecay;
+  public readonly applyTemporalDecay = applyTemporalDecay;
   /** @internal exported for testing */
-  public reRankWithMMR = reRankWithMMR;
+  public readonly reRankWithMMR = reRankWithMMR;
 
   private client: QdrantClient;
   /** @deprecated Use the scoped methods. Kept for MemoryManager backward compat. */
@@ -210,7 +210,7 @@ export class VectorService {
               score: r.score,
               payload: (r.payload ?? {}) as VectorPayload,
               namespace: ns,
-              vector: Array.isArray(r.vector) ? r.vector : undefined,
+              vector: Array.isArray(r.vector) ? (r.vector as number[]) : undefined,
               timestamp: (r.payload as VectorPayload)?.created_at,
             });
           }
@@ -219,6 +219,8 @@ export class VectorService {
         }
       })
     );
+
+    const namespacesArray = namespaces as string[];
 
     // 2. Full-text Search (PostgreSQL)
     if (queryText && textWeight > 0) {
@@ -231,7 +233,7 @@ export class VectorService {
              AND tsv @@ plainto_tsquery('english', $1)
            ORDER BY rank DESC
            LIMIT $3`,
-          [queryText, namespaces, candidateLimit]
+          [queryText, namespacesArray, candidateLimit]
         );
 
         for (const row of rows) {
@@ -293,8 +295,8 @@ export class VectorService {
             });
             for (const p of points) {
               const r = mergedMap.get(p.id);
-              if (r && Array.isArray(p.vector)) {
-                r.vector = p.vector;
+              if (r && p.vector && Array.isArray(p.vector)) {
+                r.vector = p.vector as number[];
               }
             }
           } catch {
@@ -433,7 +435,7 @@ export class VectorService {
       wait: true,
       points: points.map((p) => ({
         id: p.id,
-        vector: p.vector,
+        vector: p.vector as number[],
         payload: p.payload as Record<string, unknown>,
       })),
     });

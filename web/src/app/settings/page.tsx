@@ -3,7 +3,6 @@ import { Layers, Settings2, Activity, Search, Sliders } from 'lucide-react';
 import {
   useProviders,
   useDynamicProviders,
-  useDynamicProviderStatuses,
 } from '@/hooks/useProviders';
 import { useCircuitBreakers, useResetCircuitBreaker } from '@/hooks/useHealth';
 import { Spinner } from '@/components/ui/spinner';

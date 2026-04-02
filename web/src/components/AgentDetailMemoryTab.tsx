@@ -206,7 +206,11 @@ export function MemoryTab({ id }: { id: string }) {
                 Cancel
               </Button>
             </DialogClose>
-            <Button size="sm" onClick={() => void handleCreate()} disabled={addMemoryEntry.isPending}>
+            <Button
+              size="sm"
+              onClick={() => void handleCreate()}
+              disabled={addMemoryEntry.isPending}
+            >
               Create
             </Button>
           </div>

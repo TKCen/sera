@@ -4,24 +4,12 @@ import { Badge } from './ui/badge';
 import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft } from 'lucide-react';
 import { formatDistanceToNow } from '@/lib/utils';
 
-interface TaskDelegation {
-  id: string;
-  agent_instance_id: string;
-  task: string;
-  context: Record<string, unknown> | null;
-  status: string;
-  created_at: string;
-  completed_at: string | null;
-  result: unknown;
-  error: string | null;
-}
-
 export function DelegationsTab({ id }: { id: string }) {
   const { data: delegations, isLoading } = useAgentDelegations(id);
   const { data: tasks } = useAgentTasks(id, 'all');
 
   // Separate delegated tasks: tasks received from other agents vs tasks this agent sent
-  const receivedTasks = (tasks ?? []).filter((t) => {
+  const receivedTasks = (tasks ?? []).filter((t: any) => {
     const ctx = t.context as Record<string, unknown> | null;
     return ctx?.delegation;
   });
@@ -172,7 +160,7 @@ export function DelegationsTab({ id }: { id: string }) {
             Received Task Delegations
           </h3>
           <div className="space-y-2">
-            {receivedTasks.map((t) => {
+            {receivedTasks.map((t: any) => {
               const delegation = (t.context as Record<string, unknown>)?.delegation as
                 | { fromAgent?: string; delegatedAt?: string }
                 | undefined;
@@ -189,9 +177,9 @@ export function DelegationsTab({ id }: { id: string }) {
                       </span>
                       <Badge
                         variant={
-                          t.status === 'completed'
+                      t.status === 'done'
                             ? 'success'
-                            : t.status === 'failed'
+                        : t.status === 'error'
                               ? 'error'
                               : 'default'
                         }
@@ -200,10 +188,10 @@ export function DelegationsTab({ id }: { id: string }) {
                         {t.status}
                       </Badge>
                     </div>
-                    <p className="text-xs text-sera-text truncate">{t.task}</p>
+                <p className="text-xs text-sera-text truncate">{t.input}</p>
                   </div>
                   <span className="text-[10px] text-sera-text-dim flex-shrink-0">
-                    {formatDistanceToNow(t.created_at)}
+                {t.createdAt ? formatDistanceToNow(t.createdAt) : ''}
                   </span>
                 </div>
               );

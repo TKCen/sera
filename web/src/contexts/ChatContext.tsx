@@ -1,4 +1,12 @@
-import { createContext, useContext, useState, useRef, useEffect, useCallback, ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  ReactNode,
+} from 'react';
 import type { PublicationContext } from 'centrifuge';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { sendChatStream } from '@/lib/api/chat';
@@ -32,9 +40,20 @@ interface ChatContextType {
   expandedThoughts: Set<string>;
   setExpandedThoughts: React.Dispatch<React.SetStateAction<Set<string>>>;
   queueCount: number;
-  handleSend: (text: string, selectedAgent: string, selectedAgentId: string, sessionId: string | null, fetchSessions: () => void, setSessionId: (id: string | null) => void) => Promise<void>;
+  handleSend: (
+    text: string,
+    selectedAgent: string,
+    selectedAgentId: string,
+    sessionId: string | null,
+    fetchSessions: () => void,
+    setSessionId: (id: string | null) => void
+  ) => Promise<void>;
   handleCancel: () => void;
-  setupSubscriptions: (selectedAgent: string, selectedAgentId: string, fetchSessions: () => void) => () => void;
+  setupSubscriptions: (
+    selectedAgent: string,
+    selectedAgentId: string,
+    fetchSessions: () => void
+  ) => () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -51,7 +70,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const messageQueue = useRef<string[]>([]);
 
   const handleSend = useCallback(
-    async (text: string, selectedAgent: string, selectedAgentId: string, sessionId: string | null, fetchSessions: () => void, setSessionId: (id: string | null) => void) => {
+    async (
+      text: string,
+      selectedAgent: string,
+      selectedAgentId: string,
+      sessionId: string | null,
+      fetchSessions: () => void,
+      setSessionId: (id: string | null) => void
+    ) => {
       if (!text || !selectedAgent) return;
       if (streaming) {
         messageQueue.current.push(text);
@@ -120,80 +146,90 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     messageIdRef.current = null;
   }, [streaming]);
 
-  const setupSubscriptions = useCallback((selectedAgent: string, selectedAgentId: string, fetchSessions: () => void) => {
-    const channelKey = selectedAgentId || selectedAgent;
-    if (!centrifugoClient || !channelKey) return () => {};
+  const setupSubscriptions = useCallback(
+    (selectedAgent: string, selectedAgentId: string, fetchSessions: () => void) => {
+      const channelKey = selectedAgentId || selectedAgent;
+      if (!centrifugoClient || !channelKey) return () => {};
 
-    const tokenChannel = `tokens:${channelKey}`;
-    const thoughtChannel = `thoughts:${channelKey}`;
+      const tokenChannel = `tokens:${channelKey}`;
+      const thoughtChannel = `thoughts:${channelKey}`;
 
-    // Helper to clear existing
-    const clearSub = (channel: string) => {
-      const existing = centrifugoClient.getSubscription(channel);
-      if (existing) {
-        existing.unsubscribe();
-        existing.removeAllListeners();
-        centrifugoClient.removeSubscription(existing);
-      }
-    };
-
-    clearSub(tokenChannel);
-    clearSub(thoughtChannel);
-
-    const tokenSub = centrifugoClient.newSubscription(tokenChannel);
-    tokenSub.on('publication', (ctx: PublicationContext) => {
-      const { token, done, messageId, error } = ctx.data as TokenPayload;
-      if (messageId != null && messageIdRef.current != null && messageId !== messageIdRef.current) return;
-      if (!streamingMsgId.current) return;
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === streamingMsgId.current);
-        if (idx === -1) return prev;
-        const updated = [...prev];
-        if (error) {
-          updated[idx] = { ...updated[idx]!, content: `**Error:** ${error}`, streaming: false };
-        } else {
-          updated[idx] = { ...updated[idx]!, content: updated[idx]!.content + token, streaming: !done };
+      // Helper to clear existing
+      const clearSub = (channel: string) => {
+        const existing = centrifugoClient.getSubscription(channel);
+        if (existing) {
+          existing.unsubscribe();
+          existing.removeAllListeners();
+          centrifugoClient.removeSubscription(existing);
         }
-        return updated;
-      });
-      if (done) {
-        setTimeout(() => {
-          setStreaming(false);
-          streamingMsgId.current = null;
-          void fetchSessions();
-        }, 500);
-      }
-    });
-    tokenSub.subscribe();
-
-    const thoughtSub = centrifugoClient.newSubscription(thoughtChannel);
-    thoughtSub.on('publication', (ctx: PublicationContext) => {
-      const event = ctx.data as ThoughtPayload;
-      if (!streamingMsgId.current) return;
-      const thought: MessageThought = {
-        timestamp: event.timestamp,
-        stepType: event.stepType,
-        content: event.content,
-        ...(event.toolName ? { toolName: event.toolName } : {}),
-        ...(event.toolArgs ? { toolArgs: event.toolArgs } : {}),
       };
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === streamingMsgId.current ? { ...msg, thoughts: [...msg.thoughts, thought] } : msg
-        )
-      );
-    });
-    thoughtSub.subscribe();
 
-    return () => {
-      tokenSub.unsubscribe();
-      tokenSub.removeAllListeners();
-      centrifugoClient.removeSubscription(tokenSub);
-      thoughtSub.unsubscribe();
-      thoughtSub.removeAllListeners();
-      centrifugoClient.removeSubscription(thoughtSub);
-    };
-  }, [centrifugoClient]);
+      clearSub(tokenChannel);
+      clearSub(thoughtChannel);
+
+      const tokenSub = centrifugoClient.newSubscription(tokenChannel);
+      tokenSub.on('publication', (ctx: PublicationContext) => {
+        const { token, done, messageId, error } = ctx.data as TokenPayload;
+        if (messageId != null && messageIdRef.current != null && messageId !== messageIdRef.current)
+          return;
+        if (!streamingMsgId.current) return;
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === streamingMsgId.current);
+          if (idx === -1) return prev;
+          const updated = [...prev];
+          if (error) {
+            updated[idx] = { ...updated[idx]!, content: `**Error:** ${error}`, streaming: false };
+          } else {
+            updated[idx] = {
+              ...updated[idx]!,
+              content: updated[idx]!.content + token,
+              streaming: !done,
+            };
+          }
+          return updated;
+        });
+        if (done) {
+          setTimeout(() => {
+            setStreaming(false);
+            streamingMsgId.current = null;
+            void fetchSessions();
+          }, 500);
+        }
+      });
+      tokenSub.subscribe();
+
+      const thoughtSub = centrifugoClient.newSubscription(thoughtChannel);
+      thoughtSub.on('publication', (ctx: PublicationContext) => {
+        const event = ctx.data as ThoughtPayload;
+        if (!streamingMsgId.current) return;
+        const thought: MessageThought = {
+          timestamp: event.timestamp,
+          stepType: event.stepType,
+          content: event.content,
+          ...(event.toolName ? { toolName: event.toolName } : {}),
+          ...(event.toolArgs ? { toolArgs: event.toolArgs } : {}),
+        };
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === streamingMsgId.current
+              ? { ...msg, thoughts: [...msg.thoughts, thought] }
+              : msg
+          )
+        );
+      });
+      thoughtSub.subscribe();
+
+      return () => {
+        tokenSub.unsubscribe();
+        tokenSub.removeAllListeners();
+        centrifugoClient.removeSubscription(tokenSub);
+        thoughtSub.unsubscribe();
+        thoughtSub.removeAllListeners();
+        centrifugoClient.removeSubscription(thoughtSub);
+      };
+    },
+    [centrifugoClient]
+  );
 
   // Handle queue draining
   const prevStreaming = useRef(false);

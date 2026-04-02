@@ -46,7 +46,11 @@ export function useSessionManagement(
   }, [selectedAgent, selectedAgentId]);
 
   const loadSession = useCallback(
-    async (id: string, setSelectedAgent: (n: string) => void, setSelectedAgentId: (id: string) => void) => {
+    async (
+      id: string,
+      setSelectedAgent: (n: string) => void,
+      setSelectedAgentId: (id: string) => void
+    ) => {
       try {
         const data = await request<any>(`/sessions/${id}`);
         setSessionId(data.id);
@@ -87,7 +91,17 @@ export function useSessionManagement(
     setQueueCount(0);
     setExpandedThoughts(new Set());
     inputRef.current?.focus();
-  }, [setSessionId, setMessages, setStreaming, streamingMsgId, messageIdRef, messageQueue, setQueueCount, setExpandedThoughts, inputRef]);
+  }, [
+    setSessionId,
+    setMessages,
+    setStreaming,
+    streamingMsgId,
+    messageIdRef,
+    messageQueue,
+    setQueueCount,
+    setExpandedThoughts,
+    inputRef,
+  ]);
 
   const deleteSession = useCallback(
     async (id: string, e: React.MouseEvent) => {

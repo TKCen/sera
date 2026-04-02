@@ -306,13 +306,6 @@ export default function AgentDetailPage() {
   );
 }
 
-interface HealthCheckResult {
-  agentId: string;
-  agentName?: string;
-  overallStatus: string;
-  checks: Record<string, { ok: boolean; detail?: string }>;
-}
-
 function HealthCheckTab({ id }: { id: string }) {
   const { data, isLoading, refetch, isFetching } = useAgentHealthCheck(id);
 
@@ -346,7 +339,7 @@ function HealthCheckTab({ id }: { id: string }) {
           </div>
 
           <div className="sera-card-static divide-y divide-sera-border/50">
-            {Object.entries(data.checks).map(([name, check]) => (
+            {Object.entries(data.checks as Record<string, any>).map(([name, check]) => (
               <div key={name} className="flex items-center gap-3 px-4 py-3">
                 {check.ok ? (
                   <Check size={14} className="text-sera-success flex-shrink-0" />

@@ -1,13 +1,5 @@
 import { useState } from 'react';
-import {
-  Server,
-  RefreshCw,
-  Globe,
-  HardDrive,
-  Trash2,
-  Wifi,
-  WifiOff,
-} from 'lucide-react';
+import { Server, RefreshCw, Globe, HardDrive, Trash2, Wifi, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useProviders,

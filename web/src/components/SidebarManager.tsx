@@ -1,12 +1,11 @@
 import { memo } from 'react';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ChatSidebar } from '@/components/ChatSidebar';
-import type { SessionInfo } from '@/lib/types/chat';
-import type { AgentInfo } from '@/hooks/useAgents';
+import type { SessionInfo } from '@/hooks/useSessionManagement';
 
 interface SidebarManagerProps {
   sessions: SessionInfo[];
-  agents: AgentInfo[] | undefined;
+  agents: any[] | undefined;
   agentsLoading: boolean;
   agentsError: boolean;
   selectedAgent: string;
@@ -69,12 +68,6 @@ export const SidebarManager = memo(function SidebarManager({
       {!sidebarOpen && (
         <div className="absolute top-4 left-4 z-10">
           {sidebarToggle}
-        </div>
-      )}
-      {sidebarOpen && (
-        <div className="hidden">
-           {/* This is a hack to allow the parent to get the toggle button if needed,
-               but in ChatPage we handle it differently for the top bar. */}
         </div>
       )}
     </>

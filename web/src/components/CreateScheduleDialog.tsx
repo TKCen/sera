@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCreateSchedule } from '@/hooks/useSchedules';
 import { Button } from '@/components/ui/button';
@@ -18,7 +17,11 @@ interface CreateScheduleDialogProps {
   agentNames: string[];
 }
 
-export function CreateScheduleDialog({ open, onOpenChange, agentNames }: CreateScheduleDialogProps) {
+export function CreateScheduleDialog({
+  open,
+  onOpenChange,
+  agentNames,
+}: CreateScheduleDialogProps) {
   const [newSchedule, setNewSchedule] = useState({
     agentName: '',
     name: '',
@@ -97,7 +100,9 @@ export function CreateScheduleDialog({ open, onOpenChange, agentNames }: CreateS
             </p>
           </div>
           <div>
-            <label className="block text-xs text-sera-text-muted mb-1">Task Prompt (optional)</label>
+            <label className="block text-xs text-sera-text-muted mb-1">
+              Task Prompt (optional)
+            </label>
             <textarea
               value={newSchedule.taskPrompt}
               onChange={(e) => setNewSchedule((s) => ({ ...s, taskPrompt: e.target.value }))}
@@ -113,11 +118,7 @@ export function CreateScheduleDialog({ open, onOpenChange, agentNames }: CreateS
               Cancel
             </Button>
           </DialogClose>
-          <Button
-            size="sm"
-            onClick={() => void handleCreate()}
-            disabled={createSchedule.isPending}
-          >
+          <Button size="sm" onClick={() => void handleCreate()} disabled={createSchedule.isPending}>
             Create
           </Button>
         </div>

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { LLMConfig } from '@/lib/api/types';
 import {
   getProviders,
   updateProvider,
@@ -79,7 +80,7 @@ export function useSetActiveProvider() {
 export function useUpdateLLMConfig() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: updateLLMConfig,
+    mutationFn: (config: Partial<LLMConfig>) => updateLLMConfig(config as LLMConfig),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: providersKeys.llmConfig });
     },

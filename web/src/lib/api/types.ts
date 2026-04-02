@@ -262,6 +262,7 @@ export interface LLMConfig {
   baseUrl: string;
   apiKey?: string;
   model: string;
+  defaultModel?: string | null;
 }
 
 /** Sanitised model entry from GET /api/providers — no API keys. */

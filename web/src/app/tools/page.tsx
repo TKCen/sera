@@ -1,14 +1,6 @@
 import { useState, useMemo } from 'react';
 import { toast } from 'sonner';
-import {
-  Wrench,
-  BookOpen,
-  Search,
-  Cpu,
-  Server,
-  Plus,
-  Download,
-} from 'lucide-react';
+import { Wrench, BookOpen, Search, Cpu, Server, Plus, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';

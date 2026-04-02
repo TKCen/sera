@@ -5,7 +5,6 @@ import { useAgents } from '@/hooks/useAgents';
 import { useCentrifugoContext } from '@/hooks/useCentrifugo';
 import { useSessionManagement } from '@/hooks/useSessionManagement';
 import { useChatStream } from '@/hooks/useChatStream';
-import { request } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -68,28 +67,22 @@ function ChatPageContent() {
   const messageQueue = useRef<string[]>([]);
   const [queueCount, setQueueCount] = useState(0);
 
-  const {
-    sessions,
-    fetchSessions,
-    loadSession,
-    startNewSession,
-    deleteSession,
-    renameSession,
-  } = useSessionManagement(
-    selectedAgent,
-    selectedAgentId,
-    sessionId,
-    setSessionId,
-    setMessages,
-    setStreaming,
-    streamingMsgId,
-    messageIdRef,
-    messageQueue,
-    setQueueCount,
-    setExpandedThoughts,
-    inputRef,
-    agents
-  );
+  const { sessions, fetchSessions, loadSession, startNewSession, deleteSession, renameSession } =
+    useSessionManagement(
+      selectedAgent,
+      selectedAgentId,
+      sessionId,
+      setSessionId,
+      setMessages,
+      setStreaming,
+      streamingMsgId,
+      messageIdRef,
+      messageQueue,
+      setQueueCount,
+      setExpandedThoughts,
+      inputRef,
+      agents
+    );
 
   // ── Auto-scroll ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -341,7 +334,9 @@ function ChatPageContent() {
   }, [streaming, handleSend]);
 
   const selectedAgentData = agents?.find((a) => a.name === selectedAgent);
-  const agentStatus = (selectedAgentData as Record<string, unknown> | undefined)?.status as string | undefined;
+  const agentStatus = (selectedAgentData as Record<string, unknown> | undefined)?.status as
+    | string
+    | undefined;
   const isAgentUnavailable = agentStatus === 'error' || agentStatus === 'stopped';
 
   const sidebarToggle = (
@@ -397,10 +392,14 @@ function ChatPageContent() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0" role="log" aria-live="polite">
+        <div
+          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 min-h-0"
+          role="log"
+          aria-live="polite"
+        >
           {messages.length === 0 && !streaming ? (
-             <div className="h-full flex flex-col items-center justify-center">
-               <EmptyState
+            <div className="h-full flex flex-col items-center justify-center">
+              <EmptyState
                 icon={<Bot size={32} className="text-sera-accent" />}
                 title="How can I help you?"
                 description={
@@ -418,7 +417,7 @@ function ChatPageContent() {
                   .
                 </div>
               )}
-             </div>
+            </div>
           ) : (
             <>
               {messages.map((msg) => (

@@ -25,14 +25,10 @@ export function DynamicDiscoverySection() {
   } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  const { data: dynamicData, isLoading: isLoadingDynamic, refetch: refetchDynamic } = useDynamicProviders();
+  const { data: dynamicData, isLoading: isLoadingDynamic } = useDynamicProviders();
   const { data: statusesData } = useDynamicProviderStatuses();
   const addDynamic = useAddDynamicProvider();
   const removeDynamic = useRemoveDynamicProvider();
-
-  const handleRefetch = () => {
-    void refetchDynamic();
-  };
 
   return (
     <section>
@@ -132,7 +128,11 @@ export function DynamicDiscoverySection() {
               }`}
             >
               <div className="p-3 flex items-start gap-2">
-                {testResult.success ? <Zap size={14} className="text-sera-success" /> : <XCircle size={14} className="text-sera-error" />}
+                {testResult.success ? (
+                  <Zap size={14} className="text-sera-success" />
+                ) : (
+                  <XCircle size={14} className="text-sera-error" />
+                )}
                 <div>
                   <p className="font-semibold">
                     {testResult.success ? 'Connection successful' : 'Connection failed'}

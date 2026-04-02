@@ -128,6 +128,18 @@ export function getAgentDelegations(id: string): Promise<AgentDelegation[]> {
   return request<AgentDelegation[]>(`/agents/${encodeURIComponent(id)}/delegations`);
 }
 
+export function getAgentContextDebug(id: string, message: string): Promise<any> {
+  return request<any>(`/agents/${id}/context-debug?message=${encodeURIComponent(message)}`);
+}
+
+export function getAgentHealthCheck(id: string): Promise<any> {
+  return request<any>(`/agents/${encodeURIComponent(id)}/health-check`);
+}
+
+export function getAgentSystemPrompt(id: string): Promise<{ prompt: string }> {
+  return request<{ prompt: string }>(`/agents/${encodeURIComponent(id)}/system-prompt`);
+}
+
 // ── Capability Grants ────────────────────────────────────────────────────────
 
 export function getAgentGrants(

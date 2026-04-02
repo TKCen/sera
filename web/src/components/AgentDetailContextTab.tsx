@@ -10,14 +10,6 @@ interface ContextAssemblyEvent {
   durationMs?: number;
 }
 
-interface ContextDebugResponse {
-  agentId: string;
-  agentName: string;
-  testMessage: string;
-  systemPromptLength: number;
-  events: ContextAssemblyEvent[];
-}
-
 function stageIcon(stage: string) {
   if (stage.includes('error') || stage.includes('skip')) {
     return <AlertCircle size={14} className="text-sera-warning shrink-0" />;
@@ -122,7 +114,7 @@ export function ContextTab({ id }: { id: string }) {
   const [testMessage, setTestMessage] = useState('Hello');
   const [queryMessage, setQueryMessage] = useState('Hello');
 
-  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(id, queryMessage);
+  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(id, queryMessage) as any;
 
   const handleRun = () => {
     setQueryMessage(testMessage);
@@ -177,7 +169,7 @@ export function ContextTab({ id }: { id: string }) {
           {/* Event pipeline */}
           <div className="space-y-1.5">
             <h3 className="text-sm font-medium text-sera-text mb-2">Assembly Pipeline</h3>
-            {data.events.map((event, i) => (
+            {(data as any).events.map((event: any, i: number) => (
               <EventCard
                 key={`${event.stage}-${i}`}
                 event={event}

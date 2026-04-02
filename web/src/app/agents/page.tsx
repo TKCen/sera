@@ -1,12 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router';
-import { Bot, Plus, Play, Square, Trash2, Search } from 'lucide-react';
+import { useNavigate } from 'react-router';
+import { Bot, Plus, Search } from 'lucide-react';
+import { Virtuoso } from 'react-virtuoso';
 import { toast } from 'sonner';
 import { useAgents, useStartAgent, useStopAgent, useDeleteAgent } from '@/hooks/useAgents';
-import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import {
@@ -19,8 +18,9 @@ import {
 } from '@/components/ui/dialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AgentForm } from '@/components/AgentForm';
+import { AgentListItem } from '@/components/AgentListItem';
 
-// TODO: virtualise if > 100 agents
+const VIRTUALIZATION_THRESHOLD = 100;
 
 const STATUS_OPTIONS = ['all', 'running', 'stopped', 'created', 'error', 'unresponsive'] as const;
 
@@ -166,13 +166,13 @@ function AgentsPageContent() {
       </section>
 
       {isLoading ? (
-        <ul aria-label="Loading agents" role="status" className="space-y-3">
+        <div aria-label="Loading agents" role="status" className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <li key={i}>
+            <div key={i}>
               <Skeleton className="h-16 rounded-xl" />
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       ) : isError ? (
         <div className="flex flex-col items-center justify-center p-8 border border-sera-border rounded-xl bg-sera-surface mt-4">
           <p className="text-sera-error mb-4">Failed to load agents.</p>
@@ -195,81 +195,39 @@ function AgentsPageContent() {
         <p className="text-sm text-sera-text-muted text-center py-12">
           No agents match your filters.
         </p>
-      ) : (
-        <ul aria-label="Agents list" aria-live="polite" className="space-y-2">
-          {filtered.map((agent) => (
-            <li
-              key={agent.id}
-              className="sera-card relative flex items-center gap-4 px-4 py-3 group"
-            >
-              <div className="h-9 w-9 rounded-lg bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
-                <Bot size={16} className="text-sera-accent" />
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm text-sera-text truncate">
-                  {agent.display_name ?? agent.name}
-                </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-xs text-sera-text-dim truncate">{agent.name}</span>
-                  {agent.template_ref && <Badge variant="default">{agent.template_ref}</Badge>}
-                  {agent.circle && <Badge variant="default">{agent.circle}</Badge>}
-                  {agent.sandbox_boundary && (
-                    <Badge variant="accent">{agent.sandbox_boundary}</Badge>
-                  )}
-                </div>
-              </div>
-
-              <div className="relative z-10">
-                <AgentStatusBadge agentId={agent.id} staticStatus={agent.status} />
-              </div>
-
-              {/* Quick actions */}
-              <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={(e) => {
-                    void handleStart(e, agent.id);
-                  }}
-                  disabled={startAgent.isPending}
-                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
-                  title="Start"
-                  aria-label="Start agent"
-                >
-                  <Play size={13} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    void handleStop(e, agent.id);
-                  }}
-                  disabled={stopAgent.isPending}
-                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
-                  title="Stop"
-                  aria-label="Stop agent"
-                >
-                  <Square size={13} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    void handleDelete(e, agent.id, agent.name);
-                  }}
-                  disabled={deleteAgent.isPending}
-                  className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
-                  title="Delete"
-                  aria-label="Delete agent"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-
-              {/* Row is clickable */}
-              <Link
-                to={`/agents/${agent.id}`}
-                className="absolute inset-0 rounded-xl"
-                aria-label={`View ${agent.name}`}
+      ) : filtered.length > VIRTUALIZATION_THRESHOLD ? (
+        <Virtuoso
+          useWindowScroll
+          data={filtered}
+          itemContent={(_index, agent) => (
+            <div className="pb-2">
+              <AgentListItem
+                agent={agent}
+                onStart={handleStart}
+                onStop={handleStop}
+                onDelete={handleDelete}
+                isStartPending={startAgent.isPending}
+                isStopPending={stopAgent.isPending}
+                isDeletePending={deleteAgent.isPending}
               />
-            </li>
+            </div>
+          )}
+        />
+      ) : (
+        <div role="list" aria-label="Agents list" aria-live="polite" className="space-y-2">
+          {filtered.map((agent) => (
+            <AgentListItem
+              key={agent.id}
+              agent={agent}
+              onStart={handleStart}
+              onStop={handleStop}
+              onDelete={handleDelete}
+              isStartPending={startAgent.isPending}
+              isStopPending={stopAgent.isPending}
+              isDeletePending={deleteAgent.isPending}
+            />
           ))}
-        </ul>
+        </div>
       )}
 
       {/* Create agent dialog */}

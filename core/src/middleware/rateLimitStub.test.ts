@@ -120,8 +120,12 @@ describe('rateLimitStub', () => {
     const now = 1600000000000;
     vi.setSystemTime(new Date(now));
 
-    const req1 = { agentIdentity: { agentId: 'agent-A' } } as any;
-    const req2 = { agentIdentity: { agentId: 'agent-B' } } as any;
+    const req1 = {
+      agentIdentity: { agentId: 'agent-A' } as AgentTokenClaims,
+    } as unknown as Request;
+    const req2 = {
+      agentIdentity: { agentId: 'agent-B' } as AgentTokenClaims,
+    } as unknown as Request;
 
     // Consume all tokens for agent-A
     for (let i = 0; i < 60; i++) {
@@ -129,7 +133,7 @@ describe('rateLimitStub', () => {
     }
 
     // agent-B should still have all tokens
-    vi.mocked(res.setHeader).mockClear();
+    vi.mocked(res.setHeader!).mockClear();
     rateLimitStub(req2 as Request, res as Response, next);
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', 59);
   });

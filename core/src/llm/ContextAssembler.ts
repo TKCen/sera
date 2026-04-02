@@ -7,8 +7,9 @@ import { AgentFactory } from '../agents/AgentFactory.js';
 import { IdentityService } from '../agents/identity/IdentityService.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
-import type { MemoryNamespace, SearchFilter } from '../services/vector.service.js';
+import type { MemoryNamespace, SearchFilter, HybridSearchConfig, SearchResult } from '../services/vector.service.js';
 import { Logger } from '../lib/logger.js';
+import { MemoryBlockStore } from '../memory/blocks/MemoryBlockStore.js';
 
 const logger = new Logger('ContextAssembler');
 
@@ -288,6 +289,24 @@ export class ContextAssembler {
     emit: ContextEventListener,
     instance?: import('../agents/types.js').AgentInstance | null
   ): Promise<string | null> {
+    const memoryConfig = manifest.spec?.memory || manifest.memory;
+    const searchConfig: HybridSearchConfig = {
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      minScore: 0.35,
+      maxResults: DEFAULT_TOP_K,
+      mmr: {
+        enabled: true,
+        lambda: 0.7,
+        candidateMultiplier: 4,
+      },
+      temporalDecay: {
+        enabled: true,
+        halfLifeDays: 30,
+      },
+      ...(memoryConfig?.search || {}),
+    };
+
     if (!this.embeddingService.isAvailable()) {
       emit({
         stage: 'context.memory_skipped',
@@ -338,15 +357,57 @@ export class ContextAssembler {
     }
 
     const filter: SearchFilter = {};
-    let results;
+    let vectorResults: SearchResult[] = [];
+    let textResults: SearchResult[] = [];
+
+    const vectorLimit = searchConfig.mmr?.enabled
+      ? searchConfig.maxResults * searchConfig.mmr.candidateMultiplier
+      : searchConfig.maxResults;
+
     try {
-      results = await this.vectorService.search(namespaces, queryVector, DEFAULT_TOP_K, filter);
+      vectorResults = await this.vectorService.search(
+        namespaces,
+        queryVector,
+        vectorLimit,
+        filter,
+        searchConfig.mmr?.enabled
+      );
+    } catch (err) {
+      logger.debug('ContextAssembler: vector search failed', err);
+    }
+
+    try {
+      // Need a MemoryBlockStore instance to call searchFullText.
+      // We can use the one from MemoryManager if accessible, but here we can just create a temporary one
+      // or better, implement a static method or a shared service.
+      // For now, let's assume we can use a direct DB query or instantiate MemoryBlockStore.
+      const rootPath = process.env.MEMORY_PATH || '../memory';
+      // The logical namespace doesn't matter for searching across all namespaces,
+      // but we need an instance to call the method.
+      const store = new MemoryBlockStore(rootPath);
+      textResults = (await store.searchFullText(
+        currentMessage,
+        namespaces.map((ns) => (ns === 'global' ? 'global' : ns)), // Map namespaces if needed
+        vectorLimit
+      )) as unknown as SearchResult[];
+    } catch (err) {
+      logger.debug('ContextAssembler: full-text search failed', err);
+    }
+
+    let results: SearchResult[] = [];
+    try {
+      results = await this.vectorService.hybridSearch(
+        queryVector,
+        vectorResults,
+        textResults,
+        searchConfig
+      );
     } catch (err) {
       emit({
         stage: 'context.memory_skipped',
-        detail: { reason: 'vector search failed', error: (err as Error).message },
+        detail: { reason: 'hybrid search failed', error: (err as Error).message },
       });
-      logger.debug('ContextAssembler: vector search failed, skipping RAG', err);
+      logger.debug('ContextAssembler: hybrid search failed, skipping RAG', err);
       return null;
     }
 

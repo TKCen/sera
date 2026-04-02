@@ -202,6 +202,27 @@ export class AgentManifestLoader {
       }
     }
 
+    // ── memory search config ──────────────────────────────────────────────────
+    const mem = obj['memory'] || (isSpecWrapped && (obj['spec'] as any).memory);
+    if (mem && mem.search) {
+      const s = mem.search;
+      if (typeof s !== 'object') {
+        throw new ManifestValidationError(`"memory.search" must be an object${ctx}`, 'memory.search');
+      }
+      if (s.vectorWeight !== undefined && typeof s.vectorWeight !== 'number') {
+        throw new ManifestValidationError(`"vectorWeight" must be a number${ctx}`, 'memory.search.vectorWeight');
+      }
+      if (s.textWeight !== undefined && typeof s.textWeight !== 'number') {
+        throw new ManifestValidationError(`"textWeight" must be a number${ctx}`, 'memory.search.textWeight');
+      }
+      if (s.mmr && typeof s.mmr !== 'object') {
+        throw new ManifestValidationError(`"mmr" must be an object${ctx}`, 'memory.search.mmr');
+      }
+      if (s.temporalDecay && typeof s.temporalDecay !== 'object') {
+        throw new ManifestValidationError(`"temporalDecay" must be an object${ctx}`, 'memory.search.temporalDecay');
+      }
+    }
+
     // ── capabilities ──────────────────────────────────────────────────────────
     if (obj['capabilities']) {
       if (

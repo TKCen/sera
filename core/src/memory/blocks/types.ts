@@ -42,6 +42,8 @@ export interface MemoryEntry {
   createdAt: string;
   /** ISO-8601 timestamp. */
   updatedAt: string;
+  /** Importance 1-5. */
+  importance?: number;
 }
 
 /** Options for creating a new memory entry. */
@@ -51,6 +53,7 @@ export interface CreateEntryOptions {
   refs?: string[];
   tags?: string[];
   source?: MemorySource;
+  importance?: number;
 }
 
 // ── Block ───────────────────────────────────────────────────────────────────────

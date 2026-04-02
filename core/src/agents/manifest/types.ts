@@ -80,10 +80,27 @@ export interface WorkspaceConfig {
 }
 
 // ── Memory ──────────────────────────────────────────────────────────────────────
+export interface HybridSearchConfig {
+  vectorWeight: number;
+  textWeight: number;
+  minScore: number;
+  maxResults: number;
+  mmr?: {
+    enabled: boolean;
+    lambda: number;
+    candidateMultiplier: number;
+  };
+  temporalDecay?: {
+    enabled: boolean;
+    halfLifeDays: number;
+  };
+}
+
 export interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
   citations?: 'full' | 'brief' | 'off';
+  search?: HybridSearchConfig;
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────────────

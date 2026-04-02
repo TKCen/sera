@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { MemoryBlockStore } from './MemoryBlockStore.js';
+
+vi.mock('../../lib/database.js', () => ({
+  pool: {
+    query: vi.fn(() => Promise.resolve({ rows: [] })),
+  },
+}));
+
+import { pool } from '../../lib/database.js';
 
 describe('MemoryBlockStore', () => {
   let tmpDir: string;
@@ -211,6 +219,30 @@ describe('MemoryBlockStore', () => {
     const results = await store.search('special');
     expect(results).toHaveLength(1);
     expect(results[0]!.title).toBe('Tagged');
+  });
+
+  it('should perform full-text search using PostgreSQL', async () => {
+    const mockRows = [
+      {
+        id: '1',
+        title: 'FTS Result',
+        type: 'core',
+        content: 'FTS Content',
+        tags: ['fts'],
+        importance: 5,
+        created_at: new Date(),
+        updated_at: new Date(),
+        rank: 0.9,
+      },
+    ];
+    vi.mocked(pool.query).mockResolvedValueOnce({ rows: mockRows } as any);
+
+    const results = await store.searchFullText('query', ['namespace'], 5);
+
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('ts_rank'), expect.any(Array));
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('1');
+    expect((results[0] as any).score).toBe(0.9);
   });
 
   it('should respect search limit', async () => {

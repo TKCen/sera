@@ -42,6 +42,23 @@ export interface SearchResult {
   score: number;
   payload: VectorPayload;
   namespace: MemoryNamespace;
+  vector?: number[];
+}
+
+export interface HybridSearchConfig {
+  vectorWeight: number;
+  textWeight: number;
+  minScore: number;
+  maxResults: number;
+  mmr?: {
+    enabled: boolean;
+    lambda: number;
+    candidateMultiplier: number;
+  };
+  temporalDecay?: {
+    enabled: boolean;
+    halfLifeDays: number;
+  };
 }
 
 export interface SearchFilter {
@@ -126,7 +143,8 @@ export class VectorService {
     namespaces: MemoryNamespace[],
     queryVector: number[],
     topK: number,
-    filter?: SearchFilter
+    filter?: SearchFilter,
+    withVectors = false
   ): Promise<SearchResult[]> {
     const perNamespace = Math.max(Math.ceil(topK / namespaces.length), topK);
     const allResults: SearchResult[] = [];
@@ -140,6 +158,7 @@ export class VectorService {
             vector: queryVector,
             limit: perNamespace,
             with_payload: true,
+            with_vector: withVectors,
           };
           if (qdrantFilter) {
             searchParams.filter = qdrantFilter as Record<string, unknown>;
@@ -151,6 +170,7 @@ export class VectorService {
               score: r.score,
               payload: (r.payload ?? {}) as VectorPayload,
               namespace: ns,
+              vector: r.vector as number[] | undefined,
             });
           }
         } catch (err) {
@@ -163,6 +183,143 @@ export class VectorService {
     // Merge and sort by score descending, take top topK
     allResults.sort((a, b) => b.score - a.score);
     return allResults.slice(0, topK);
+  }
+
+  /**
+   * Hybrid search combining vector + full-text results with MMR and temporal decay.
+   */
+  async hybridSearch(
+    queryVector: number[],
+    vectorResults: SearchResult[],
+    textResults: SearchResult[],
+    config: HybridSearchConfig
+  ): Promise<SearchResult[]> {
+    const combinedMap = new Map<string | number, SearchResult & { vectorScore?: number; textScore?: number }>();
+
+    // Normalize and add vector results
+    const maxVectorScore = Math.max(...vectorResults.map(r => r.score), 0) || 1;
+    for (const r of vectorResults) {
+      combinedMap.set(r.id, { ...r, vectorScore: r.score / maxVectorScore });
+    }
+
+    // Normalize and add text results
+    const maxTextScore = Math.max(...textResults.map(r => r.score), 0) || 1;
+    for (const r of textResults) {
+      const existing = combinedMap.get(r.id);
+      if (existing) {
+        existing.textScore = r.score / maxTextScore;
+      } else {
+        combinedMap.set(r.id, { ...r, textScore: r.score / maxTextScore });
+      }
+    }
+
+    let results = Array.from(combinedMap.values());
+
+    // Calculate final hybrid score
+    for (const r of results) {
+      const vs = r.vectorScore ?? 0;
+      const ts = r.textScore ?? 0;
+      r.score = config.vectorWeight * vs + config.textWeight * ts;
+
+      // Apply Temporal Decay
+      if (config.temporalDecay?.enabled && r.payload.created_at) {
+        const ageInDays = (Date.now() - new Date(r.payload.created_at).getTime()) / (1000 * 60 * 60 * 24);
+        const decayFactor = Math.pow(2, -ageInDays / config.temporalDecay.halfLifeDays);
+        r.score *= decayFactor;
+      }
+    }
+
+    // Filter by minScore and sort
+    results = results.filter(r => r.score >= config.minScore);
+    results.sort((a, b) => b.score - a.score);
+
+    // Apply MMR Re-ranking
+    if (config.mmr?.enabled && results.length > 0) {
+      // Ensure all candidates have vectors
+      const missingVectorIds = results.filter(r => !r.vector).map(r => r.id);
+      if (missingVectorIds.length > 0) {
+        // Fetch missing vectors from Qdrant
+        // Note: Qdrant client retrieve can fetch by IDs
+        // For multi-namespace, we might need to check which namespace the result came from.
+        // For simplicity, we'll try to fetch from all namespaces or assume they are accessible.
+        // Actually, SearchResult has namespace.
+        const namespaceGroups = new Map<MemoryNamespace, string[]>();
+        for (const r of results) {
+          if (!r.vector) {
+            const group = namespaceGroups.get(r.namespace) ?? [];
+            group.push(String(r.id));
+            namespaceGroups.set(r.namespace, group);
+          }
+        }
+
+        await Promise.all(Array.from(namespaceGroups.entries()).map(async ([ns, ids]) => {
+          try {
+            const points = await this.client.retrieve(collectionName(ns), {
+              ids,
+              with_vector: true,
+            });
+            for (const p of points) {
+              const res = results.find(r => r.id === p.id);
+              if (res && p.vector) {
+                res.vector = p.vector as number[];
+              }
+            }
+          } catch (err) {
+            logger.warn(`Failed to retrieve vectors for MMR from ${ns}`, err);
+          }
+        }));
+      }
+
+      results = this.applyMMR(results, queryVector, config.mmr.lambda, config.maxResults);
+    } else {
+      results = results.slice(0, config.maxResults);
+    }
+
+    return results;
+  }
+
+  private applyMMR(
+    candidates: SearchResult[],
+    queryVector: number[],
+    lambda: number,
+    topK: number
+  ): SearchResult[] {
+    const selected: SearchResult[] = [];
+    const remaining = [...candidates];
+
+    // Select the first one (highest score)
+    const first = remaining.shift()!;
+    selected.push(first);
+
+    while (selected.length < topK && remaining.length > 0) {
+      let bestScore = -Infinity;
+      let bestIdx = -1;
+
+      for (let i = 0; i < remaining.length; i++) {
+        const candidate = remaining[i]!;
+        if (!candidate.vector) continue; // Should have vectors for MMR
+
+        // Max similarity to already selected results
+        let maxSim = -Infinity;
+        for (const s of selected) {
+          if (!s.vector) continue;
+          const sim = cosineSimilarity(candidate.vector, s.vector);
+          if (sim > maxSim) maxSim = sim;
+        }
+
+        // MMR Score = lambda * relevance - (1 - lambda) * max_similarity
+        const mmrScore = lambda * candidate.score - (1 - lambda) * maxSim;
+        if (mmrScore > bestScore) {
+          bestScore = mmrScore;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx === -1) break;
+      selected.push(remaining.splice(bestIdx, 1)[0]!);
+    }
+
+    return selected;
   }
 
   // ── Delete ─────────────────────────────────────────────────────────────────
@@ -294,6 +451,18 @@ export class VectorService {
 }
 
 // ── Filter helpers ─────────────────────────────────────────────────────────────
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i]! * b[i]!;
+    normA += a[i]! * a[i]!;
+    normB += b[i]! * b[i]!;
+  }
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
 
 function buildQdrantFilter(filter?: SearchFilter): object | undefined {
   if (!filter) return undefined;

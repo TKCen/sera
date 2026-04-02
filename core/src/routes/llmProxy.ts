@@ -169,7 +169,10 @@ export function createLlmProxyRouter(
               }
 
               // Collect injected memory blocks for citation metadata
-              if (event.stage === 'context.memory_retrieved' && Array.isArray(event.detail?.blocks)) {
+              if (
+                event.stage === 'context.memory_retrieved' &&
+                Array.isArray(event.detail?.blocks)
+              ) {
                 injectedBlocks.push(...(event.detail.blocks as typeof injectedBlocks));
               }
             }

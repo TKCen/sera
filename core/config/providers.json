@@ -17,10 +17,11 @@
       "baseUrl": "http://host.docker.internal:1234/v1",
       "apiKey": "lm-studio",
       "description": "Qwen 3.5 35B A3B via LM Studio",
-      "contextWindow": 131072,
+      "contextWindow": 190000,
       "maxTokens": 8192,
-      "contextStrategy": "sliding-window",
-      "reasoning": true
+      "contextStrategy": "summarize",
+      "reasoning": true,
+      "contextHighWaterMark": 0.8
     },
     {
       "modelName": "ollama-local",
@@ -31,6 +32,29 @@
       "description": "Local Ollama instance (host port 11434) — generic alias",
       "contextWindow": 32768,
       "maxTokens": 4096
+    },
+    {
+      "modelName": "dp-agw-qwen/qwen3.5-35b-a3b",
+      "api": "openai-completions",
+      "provider": "lmstudio",
+      "baseUrl": "http://host.docker.internal:1234/v1",
+      "apiKey": "lm-studio",
+      "description": "Discovered from af (qwen/qwen3.5-35b-a3b)",
+      "dynamicProviderId": "agw",
+      "contextWindow": 190000,
+      "maxTokens": 8192,
+      "contextStrategy": "summarize",
+      "contextHighWaterMark": 0.8,
+      "reasoning": true
+    },
+    {
+      "modelName": "dp-agw-text-embedding-embeddinggemma-300m-qat",
+      "api": "openai-completions",
+      "provider": "lmstudio",
+      "baseUrl": "http://host.docker.internal:1234/v1",
+      "apiKey": "lm-studio",
+      "description": "Discovered from af (text-embedding-embeddinggemma-300m-qat)",
+      "dynamicProviderId": "agw"
     }
   ]
 }

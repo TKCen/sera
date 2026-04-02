@@ -128,7 +128,10 @@ describe('useProviders hooks', () => {
     });
 
     it('useSetActiveProvider should set active provider and invalidate llmConfig query', async () => {
-      vi.mocked(providersApi.setActiveProvider).mockResolvedValue({ success: true, defaultModel: 'test' });
+      vi.mocked(providersApi.setActiveProvider).mockResolvedValue({
+        success: true,
+        defaultModel: 'test',
+      });
       const { result } = renderHook(() => useSetActiveProvider(), { wrapper: TestWrapper });
 
       await result.current.mutateAsync('test-model');
@@ -170,7 +173,13 @@ describe('useProviders hooks', () => {
       vi.mocked(providersApi.addDynamicProvider).mockResolvedValue(mockResult as any);
       const { result } = renderHook(() => useAddDynamicProvider(), { wrapper: TestWrapper });
 
-      const config = { name: 'test', type: 'lm-studio' as const, baseUrl: 'url', enabled: true, intervalMs: 1000 };
+      const config = {
+        name: 'test',
+        type: 'lm-studio' as const,
+        baseUrl: 'url',
+        enabled: true,
+        intervalMs: 1000,
+      };
       await result.current.mutateAsync(config as any);
 
       expect(providersApi.addDynamicProvider).toHaveBeenCalledWith(config);
@@ -195,7 +204,10 @@ describe('useProviders hooks', () => {
     });
 
     it('useAddProvider should add provider and invalidate providers query', async () => {
-      vi.mocked(providersApi.addProvider).mockResolvedValue({ modelName: 'test', result: { modelName: 'test', api: 'api' } });
+      vi.mocked(providersApi.addProvider).mockResolvedValue({
+        modelName: 'test',
+        result: { modelName: 'test', api: 'api' },
+      });
       const { result } = renderHook(() => useAddProvider(), { wrapper: TestWrapper });
 
       const payload = { modelName: 'test', api: 'api' };

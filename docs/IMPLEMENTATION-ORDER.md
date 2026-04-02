@@ -18,25 +18,25 @@ Each phase produces a meaningful, runnable milestone — not just a collection o
 
 Stories drawn from Epics 04, 05, 12, 13.
 
-| Step | What | Issue | Notes |
-|------|------|-------|-------|
-| A.1 | Fix Sera agent model name resolution | #552 | Config fix — model name must match providers.json |
-| A.2 | Verify apiKey propagation for local LLM | #497 | Use static providers.json entry for LM Studio |
-| A.3 | Verify streaming error surfacing | #553 | PR #561 merged — verify fix works e2e |
-| A.4 | E2E smoke test (Tests 1–3) | #564 | Basic chat, tool use, error handling |
-| A.5 | Display reasoning steps in chat UI | #455 | Thought stream data arrives, rendering needs work |
-| A.6 | Web UI CRUD for agents | #317 | Delegate sub-tasks to Jules |
+| Step | What                                    | Issue | Notes                                             |
+| ---- | --------------------------------------- | ----- | ------------------------------------------------- |
+| A.1  | Fix Sera agent model name resolution    | #552  | Config fix — model name must match providers.json |
+| A.2  | Verify apiKey propagation for local LLM | #497  | Use static providers.json entry for LM Studio     |
+| A.3  | Verify streaming error surfacing        | #553  | PR #561 merged — verify fix works e2e             |
+| A.4  | E2E smoke test (Tests 1–3)              | #564  | Basic chat, tool use, error handling              |
+| A.5  | Display reasoning steps in chat UI      | #455  | Thought stream data arrives, rendering needs work |
+| A.6  | Web UI CRUD for agents                  | #317  | Delegate sub-tasks to Jules                       |
 
 ### Track B: Discord Integration (week 2–3, after Track A.4 passes)
 
 Stories drawn from Epic 18.
 
-| Step | What | Notes |
-|------|------|-------|
-| B.1 | Deprecate legacy DiscordAdapter | Remove instantiation from `index.ts`, wire `DiscordChatAdapter` as default |
-| B.2 | Verify container routing e2e via Discord | `DiscordChatAdapter` already routes through containers with session management |
-| B.3 | Implement slash command registration | `/ask`, `/status`, `/history`, `/reset` — genuinely missing |
-| B.4 | Setup guide for Discord bot token | Document env var configuration |
+| Step | What                                     | Notes                                                                          |
+| ---- | ---------------------------------------- | ------------------------------------------------------------------------------ |
+| B.1  | Deprecate legacy DiscordAdapter          | Remove instantiation from `index.ts`, wire `DiscordChatAdapter` as default     |
+| B.2  | Verify container routing e2e via Discord | `DiscordChatAdapter` already routes through containers with session management |
+| B.3  | Implement slash command registration     | `/ask`, `/status`, `/history`, `/reset` — genuinely missing                    |
+| B.4  | Setup guide for Discord bot token        | Document env var configuration                                                 |
 
 **Note:** `DiscordChatAdapter` already implements session management, typing indicators, chunked messages, and DM support. Track B is days, not weeks.
 
@@ -44,18 +44,19 @@ Stories drawn from Epic 18.
 
 Stories drawn from Epics 08, 13.
 
-| Step | What | Issue | Notes |
-|------|------|-------|-------|
-| C.0 | **PREREQUISITE:** Embedding model in LM Studio | — | Load `text-embedding-embeddinggemma-300m-qat` (or `nomic-embed-text`). Configure `core/config/embedding.json` with `provider: "lm-studio"`, matching baseUrl and dimension. |
-| C.1 | Verify Qdrant collections auto-create on startup | — | Fresh Qdrant may not have namespace collections |
-| C.2 | Verify knowledge-store → Qdrant → ContextAssembler cycle | — | Full RAG retrieval path |
-| C.3 | Add startup warning when embedding service unavailable | — | Currently silently skips RAG |
-| C.4 | DELETE memory blocks endpoint | #465 | PR #556 exists but has CI failure — fix and merge |
-| C.5 | Memory exploration UI | #352 | Operators need to see what the agent remembers |
+| Step | What                                                     | Issue | Notes                                                                                                                                                                       |
+| ---- | -------------------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C.0  | **PREREQUISITE:** Embedding model in LM Studio           | —     | Load `text-embedding-embeddinggemma-300m-qat` (or `nomic-embed-text`). Configure `core/config/embedding.json` with `provider: "lm-studio"`, matching baseUrl and dimension. |
+| C.1  | Verify Qdrant collections auto-create on startup         | —     | Fresh Qdrant may not have namespace collections                                                                                                                             |
+| C.2  | Verify knowledge-store → Qdrant → ContextAssembler cycle | —     | Full RAG retrieval path                                                                                                                                                     |
+| C.3  | Add startup warning when embedding service unavailable   | —     | Currently silently skips RAG                                                                                                                                                |
+| C.4  | DELETE memory blocks endpoint                            | #465  | PR #556 exists but has CI failure — fix and merge                                                                                                                           |
+| C.5  | Memory exploration UI                                    | #352  | Operators need to see what the agent remembers                                                                                                                              |
 
 ### v1 Gate
 
 All three tracks must pass the [5-scenario smoke test (#564)](https://github.com/TKCen/sera/issues/564):
+
 1. **Basic Chat** — send message, receive streamed response with thoughts
 2. **Tool Use** — agent creates a file via tool, confirms success
 3. **Error Handling** — meaningful error on LLM failure (not infinite spinner)
@@ -70,18 +71,19 @@ All three tracks must pass the [5-scenario smoke test (#564)](https://github.com
 
 **Target state:** A configured agent that uses skills and MCP tools, has enhanced memory with hybrid search, can be scheduled, has a full chat interface, and a meaningful audit trail.
 
-| Epic | Stories to implement | Notes |
-|---|---|---|
-| **06 Skill Library** | All (6.1–6.6) | Skills injected into agent context |
-| **07 MCP Tool Registry** | 7.1–7.6, 7.8 | Containerised MCP servers; SERA MCP Extension Protocol. Story 7.7 (sera-core as MCP server) in Phase 2. |
-| **08 Memory & RAG** | Remaining: 8.1–8.7, 8.8 | Enhanced memory — hybrid search, categorization, hierarchical scopes |
-| **09 Real-Time Messaging** | 9.1–9.5, 9.7 | Channels, IntercomService, thought persistence. Webhooks (9.8) and federation (9.6) lower priority. |
-| **11 Scheduling & Audit** | 11.1–11.5 | Schedule engine + audit trail. Export (11.6) is convenience. |
-| **03 Docker Sandbox** | 3.9, 3.10, 3.11, 3.12 | Permission requests, dynamic mounts, recursion guard, disk quotas |
-| **05 Agent Runtime** | 5.8, 5.9 + enhancements | Task queue + result storage, compaction strategy (#501), system prompt builder (#500) |
-| **13 sera-web Agent UX** | 13.1–13.6 (Phase 1), 13.7–13.12 (Phase 2) | Core: agent list/detail/create, chat, thoughts, memory graph |
-| **14 sera-web Observability** | 14.1–14.4 | Token usage, budget UI, audit log viewer, provider management |
-| **20 Egress Proxy** | 20.1–20.7 | Squid forward proxy on agent_net, per-agent ACLs, audit integration, egress metering |
+| Epic                                   | Stories to implement                      | Notes                                                                                                               |
+| -------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **06 Skill Library**                   | All (6.1–6.6)                             | Skills injected into agent context                                                                                  |
+| **07 MCP Tool Registry**               | 7.1–7.6, 7.8                              | Containerised MCP servers; SERA MCP Extension Protocol. Story 7.7 (sera-core as MCP server) in Phase 2.             |
+| **08 Memory & RAG**                    | Remaining: 8.1–8.7, 8.8                   | Enhanced memory — hybrid search, categorization, hierarchical scopes                                                |
+| **09 Real-Time Messaging**             | 9.1–9.5, 9.7                              | Channels, IntercomService, thought persistence. Webhooks (9.8) and federation (9.6) lower priority.                 |
+| **11 Scheduling & Audit**              | 11.1–11.5                                 | Schedule engine + audit trail. Export (11.6) is convenience.                                                        |
+| **03 Docker Sandbox**                  | 3.9, 3.10, 3.11, 3.12                     | Permission requests, dynamic mounts, recursion guard, disk quotas                                                   |
+| **05 Agent Runtime**                   | 5.8, 5.9 + enhancements                   | Task queue + result storage, compaction strategy (#501), system prompt builder (#500)                               |
+| **13 sera-web Agent UX**               | 13.1–13.6 (Phase 1), 13.7–13.12 (Phase 2) | Core: agent list/detail/create, chat, thoughts, memory graph                                                        |
+| **14 sera-web Observability**          | 14.1–14.4                                 | Token usage, budget UI, audit log viewer, provider management                                                       |
+| **20 Egress Proxy**                    | 20.1–20.7                                 | Squid forward proxy on agent_net, per-agent ACLs, audit integration, egress metering                                |
+| **27 Interactive Setup & Diagnostics** | 27.1–27.6                                 | `sera doctor`, setup wizard, provider/channel setup flows, health dashboard, onboarding checklist. OpenClaw parity. |
 
 **Phase 1 milestone:** Multiple configured agents with skills and MCP tools, with memory that persists across sessions, scheduled tasks running overnight, network egress audited and metered, and a complete operator UI.
 
@@ -91,19 +93,19 @@ All three tracks must pass the [5-scenario smoke test (#564)](https://github.com
 
 **Target state:** Multi-operator ready (OIDC, RBAC enforced), full delegation model, external notification channels, and a plugin SDK for community contributions.
 
-| Epic | Stories to implement | Notes |
-|---|---|---|
-| **16 Auth & Secrets** | 16.1, 16.2, 16.5–16.12 | Full OIDC, Authentik, web UI auth flow, CLI device flow, secrets interface, injection, rotation, out-of-band secret entry (16.12) |
-| **13 sera-web Agent UX** | 13.7–13.12 | Permission approval UI, grants viewer, circle mgmt, secret entry modal, delegation UI, Centrifugo indicator |
-| **17 Agent Identity & Delegation** | All (17.1–17.9) | ActingContext, service identities, operator/agent delegation, credential resolver, audit chain |
-| **07 MCP Tool Registry** | 7.7 | sera-core as MCP server — Sera can now orchestrate the full instance |
-| **10 Circles & Coordination** | All (10.1–10.6) | Circle management, constitutions, orchestration patterns, party mode |
-| **18 Integration Channels** | All (18.1–18.10) | Unified channel model (ingress+egress), Slack/email/webhook adapters, actionable HitL, alert rules, topology UI (18.9), activity dashboard (18.10) |
-| **15 Plugin SDK** | All (15.1–15.8) | Plugin interface, `@sera/mcp-sdk`, contributor docs, `sera` CLI |
-| **14 sera-web Observability** | 14.5–14.6 | System health, schedule management UI |
-| **09 Real-Time Messaging** | 9.6, 9.8 | Federation stub, webhooks |
-| **04 LLM Proxy** | 4.7 | Rate limiting |
-| **01 Infrastructure** | 1.7–1.9 | Backup/restore, instance identity, upgrade path |
+| Epic                               | Stories to implement   | Notes                                                                                                                                              |
+| ---------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **16 Auth & Secrets**              | 16.1, 16.2, 16.5–16.12 | Full OIDC, Authentik, web UI auth flow, CLI device flow, secrets interface, injection, rotation, out-of-band secret entry (16.12)                  |
+| **13 sera-web Agent UX**           | 13.7–13.12             | Permission approval UI, grants viewer, circle mgmt, secret entry modal, delegation UI, Centrifugo indicator                                        |
+| **17 Agent Identity & Delegation** | All (17.1–17.9)        | ActingContext, service identities, operator/agent delegation, credential resolver, audit chain                                                     |
+| **07 MCP Tool Registry**           | 7.7                    | sera-core as MCP server — Sera can now orchestrate the full instance                                                                               |
+| **10 Circles & Coordination**      | All (10.1–10.6)        | Circle management, constitutions, orchestration patterns, party mode                                                                               |
+| **18 Integration Channels**        | All (18.1–18.10)       | Unified channel model (ingress+egress), Slack/email/webhook adapters, actionable HitL, alert rules, topology UI (18.9), activity dashboard (18.10) |
+| **15 Plugin SDK**                  | All (15.1–15.8)        | Plugin interface, `@sera/mcp-sdk`, contributor docs, `sera` CLI                                                                                    |
+| **14 sera-web Observability**      | 14.5–14.6              | System health, schedule management UI                                                                                                              |
+| **09 Real-Time Messaging**         | 9.6, 9.8               | Federation stub, webhooks                                                                                                                          |
+| **04 LLM Proxy**                   | 4.7                    | Rate limiting                                                                                                                                      |
+| **01 Infrastructure**              | 1.7–1.9                | Backup/restore, instance identity, upgrade path                                                                                                    |
 
 **Phase 2 milestone:** Multiple operators with distinct identities and roles, agents delegating credentials, community-published MCP tools working in SERA, Discord-based HitL approvals, and a plugin SDK for the ecosystem.
 
@@ -113,12 +115,12 @@ All three tracks must pass the [5-scenario smoke test (#564)](https://github.com
 
 **Target state:** All legacy shims removed, one coherent memory model, fully tested internals. IDE integration operational. Safe to hand off to community contributors.
 
-| Epic | Stories to implement | Notes |
-|---|---|---|
-| **19 Memory System Consolidation** | All (19.1–19.5) | Retire Letta-style memory; migrate BaseAgent/WorkerAgent to Epic 8 scoped model; remove MemoryManager, Reflector; on-disk migration for legacy files |
-| **21 ACP / IDE Bridge** | All | ACP stdio server, session mapping, multi-agent routing from IDE, sub-agent spawning, CWD injection, thinking level control |
-| **23 Voice Interface** | Initial stories | Voice input via Web Speech API, TTS output, voice-to-chat routing, push-to-talk in sera-web |
-| **24 A2A Federation Protocol** | All | Google A2A protocol (Linux Foundation standard) for external federation. Inbound A2A server, outbound client, Agent Card generation, instance pairing, capability gate. Internal comms stay on Centrifugo. |
+| Epic                               | Stories to implement | Notes                                                                                                                                                                                                      |
+| ---------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **19 Memory System Consolidation** | All (19.1–19.5)      | Retire Letta-style memory; migrate BaseAgent/WorkerAgent to Epic 8 scoped model; remove MemoryManager, Reflector; on-disk migration for legacy files                                                       |
+| **21 ACP / IDE Bridge**            | All                  | ACP stdio server, session mapping, multi-agent routing from IDE, sub-agent spawning, CWD injection, thinking level control                                                                                 |
+| **23 Voice Interface**             | Initial stories      | Voice input via Web Speech API, TTS output, voice-to-chat routing, push-to-talk in sera-web                                                                                                                |
+| **24 A2A Federation Protocol**     | All                  | Google A2A protocol (Linux Foundation standard) for external federation. Inbound A2A server, outbound client, Agent Card generation, instance pairing, capability gate. Internal comms stay on Centrifugo. |
 
 **Phase 3 milestone:** Zero references to the old Letta memory system; developers can work with SERA agent teams from their IDE via ACP; basic voice interaction in sera-web; SERA instances federate via industry-standard A2A protocol.
 
@@ -128,12 +130,29 @@ All three tracks must pass the [5-scenario smoke test (#564)](https://github.com
 
 **Target state:** Agents can push dynamic, interactive UI to the dashboard. Companion apps on the horizon.
 
-| Epic | Stories to implement | Notes |
-|---|---|---|
-| **22 Canvas / A2UI** | All | A2UI message format, canvas panel in sera-web, agent canvas tools, Centrifugo streaming, component catalog |
-| **23 Voice Interface** | Advanced stories | Wake words, continuous listening, companion app voice (deferred until mobile apps) |
+| Epic                   | Stories to implement | Notes                                                                                                      |
+| ---------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **22 Canvas / A2UI**   | All                  | A2UI message format, canvas panel in sera-web, agent canvas tools, Centrifugo streaming, component catalog |
+| **23 Voice Interface** | Advanced stories     | Wake words, continuous listening, companion app voice (deferred until mobile apps)                         |
 
 **Phase 4 milestone:** Agents render rich visual output (dashboards, forms, visualisations) in the sera-web canvas panel alongside chat.
+
+---
+
+## Phase 5 — Multimodal & Channel Breadth: Media, image generation, extended channels
+
+**Target state:** Agents process multimodal inputs (audio, images, video, PDFs), generate images, use advanced web research tools, and are reachable on Telegram, WhatsApp, Signal, Matrix, and iMessage.
+
+| Epic                             | Stories to implement | Notes                                                                                                                                                 |
+| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **25 Media Processing Pipeline** | All (25.1–25.7)      | Audio transcription (Whisper/Deepgram), image analysis (vision models), PDF extraction, video understanding, channel media handling. OpenClaw parity. |
+| **26 Extended Channel Adapters** | All (26.1–26.6)      | Telegram, WhatsApp, Signal, Matrix, iMessage adapters + channel plugin architecture. OpenClaw parity.                                                 |
+| **28 Image Generation**          | All (28.1–28.5)      | Multi-provider image gen (DALL-E, Stability, ComfyUI/A1111), `generate-image` tool, image display in chat/canvas. OpenClaw parity.                    |
+| **29 Enhanced Web Intelligence** | All (29.1–29.6)      | Multi-provider search (SearXNG, Brave, Tavily), readability extraction, citation tracking, SSRF-safe client, JS rendering. OpenClaw parity.           |
+
+**Note:** Epic 27 (Interactive Setup & Diagnostics) is Phase 1 priority — it slots into Phase 1 alongside the `sera` CLI work in Epic 15.
+
+**Phase 5 milestone:** Agents understand images, audio, video, and PDFs. Agents generate images. Agents perform sophisticated web research with citations. SERA is reachable on 8+ messaging platforms via a pluggable channel architecture.
 
 ---
 
@@ -166,6 +185,15 @@ Epic 12/13 (sera-web) → Epic 23 (Voice UI in sera-web)
 Epic 09 (Real-Time Messaging) → Epic 24 (Federation uses intercom)
 Epic 16 (Auth) → Epic 24 (Instance authentication)
 Epic 17 (Agent Identity) → Epic 24 (Cross-instance agent identity)
+Epic 18 (Integration Channels) → Epic 26 (Extended channel adapters use Channel interface)
+Epic 16 (Auth & Secrets) → Epic 26 (API tokens stored in SecretsProvider)
+Epic 25 (Media Processing) → Epic 26 (channel media forwarded to media pipeline)
+Epic 04 (LLM Proxy) → Epic 25 (vision model routing for image analysis)
+Epic 05 (Agent Runtime) → Epic 25 (media tools registered in agent inventory)
+Epic 15 (Plugin SDK) → Epic 27 (CLI commands extend sera CLI)
+Epic 04 (LLM Proxy) → Epic 28 (budget enforcement for image generation)
+Epic 05 (Agent Runtime) → Epic 29 (web tools registered in agent inventory)
+Epic 20 (Egress Proxy) → Epic 29 (SSRF-safe fetch routes through proxy)
 ```
 
 ---
@@ -180,11 +208,11 @@ Within each epic, implement stories in the order they are written — the number
 
 Once Phase 0 (v1 Prototype) gate passes, Phase 1 work can be parallelised across tracks. Suggested agent assignments if multiple agents implement in parallel:
 
-| Track | Epics | Best agent |
-|---|---|---|
-| **Core runtime** | 05 (remaining), 06, 07 | Claude Code |
-| **Data & memory** | 08, 11 | Claude Code or Jules |
-| **UI** | 13, 14 | Jules or Antigravity |
-| **Messaging** | 09 | Claude Code |
+| Track             | Epics                  | Best agent           |
+| ----------------- | ---------------------- | -------------------- |
+| **Core runtime**  | 05 (remaining), 06, 07 | Claude Code          |
+| **Data & memory** | 08, 11                 | Claude Code or Jules |
+| **UI**            | 13, 14                 | Jules or Antigravity |
+| **Messaging**     | 09                     | Claude Code          |
 
 Tracks are independent after Phase 0 is complete. The seams between tracks (context assembly calling memory, UI consuming audit API) are well-defined API contracts — teams can build against mocks until the implementation is ready.

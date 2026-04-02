@@ -16,6 +16,8 @@ export class NotPermittedError extends Error {
   }
 }
 
+export type ToolErrorType = 'recoverable' | 'fatal';
+
 /** Max output length in bytes (50 KB). */
 export const MAX_RESULT_BYTES = 50_000;
 

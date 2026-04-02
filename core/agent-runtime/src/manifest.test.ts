@@ -52,7 +52,7 @@ describe('generateSystemPrompt', () => {
     const prompt = generateSystemPrompt(baseManifest);
     expect(prompt).toContain('You are Test Agent');
     expect(prompt).toContain('Role: Test role');
-    expect(prompt).not.toContain('## Notes');
+    expect(prompt).not.toContain('## Agent Notes');
     expect(prompt).not.toContain('## Workspace Context');
   });
 
@@ -62,7 +62,7 @@ describe('generateSystemPrompt', () => {
       notes: 'Always respond in JSON format.',
     };
     const prompt = generateSystemPrompt(manifest);
-    expect(prompt).toContain('## Notes');
+    expect(prompt).toContain('## Agent Notes');
     expect(prompt).toContain('Always respond in JSON format.');
   });
 

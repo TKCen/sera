@@ -822,7 +822,7 @@ export function createAgentRouter(
   router.post(
     '/:id/command-logs',
     asyncHandler(async (req, res) => {
-      const { sessionId, toolName, arguments: toolArgs, result, durationMs, status } = req.body;
+      const { sessionId, toolName, arguments: toolArgs, result, durationMs, status, errorType } = req.body;
       const agentInstanceId = req.params['id'] as string;
 
       if (!sessionId || !toolName || !status) {
@@ -832,8 +832,8 @@ export function createAgentRouter(
 
       await dbPool.query(
         `INSERT INTO agent_command_log
-           (session_id, agent_instance_id, tool_name, arguments, result, duration_ms, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (session_id, agent_instance_id, tool_name, arguments, result, duration_ms, status, error_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           sessionId,
           agentInstanceId,
@@ -842,6 +842,7 @@ export function createAgentRouter(
           result,
           durationMs,
           status,
+          errorType,
         ]
       );
 

@@ -13,7 +13,7 @@ import {
   ToolArgumentParseError,
 } from '../toolArgumentRepair.js';
 import { log } from '../logger.js';
-import { PermissionDeniedError, AGENT_ID } from './types.js';
+import { PermissionDeniedError, AGENT_ID, ToolErrorType } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
 import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
 import type { RuntimeManifest } from '../manifest.js';
@@ -27,6 +27,7 @@ export interface ToolExecutionResult {
   toolName: string;
   argRepaired: boolean;
   repairStrategy: string | null;
+  errorType?: ToolErrorType;
 }
 
 /** Local tool names that are handled natively in the container. */
@@ -187,6 +188,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
           toolName,
           argRepaired: false,
           repairStrategy: null,
+          errorType: 'recoverable',
         };
       }
 
@@ -285,16 +287,25 @@ export class RuntimeToolExecutor implements IToolExecutor {
         });
       }
 
+      const isError = finalResult.startsWith('Error:');
       if (this.manifest?.logging?.commands && sessionId) {
-        this.sendCommandLog(sessionId, toolName, params, finalResult, durationMs, 'success');
+        this.sendCommandLog(
+          sessionId,
+          toolName,
+          params,
+          finalResult,
+          durationMs,
+          isError ? 'error' : 'success',
+          isError ? 'recoverable' : undefined
+        );
       }
-
 
       return {
         message: { role: 'tool', tool_call_id: id, content: finalResult },
         toolName,
         argRepaired,
         repairStrategy,
+        errorType: isError ? 'recoverable' : undefined,
       };
     } catch (err) {
       const durationMs = Date.now() - start;
@@ -311,6 +322,18 @@ export class RuntimeToolExecutor implements IToolExecutor {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.logInvocation(toolName, 'error', durationMs);
 
+      // Distinguish between recoverable and fatal errors
+      // Fatal errors are infrastructure failures (network, container issues)
+      // Tool-level errors (permission, path, etc.) are recoverable
+      const errorType: ToolErrorType =
+        err instanceof PermissionDeniedError ||
+        err instanceof ToolArgumentParseError ||
+        errorMsg.includes('Permission denied') ||
+        errorMsg.includes('not found') ||
+        errorMsg.includes('Exit code:')
+          ? 'recoverable'
+          : 'fatal';
+
       if (this.manifest?.logging?.commands && sessionId) {
         let parsedArgs = {};
         try {
@@ -318,7 +341,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
         } catch {
           /* best effort */
         }
-        this.sendCommandLog(sessionId, toolName, parsedArgs, errorMsg, durationMs, 'error');
+        this.sendCommandLog(sessionId, toolName, parsedArgs, errorMsg, durationMs, 'error', errorType);
       }
 
       return {
@@ -326,6 +349,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
         toolName,
         argRepaired: false,
         repairStrategy: null,
+        errorType,
       };
     }
   }
@@ -440,7 +464,8 @@ export class RuntimeToolExecutor implements IToolExecutor {
     args: Record<string, unknown>,
     result: string,
     durationMs: number,
-    status: 'success' | 'error'
+    status: 'success' | 'error',
+    errorType?: ToolErrorType
   ): Promise<void> {
     const coreUrl = process.env['SERA_CORE_URL'] ?? '';
     const token = process.env['SERA_IDENTITY_TOKEN'] ?? '';
@@ -467,6 +492,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
           result: truncatedResult,
           durationMs,
           status,
+          errorType,
         }),
       });
     } catch (err) {

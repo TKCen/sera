@@ -111,4 +111,67 @@ describe('ReasoningLoop E2E', () => {
     expect(llm.getCallCount()).toBe(2);
     expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: Error: Unknown tool "unknown"'), 1, undefined);
   });
+
+  it('injects guidance after 5 consecutive tool errors', async () => {
+    const llm = new ScriptedLLMClient([
+      { toolCalls: [{ id: 'c1', type: 'function', function: { name: 'echo', arguments: '{"text":"fail"}' } }] },
+      { toolCalls: [{ id: 'c2', type: 'function', function: { name: 'echo', arguments: '{"text":"fail"}' } }] },
+      { toolCalls: [{ id: 'c3', type: 'function', function: { name: 'echo', arguments: '{"text":"fail"}' } }] },
+      { toolCalls: [{ id: 'c4', type: 'function', function: { name: 'echo', arguments: '{"text":"fail"}' } }] },
+      { toolCalls: [{ id: 'c5', type: 'function', function: { name: 'echo', arguments: '{"text":"fail"}' } }] },
+      { content: 'Okay, I will try something else.' },
+    ]);
+
+    const tools = new StaticToolExecutor().register(echoTool, (args) => {
+      const parsed = JSON.parse(args);
+      if (parsed.text === 'fail') return 'Error: Something went wrong';
+      return parsed.text;
+    });
+
+    const publisher = createMockPublisher();
+    const loop = new ReasoningLoop(llm, tools, publisher, mockManifest);
+
+    await loop.run({ taskId: 't-fail', task: 'Try 6 times' });
+
+    // 6 LLM calls: 5 for tool calls, 1 for final response
+    expect(llm.getCallCount()).toBe(6);
+
+    // Verify guidance was injected into history (passed to the 6th LLM call)
+    const lastCallMessages = llm.getHistory(5);
+    const guidanceMsg = lastCallMessages.find(m => m.role === 'system' && m.content.includes('multiple consecutive tool errors'));
+    expect(guidanceMsg).toBeDefined();
+
+    expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Injected guidance'), 5, expect.any(Object));
+  });
+
+  it('fails task on fatal tool error', async () => {
+    const llm = new ScriptedLLMClient([
+      { toolCalls: [{ id: 'c1', type: 'function', function: { name: 'fatal_tool', arguments: '{}' } }] },
+    ]);
+
+    const fatalTool: ToolDefinition = {
+      type: 'function',
+      function: { name: 'fatal_tool', description: 'Fails fatally', parameters: { type: 'object', properties: {} } },
+    };
+
+    const tools = new StaticToolExecutor().register(fatalTool, () => {
+      throw new Error('Infrastructure failure');
+    });
+
+    // Mock executor to return fatal error type (StaticToolExecutor doesn't do this by default)
+    const originalExecute = tools.executeToolCalls.bind(tools);
+    tools.executeToolCalls = async (calls) => {
+      const results = await originalExecute(calls);
+      results.forEach(r => { if (r.message.content.includes('Infrastructure failure')) r.errorType = 'fatal'; });
+      return results;
+    };
+
+    const publisher = createMockPublisher();
+    const loop = new ReasoningLoop(llm, tools, publisher, mockManifest);
+
+    const output = await loop.run({ taskId: 't-fatal', task: 'Run fatal tool' });
+
+    expect(output.exitReason).toBe('error');
+    expect(output.error).toContain('Fatal tool error in fatal_tool: Error: Infrastructure failure');
+  });
 });

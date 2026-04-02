@@ -15,10 +15,12 @@ import type { CentrifugoPublisher, ToolOutputCallback } from '../centrifugo.js';
  */
 export class ScriptedLLMClient implements ILLMClient {
   private callCount = 0;
+  private callHistories: ChatMessage[][] = [];
+
   constructor(private responses: LLMResponse[]) {}
 
   async chat(
-    _messages: ChatMessage[],
+    messages: ChatMessage[],
     _tools?: ToolDefinition[],
     _temperature?: number,
 
@@ -26,6 +28,7 @@ export class ScriptedLLMClient implements ILLMClient {
     _timeoutMs?: number,
     _model?: string
   ): Promise<LLMResponse> {
+    this.callHistories.push([...messages]);
     const response = this.responses[this.callCount];
     if (!response) {
       throw new Error(
@@ -38,6 +41,10 @@ export class ScriptedLLMClient implements ILLMClient {
 
   getCallCount(): number {
     return this.callCount;
+  }
+
+  getHistory(callIndex: number): ChatMessage[] {
+    return this.callHistories[callIndex];
   }
 }
 

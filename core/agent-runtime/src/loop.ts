@@ -257,6 +257,7 @@ export class ReasoningLoop {
 
     try {
       let iteration = 0;
+      let consecutiveToolErrors = 0;
 
       while (iteration < MAX_ITERATIONS) {
         if (this.shutdownRequested) {
@@ -614,6 +615,34 @@ export class ReasoningLoop {
             });
           };
           const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
+
+          // Track consecutive errors for guidance (Story 5.4)
+          let turnHasError = false;
+          for (const result of toolResults) {
+            if (result.errorType === 'fatal') {
+              throw new Error(`Fatal tool error in ${result.toolName}: ${result.message.content}`);
+            }
+            if (result.errorType === 'recoverable' || result.message.content.startsWith('Error:')) {
+              turnHasError = true;
+            }
+          }
+
+          if (turnHasError) {
+            consecutiveToolErrors++;
+          } else {
+            consecutiveToolErrors = 0;
+          }
+
+          if (consecutiveToolErrors >= 5) {
+            log('warn', `Consecutive tool errors reached ${consecutiveToolErrors} — injecting guidance`);
+            messages.push({
+              role: 'system',
+              content: 'You have encountered multiple consecutive tool errors. Consider a different approach or verify your assumptions before continuing.',
+            });
+            consecutiveToolErrors = 0; // Reset after guidance
+            await think('reflect', 'Injected guidance due to consecutive tool errors', iteration, { anomaly: true });
+          }
+
           for (const result of toolResults) {
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);

@@ -118,7 +118,7 @@ model:
           provider: 'openai',
           name: 'gpt-4',
         },
-        contextFiles: ['README.md'],
+        contextFiles: [{ path: 'README.md', label: 'Readme' }],
         outputFormat: 'Markdown',
       };
 

@@ -228,6 +228,9 @@ describe('ReasoningLoop — memory flush', () => {
 
     // 2. Over threshold (task content ~400 tokens)
     await loop.run({ taskId: 't2', task: 'word '.repeat(200) });
+    // In our implementation, if near limit, it fires memory flush turn, which counts as 1 LLM call,
+    // then it proceeds to the regular turn (another LLM call). Total 2.
+    // However, if the first turn is already over threshold, it might trigger compaction.
     expect(mockChat).toHaveBeenCalledTimes(2);
   });
 });

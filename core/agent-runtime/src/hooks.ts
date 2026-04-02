@@ -70,12 +70,12 @@ export class HookRunner {
   ): Promise<HookRunResult> {
     return new Promise((resolve) => {
       const env = {
-        ...process.env,
         HOOK_EVENT: event,
         HOOK_TOOL_NAME: context.toolName,
         HOOK_TOOL_INPUT: context.toolInput,
         HOOK_TOOL_OUTPUT: context.toolOutput || '',
         HOOK_TOOL_IS_ERROR: context.isError ? '1' : '0',
+        PATH: process.env.PATH, // Keep PATH for finding scripts/binaries
       };
 
       const payload = JSON.stringify({
@@ -93,6 +93,15 @@ export class HookRunner {
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
+
+      let resolved = false;
+      const timeout = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        log('warn', `Hook timed out after 30s: ${command}`);
+        child.kill('SIGKILL');
+        resolve({ status: 'warn', feedback: 'Hook execution timed out after 30s.' });
+      }, 30_000);
 
       let stdout = '';
       let stderr = '';
@@ -112,11 +121,17 @@ export class HookRunner {
       child.stdin?.end();
 
       child.on('error', (err) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
         log('error', `Hook spawn error (${command}): ${err.message}`);
         resolve({ status: 'warn', feedback: `Hook execution failed: ${err.message}` });
       });
 
       child.on('exit', (code) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
         const output = stdout.trim();
         const errorOutput = stderr.trim();
 

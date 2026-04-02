@@ -121,7 +121,8 @@ describe('HookRunner', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it('should pass correct environment variables', async () => {
+  it('should pass correct environment variables and isolate from process.env', async () => {
+    process.env['SENSITIVE_KEY'] = 'secret-value';
     mockSpawn(0, '');
     const runner = new HookRunner({ preToolUse: ['test-hook'] });
     await runner.run('PreToolUse', {
@@ -135,6 +136,9 @@ describe('HookRunner', () => {
     expect(env.HOOK_TOOL_NAME).toBe('test-tool');
     expect(env.HOOK_TOOL_INPUT).toBe('{"arg": 1}');
     expect(env.HOOK_TOOL_IS_ERROR).toBe('0');
+    expect(env.PATH).toBeDefined();
+    expect(env.SENSITIVE_KEY).toBeUndefined();
+    delete process.env['SENSITIVE_KEY'];
   });
 
   it('should handle post-tool hooks with error status', async () => {
@@ -172,5 +176,28 @@ describe('HookRunner', () => {
 
     expect(result.status).toBe('warn');
     expect(result.feedback).toContain('Hook execution failed: Spawn failed');
+  });
+
+  it('should timeout if hook runs too long', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter() as any;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = new EventEmitter() as any;
+    child.stdin.write = vi.fn();
+    child.stdin.end = vi.fn();
+    child.kill = vi.fn();
+    vi.mocked(spawn).mockReturnValue(child);
+
+    const runner = new HookRunner({ preToolUse: ['long-hook'] });
+    const runPromise = runner.run('PreToolUse', { toolName: 'test', toolInput: '{}' });
+
+    await vi.advanceTimersByTimeAsync(30001);
+
+    const result = await runPromise;
+    expect(result.status).toBe('warn');
+    expect(result.feedback).toContain('Hook execution timed out');
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    vi.useRealTimers();
   });
 });

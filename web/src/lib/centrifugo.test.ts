@@ -147,7 +147,9 @@ describe('centrifugo utility', () => {
       // Simulate publication
       const publicationCallback = vi
         .mocked(sub.on)
-        .mock.calls.find((call) => call[0] === 'publication')![1];
+        .mock.calls.find((call: [string, unknown]) => call[0] === 'publication')![1] as (
+        ctx: { data: unknown }
+      ) => void;
       publicationCallback({ data: { text: 'hello' } });
       expect(onThought).toHaveBeenCalledWith({ text: 'hello' });
 
@@ -179,7 +181,9 @@ describe('centrifugo utility', () => {
       const sub = vi.mocked(client.newSubscription).mock.results[0].value;
       const publicationCallback = vi
         .mocked(sub.on)
-        .mock.calls.find((call) => call[0] === 'publication')![1];
+        .mock.calls.find((call: [string, unknown]) => call[0] === 'publication')![1] as (
+        ctx: { data: unknown }
+      ) => void;
 
       // Simulate token
       publicationCallback({ data: { token: 'part1', done: false, messageId } });

@@ -10,16 +10,23 @@ vi.mock('../../llm/LlmRouter.js', () => ({
 
 const mockResolve = vi.fn().mockReturnValue({ contextCompactionModel: 'cheap-model' });
 vi.mock('../../llm/ProviderRegistry.js', () => ({
-  ProviderRegistry: vi.fn().mockImplementation(function() {
+  ProviderRegistry: vi.fn().mockImplementation(function () {
     return {
       resolve: mockResolve,
     };
   }),
 }));
 
-const mockWrite = vi.fn().mockResolvedValue({ id: 'mock-id', timestamp: new Date().toISOString(), title: 'mock-title', content: 'mock-content' });
+const mockWrite = vi
+  .fn()
+  .mockResolvedValue({
+    id: 'mock-id',
+    timestamp: new Date().toISOString(),
+    title: 'mock-title',
+    content: 'mock-content',
+  });
 vi.mock('../../memory/blocks/ScopedMemoryBlockStore.js', () => ({
-  ScopedMemoryBlockStore: vi.fn().mockImplementation(function() {
+  ScopedMemoryBlockStore: vi.fn().mockImplementation(function () {
     return {
       write: mockWrite,
     };

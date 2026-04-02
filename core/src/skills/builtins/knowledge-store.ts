@@ -246,9 +246,11 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
               pendingMerge = true;
             }
           } else {
-            await gitService.createMergeRequest(circleId, agentId, context.agentName).catch((err) => {
-              logger.warn('Failed to create merge request:', err);
-            });
+            await gitService
+              .createMergeRequest(circleId, agentId, context.agentName)
+              .catch((err) => {
+                logger.warn('Failed to create merge request:', err);
+              });
             pendingMerge = true;
           }
 
@@ -295,9 +297,11 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
               pendingMerge = true;
             }
           } else {
-            await gitService.createMergeRequest('system', agentId, context.agentName).catch((err) => {
-              logger.warn('Failed to create merge request:', err);
-            });
+            await gitService
+              .createMergeRequest('system', agentId, context.agentName)
+              .catch((err) => {
+                logger.warn('Failed to create merge request:', err);
+              });
             pendingMerge = true;
           }
 
@@ -313,11 +317,11 @@ export function createKnowledgeStoreSkill(): SkillDefinition {
         return { success: false, error: `Unknown scope: ${scope as string}` };
       }
 
-    return {
-      success: true,
-      data: results.length === 1 ? results[0] : { blocks: results, success: true },
-    };
-  },
+      return {
+        success: true,
+        data: results.length === 1 ? results[0] : { blocks: results, success: true },
+      };
+    },
   };
 }
 

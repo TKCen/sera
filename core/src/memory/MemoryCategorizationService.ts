@@ -75,15 +75,18 @@ export class MemoryCategorizationService {
       return results
         .map((item: any) => {
           const type = KNOWLEDGE_BLOCK_TYPES.includes(item.type) ? item.type : 'fact';
-          const importance = typeof item.importance === 'number'
-            ? Math.max(1, Math.min(5, Math.round(item.importance))) as Importance
-            : 3;
+          const importance =
+            typeof item.importance === 'number'
+              ? (Math.max(1, Math.min(5, Math.round(item.importance))) as Importance)
+              : 3;
 
           return {
             title: typeof item.title === 'string' ? item.title : content.slice(0, 50),
             content: typeof item.content === 'string' ? item.content : content,
             type,
-            tags: Array.isArray(item.tags) ? item.tags.filter((t: any) => typeof t === 'string') : [],
+            tags: Array.isArray(item.tags)
+              ? item.tags.filter((t: any) => typeof t === 'string')
+              : [],
             importance,
           };
         })

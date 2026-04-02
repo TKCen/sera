@@ -882,6 +882,37 @@ export class Orchestrator {
     await this.startInstance(instanceId);
   }
 
+  /**
+   * Reconcile tasks on startup: mark 'running' tasks with no active container as failed/orphaned.
+   */
+  public async reconcileTasks(): Promise<void> {
+    const activeInstanceIds = this.sandboxManager
+      ? await this.sandboxManager.getActiveInstanceIds()
+      : [];
+
+    let queryText = `
+       UPDATE task_queue
+       SET status = 'failed',
+           exit_reason = 'orphaned',
+           error = 'Orphaned by system restart',
+           completed_at = now()
+       WHERE status = 'running'`;
+
+    const params: string[] = [];
+    if (activeInstanceIds.length > 0) {
+      queryText += ` AND agent_instance_id NOT IN (${activeInstanceIds.map((_, i) => `$${i + 1}`).join(', ')})`;
+      params.push(...activeInstanceIds);
+    }
+
+    const result = await query(queryText, params);
+    const count = result.rowCount ?? 0;
+    if (count > 0) {
+      logger.info(
+        `Reconciled ${count} orphaned tasks on startup (ignored ${activeInstanceIds.length} active instances)`
+      );
+    }
+  }
+
   public getAgentInfo(name: string): { name: string; manifest: AgentManifest } | undefined {
     const manifest = this.manifests.get(name);
     if (!manifest) return undefined;

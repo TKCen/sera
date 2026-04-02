@@ -55,12 +55,14 @@ vi.mock('@/lib/api/agents', async (importOriginal) => {
     getAgentTasks: vi.fn().mockResolvedValue([]),
     createAgentTask: vi.fn().mockResolvedValue({
       id: 'task-1',
-      agentName: 'test-agent',
-      type: 'chat',
+      agentInstanceId: 'inst-test-1',
+      task: 'Hello',
       status: 'running',
-      input: 'Hello',
-      messageId: 'msg-1',
+      priority: 100,
+      retryCount: 0,
+      maxRetries: 3,
       createdAt: new Date().toISOString(),
+      resultTruncated: false,
     }),
   };
 });

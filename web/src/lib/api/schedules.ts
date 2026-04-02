@@ -42,10 +42,17 @@ export function deleteSchedule(id: string): Promise<{ success: boolean }> {
   });
 }
 
-export function triggerSchedule(id: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/schedules/${encodeURIComponent(id)}/trigger`, {
-    method: 'POST',
-  });
+export function triggerSchedule(
+  id: string,
+  force = false
+): Promise<{ status: 'triggered' | 'skipped'; reason?: string }> {
+  const query = force ? '?force=true' : '';
+  return request<{ status: 'triggered' | 'skipped'; reason?: string }>(
+    `/schedules/${encodeURIComponent(id)}/trigger${query}`,
+    {
+      method: 'POST',
+    }
+  );
 }
 
 export function listScheduleRuns(

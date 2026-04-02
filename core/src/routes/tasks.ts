@@ -370,6 +370,80 @@ export function createTasksRouter(intercom: IntercomService): Router {
     return res.json(toPublicTask(row));
   });
 
+  // ── POST /api/agents/:id/tasks/:taskId/cancel — cancel a task ─────────────
+  router.post('/:taskId/cancel', async (req: Request, res: Response) => {
+    const agentId = req.params['id'] as string;
+    const taskId = req.params['taskId'] as string;
+
+    const row = await getTaskRow(taskId, agentId);
+    if (!row) return res.status(404).json({ error: 'Task not found' });
+
+    if (row.status !== 'queued' && row.status !== 'running') {
+      return res.status(409).json({ error: `Cannot cancel task in status '${row.status}'` });
+    }
+
+    await pool.query(
+      `UPDATE task_queue
+       SET status = 'failed',
+           exit_reason = 'cancelled',
+           error = 'Cancelled by operator',
+           completed_at = now()
+       WHERE id = $1`,
+      [taskId]
+    );
+
+    const depth = await getQueueDepth(row.agent_instance_id);
+    await intercom
+      .publish(`agent:${agentId}:status`, {
+        event: 'task.cancelled',
+        taskId,
+        queueDepth: depth,
+      })
+      .catch(() => {
+        /* best-effort */
+      });
+
+    return res.json({ taskId, status: 'failed', exitReason: 'cancelled' });
+  });
+
+  // ── POST /api/agents/:id/tasks/clear-stale — auto-detect stale tasks ──────
+  router.post('/clear-stale', async (req: Request, res: Response) => {
+    const agentId = req.params['id'] as string;
+    const timeoutMin = parseInt(req.query['timeout'] as string, 10) || 30;
+
+    const agentRow = await getAgentRow(agentId);
+    if (!agentRow) return res.status(404).json({ error: 'Agent not found' });
+
+    const result = await pool.query(
+      `UPDATE task_queue
+       SET status = 'failed',
+           exit_reason = 'stale',
+           error = 'Task timed out (stale)',
+           completed_at = now()
+       WHERE agent_instance_id = $1
+         AND status = 'running'
+         AND started_at < now() - interval '1 minute' * $2`,
+      [agentRow.id, timeoutMin]
+    );
+
+    const cleared = result.rowCount ?? 0;
+    if (cleared > 0) {
+      logger.info(`Cleared ${cleared} stale tasks for agent ${agentId}`);
+      const depth = await getQueueDepth(agentRow.id);
+      await intercom
+        .publish(`agent:${agentId}:status`, {
+          event: 'task.cleared-stale',
+          clearedCount: cleared,
+          queueDepth: depth,
+        })
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+
+    return res.json({ cleared });
+  });
+
   // ── GET /api/agents/:id/tasks/:taskId/result — result payload only ────────
   router.get('/:taskId/result', async (req: Request, res: Response) => {
     const agentId = req.params['id'] as string;

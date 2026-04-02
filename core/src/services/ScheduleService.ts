@@ -283,10 +283,13 @@ export class ScheduleService {
     }
   }
 
-  public async triggerSchedule(id: string): Promise<void> {
+  public async triggerSchedule(
+    id: string,
+    force = false
+  ): Promise<{ status: 'triggered' | 'skipped'; reason?: string }> {
     const { rows } = await pool.query<Schedule>('SELECT * FROM schedules WHERE id = $1', [id]);
     const schedule = rows[0];
-    if (!schedule) return;
+    if (!schedule) throw new Error('Schedule not found');
 
     // schedule.task is JSONB — PostgreSQL deserializes it to a JS object on SELECT.
     // Extract the prompt string for downstream consumers that expect plain text.
@@ -296,7 +299,7 @@ export class ScheduleService {
 
     if (!this.orchestrator) {
       logger.error('Orchestrator not set in ScheduleService');
-      return;
+      throw new Error('Internal error: Orchestrator not available');
     }
 
     // Get agent instance to check lifecycle mode
@@ -309,7 +312,7 @@ export class ScheduleService {
       logger.error(
         `Agent instance ${schedule.agent_instance_id} not found for schedule ${schedule.id}`
       );
-      return;
+      throw new Error('Agent instance not found');
     }
 
     const { lifecycle_mode, status } = agentInstance.rows[0];
@@ -317,20 +320,22 @@ export class ScheduleService {
     // Dedup guard for persistent agents: skip only if THIS schedule already has a pending task.
     // Other schedules can enqueue freely — the agent processes them sequentially.
     if (lifecycle_mode === 'persistent') {
-      const existingTask = await pool.query(
-        `SELECT id FROM task_queue
-         WHERE agent_instance_id = $1
-           AND status IN ('queued', 'running')
-           AND context->'schedule'->>'scheduleId' = $2
-         LIMIT 1`,
-        [schedule.agent_instance_id, schedule.id]
-      );
-      if (existingTask.rows.length > 0) {
-        logger.info(
-          `Schedule ${schedule.name} already has a queued/running task — skipping duplicate`
+      if (!force) {
+        const existingTask = await pool.query(
+          `SELECT id FROM task_queue
+           WHERE agent_instance_id = $1
+             AND status IN ('queued', 'running')
+             AND context->'schedule'->>'scheduleId' = $2
+           LIMIT 1`,
+          [schedule.agent_instance_id, schedule.id]
         );
-        await this.updateRunStatus(id, 'skipped', 'Schedule already has a pending task');
-        return;
+        if (existingTask.rows.length > 0) {
+          logger.info(
+            `Schedule ${schedule.name} already has a queued/running task — skipping duplicate`
+          );
+          await this.updateRunStatus(id, 'skipped', 'Schedule already has a pending task');
+          return { status: 'skipped', reason: 'Schedule already has a pending task' };
+        }
       }
 
       // Enqueue task with schedule metadata in context
@@ -362,7 +367,7 @@ export class ScheduleService {
           `Skipping scheduled task for ${schedule.agent_name}: ephemeral agent is already running.`
         );
         await this.updateRunStatus(id, 'skipped', 'Agent already running');
-        return;
+        return { status: 'skipped', reason: 'Agent already running' };
       }
 
       // Start with task
@@ -383,6 +388,8 @@ export class ScheduleService {
       eventType: 'schedule.fired',
       payload: { scheduleId: schedule.id, agentId: schedule.agent_instance_id },
     });
+
+    return { status: 'triggered' };
   }
 
   private async updateRunStatus(

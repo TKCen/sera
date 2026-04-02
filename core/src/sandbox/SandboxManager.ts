@@ -487,6 +487,24 @@ export class SandboxManager {
 
   // ── Query ────────────────────────────────────────────────────────────────────
 
+  /**
+   * List all instance IDs that have an active container in Docker.
+   * Used for task reconciliation on startup.
+   */
+  async getActiveInstanceIds(): Promise<string[]> {
+    try {
+      const containers = await this.docker.listContainers({
+        filters: JSON.stringify({ label: ['sera.sandbox=true'] }),
+      });
+      return containers
+        .map((c) => c.Labels?.['sera.instance'])
+        .filter((id): id is string => typeof id === 'string');
+    } catch (err: unknown) {
+      logger.warn('Could not list active containers:', err);
+      return [];
+    }
+  }
+
   listContainers(agentName?: string): SandboxInfo[] {
     const all = Array.from(this.containers.values());
     if (!agentName) return all;

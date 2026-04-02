@@ -252,10 +252,15 @@ export const createSchedulesRouter = () => {
    */
   router.post('/:id/trigger', async (req, res) => {
     try {
-      await scheduleService.triggerSchedule(req.params.id);
-      res.json({ status: 'triggered' });
+      const force = req.query.force === 'true';
+      const result = await scheduleService.triggerSchedule(req.params.id, force);
+      if (result.status === 'skipped') {
+        return res.status(409).json(result);
+      }
+      res.json(result);
     } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
+      const status = (err as { status?: number }).status || 500;
+      res.status(status).json({ error: (err as Error).message });
     }
   });
 

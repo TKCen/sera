@@ -37,9 +37,11 @@ import { InnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
 import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
 import { ContextTab } from '@/components/AgentDetailContextTab';
 import { CommandLogTimeline } from '@/components/CommandLogTimeline';
+import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
 
 type Tab =
   | 'overview'
+  | 'tasks'
   | 'grants'
   | 'tools'
   | 'delegations'
@@ -192,6 +194,7 @@ export default function AgentDetailPage() {
           {(
             [
               'overview',
+              'tasks',
               'grants',
               'tools',
               'delegations',
@@ -224,6 +227,7 @@ export default function AgentDetailPage() {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
         {tab === 'overview' && <ManifestTab id={id} />}
+        {tab === 'tasks' && <AgentDetailTasksTab id={id} />}
         {tab === 'grants' && <GrantsTab id={id} />}
         {tab === 'tools' && <ToolsTab id={id} />}
         {tab === 'delegations' && <DelegationsTab id={id} />}

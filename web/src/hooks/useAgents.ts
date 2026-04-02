@@ -60,11 +60,34 @@ export function useAgentLogs(id: string) {
   });
 }
 
-export function useAgentTasks(id: string, type?: string) {
+export function useAgentTasks(id: string, status?: string) {
   return useQuery({
-    queryKey: agentsKeys.tasks(id, type),
-    queryFn: () => agentsApi.getAgentTasks(id, type),
+    queryKey: agentsKeys.tasks(id, status),
+    queryFn: () => agentsApi.getAgentTasks(id, status),
     enabled: id.length > 0,
+    refetchInterval: 10000,
+  });
+}
+
+export function useCancelTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, taskId }: { agentId: string; taskId: string }) =>
+      agentsApi.cancelAgentTask(agentId, taskId),
+    onSuccess: (_data, { agentId }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.tasks(agentId) });
+    },
+  });
+}
+
+export function useClearStaleTasks() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, timeout }: { agentId: string; timeout?: number }) =>
+      agentsApi.clearStaleTasks(agentId, timeout),
+    onSuccess: (_data, { agentId }) => {
+      void qc.invalidateQueries({ queryKey: agentsKeys.tasks(agentId) });
+    },
   });
 }
 

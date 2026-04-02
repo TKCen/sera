@@ -317,28 +317,29 @@ export abstract class BaseAgent {
               messageId
             );
 
-            // Record audit entries for tool calls
-            for (let i = 0; i < activeCalls.length; i++) {
-              const tc = activeCalls[i]!;
-              const tr = toolResults[i]!;
-              const trContent = tr.content ?? '';
-              try {
-                await AuditService.getInstance().record({
-                  actorType: 'agent',
-                  actorId: this.agentInstanceId || this.name,
-                  actingContext: null,
-                  eventType: 'tool.called',
-                  payload: {
-                    tool: tc.function.name,
-                    args: tc.function.arguments,
-                    result:
-                      trContent.length > 500 ? trContent.substring(0, 500) + '...' : trContent,
-                  },
-                });
-              } catch (auditErr) {
-                this.logger.error('Failed to record audit entry:', auditErr);
-              }
-            }
+            // Record audit entries for tool calls in parallel
+            await Promise.all(
+              activeCalls.map(async (tc, i) => {
+                const tr = toolResults[i]!;
+                const trContent = tr.content ?? '';
+                try {
+                  await AuditService.getInstance().record({
+                    actorType: 'agent',
+                    actorId: this.agentInstanceId || this.name,
+                    actingContext: null,
+                    eventType: 'tool.called',
+                    payload: {
+                      tool: tc.function.name,
+                      args: tc.function.arguments,
+                      result:
+                        trContent.length > 500 ? trContent.substring(0, 500) + '...' : trContent,
+                    },
+                  });
+                } catch (auditErr) {
+                  this.logger.error('Failed to record audit entry:', auditErr);
+                }
+              })
+            );
 
             // Publish results and add to conversation
             for (const result of toolResults) {

@@ -133,7 +133,10 @@ function AgentsPageContent() {
 
         {circles.length > 0 && (
           <div className="flex items-center gap-2">
-            <label htmlFor="filter-circle" className="text-xs text-sera-text-dim font-medium uppercase tracking-wider">
+            <label
+              htmlFor="filter-circle"
+              className="text-xs text-sera-text-dim font-medium uppercase tracking-wider"
+            >
               Circle:
             </label>
             <select

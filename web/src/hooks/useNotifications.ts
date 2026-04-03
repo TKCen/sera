@@ -10,6 +10,7 @@ import {
   updateRoutingRule,
   deleteRoutingRule,
   updateChannel,
+  getChannelHealth,
   type CreateChannelPayload,
   type CreateRoutingRulePayload,
 } from '@/lib/api/notifications';
@@ -23,6 +24,16 @@ export function useChannels() {
 
 export function useRoutingRules() {
   return useQuery({ queryKey: RULES_KEY, queryFn: listRoutingRules });
+}
+
+export function useChannelHealth(id: string | undefined) {
+  return useQuery({
+    queryKey: [...CHANNELS_KEY, id, 'health'] as const,
+    queryFn: () => getChannelHealth(id!),
+    enabled: !!id,
+    refetchInterval: 60_000,
+    retry: false,
+  });
 }
 
 export function useCreateChannel() {

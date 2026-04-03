@@ -18,6 +18,7 @@ import {
   useUpdateChannel,
   useDeleteChannel,
   useTestChannel,
+  useChannelHealth,
   useCreateRoutingRule,
   useUpdateRoutingRule,
   useDeleteRoutingRule,
@@ -31,7 +32,15 @@ import { useAuth } from '@/hooks/useAuth';
 import { useAgents } from '@/hooks/useAgents';
 import { ForbiddenView } from '@/views/ForbiddenView';
 
-const CHANNEL_TYPES = ['webhook', 'email', 'discord', 'discord-chat', 'slack'] as const;
+const CHANNEL_TYPES = [
+  'webhook',
+  'email',
+  'discord',
+  'discord-chat',
+  'slack',
+  'telegram',
+  'whatsapp',
+] as const;
 type ChannelType = (typeof CHANNEL_TYPES)[number];
 
 const SEVERITY_OPTIONS = ['info', 'warning', 'critical'] as const;
@@ -71,6 +80,11 @@ const CONFIG_FIELDS: Record<
       type: 'password',
       placeholder: 'Bot token from discord.dev',
     },
+    {
+      key: 'applicationId',
+      label: 'Application ID',
+      placeholder: 'From discord.dev application page',
+    },
     { key: 'targetAgentId', label: 'Target Agent', type: 'agent-select' },
     {
       key: 'allowedGuilds',
@@ -95,6 +109,26 @@ const CONFIG_FIELDS: Record<
     { key: 'appToken', label: 'App Token (optional)', type: 'password' },
     { key: 'signingSecret', label: 'Signing Secret (optional)', type: 'password' },
   ],
+  telegram: [
+    {
+      key: 'botToken',
+      label: 'Telegram Bot Token',
+      type: 'password',
+      placeholder: 'From @BotFather',
+    },
+    { key: 'targetAgentId', label: 'Target Agent', type: 'agent-select' },
+    {
+      key: 'allowedUsers',
+      label: 'Allowed User IDs (comma-separated)',
+      placeholder: 'Leave empty for all',
+    },
+  ],
+  whatsapp: [
+    { key: 'accessToken', label: 'Meta Cloud API Access Token', type: 'password' },
+    { key: 'phoneNumberId', label: 'Phone Number ID', placeholder: 'From Meta Business Suite' },
+    { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Custom verify token' },
+    { key: 'targetAgentId', label: 'Target Agent', type: 'agent-select' },
+  ],
 };
 
 function typeBadge(type: string) {
@@ -104,8 +138,36 @@ function typeBadge(type: string) {
     discord: 'success',
     'discord-chat': 'accent',
     slack: 'warning',
+    telegram: 'accent',
+    whatsapp: 'success',
   };
   return <Badge variant={colors[type] ?? 'default'}>{type}</Badge>;
+}
+
+function ChannelHealthBadge({ channelId }: { channelId: string }) {
+  const { data: health, isLoading } = useChannelHealth(channelId);
+
+  let color = 'bg-sera-text-dim';
+  let title = 'Unknown';
+  let pulse = false;
+
+  if (isLoading) {
+    title = 'Checking...';
+    pulse = true;
+  } else if (health?.healthy) {
+    color = 'bg-green-500';
+    title = 'Healthy';
+  } else if (health) {
+    color = 'bg-yellow-500';
+    title = health.error ?? 'Degraded';
+  }
+
+  return (
+    <span
+      className={`inline-block w-2 h-2 rounded-full ${color}${pulse ? ' animate-pulse' : ''}`}
+      title={title}
+    />
+  );
 }
 
 // ── Channel Dialog ───────────────────────────────────────────────────────────
@@ -579,6 +641,7 @@ export default function ChannelsPage() {
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
+                    <ChannelHealthBadge channelId={ch.id} />
                     <span className="text-sm font-medium text-sera-text">{ch.name}</span>
                     {typeBadge(ch.type)}
                     {!ch.enabled && <Badge variant="default">disabled</Badge>}

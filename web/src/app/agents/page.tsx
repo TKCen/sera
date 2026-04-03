@@ -132,19 +132,27 @@ function AgentsPageContent() {
         </div>
 
         {circles.length > 0 && (
-          <select
-            aria-label="Filter by circle"
-            value={filterCircle}
-            onChange={(e) => setFilterCircle(e.target.value)}
-            className="sera-input h-9 py-0 w-auto text-xs"
-          >
-            <option value="all">All circles</option>
-            {circles.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="filter-circle"
+              className="text-xs text-sera-text-dim font-medium uppercase tracking-wider"
+            >
+              Circle:
+            </label>
+            <select
+              id="filter-circle"
+              value={filterCircle}
+              onChange={(e) => setFilterCircle(e.target.value)}
+              className="sera-input h-9 py-0 w-auto text-xs"
+            >
+              <option value="all">All circles</option>
+              {circles.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
 
         <nav aria-label="Filter by status" className="flex items-center gap-1">
@@ -192,9 +200,20 @@ function AgentsPageContent() {
           }
         />
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-sera-text-muted text-center py-12">
-          No agents match your filters.
-        </p>
+        <div className="text-center py-12">
+          <p className="text-sm text-sera-text-muted mb-4">No agents match your filters.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setSearch('');
+              setFilterStatus('all');
+              setFilterCircle('all');
+            }}
+          >
+            Clear filters
+          </Button>
+        </div>
       ) : filtered.length > VIRTUALIZATION_THRESHOLD ? (
         <Virtuoso
           useWindowScroll

@@ -153,6 +153,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['agentId'],
       },
     },
+    {
+      name: 'sera_operator_requests',
+      description:
+        'List pending operator requests from SERA agents. Agents create these when they need operator help (config changes, dependency installs, capability requests).',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          status: {
+            type: 'string',
+            description:
+              'Filter by status: pending, approved, rejected, resolved (default: pending)',
+          },
+        },
+      },
+    },
+    {
+      name: 'sera_operator_respond',
+      description: 'Respond to an operator request from a SERA agent.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          requestId: { type: 'string', description: 'The operator request ID' },
+          action: {
+            type: 'string',
+            description: 'Response action: approved, rejected, or resolved',
+          },
+          response: {
+            type: 'string',
+            description: 'Optional response message or JSON data for the agent',
+          },
+        },
+        required: ['requestId', 'action'],
+      },
+    },
+    {
+      name: 'sera_mcp_servers',
+      description: 'List all registered MCP servers with status and tool counts.',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
   ],
 }));
 
@@ -251,6 +290,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'sera_operator_requests': {
+        const status = (a.status as string) || 'pending';
+        const requests = await seraFetch(`/operator-requests?status=${encodeURIComponent(status)}`);
+        return { content: [{ type: 'text', text: JSON.stringify(requests, null, 2) }] };
+      }
+
+      case 'sera_operator_respond': {
+        const result = await seraFetch(
+          `/operator-requests/${encodeURIComponent(a.requestId as string)}/respond`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              action: a.action,
+              ...(a.response ? { response: a.response } : {}),
+            }),
+          }
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'sera_mcp_servers': {
+        const servers = await seraFetch('/mcp-servers');
+        return { content: [{ type: 'text', text: JSON.stringify(servers, null, 2) }] };
       }
 
       default:

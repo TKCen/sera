@@ -39,6 +39,7 @@ import { WebhooksService } from './intercom/WebhooksService.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createMemoryRouter } from './routes/memory.js';
 import { createMCPRouter } from './routes/mcp.js';
+import { createOperatorRequestsRouter } from './routes/operator-requests.js';
 import lspRouter, { lspManager } from './routes/lsp.js';
 import { SessionStore } from './sessions/SessionStore.js';
 import { IdentityService } from './auth/IdentityService.js';
@@ -526,6 +527,7 @@ app.use(
   createRegistryRouter(agentRegistry, resourceImporter, orchestrator)
 );
 app.use('/api/mcp-servers', authMiddleware, createMCPRouter(mcpRegistry, skillRegistry));
+app.use('/api/operator-requests', authMiddleware, createOperatorRequestsRouter(intercomService));
 app.use('/api/agents/:id/tasks', authMiddleware, createTasksRouter(intercomService));
 app.use('/api/knowledge', authMiddleware, createKnowledgeRouter(llmRouter));
 

@@ -201,15 +201,19 @@ describe('SeraMCPServer — Schedule tools (#647)', () => {
   // ── Tool definitions ────────────────────────────────────────────────────
 
   describe('tool definitions', () => {
-    it('includes all 4 schedule tools', () => {
+    it('includes all 8 schedule tools', () => {
       const tools = server.getToolDefinitions();
       const scheduleTools = tools.filter((t: { name: string }) => t.name.startsWith('schedules.'));
-      expect(scheduleTools).toHaveLength(4);
+      expect(scheduleTools).toHaveLength(8);
       expect(scheduleTools.map((t: { name: string }) => t.name).sort()).toEqual([
+        'schedules.create',
+        'schedules.delete',
         'schedules.get',
         'schedules.list',
         'schedules.pause',
         'schedules.resume',
+        'schedules.trigger',
+        'schedules.update',
       ]);
     });
 

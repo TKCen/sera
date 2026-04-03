@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import {
   Server,
   Trash2,
@@ -28,6 +28,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Tooltip } from '@/components/ui/tooltip';
 import {
   Dialog,
   DialogContent,
@@ -70,6 +72,8 @@ function ActivateDialog({
   const [baseUrl, setBaseUrl] = useState('');
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const addProvider = useAddProvider();
+  const apiKeyId = useId();
+  const baseUrlId = useId();
 
   if (!template) return null;
 
@@ -114,10 +118,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor={apiKeyId} className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
+              id={apiKeyId}
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -126,8 +131,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label className="text-xs text-sera-text-muted block mb-1">Base URL (optional)</label>
+              <label htmlFor={baseUrlId} className="text-xs text-sera-text-muted block mb-1">
+                Base URL (optional)
+              </label>
               <Input
+                id={baseUrlId}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -140,6 +148,7 @@ function ActivateDialog({
                 Models ({selectedModels.size || template.models.length} selected)
               </label>
               <button
+                type="button"
                 className="text-[10px] text-sera-accent hover:underline"
                 onClick={() =>
                   setSelectedModels(allSelected ? new Set() : new Set(template.models))
@@ -220,13 +229,16 @@ function TestConnectionButton({ modelName }: { modelName: string }) {
   if (status === 'ok') return <CheckCircle2 size={12} className="text-sera-success" />;
   if (status === 'fail') return <XCircle size={12} className="text-sera-error" />;
   return (
-    <button
-      onClick={() => void handleTest()}
-      className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
-      title="Test connection"
-    >
-      <Zap size={12} />
-    </button>
+    <Tooltip content="Test connection">
+      <button
+        type="button"
+        onClick={() => void handleTest()}
+        className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
+        aria-label="Test connection"
+      >
+        <Zap size={12} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -273,11 +285,12 @@ function DiscoverButton({ providerName }: { providerName: string }) {
         Discover
       </Button>
       {models && models.length > 0 && (
-        <div className="mt-2 ml-4 space-y-1">
+        <div className="bg-sera-surface-active/40 rounded-lg p-2.5 mt-3 ml-4 border border-sera-border/50 space-y-1">
           {models.map((m) => (
             <div key={m} className="flex items-center gap-2 text-xs">
               <span className="font-mono text-sera-text-muted">{m}</span>
               <button
+                type="button"
                 onClick={() => void handleAddModel(m)}
                 className="text-sera-accent hover:underline text-[10px]"
               >
@@ -335,9 +348,11 @@ export default function ProvidersPage() {
             {providers.length} model{providers.length !== 1 ? 's' : ''} configured
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
-          <RefreshCw size={13} /> Refresh
-        </Button>
+        <Tooltip content="Refresh providers">
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
+            <RefreshCw size={13} /> Refresh
+          </Button>
+        </Tooltip>
       </div>
 
       {/* ── Available Templates ──────────────────────────────────────────── */}
@@ -386,18 +401,18 @@ export default function ProvidersPage() {
       ) : (
         <div className="space-y-6">
           {Object.entries(grouped).map(([providerName, models]) => (
-            <div key={providerName} className="sera-card-static overflow-hidden">
-              <div className="px-4 py-3 border-b border-sera-border flex items-center gap-2">
+            <Card key={providerName} className="p-0 overflow-hidden">
+              <CardHeader className="px-4 py-3 border-b border-sera-border flex-row items-center gap-2 space-y-0">
                 {providerIcon(providerName)}
-                <span className="text-sm font-semibold text-sera-text capitalize">
+                <CardTitle className="text-sm font-semibold text-sera-text capitalize">
                   {providerName}
-                </span>
+                </CardTitle>
                 <Badge variant="default" className="ml-auto">
                   {models.length} model{models.length !== 1 ? 's' : ''}
                 </Badge>
                 <DiscoverButton providerName={providerName} />
-              </div>
-              <div className="divide-y divide-sera-border/50">
+              </CardHeader>
+              <CardContent className="divide-y divide-sera-border/50">
                 {models.map((m) => {
                   const isDynamic = !!m.dynamicProviderId;
                   const dpStatus = m.dynamicProviderId
@@ -426,12 +441,22 @@ export default function ProvidersPage() {
                           </p>
                         )}
                         {(m.contextWindow || m.maxTokens) && (
-                          <div className="flex gap-2 mt-1 text-[10px] text-sera-text-dim">
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
                             {m.contextWindow && (
-                              <span>ctx: {(m.contextWindow / 1024).toFixed(0)}K</span>
+                              <span className="text-[10px] text-sera-text-dim font-medium bg-sera-surface-active/50 px-1.5 py-0.5 rounded border border-sera-border/30">
+                                ctx: {(m.contextWindow / 1024).toFixed(0)}K
+                              </span>
                             )}
-                            {m.maxTokens && <span>max: {(m.maxTokens / 1024).toFixed(1)}K</span>}
-                            {m.contextStrategy && <span>strategy: {m.contextStrategy}</span>}
+                            {m.maxTokens && (
+                              <span className="text-[10px] text-sera-text-dim font-medium bg-sera-surface-active/50 px-1.5 py-0.5 rounded border border-sera-border/30">
+                                max: {(m.maxTokens / 1024).toFixed(1)}K
+                              </span>
+                            )}
+                            {m.contextStrategy && (
+                              <span className="text-[10px] text-sera-text-dim font-medium bg-sera-surface-active/50 px-1.5 py-0.5 rounded border border-sera-border/30">
+                                strategy: {m.contextStrategy}
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -472,20 +497,23 @@ export default function ProvidersPage() {
                         )}
                         <TestConnectionButton modelName={m.modelName} />
                         {!isDynamic && (
-                          <button
-                            onClick={() => setConfirmDelete(m.modelName)}
-                            className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
-                            title="Delete provider"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <Tooltip content="Delete provider">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDelete(m.modelName)}
+                              className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
+                              aria-label="Delete provider"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                     </div>
                   );
                 })}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}

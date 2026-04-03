@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios, { AxiosError } from 'axios';
-import { LLMClient, BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError, type ChatMessage } from '../llmClient.js';
+import { LLMClient, BudgetExceededError, ProviderUnavailableError, ContextOverflowError, LLMTimeoutError } from '../llmClient.js';
+import { Readable } from 'stream';
 
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios);
@@ -25,10 +26,25 @@ describe('LLMClient', () => {
       );
     });
 
-    it('parses OpenAI response with content', async () => {
-      mockPost.mockResolvedValueOnce({
-        data: { choices: [{ message: { content: 'Hello world!' } }] },
+    function createMockStream(events: any[]): Readable {
+      const stream = new Readable({
+        read() {},
       });
+      for (const event of events) {
+        stream.push(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      stream.push('data: [DONE]\n\n');
+      stream.push(null);
+      return stream;
+    }
+
+    it('parses OpenAI response with content', async () => {
+      const stream = createMockStream([
+        { choices: [{ delta: { content: 'Hello ' } }] },
+        { choices: [{ delta: { content: 'world!' } }] },
+      ]);
+      mockPost.mockResolvedValueOnce({ data: stream });
+
       const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
       const response = await client.chat([{ role: 'user', content: 'Hi' }]);
       expect(response.content).toBe('Hello world!');
@@ -36,33 +52,44 @@ describe('LLMClient', () => {
     });
 
     it('parses OpenAI response with tool_calls', async () => {
-      mockPost.mockResolvedValueOnce({
-        data: {
-          choices: [{
-            message: {
-              content: null,
-              tool_calls: [{ id: 'call_abc', type: 'function', function: { name: 'file-read', arguments: '{"path":"test.txt"}' } }],
-            },
-          }],
-        },
-      });
+      const stream = createMockStream([
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_abc', function: { name: 'file-read' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"test.txt"}' } }] } }] },
+      ]);
+      mockPost.mockResolvedValueOnce({ data: stream });
+
       const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
       const response = await client.chat([{ role: 'user', content: 'Read a file' }]);
       expect(response.toolCalls).toHaveLength(1);
       expect(response.toolCalls![0]!.function.name).toBe('file-read');
+      expect(JSON.parse(response.toolCalls![0]!.function.arguments)).toEqual({ path: 'test.txt' });
     });
 
     it('parses usage stats', async () => {
-      mockPost.mockResolvedValueOnce({
-        data: {
-          choices: [{ message: { content: 'done' } }],
-          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-        },
-      });
+      const stream = createMockStream([
+        { choices: [{ delta: { content: 'done' } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+      ]);
+      mockPost.mockResolvedValueOnce({ data: stream });
+
       const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
       const response = await client.chat([{ role: 'user', content: 'Hi' }]);
       expect(response.usage?.promptTokens).toBe(10);
       expect(response.usage?.completionTokens).toBe(5);
+    });
+
+    it('parses usage-only chunks without choices', async () => {
+      const stream = new Readable({
+        read() {},
+      });
+      stream.push(`data: ${JSON.stringify({ usage: { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 } })}\n\n`);
+      stream.push('data: [DONE]\n\n');
+      stream.push(null);
+      mockPost.mockResolvedValueOnce({ data: stream });
+
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      const response = await client.chat([{ role: 'user', content: 'Hi' }]);
+      expect(response.usage?.totalTokens).toBe(70);
     });
 
     it('throws BudgetExceededError on HTTP 429', async () => {

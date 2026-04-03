@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import {
   Server,
   Trash2,
@@ -36,6 +36,7 @@ import {
   DialogDescription,
   DialogClose,
 } from '@/components/ui/dialog';
+import { Tooltip } from '@/components/ui/tooltip';
 import type { ProviderConfig } from '@/lib/api/types';
 import type { ProviderTemplate } from '@/lib/api/providers';
 import { request } from '@/lib/api/client';
@@ -70,6 +71,8 @@ function ActivateDialog({
   const [baseUrl, setBaseUrl] = useState('');
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const addProvider = useAddProvider();
+  const apiKeyId = useId();
+  const baseUrlId = useId();
 
   if (!template) return null;
 
@@ -114,10 +117,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor={apiKeyId} className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
+              id={apiKeyId}
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -126,8 +130,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label className="text-xs text-sera-text-muted block mb-1">Base URL (optional)</label>
+              <label htmlFor={baseUrlId} className="text-xs text-sera-text-muted block mb-1">
+                Base URL (optional)
+              </label>
               <Input
+                id={baseUrlId}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -136,9 +143,9 @@ function ActivateDialog({
           )}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-sera-text-muted">
+              <span className="text-xs text-sera-text-muted">
                 Models ({selectedModels.size || template.models.length} selected)
-              </label>
+              </span>
               <button
                 className="text-[10px] text-sera-accent hover:underline"
                 onClick={() =>
@@ -148,28 +155,33 @@ function ActivateDialog({
                 {allSelected ? 'Deselect all' : 'Select all'}
               </button>
             </div>
-            <div className="max-h-40 overflow-y-auto space-y-1 border border-sera-border rounded-lg p-2">
-              {template.models.map((m) => (
-                <label
-                  key={m}
-                  className="flex items-center gap-2 text-xs text-sera-text cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedModels.has(m) || selectedModels.size === 0}
-                    onChange={(e) => {
-                      const next = new Set(
-                        selectedModels.size === 0 ? template.models : selectedModels
-                      );
-                      if (e.target.checked) next.add(m);
-                      else next.delete(m);
-                      setSelectedModels(next);
-                    }}
-                    className="rounded"
-                  />
-                  <span className="font-mono">{m}</span>
-                </label>
-              ))}
+            <div className="max-h-40 overflow-y-auto border border-sera-border rounded-lg bg-sera-surface/50">
+              {template.models.map((m) => {
+                const id = `model-${m}`;
+                return (
+                  <label
+                    key={m}
+                    htmlFor={id}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-sera-text cursor-pointer hover:bg-sera-surface-hover transition-colors"
+                  >
+                    <input
+                      id={id}
+                      type="checkbox"
+                      checked={selectedModels.has(m) || selectedModels.size === 0}
+                      onChange={(e) => {
+                        const next = new Set(
+                          selectedModels.size === 0 ? template.models : selectedModels
+                        );
+                        if (e.target.checked) next.add(m);
+                        else next.delete(m);
+                        setSelectedModels(next);
+                      }}
+                      className="rounded border-sera-border bg-sera-bg text-sera-accent focus:ring-sera-accent"
+                    />
+                    <span className="font-mono">{m}</span>
+                  </label>
+                );
+              })}
             </div>
           </div>
           <div className="flex gap-3 justify-end">
@@ -220,13 +232,15 @@ function TestConnectionButton({ modelName }: { modelName: string }) {
   if (status === 'ok') return <CheckCircle2 size={12} className="text-sera-success" />;
   if (status === 'fail') return <XCircle size={12} className="text-sera-error" />;
   return (
-    <button
-      onClick={() => void handleTest()}
-      className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
-      title="Test connection"
-    >
-      <Zap size={12} />
-    </button>
+    <Tooltip content="Test connection">
+      <button
+        onClick={() => void handleTest()}
+        className="p-1.5 text-sera-text-dim hover:text-sera-accent hover:bg-sera-surface-hover rounded-md transition-all"
+        aria-label={`Test connection for ${modelName}`}
+      >
+        <Zap size={13} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -263,15 +277,22 @@ function DiscoverButton({ providerName }: { providerName: string }) {
 
   return (
     <div>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => void handleDiscover()}
-        disabled={discover.isPending}
-      >
-        {discover.isPending ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
-        Discover
-      </Button>
+      <Tooltip content="Discover more models from this provider">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void handleDiscover()}
+          disabled={discover.isPending}
+          aria-label={`Discover models for ${providerName}`}
+        >
+          {discover.isPending ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <Search size={12} />
+          )}
+          Discover
+        </Button>
+      </Tooltip>
       {models && models.length > 0 && (
         <div className="mt-2 ml-4 space-y-1">
           {models.map((m) => (
@@ -335,9 +356,16 @@ export default function ProvidersPage() {
             {providers.length} model{providers.length !== 1 ? 's' : ''} configured
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
-          <RefreshCw size={13} /> Refresh
-        </Button>
+        <Tooltip content="Reload providers from core registry">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void refetch()}
+            aria-label="Refresh providers"
+          >
+            <RefreshCw size={13} /> Refresh
+          </Button>
+        </Tooltip>
       </div>
 
       {/* ── Available Templates ──────────────────────────────────────────── */}
@@ -407,7 +435,7 @@ export default function ProvidersPage() {
                   return (
                     <div
                       key={m.modelName}
-                      className="px-4 py-3 flex items-center gap-4 hover:bg-sera-surface-hover/30 transition-colors"
+                      className="px-4 py-4 flex items-center gap-8 hover:bg-sera-surface-hover/50 transition-colors group"
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -461,24 +489,28 @@ export default function ProvidersPage() {
                           </Badge>
                         )}
                         {dpStatus && (
-                          <span className="flex items-center gap-1 text-[10px]">
+                          <span className="flex items-center gap-1.5 text-[10px] bg-sera-bg px-2 py-0.5 rounded border border-sera-border">
                             {dpStatus === 'connected' ? (
                               <Wifi size={10} className="text-sera-success" />
                             ) : (
                               <WifiOff size={10} className="text-sera-error" />
                             )}
-                            {dpStatus}
+                            <span className={dpStatus === 'connected' ? 'text-sera-success' : 'text-sera-error'}>
+                              {dpStatus}
+                            </span>
                           </span>
                         )}
                         <TestConnectionButton modelName={m.modelName} />
                         {!isDynamic && (
-                          <button
-                            onClick={() => setConfirmDelete(m.modelName)}
-                            className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
-                            title="Delete provider"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <Tooltip content="Delete provider">
+                            <button
+                              onClick={() => setConfirmDelete(m.modelName)}
+                              className="p-1.5 text-sera-text-dim hover:text-sera-error hover:bg-sera-error/10 rounded-md transition-all"
+                              aria-label={`Delete provider ${m.modelName}`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                     </div>

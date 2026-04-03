@@ -152,7 +152,10 @@ function AgentsPageContent() {
           </div>
         )}
 
-        <nav aria-label="Filter by status" className="flex items-center gap-1 p-1 bg-sera-surface rounded-lg border border-sera-border">
+        <nav
+          aria-label="Filter by status"
+          className="flex items-center gap-1 p-1 bg-sera-surface rounded-lg border border-sera-border"
+        >
           {STATUS_OPTIONS.map((s) => (
             <button
               key={s}

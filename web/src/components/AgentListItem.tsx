@@ -80,11 +80,7 @@ export const AgentListItem: React.FC<AgentListItemProps> = ({
             className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors disabled:opacity-50"
             aria-label="Stop agent"
           >
-            {isStopPending ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Square size={13} />
-            )}
+            {isStopPending ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
           </button>
         </Tooltip>
         <Tooltip content="Delete agent">

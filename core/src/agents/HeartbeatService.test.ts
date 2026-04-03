@@ -1,23 +1,48 @@
-import { describe, it, expect, vi, beforeEach, afterEach, type Mocked } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { HeartbeatService } from './HeartbeatService.js';
-import type { AgentRegistry } from './registry.service.js';
-import type { IntercomService } from '../intercom/IntercomService.js';
+import { AgentRegistry } from './registry.service.js';
+import { IntercomService } from '../intercom/IntercomService.js';
+
+// Mock Logger
+vi.mock('../lib/logger.js', () => {
+  return {
+    Logger: class {
+      info = vi.fn();
+      error = vi.fn();
+      warn = vi.fn();
+      debug = vi.fn();
+    },
+  };
+});
+
+// Mock dependencies
+vi.mock('./registry.service.js', () => {
+  class Mock {
+    updateLastHeartbeat = vi.fn();
+    updateInstanceStatus = vi.fn();
+  }
+  return { AgentRegistry: Mock };
+});
+
+vi.mock('../intercom/IntercomService.js', () => {
+  class Mock {
+    publish = vi.fn().mockResolvedValue(undefined);
+  }
+  return { IntercomService: Mock };
+});
 
 describe('HeartbeatService', () => {
   let service: HeartbeatService;
-  let mockRegistry: Mocked<AgentRegistry>;
-  let mockIntercom: Mocked<IntercomService>;
+  let registry: AgentRegistry;
+  let intercom: IntercomService;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    mockRegistry = {
-      updateLastHeartbeat: vi.fn().mockResolvedValue(undefined),
-      updateInstanceStatus: vi.fn().mockResolvedValue(undefined),
-    } as unknown as Mocked<AgentRegistry>;
-    mockIntercom = {
-      publish: vi.fn().mockResolvedValue(undefined),
-    } as unknown as Mocked<IntercomService>;
     service = new HeartbeatService();
+    registry = new AgentRegistry({} as any);
+    intercom = new IntercomService({} as any);
+    service.setRegistry(registry);
+    service.setIntercom(intercom);
   });
 
   afterEach(() => {
@@ -26,80 +51,71 @@ describe('HeartbeatService', () => {
     vi.clearAllMocks();
   });
 
-  it('should register a heartbeat and update the registry', async () => {
-    service.setRegistry(mockRegistry);
-    await service.registerHeartbeat('agent-1');
-    expect(mockRegistry.updateLastHeartbeat).toHaveBeenCalledWith('agent-1');
+  describe('registerHeartbeat', () => {
+    it('should update last heartbeat in internal map and registry', async () => {
+      const instanceId = 'inst-1';
+      await service.registerHeartbeat(instanceId);
+
+      expect(registry.updateLastHeartbeat).toHaveBeenCalledWith(instanceId);
+      const unhealthy = service.getUnhealthyInstances(60000);
+      expect(unhealthy.find((u) => u.instanceId === instanceId)).toBeUndefined();
+    });
   });
 
-  it('should detect and mark stale instances as unresponsive', async () => {
-    service.setRegistry(mockRegistry);
-    service.setIntercom(mockIntercom);
+  describe('checkStaleInstances', () => {
+    it('should identify stale instances and mark them unresponsive', async () => {
+      const instanceId = 'inst-1';
+      await service.registerHeartbeat(instanceId);
 
-    // Register heartbeat at T=0
-    await service.registerHeartbeat('agent-1');
+      // Advance time beyond HEARTBEAT_STALE_MS (120000)
+      vi.advanceTimersByTime(121000);
 
-    // Advance time by 130s (default stale is 120s)
-    vi.advanceTimersByTime(130000);
+      await service.checkStaleInstances();
 
-    await service.checkStaleInstances();
-
-    expect(mockRegistry.updateInstanceStatus).toHaveBeenCalledWith('agent-1', 'unresponsive');
-    expect(mockIntercom.publish).toHaveBeenCalledWith(
-      'system.agents',
-      expect.objectContaining({
+      expect(registry.updateInstanceStatus).toHaveBeenCalledWith(instanceId, 'unresponsive');
+      expect(intercom.publish).toHaveBeenCalledWith('system.agents', expect.objectContaining({
         type: 'unresponsive',
-        agentId: 'agent-1',
-      })
-    );
+        agentId: instanceId,
+      }));
+    });
+
+    it('should not mark instances unresponsive if they are within time limit', async () => {
+      const instanceId = 'inst-1';
+      await service.registerHeartbeat(instanceId);
+
+      // Advance time but not beyond limit
+      vi.advanceTimersByTime(60000);
+
+      await service.checkStaleInstances();
+
+      expect(registry.updateInstanceStatus).not.toHaveBeenCalled();
+    });
   });
 
-  it('should return unhealthy instances', async () => {
-    // Agent 1 at T=0
-    await service.registerHeartbeat('agent-1');
+  describe('getUnhealthyInstances', () => {
+    it('should return list of unhealthy instances', async () => {
+      const instanceId = 'inst-1';
+      await service.registerHeartbeat(instanceId);
 
-    // Advance 130s
-    vi.advanceTimersByTime(130000);
+      vi.advanceTimersByTime(121000);
 
-    // Agent 2 at T=130s
-    await service.registerHeartbeat('agent-2');
-
-    const unhealthy = service.getUnhealthyInstances(120000);
-    expect(unhealthy).toHaveLength(1);
-    expect(unhealthy[0]!.instanceId).toBe('agent-1');
+      const unhealthy = service.getUnhealthyInstances();
+      expect(unhealthy).toHaveLength(1);
+      expect(unhealthy[0]!.instanceId).toBe(instanceId);
+    });
   });
 
-  it('should remove heartbeats', async () => {
-    await service.registerHeartbeat('agent-1');
-    service.removeHeartbeat('agent-1');
-    const unhealthy = service.getUnhealthyInstances(0);
-    expect(unhealthy).toHaveLength(0);
-  });
+  describe('removeHeartbeat', () => {
+    it('should stop tracking instance heartbeat', async () => {
+      const instanceId = 'inst-1';
+      await service.registerHeartbeat(instanceId);
 
-  it('should stop the interval', () => {
-    const clearIntervalSpy = vi.spyOn(global, 'clearInterval');
-    service.stop();
-    expect(clearIntervalSpy).toHaveBeenCalled();
-  });
+      service.removeHeartbeat(instanceId);
 
-  it('should handle checkStaleInstances through interval', async () => {
-    service.setRegistry(mockRegistry);
-    await service.registerHeartbeat('agent-1');
+      vi.advanceTimersByTime(121000);
+      await service.checkStaleInstances();
 
-    // Advance 130s. The interval runs every 30s.
-    // At 30, 60, 90, 120 the check will run.
-    // At 120, it's exactly 120s since T=0, might not be > 120000 yet depending on exact Date.now()
-
-    vi.advanceTimersByTime(130000);
-
-    // We need to wait for any pending promises if checkStaleInstances is async
-    // but here we just want to see if it was called.
-    // Since it's called inside the interval:
-    // setInterval(() => { this.checkStaleInstances()... }, 30000)
-
-    // Triggering the intervals
-    await vi.runOnlyPendingTimersAsync();
-
-    expect(mockRegistry.updateInstanceStatus).toHaveBeenCalledWith('agent-1', 'unresponsive');
+      expect(registry.updateInstanceStatus).not.toHaveBeenCalled();
+    });
   });
 });

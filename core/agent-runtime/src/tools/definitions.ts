@@ -376,4 +376,32 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'skill-search',
+      description:
+        'Search the mounted skill registry for available skills. ' +
+        'Returns discoverable skills with their descriptions, parameters, and compatible harnesses. ' +
+        'Use this to find skills that can extend your capabilities.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query — matches against skill name, description, and tags.',
+          },
+          harness: {
+            type: 'string',
+            description: 'Filter by compatible harness (e.g., "sera", "langchain", "openclaw").',
+          },
+          tag: {
+            type: 'string',
+            description: 'Filter by tag (e.g., "research", "engineering").',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
 ];

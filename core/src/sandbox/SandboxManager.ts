@@ -96,6 +96,9 @@ export class SandboxManager {
       `AGENT_LIFECYCLE_MODE=${request.lifecycleMode ?? 'persistent'}`,
       `SERA_LLM_PROXY_URL=${process.env.SERA_CORE_URL ?? 'http://sera-core:3001'}/v1/llm`,
       `AGENT_CHAT_PORT=${manifest.spec?.sandbox?.chatPort ?? 3100}`,
+      ...(caps.skillPackages && caps.skillPackages.length > 0
+        ? [`SERA_SKILLS_DIR=/sera/skills`]
+        : []),
     ];
 
     // Story 3.1 — include identity JWT if provided

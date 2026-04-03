@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/sera-skill.schema.json",
+  "title": "SERA Skill Manifest",
+  "description": "Discovery-only skill manifest for the Universal Skill Registry (v1). Describes a skill's interface without execution details.",
+  "type": "object",
+  "required": ["name", "displayName", "description", "version", "parameters"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "description": "Unique skill identifier (kebab-case)"
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Human-readable skill name"
+    },
+    "description": {
+      "type": "string",
+      "description": "What the skill does — used for search and LLM tool selection"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+",
+      "description": "Semantic version"
+    },
+    "parameters": {
+      "type": "object",
+      "description": "JSON Schema describing the skill's input parameters"
+    },
+    "returns": {
+      "type": "object",
+      "description": "JSON Schema describing the skill's output"
+    },
+    "compatibleHarnesses": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Which agent harnesses can execute this skill (e.g. sera, openclaw, langchain, custom)"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Searchable tags for categorization"
+    },
+    "author": {
+      "type": "string",
+      "description": "Skill author or organization"
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX license identifier"
+    }
+  },
+  "additionalProperties": false
+}

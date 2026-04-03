@@ -1,0 +1,51 @@
+{
+  "$schema": "https://sera.dev/schemas/sera-skill.schema.json",
+  "name": "shell-exec",
+  "displayName": "Shell Execute",
+  "description": "Execute a shell command in a sandboxed environment and capture its exit code, stdout, and stderr. Subject to the agent's sandbox tier egress and command policies.",
+  "version": "1.0.0",
+  "parameters": {
+    "type": "object",
+    "required": ["command"],
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Shell command to execute"
+      },
+      "workDir": {
+        "type": "string",
+        "description": "Working directory for the command (defaults to agent working directory)"
+      },
+      "timeout": {
+        "type": "number",
+        "description": "Execution timeout in milliseconds (default: 30000)",
+        "default": 30000,
+        "minimum": 100,
+        "maximum": 300000
+      }
+    },
+    "additionalProperties": false
+  },
+  "returns": {
+    "type": "object",
+    "required": ["exitCode", "stdout", "stderr"],
+    "properties": {
+      "exitCode": {
+        "type": "number",
+        "description": "Process exit code (0 = success)"
+      },
+      "stdout": {
+        "type": "string",
+        "description": "Standard output captured from the command"
+      },
+      "stderr": {
+        "type": "string",
+        "description": "Standard error captured from the command"
+      }
+    }
+  },
+  "compatibleHarnesses": ["sera", "openclaw", "langchain", "custom"],
+  "tags": ["system", "shell", "execution"],
+  "author": "SERA Project",
+  "license": "MIT"
+}

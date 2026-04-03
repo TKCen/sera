@@ -105,7 +105,22 @@ export class BindMountBuilder {
       }
     }
 
-    // 5. Persistent filesystem grants (Story 3.10)
+    // 5. Skill package mounts (M6.2 — capability-filtered)
+    const skillPackages = caps.skillPackages;
+    if (skillPackages && skillPackages.length > 0) {
+      const skillsHostDir = process.env.HOST_SKILLS_DIR ?? '/skills';
+      for (const pkg of skillPackages) {
+        const pkgHostPath = PlatformPath.normalizeDockerBindPath(`${skillsHostDir}/${pkg}`);
+        if (fs.existsSync(pkgHostPath)) {
+          binds.push(`${pkgHostPath}:/sera/skills/${pkg}:ro`);
+          logger.debug(`Skill mount: ${pkg} for ${containerName}`);
+        } else {
+          logger.warn(`Skill package "${pkg}" not found at ${pkgHostPath} — skipping mount`);
+        }
+      }
+    }
+
+    // 6. Persistent filesystem grants (Story 3.10)
     if (agentRegistry) {
       try {
         const grants = await agentRegistry.getActiveFilesystemGrants(finalInstanceId);

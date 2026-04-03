@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import {
   Users,
-  ArrowLeft,
   Bot,
   Radio,
   Zap,
@@ -24,6 +23,7 @@ import * as circlesApi from '@/lib/api/circles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { CopyButton } from '@/components/CopyButton';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -251,14 +251,13 @@ export default function CircleDetailPage() {
 
   return (
     <div className="p-6 max-w-5xl">
-      {/* Back link */}
-      <Link
-        to="/circles"
-        className="inline-flex items-center gap-1.5 text-xs text-sera-text-muted hover:text-sera-text transition-colors mb-4"
-      >
-        <ArrowLeft size={12} />
-        Circles
-      </Link>
+      {/* Breadcrumbs */}
+      <Breadcrumbs
+        items={[
+          { label: 'Circles', href: '/circles' },
+          { label: circle.displayName ?? circle.metadata?.displayName ?? id ?? '' },
+        ]}
+      />
 
       {/* Hero */}
       <div className="flex items-start gap-4 mb-6">

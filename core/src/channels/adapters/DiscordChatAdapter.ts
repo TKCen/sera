@@ -102,6 +102,26 @@ const SLASH_COMMANDS = [
     name: 'reset',
     description: 'Start a new conversation session',
   },
+  {
+    name: 'agents',
+    description: 'List available agent instances with status',
+  },
+  {
+    name: 'switch',
+    description: 'Switch the bound agent for your session',
+    options: [
+      {
+        name: 'agent',
+        description: 'Agent instance name or ID',
+        type: 3, // STRING
+        required: true,
+      },
+    ],
+  },
+  {
+    name: 'help',
+    description: 'Show available commands',
+  },
 ];
 
 export class DiscordChatAdapter {
@@ -113,6 +133,14 @@ export class DiscordChatAdapter {
 
   /** Maps Discord userId → SERA sessionId for conversation continuity */
   private userSessions = new Map<string, string>();
+
+  /** Per-user agent override (userId → agentId). Falls back to config.targetAgentId. */
+  private userTargetAgent = new Map<string, string>();
+
+  /** Resolve the effective target agent for a user, respecting per-user overrides. */
+  private getTargetAgent(userId: string): string {
+    return this.userTargetAgent.get(userId) ?? this.config.targetAgentId;
+  }
 
   constructor(
     private channelId: string,
@@ -265,7 +293,6 @@ export class DiscordChatAdapter {
       Array.isArray(msg.mentions) &&
       msg.mentions.some((m) => m.id === this.botUserId);
 
-    // Check if this message type is allowed.
     // Defaults: allowDMs=true, allowMentions=true (must explicitly disable)
     const allowDMs = this.config.allowDMs !== false;
     const allowMentions = this.config.allowMentions !== false;
@@ -296,62 +323,12 @@ export class DiscordChatAdapter {
     }
     if (!text) return;
 
-    // Show typing indicator
     void this.sendTyping(msg.channel_id);
 
     try {
-      // Resolve or create session
       const sessionId = await this.getOrCreateSession(msg.author.id, msg.author.username);
+      const reply = await this.processChat(msg.author.id, text, sessionId);
 
-      // Load conversation history
-      const messages = await this.sessionStore.getMessages(sessionId);
-      const history: ChatMessage[] = messages.map((m) => ({
-        role: m.role as ChatMessage['role'],
-        content: m.content,
-      }));
-
-      // Get the target agent
-      let agent = this.orchestrator.getAgent(this.config.targetAgentId);
-      if (!agent) {
-        try {
-          agent = await this.orchestrator.startInstance(this.config.targetAgentId);
-        } catch {
-          await this.sendDiscordMessage(
-            msg.channel_id,
-            '⚠️ The bound agent is not available. Please contact the operator.'
-          );
-          return;
-        }
-      }
-
-      // Process message — route through container chat for full tool catalog + fixed prompt
-      let reply: string;
-      try {
-        const chatUrl = await this.orchestrator.ensureContainerRunning(this.config.targetAgentId);
-        const chatRes = await fetch(`${chatUrl}/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, sessionId, history }),
-          signal: AbortSignal.timeout(120_000),
-        });
-        if (chatRes.ok) {
-          const body = (await chatRes.json()) as { result: string | null; error?: string };
-          reply = body.result || 'No response generated.';
-        } else {
-          throw new Error(`Container chat returned ${chatRes.status}`);
-        }
-      } catch (containerErr) {
-        // Fallback to in-process if container unavailable
-        logger.warn('Container chat failed, falling back to in-process:', containerErr);
-        const response = await agent.process(text, history);
-        reply = response.finalAnswer || response.thought || 'No response generated.';
-      }
-
-      // Persist messages
-      await this.sessionStore.addMessage({ sessionId, role: 'user', content: text });
-      await this.sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
-
-      // Send response (chunked if needed)
       const prefix = this.config.responsePrefix ? `**${this.config.responsePrefix}:** ` : '';
       await this.sendChunked(msg.channel_id, prefix + reply);
     } catch (err) {
@@ -361,6 +338,51 @@ export class DiscordChatAdapter {
         '⚠️ An error occurred while processing your message.'
       );
     }
+  }
+
+  /**
+   * Fetch agent, send message through container chat (with in-process fallback),
+   * and persist both turns to the session store. Returns the assistant reply.
+   */
+  private async processChat(userId: string, text: string, sessionId: string): Promise<string> {
+    const targetAgentId = this.getTargetAgent(userId);
+
+    let agent = this.orchestrator.getAgent(targetAgentId);
+    if (!agent) {
+      agent = await this.orchestrator.startInstance(targetAgentId);
+    }
+
+    const messages = await this.sessionStore.getMessages(sessionId);
+    const history: ChatMessage[] = messages.map((m) => ({
+      role: m.role as ChatMessage['role'],
+      content: m.content,
+    }));
+
+    let reply: string;
+    try {
+      const chatUrl = await this.orchestrator.ensureContainerRunning(targetAgentId);
+      const chatRes = await fetch(`${chatUrl}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, sessionId, history }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (chatRes.ok) {
+        const body = (await chatRes.json()) as { result: string | null; error?: string };
+        reply = body.result || 'No response generated.';
+      } else {
+        throw new Error(`Container chat returned ${chatRes.status}`);
+      }
+    } catch (containerErr) {
+      logger.warn('Container chat failed, falling back to in-process:', containerErr);
+      const response = await agent.process(text, history);
+      reply = response.finalAnswer || response.thought || 'No response generated.';
+    }
+
+    await this.sessionStore.addMessage({ sessionId, role: 'user', content: text });
+    await this.sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
+
+    return reply;
   }
 
   // ── Security ───────────────────────────────────────────────────────────────
@@ -391,7 +413,8 @@ export class DiscordChatAdapter {
    * session with this agent, without needing a separate lookup table.
    */
   private async getOrCreateSession(userId: string, userName: string): Promise<string> {
-    const key = `discord:${userId}:${this.config.targetAgentId}`;
+    const targetAgentId = this.getTargetAgent(userId);
+    const key = `discord:${userId}:${targetAgentId}`;
 
     // Check in-memory cache first
     const cached = this.userSessions.get(key);
@@ -411,8 +434,8 @@ export class DiscordChatAdapter {
     // Create new session with the deterministic ID
     const session = await this.sessionStore.createSession({
       id: deterministicId,
-      agentName: this.config.targetAgentId,
-      agentInstanceId: this.config.targetAgentId,
+      agentName: targetAgentId,
+      agentInstanceId: targetAgentId,
       title: `Discord: ${userName}`,
     });
 
@@ -502,6 +525,15 @@ export class DiscordChatAdapter {
       case 'reset':
         await this.handleResetCommand(interaction, user);
         break;
+      case 'agents':
+        await this.handleAgentsCommand(interaction);
+        break;
+      case 'switch':
+        await this.handleSwitchCommand(interaction, user);
+        break;
+      case 'help':
+        await this.handleHelpCommand(interaction);
+        break;
       default:
         await this.respondToInteraction(interaction.id, interaction.token, 4, {
           content: `Unknown command: ${commandName ?? '(none)'}`,
@@ -528,55 +560,10 @@ export class DiscordChatAdapter {
 
     try {
       const sessionId = await this.getOrCreateSession(user.id, user.username);
-      const messages = await this.sessionStore.getMessages(sessionId);
-      const history: ChatMessage[] = messages.map((m) => ({
-        role: m.role as ChatMessage['role'],
-        content: m.content,
-      }));
+      const reply = await this.processChat(user.id, message.trim(), sessionId);
 
-      let agent = this.orchestrator.getAgent(this.config.targetAgentId);
-      if (!agent) {
-        try {
-          agent = await this.orchestrator.startInstance(this.config.targetAgentId);
-        } catch {
-          await this.editInteractionResponse(
-            interaction.token,
-            '⚠️ The bound agent is not available.'
-          );
-          return;
-        }
-      }
-
-      let reply: string;
-      try {
-        const chatUrl = await this.orchestrator.ensureContainerRunning(this.config.targetAgentId);
-        const chatRes = await fetch(`${chatUrl}/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: message.trim(), sessionId, history }),
-          signal: AbortSignal.timeout(120_000),
-        });
-        if (chatRes.ok) {
-          const body = (await chatRes.json()) as { result: string | null; error?: string };
-          reply = body.result || 'No response generated.';
-        } else {
-          throw new Error(`Container chat returned ${chatRes.status}`);
-        }
-      } catch (containerErr) {
-        logger.warn('Container chat failed, falling back to in-process:', containerErr);
-        const response = await agent.process(message.trim(), history);
-        reply = response.finalAnswer || response.thought || 'No response generated.';
-      }
-
-      // Persist messages
-      await this.sessionStore.addMessage({ sessionId, role: 'user', content: message.trim() });
-      await this.sessionStore.addMessage({ sessionId, role: 'assistant', content: reply });
-
-      // Edit the deferred response with the actual reply
       const prefix = this.config.responsePrefix ? `**${this.config.responsePrefix}:** ` : '';
       const fullReply = prefix + reply;
-
-      // Discord interaction responses have a 2000 char limit — truncate if needed
       const truncated =
         fullReply.length > MAX_MESSAGE_LENGTH
           ? fullReply.substring(0, MAX_MESSAGE_LENGTH - 3) + '...'
@@ -595,10 +582,11 @@ export class DiscordChatAdapter {
     interaction: DiscordInteraction,
     user: { id: string; username: string }
   ): Promise<void> {
-    const agent = this.orchestrator.getAgent(this.config.targetAgentId);
+    const targetAgentId = this.getTargetAgent(user.id);
+    const agent = this.orchestrator.getAgent(targetAgentId);
     const status = agent ? 'running' : 'stopped';
 
-    const key = `discord:${user.id}:${this.config.targetAgentId}`;
+    const key = `discord:${user.id}:${targetAgentId}`;
     const sessionId = this.userSessions.get(key);
 
     let messageCount = 0;
@@ -607,15 +595,24 @@ export class DiscordChatAdapter {
       messageCount = messages.length;
     }
 
-    const lines = [
-      `**Agent:** ${this.config.targetAgentId}`,
-      `**Status:** ${status}`,
-      `**Your session:** ${sessionId ?? 'none'}`,
-      `**Messages in session:** ${messageCount}`,
-    ];
-
     await this.respondToInteraction(interaction.id, interaction.token, 4, {
-      content: lines.join('\n'),
+      embeds: [
+        {
+          title: 'Agent Status',
+          color: status === 'running' ? 0x00ff00 : 0xff0000,
+          fields: [
+            { name: 'Agent', value: targetAgentId, inline: true },
+            { name: 'Status', value: status, inline: true },
+            {
+              name: 'Session',
+              value: sessionId ? `\`${sessionId.substring(0, 8)}...\`` : 'none',
+              inline: true,
+            },
+            { name: 'Messages', value: String(messageCount), inline: true },
+          ],
+          footer: { text: 'SERA' },
+        },
+      ],
       flags: 64,
     });
   }
@@ -630,7 +627,8 @@ export class DiscordChatAdapter {
     // ACK with deferred response
     await this.respondToInteraction(interaction.id, interaction.token, 5, { flags: 64 });
 
-    const key = `discord:${user.id}:${this.config.targetAgentId}`;
+    const targetAgentId = this.getTargetAgent(user.id);
+    const key = `discord:${user.id}:${targetAgentId}`;
     const sessionId = this.userSessions.get(key);
 
     if (!sessionId) {
@@ -669,14 +667,118 @@ export class DiscordChatAdapter {
     interaction: DiscordInteraction,
     user: { id: string; username: string }
   ): Promise<void> {
-    const key = `discord:${user.id}:${this.config.targetAgentId}`;
+    const targetAgentId = this.getTargetAgent(user.id);
+    const key = `discord:${user.id}:${targetAgentId}`;
+
+    // Delete the existing session from the store so getOrCreateSession creates a fresh one
+    const oldSessionId = this.userSessions.get(key);
+    if (oldSessionId) {
+      await this.sessionStore.deleteSession(oldSessionId);
+    }
     this.userSessions.delete(key);
 
-    // Create a fresh session immediately so next /ask doesn't reuse the old one
+    // Create a fresh session (deterministic ID will produce the same key, but the
+    // store entry was deleted above so a new empty session is created)
     const newSessionId = await this.getOrCreateSession(user.id, user.username);
 
     await this.respondToInteraction(interaction.id, interaction.token, 4, {
       content: `✅ Session reset. New session: \`${newSessionId.substring(0, 8)}...\`\nUse \`/ask\` to start a new conversation.`,
+      flags: 64,
+    });
+  }
+
+  private async handleAgentsCommand(interaction: DiscordInteraction): Promise<void> {
+    const agents = this.orchestrator.listAgents();
+
+    if (agents.length === 0) {
+      await this.respondToInteraction(interaction.id, interaction.token, 4, {
+        content: 'No agents are currently registered.',
+        flags: 64,
+      });
+      return;
+    }
+
+    const fields = agents.map((a) => ({
+      name: a.name,
+      value: `**Status:** ${a.status}\n**ID:** \`${a.id || 'n/a'}\``,
+      inline: true,
+    }));
+
+    await this.respondToInteraction(interaction.id, interaction.token, 4, {
+      embeds: [
+        {
+          title: 'Available Agents',
+          color: 0x5865f2, // Discord blurple
+          fields,
+          footer: { text: `${agents.length} agent(s) — SERA` },
+        },
+      ],
+      flags: 64,
+    });
+  }
+
+  private async handleSwitchCommand(
+    interaction: DiscordInteraction,
+    user: { id: string; username: string }
+  ): Promise<void> {
+    const agentOpt = interaction.data?.options?.find((o) => o.name === 'agent')?.value;
+    if (typeof agentOpt !== 'string' || !agentOpt.trim()) {
+      await this.respondToInteraction(interaction.id, interaction.token, 4, {
+        content: 'Please provide an agent name or ID.',
+        flags: 64,
+      });
+      return;
+    }
+
+    const agentId = agentOpt.trim();
+
+    // Validate the agent exists (check running agents and manifests)
+    const agent = this.orchestrator.getAgent(agentId);
+    const agentInfo = this.orchestrator.getAgentInfo(agentId);
+    if (!agent && !agentInfo) {
+      await this.respondToInteraction(interaction.id, interaction.token, 4, {
+        content: `⚠️ Agent \`${agentId}\` not found. Use \`/agents\` to see available agents.`,
+        flags: 64,
+      });
+      return;
+    }
+
+    // Clear the old session cache so next /ask creates a fresh session for the new agent
+    const oldTargetId = this.getTargetAgent(user.id);
+    const oldKey = `discord:${user.id}:${oldTargetId}`;
+    this.userSessions.delete(oldKey);
+
+    // Set the per-user override
+    this.userTargetAgent.set(user.id, agentId);
+
+    await this.respondToInteraction(interaction.id, interaction.token, 4, {
+      embeds: [
+        {
+          title: 'Agent Switched',
+          color: 0x57f287, // Discord green
+          fields: [
+            { name: 'Now talking to', value: `\`${agentId}\``, inline: true },
+            { name: 'Previous', value: `\`${oldTargetId}\``, inline: true },
+          ],
+          footer: { text: 'Session reset — use /ask to start chatting. — SERA' },
+        },
+      ],
+      flags: 64,
+    });
+  }
+
+  private async handleHelpCommand(interaction: DiscordInteraction): Promise<void> {
+    const commands = SLASH_COMMANDS.map((cmd) => `**/${cmd.name}** — ${cmd.description}`);
+
+    await this.respondToInteraction(interaction.id, interaction.token, 4, {
+      embeds: [
+        {
+          title: 'SERA Commands',
+          color: 0x5865f2,
+          description: commands.join('\n'),
+          footer: { text: 'SERA' },
+        },
+      ],
       flags: 64,
     });
   }
@@ -691,7 +793,17 @@ export class DiscordChatAdapter {
     interactionId: string,
     interactionToken: string,
     type: number,
-    data?: { content?: string; flags?: number }
+    data?: {
+      content?: string;
+      embeds?: Array<{
+        title?: string;
+        description?: string;
+        color?: number;
+        fields?: Array<{ name: string; value: string; inline?: boolean }>;
+        footer?: { text: string };
+      }>;
+      flags?: number;
+    }
   ): Promise<void> {
     try {
       const resp = await fetch(

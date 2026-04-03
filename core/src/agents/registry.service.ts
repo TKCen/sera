@@ -300,13 +300,14 @@ export class AgentRegistry {
 
     await this.pool
       .query(
-        `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
-         VALUES ($1, $2, $3, NOW())
+        `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, source, updated_at)
+         VALUES ($1, $2, $3, 'manifest', NOW())
          ON CONFLICT (agent_id)
          DO UPDATE SET
-           max_tokens_per_hour = $2,
-           max_tokens_per_day = $3,
-           updated_at = NOW()`,
+           max_tokens_per_hour = EXCLUDED.max_tokens_per_hour,
+           max_tokens_per_day = EXCLUDED.max_tokens_per_day,
+           updated_at = NOW()
+         WHERE token_quotas.source = 'manifest'`,
         [instanceId, hourly ?? DEFAULT_HOURLY_QUOTA, daily ?? DEFAULT_DAILY_QUOTA]
       )
       .catch((err) => {

@@ -4,7 +4,7 @@ export interface NotificationChannel {
   id: string;
   name: string;
   description?: string;
-  type: 'webhook' | 'email' | 'discord' | 'slack' | 'discord-chat';
+  type: 'webhook' | 'email' | 'discord' | 'slack' | 'discord-chat' | 'telegram' | 'whatsapp';
   config: Record<string, unknown>;
   enabled: boolean;
   createdAt: string;
@@ -98,4 +98,13 @@ export function deleteRoutingRule(id: string): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/notifications/routing/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
+}
+
+export interface ChannelHealth {
+  healthy: boolean;
+  error?: string;
+}
+
+export function getChannelHealth(id: string): Promise<ChannelHealth> {
+  return request<ChannelHealth>(`/channels/${encodeURIComponent(id)}/health`);
 }

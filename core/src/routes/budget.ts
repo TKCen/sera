@@ -145,43 +145,34 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
         maxLlmTokensPerDay?: number | null;
       };
 
-      // Resolve values: null or 0 → 0 (unlimited), undefined → keep existing, positive → use as-is
-      const resolveQuota = (val: number | null | undefined, _fallback: number): number | null => {
+      // Resolve values: null or 0 → 0 (unlimited), undefined → keep existing (represented as null here)
+      const resolveQuota = (val: number | null | undefined): number | null => {
         if (val === undefined) return null; // not in request — keep existing
         if (val === null || val === 0) return 0; // explicit unlimited
         return val;
       };
 
-      const hourly = resolveQuota(maxLlmTokensPerHour, DEFAULT_HOURLY_QUOTA);
-      const daily = resolveQuota(maxLlmTokensPerDay, DEFAULT_DAILY_QUOTA);
+      const hourly = resolveQuota(maxLlmTokensPerHour);
+      const daily = resolveQuota(maxLlmTokensPerDay);
 
-      // Build the upsert dynamically to handle "keep existing" (null = not provided)
-      if (hourly !== null && daily !== null) {
-        await query(
-          `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (agent_id)
-           DO UPDATE SET max_tokens_per_hour = $2, max_tokens_per_day = $3, updated_at = NOW()`,
-          [agentId, hourly, daily]
-        );
-      } else if (hourly !== null) {
-        await query(
-          `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (agent_id)
-           DO UPDATE SET max_tokens_per_hour = $2, updated_at = NOW()`,
-          [agentId, hourly, DEFAULT_DAILY_QUOTA]
-        );
-      } else if (daily !== null) {
-        await query(
-          `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, updated_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (agent_id)
-           DO UPDATE SET max_tokens_per_day = $3, updated_at = NOW()`,
-          [agentId, DEFAULT_HOURLY_QUOTA, daily]
-        );
+      // Nothing to update if neither field was provided
+      if (hourly === null && daily === null) {
+        res.json({ success: true });
+        return;
       }
-      // If both are null (undefined in request), nothing to update
+
+      // Single upsert: COALESCE preserves the existing column value when the caller omits a field.
+      await query(
+        `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, source, updated_at)
+         VALUES ($1, COALESCE($2, $3), COALESCE($4, $5), 'operator', NOW())
+         ON CONFLICT (agent_id)
+         DO UPDATE SET
+           max_tokens_per_hour = COALESCE($2, token_quotas.max_tokens_per_hour),
+           max_tokens_per_day  = COALESCE($4, token_quotas.max_tokens_per_day),
+           source = 'operator',
+           updated_at = NOW()`,
+        [agentId, hourly, DEFAULT_HOURLY_QUOTA, daily, DEFAULT_DAILY_QUOTA]
+      );
 
       logger.info(
         `Budget updated for agent=${agentId} hourly=${hourly ?? 'unchanged'} daily=${daily ?? 'unchanged'}`

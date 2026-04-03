@@ -132,34 +132,42 @@ function AgentsPageContent() {
         </div>
 
         {circles.length > 0 && (
-          <select
-            aria-label="Filter by circle"
-            value={filterCircle}
-            onChange={(e) => setFilterCircle(e.target.value)}
-            className="sera-input h-9 py-0 w-auto text-xs"
-          >
-            <option value="all">All circles</option>
-            {circles.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label htmlFor="circle-filter" className="sr-only">
+              Filter by circle
+            </label>
+            <select
+              id="circle-filter"
+              value={filterCircle}
+              onChange={(e) => setFilterCircle(e.target.value)}
+              className="sera-input h-9 py-0 w-auto text-xs"
+            >
+              <option value="all">All circles</option>
+              {circles.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
 
-        <nav aria-label="Filter by status" className="flex items-center gap-1">
+        <nav aria-label="Filter by status" className="flex items-center gap-1 p-1 bg-sera-surface rounded-lg border border-sera-border">
           {STATUS_OPTIONS.map((s) => (
             <button
               key={s}
-              onClick={() => setFilterStatus(s)}
+              onClick={() => {
+                setFilterStatus(s);
+                setLiveMessage(`Filtering by ${s} status`);
+              }}
               aria-pressed={filterStatus === s}
               className={
                 filterStatus === s
-                  ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
-                  : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                  ? 'px-3 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wider bg-sera-accent-soft text-sera-accent'
+                  : 'px-3 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wider text-sera-text-muted hover:bg-sera-surface-hover hover:text-sera-text transition-colors'
               }
             >
-              {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+              {s === 'all' ? 'All' : s}
             </button>
           ))}
         </nav>

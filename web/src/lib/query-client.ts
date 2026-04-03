@@ -3,10 +3,12 @@ import { toast } from 'sonner';
 
 export const queryClient = new QueryClient({
   queryCache: new QueryCache({
-    onError: (_error, query) => {
+    onError: (error, query) => {
       // Only show error toasts for queries that have an explicit errorMessage meta
       if (query.meta?.errorMessage) {
         toast.error(String(query.meta.errorMessage));
+      } else if (query.meta?.showToast === true) {
+        toast.error(error instanceof Error ? error.message : 'Failed to fetch data');
       }
     },
   }),

@@ -18,6 +18,7 @@ import {
   Radio,
   Server,
   Brain,
+  Puzzle,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
@@ -49,6 +50,7 @@ const navGroups: NavGroup[] = [
       { label: 'Templates', href: '/templates', icon: <LayoutTemplate size={16} /> },
       { label: 'Circles', href: '/circles', icon: <Users size={16} /> },
       { label: 'Tools', href: '/tools', icon: <Wrench size={16} /> },
+      { label: 'MCP Servers', href: '/mcp-servers', icon: <Puzzle size={16} /> },
       { label: 'Memory', href: '/memory', icon: <Brain size={16} /> },
     ],
   },

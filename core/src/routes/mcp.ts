@@ -6,6 +6,92 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
   const router = Router();
 
   /**
+   * GET /api/mcp-servers
+   * List all registered MCP servers with status and tool counts.
+   */
+  router.get('/', async (_req, res) => {
+    try {
+      const servers = await mcpRegistry.listServers();
+      res.json(servers);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/mcp-servers/:name
+   * Get details of a specific MCP server including its tools.
+   */
+  router.get('/:name', async (req, res) => {
+    try {
+      const client = mcpRegistry.getClient(req.params.name);
+      if (!client) {
+        return res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+      }
+      const tools = await client.listTools();
+      const servers = await mcpRegistry.listServers();
+      const serverInfo = servers.find((s) => s.name === req.params.name);
+      res.json({
+        name: req.params.name,
+        status: serverInfo?.status ?? 'unknown',
+        toolCount: serverInfo?.toolCount ?? 0,
+        tools: tools.tools,
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/mcp-servers/:name/health
+   * Health check for a specific MCP server.
+   */
+  router.get('/:name/health', async (req, res) => {
+    try {
+      const client = mcpRegistry.getClient(req.params.name);
+      if (!client) {
+        return res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+      }
+      const tools = await client.listTools();
+      res.json({
+        name: req.params.name,
+        healthy: true,
+        toolCount: tools.tools.length,
+        checkedAt: new Date().toISOString(),
+      });
+    } catch (err: unknown) {
+      res.json({
+        name: req.params.name,
+        healthy: false,
+        error: (err as Error).message,
+        checkedAt: new Date().toISOString(),
+      });
+    }
+  });
+
+  /**
+   * POST /api/mcp-servers/:name/reload
+   * Reconnect to an MCP server and refresh its tool list.
+   */
+  router.post('/:name/reload', async (req, res) => {
+    try {
+      const client = mcpRegistry.getClient(req.params.name);
+      if (!client) {
+        return res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+      }
+      await client.disconnect();
+      await client.connect();
+      const tools = await client.listTools();
+      res.json({
+        message: `MCP server "${req.params.name}" reloaded`,
+        toolCount: tools.tools.length,
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
    * POST /api/mcp-servers
    * Register a new containerized MCP server from manifest.
    */

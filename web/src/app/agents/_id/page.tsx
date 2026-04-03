@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { queryClient } from '@/lib/query-client';
 import { ArrowLeft, Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -10,6 +12,7 @@ import {
   useStopAgent,
   useRestartAgent,
   useDeleteAgent,
+  agentsKeys,
 } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Button } from '@/components/ui/button';
@@ -237,21 +240,28 @@ export default function AgentDetailPage() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
-        {tab === 'overview' && <ManifestTab id={id} />}
-        {tab === 'tasks' && <AgentDetailTasksTab id={id} />}
-        {tab === 'grants' && <GrantsTab id={id} />}
-        {tab === 'tools' && <ToolsTab id={id} />}
-        {tab === 'delegations' && <DelegationsTab id={id} />}
-        {tab === 'logs' && <LogsTab id={id} />}
-        {tab === 'commands' && <CommandsTab id={id} />}
-        {tab === 'memory' && <MemoryTab id={id} />}
-        {tab === 'core-memory' && <CoreMemoryTab id={id} />}
-        {tab === 'schedules' && <SchedulesTab id={id} agentName={agent?.name} />}
-        {tab === 'inner-life' && <InnerLifeTab id={id} />}
-        {tab === 'budget' && <BudgetTab id={id} />}
-        {tab === 'context' && <ContextTab id={id} />}
-        {tab === 'prompt' && <SystemPromptTab id={id} />}
-        {tab === 'health' && <HealthCheckTab id={id} />}
+        <ErrorBoundary
+          onReset={() => {
+            void queryClient.invalidateQueries({ queryKey: agentsKeys.detail(id) });
+          }}
+          fallbackMessage="The agent detail tab content failed to load."
+        >
+          {tab === 'overview' && <ManifestTab id={id} />}
+          {tab === 'tasks' && <AgentDetailTasksTab id={id} />}
+          {tab === 'grants' && <GrantsTab id={id} />}
+          {tab === 'tools' && <ToolsTab id={id} />}
+          {tab === 'delegations' && <DelegationsTab id={id} />}
+          {tab === 'logs' && <LogsTab id={id} />}
+          {tab === 'commands' && <CommandsTab id={id} />}
+          {tab === 'memory' && <MemoryTab id={id} />}
+          {tab === 'core-memory' && <CoreMemoryTab id={id} />}
+          {tab === 'schedules' && <SchedulesTab id={id} agentName={agent?.name} />}
+          {tab === 'inner-life' && <InnerLifeTab id={id} />}
+          {tab === 'budget' && <BudgetTab id={id} />}
+          {tab === 'context' && <ContextTab id={id} />}
+          {tab === 'prompt' && <SystemPromptTab id={id} />}
+          {tab === 'health' && <HealthCheckTab id={id} />}
+        </ErrorBoundary>
       </div>
 
       {/* Edit agent dialog */}

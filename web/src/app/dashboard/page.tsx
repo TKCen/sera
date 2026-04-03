@@ -59,11 +59,7 @@ function StatCard({
 }) {
   return (
     <Card className="p-0 overflow-hidden hover:border-sera-accent/40 transition-colors group">
-      <Link
-        to={to}
-        className="block p-4"
-        aria-label={`${label}: ${isLoading ? 'loading' : value}`}
-      >
+      <Link to={to} className="block p-4" aria-label={`${label}: ${isLoading ? 'loading' : value}`}>
         <div className="flex items-center justify-between mb-2">
           <Icon
             size={18}
@@ -104,7 +100,8 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
       </div>
     );
   } else if (status === 'degraded') {
-    description = 'Some services are experiencing issues but the system remains partially functional.';
+    description =
+      'Some services are experiencing issues but the system remains partially functional.';
     banner = (
       <div
         className={cn(commonClasses, 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400')}
@@ -127,11 +124,7 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
     );
   }
 
-  return (
-    <Tooltip content={description}>
-      {banner}
-    </Tooltip>
-  );
+  return <Tooltip content={description}>{banner}</Tooltip>;
 }
 
 function RecentSessions() {

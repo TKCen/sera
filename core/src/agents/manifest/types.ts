@@ -212,6 +212,7 @@ export interface AgentManifest {
     };
     notes?: string;
     sandbox?: SandboxSpec;
+    permissions?: PermissionsConfig;
   };
   tools?: ToolsConfig;
   skills?: Array<string | { name: string; version: string }>;

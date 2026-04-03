@@ -23,13 +23,13 @@ vi.mock('pg', () => {
 
 vi.mock('node-pg-migrate', () => {
   return {
-    default: vi.fn(),
+    runner: vi.fn(),
   };
 });
 
 import { query, initDb } from './database.js';
 import * as migrateModule from 'node-pg-migrate';
-const migrate = (migrateModule as any).default || migrateModule;
+const migrate = (migrateModule as any).runner ?? (migrateModule as any).default ?? migrateModule;
 import path from 'path';
 
 describe('database', () => {

@@ -7,6 +7,28 @@ import { pool } from '../lib/database.js';
 import { AuditService } from '../audit/AuditService.js';
 import { ActingContextBuilder, type DelegationScope } from '../identity/acting-context.js';
 import type { ProcessTask } from '../agents/process/types.js';
+import { MCPRegistry } from './registry.js';
+import { SkillLibrary } from '../skills/SkillLibrary.js';
+import { ScheduleService } from '../services/ScheduleService.js';
+
+/** Name of the embedded sera-core MCP server — used in guards. */
+export const SERA_CORE_MCP_NAME = 'sera-core';
+
+/**
+ * Fields agents are NOT allowed to modify via agent_config.patch.
+ * Follows OpenClaw's PROTECTED_GATEWAY_CONFIG_PATHS pattern.
+ */
+export const PROTECTED_AGENT_CONFIG_PATHS = [
+  'sandboxBoundary',
+  'capabilities.tier',
+  'capabilities.sandboxBoundary',
+  'auth',
+  'audit',
+  'security',
+  'permissions.canSpawnSubagents',
+  'metadata.owner',
+  'metadata.builtin',
+] as const;
 
 /**
  * SeraMCPServer — an embedded MCP server that exposes platform management tools.
@@ -448,6 +470,233 @@ export class SeraMCPServer {
           required: ['role', 'task'],
         },
       },
+      // ── MCP Server Management ─────────────────────────────────────────
+      {
+        name: 'mcp_servers.list',
+        description: 'List all registered MCP servers with their status and tool counts.',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'mcp_servers.register',
+        description: 'Register a new containerized MCP server from a manifest.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Server name' },
+            image: { type: 'string', description: 'Docker image for the MCP server' },
+            transport: {
+              type: 'string',
+              enum: ['stdio', 'http'],
+              description: 'Transport type (default: stdio)',
+            },
+            port: { type: 'number', description: 'Port for HTTP transport' },
+            env: {
+              type: 'object',
+              description: 'Environment variables to pass to the container',
+            },
+          },
+          required: ['name', 'image'],
+        },
+      },
+      {
+        name: 'mcp_servers.unregister',
+        description: 'Unregister and stop an MCP server.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Server name to unregister' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'mcp_servers.reload',
+        description: 'Reconnect to an MCP server and refresh its tool list.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Server name to reload' },
+          },
+          required: ['name'],
+        },
+      },
+      // ── Skill Management ──────────────────────────────────────────────
+      {
+        name: 'skills.list',
+        description: 'List all registered guidance skills.',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'skills.register',
+        description: 'Register a new guidance skill (text document).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Skill name (slug)' },
+            version: { type: 'string', description: 'Semantic version (e.g. "1.0.0")' },
+            description: { type: 'string', description: 'What the skill does' },
+            content: { type: 'string', description: 'Skill content (markdown)' },
+            triggers: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Keywords that trigger this skill',
+            },
+            category: { type: 'string', description: 'Skill category' },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tags for discovery',
+            },
+          },
+          required: ['name', 'version', 'description', 'content'],
+        },
+      },
+      {
+        name: 'skills.remove',
+        description: 'Remove a registered guidance skill.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Skill name to remove' },
+            version: { type: 'string', description: 'Specific version to remove (optional)' },
+          },
+          required: ['name'],
+        },
+      },
+      // ── Agent Self-Configuration ──────────────────────────────────────
+      {
+        name: 'agent_config.get',
+        description:
+          "Get an agent's full resolved configuration including template defaults and instance overrides.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID or name' },
+          },
+          required: ['agentId'],
+        },
+      },
+      {
+        name: 'agent_config.patch',
+        description:
+          "Apply partial configuration updates to an agent instance's overrides. Protected paths (sandbox boundary, security, auth) cannot be modified.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID or name' },
+            patch: {
+              type: 'object',
+              description:
+                'Partial config to merge. Supports: model (object with name), tools.allowed (string[]), tools.denied (string[]), identity.role, identity.personality, and custom override keys.',
+            },
+          },
+          required: ['agentId', 'patch'],
+        },
+      },
+      // ── Schedule CRUD ─────────────────────────────────────────────────
+      {
+        name: 'schedules.create',
+        description: 'Create a new schedule for an agent.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentInstanceId: { type: 'string', description: 'Agent instance ID' },
+            name: { type: 'string', description: 'Schedule name' },
+            expression: { type: 'string', description: 'Cron expression (e.g. "0 */6 * * *")' },
+            task: { type: 'string', description: 'Task prompt to execute' },
+            description: { type: 'string', description: 'Human-readable description' },
+            category: { type: 'string', description: 'Category (e.g. "maintenance", "reporting")' },
+          },
+          required: ['agentInstanceId', 'name', 'expression', 'task'],
+        },
+      },
+      {
+        name: 'schedules.update',
+        description: 'Update an existing schedule.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID (ownership check)' },
+            scheduleId: { type: 'string', description: 'Schedule UUID' },
+            updates: {
+              type: 'object',
+              description:
+                'Fields to update: name, expression, task, description, category, status',
+            },
+          },
+          required: ['agentId', 'scheduleId', 'updates'],
+        },
+      },
+      {
+        name: 'schedules.delete',
+        description: 'Delete a schedule.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID (ownership check)' },
+            scheduleId: { type: 'string', description: 'Schedule UUID' },
+          },
+          required: ['agentId', 'scheduleId'],
+        },
+      },
+      {
+        name: 'schedules.trigger',
+        description: 'Immediately trigger a scheduled task.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent instance ID (ownership check)' },
+            scheduleId: { type: 'string', description: 'Schedule UUID' },
+          },
+          required: ['agentId', 'scheduleId'],
+        },
+      },
+      // ── Operator Requests ─────────────────────────────────────────────
+      {
+        name: 'operator.request',
+        description:
+          'Create a request for the operator (human or Claude Code). Use this when you need something you cannot do yourself — configuration changes, dependency installs, capability escalation, or general feedback.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Your agent instance ID' },
+            agentName: { type: 'string', description: 'Your agent name' },
+            type: {
+              type: 'string',
+              enum: [
+                'config_change',
+                'dependency_install',
+                'feedback',
+                'capability_request',
+                'general',
+              ],
+              description: 'Request type',
+            },
+            title: { type: 'string', description: 'Short description of what you need' },
+            payload: {
+              type: 'object',
+              description:
+                'Detailed request data (e.g. { "package": "axios", "reason": "need HTTP client" })',
+            },
+          },
+          required: ['agentId', 'type', 'title'],
+        },
+      },
+      {
+        name: 'operator.list_requests',
+        description: 'List operator requests, optionally filtered by status.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            status: {
+              type: 'string',
+              enum: ['pending', 'approved', 'rejected', 'resolved'],
+              description: 'Filter by status (omit for all)',
+            },
+            agentId: { type: 'string', description: 'Filter by agent ID' },
+          },
+        },
+      },
     ];
   }
 
@@ -578,6 +827,60 @@ export class SeraMCPServer {
               delegationTokenId: string;
               narrowedScope?: DelegationScope;
             }>
+          );
+        // ── MCP Server Management ─────────────────────────────────────
+        case 'mcp_servers.list':
+          return this.handleMcpServersList();
+        case 'mcp_servers.register':
+          return this.handleMcpServersRegister(toolArgs);
+        case 'mcp_servers.unregister':
+          return this.handleMcpServersUnregister(toolArgs['name'] as string);
+        case 'mcp_servers.reload':
+          return this.handleMcpServersReload(toolArgs['name'] as string);
+        // ── Skill Management ──────────────────────────────────────────
+        case 'skills.list':
+          return this.handleSkillsList();
+        case 'skills.register':
+          return this.handleSkillsRegister(toolArgs);
+        case 'skills.remove':
+          return this.handleSkillsRemove(
+            toolArgs['name'] as string,
+            toolArgs['version'] as string | undefined
+          );
+        // ── Agent Self-Configuration ──────────────────────────────────
+        case 'agent_config.get':
+          return this.handleAgentConfigGet(toolArgs['agentId'] as string);
+        case 'agent_config.patch':
+          return this.handleAgentConfigPatch(
+            toolArgs['agentId'] as string,
+            toolArgs['patch'] as Record<string, unknown>
+          );
+        // ── Schedule CRUD ─────────────────────────────────────────────
+        case 'schedules.create':
+          return this.handleScheduleCreate(toolArgs);
+        case 'schedules.update':
+          return this.handleScheduleUpdate(
+            toolArgs['agentId'] as string,
+            toolArgs['scheduleId'] as string,
+            toolArgs['updates'] as Record<string, unknown>
+          );
+        case 'schedules.delete':
+          return this.handleScheduleDelete(
+            toolArgs['agentId'] as string,
+            toolArgs['scheduleId'] as string
+          );
+        case 'schedules.trigger':
+          return this.handleScheduleTrigger(
+            toolArgs['agentId'] as string,
+            toolArgs['scheduleId'] as string
+          );
+        // ── Operator Requests ─────────────────────────────────────────
+        case 'operator.request':
+          return this.handleOperatorRequest(toolArgs);
+        case 'operator.list_requests':
+          return this.handleOperatorListRequests(
+            toolArgs['status'] as string | undefined,
+            toolArgs['agentId'] as string | undefined
           );
         default:
           throw new Error(`Tool not found: ${name}`);
@@ -1184,5 +1487,420 @@ export class SeraMCPServer {
     if (!agentName || !task) throw new Error('agentName and task are required');
     const message = context ? `${task}\n\nContext:\n${context}` : task;
     return this.handleChat(agentName, message, undefined);
+  }
+
+  // ── MCP Server Management ───────────────────────────────────────────────
+
+  private async handleMcpServersList() {
+    const registry = MCPRegistry.getInstance();
+    const servers = await registry.listServers();
+    return {
+      content: [{ type: 'text', text: JSON.stringify(servers, null, 2) }],
+    };
+  }
+
+  private async handleMcpServersRegister(args: Record<string, unknown>) {
+    const name = args['name'] as string;
+    const image = args['image'] as string;
+    if (!name || !image) throw new Error('name and image are required');
+
+    const registry = MCPRegistry.getInstance();
+    const manifest = {
+      apiVersion: 'sera/v1' as const,
+      kind: 'SkillProvider' as const,
+      metadata: { name },
+      image,
+      transport: ((args['transport'] as string) ?? 'stdio') as 'stdio' | 'http',
+      ...(args['env'] ? { env: args['env'] as Record<string, string> } : {}),
+    };
+
+    await registry.registerContainerServer(
+      manifest as import('./MCPServerManager.js').MCPServerManifest
+    );
+    return {
+      content: [{ type: 'text', text: `MCP server "${name}" registered and connected.` }],
+    };
+  }
+
+  private async handleMcpServersUnregister(name: string) {
+    if (!name) throw new Error('name is required');
+    if (name === SERA_CORE_MCP_NAME)
+      throw new Error('Cannot unregister the embedded sera-core server');
+
+    const registry = MCPRegistry.getInstance();
+    const removed = await registry.unregisterClient(name);
+    if (!removed) throw new Error(`MCP server "${name}" not found`);
+    return {
+      content: [{ type: 'text', text: `MCP server "${name}" unregistered.` }],
+    };
+  }
+
+  private async handleMcpServersReload(name: string) {
+    if (!name) throw new Error('name is required');
+
+    const registry = MCPRegistry.getInstance();
+    const client = registry.getClient(name);
+    if (!client) throw new Error(`MCP server "${name}" not found`);
+
+    await client.disconnect();
+    await client.connect();
+    const tools = await client.listTools();
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `MCP server "${name}" reloaded. ${tools.tools.length} tools available.`,
+        },
+      ],
+    };
+  }
+
+  // ── Skill Management ────────────────────────────────────────────────────
+
+  private async handleSkillsList() {
+    const skillLibrary = SkillLibrary.getInstance(pool);
+    const skills = await skillLibrary.listSkills();
+    return {
+      content: [{ type: 'text', text: JSON.stringify(skills, null, 2) }],
+    };
+  }
+
+  private async handleSkillsRegister(args: Record<string, unknown>) {
+    const name = args['name'] as string;
+    const version = args['version'] as string;
+    const description = args['description'] as string;
+    const content = args['content'] as string;
+    if (!name || !version || !description || !content) {
+      throw new Error('name, version, description, and content are required');
+    }
+
+    const skillLibrary = SkillLibrary.getInstance(pool);
+    await skillLibrary.createSkill(
+      {
+        name,
+        version,
+        description,
+        triggers: (args['triggers'] as string[]) ?? [],
+        ...(args['category'] ? { category: args['category'] as string } : {}),
+        ...(args['tags'] ? { tags: args['tags'] as string[] } : {}),
+      },
+      content
+    );
+
+    return {
+      content: [{ type: 'text', text: `Skill "${name}" v${version} registered.` }],
+    };
+  }
+
+  private async handleSkillsRemove(name: string, version?: string) {
+    if (!name) throw new Error('name is required');
+    const skillLibrary = SkillLibrary.getInstance(pool);
+    const deleted = await skillLibrary.deleteSkill(name, version);
+    if (!deleted) throw new Error(`Skill "${name}" not found`);
+    return {
+      content: [{ type: 'text', text: `Skill "${name}" removed.` }],
+    };
+  }
+
+  // ── Agent Self-Configuration ────────────────────────────────────────────
+
+  private async handleAgentConfigGet(agentId: string) {
+    if (!agentId) throw new Error('agentId is required');
+
+    // Try by name first, then by ID
+    const info = this.orchestrator.getAgentInfo(agentId);
+    if (info) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                name: info.name,
+                manifest: info.manifest,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    // Fall back to DB lookup
+    const { rows } = await pool.query(
+      `SELECT ai.id, ai.name, ai.template_name, ai.overrides, ai.status,
+              at.manifest AS template_manifest
+       FROM agent_instances ai
+       LEFT JOIN agent_templates at ON ai.template_name = at.name
+       WHERE ai.id = $1 OR ai.name = $1
+       LIMIT 1`,
+      [agentId]
+    );
+    if (rows.length === 0) throw new Error(`Agent "${agentId}" not found`);
+    const row = rows[0]!;
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              id: row.id,
+              name: row.name,
+              templateName: row.template_name,
+              overrides: row.overrides,
+              templateManifest: row.template_manifest,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  private async handleAgentConfigPatch(agentId: string, patch: Record<string, unknown>) {
+    if (!agentId) throw new Error('agentId is required');
+    if (!patch || typeof patch !== 'object') throw new Error('patch must be an object');
+
+    // Enforce protected paths
+    for (const protectedPath of PROTECTED_AGENT_CONFIG_PATHS) {
+      const topKey = protectedPath.split('.')[0]!;
+      if (topKey in patch) {
+        // Check if the nested path is being modified
+        if (!protectedPath.includes('.')) {
+          throw new Error(
+            `Cannot modify protected path "${protectedPath}". This field is security-critical and requires operator intervention.`
+          );
+        }
+        const nested = patch[topKey];
+        if (nested && typeof nested === 'object') {
+          const subKey = protectedPath.split('.').slice(1).join('.');
+          if (subKey in (nested as Record<string, unknown>)) {
+            throw new Error(
+              `Cannot modify protected path "${protectedPath}". This field is security-critical and requires operator intervention.`
+            );
+          }
+        }
+      }
+    }
+
+    // Find the instance
+    const { rows } = await pool.query<{ id: string; overrides: Record<string, unknown> }>(
+      'SELECT id, overrides FROM agent_instances WHERE id = $1 OR name = $1 LIMIT 1',
+      [agentId]
+    );
+    if (rows.length === 0) throw new Error(`Agent "${agentId}" not found`);
+    const instance = rows[0]!;
+
+    // Deep merge patch into existing overrides
+    const currentOverrides = instance.overrides ?? {};
+    const merged = { ...currentOverrides };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        merged[key] = {
+          ...((currentOverrides[key] as Record<string, unknown>) ?? {}),
+          ...(value as Record<string, unknown>),
+        };
+      } else {
+        merged[key] = value;
+      }
+    }
+
+    await pool.query(
+      'UPDATE agent_instances SET overrides = $1, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(merged), instance.id]
+    );
+
+    // Update in-memory manifest if loaded
+    const manifest = this.orchestrator.getManifest(agentId);
+    if (manifest && patch['model'] && typeof patch['model'] === 'object') {
+      const modelPatch = patch['model'] as Record<string, unknown>;
+      if (modelPatch['name']) {
+        const m = manifest as unknown as Record<string, unknown>;
+        const spec = m['spec'] as Record<string, unknown> | undefined;
+        if (spec?.['model']) {
+          (spec['model'] as Record<string, unknown>)['name'] = modelPatch['name'];
+        } else if (m['model']) {
+          (m['model'] as Record<string, unknown>)['name'] = modelPatch['name'];
+        }
+      }
+    }
+    if (manifest && patch['tools']) {
+      const toolsPatch = patch['tools'] as Record<string, unknown>;
+      if (!manifest.tools) manifest.tools = {};
+      if (toolsPatch['allowed']) manifest.tools.allowed = toolsPatch['allowed'] as string[];
+      if (toolsPatch['denied']) manifest.tools.denied = toolsPatch['denied'] as string[];
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Agent "${agentId}" config updated. Changed keys: ${Object.keys(patch).join(', ')}`,
+        },
+      ],
+    };
+  }
+
+  // ── Schedule CRUD ───────────────────────────────────────────────────────
+
+  private async handleScheduleCreate(args: Record<string, unknown>) {
+    const agentInstanceId = args['agentInstanceId'] as string;
+    const name = args['name'] as string;
+    const expression = args['expression'] as string;
+    const task = args['task'] as string;
+    if (!agentInstanceId || !name || !expression || !task) {
+      throw new Error('agentInstanceId, name, expression, and task are required');
+    }
+
+    const scheduleService = ScheduleService.getInstance();
+    const schedule = await scheduleService.createSchedule({
+      agent_instance_id: agentInstanceId,
+      name,
+      expression,
+      task: JSON.stringify({ prompt: task }),
+      source: 'api',
+      ...(args['description'] ? { description: args['description'] as string } : {}),
+      ...(args['category'] ? { category: args['category'] as string } : {}),
+    });
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(schedule, null, 2) }],
+    };
+  }
+
+  private async handleScheduleUpdate(
+    agentId: string,
+    scheduleId: string,
+    updates: Record<string, unknown>
+  ) {
+    if (!agentId || !scheduleId) throw new Error('agentId and scheduleId are required');
+
+    // Verify ownership
+    const { rows } = await pool.query(
+      'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
+      [scheduleId, agentId]
+    );
+    if (rows.length === 0) {
+      throw new Error('Schedule not found or not owned by this agent.');
+    }
+
+    const scheduleService = ScheduleService.getInstance();
+    const schedule = await scheduleService.updateSchedule(scheduleId, updates);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(schedule, null, 2) }],
+    };
+  }
+
+  private async handleScheduleDelete(agentId: string, scheduleId: string) {
+    if (!agentId || !scheduleId) throw new Error('agentId and scheduleId are required');
+
+    // Verify ownership
+    const { rows } = await pool.query(
+      'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
+      [scheduleId, agentId]
+    );
+    if (rows.length === 0) {
+      throw new Error('Schedule not found or not owned by this agent.');
+    }
+
+    const scheduleService = ScheduleService.getInstance();
+    await scheduleService.deleteSchedule(scheduleId);
+    return {
+      content: [{ type: 'text', text: `Schedule "${scheduleId}" deleted.` }],
+    };
+  }
+
+  private async handleScheduleTrigger(agentId: string, scheduleId: string) {
+    if (!agentId || !scheduleId) throw new Error('agentId and scheduleId are required');
+
+    // Verify ownership
+    const { rows } = await pool.query(
+      'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
+      [scheduleId, agentId]
+    );
+    if (rows.length === 0) {
+      throw new Error('Schedule not found or not owned by this agent.');
+    }
+
+    const scheduleService = ScheduleService.getInstance();
+    await scheduleService.triggerSchedule(scheduleId);
+    return {
+      content: [{ type: 'text', text: `Schedule "${scheduleId}" triggered.` }],
+    };
+  }
+
+  // ── Operator Requests ───────────────────────────────────────────────────
+
+  private async handleOperatorRequest(args: Record<string, unknown>) {
+    const agentId = args['agentId'] as string;
+    const type = args['type'] as string;
+    const title = args['title'] as string;
+    if (!agentId || !type || !title) {
+      throw new Error('agentId, type, and title are required');
+    }
+
+    const payload = (args['payload'] as Record<string, unknown>) ?? {};
+    const agentName = (args['agentName'] as string) ?? null;
+
+    const { rows } = await pool.query(
+      `INSERT INTO operator_requests (agent_id, agent_name, type, title, payload)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, status, created_at`,
+      [agentId, agentName, type, title, JSON.stringify(payload)]
+    );
+
+    const request = rows[0]!;
+
+    // Broadcast to system channel for real-time notification
+    const intercom = this.orchestrator.getIntercom();
+    if (intercom) {
+      intercom
+        .publishSystem('operator_request', {
+          id: request.id,
+          agentId,
+          agentName,
+          type,
+          title,
+          status: 'pending',
+          timestamp: new Date().toISOString(),
+        })
+        .catch(() => {});
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Operator request created (id: ${request.id}). Status: pending. The operator will be notified.`,
+        },
+      ],
+    };
+  }
+
+  private async handleOperatorListRequests(status?: string, agentId?: string) {
+    let query = 'SELECT * FROM operator_requests';
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (status) {
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (agentId) {
+      params.push(agentId);
+      conditions.push(`agent_id = $${params.length}`);
+    }
+
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    query += ' ORDER BY created_at DESC LIMIT 50';
+
+    const { rows } = await pool.query(query, params);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }],
+    };
   }
 }

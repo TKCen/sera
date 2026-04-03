@@ -29,6 +29,8 @@ import AgentMemoryGraphPage from '@/pages/AgentMemoryGraphPage';
 import ChannelsPage from '@/app/channels/page';
 import TemplatesPage from '@/app/templates/page';
 import ProvidersPage from '@/app/providers/page';
+import MCPServersPage from '@/app/mcp-servers/page';
+import OperatorRequestsPage from '@/app/operator-requests/page';
 import LoginPage from '@/app/login/page';
 import AuthCallbackPage from '@/app/auth/callback/page';
 import { ForbiddenView } from '@/views/ForbiddenView';
@@ -70,6 +72,8 @@ createRoot(el).render(
                 <Route path="schedules" element={<SchedulesPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="tools" element={<ToolsPage />} />
+                <Route path="mcp-servers" element={<MCPServersPage />} />
+                <Route path="operator-requests" element={<OperatorRequestsPage />} />
                 <Route path="channels" element={<ChannelsPage />} />
                 <Route path="providers" element={<ProvidersPage />} />
                 <Route path="memory" element={<MemoryExplorerPage />} />

@@ -646,6 +646,11 @@ const startServer = async () => {
     .initialize()
     .catch((err) => logger.error('Failed to initialize AuditService:', err));
 
+  // ADR-004 — Hydrate persistent permission grants
+  await permissionService.initialize().catch((err) => {
+    logger.error('Failed to initialize PermissionRequestService:', err);
+  });
+
   // Start shared pg-boss instance (used by ScheduleService, NotificationService,
   // and optionally MemoryCompactionService — one connection pool, one polling loop)
   const sharedBoss = process.env.DATABASE_URL

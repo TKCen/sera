@@ -42,6 +42,10 @@ export interface ModelConfig {
 export interface ToolsConfig {
   allowed?: string[];
   denied?: string[];
+  hooks?: Array<{
+    command: string;
+    events: Array<'before_tool_call' | 'after_tool_call'>;
+  }>;
 }
 
 // ── Subagents ───────────────────────────────────────────────────────────────────
@@ -132,6 +136,10 @@ export interface AgentManifest {
     tools?: {
       allowed?: string[];
       denied?: string[];
+      hooks?: Array<{
+        command: string;
+        events: Array<'before_tool_call' | 'after_tool_call'>;
+      }>;
     };
     subagents?: {
       allowed?: Array<{

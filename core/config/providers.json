@@ -41,9 +41,7 @@
       "apiKey": "lm-studio",
       "description": "Discovered from af (qwen/qwen3.5-35b-a3b)",
       "dynamicProviderId": "agw",
-      "contextWindow": 190000,
-      "maxTokens": 8192,
-      "contextStrategy": "summarize",
+      "contextStrategy": "sliding-window",
       "contextHighWaterMark": 0.8,
       "reasoning": true
     },

@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SystemPromptBuilder } from '../systemPromptBuilder.js';
 import type { RuntimeManifest } from '../manifest.js';
 import type { ToolDefinition } from '../llmClient.js';
+import fs from 'fs';
+
+vi.mock('fs');
 
 describe('SystemPromptBuilder', () => {
   const mockManifest: RuntimeManifest = {
@@ -25,8 +28,9 @@ describe('SystemPromptBuilder', () => {
       provider: 'openai',
       name: 'gpt-4',
     },
-    contextFiles: ['README.md'],
+    contextFiles: [{ path: 'README.md', label: 'README' }],
     outputFormat: 'Markdown',
+    notes: 'Agent-specific notes here.',
   };
 
   const mockTools: ToolDefinition[] = [
@@ -39,6 +43,15 @@ describe('SystemPromptBuilder', () => {
       },
     },
   ];
+
+  beforeEach(() => {
+    vi.mocked(fs.readFileSync).mockImplementation(() => 'Mocked file content');
+    vi.mocked(fs.existsSync).mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
 
   it('builds a full system prompt with all sections', () => {
     const builder = new SystemPromptBuilder();
@@ -75,8 +88,10 @@ describe('SystemPromptBuilder', () => {
     expect(prompt).toContain('## Delegation');
     expect(prompt).toContain('## Agent Notes');
     expect(prompt).toContain('Some internal notes.');
+    expect(prompt).toContain('Agent-specific notes here.');
     expect(prompt).toContain('## Workspace Context');
-    expect(prompt).toContain('- README.md');
+    expect(prompt).toContain('### README');
+    expect(prompt).toContain('Mocked file content');
     expect(prompt).toContain('## Reasoning Instructions');
     expect(prompt).toContain('## System Constraints');
     expect(prompt).toContain('## Output Format');
@@ -87,10 +102,7 @@ describe('SystemPromptBuilder', () => {
     const builder = new SystemPromptBuilder();
     // Required: identity (approx 20 tokens), constraints (approx 15 tokens)
     // Optional: principles (approx 15 tokens)
-    builder
-      .addIdentity(mockManifest)
-      .addPrinciples(mockManifest)
-      .addConstraints(1);
+    builder.addIdentity(mockManifest).addPrinciples(mockManifest).addConstraints(1);
 
     // Total should be around 50 tokens. Set budget to 35.
     // Principles (priority 10) should be dropped. Identity and Constraints are required.
@@ -103,9 +115,7 @@ describe('SystemPromptBuilder', () => {
 
   it('keeps all required sections even if over budget', () => {
     const builder = new SystemPromptBuilder();
-    builder
-      .addIdentity(mockManifest)
-      .addConstraints(1);
+    builder.addIdentity(mockManifest).addConstraints(1);
 
     // Total approx 35 tokens. Set budget to 10.
     const prompt = builder.build(10);
@@ -147,5 +157,117 @@ describe('SystemPromptBuilder', () => {
     expect(prompt).not.toContain('## Principles');
     expect(prompt).not.toContain('## Agent Notes');
     expect(prompt).not.toContain('## Workspace Context');
+  });
+
+  describe('Workspace Context Trimming', () => {
+    beforeEach(() => {
+      vi.mocked(fs.existsSync).mockImplementation(() => true);
+      process.env['CONTEXT_FILES_BUDGET'] = '100'; // Very small budget for testing
+    });
+
+    afterEach(() => {
+      delete process.env['CONTEXT_FILES_BUDGET'];
+    });
+
+    it('trims low priority files first', () => {
+      process.env['CONTEXT_FILES_BUDGET'] = '150';
+      const manifest: RuntimeManifest = {
+        ...mockManifest,
+        contextFiles: [
+          { path: 'high.md', label: 'High', priority: 'high' },
+          { path: 'low.md', label: 'Low', priority: 'low' },
+        ],
+      };
+
+      vi.mocked(fs.readFileSync).mockImplementation((path) => {
+        if (path.toString().endsWith('high.md')) return 'A'.repeat(200); // ~50 tokens
+        if (path.toString().endsWith('low.md')) return 'B'.repeat(800); // ~200 tokens
+        return '';
+      });
+
+      const builder = new SystemPromptBuilder();
+      builder.addWorkspaceContext(manifest);
+      const prompt = builder.build();
+
+      expect(prompt).toContain('### High');
+      expect(prompt).toContain('A'.repeat(200));
+      expect(prompt).toContain('### Low');
+      expect(prompt).toContain('*Omitted due to token budget: low.md*');
+    });
+
+    it('trims largest files first within same priority', () => {
+      const manifest: RuntimeManifest = {
+        ...mockManifest,
+        contextFiles: [
+          { path: 'small.md', label: 'Small', priority: 'normal' },
+          { path: 'large.md', label: 'Large', priority: 'normal' },
+        ],
+      };
+
+      vi.mocked(fs.readFileSync).mockImplementation((path) => {
+        if (path.toString().endsWith('small.md')) return 'S'.repeat(40); // ~10 tokens
+        if (path.toString().endsWith('large.md')) return 'L'.repeat(400); // ~100 tokens
+        return '';
+      });
+
+      const builder = new SystemPromptBuilder();
+      builder.addWorkspaceContext(manifest);
+      const prompt = builder.build();
+
+      expect(prompt).toContain('### Small');
+      expect(prompt).toContain('S'.repeat(40));
+      expect(prompt).toContain('### Large');
+      expect(prompt).toContain('*Omitted due to token budget: large.md*');
+    });
+
+    it('truncates high priority files instead of omitting', () => {
+      const manifest: RuntimeManifest = {
+        ...mockManifest,
+        contextFiles: [{ path: 'high.md', label: 'High', priority: 'high' }],
+      };
+
+      vi.mocked(fs.readFileSync).mockReturnValue('H'.repeat(800)); // ~200 tokens
+
+      const builder = new SystemPromptBuilder();
+      builder.addWorkspaceContext(manifest);
+      const prompt = builder.build();
+
+      expect(prompt).toContain('### High');
+      expect(prompt).toContain('H'.repeat(100)); // Truncated to around budget
+      expect(prompt).toContain('...(truncated)');
+      expect(prompt).not.toContain('*Omitted due to token budget*');
+    });
+
+    it('handles missing files gracefully', () => {
+      vi.mocked(fs.existsSync).mockImplementation(() => false);
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error('File not found');
+      });
+      const manifest: RuntimeManifest = {
+        ...mockManifest,
+        contextFiles: [{ path: 'missing.md', label: 'Missing' }],
+      };
+
+      const builder = new SystemPromptBuilder();
+      builder.addWorkspaceContext(manifest);
+      const prompt = builder.build();
+
+      expect(prompt).toContain('### Missing');
+      expect(prompt).toContain('*File not found: missing.md*');
+    });
+
+    it('blocks path traversal', () => {
+      const manifest: RuntimeManifest = {
+        ...mockManifest,
+        contextFiles: [{ path: '../etc/passwd', label: 'Secret' }],
+      };
+
+      const builder = new SystemPromptBuilder();
+      builder.addWorkspaceContext(manifest);
+      const prompt = builder.build();
+
+      expect(prompt).toContain('### Secret');
+      expect(prompt).toContain('*Path traversal blocked: ../etc/passwd*');
+    });
   });
 });

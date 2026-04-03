@@ -8,8 +8,10 @@ import type { AgentManifest } from '../agents/manifest/types.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
 import { SkillInjector } from '../skills/SkillInjector.js';
+import { MemoryBlockStore } from '../memory/blocks/MemoryBlockStore.js';
 
 vi.mock('../skills/SkillInjector.js');
+vi.mock('../memory/blocks/MemoryBlockStore.js');
 vi.mock('../services/vector.service.js');
 vi.mock('../services/embedding.service.js');
 vi.mock('../agents/AgentFactory.js');
@@ -96,11 +98,24 @@ describe('ContextAssembler', () => {
         payload: { content: 'Memory Content', type: 'note' },
       },
     ]);
+    const mockHybridSearch = vi.fn().mockResolvedValue([
+      {
+        id: '1',
+        namespace: 'personal:agent-1',
+        score: 0.9,
+        payload: { content: 'Memory Content', type: 'note' },
+      },
+    ]);
+
     vi.mocked(VectorService).mockImplementation(function () {
       return {
         search: mockVectorSearch,
+        hybridSearch: mockHybridSearch,
       } as unknown as VectorService;
     });
+
+    vi.mocked(MemoryBlockStore.prototype.searchFullText).mockResolvedValue([]);
+
     // Need to re-instantiate assembler because VectorService is instantiated in constructor
     assembler = new ContextAssembler(mockPool, mockOrchestrator);
 

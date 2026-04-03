@@ -109,13 +109,14 @@ function checkScopePermission(
 export const scheduleTaskSkill: SkillDefinition = {
   id: 'schedule-task',
   description:
-    'Schedule a recurring task for the current agent or another agent (with appropriate permissions) using a cron expression.',
+    'Schedule a recurring task, or manage existing schedules (list, get, activate, deactivate, update, delete) for the current agent or another agent.',
   source: 'builtin',
   parameters: [
     {
       name: 'action',
       type: 'string',
-      description: 'The action to perform: create, list, delete, or update a schedule.',
+      description:
+        'The action to perform: create, list, get, activate, deactivate, update, or delete a schedule.',
       required: true,
     },
     {
@@ -146,7 +147,8 @@ export const scheduleTaskSkill: SkillDefinition = {
     {
       name: 'scheduleId',
       type: 'string',
-      description: 'The UUID of the schedule (required for delete and update).',
+      description:
+        'The UUID of the schedule (required for get, activate, deactivate, delete, and update).',
       required: false,
     },
     {
@@ -224,16 +226,82 @@ export const scheduleTaskSkill: SkillDefinition = {
 
         case 'list': {
           const listResult = await query(
-            `SELECT id, name, expression AS cron, task, status, category, last_run_at AS last_run
+            `SELECT id, name, expression AS cron, task, status, category, source, description, last_run_at AS last_run, next_run_at
              FROM schedules WHERE agent_instance_id = $1`,
             [targetId]
           );
           return { success: true, data: { schedules: listResult.rows } };
         }
 
+        case 'get': {
+          if (!scheduleId)
+            return { success: false, error: 'scheduleId is required for get action.' };
+          const getRes = await query(
+            `SELECT id, name, expression AS cron, task, status, category, source, description, last_run_at, next_run_at, created_at, updated_at
+             FROM schedules WHERE id = $1 AND agent_instance_id = $2`,
+            [scheduleId, targetId]
+          );
+          if (getRes.rows.length === 0)
+            return {
+              success: false,
+              error: 'Schedule not found or not owned by the target agent.',
+            };
+          return { success: true, data: { schedule: getRes.rows[0] } };
+        }
+
+        case 'activate': {
+          if (!scheduleId)
+            return { success: false, error: 'scheduleId is required for activate action.' };
+          const actRes = await query(
+            `UPDATE schedules SET status = 'active', updated_at = NOW()
+             WHERE id = $1 AND agent_instance_id = $2`,
+            [scheduleId, targetId]
+          );
+          if (actRes.rowCount === 0)
+            return {
+              success: false,
+              error: 'Schedule not found or not owned by the target agent.',
+            };
+          return { success: true, data: { message: 'Schedule activated successfully.' } };
+        }
+
+        case 'deactivate': {
+          if (!scheduleId)
+            return { success: false, error: 'scheduleId is required for deactivate action.' };
+          const deactRes = await query(
+            `UPDATE schedules SET status = 'paused', updated_at = NOW()
+             WHERE id = $1 AND agent_instance_id = $2`,
+            [scheduleId, targetId]
+          );
+          if (deactRes.rowCount === 0)
+            return {
+              success: false,
+              error: 'Schedule not found or not owned by the target agent.',
+            };
+          return {
+            success: true,
+            data: { message: 'Schedule deactivated (paused) successfully.' },
+          };
+        }
+
         case 'delete': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for delete action.' };
+          // Check if manifest-sourced — cannot delete
+          const sourceCheck = await query(
+            'SELECT source FROM schedules WHERE id = $1 AND agent_instance_id = $2',
+            [scheduleId, targetId]
+          );
+          if (sourceCheck.rows.length === 0)
+            return {
+              success: false,
+              error: 'Schedule not found or not owned by the target agent.',
+            };
+          if (sourceCheck.rows[0]!.source === 'manifest')
+            return {
+              success: false,
+              error: 'Cannot delete manifest-managed schedules. Use deactivate instead.',
+            };
           const delRes = await query(
             'DELETE FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, targetId]
@@ -260,6 +328,16 @@ export const scheduleTaskSkill: SkillDefinition = {
             };
 
           const current = currentRes.rows[0];
+
+          // Manifest schedules: only allow status changes (activate/deactivate)
+          if (current.source === 'manifest' && (name || cron || taskPrompt || category)) {
+            return {
+              success: false,
+              error:
+                'Cannot modify expression, task, or name of manifest-managed schedules. Use activate/deactivate to change status.',
+            };
+          }
+
           const updName = name ?? current.name;
           const updCron = cron ?? (current.expression || current.cron);
           const updTask = taskPrompt ?? current.task;

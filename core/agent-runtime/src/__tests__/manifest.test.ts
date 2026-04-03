@@ -118,7 +118,7 @@ model:
           provider: 'openai',
           name: 'gpt-4',
         },
-        contextFiles: ['README.md'],
+        contextFiles: [{ path: 'README.md', label: 'README' }],
         outputFormat: 'Markdown',
       };
 
@@ -170,7 +170,9 @@ model:
         identity: {
           role: 'Helpful Assistant',
           description: 'A test agent.',
-          principles: ['A very long principle that will definitely add many tokens to the prompt to make sure budget is exceeded'],
+          principles: [
+            'A very long principle that will definitely add many tokens to the prompt to make sure budget is exceeded',
+          ],
         },
         model: {
           provider: 'openai',

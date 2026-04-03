@@ -3,6 +3,7 @@ import fsSync from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
 import { Logger } from '../../lib/logger.js';
+import { pool } from '../../lib/database.js';
 
 const logger = new Logger('MemoryBlockStore');
 import { v4 as uuidv4 } from 'uuid';
@@ -25,11 +26,13 @@ import { MEMORY_BLOCK_TYPES } from './types.js';
  */
 export class MemoryBlockStore {
   private readonly basePath: string;
+  private readonly logicalNamespace: string;
   private cache: Map<MemoryBlockType, MemoryBlock> = new Map();
   private watcher: fsSync.FSWatcher | null = null;
 
-  constructor(basePath: string) {
+  constructor(basePath: string, logicalNamespace: string = 'global') {
     this.basePath = basePath;
+    this.logicalNamespace = logicalNamespace;
     this.initWatcher();
   }
 
@@ -99,6 +102,7 @@ export class MemoryBlockStore {
       source: entry.source,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
+      importance: entry.importance,
     };
     return matter.stringify(entry.content, frontmatter);
   }
@@ -107,7 +111,7 @@ export class MemoryBlockStore {
   private parse(fileContent: string): MemoryEntry {
     const parsed = matter(fileContent);
     const data = parsed.data as Record<string, unknown>;
-    return {
+    const entry: MemoryEntry = {
       id: data.id as string,
       title: data.title as string,
       type: data.type as MemoryBlockType,
@@ -118,6 +122,10 @@ export class MemoryBlockStore {
       createdAt: data.createdAt as string,
       updatedAt: data.updatedAt as string,
     };
+    if (data.importance !== undefined) {
+      entry.importance = data.importance as number;
+    }
+    return entry;
   }
 
   /** Find the filepath for an entry by scanning all block dirs.  Returns null if not found. */
@@ -201,7 +209,11 @@ export class MemoryBlockStore {
   // ── Entry CRUD ──────────────────────────────────────────────────────────────
 
   /** Create a new memory entry. Returns the created entry. */
-  async addEntry(type: MemoryBlockType, opts: CreateEntryOptions): Promise<MemoryEntry> {
+  async addEntry(
+    type: MemoryBlockType,
+    opts: CreateEntryOptions,
+    agentId?: string
+  ): Promise<MemoryEntry> {
     await this.ensureBlockDir(type);
     const now = new Date().toISOString();
     const entry: MemoryEntry = {
@@ -214,11 +226,44 @@ export class MemoryBlockStore {
       source: opts.source ?? 'system',
       createdAt: now,
       updatedAt: now,
+      importance: opts.importance ?? 3,
     };
     const filename = `${this.slugify(entry.title)}.md`;
     const filepath = path.join(this.blockDir(type), filename);
     await fs.writeFile(filepath, this.serialize(entry), 'utf8');
     this.invalidateCache();
+
+    // Sync to PostgreSQL
+    try {
+      await pool.query(
+        `INSERT INTO memory_blocks (id, agent_id, namespace, type, title, content, tags, importance, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (id) DO UPDATE SET
+           agent_id = EXCLUDED.agent_id,
+           namespace = EXCLUDED.namespace,
+           type = EXCLUDED.type,
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           tags = EXCLUDED.tags,
+           importance = EXCLUDED.importance,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          entry.id,
+          agentId || null,
+          this.logicalNamespace,
+          entry.type,
+          entry.title,
+          entry.content,
+          entry.tags,
+          entry.importance,
+          entry.createdAt,
+          entry.updatedAt,
+        ]
+      );
+    } catch (err) {
+      logger.error('Failed to sync memory block to PostgreSQL:', err);
+    }
+
     return entry;
   }
 
@@ -305,6 +350,18 @@ export class MemoryBlockStore {
     entry.updatedAt = new Date().toISOString();
     await fs.writeFile(result.filepath, this.serialize(entry), 'utf8');
     this.invalidateCache();
+
+    // Sync to PostgreSQL
+    try {
+      await pool.query(`UPDATE memory_blocks SET content = $1, updated_at = $2 WHERE id = $3`, [
+        entry.content,
+        entry.updatedAt,
+        entry.id,
+      ]);
+    } catch (err) {
+      logger.error('Failed to sync updated memory block to PostgreSQL:', err);
+    }
+
     return entry;
   }
 
@@ -314,6 +371,14 @@ export class MemoryBlockStore {
     if (!result) return false;
     await fs.unlink(result.filepath);
     this.invalidateCache();
+
+    // Sync to PostgreSQL
+    try {
+      await pool.query(`DELETE FROM memory_blocks WHERE id = $1`, [id]);
+    } catch (err) {
+      logger.error('Failed to sync deleted memory block to PostgreSQL:', err);
+    }
+
     return true;
   }
 
@@ -335,6 +400,18 @@ export class MemoryBlockStore {
     const filepath = path.join(this.blockDir(toType), filename);
     await fs.writeFile(filepath, this.serialize(entry), 'utf8');
     this.invalidateCache();
+
+    // Sync to PostgreSQL
+    try {
+      await pool.query(`UPDATE memory_blocks SET type = $1, updated_at = $2 WHERE id = $3`, [
+        entry.type,
+        entry.updatedAt,
+        entry.id,
+      ]);
+    } catch (err) {
+      logger.error('Failed to sync moved memory block to PostgreSQL:', err);
+    }
+
     return entry;
   }
 
@@ -436,5 +513,44 @@ export class MemoryBlockStore {
     );
 
     return limit ? results.slice(0, limit) : results;
+  }
+
+  /** PostgreSQL-backed full-text search. */
+  async searchFullText(
+    queryText: string,
+    namespaces: string[],
+    limit: number = 10
+  ): Promise<any[]> {
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, agent_id, namespace, type, title, content, tags, importance, created_at, updated_at,
+                ts_rank(to_tsvector('english', coalesce(title, '') || ' ' || content), plainto_tsquery('english', $1)) as rank
+         FROM memory_blocks
+         WHERE namespace = ANY($2)
+           AND to_tsvector('english', coalesce(title, '') || ' ' || content) @@ plainto_tsquery('english', $1)
+         ORDER BY rank DESC
+         LIMIT $3`,
+        [queryText, namespaces, limit]
+      );
+
+      return rows.map((r) => ({
+        id: r.id,
+        score: r.rank,
+        namespace: r.namespace,
+        payload: {
+          agent_id: r.agent_id,
+          created_at: r.created_at.toISOString(),
+          tags: r.tags || [],
+          type: r.type,
+          title: r.title,
+          content: r.content,
+          importance: r.importance,
+          namespace: r.namespace,
+        },
+      }));
+    } catch (err) {
+      logger.error('Full-text search failed:', err);
+      return [];
+    }
   }
 }

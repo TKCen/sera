@@ -118,4 +118,47 @@ describe('ApiKeyProvider', () => {
     const identity = await provider.authenticate(req);
     expect(identity).toBeNull();
   });
+
+  it('should early-exit on first valid key', async () => {
+    const key = 'sera_valid_key';
+    const req = {
+      headers: { authorization: `Bearer ${key}` },
+    } as unknown as import('express').Request;
+
+    vi.mocked(db.query).mockResolvedValueOnce({
+      rowCount: 2,
+      rows: [
+        {
+          id: 'key-1',
+          key_hash: 'hash-1',
+          owner_sub: 'user-1',
+          roles: ['operator'],
+        },
+        {
+          id: 'key-2',
+          key_hash: 'hash-2',
+          owner_sub: 'user-2',
+          roles: ['operator'],
+        },
+      ],
+    } as unknown as import('pg').QueryResult);
+
+    // Mock the UPDATE last_used_at query
+    vi.mocked(db.query).mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [],
+    } as unknown as import('pg').QueryResult);
+
+    vi.mocked(argon2.verify).mockImplementation(async (hash, _key) => {
+      if (hash === 'hash-1') return true;
+      if (hash === 'hash-2') return true;
+      return false;
+    });
+
+    const identity = await provider.authenticate(req);
+    expect(identity).not.toBeNull();
+    expect(identity?.sub).toBe('user-1');
+    expect(argon2.verify).toHaveBeenCalledTimes(1);
+    expect(argon2.verify).toHaveBeenCalledWith('hash-1', key);
+  });
 });

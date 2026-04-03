@@ -29,8 +29,10 @@ import { codeEval } from './code-handler.js';
 import { httpRequest } from './http-handler.js';
 import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
+import { webFetchStreaming } from './web-handler.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
 import { spawnSubagent, runTool, executeProxiedTool, isProxyAvailable } from './proxy.js';
+import { HookRunner } from './hooks.js';
 
 /** Result of executing a single tool call, including repair metadata. */
 export interface ToolExecutionResult {
@@ -54,6 +56,7 @@ const LOCAL_TOOLS = new Set([
   'glob',
   'grep',
   'shell-exec',
+  'web-fetch',
   'spawn-subagent',
   'run-tool',
   'tool-search',
@@ -111,6 +114,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
   private writeMutex = new Semaphore(1);
   /** Max concurrent tool executions. */
   private concurrency: number;
+  private hookRunner: HookRunner;
 
   constructor(workspacePath: string = '/workspace', tier?: number, manifest?: RuntimeManifest) {
     this.workspacePath = workspacePath;
@@ -118,6 +122,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
     this.manifest = manifest;
     const envConcurrency = process.env['MAX_TOOL_CONCURRENCY'];
     this.concurrency = envConcurrency ? parseInt(envConcurrency, 10) : DEFAULT_MAX_TOOL_CONCURRENCY;
+    this.hookRunner = new HookRunner(manifest?.tools?.hooks || []);
   }
 
   /**
@@ -181,13 +186,36 @@ export class RuntimeToolExecutor implements IToolExecutor {
     onOutput?: ToolOutputCallback,
     sessionId?: string
   ): Promise<ToolExecutionResult> {
-
     const { id, function: fn } = toolCall;
     const toolName = sanitizeToolName(fn.name);
     const start = Date.now();
+    const agentInstanceId = process.env['AGENT_INSTANCE_ID'] || AGENT_ID;
+    let params: Record<string, unknown> = {};
 
     try {
-      let params: Record<string, unknown>;
+      // ── Built-in: Capability Check ────────────────────────────────────────
+      const allowed = this.manifest?.tools?.allowed || ['*'];
+      const denied = this.manifest?.tools?.denied || [];
+      const isAllowed =
+        (allowed.includes('*') || allowed.includes(toolName)) && !denied.includes(toolName);
+
+      if (!isAllowed) {
+        log(
+          'warn',
+          `Tool execution denied: ${toolName} not permitted for agent ${agentInstanceId}`
+        );
+        return {
+          message: {
+            role: 'tool',
+            tool_call_id: id,
+            content: `Error: tool_not_permitted: Access to tool "${toolName}" is denied by agent manifest.`,
+          },
+          toolName,
+          argRepaired: false,
+          repairStrategy: null,
+        };
+      }
+
       let argRepaired = false;
       let repairStrategy: string | null = null;
       try {
@@ -207,6 +235,36 @@ export class RuntimeToolExecutor implements IToolExecutor {
           argRepaired: false,
           repairStrategy: null,
         };
+      }
+
+      // ── beforeToolCall Hooks ──────────────────────────────────────────────
+      const beforeResult = await this.hookRunner.beforeToolCall({
+        toolName,
+        args: params,
+        agentName: this.manifest?.metadata?.name || 'unknown',
+        agentInstanceId,
+        tier: this.tier,
+      });
+
+      if (beforeResult.status === 'warn' && beforeResult.message) {
+        log('warn', `Hook warning (beforeToolCall): ${beforeResult.message}`);
+      }
+
+      if (beforeResult.status === 'deny') {
+        return {
+          message: {
+            role: 'tool',
+            tool_call_id: id,
+            content: `Error: tool_denied: ${beforeResult.message || 'Execution denied by hook.'}`,
+          },
+          toolName,
+          argRepaired,
+          repairStrategy,
+        };
+      }
+
+      if (beforeResult.modifiedArgs) {
+        params = beforeResult.modifiedArgs;
       }
 
       let result: string;
@@ -244,14 +302,16 @@ export class RuntimeToolExecutor implements IToolExecutor {
           );
           break;
         case 'file-read':
-          result = fileRead(this.workspacePath, params['path'] as string);
+          result = fileRead(this.workspacePath, params['path'] as string, onOutput, id);
           break;
         case 'read_file':
           result = await readFilePartial(
             this.workspacePath,
             params['path'] as string,
             params['offset'] as number | undefined,
-            params['limit'] as number | undefined
+            params['limit'] as number | undefined,
+            onOutput,
+            id
           );
           break;
         case 'glob':
@@ -281,6 +341,14 @@ export class RuntimeToolExecutor implements IToolExecutor {
             params['path'] as string,
             params['recursive'] as boolean | undefined
           );
+          break;
+        case 'web-fetch':
+          if (onOutput) {
+            result = await webFetchStreaming(params['url'] as string, onOutput, id);
+          } else {
+            // Re-use streaming logic even for sync-style calls for consistency
+            result = await webFetchStreaming(params['url'] as string, () => {}, id);
+          }
           break;
         case 'shell-exec': {
           const outsidePath = checkShellPathRestriction(
@@ -340,24 +408,42 @@ export class RuntimeToolExecutor implements IToolExecutor {
 
       const durationMs = Date.now() - start;
       this.logInvocation(toolName, 'success', durationMs);
+
+      // ── afterToolCall Hooks ───────────────────────────────────────────────
+      const afterResult = await this.hookRunner.afterToolCall({
+        toolName,
+        args: params,
+        result,
+        isError: false,
+        agentName: this.manifest?.metadata?.name || 'unknown',
+        agentInstanceId,
+        tier: this.tier,
+      });
+
+      if (afterResult.status === 'warn' && afterResult.message) {
+        log('warn', `Hook warning (afterToolCall): ${afterResult.message}`);
+      }
+
+      if (afterResult.modifiedResult !== undefined) {
+        result = afterResult.modifiedResult;
+      }
+
       const finalResult = truncateOutput(result);
 
-      if (onOutput && toolName !== 'shell-exec') {
+      if (onOutput && toolName !== 'shell-exec' && toolName !== 'web-fetch') {
         onOutput({
           toolCallId: id,
           toolName,
-          type: 'result',
-          content: result.substring(0, 500),
-          done: true,
+          result: result.substring(0, 500),
+          duration: durationMs,
+          error: result.startsWith('Error:'),
           timestamp: new Date().toISOString(),
-          durationMs,
         });
       }
 
       if (this.manifest?.logging?.commands && sessionId) {
         this.sendCommandLog(sessionId, toolName, params, finalResult, durationMs, 'success');
       }
-
 
       return {
         message: { role: 'tool', tool_call_id: id, content: finalResult },
@@ -380,18 +466,38 @@ export class RuntimeToolExecutor implements IToolExecutor {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.logInvocation(toolName, 'error', durationMs);
 
+      // ── afterToolCall Hooks (Error Case) ──────────────────────────────────
+      const afterResult = await this.hookRunner
+        .afterToolCall({
+          toolName,
+          args: params || {},
+          result: errorMsg,
+          isError: true,
+          agentName: this.manifest?.metadata?.name || 'unknown',
+          agentInstanceId,
+          tier: this.tier,
+        })
+        .catch(() => ({ status: 'allow' as const }));
+
+      let finalError = errorMsg;
+      if (afterResult.modifiedResult !== undefined) {
+        finalError = afterResult.modifiedResult;
+      }
+
       if (this.manifest?.logging?.commands && sessionId) {
-        let parsedArgs = {};
-        try {
-          parsedArgs = JSON.parse(fn.arguments || '{}');
-        } catch {
-          /* best effort */
+        let parsedArgs = params || {};
+        if (!params) {
+          try {
+            parsedArgs = JSON.parse(fn.arguments || '{}');
+          } catch {
+            /* ignore */
+          }
         }
-        this.sendCommandLog(sessionId, toolName, parsedArgs, errorMsg, durationMs, 'error');
+        this.sendCommandLog(sessionId, toolName, parsedArgs, finalError, durationMs, 'error');
       }
 
       return {
-        message: { role: 'tool', tool_call_id: id, content: `Error: ${errorMsg}` },
+        message: { role: 'tool', tool_call_id: id, content: `Error: ${finalError}` },
         toolName,
         argRepaired: false,
         repairStrategy: null,
@@ -539,7 +645,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
         }),
       });
     } catch (err) {
-      log('warn', `Failed to send command log to core: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        'warn',
+        `Failed to send command log to core: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 }

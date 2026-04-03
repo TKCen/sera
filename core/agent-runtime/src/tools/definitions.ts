@@ -12,6 +12,24 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'web-fetch',
+      description:
+        'Fetch a URL and return its text content. Useful for reading web pages, documentation, or API responses.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to fetch',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'http-request',
       description: 'Make a raw HTTP request. Supports custom methods, headers, and body.',
       parameters: {
@@ -47,7 +65,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'code-eval',
-      description: 'Execute JavaScript/TypeScript code in an isolated sandbox. Capture stdout and return value.',
+      description:
+        'Execute JavaScript/TypeScript code in an isolated sandbox. Capture stdout and return value.',
       parameters: {
         type: 'object',
         properties: {
@@ -207,7 +226,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'file-write',
-      description: 'Write content to a file in the workspace. Creates parent directories if needed.',
+      description:
+        'Write content to a file in the workspace. Creates parent directories if needed.',
       parameters: {
         type: 'object',
         properties: {
@@ -266,7 +286,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'shell-exec',
-      description: 'Execute a shell command in the workspace directory. Returns stdout/stderr/exitCode.',
+      description:
+        'Execute a shell command in the workspace directory. Returns stdout/stderr/exitCode.',
       parameters: {
         type: 'object',
         properties: {
@@ -295,7 +316,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         properties: {
           role: {
             type: 'string',
-            description: "The subagent role to spawn (must be in the manifest's subagents.allowed list).",
+            description:
+              "The subagent role to spawn (must be in the manifest's subagents.allowed list).",
           },
           task: {
             type: 'string',
@@ -346,7 +368,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         properties: {
           query: {
             type: 'string',
-            description: 'Description of the capability you need (e.g., "schedule a task", "search the web").',
+            description:
+              'Description of the capability you need (e.g., "schedule a task", "search the web").',
           },
         },
         required: ['query'],

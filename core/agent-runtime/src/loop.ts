@@ -226,9 +226,7 @@ export class ReasoningLoop {
     };
 
     // Build initial message array
-    const messages: ChatMessage[] = [
-      { role: 'system', content: this.systemPrompt },
-    ];
+    const messages: ChatMessage[] = [{ role: 'system', content: this.systemPrompt }];
 
     if (this.bootContext) {
       messages.push({
@@ -639,7 +637,7 @@ export class ReasoningLoop {
           // Execute tools and add results
 
           const onToolOutput: ToolOutputCallback = (event) => {
-            this.centrifugo.publishToolOutput(event).catch((err) => {
+            this.centrifugo.publishToolOutput(event, taskId).catch((err) => {
               log(
                 'warn',
                 `Failed to publish tool output: ${err instanceof Error ? err.message : String(err)}`
@@ -649,16 +647,21 @@ export class ReasoningLoop {
           const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
           for (const result of toolResults) {
             // Handle image-view vision request (#NEW)
-            if (result.toolName === 'image-view' && result.message.content.includes('"vision_request"')) {
+            if (
+              result.toolName === 'image-view' &&
+              result.message.content.includes('"vision_request"')
+            ) {
               try {
                 const parsed = JSON.parse(result.message.content);
                 if (parsed.__type === 'vision_request') {
-                  const hasVision = this.manifest.model.name.toLowerCase().includes('vision') ||
-                                   this.manifest.model.name.toLowerCase().includes('gpt-4o') ||
-                                   this.manifest.model.name.toLowerCase().includes('claude-3');
+                  const hasVision =
+                    this.manifest.model.name.toLowerCase().includes('vision') ||
+                    this.manifest.model.name.toLowerCase().includes('gpt-4o') ||
+                    this.manifest.model.name.toLowerCase().includes('claude-3');
 
                   if (!hasVision) {
-                    result.message.content = "Error: Current model does not support vision/image analysis. Please switch to a vision-capable model.";
+                    result.message.content =
+                      'Error: Current model does not support vision/image analysis. Please switch to a vision-capable model.';
                   } else {
                     // Inject a vision block in the NEXT turn's user message
                     // We transform the tool result into a directive for the loop
@@ -679,11 +682,15 @@ export class ReasoningLoop {
                       role: 'user',
                       content: [
                         { type: 'text', text: visionPrompt },
-                        { type: 'image_url', image_url: { url: parsed.image_url } }
-                      ]
+                        { type: 'image_url', image_url: { url: parsed.image_url } },
+                      ],
                     });
 
-                    await think('reflect', `Image "${parsed.path}" loaded and injected into conversation`, iteration);
+                    await think(
+                      'reflect',
+                      `Image "${parsed.path}" loaded and injected into conversation`,
+                      iteration
+                    );
                     continue; // Skip standard message.push below
                   }
                 }

@@ -6,6 +6,8 @@ spec:
   linux:
     capabilities: ["NET_RAW", "SYS_CHROOT"]
     readOnlyRootfs: true
+  allowedImages:
+    - "*"
   capabilities:
     network-allowlist: ["*"]
     command-denylist: ["rm -rf /", "mkfs*"]

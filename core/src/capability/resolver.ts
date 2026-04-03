@@ -143,6 +143,11 @@ export class CapabilityResolver {
       }
     }
 
+    // Image allowlist from boundary spec (M2.0 — BYOH image validation)
+    if (boundarySpec?.allowedImages) {
+      resolved['allowedImages'] = boundarySpec.allowedImages;
+    }
+
     return {
       spec,
       resolvedCapabilities: resolved,

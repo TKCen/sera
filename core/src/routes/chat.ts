@@ -110,7 +110,7 @@ async function forwardToContainer(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -280,7 +280,7 @@ export function createChatRouter(
           thoughts,
           citations
         );
-        res.json({ sessionId, reply, thought, citations });
+        res.json({ sessionId, reply, thought, thoughts, citations });
       }
     } catch (error: unknown) {
       const err = error as Error & { status?: number };

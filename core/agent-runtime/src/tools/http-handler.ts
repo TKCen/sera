@@ -14,8 +14,14 @@ export async function httpRequest(
     return 'Error: Only http and https URLs are allowed';
   }
 
-  if (/^https?:\/\/(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/i.test(url)) {
-    return 'Error: Fetching private/local addresses is not allowed';
+  // Allow sera-core and other SERA service hostnames (internal Docker network).
+  // Block raw private IPs unless they resolve to a known SERA service.
+  const SERA_INTERNAL_HOSTS = /^https?:\/\/(sera-core|sera-db|sera-centrifugo|centrifugo|sera-qdrant|sera-egress-proxy)(:\d+)?/i;
+  if (
+    !SERA_INTERNAL_HOSTS.test(url) &&
+    /^https?:\/\/(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/i.test(url)
+  ) {
+    return 'Error: Fetching private/local addresses is not allowed (use service hostnames like sera-core:3001)';
   }
 
   try {

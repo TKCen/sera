@@ -15,6 +15,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     git \
     curl \
     ca-certificates \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user — uid 1001 is outside the default range used by the base image

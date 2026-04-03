@@ -94,7 +94,8 @@ export class SandboxManager {
       `CENTRIFUGO_API_KEY=${process.env.CENTRIFUGO_API_KEY ?? ''}`,
       `AGENT_HEARTBEAT_INTERVAL_MS=${process.env.AGENT_HEARTBEAT_INTERVAL_MS ?? '30000'}`,
       `AGENT_LIFECYCLE_MODE=${request.lifecycleMode ?? 'persistent'}`,
-      `AGENT_CHAT_PORT=3100`,
+      `SERA_LLM_PROXY_URL=${process.env.SERA_CORE_URL ?? 'http://sera-core:3001'}/v1/llm`,
+      `AGENT_CHAT_PORT=${manifest.spec?.sandbox?.chatPort ?? 3100}`,
     ];
 
     // Story 3.1 — include identity JWT if provided
@@ -159,6 +160,13 @@ export class SandboxManager {
       image: request.image,
     });
 
+    // Validate image against sandbox boundary allowlist (M2.0)
+    const resolvedImage =
+      manifest.spec?.sandbox?.image ?? request.image ?? 'sera-agent-worker:latest';
+    const allowedImages = (caps as ResolvedCapabilities & { allowedImages?: string[] })
+      .allowedImages;
+    this.validateImageAllowlist(resolvedImage, allowedImages);
+
     const container = await this.docker.createContainer(createOptions);
 
     if (request.task) {
@@ -213,7 +221,7 @@ export class SandboxManager {
       containerId: info.Id,
       agentName,
       type: request.type,
-      image: request.image ?? 'sera-agent-worker:latest',
+      image: manifest.spec?.sandbox?.image ?? request.image ?? 'sera-agent-worker:latest',
       status: 'running',
       createdAt: new Date().toISOString(),
       tier,
@@ -221,7 +229,9 @@ export class SandboxManager {
       ...(request.lifecycleMode !== undefined ? { lifecycleMode: request.lifecycleMode } : {}),
       ...(proxyEnabled ? { proxyEnabled } : {}),
       ...(containerIp ? { containerIp } : {}),
-      ...(chatIp ? { chatUrl: `http://${chatIp}:3100` } : {}),
+      ...(chatIp
+        ? { chatUrl: `http://${chatIp}:${manifest.spec?.sandbox?.chatPort ?? 3100}` }
+        : {}),
     };
 
     // Wait for the container's chat server to become ready before
@@ -582,6 +592,33 @@ export class SandboxManager {
       });
       stream.on('error', reject);
     });
+  }
+
+  /**
+   * Validate that the container image is allowed by the agent's sandbox boundary.
+   * Called before container creation. The allowedImages list comes from the
+   * SandboxBoundary YAML (e.g. tier-1.yaml) and supports glob patterns.
+   */
+  private validateImageAllowlist(image: string, allowedImages?: string[]): void {
+    if (!allowedImages || allowedImages.length === 0) return; // No allowlist = no restriction
+    if (allowedImages.includes('*')) return; // Wildcard allows everything
+
+    const matches = allowedImages.some((pattern) => {
+      if (pattern === image) return true;
+      // Simple glob: convert * to regex .*
+      const regex = new RegExp(
+        '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$'
+      );
+      return regex.test(image);
+    });
+
+    if (!matches) {
+      throw new PolicyViolationError(
+        `Image "${image}" is not allowed by the sandbox boundary. Allowed images: ${allowedImages.join(', ')}`,
+        'unknown',
+        'image-allowlist'
+      );
+    }
   }
 
   public audit(operation: string, agentName: string, details: Record<string, unknown>): void {

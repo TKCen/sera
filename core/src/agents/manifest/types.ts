@@ -125,6 +125,18 @@ export interface ScheduleManifest {
   category?: string;
 }
 
+// ── Sandbox Configuration ───────────────────────────────────────────────────────
+export interface SandboxSpec {
+  /** Docker image override (default: sera-agent-worker:latest) */
+  image?: string;
+  /** Custom Docker entrypoint */
+  entrypoint?: string[];
+  /** Custom Docker command */
+  command?: string[];
+  /** Chat/health server port (default: 3100) */
+  chatPort?: number;
+}
+
 // ── Full Manifest ───────────────────────────────────────────────────────────────
 export interface AgentManifest {
   apiVersion: string;
@@ -199,6 +211,7 @@ export interface AgentManifest {
       directory?: string;
     };
     notes?: string;
+    sandbox?: SandboxSpec;
   };
   tools?: ToolsConfig;
   skills?: Array<string | { name: string; version: string }>;

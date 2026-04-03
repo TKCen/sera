@@ -57,10 +57,13 @@ export class ContainerSecurityMapper {
 
     const createOptions: Docker.ContainerCreateOptions = {
       name: containerName,
-      Image: request.image ?? 'sera-agent-worker:latest',
-      Cmd: request.command ?? undefined,
+      Image: manifest.spec?.sandbox?.image ?? request.image ?? 'sera-agent-worker:latest',
+      Cmd: manifest.spec?.sandbox?.command ?? request.command ?? undefined,
+      ...(manifest.spec?.sandbox?.entrypoint
+        ? { Entrypoint: manifest.spec.sandbox.entrypoint }
+        : {}),
       Env: env,
-      ExposedPorts: { '3100/tcp': {} },
+      ExposedPorts: { [`${manifest.spec?.sandbox?.chatPort ?? 3100}/tcp`]: {} },
       AttachStdin: !!request.task,
       OpenStdin: !!request.task,
       StdinOnce: !!request.task,

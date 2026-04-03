@@ -29,6 +29,11 @@
     },
     "capabilities": {
       "type": "object"
+    },
+    "allowedImages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Glob patterns of Docker images allowed for agents in this boundary"
     }
   }
 }

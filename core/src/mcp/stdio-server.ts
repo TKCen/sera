@@ -34,7 +34,7 @@ async function seraFetch(path: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(`${SERA_API_URL}/api${path}`, {
     ...init,
     headers: { ...headers(), ...(init?.headers as Record<string, string>) },
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(600_000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -49,13 +49,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'sera_chat',
-      description: 'Send a message to a SERA agent and get a response.',
+      description:
+        'Send a message to a SERA agent and get a structured response with reasoning steps. ' +
+        'Pass sessionId to continue a multi-turn conversation. ' +
+        'Returns: session ID, reasoning steps (tool calls, thoughts), reply text, and citations.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           agentName: { type: 'string', description: 'Agent name (e.g. "sera")' },
-          message: { type: 'string', description: 'Message to send' },
-          sessionId: { type: 'string', description: 'Session ID to continue a conversation' },
+          message: { type: 'string', description: 'Message or task for the agent' },
+          sessionId: {
+            type: 'string',
+            description: 'Session ID from a previous sera_chat call to continue the conversation',
+          },
         },
         required: ['agentName', 'message'],
       },
@@ -202,7 +208,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'sera_chat': {
-        const body: Record<string, string> = {
+        const body: Record<string, unknown> = {
           agentName: a.agentName as string,
           message: a.message as string,
         };
@@ -211,10 +217,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           method: 'POST',
           body: JSON.stringify(body),
         });
-        const r = result as { sessionId: string; reply: string };
-        return {
-          content: [{ type: 'text', text: `[Session: ${r.sessionId}]\n\n${r.reply}` }],
+        const r = result as {
+          sessionId: string;
+          reply: string;
+          thought?: string;
+          thoughts?: Array<{ type: string; content: string }>;
+          citations?: Array<{ url: string; title?: string }>;
         };
+        // Structured response for agent consumption
+        const parts: string[] = [];
+        parts.push(`**Session:** ${r.sessionId}`);
+        if (r.thoughts?.length) {
+          parts.push('\n**Reasoning steps:**');
+          for (const t of r.thoughts) {
+            parts.push(`- [${t.type}] ${t.content}`);
+          }
+        }
+        parts.push(`\n**Reply:**\n${r.reply}`);
+        if (r.citations?.length) {
+          parts.push('\n**Citations:**');
+          for (const c of r.citations) {
+            parts.push(`- ${c.title ?? c.url}: ${c.url}`);
+          }
+        }
+        return { content: [{ type: 'text', text: parts.join('\n') }] };
       }
 
       case 'sera_list_agents': {

@@ -105,6 +105,14 @@ export const AgentTemplateSchema = z.object({
       )
       .optional(),
     notes: z.string().optional(),
+    sandbox: z
+      .object({
+        image: z.string().min(1).optional(),
+        entrypoint: z.array(z.string()).optional(),
+        command: z.array(z.string()).optional(),
+        chatPort: z.number().int().min(1).max(65535).optional(),
+      })
+      .optional(),
   }),
 });
 
@@ -174,6 +182,7 @@ export const SandboxBoundarySchema = z.object({
       runAsNonRoot: z.boolean().optional(),
     }),
     capabilities: z.record(z.any()),
+    allowedImages: z.array(z.string()).optional(),
   }),
 });
 

@@ -141,8 +141,10 @@ export class LLMClient implements ILLMClient {
       : 120_000;
 
     this.model = model;
+    // Prefer SERA_LLM_PROXY_URL (BYOH contract) over constructing from SERA_CORE_URL
+    const llmBaseUrl = process.env['SERA_LLM_PROXY_URL'] || `${coreUrl}/v1/llm`;
     this.http = axios.create({
-      baseURL: `${coreUrl}/v1/llm`,
+      baseURL: llmBaseUrl,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${identityToken}`,

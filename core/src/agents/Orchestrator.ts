@@ -237,6 +237,25 @@ export class Orchestrator {
       const sb = overrides.sandboxBoundary as string;
       manifest.metadata.tier = sb === 'tier-3' ? 3 : sb === 'tier-2' ? 2 : 1;
     }
+    // Apply tools overrides (allowed/denied/coreTools lists)
+    const toolsOv = overrides.tools as Record<string, unknown> | undefined;
+    if (toolsOv) {
+      const baseTools = (manifest.spec?.tools as Record<string, unknown>) ?? {};
+      const mergedTools = { ...baseTools, ...toolsOv };
+      manifest.spec = { ...(manifest.spec ?? {}), tools: mergedTools };
+      (manifest as unknown as Record<string, unknown>)['tools'] = mergedTools;
+    }
+    // Apply permissions overrides
+    const permOv = overrides.permissions as Record<string, unknown> | undefined;
+    if (permOv) {
+      manifest.spec = {
+        ...(manifest.spec ?? {}),
+        permissions: {
+          ...((manifest.spec?.permissions as Record<string, unknown>) ?? {}),
+          ...permOv,
+        },
+      };
+    }
     const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
     if (resourcesOv) {
       manifest.spec = {

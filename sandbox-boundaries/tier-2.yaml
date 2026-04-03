@@ -6,6 +6,10 @@ spec:
   linux:
     capabilities: []
     readOnlyRootfs: true
+  allowedImages:
+    - "sera-agent-worker:*"
+    - "python:3.*-slim"
+    - "node:*-slim"
   capabilities:
     network-allowlist: ["github.com", "api.openai.com", "api.anthropic.com"]
     network-denylist: ["169.254.169.254"]

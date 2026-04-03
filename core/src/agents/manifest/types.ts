@@ -104,6 +104,7 @@ export interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
   citations?: 'full' | 'brief' | 'off';
+  analyzeOnSave?: boolean;
   search?: HybridSearchConfig;
 }
 

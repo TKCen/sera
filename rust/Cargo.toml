@@ -3,6 +3,14 @@ resolver = "2"
 members = [
   "crates/sera-domain",
   "crates/sera-config",
+  "crates/sera-db",
+  "crates/sera-auth",
+  "crates/sera-events",
+  "crates/sera-docker",
+  "crates/sera-testing",
+  "crates/sera-core",
+  "crates/sera-runtime",
+  "crates/sera-tui",
   "crates/sera-byoh-agent",
 ]
 
@@ -12,13 +20,52 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
+
+# Async runtime
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+
+# HTTP
 axum = "0.8"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-native-tls", "postgres", "json", "time", "uuid"] }
+
+# Auth
+jsonwebtoken = "9"
+
+# Docker
+bollard = "0.18"
+
+# Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Testing
+insta = { version = "1", features = ["yaml"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde"] }
+
+# Workspace crates
+sera-domain = { path = "crates/sera-domain" }
+sera-config = { path = "crates/sera-config" }
+sera-db = { path = "crates/sera-db" }
+sera-auth = { path = "crates/sera-auth" }
+sera-events = { path = "crates/sera-events" }
+sera-docker = { path = "crates/sera-docker" }
+sera-testing = { path = "crates/sera-testing" }
 
 [profile.release]
 lto = true

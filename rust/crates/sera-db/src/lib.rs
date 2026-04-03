@@ -1,0 +1,10 @@
+//! SERA Database Layer — PostgreSQL access via sqlx with compile-time checked queries.
+//!
+//! Design rules (from RUST-MIGRATION-PLAN.md):
+//! - Domain objects live in `sera-domain`
+//! - SQL rows and query code live here in `sera-db`
+//! - No leaking `sqlx::Row` or SQL types into handler/business layers
+
+pub mod pool;
+
+pub use pool::DbPool;

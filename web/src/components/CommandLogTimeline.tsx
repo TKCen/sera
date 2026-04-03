@@ -11,7 +11,9 @@ import {
   Hash,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { agentsKeys } from '@/hooks/useAgents';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
+import { EmptyState } from '@/components/EmptyState';
 
 interface CommandLog {
   id: string;
@@ -26,7 +28,7 @@ interface CommandLog {
 
 export function CommandLogTimeline({ agentId, sessionId }: { agentId: string; sessionId: string }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['agent-command-logs', agentId, sessionId],
+    queryKey: agentsKeys.commandLogs(agentId, sessionId),
     queryFn: () =>
       request<CommandLog[]>(
         `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/commands`
@@ -38,13 +40,11 @@ export function CommandLogTimeline({ agentId, sessionId }: { agentId: string; se
 
   if (!data || data.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 text-sera-text-muted">
-        <Terminal size={32} className="mb-3 opacity-20" />
-        <p className="text-sm font-medium">No command logs found for this session.</p>
-        <p className="text-xs mt-1">
-          Enable "spec.logging.commands: true" in the agent manifest to see tool logs.
-        </p>
-      </div>
+      <EmptyState
+        icon={<Terminal size={24} />}
+        title="No command logs found for this session"
+        description='Enable "spec.logging.commands: true" in the agent manifest to see tool logs.'
+      />
     );
   }
 

@@ -11,34 +11,25 @@ import {
   RotateCcw,
   Wrench,
   CheckCircle2,
+  type LucideIcon,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatElapsed } from '@/lib/utils';
+import { getStepMeta } from '@/lib/step-metadata';
 
 import type { Message, MessageThought } from '@/lib/api/types';
 export type { Message, MessageThought };
 
-// ── Thought step icons & colours ─────────────────────────────────────────────
+// ── Icon lookup (maps metadata icon name → component) ────────────────────────
 
-const STEP_ICONS: Record<string, React.ReactNode> = {
-  observe: <Eye size={11} />,
-  plan: <Map size={11} />,
-  act: <Zap size={11} />,
-  reflect: <RotateCcw size={11} />,
-  'tool-call': <Wrench size={11} />,
-  'tool-result': <CheckCircle2 size={11} />,
-  reasoning: <Brain size={11} />,
-  error: <AlertTriangle size={11} />,
-};
-
-const STEP_COLORS: Record<string, string> = {
-  observe: 'text-blue-400',
-  plan: 'text-amber-400',
-  act: 'text-emerald-400',
-  reflect: 'text-purple-400',
-  'tool-call': 'text-cyan-400',
-  'tool-result': 'text-teal-400',
-  reasoning: 'text-violet-400',
-  error: 'text-red-400',
+const ICON_MAP: Record<string, LucideIcon> = {
+  Eye,
+  Map,
+  Zap,
+  RotateCcw,
+  Wrench,
+  CheckCircle2,
+  Brain,
+  AlertTriangle,
 };
 
 /** Derive iteration count from observe/reflect cycles in the thought array */
@@ -52,13 +43,16 @@ function getIterationInfo(thoughts: MessageThought[]): { current: number; label:
   return { current: iterations, label: `iteration ${iterations}` };
 }
 
-/** Format elapsed time between two ISO timestamps */
-function formatElapsed(from: string, to: string): string {
-  const ms = new Date(to).getTime() - new Date(from).getTime();
-  if (isNaN(ms) || ms < 0) return '';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+/** Resolve step icon component from metadata */
+function stepIcon(stepType: string, size = 11): React.ReactNode {
+  const meta = getStepMeta(stepType);
+  const Icon = ICON_MAP[meta.icon] ?? Brain;
+  return <Icon size={size} />;
+}
+
+/** Resolve step text-color class from metadata */
+function stepColor(stepType: string): string {
+  return getStepMeta(stepType).color;
 }
 
 interface ChatThoughtPanelProps {
@@ -125,6 +119,7 @@ export function ChatThoughtPanel({
             // ── Reasoning block ──────────────────────────────────────────────
             if (thought.stepType === 'reasoning') {
               const isLast = i === msg.thoughts.length - 1;
+              const reasonColor = stepColor('reasoning');
               return (
                 <details
                   key={`${thought.timestamp}-${i}`}
@@ -134,22 +129,23 @@ export function ChatThoughtPanel({
                   <summary className="flex items-center gap-1.5 cursor-pointer list-none select-none mb-2">
                     <span
                       className={cn(
-                        'text-violet-400 flex-shrink-0',
+                        reasonColor,
+                        'flex-shrink-0',
                         msg.streaming && isLast && 'animate-pulse'
                       )}
                     >
-                      <Brain size={11} />
+                      {stepIcon('reasoning')}
                     </span>
-                    <span className="text-[11px] font-semibold text-violet-300">
+                    <span className={cn('text-[11px] font-semibold', reasonColor)}>
                       {msg.streaming && isLast ? 'Reasoning…' : 'Reasoning'}
                     </span>
                     <ChevronDown
                       size={10}
-                      className="ml-auto text-violet-400/60 transition-transform group-open:rotate-180"
+                      className="ml-auto text-sera-text-dim transition-transform group-open:rotate-180"
                     />
                   </summary>
                   <div className="relative ml-3">
-                    <div className="pl-3 border-l border-violet-400/25 text-[11.5px] text-sera-text-muted leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto [scrollbar-width:thin]">
+                    <div className="pl-3 border-l border-sera-border text-[11.5px] text-sera-text-muted leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto [scrollbar-width:thin]">
                       {thought.content}
                     </div>
                     <div className="absolute bottom-0 left-3 right-0 h-6 bg-gradient-to-t from-sera-surface to-transparent pointer-events-none" />
@@ -188,15 +184,12 @@ export function ChatThoughtPanel({
                   className="animate-in fade-in slide-in-from-left-2 duration-200"
                 >
                   <div className="flex items-center gap-1.5 mb-1">
-                    <span
-                      className={cn(
-                        'flex-shrink-0',
-                        STEP_COLORS['tool-call'] ?? STEP_COLORS['act']
-                      )}
-                    >
-                      {STEP_ICONS['tool-call'] ?? STEP_ICONS['act']}
+                    <span className={cn('flex-shrink-0', stepColor('tool-call'))}>
+                      {stepIcon('tool-call')}
                     </span>
-                    <span className="text-[11px] font-semibold text-cyan-300">{toolName}</span>
+                    <span className={cn('text-[11px] font-semibold', stepColor('tool-call'))}>
+                      {toolName}
+                    </span>
                     {i > 0 && (
                       <span className="ml-auto text-[10px] text-sera-text-muted/50">
                         {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
@@ -242,10 +235,10 @@ export function ChatThoughtPanel({
                     className="animate-in fade-in slide-in-from-left-2 duration-200"
                   >
                     <div className="flex items-center gap-1.5 mb-1.5">
-                      <span className={cn('flex-shrink-0', STEP_COLORS['tool-result'])}>
-                        {STEP_ICONS['tool-result']}
+                      <span className={cn('flex-shrink-0', stepColor('tool-result'))}>
+                        {stepIcon('tool-result')}
                       </span>
-                      <span className="text-[11px] font-semibold text-teal-300">
+                      <span className={cn('text-[11px] font-semibold', stepColor('tool-result'))}>
                         {parsedResults.length} result{parsedResults.length !== 1 ? 's' : ''} fetched
                       </span>
                     </div>
@@ -278,11 +271,11 @@ export function ChatThoughtPanel({
                   key={`${thought.timestamp}-${i}`}
                   className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
                 >
-                  <span className={cn('mt-0.5 flex-shrink-0', STEP_COLORS['tool-result'])}>
-                    {STEP_ICONS['tool-result']}
+                  <span className={cn('mt-0.5 flex-shrink-0', stepColor('tool-result'))}>
+                    {stepIcon('tool-result')}
                   </span>
                   <div className="text-[11px] leading-relaxed min-w-0">
-                    <span className="font-semibold text-teal-300">Result: </span>
+                    <span className={cn('font-semibold', stepColor('tool-result'))}>Result: </span>
                     <span className="text-sera-text-muted break-all">
                       {raw.length > 300 ? raw.substring(0, 300) + '…' : raw}
                     </span>
@@ -293,23 +286,25 @@ export function ChatThoughtPanel({
 
             // ── Error block ──────────────────────────────────────────────────
             if (thought.stepType === 'error') {
+              const errMeta = getStepMeta('error');
               return (
                 <div
                   key={`${thought.timestamp}-${i}`}
-                  className="animate-in fade-in slide-in-from-left-2 duration-200 rounded-md bg-red-500/10 border border-red-500/30 px-3 py-2"
+                  className={cn(
+                    'animate-in fade-in slide-in-from-left-2 duration-200 rounded-md px-3 py-2',
+                    errMeta.bg
+                  )}
                 >
                   <div className="flex items-center gap-1.5">
-                    <span className="text-red-400 flex-shrink-0">
-                      <AlertTriangle size={11} />
-                    </span>
-                    <span className="text-[11px] font-semibold text-red-300">Error</span>
+                    <span className={cn(errMeta.color, 'flex-shrink-0')}>{stepIcon('error')}</span>
+                    <span className={cn('text-[11px] font-semibold', errMeta.color)}>Error</span>
                     {i > 0 && (
                       <span className="ml-auto text-[10px] text-sera-text-muted/50">
                         {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-red-300/80 mt-1 ml-4 leading-relaxed">
+                  <p className="text-[11px] text-sera-error/80 mt-1 ml-4 leading-relaxed">
                     {thought.content}
                   </p>
                 </div>
@@ -322,13 +317,8 @@ export function ChatThoughtPanel({
                 key={`${thought.timestamp}-${i}`}
                 className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-200"
               >
-                <span
-                  className={cn(
-                    'mt-0.5 flex-shrink-0',
-                    STEP_COLORS[thought.stepType] ?? 'text-sera-text-muted'
-                  )}
-                >
-                  {STEP_ICONS[thought.stepType] ?? <Brain size={11} />}
+                <span className={cn('mt-0.5 flex-shrink-0', stepColor(thought.stepType))}>
+                  {stepIcon(thought.stepType)}
                 </span>
                 <span className="text-[11px] text-sera-text-muted leading-relaxed flex-1">
                   {thought.content}

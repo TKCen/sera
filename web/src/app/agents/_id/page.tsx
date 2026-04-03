@@ -1,7 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
-import { request } from '@/lib/api/client';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { queryClient } from '@/lib/query-client';
 import { Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
@@ -12,6 +10,9 @@ import {
   useStopAgent,
   useRestartAgent,
   useDeleteAgent,
+  useAgentSessions,
+  useAgentHealthCheck,
+  useAgentSystemPrompt,
   agentsKeys,
 } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
@@ -31,17 +32,17 @@ import {
 import { cn } from '@/lib/utils';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
-import { AgentDetailManifestTab as ManifestTab } from '@/components/AgentDetailManifestTab';
-import { AgentDetailGrantsTab as GrantsTab } from '@/components/AgentDetailGrantsTab';
-import { AgentDetailToolsTab as ToolsTab } from '@/components/AgentDetailToolsTab';
-import { AgentDetailLogsTab as LogsTab } from '@/components/AgentDetailLogsTab';
-import { MemoryTab } from '@/components/AgentDetailMemoryTab';
-import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
-import { BudgetTab } from '@/components/AgentDetailBudgetTab';
-import { InnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
-import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
-import { ContextTab } from '@/components/AgentDetailContextTab';
-import { CoreMemoryTab } from '@/components/AgentDetailCoreMemoryTab';
+import { AgentDetailManifestTab } from '@/components/AgentDetailManifestTab';
+import { AgentDetailGrantsTab } from '@/components/AgentDetailGrantsTab';
+import { AgentDetailToolsTab } from '@/components/AgentDetailToolsTab';
+import { AgentDetailLogsTab } from '@/components/AgentDetailLogsTab';
+import { AgentDetailMemoryTab } from '@/components/AgentDetailMemoryTab';
+import { AgentDetailSchedulesTab } from '@/components/AgentDetailSchedulesTab';
+import { AgentDetailBudgetTab } from '@/components/AgentDetailBudgetTab';
+import { AgentDetailInnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
+import { AgentDetailDelegationsTab } from '@/components/AgentDetailDelegationsTab';
+import { AgentDetailContextTab } from '@/components/AgentDetailContextTab';
+import { AgentDetailCoreMemoryTab } from '@/components/AgentDetailCoreMemoryTab';
 import { CommandLogTimeline } from '@/components/CommandLogTimeline';
 import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
 import { TemplateDiffBanner } from '@/components/TemplateDiffBanner';
@@ -242,19 +243,19 @@ export default function AgentDetailPage() {
           }}
           fallbackMessage="The agent detail tab content failed to load."
         >
-          {tab === 'overview' && <ManifestTab id={id} />}
+          {tab === 'overview' && <AgentDetailManifestTab id={id} />}
           {tab === 'tasks' && <AgentDetailTasksTab id={id} />}
-          {tab === 'grants' && <GrantsTab id={id} />}
-          {tab === 'tools' && <ToolsTab id={id} />}
-          {tab === 'delegations' && <DelegationsTab id={id} />}
-          {tab === 'logs' && <LogsTab id={id} />}
+          {tab === 'grants' && <AgentDetailGrantsTab id={id} />}
+          {tab === 'tools' && <AgentDetailToolsTab id={id} />}
+          {tab === 'delegations' && <AgentDetailDelegationsTab id={id} />}
+          {tab === 'logs' && <AgentDetailLogsTab id={id} />}
           {tab === 'commands' && <CommandsTab id={id} />}
-          {tab === 'memory' && <MemoryTab id={id} />}
-          {tab === 'core-memory' && <CoreMemoryTab id={id} />}
-          {tab === 'schedules' && <SchedulesTab id={id} agentName={agent?.name} />}
-          {tab === 'inner-life' && <InnerLifeTab id={id} />}
-          {tab === 'budget' && <BudgetTab id={id} />}
-          {tab === 'context' && <ContextTab id={id} />}
+          {tab === 'memory' && <AgentDetailMemoryTab id={id} />}
+          {tab === 'core-memory' && <AgentDetailCoreMemoryTab id={id} />}
+          {tab === 'schedules' && <AgentDetailSchedulesTab id={id} agentName={agent?.name} />}
+          {tab === 'inner-life' && <AgentDetailInnerLifeTab id={id} />}
+          {tab === 'budget' && <AgentDetailBudgetTab id={id} />}
+          {tab === 'context' && <AgentDetailContextTab id={id} />}
           {tab === 'prompt' && <SystemPromptTab id={id} />}
           {tab === 'health' && <HealthCheckTab id={id} />}
         </ErrorBoundary>
@@ -337,26 +338,26 @@ export default function AgentDetailPage() {
 }
 
 function CommandsTab({ id }: { id: string }) {
-  const { data: sessions, isLoading } = useQuery({
-    queryKey: ['agent-sessions', id],
-    queryFn: () =>
-      request<Array<{ id: string; title: string; updatedAt: string }>>(
-        `/sessions?agentInstanceId=${encodeURIComponent(id)}`
-      ),
-  });
+  const { data: sessions, isLoading } = useAgentSessions(id);
 
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   if (isLoading) return <TabLoading />;
 
-  const sortedSessions = [...(sessions ?? [])].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  const sortedSessions = useMemo(
+    () =>
+      [...(sessions ?? [])].sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      ),
+    [sessions]
   );
 
   // Auto-select most recent session
-  if (!selectedSessionId && sortedSessions.length > 0) {
-    setSelectedSessionId(sortedSessions[0]!.id);
-  }
+  useEffect(() => {
+    if (!selectedSessionId && sortedSessions.length > 0) {
+      setSelectedSessionId(sortedSessions[0]!.id);
+    }
+  }, [sortedSessions, selectedSessionId]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -394,19 +395,8 @@ function CommandsTab({ id }: { id: string }) {
   );
 }
 
-interface HealthCheckResult {
-  agentId: string;
-  agentName?: string;
-  overallStatus: string;
-  checks: Record<string, { ok: boolean; detail?: string }>;
-}
-
 function HealthCheckTab({ id }: { id: string }) {
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['agent-health-check', id],
-    queryFn: () => request<HealthCheckResult>(`/agents/${encodeURIComponent(id)}/health-check`),
-    enabled: id.length > 0,
-  });
+  const { data, isLoading, refetch, isFetching } = useAgentHealthCheck(id);
 
   if (isLoading) return <TabLoading />;
 
@@ -459,11 +449,7 @@ function HealthCheckTab({ id }: { id: string }) {
 }
 
 function SystemPromptTab({ id }: { id: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['agent-system-prompt', id],
-    queryFn: () => request<{ prompt: string }>(`/agents/${encodeURIComponent(id)}/system-prompt`),
-    enabled: id.length > 0,
-  });
+  const { data, isLoading } = useAgentSystemPrompt(id);
 
   if (isLoading) return <TabLoading />;
 

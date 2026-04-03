@@ -21,7 +21,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 
-export function SchedulesTab({
+export function AgentDetailSchedulesTab({
   id,
   agentName: parentAgentName,
 }: {

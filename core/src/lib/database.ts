@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { Logger } from './logger.js';
-import migrate from 'node-pg-migrate';
+import * as migrateModule from 'node-pg-migrate';
+const migrate = (migrateModule as any).default || migrateModule;
 import path from 'path';
 
 const logger = new Logger('Database');

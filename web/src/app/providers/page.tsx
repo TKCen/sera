@@ -26,6 +26,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tooltip } from '@/components/ui/tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import {
@@ -114,10 +115,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor="api-key" className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
+              id="api-key"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -126,8 +128,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label className="text-xs text-sera-text-muted block mb-1">Base URL (optional)</label>
+              <label htmlFor="base-url" className="text-xs text-sera-text-muted block mb-1">
+                Base URL (optional)
+              </label>
               <Input
+                id="base-url"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -141,6 +146,7 @@ function ActivateDialog({
               </label>
               <button
                 className="text-[10px] text-sera-accent hover:underline"
+                aria-label={allSelected ? 'Deselect all models' : 'Select all models'}
                 onClick={() =>
                   setSelectedModels(allSelected ? new Set() : new Set(template.models))
                 }
@@ -152,9 +158,11 @@ function ActivateDialog({
               {template.models.map((m) => (
                 <label
                   key={m}
+                  htmlFor={`model-${m}`}
                   className="flex items-center gap-2 text-xs text-sera-text cursor-pointer"
                 >
                   <input
+                    id={`model-${m}`}
                     type="checkbox"
                     checked={selectedModels.has(m) || selectedModels.size === 0}
                     onChange={(e) => {
@@ -184,7 +192,10 @@ function ActivateDialog({
               disabled={addProvider.isPending}
             >
               {addProvider.isPending ? (
-                <Loader2 size={14} className="animate-spin" />
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  <span className="sr-only">Loading...</span>
+                </>
               ) : (
                 <Plus size={14} />
               )}
@@ -216,17 +227,24 @@ function TestConnectionButton({ modelName }: { modelName: string }) {
   };
 
   if (status === 'testing')
-    return <Loader2 size={12} className="animate-spin text-sera-text-muted" />;
+    return (
+      <>
+        <Loader2 size={12} className="animate-spin text-sera-text-muted" />
+        <span className="sr-only">Testing...</span>
+      </>
+    );
   if (status === 'ok') return <CheckCircle2 size={12} className="text-sera-success" />;
   if (status === 'fail') return <XCircle size={12} className="text-sera-error" />;
   return (
-    <button
-      onClick={() => void handleTest()}
-      className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
-      title="Test connection"
-    >
-      <Zap size={12} />
-    </button>
+    <Tooltip content="Test connection">
+      <button
+        onClick={() => void handleTest()}
+        className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
+        aria-label="Test connection"
+      >
+        <Zap size={12} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -269,7 +287,14 @@ function DiscoverButton({ providerName }: { providerName: string }) {
         onClick={() => void handleDiscover()}
         disabled={discover.isPending}
       >
-        {discover.isPending ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
+        {discover.isPending ? (
+          <>
+            <Loader2 size={12} className="animate-spin" />
+            <span className="sr-only">Discovering models...</span>
+          </>
+        ) : (
+          <Search size={12} />
+        )}
         Discover
       </Button>
       {models && models.length > 0 && (
@@ -335,9 +360,16 @@ export default function ProvidersPage() {
             {providers.length} model{providers.length !== 1 ? 's' : ''} configured
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
-          <RefreshCw size={13} /> Refresh
-        </Button>
+        <Tooltip content="Refresh providers list">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void refetch()}
+            aria-label="Refresh providers list"
+          >
+            <RefreshCw size={13} /> Refresh
+          </Button>
+        </Tooltip>
       </div>
 
       {/* ── Available Templates ──────────────────────────────────────────── */}
@@ -461,7 +493,11 @@ export default function ProvidersPage() {
                           </Badge>
                         )}
                         {dpStatus && (
-                          <span className="flex items-center gap-1 text-[10px]">
+                          <span
+                            className="flex items-center gap-1 text-[10px]"
+                            aria-live="polite"
+                            role="status"
+                          >
                             {dpStatus === 'connected' ? (
                               <Wifi size={10} className="text-sera-success" />
                             ) : (
@@ -472,13 +508,15 @@ export default function ProvidersPage() {
                         )}
                         <TestConnectionButton modelName={m.modelName} />
                         {!isDynamic && (
-                          <button
-                            onClick={() => setConfirmDelete(m.modelName)}
-                            className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
-                            title="Delete provider"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <Tooltip content="Delete provider">
+                            <button
+                              onClick={() => setConfirmDelete(m.modelName)}
+                              className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
+                              aria-label="Delete provider"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                     </div>
@@ -514,6 +552,7 @@ export default function ProvidersPage() {
               variant="danger"
               onClick={() => confirmDelete && void handleDelete(confirmDelete)}
               disabled={deleteProvider.isPending}
+              aria-label="Delete provider"
             >
               Delete
             </Button>

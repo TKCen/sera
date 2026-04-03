@@ -76,11 +76,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 <Button onClick={this.handleReload} variant="outline" size="sm">
                   Reload Page
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => (window.location.href = '/')}
-                >
+                <Button variant="outline" size="sm" onClick={() => (window.location.href = '/')}>
                   Dashboard
                 </Button>
               </div>

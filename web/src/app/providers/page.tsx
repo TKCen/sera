@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import {
   Server,
   Trash2,
@@ -67,6 +67,9 @@ function ActivateDialog({
   template: ProviderTemplate | null;
   onClose: () => void;
 }) {
+  const apiKeyId = useId();
+  const baseUrlId = useId();
+  const modelIdPrefix = useId();
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
@@ -115,11 +118,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label htmlFor="api-key" className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor={apiKeyId} className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
-              id="api-key"
+              id={apiKeyId}
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -128,11 +131,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label htmlFor="base-url" className="text-xs text-sera-text-muted block mb-1">
+              <label htmlFor={baseUrlId} className="text-xs text-sera-text-muted block mb-1">
                 Base URL (optional)
               </label>
               <Input
-                id="base-url"
+                id={baseUrlId}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -145,6 +148,7 @@ function ActivateDialog({
                 Models ({selectedModels.size || template.models.length} selected)
               </label>
               <button
+                type="button"
                 className="text-[10px] text-sera-accent hover:underline"
                 aria-label={allSelected ? 'Deselect all models' : 'Select all models'}
                 onClick={() =>
@@ -158,11 +162,11 @@ function ActivateDialog({
               {template.models.map((m) => (
                 <label
                   key={m}
-                  htmlFor={`model-${m}`}
+                  htmlFor={`${modelIdPrefix}-${m}`}
                   className="flex items-center gap-2 text-xs text-sera-text cursor-pointer"
                 >
                   <input
-                    id={`model-${m}`}
+                    id={`${modelIdPrefix}-${m}`}
                     type="checkbox"
                     checked={selectedModels.has(m) || selectedModels.size === 0}
                     onChange={(e) => {
@@ -238,6 +242,7 @@ function TestConnectionButton({ modelName }: { modelName: string }) {
   return (
     <Tooltip content="Test connection">
       <button
+        type="button"
         onClick={() => void handleTest()}
         className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
         aria-label="Test connection"
@@ -282,6 +287,7 @@ function DiscoverButton({ providerName }: { providerName: string }) {
   return (
     <div>
       <Button
+        type="button"
         size="sm"
         variant="ghost"
         onClick={() => void handleDiscover()}
@@ -303,6 +309,7 @@ function DiscoverButton({ providerName }: { providerName: string }) {
             <div key={m} className="flex items-center gap-2 text-xs">
               <span className="font-mono text-sera-text-muted">{m}</span>
               <button
+                type="button"
                 onClick={() => void handleAddModel(m)}
                 className="text-sera-accent hover:underline text-[10px]"
               >
@@ -362,6 +369,7 @@ export default function ProvidersPage() {
         </div>
         <Tooltip content="Refresh providers list">
           <Button
+            type="button"
             size="sm"
             variant="outline"
             onClick={() => void refetch()}
@@ -380,6 +388,7 @@ export default function ProvidersPage() {
             {availableTemplates.map((t) => (
               <button
                 key={t.provider}
+                type="button"
                 onClick={() => setActivateTemplate(t)}
                 className="sera-card-static p-4 text-left hover:border-sera-accent/50 transition-colors group"
               >
@@ -510,6 +519,7 @@ export default function ProvidersPage() {
                         {!isDynamic && (
                           <Tooltip content="Delete provider">
                             <button
+                              type="button"
                               onClick={() => setConfirmDelete(m.modelName)}
                               className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
                               aria-label="Delete provider"

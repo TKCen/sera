@@ -55,9 +55,7 @@ describe('generateSystemPrompt', () => {
   });
 
   it('injects context files with labels as subsections', () => {
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      '# API Reference\nGET /api/v1/users'
-    );
+    vi.mocked(fs.readFileSync).mockReturnValue('# API Reference\nGET /api/v1/users');
     vi.mocked(fs.existsSync).mockReturnValue(true);
     const manifest: RuntimeManifest = {
       ...baseManifest,
@@ -91,9 +89,7 @@ describe('generateSystemPrompt', () => {
     const highContent = 'H'.repeat(4000); // ~1000 tokens
     const lowContent = 'L'.repeat(4000); // ~1000 tokens
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync)
-      .mockReturnValueOnce(highContent)
-      .mockReturnValueOnce(lowContent);
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(highContent).mockReturnValueOnce(lowContent);
 
     const manifest: RuntimeManifest = {
       ...baseManifest,

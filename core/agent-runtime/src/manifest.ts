@@ -143,7 +143,10 @@ export interface SystemPromptContext {
 /**
  * Generate a rich, composable system prompt from a manifest and runtime context.
  */
-export function generateSystemPrompt(manifest: RuntimeManifest, context: SystemPromptContext = {}): string {
+export function generateSystemPrompt(
+  manifest: RuntimeManifest,
+  context: SystemPromptContext = {}
+): string {
   const builder = new SystemPromptBuilder();
 
   // 1. Identity (Priority 0, Required)
@@ -198,4 +201,3 @@ export function generateSystemPrompt(manifest: RuntimeManifest, context: SystemP
 
   return builder.build(context.tokenBudget);
 }
-

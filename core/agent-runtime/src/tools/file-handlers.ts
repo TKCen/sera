@@ -8,6 +8,34 @@ import path from 'path';
 import { PermissionDeniedError, MAX_RESULT_BYTES } from './types.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
 
+export function imageView(workspacePath: string, filePath: string, prompt?: string): string {
+  const resolved = resolveSafe(workspacePath, filePath);
+  if (!fs.existsSync(resolved)) {
+    return `Error: Image file not found: ${filePath}`;
+  }
+
+  const stat = fs.statSync(resolved);
+  if (stat.size > 5 * 1024 * 1024) {
+    return `Error: Image too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). Max size is 5MB.`;
+  }
+
+  const mime = guessMime(resolved);
+  if (!mime.startsWith('image/')) {
+    return `Error: File is not an image: ${filePath} (${mime})`;
+  }
+
+  const buf = fs.readFileSync(resolved);
+  const base64 = buf.toString('base64');
+  const dataUrl = `data:${mime};base64,${base64}`;
+
+  return JSON.stringify({
+    __type: 'vision_request',
+    path: filePath,
+    prompt: prompt ?? 'Analyze this image.',
+    image_url: dataUrl,
+  });
+}
+
 export function fileRead(
   workspacePath: string,
   filePath: string,
@@ -131,11 +159,35 @@ export function truncateOutput(content: string): string {
 function isBinaryFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   const binaryExts = new Set([
-    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico',
-    '.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
-    '.exe', '.dll', '.so', '.dylib', '.wasm',
-    '.mp3', '.mp4', '.wav', '.ogg', '.avi', '.mov',
-    '.ttf', '.otf', '.woff', '.woff2',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.bmp',
+    '.webp',
+    '.ico',
+    '.pdf',
+    '.zip',
+    '.tar',
+    '.gz',
+    '.bz2',
+    '.7z',
+    '.rar',
+    '.exe',
+    '.dll',
+    '.so',
+    '.dylib',
+    '.wasm',
+    '.mp3',
+    '.mp4',
+    '.wav',
+    '.ogg',
+    '.avi',
+    '.mov',
+    '.ttf',
+    '.otf',
+    '.woff',
+    '.woff2',
   ]);
   if (binaryExts.has(ext)) return true;
 

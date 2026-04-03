@@ -8,9 +8,9 @@ const tokenizer = getEncoding('cl100k_base');
 
 export interface PromptSection {
   id: string;
-  priority: number;        // Lower = more important, kept when truncating
+  priority: number; // Lower = more important, kept when truncating
   content: string;
-  required: boolean;       // If true, never truncated
+  required: boolean; // If true, never truncated
 }
 
 export class SystemPromptBuilder {
@@ -35,7 +35,10 @@ export class SystemPromptBuilder {
     const sorted = [...this.sections].sort((a, b) => a.priority - b.priority);
 
     if (!tokenBudget) {
-      return sorted.map((s) => s.content).join('\n\n').trim();
+      return sorted
+        .map((s) => s.content)
+        .join('\n\n')
+        .trim();
     }
 
     const requiredSections = sorted.filter((s) => s.required);
@@ -72,7 +75,10 @@ export class SystemPromptBuilder {
   }
 
   private assemble(sections: PromptSection[]): string {
-    return sections.map((s) => s.content).join('\n\n').trim();
+    return sections
+      .map((s) => s.content)
+      .join('\n\n')
+      .trim();
   }
 
   private countTokens(text: string): number {
@@ -260,7 +266,11 @@ export class SystemPromptBuilder {
 
   /** Reasoning Hints: for thinking models (Optional, Priority 110) */
   addReasoningHints(modelName: string): this {
-    const isReasoningModel = modelName.includes('thinking') || modelName.includes('r1') || modelName.includes('o1') || modelName.includes('o3');
+    const isReasoningModel =
+      modelName.includes('thinking') ||
+      modelName.includes('r1') ||
+      modelName.includes('o1') ||
+      modelName.includes('o3');
     if (!isReasoningModel) return this;
     const lines = [
       '## Reasoning Instructions',

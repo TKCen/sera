@@ -64,12 +64,15 @@ export function grepFiles(
       log('error', `grepFiles error: ${result.error.message}`);
       return JSON.stringify({ error: `ripgrep error: ${result.error.message}` });
     }
-    const files = (result.stdout || '').split('\n').filter((f) => f.length > 0).map(f => {
+    const files = (result.stdout || '')
+      .split('\n')
+      .filter((f) => f.length > 0)
+      .map((f) => {
         if (f.startsWith(workspacePath)) {
-            return f.substring(workspacePath.length).replace(/^[/\\]/, '');
+          return f.substring(workspacePath.length).replace(/^[/\\]/, '');
         }
         return f;
-    });
+      });
     return JSON.stringify({ files, total: files.length });
   }
 
@@ -84,21 +87,24 @@ export function grepFiles(
       return JSON.stringify({ error: `ripgrep error: ${result.error.message}` });
     }
     const counts: Record<string, number> = {};
-    (result.stdout || '').split('\n').filter((f) => f.length > 0).forEach((line) => {
-      const parts = line.split(':');
-      if (parts.length >= 2) {
-        const count = parseInt(parts.pop() || '0', 10);
-        let path = parts.join(':');
-        if (path.startsWith(workspacePath)) {
+    (result.stdout || '')
+      .split('\n')
+      .filter((f) => f.length > 0)
+      .forEach((line) => {
+        const parts = line.split(':');
+        if (parts.length >= 2) {
+          const count = parseInt(parts.pop() || '0', 10);
+          let path = parts.join(':');
+          if (path.startsWith(workspacePath)) {
             path = path.substring(workspacePath.length).replace(/^[/\\]/, '');
+          }
+          counts[path] = count;
+        } else if (parts.length === 1 && !isNaN(parseInt(parts[0], 10))) {
+          // Single file count
+          let path = searchPath || '.';
+          counts[path] = parseInt(parts[0], 10);
         }
-        counts[path] = count;
-      } else if (parts.length === 1 && !isNaN(parseInt(parts[0], 10))) {
-        // Single file count
-        let path = searchPath || '.';
-        counts[path] = parseInt(parts[0], 10);
-      }
-    });
+      });
     return JSON.stringify({ counts });
   }
 
@@ -124,7 +130,7 @@ export function grepFiles(
       if (parsed.type === 'match') {
         let path = parsed.data.path.text;
         if (path.startsWith(workspacePath)) {
-            path = path.substring(workspacePath.length).replace(/^[/\\]/, '');
+          path = path.substring(workspacePath.length).replace(/^[/\\]/, '');
         }
         matches.push({
           path,
@@ -185,7 +191,9 @@ export async function readFilePartial(
     totalLines++;
     if (currentLineNum >= startLine && currentLineNum <= endLine) {
       const contentLine =
-        line.length > MAX_LINE_LENGTH ? line.substring(0, MAX_LINE_LENGTH) + '... [TRUNCATED]' : line;
+        line.length > MAX_LINE_LENGTH
+          ? line.substring(0, MAX_LINE_LENGTH) + '... [TRUNCATED]'
+          : line;
       processedLines.push(contentLine);
 
       if (onOutput && toolCallId) {

@@ -96,7 +96,9 @@ export async function webFetchStreaming(
     });
   } catch (err) {
     if (axios.isAxiosError(err)) {
-      throw new Error(`Fetch failed (HTTP ${err.response?.status || 'network error'}): ${err.message}`);
+      throw new Error(
+        `Fetch failed (HTTP ${err.response?.status || 'network error'}): ${err.message}`
+      );
     }
     throw err;
   }

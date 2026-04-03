@@ -39,7 +39,10 @@ describe('Tool Streaming', () => {
       {
         id: 'call_1',
         type: 'function',
-        function: { name: 'shell-exec', arguments: JSON.stringify({ command: 'echo line1 && echo line2' }) },
+        function: {
+          name: 'shell-exec',
+          arguments: JSON.stringify({ command: 'echo line1 && echo line2' }),
+        },
       },
       onOutput
     );
@@ -131,7 +134,7 @@ describe('Tool Streaming', () => {
     expect(progressEvents.length).toBeGreaterThan(1);
 
     let combined = '';
-    progressEvents.forEach(e => combined += (e as ToolOutputEvent).content);
+    progressEvents.forEach((e) => (combined += (e as ToolOutputEvent).content));
     expect(combined).toBe(largeContent);
 
     const resultEvent = events.find((e) => !('type' in e)) as ToolResultEvent;

@@ -102,10 +102,7 @@ describe('SystemPromptBuilder', () => {
     const builder = new SystemPromptBuilder();
     // Required: identity (approx 20 tokens), constraints (approx 15 tokens)
     // Optional: principles (approx 15 tokens)
-    builder
-      .addIdentity(mockManifest)
-      .addPrinciples(mockManifest)
-      .addConstraints(1);
+    builder.addIdentity(mockManifest).addPrinciples(mockManifest).addConstraints(1);
 
     // Total should be around 50 tokens. Set budget to 35.
     // Principles (priority 10) should be dropped. Identity and Constraints are required.
@@ -118,9 +115,7 @@ describe('SystemPromptBuilder', () => {
 
   it('keeps all required sections even if over budget', () => {
     const builder = new SystemPromptBuilder();
-    builder
-      .addIdentity(mockManifest)
-      .addConstraints(1);
+    builder.addIdentity(mockManifest).addConstraints(1);
 
     // Total approx 35 tokens. Set budget to 10.
     const prompt = builder.build(10);

@@ -153,4 +153,76 @@ describe('ReasoningLoop E2E', () => {
     expect(bootMsg.content).toContain('Boot File');
     expect(bootMsg.content).toContain('Boot context content');
   });
+
+  it('handles image-view and injects vision block into next turn', async () => {
+    const llm = new ScriptedLLMClient([
+      {
+        content: 'I will look at that image.',
+        toolCalls: [
+          {
+            id: 'call_img',
+            type: 'function',
+            function: {
+              name: 'image-view',
+              arguments: '{"path": "test.png", "prompt": "What color is the cat?"}',
+            },
+          },
+        ],
+      },
+      { content: 'The cat is orange.' },
+    ]);
+
+    const tools = new StaticToolExecutor().register(
+      {
+        type: 'function',
+        function: {
+          name: 'image-view',
+          description: 'View image',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+      () =>
+        JSON.stringify({
+          __type: 'vision_request',
+          path: 'test.png',
+          prompt: 'What color is the cat?',
+          image_url: 'data:image/png;base64,mock-data',
+        })
+    );
+
+    const publisher = createMockPublisher();
+    const loop = new ReasoningLoop(llm, tools, publisher, mockManifest);
+
+    let capturedMessages: ChatMessage[] = [];
+    const originalChat = llm.chat.bind(llm);
+    llm.chat = async (messages: ChatMessage[], ...args: any[]) => {
+      capturedMessages = [...messages];
+      return originalChat(messages, ...args);
+    };
+
+    const output = await loop.run({
+      taskId: 'task-img',
+      task: 'Check image test.png',
+    });
+
+    expect(output.result).toBe('The cat is orange.');
+    expect(llm.getCallCount()).toBe(2);
+
+    // Verify vision block injection in the second LLM call
+    const visionMsg = capturedMessages.find(
+      (m) => m.role === 'user' && Array.isArray(m.content)
+    );
+    expect(visionMsg).toBeDefined();
+    const content = visionMsg!.content as any[];
+    expect(content[0].text).toBe('What color is the cat?');
+    expect(content[1].type).toBe('image_url');
+    expect(content[1].image_url.url).toBe('data:image/png;base64,mock-data');
+
+    expect(publisher.publishThought).toHaveBeenCalledWith(
+      'reflect',
+      expect.stringContaining('Image "test.png" loaded and injected'),
+      1,
+      undefined
+    );
+  });
 });

@@ -15,8 +15,18 @@ import {
 import { log } from '../logger.js';
 import { PermissionDeniedError, AGENT_ID } from './types.js';
 import { BUILTIN_TOOLS } from './definitions.js';
-import { fileRead, fileWrite, fileList, fileDelete, truncateOutput } from './file-handlers.js';
+import {
+  imageView,
+  fileRead,
+  fileWrite,
+  fileList,
+  fileDelete,
+  truncateOutput,
+} from './file-handlers.js';
 import { globFiles, grepFiles, readFilePartial } from './search-handlers.js';
+import { pdfRead } from './pdf-handler.js';
+import { codeEval } from './code-handler.js';
+import { httpRequest } from './http-handler.js';
 import type { RuntimeManifest } from '../manifest.js';
 import { shellExec, shellExecStreaming, checkShellPathRestriction } from './shell-handler.js';
 import { webFetchStreaming } from './web-handler.js';
@@ -36,6 +46,10 @@ export interface ToolExecutionResult {
 const LOCAL_TOOLS = new Set([
   'file-read',
   'file-write',
+  'image-view',
+  'pdf-read',
+  'code-eval',
+  'http-request',
   'file-list',
   'file-delete',
   'read_file',
@@ -172,7 +186,6 @@ export class RuntimeToolExecutor implements IToolExecutor {
     onOutput?: ToolOutputCallback,
     sessionId?: string
   ): Promise<ToolExecutionResult> {
-
     const { id, function: fn } = toolCall;
     const toolName = sanitizeToolName(fn.name);
     const start = Date.now();
@@ -187,7 +200,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
         (allowed.includes('*') || allowed.includes(toolName)) && !denied.includes(toolName);
 
       if (!isAllowed) {
-        log('warn', `Tool execution denied: ${toolName} not permitted for agent ${agentInstanceId}`);
+        log(
+          'warn',
+          `Tool execution denied: ${toolName} not permitted for agent ${agentInstanceId}`
+        );
         return {
           message: {
             role: 'tool',
@@ -254,6 +270,37 @@ export class RuntimeToolExecutor implements IToolExecutor {
       let result: string;
 
       switch (toolName) {
+        case 'image-view':
+          result = imageView(
+            this.workspacePath,
+            params['path'] as string,
+            params['prompt'] as string | undefined
+          );
+          break;
+        case 'pdf-read':
+          result = await pdfRead(
+            this.workspacePath,
+            params['path'] as string,
+            params['pages'] as string | undefined,
+            params['format'] as 'text' | 'markdown' | undefined
+          );
+          break;
+        case 'code-eval':
+          result = await codeEval(
+            params['code'] as string,
+            params['language'] as 'javascript' | 'typescript' | undefined,
+            params['timeout'] as number | undefined
+          );
+          break;
+        case 'http-request':
+          result = await httpRequest(
+            params['url'] as string,
+            params['method'] as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | undefined,
+            params['headers'] as Record<string, string> | undefined,
+            params['body'] as string | undefined,
+            params['timeout'] as number | undefined
+          );
+          break;
         case 'file-read':
           result = fileRead(this.workspacePath, params['path'] as string, onOutput, id);
           break;
@@ -420,15 +467,17 @@ export class RuntimeToolExecutor implements IToolExecutor {
       this.logInvocation(toolName, 'error', durationMs);
 
       // ── afterToolCall Hooks (Error Case) ──────────────────────────────────
-      const afterResult = await this.hookRunner.afterToolCall({
-        toolName,
-        args: params || {},
-        result: errorMsg,
-        isError: true,
-        agentName: this.manifest?.metadata?.name || 'unknown',
-        agentInstanceId,
-        tier: this.tier,
-      }).catch(() => ({ status: 'allow' as const }));
+      const afterResult = await this.hookRunner
+        .afterToolCall({
+          toolName,
+          args: params || {},
+          result: errorMsg,
+          isError: true,
+          agentName: this.manifest?.metadata?.name || 'unknown',
+          agentInstanceId,
+          tier: this.tier,
+        })
+        .catch(() => ({ status: 'allow' as const }));
 
       let finalError = errorMsg;
       if (afterResult.modifiedResult !== undefined) {
@@ -440,7 +489,9 @@ export class RuntimeToolExecutor implements IToolExecutor {
         if (!params) {
           try {
             parsedArgs = JSON.parse(fn.arguments || '{}');
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
         this.sendCommandLog(sessionId, toolName, parsedArgs, finalError, durationMs, 'error');
       }
@@ -594,7 +645,10 @@ export class RuntimeToolExecutor implements IToolExecutor {
         }),
       });
     } catch (err) {
-      log('warn', `Failed to send command log to core: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        'warn',
+        `Failed to send command log to core: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 }

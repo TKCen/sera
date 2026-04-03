@@ -114,7 +114,7 @@ export class CentrifugoPublisher {
       anomaly?: boolean;
 
       internal?: boolean;
-    },
+    }
   ): Promise<void> {
     const canonical = this.toCanonicalStep(step);
     const channel = `thoughts:${this.agentId}`;

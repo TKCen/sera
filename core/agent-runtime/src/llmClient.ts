@@ -81,13 +81,22 @@ export interface ToolDefinition {
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | MessageContentBlock[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   /** Internal messages are hidden from the chat UI (Story 5.12). */
   internal?: boolean;
   /** Estimated token count for this message. */
   tokens?: number;
+}
+
+export interface MessageContentBlock {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: {
+    url: string;
+    detail?: 'auto' | 'low' | 'high';
+  };
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';
@@ -116,7 +125,7 @@ export interface ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
-    model?: string,
+    model?: string
   ): Promise<LLMResponse>;
 }
 
@@ -126,11 +135,7 @@ export class LLMClient implements ILLMClient {
   private http: AxiosInstance;
   private model: string;
 
-  constructor(
-    coreUrl: string,
-    identityToken: string,
-    model: string,
-  ) {
+  constructor(coreUrl: string, identityToken: string, model: string) {
     const timeoutMs = process.env['LLM_TIMEOUT_MS']
       ? parseInt(process.env['LLM_TIMEOUT_MS'], 10)
       : 120_000;
@@ -140,7 +145,7 @@ export class LLMClient implements ILLMClient {
       baseURL: `${coreUrl}/v1/llm`,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${identityToken}`,
+        Authorization: `Bearer ${identityToken}`,
       },
       timeout: timeoutMs,
     });
@@ -159,7 +164,7 @@ export class LLMClient implements ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
-    model?: string,
+    model?: string
   ): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: model || this.model,
@@ -187,7 +192,10 @@ export class LLMClient implements ILLMClient {
     // Debug: log tool names and message roles sent to LLM
     if (tools && tools.length > 0) {
       const toolNames = tools.map((t) => t.function.name).join(', ');
-      log('debug', `LLM request: ${(body['messages'] as unknown[]).length} messages, ${tools.length} tools: [${toolNames}]`);
+      log(
+        'debug',
+        `LLM request: ${(body['messages'] as unknown[]).length} messages, ${tools.length} tools: [${toolNames}]`
+      );
     }
 
     try {
@@ -199,7 +207,9 @@ export class LLMClient implements ILLMClient {
       const rawStream = res.data as Readable;
       const chunkStream = this.parseSSE(rawStream);
 
-      const idleTimeout = timeoutMs || (process.env['LLM_TIMEOUT_MS'] ? parseInt(process.env['LLM_TIMEOUT_MS'], 10) : 120_000);
+      const idleTimeout =
+        timeoutMs ||
+        (process.env['LLM_TIMEOUT_MS'] ? parseInt(process.env['LLM_TIMEOUT_MS'], 10) : 120_000);
 
       const wrappedStream = pipe(
         chunkStream,
@@ -207,7 +217,7 @@ export class LLMClient implements ILLMClient {
         wrapToolNameTrim(),
         wrapToolCallArgumentRepair(),
         wrapSanitizeMalformedToolCalls(),
-        wrapReasoningFilter(thinkingLevel),
+        wrapReasoningFilter(thinkingLevel)
       );
 
       let content = '';
@@ -262,14 +272,18 @@ export class LLMClient implements ILLMClient {
         }
 
         if (status === 503) {
-          throw new ProviderUnavailableError(`LLM provider unavailable (circuit open): ${errorMsg ?? err.message}`);
+          throw new ProviderUnavailableError(
+            `LLM provider unavailable (circuit open): ${errorMsg ?? err.message}`
+          );
         }
 
         // Context overflow detection — HTTP 400 with overflow-related error text
         if (status === 400) {
           const combined = `${errorCode ?? ''} ${errorMsg ?? ''}`.toLowerCase();
           if (OVERFLOW_PATTERNS.some((p) => combined.includes(p))) {
-            throw new ContextOverflowError(`Context window overflow: ${errorMsg ?? errorCode ?? 'context too long'}`);
+            throw new ContextOverflowError(
+              `Context window overflow: ${errorMsg ?? errorCode ?? 'context too long'}`
+            );
           }
         }
 
@@ -282,7 +296,7 @@ export class LLMClient implements ILLMClient {
   /**
    * Parse OpenAI-compatible SSE stream into an AsyncIterable of Chunks.
    */
-  private async* parseSSE(stream: Readable): AsyncIterable<Chunk> {
+  private async *parseSSE(stream: Readable): AsyncIterable<Chunk> {
     let buffer = '';
     for await (const chunk of stream) {
       buffer += chunk.toString();

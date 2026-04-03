@@ -92,13 +92,16 @@ describe('streamWrappers', () => {
 
     it('should not swallow non-delta fields in mixed chunks', async () => {
       const chunks: Chunk[] = [
-        { content: 'metadata', toolCallDelta: { index: 0, id: 'call_1', name: 'test', arguments: '{}' } },
+        {
+          content: 'metadata',
+          toolCallDelta: { index: 0, id: 'call_1', name: 'test', arguments: '{}' },
+        },
       ];
       const wrapped = wrapToolCallArgumentRepair()(toAsyncIterable(chunks));
       const result = await collect(wrapped);
 
-      expect(result.some(c => c.content === 'metadata')).toBe(true);
-      expect(result.some(c => c.toolCallDelta?.index === 0)).toBe(true);
+      expect(result.some((c) => c.content === 'metadata')).toBe(true);
+      expect(result.some((c) => c.toolCallDelta?.index === 0)).toBe(true);
     });
   });
 
@@ -116,9 +119,7 @@ describe('streamWrappers', () => {
     });
 
     it('should drop tool calls without a name', async () => {
-      const chunks: Chunk[] = [
-        { toolCallDelta: { index: 0, name: '', arguments: '{}' } },
-      ];
+      const chunks: Chunk[] = [{ toolCallDelta: { index: 0, name: '', arguments: '{}' } }];
       const wrapped = wrapSanitizeMalformedToolCalls()(toAsyncIterable(chunks));
       const result = await collect(wrapped);
 
@@ -140,9 +141,7 @@ describe('streamWrappers', () => {
 
   describe('wrapReasoningFilter', () => {
     it('should drop reasoning if level is off', async () => {
-      const chunks: Chunk[] = [
-        { content: 'hello', reasoning: 'thinking' },
-      ];
+      const chunks: Chunk[] = [{ content: 'hello', reasoning: 'thinking' }];
       const wrapped = wrapReasoningFilter('off')(toAsyncIterable(chunks));
       const result = await collect(wrapped);
 
@@ -151,9 +150,7 @@ describe('streamWrappers', () => {
     });
 
     it('should keep reasoning if level is not off', async () => {
-      const chunks: Chunk[] = [
-        { content: 'hello', reasoning: 'thinking' },
-      ];
+      const chunks: Chunk[] = [{ content: 'hello', reasoning: 'thinking' }];
       const wrapped = wrapReasoningFilter('medium')(toAsyncIterable(chunks));
       const result = await collect(wrapped);
 
@@ -162,9 +159,7 @@ describe('streamWrappers', () => {
     });
 
     it('should only drop reasoning if other content exists', async () => {
-      const chunks: Chunk[] = [
-        { content: 'hello', reasoning: 'thinking' },
-      ];
+      const chunks: Chunk[] = [{ content: 'hello', reasoning: 'thinking' }];
       const wrapped = wrapReasoningFilter('off')(toAsyncIterable(chunks));
       const result = await collect(wrapped);
 

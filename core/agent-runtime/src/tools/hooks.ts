@@ -46,7 +46,11 @@ export class HookRunner {
 
     for (const config of applicable) {
       try {
-        const result = await this.executeHook(config, { ...context, args: currentArgs }, 'before_tool_call');
+        const result = await this.executeHook(
+          config,
+          { ...context, args: currentArgs },
+          'before_tool_call'
+        );
 
         if (result.status === 'deny') {
           return result;
@@ -61,7 +65,10 @@ export class HookRunner {
           currentArgs = result.modifiedArgs;
         }
       } catch (err) {
-        log('error', `Hook error (beforeToolCall): ${err instanceof Error ? err.message : String(err)}`);
+        log(
+          'error',
+          `Hook error (beforeToolCall): ${err instanceof Error ? err.message : String(err)}`
+        );
         // Hook errors don't crash the reasoning loop (logged and skipped)
       }
     }
@@ -82,7 +89,11 @@ export class HookRunner {
 
     for (const config of applicable) {
       try {
-        const result = await this.executeHook(config, { ...context, result: currentResult }, 'after_tool_call');
+        const result = await this.executeHook(
+          config,
+          { ...context, result: currentResult },
+          'after_tool_call'
+        );
 
         if (result.status === 'warn') {
           finalStatus = 'warn';
@@ -93,14 +104,21 @@ export class HookRunner {
           currentResult = result.modifiedResult;
         }
       } catch (err) {
-        log('error', `Hook error (afterToolCall): ${err instanceof Error ? err.message : String(err)}`);
+        log(
+          'error',
+          `Hook error (afterToolCall): ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
 
     return { status: finalStatus, modifiedResult: currentResult, message: finalMessage };
   }
 
-  private async executeHook(config: HookConfig, context: HookContext, event: HookEvent): Promise<HookResponse> {
+  private async executeHook(
+    config: HookConfig,
+    context: HookContext,
+    event: HookEvent
+  ): Promise<HookResponse> {
     return new Promise((resolve, reject) => {
       const env = {
         ...process.env,
@@ -154,7 +172,11 @@ export class HookRunner {
             if (event === 'before_tool_call') {
               resolve({ status, modifiedArgs: parsed, message });
             } else {
-              resolve({ status, modifiedResult: typeof parsed === 'string' ? parsed : JSON.stringify(parsed), message });
+              resolve({
+                status,
+                modifiedResult: typeof parsed === 'string' ? parsed : JSON.stringify(parsed),
+                message,
+              });
             }
             return;
           } catch {

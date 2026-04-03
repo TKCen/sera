@@ -38,20 +38,26 @@ describe('RuntimeToolExecutor', () => {
     });
 
     it('blocks path traversal', async () => {
-      const result = await executor.executeTool(makeCall('file-read', { path: '../../etc/passwd' }));
+      const result = await executor.executeTool(
+        makeCall('file-read', { path: '../../etc/passwd' })
+      );
       expect(result.message.content).toContain('Path traversal blocked');
     });
   });
 
   describe('executeTool() — file-write', () => {
     it('creates a file with content', async () => {
-      const result = await executor.executeTool(makeCall('file-write', { path: 'new.txt', content: 'data' }));
+      const result = await executor.executeTool(
+        makeCall('file-write', { path: 'new.txt', content: 'data' })
+      );
       expect(result.message.content).toContain('File written');
       expect(fs.readFileSync(path.join(tempDir, 'new.txt'), 'utf-8')).toBe('data');
     });
 
     it('creates parent directories automatically', async () => {
-      const result = await executor.executeTool(makeCall('file-write', { path: 'sub/dir/file.txt', content: 'nested' }));
+      const result = await executor.executeTool(
+        makeCall('file-write', { path: 'sub/dir/file.txt', content: 'nested' })
+      );
       expect(result.message.content).toContain('File written');
       expect(fs.existsSync(path.join(tempDir, 'sub', 'dir', 'file.txt'))).toBe(true);
     });
@@ -98,7 +104,9 @@ describe('RuntimeToolExecutor', () => {
     it('deletes non-empty directory with recursive:true', async () => {
       fs.mkdirSync(path.join(tempDir, 'notempty'));
       fs.writeFileSync(path.join(tempDir, 'notempty', 'x.txt'), '');
-      const result = await executor.executeTool(makeCall('file-delete', { path: 'notempty', recursive: true }));
+      const result = await executor.executeTool(
+        makeCall('file-delete', { path: 'notempty', recursive: true })
+      );
       expect(result.message.content).toContain('Deleted directory');
       expect(fs.existsSync(path.join(tempDir, 'notempty'))).toBe(false);
     });
@@ -122,7 +130,9 @@ describe('RuntimeToolExecutor', () => {
 
     it('is blocked on tier-1 agents', async () => {
       const tier1Executor = new RuntimeToolExecutor(tempDir, 1);
-      const result = await tier1Executor.executeTool(makeCall('shell-exec', { command: 'echo hi' }));
+      const result = await tier1Executor.executeTool(
+        makeCall('shell-exec', { command: 'echo hi' })
+      );
       expect(result.message.content).toContain('tier-1');
       expect(result.message.content).toContain('Error');
     });
@@ -156,7 +166,7 @@ describe('RuntimeToolExecutor', () => {
         // Create a fresh executor so it picks up the env vars
         const proxyExecutor = new RuntimeToolExecutor(tempDir, 2);
         const result = await proxyExecutor.executeTool(
-          makeCall('file-read', { path: '/outside/workspace/file.txt' }),
+          makeCall('file-read', { path: '/outside/workspace/file.txt' })
         );
 
         // Should attempt proxy (curl will fail in test env, but shouldn't throw PermissionDeniedError)
@@ -180,7 +190,7 @@ describe('RuntimeToolExecutor', () => {
       try {
         const proxyExecutor = new RuntimeToolExecutor(tempDir, 2);
         const result = await proxyExecutor.executeTool(
-          makeCall('shell-exec', { command: 'cat /outside/secret.txt' }),
+          makeCall('shell-exec', { command: 'cat /outside/secret.txt' })
         );
 
         expect(result.message.role).toBe('tool');
@@ -204,7 +214,7 @@ describe('RuntimeToolExecutor', () => {
       try {
         const proxyExecutor = new RuntimeToolExecutor(tempDir, 2);
         const result = await proxyExecutor.executeTool(
-          makeCall('shell-exec', { command: 'echo hello' }),
+          makeCall('shell-exec', { command: 'echo hello' })
         );
 
         expect(result.message.role).toBe('tool');
@@ -227,7 +237,7 @@ describe('RuntimeToolExecutor', () => {
       try {
         const noProxyExecutor = new RuntimeToolExecutor(tempDir, 2);
         const result = await noProxyExecutor.executeTool(
-          makeCall('file-read', { path: '/outside/workspace/file.txt' }),
+          makeCall('file-read', { path: '/outside/workspace/file.txt' })
         );
 
         expect(result.message.content).toContain('Path traversal blocked');
@@ -296,17 +306,21 @@ describe('RuntimeToolExecutor', () => {
   });
 
   describe('getToolDefinitions()', () => {
-    it('returns all 12 built-in tools when no filter given', () => {
+    it('returns all built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(12);
+      expect(tools.length).toBe(16);
       const names = tools.map((t) => t.function.name).sort();
       expect(names).toEqual([
+        'code-eval',
         'file-delete',
         'file-list',
         'file-read',
         'file-write',
         'glob',
         'grep',
+        'http-request',
+        'image-view',
+        'pdf-read',
         'read_file',
         'run-tool',
         'shell-exec',

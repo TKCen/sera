@@ -6,29 +6,27 @@ import type { ToolCall } from '../llmClient.js';
 
 describe('HookRunner', () => {
   it('should allow tool execution when hook returns 0', async () => {
-    const runner = new HookRunner([
-      { command: 'exit 0', events: ['before_tool_call'] }
-    ]);
+    const runner = new HookRunner([{ command: 'exit 0', events: ['before_tool_call'] }]);
     const result = await runner.beforeToolCall({
       toolName: 'test-tool',
       args: { foo: 'bar' },
       agentName: 'test-agent',
       agentInstanceId: 'test-id',
-      tier: 1
+      tier: 1,
     });
     expect(result.status).toBe('allow');
   });
 
   it('should deny tool execution when hook returns 2', async () => {
     const runner = new HookRunner([
-      { command: 'echo "Denied!" >&2; exit 2', events: ['before_tool_call'] }
+      { command: 'echo "Denied!" >&2; exit 2', events: ['before_tool_call'] },
     ]);
     const result = await runner.beforeToolCall({
       toolName: 'test-tool',
       args: { foo: 'bar' },
       agentName: 'test-agent',
       agentInstanceId: 'test-id',
-      tier: 1
+      tier: 1,
     });
     expect(result.status).toBe('deny');
     expect(result.message).toBe('Denied!');
@@ -36,21 +34,21 @@ describe('HookRunner', () => {
 
   it('should modify arguments when before_tool_call hook outputs JSON', async () => {
     const runner = new HookRunner([
-      { command: 'echo \'{"foo": "modified"}\'', events: ['before_tool_call'] }
+      { command: 'echo \'{"foo": "modified"}\'', events: ['before_tool_call'] },
     ]);
     const result = await runner.beforeToolCall({
       toolName: 'test-tool',
       args: { foo: 'bar' },
       agentName: 'test-agent',
       agentInstanceId: 'test-id',
-      tier: 1
+      tier: 1,
     });
     expect(result.modifiedArgs).toEqual({ foo: 'modified' });
   });
 
   it('should modify result when after_tool_call hook outputs content', async () => {
     const runner = new HookRunner([
-      { command: 'echo "Modified Result"', events: ['after_tool_call'] }
+      { command: 'echo "Modified Result"', events: ['after_tool_call'] },
     ]);
     const result = await runner.afterToolCall({
       toolName: 'test-tool',
@@ -58,7 +56,7 @@ describe('HookRunner', () => {
       result: 'Original Result',
       agentName: 'test-agent',
       agentInstanceId: 'test-id',
-      tier: 1
+      tier: 1,
     });
     expect(result.modifiedResult).toBe('Modified Result');
   });
@@ -66,27 +64,27 @@ describe('HookRunner', () => {
   it('should provide context via environment variables', async () => {
     // We use a hook that prints an env var to stdout
     const runner = new HookRunner([
-      { command: 'echo $HOOK_TOOL_NAME', events: ['before_tool_call'] }
+      { command: 'echo $HOOK_TOOL_NAME', events: ['before_tool_call'] },
     ]);
     const result = await runner.beforeToolCall({
       toolName: 'test-tool',
       args: { foo: 'bar' },
       agentName: 'test-agent',
       agentInstanceId: 'test-id',
-      tier: 1
+      tier: 1,
     });
     // The modifiedArgs check will fail because it's not JSON, but we can verify it's skipped or handled
     // Actually our implementation tries to parse JSON, if it fails it might just return status 'allow'
     // Let's make it output valid JSON
     const runner2 = new HookRunner([
-      { command: 'echo "{\\\"name\\\": \\\"$HOOK_TOOL_NAME\\\"}"', events: ['before_tool_call'] }
+      { command: 'echo "{\\\"name\\\": \\\"$HOOK_TOOL_NAME\\\"}"', events: ['before_tool_call'] },
     ]);
     const result2 = await runner2.beforeToolCall({
       toolName: 'my-special-tool',
       args: {},
       agentName: 'test-agent',
       agentInstanceId: 'test-id',
-      tier: 1
+      tier: 1,
     });
     expect(result2.modifiedArgs).toEqual({ name: 'my-special-tool' });
   });
@@ -102,9 +100,9 @@ describe('RuntimeToolExecutor with Hooks', () => {
     tools: {
       allowed: ['file-list'],
       hooks: [
-        { command: 'echo "{\\\"path\\\": \\\"/modified/path\\\"}"', events: ['before_tool_call'] }
-      ]
-    }
+        { command: 'echo "{\\\"path\\\": \\\"/modified/path\\\"}"', events: ['before_tool_call'] },
+      ],
+    },
   };
 
   it('should apply hooks during executeTool', async () => {
@@ -119,8 +117,8 @@ describe('RuntimeToolExecutor with Hooks', () => {
       type: 'function',
       function: {
         name: 'file-list',
-        arguments: JSON.stringify({ path: '/original/path' })
-      }
+        arguments: JSON.stringify({ path: '/original/path' }),
+      },
     };
 
     const result = await executor.executeTool(toolCall);
@@ -136,10 +134,8 @@ describe('RuntimeToolExecutor with Hooks', () => {
       ...mockManifest,
       tools: {
         allowed: ['file-list'],
-        hooks: [
-          { command: 'exit 2', events: ['before_tool_call'] }
-        ]
-      }
+        hooks: [{ command: 'exit 2', events: ['before_tool_call'] }],
+      },
     };
     const executor = new RuntimeToolExecutor('/workspace', 1, denyManifest);
     const toolCall: ToolCall = {
@@ -147,8 +143,8 @@ describe('RuntimeToolExecutor with Hooks', () => {
       type: 'function',
       function: {
         name: 'file-list',
-        arguments: JSON.stringify({ path: '/' })
-      }
+        arguments: JSON.stringify({ path: '/' }),
+      },
     };
 
     const result = await executor.executeTool(toolCall);
@@ -160,8 +156,8 @@ describe('RuntimeToolExecutor with Hooks', () => {
       ...mockManifest,
       tools: {
         allowed: ['file-read'], // file-list not allowed
-        hooks: []
-      }
+        hooks: [],
+      },
     };
     const executor = new RuntimeToolExecutor('/workspace', 1, restrictManifest);
     const toolCall: ToolCall = {
@@ -169,8 +165,8 @@ describe('RuntimeToolExecutor with Hooks', () => {
       type: 'function',
       function: {
         name: 'file-list',
-        arguments: JSON.stringify({ path: '/' })
-      }
+        arguments: JSON.stringify({ path: '/' }),
+      },
     };
 
     const result = await executor.executeTool(toolCall);

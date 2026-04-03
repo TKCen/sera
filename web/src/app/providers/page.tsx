@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import {
   Server,
   Trash2,
@@ -28,12 +28,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Tooltip } from '@/components/ui/tooltip';
 import {
   Dialog,
@@ -77,6 +72,8 @@ function ActivateDialog({
   const [baseUrl, setBaseUrl] = useState('');
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const addProvider = useAddProvider();
+  const apiKeyId = useId();
+  const baseUrlId = useId();
 
   if (!template) return null;
 
@@ -121,11 +118,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label htmlFor="apiKey" className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor={apiKeyId} className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
-              id="apiKey"
+              id={apiKeyId}
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -134,9 +131,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label htmlFor="baseUrl" className="text-xs text-sera-text-muted block mb-1">Base URL (optional)</label>
+              <label htmlFor={baseUrlId} className="text-xs text-sera-text-muted block mb-1">
+                Base URL (optional)
+              </label>
               <Input
-                id="baseUrl"
+                id={baseUrlId}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -350,12 +349,7 @@ export default function ProvidersPage() {
           </p>
         </div>
         <Tooltip content="Refresh providers">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void refetch()}
-            aria-label="Refresh providers"
-          >
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
             <RefreshCw size={13} /> Refresh
           </Button>
         </Tooltip>

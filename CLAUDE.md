@@ -95,7 +95,7 @@ When completing a workflow loop or resolving a non-trivial issue, check whether 
 
 ## Learnings
 
-- **`bunx` replaces `npx`**: bun is the project package manager. Use `bunx` to run local binaries (e.g. `bunx vitest run`, `bunx tsc --noEmit`). The old `npx` and `node_modules/.bin/` shim workarounds are no longer needed.
+- **Use `npm install` on Windows, `bun install` in Docker**: Bun 1.3.x on Windows creates junction points that Windows treats as "untrusted mount points" — Node.js, tsc, and other tools cannot traverse them. Use `npm install` on the Windows host for compatible `node_modules`. Docker builds use `bun install` via `bun.lock`. Both `package-lock.json` and `bun.lock` must be kept in sync. Use `bunx` to run local binaries (e.g. `bunx vitest run`, `bunx tsc --noEmit`).
 - **`cd` does not persist between shell calls**: Every Bash tool call starts in the default working directory — always use absolute paths.
 - **Git Bash mangles absolute Linux paths in `docker exec`**: Prefix with `MSYS_NO_PATHCONV=1` when passing paths like `/app/...` to `docker exec`.
 - **Dev dependency version alignment**: `vitest` and `@vitest/coverage-v8` must share the same major version — a mismatch breaks `bun install` in Docker builds.

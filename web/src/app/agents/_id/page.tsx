@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { queryClient } from '@/lib/query-client';
-import { ArrowLeft, Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
+import { Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,

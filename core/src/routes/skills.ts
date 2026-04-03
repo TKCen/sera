@@ -10,6 +10,7 @@ import type { SkillRegistry } from '../skills/SkillRegistry.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { SkillLibrary } from '../skills/SkillLibrary.js';
 import { SkillRegistryService } from '../skills/adapters/SkillRegistryService.js';
+import { ManifestSkillIndex } from '../skills/ManifestSkillIndex.js';
 
 export function createSkillsRouter(
   _skillRegistry: SkillRegistry,
@@ -42,6 +43,58 @@ export function createSkillsRouter(
       });
 
       res.json(enriched);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Combined skill registry (built-in tools + manifest skills) ───────────
+  router.get('/registry/list', async (_req, res) => {
+    try {
+      const builtinTools = _skillRegistry.listAll();
+      const manifestIndex = ManifestSkillIndex.getInstance();
+      const manifestSkills = manifestIndex.listAll();
+
+      res.json({
+        builtin: builtinTools,
+        manifest: manifestSkills,
+        total: builtinTools.length + manifestSkills.length,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Search across all skill sources ────────────────────────────────────
+  router.post('/registry/search', async (req, res) => {
+    try {
+      const { query, harness, tags } = req.body as {
+        query?: string;
+        harness?: string;
+        tags?: string[];
+      };
+
+      const manifestIndex = ManifestSkillIndex.getInstance();
+      const manifestFilters: { harness?: string; tags?: string[] } = {};
+      if (harness !== undefined) manifestFilters.harness = harness;
+      if (tags !== undefined) manifestFilters.tags = tags;
+      const manifestResults = manifestIndex.search(query ?? '', manifestFilters);
+
+      // Also search built-in tools by id/description
+      const q = (query ?? '').toLowerCase();
+      const builtinResults = q
+        ? _skillRegistry
+            .listAll()
+            .filter(
+              (s) => s.id.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
+            )
+        : [];
+
+      res.json({
+        builtin: builtinResults,
+        manifest: manifestResults,
+        total: builtinResults.length + manifestResults.length,
+      });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

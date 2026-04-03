@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/byoh-task-output.schema.json",
+  "title": "BYOH Task Output",
+  "description": "JSON payload written by agent containers to stdout (ephemeral mode) or POSTed to .../tasks/:id/complete (persistent mode).",
+  "type": "object",
+  "required": ["taskId", "result"],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "description": "Must match the taskId from the corresponding BYOH Task Input."
+    },
+    "result": {
+      "type": ["string", "null"],
+      "description": "Task output produced by the agent. null when the task failed and an error is present."
+    },
+    "error": {
+      "type": "string",
+      "description": "Human-readable error message describing why the task failed. Omit or set to null on success."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "taskId": "task-abc123",
+      "result": "The README describes a Docker-native multi-agent AI orchestration platform called SERA.",
+      "error": null
+    },
+    {
+      "taskId": "task-def456",
+      "result": null,
+      "error": "LLM proxy returned 429: token budget exhausted for this agent instance"
+    }
+  ]
+}

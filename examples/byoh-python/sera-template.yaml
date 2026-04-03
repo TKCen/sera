@@ -1,0 +1,19 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: byoh-python-example
+  displayName: BYOH Python Example
+  icon: "🐍"
+  builtin: false
+  category: examples
+  description: "Minimal Python agent demonstrating the BYOH contract"
+spec:
+  identity:
+    role: "Example BYOH Python agent"
+  model:
+    name: default
+  sandboxBoundary: tier-1
+  lifecycle:
+    mode: ephemeral
+  sandbox:
+    image: sera-byoh-python:latest

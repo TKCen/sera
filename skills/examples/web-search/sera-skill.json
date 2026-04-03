@@ -1,0 +1,57 @@
+{
+  "$schema": "https://sera.dev/schemas/sera-skill.schema.json",
+  "name": "web-search",
+  "displayName": "Web Search",
+  "description": "Search the web and return ranked results with titles, URLs, and snippets. Use for research, fact-checking, and retrieving up-to-date information.",
+  "version": "1.0.0",
+  "parameters": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "The search query string"
+      },
+      "maxResults": {
+        "type": "number",
+        "description": "Maximum number of results to return (default: 10)",
+        "default": 10,
+        "minimum": 1,
+        "maximum": 50
+      }
+    },
+    "additionalProperties": false
+  },
+  "returns": {
+    "type": "object",
+    "required": ["results"],
+    "properties": {
+      "results": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["title", "url", "snippet"],
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Page title"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Full URL of the result"
+            },
+            "snippet": {
+              "type": "string",
+              "description": "Relevant excerpt from the page"
+            }
+          }
+        }
+      }
+    }
+  },
+  "compatibleHarnesses": ["sera", "langchain"],
+  "tags": ["research", "web", "search"],
+  "author": "SERA Project",
+  "license": "MIT"
+}

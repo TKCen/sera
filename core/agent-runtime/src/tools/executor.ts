@@ -33,6 +33,7 @@ import { webFetchStreaming } from './web-handler.js';
 import type { ToolOutputCallback } from '../centrifugo.js';
 import { spawnSubagent, runTool, executeProxiedTool, isProxyAvailable } from './proxy.js';
 import { HookRunner } from './hooks.js';
+import { skillSearch } from './skill-handler.js';
 
 /** Result of executing a single tool call, including repair metadata. */
 export interface ToolExecutionResult {
@@ -60,6 +61,7 @@ const LOCAL_TOOLS = new Set([
   'spawn-subagent',
   'run-tool',
   'tool-search',
+  'skill-search',
 ]);
 
 /** Tools that modify state — executed with mutual exclusion to prevent races. */
@@ -396,6 +398,9 @@ export class RuntimeToolExecutor implements IToolExecutor {
           break;
         case 'tool-search':
           result = this.searchTools(params['query'] as string);
+          break;
+        case 'skill-search':
+          result = await skillSearch(params);
           break;
         default:
           // Route to core's invoke endpoint for remote tools (ADR-001)

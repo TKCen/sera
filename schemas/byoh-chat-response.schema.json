@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/byoh-chat-response.schema.json",
+  "title": "BYOH Chat Response",
+  "description": "JSON body returned by POST /chat — the optional interactive chat endpoint on AGENT_CHAT_PORT.",
+  "type": "object",
+  "required": ["result"],
+  "properties": {
+    "result": {
+      "type": ["string", "null"],
+      "description": "The assistant's response text. null when an error occurred."
+    },
+    "error": {
+      "type": "string",
+      "description": "Human-readable error message if the chat request failed. Omit or set to null on success."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "result": "The /workspace directory contains: README.md, main.py, requirements.txt",
+      "error": null
+    },
+    {
+      "result": null,
+      "error": "LLM proxy returned 429: token budget exhausted"
+    }
+  ]
+}

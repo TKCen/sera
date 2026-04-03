@@ -1,0 +1,63 @@
+{
+  "$schema": "https://sera.dev/schemas/sera-skill.schema.json",
+  "name": "code-review",
+  "displayName": "Code Review",
+  "description": "Analyze a source file for code quality issues, bugs, and style violations. Returns structured issues with line numbers, severity levels, and actionable suggestions.",
+  "version": "1.0.0",
+  "parameters": {
+    "type": "object",
+    "required": ["filePath"],
+    "properties": {
+      "filePath": {
+        "type": "string",
+        "description": "Absolute or relative path to the source file to review"
+      },
+      "language": {
+        "type": "string",
+        "description": "Programming language override (auto-detected from extension if omitted)",
+        "examples": ["python", "typescript", "go", "rust", "java"]
+      },
+      "focus": {
+        "type": "string",
+        "description": "Optional review focus area (e.g. 'security', 'performance', 'style')"
+      }
+    },
+    "additionalProperties": false
+  },
+  "returns": {
+    "type": "object",
+    "required": ["issues"],
+    "properties": {
+      "issues": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["line", "severity", "message", "suggestion"],
+          "properties": {
+            "line": {
+              "type": "number",
+              "description": "1-based line number where the issue occurs"
+            },
+            "severity": {
+              "type": "string",
+              "enum": ["error", "warning", "info"],
+              "description": "Issue severity level"
+            },
+            "message": {
+              "type": "string",
+              "description": "Description of the issue"
+            },
+            "suggestion": {
+              "type": "string",
+              "description": "Recommended fix or improvement"
+            }
+          }
+        }
+      }
+    }
+  },
+  "compatibleHarnesses": ["sera", "custom"],
+  "tags": ["engineering", "code-quality", "review"],
+  "author": "SERA Project",
+  "license": "MIT"
+}

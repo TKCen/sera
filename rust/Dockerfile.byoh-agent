@@ -1,0 +1,52 @@
+# Multi-stage build for the SERA BYOH Rust Agent
+# Produces a minimal image (~30MB) with a statically-linked binary.
+
+# ── Build Stage ──────────────────────────────────────────────────────────────
+FROM rust:1.82-slim AS builder
+
+WORKDIR /build
+
+# Copy workspace manifests first for dependency caching
+COPY Cargo.toml ./
+COPY crates/sera-domain/Cargo.toml crates/sera-domain/Cargo.toml
+COPY crates/sera-config/Cargo.toml crates/sera-config/Cargo.toml
+COPY crates/sera-byoh-agent/Cargo.toml crates/sera-byoh-agent/Cargo.toml
+
+# Create dummy src files for dependency pre-build
+RUN mkdir -p crates/sera-domain/src crates/sera-config/src crates/sera-byoh-agent/src \
+    && echo "pub fn dummy() {}" > crates/sera-domain/src/lib.rs \
+    && echo "pub fn dummy() {}" > crates/sera-config/src/lib.rs \
+    && echo "fn main() {}" > crates/sera-byoh-agent/src/main.rs
+
+# Pre-build dependencies (cached unless Cargo.toml changes)
+RUN cargo build --release -p sera-byoh-agent 2>/dev/null || true
+
+# Copy real source
+COPY crates/ crates/
+
+# Touch source files to invalidate the dummy build
+RUN touch crates/sera-domain/src/lib.rs \
+    crates/sera-config/src/lib.rs \
+    crates/sera-byoh-agent/src/main.rs
+
+# Build the real binary
+RUN cargo build --release -p sera-byoh-agent
+
+# ── Runtime Stage ────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user matching SERA agent convention
+RUN useradd -m -u 1001 agent
+USER agent
+
+WORKDIR /workspace
+
+COPY --from=builder /build/target/release/sera-byoh-agent /usr/local/bin/sera-byoh-agent
+
+EXPOSE 3100
+
+ENTRYPOINT ["sera-byoh-agent"]

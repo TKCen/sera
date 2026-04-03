@@ -1,0 +1,19 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: byoh-shell-example
+  displayName: BYOH Shell Example
+  icon: "🐚"
+  builtin: false
+  category: examples
+  description: "Minimal POSIX shell agent demonstrating the BYOH contract"
+spec:
+  identity:
+    role: "Example BYOH shell agent"
+  model:
+    name: default
+  sandboxBoundary: tier-1
+  lifecycle:
+    mode: ephemeral
+  sandbox:
+    image: sera-byoh-shell:latest

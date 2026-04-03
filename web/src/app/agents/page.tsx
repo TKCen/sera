@@ -117,13 +117,15 @@ function AgentsPageContent() {
       {/* Filters */}
       <section aria-label="Filters" className="flex items-center gap-3 mb-4">
         <div role="search" className="relative flex-1 max-w-xs">
+          <label htmlFor="search-agents" className="sr-only">
+            Search agents
+          </label>
           <Search
             size={13}
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sera-text-dim pointer-events-none"
           />
           <Input
             id="search-agents"
-            aria-label="Search agents"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search agents…"
@@ -132,35 +134,42 @@ function AgentsPageContent() {
         </div>
 
         {circles.length > 0 && (
-          <select
-            aria-label="Filter by circle"
-            value={filterCircle}
-            onChange={(e) => setFilterCircle(e.target.value)}
-            className="sera-input h-9 py-0 w-auto text-xs"
-          >
-            <option value="all">All circles</option>
-            {circles.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label htmlFor="circle-filter" className="sr-only">
+              Filter by circle
+            </label>
+            <select
+              id="circle-filter"
+              value={filterCircle}
+              onChange={(e) => setFilterCircle(e.target.value)}
+              className="sera-input h-9 py-0 w-auto text-xs"
+            >
+              <option value="all">All circles</option>
+              {circles.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
 
         <nav aria-label="Filter by status" className="flex items-center gap-1">
           {STATUS_OPTIONS.map((s) => (
-            <button
+            <Button
               key={s}
+              variant={filterStatus === s ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={() => setFilterStatus(s)}
               aria-pressed={filterStatus === s}
               className={
                 filterStatus === s
-                  ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
-                  : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                  ? 'h-7 px-2.5 bg-sera-accent-soft text-sera-accent border-sera-accent/20'
+                  : 'h-7 px-2.5 text-xs'
               }
             >
               {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
+            </Button>
           ))}
         </nav>
       </section>

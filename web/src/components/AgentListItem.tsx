@@ -3,6 +3,8 @@ import { Link } from 'react-router';
 import { Bot, Play, Square, Trash2 } from 'lucide-react';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
 import type { AgentInstance } from '@/lib/api/types';
 
 interface AgentListItemProps {
@@ -50,39 +52,44 @@ export const AgentListItem: React.FC<AgentListItemProps> = ({
 
       {/* Quick actions */}
       <div className="relative z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={(e) => {
-            onStart(e, agent.id);
-          }}
-          disabled={isStartPending}
-          className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
-          title="Start"
-          aria-label="Start agent"
-        >
-          <Play size={13} />
-        </button>
-        <button
-          onClick={(e) => {
-            onStop(e, agent.id);
-          }}
-          disabled={isStopPending}
-          className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
-          title="Stop"
-          aria-label="Stop agent"
-        >
-          <Square size={13} />
-        </button>
-        <button
-          onClick={(e) => {
-            onDelete(e, agent.id, agent.name);
-          }}
-          disabled={isDeletePending}
-          className="p-1.5 rounded-md text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
-          title="Delete"
-          aria-label="Delete agent"
-        >
-          <Trash2 size={13} />
-        </button>
+        <Tooltip content="Start Agent">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => onStart(e, agent.id)}
+            disabled={isStartPending}
+            className="h-8 w-8 text-sera-text-muted hover:text-sera-success hover:bg-sera-success/10 transition-colors"
+            aria-label="Start agent"
+          >
+            <Play size={13} />
+          </Button>
+        </Tooltip>
+
+        <Tooltip content="Stop Agent">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => onStop(e, agent.id)}
+            disabled={isStopPending}
+            className="h-8 w-8 text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+            aria-label="Stop agent"
+          >
+            <Square size={13} />
+          </Button>
+        </Tooltip>
+
+        <Tooltip content="Delete Agent">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => onDelete(e, agent.id, agent.name)}
+            disabled={isDeletePending}
+            className="h-8 w-8 text-sera-text-muted hover:text-sera-error hover:bg-sera-error/10 transition-colors"
+            aria-label="Delete agent"
+          >
+            <Trash2 size={13} />
+          </Button>
+        </Tooltip>
       </div>
 
       {/* Row is clickable */}

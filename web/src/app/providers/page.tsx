@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -36,6 +37,7 @@ import {
   DialogDescription,
   DialogClose,
 } from '@/components/ui/dialog';
+import { Tooltip } from '@/components/ui/tooltip';
 import type { ProviderConfig } from '@/lib/api/types';
 import type { ProviderTemplate } from '@/lib/api/providers';
 import { request } from '@/lib/api/client';
@@ -114,10 +116,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor="api-key" className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
+              id="api-key"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -126,8 +129,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label className="text-xs text-sera-text-muted block mb-1">Base URL (optional)</label>
+              <label htmlFor="base-url" className="text-xs text-sera-text-muted block mb-1">
+                Base URL (optional)
+              </label>
               <Input
+                id="base-url"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -216,17 +222,33 @@ function TestConnectionButton({ modelName }: { modelName: string }) {
   };
 
   if (status === 'testing')
-    return <Loader2 size={12} className="animate-spin text-sera-text-muted" />;
-  if (status === 'ok') return <CheckCircle2 size={12} className="text-sera-success" />;
-  if (status === 'fail') return <XCircle size={12} className="text-sera-error" />;
+    return (
+      <div role="status" aria-label="Testing connection">
+        <Loader2 size={12} className="animate-spin text-sera-text-muted" />
+      </div>
+    );
+  if (status === 'ok')
+    return (
+      <div role="status" aria-label="Connection successful">
+        <CheckCircle2 size={12} className="text-sera-success" />
+      </div>
+    );
+  if (status === 'fail')
+    return (
+      <div role="status" aria-label="Connection failed">
+        <XCircle size={12} className="text-sera-error" />
+      </div>
+    );
   return (
-    <button
-      onClick={() => void handleTest()}
-      className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
-      title="Test connection"
-    >
-      <Zap size={12} />
-    </button>
+    <Tooltip content="Test connection">
+      <button
+        onClick={() => void handleTest()}
+        className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
+        aria-label="Test connection"
+      >
+        <Zap size={12} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -268,6 +290,7 @@ function DiscoverButton({ providerName }: { providerName: string }) {
         variant="ghost"
         onClick={() => void handleDiscover()}
         disabled={discover.isPending}
+        aria-label={discover.isPending ? 'Discovering models' : 'Discover models'}
       >
         {discover.isPending ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
         Discover
@@ -386,8 +409,8 @@ export default function ProvidersPage() {
       ) : (
         <div className="space-y-6">
           {Object.entries(grouped).map(([providerName, models]) => (
-            <div key={providerName} className="sera-card-static overflow-hidden">
-              <div className="px-4 py-3 border-b border-sera-border flex items-center gap-2">
+            <Card key={providerName} className="p-0 overflow-hidden">
+              <CardHeader className="px-4 py-3 border-b border-sera-border flex-row items-center gap-2">
                 {providerIcon(providerName)}
                 <span className="text-sm font-semibold text-sera-text capitalize">
                   {providerName}
@@ -396,8 +419,8 @@ export default function ProvidersPage() {
                   {models.length} model{models.length !== 1 ? 's' : ''}
                 </Badge>
                 <DiscoverButton providerName={providerName} />
-              </div>
-              <div className="divide-y divide-sera-border/50">
+              </CardHeader>
+              <CardContent className="divide-y divide-sera-border/50">
                 {models.map((m) => {
                   const isDynamic = !!m.dynamicProviderId;
                   const dpStatus = m.dynamicProviderId
@@ -472,20 +495,22 @@ export default function ProvidersPage() {
                         )}
                         <TestConnectionButton modelName={m.modelName} />
                         {!isDynamic && (
-                          <button
-                            onClick={() => setConfirmDelete(m.modelName)}
-                            className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
-                            title="Delete provider"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <Tooltip content="Delete provider">
+                            <button
+                              onClick={() => setConfirmDelete(m.modelName)}
+                              className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
+                              aria-label="Delete provider"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                     </div>
                   );
                 })}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}

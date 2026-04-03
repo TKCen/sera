@@ -28,7 +28,8 @@ vi.mock('node-pg-migrate', () => {
 });
 
 import { query, initDb } from './database.js';
-import migrate from 'node-pg-migrate';
+import * as migrateModule from 'node-pg-migrate';
+const migrate = (migrateModule as any).default || migrateModule;
 import path from 'path';
 
 describe('database', () => {

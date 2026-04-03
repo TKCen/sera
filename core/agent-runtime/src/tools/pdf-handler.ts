@@ -23,9 +23,10 @@ export async function pdfRead(
     const options = {
       pagerender: (pageData: any) => {
         return pageData.getTextContent().then((textContent: any) => {
-          let lastY, text = '';
+          let lastY,
+            text = '';
           for (let item of textContent.items) {
-            if (lastY == item.transform[5] || !lastY){
+            if (lastY == item.transform[5] || !lastY) {
               text += item.str;
             } else {
               text += '\n' + item.str;
@@ -34,7 +35,7 @@ export async function pdfRead(
           }
           return `\n--- PAGE ${pageData.pageIndex + 1} ---\n${text}`;
         });
-      }
+      },
     };
 
     const data = await pdf(dataBuffer, options);
@@ -46,18 +47,18 @@ export async function pdfRead(
 
     if (pages) {
       const pageSet = parsePageRange(pages, data.numpages);
-      const allPages = text.split(/\n--- PAGE \d+ ---\n/).filter(p => p.trim().length > 0);
+      const allPages = text.split(/\n--- PAGE \d+ ---\n/).filter((p) => p.trim().length > 0);
 
       const filtered = Array.from(pageSet)
         .sort((a, b) => a - b)
-        .filter(p => p >= 1 && p <= allPages.length)
-        .map(p => `--- PAGE ${p} ---\n${allPages[p-1]}`);
+        .filter((p) => p >= 1 && p <= allPages.length)
+        .map((p) => `--- PAGE ${p} ---\n${allPages[p - 1]}`);
 
       text = filtered.join('\n\n');
     }
 
     if (text.trim().length === 0) {
-      return "Warning: No text extracted from PDF. This might be a scanned image PDF. Try image-view instead.";
+      return 'Warning: No text extracted from PDF. This might be a scanned image PDF. Try image-view instead.';
     }
 
     return text;
@@ -72,7 +73,7 @@ function parsePageRange(rangeStr: string, maxPages: number): Set<number> {
 
   for (const part of parts) {
     if (part.includes('-')) {
-      const [start, end] = part.split('-').map(p => parseInt(p.trim()));
+      const [start, end] = part.split('-').map((p) => parseInt(p.trim()));
       const s = isNaN(start) ? 1 : start;
       const e = isNaN(end) ? maxPages : end;
       for (let i = s; i <= e; i++) {

@@ -19,9 +19,9 @@ export async function codeEval(
     // Create a restricted global scope
     const sandbox = {
       console: {
-        log: (...args: any[]) => stdout.push(args.map(a => String(a)).join(' ')),
-        error: (...args: any[]) => stderr.push(args.map(a => String(a)).join(' ')),
-        warn: (...args: any[]) => stderr.push(args.map(a => String(a)).join(' ')),
+        log: (...args: any[]) => stdout.push(args.map((a) => String(a)).join(' ')),
+        error: (...args: any[]) => stderr.push(args.map((a) => String(a)).join(' ')),
+        warn: (...args: any[]) => stderr.push(args.map((a) => String(a)).join(' ')),
       },
       process: undefined,
       Buffer: undefined,
@@ -51,20 +51,26 @@ export async function codeEval(
 
     // Create a promise that rejects after timeout
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Execution timed out after ${actualTimeout}ms`)), actualTimeout)
+      setTimeout(
+        () => reject(new Error(`Execution timed out after ${actualTimeout}ms`)),
+        actualTimeout
+      )
     );
 
     const executionPromise = (async () => {
-       // Function constructor is slightly safer than eval as it doesn't capture local scope
-       const fn = new Function('sandbox', `
+      // Function constructor is slightly safer than eval as it doesn't capture local scope
+      const fn = new Function(
+        'sandbox',
+        `
          with(sandbox) {
            ${language === 'typescript' ? '// Typescript not natively supported in Function, treating as JS\n' : ''}
            return (async () => {
              ${code}
            })()
          }
-       `);
-       return await fn(sandbox);
+       `
+      );
+      return await fn(sandbox);
     })();
 
     result = await Promise.race([executionPromise, timeoutPromise]);
@@ -75,15 +81,18 @@ export async function codeEval(
       result,
       stdout: stdout.join('\n'),
       stderr: stderr.join('\n'),
-      elapsedMs: elapsed
+      elapsedMs: elapsed,
     };
 
     return JSON.stringify(output, null, 2);
-
   } catch (err) {
-    return JSON.stringify({
-      error: err instanceof Error ? err.message : String(err),
-      elapsedMs: Date.now() - start
-    }, null, 2);
+    return JSON.stringify(
+      {
+        error: err instanceof Error ? err.message : String(err),
+        elapsedMs: Date.now() - start,
+      },
+      null,
+      2
+    );
   }
 }

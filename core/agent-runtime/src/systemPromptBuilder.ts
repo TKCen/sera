@@ -4,6 +4,12 @@ import { getEncoding } from 'js-tiktoken';
 import type { RuntimeManifest } from './manifest.js';
 import type { ToolDefinition } from './llmClient.js';
 
+export interface CoreMemoryBlock {
+  name: string;
+  content: string;
+  characterLimit: number;
+}
+
 const tokenizer = getEncoding('cl100k_base');
 
 export interface PromptSection {
@@ -294,6 +300,26 @@ export class SystemPromptBuilder {
     return this.addSection({
       id: 'constraints',
       priority: 120,
+      content: lines.join('\n'),
+      required: true,
+    });
+  }
+
+  /** Core Memory: Letta-style blocks (Optional, Priority 5) */
+  addCoreMemoryBlocks(blocks: CoreMemoryBlock[]): this {
+    if (!blocks.length) return this;
+    const lines = ['<memory_blocks>'];
+    for (const b of blocks) {
+      lines.push(
+        `  <block name="${b.name}" character_count="${b.content.length}" character_limit="${b.characterLimit}">`,
+        `    ${b.content}`,
+        `  </block>`
+      );
+    }
+    lines.push('</memory_blocks>');
+    return this.addSection({
+      id: 'core-memory',
+      priority: 5,
       content: lines.join('\n'),
       required: true,
     });

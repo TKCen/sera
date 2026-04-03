@@ -46,7 +46,7 @@ export async function httpRequest(
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      data: typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+      data: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
     };
 
     return JSON.stringify(output, null, 2);

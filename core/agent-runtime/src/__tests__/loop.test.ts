@@ -48,9 +48,7 @@ describe('ReasoningLoop E2E', () => {
   };
 
   it('completes basic turn with text response', async () => {
-    const llm = new ScriptedLLMClient([
-      { content: 'Hello, how can I help you today?' },
-    ]);
+    const llm = new ScriptedLLMClient([{ content: 'Hello, how can I help you today?' }]);
     const tools = new StaticToolExecutor();
     const publisher = createMockPublisher();
     const loop = new ReasoningLoop(llm, tools, publisher, mockManifest);
@@ -63,7 +61,12 @@ describe('ReasoningLoop E2E', () => {
     expect(output.result).toBe('Hello, how can I help you today?');
     expect(output.exitReason).toBe('success');
     expect(llm.getCallCount()).toBe(1);
-    expect(publisher.publishThought).toHaveBeenCalledWith('observe', expect.stringContaining('Received task'), 0, undefined);
+    expect(publisher.publishThought).toHaveBeenCalledWith(
+      'observe',
+      expect.stringContaining('Received task'),
+      0,
+      undefined
+    );
   });
 
   it('handles tool call cycle', async () => {
@@ -71,7 +74,11 @@ describe('ReasoningLoop E2E', () => {
       {
         content: 'I will echo that.',
         toolCalls: [
-          { id: 'call_1', type: 'function', function: { name: 'echo', arguments: '{"text": "hello"}' } },
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'echo', arguments: '{"text": "hello"}' },
+          },
         ],
       },
       { content: 'Echoed: hello' },
@@ -91,8 +98,18 @@ describe('ReasoningLoop E2E', () => {
     expect(output.result).toBe('Echoed: hello');
     expect(output.exitReason).toBe('success');
     expect(llm.getCallCount()).toBe(2);
-    expect(publisher.publishThought).toHaveBeenCalledWith('act', expect.stringContaining('Calling tool: echo'), 1, expect.any(Object));
-    expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: hello'), 1, undefined);
+    expect(publisher.publishThought).toHaveBeenCalledWith(
+      'act',
+      expect.stringContaining('Calling tool: echo'),
+      1,
+      expect.any(Object)
+    );
+    expect(publisher.publishThought).toHaveBeenCalledWith(
+      'reflect',
+      expect.stringContaining('Tool result: hello'),
+      1,
+      undefined
+    );
   });
 
   it('handles unknown tool call by returning error to LLM', async () => {
@@ -116,15 +133,20 @@ describe('ReasoningLoop E2E', () => {
 
     expect(output.result).toBe('It failed as expected.');
     expect(llm.getCallCount()).toBe(2);
-    expect(publisher.publishThought).toHaveBeenCalledWith('reflect', expect.stringContaining('Tool result: Error: Unknown tool "unknown"'), 1, undefined);
+    expect(publisher.publishThought).toHaveBeenCalledWith(
+      'reflect',
+      expect.stringContaining('Tool result: Error: Unknown tool "unknown"'),
+      1,
+      undefined
+    );
   });
 
   it('injects boot context into message history', async () => {
     const manifestWithBoot: RuntimeManifest = {
       ...mockManifest,
       bootContext: {
-        files: [{ path: 'boot.md', label: 'Boot File' }]
-      }
+        files: [{ path: 'boot.md', label: 'Boot File' }],
+      },
     };
 
     vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -136,7 +158,7 @@ describe('ReasoningLoop E2E', () => {
         capturedMessages = messages;
         return Promise.resolve({ content: 'Acknowledged boot context.' });
       }),
-      getCallCount: () => 1
+      getCallCount: () => 1,
     } as any;
 
     const tools = new StaticToolExecutor();
@@ -148,7 +170,7 @@ describe('ReasoningLoop E2E', () => {
       task: 'Check boot context',
     });
 
-    const bootMsg = capturedMessages.find(m => m.role === 'system' && m.internal === true);
+    const bootMsg = capturedMessages.find((m) => m.role === 'system' && m.internal === true);
     expect(bootMsg).toBeDefined();
     expect(bootMsg.content).toContain('Boot File');
     expect(bootMsg.content).toContain('Boot context content');
@@ -209,9 +231,7 @@ describe('ReasoningLoop E2E', () => {
     expect(llm.getCallCount()).toBe(2);
 
     // Verify vision block injection in the second LLM call
-    const visionMsg = capturedMessages.find(
-      (m) => m.role === 'user' && Array.isArray(m.content)
-    );
+    const visionMsg = capturedMessages.find((m) => m.role === 'user' && Array.isArray(m.content));
     expect(visionMsg).toBeDefined();
     const content = visionMsg!.content as any[];
     expect(content[0].text).toBe('What color is the cat?');

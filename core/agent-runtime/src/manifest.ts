@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { ToolDefinition } from './llmClient.js';
-import { SystemPromptBuilder } from './systemPromptBuilder.js';
+import { SystemPromptBuilder, type CoreMemoryBlock } from './systemPromptBuilder.js';
 
 // ── Minimal Manifest Types (mirrors Core's AgentManifest) ───────────────────
 
@@ -137,6 +137,7 @@ export interface SystemPromptContext {
   circleMembers?: string[];
   circleConstitution?: string;
   availableAgents?: Array<{ name: string; role: string }>;
+  coreMemoryBlocks?: CoreMemoryBlock[];
   tokenBudget?: number;
 }
 
@@ -148,6 +149,11 @@ export function generateSystemPrompt(
   context: SystemPromptContext = {}
 ): string {
   const builder = new SystemPromptBuilder();
+
+  // 0. Core Memory (Priority 5, Required)
+  if (context.coreMemoryBlocks) {
+    builder.addCoreMemoryBlocks(context.coreMemoryBlocks);
+  }
 
   // 1. Identity (Priority 0, Required)
   builder.addIdentity(manifest);

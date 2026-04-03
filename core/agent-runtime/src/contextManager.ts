@@ -303,7 +303,11 @@ export class ContextManager {
   ): number {
     let truncatedCount = 0;
     for (const msg of messages) {
-      if (msg.role === 'tool' && typeof msg.content === 'string' && this.countTokens(msg.content) > maxTokens) {
+      if (
+        msg.role === 'tool' &&
+        typeof msg.content === 'string' &&
+        this.countTokens(msg.content) > maxTokens
+      ) {
         const notice = `\n\n[SERA: tool result retroactively truncated to ${maxTokens} tokens for overflow recovery]`;
         const noticeTokens = this.countTokens(notice);
         msg.content = this.truncateToFit(msg.content, maxTokens - noticeTokens) + notice;
@@ -432,7 +436,9 @@ export class ContextManager {
     let isFallback = false;
     if (this.strategy === 'summarise' && llmClient) {
       // Summarization is only for text. If there are images, skip.
-      const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'image_url'));
+      const hasImages = messages.some(
+        (m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'image_url')
+      );
       if (hasImages) {
         log('info', 'ContextManager: images detected, skipping summarization strategy');
       } else {
@@ -445,7 +451,10 @@ export class ContextManager {
             tokensBefore
           );
         } catch (err) {
-          log('warn', `ContextManager: summarization failed, falling back to sliding-window: ${err}`);
+          log(
+            'warn',
+            `ContextManager: summarization failed, falling back to sliding-window: ${err}`
+          );
           isFallback = true;
         }
       }
@@ -600,7 +609,8 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
 
     const conversationText = oldest
       .map((m) => {
-        const content = typeof m.content === 'string' ? this.stripEnrichment(m.content ?? '') : '[Media Content]';
+        const content =
+          typeof m.content === 'string' ? this.stripEnrichment(m.content ?? '') : '[Media Content]';
         return `${m.role}: ${content}`;
       })
       .join('\n\n');

@@ -30,9 +30,11 @@ describe('New Built-in Tools', () => {
   describe('image-view', () => {
     it('reads an image and returns vision request metadata', async () => {
       const imgPath = path.join(tempDir, 'test.png');
-      fs.writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])); // PNG header
+      fs.writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])); // PNG header
 
-      const result = await executor.executeTool(makeCall('image-view', { path: 'test.png', prompt: 'What is this?' }));
+      const result = await executor.executeTool(
+        makeCall('image-view', { path: 'test.png', prompt: 'What is this?' })
+      );
       expect(result.message.role).toBe('tool');
       const parsed = JSON.parse(result.message.content);
       expect(parsed.__type).toBe('vision_request');
@@ -65,14 +67,21 @@ describe('New Built-in Tools', () => {
     });
 
     it('captures console.log output', async () => {
-      const result = await executor.executeTool(makeCall('code-eval', { code: 'console.log("hello"); return 42' }));
+      const result = await executor.executeTool(
+        makeCall('code-eval', { code: 'console.log("hello"); return 42' })
+      );
       const parsed = JSON.parse(result.message.content);
       expect(parsed.result).toBe(42);
       expect(parsed.stdout).toBe('hello');
     });
 
     it('enforces timeout', async () => {
-      const result = await executor.executeTool(makeCall('code-eval', { code: 'return (async () => { while(true) { await new Promise(r => setTimeout(r, 10)); } })()', timeout: 100 }));
+      const result = await executor.executeTool(
+        makeCall('code-eval', {
+          code: 'return (async () => { while(true) { await new Promise(r => setTimeout(r, 10)); } })()',
+          timeout: 100,
+        })
+      );
       const parsed = JSON.parse(result.message.content);
       expect(parsed.error).toContain('timed out');
     });
@@ -84,17 +93,21 @@ describe('New Built-in Tools', () => {
         status: 200,
         statusText: 'OK',
         headers: { 'content-type': 'application/json' },
-        data: { foo: 'bar' }
+        data: { foo: 'bar' },
       } as any);
 
-      const result = await executor.executeTool(makeCall('http-request', { url: 'https://api.example.com/data' }));
+      const result = await executor.executeTool(
+        makeCall('http-request', { url: 'https://api.example.com/data' })
+      );
       const parsed = JSON.parse(result.message.content);
       expect(parsed.status).toBe(200);
       expect(parsed.data).toBe('{"foo":"bar"}');
     });
 
     it('blocks private addresses', async () => {
-      const result = await executor.executeTool(makeCall('http-request', { url: 'http://192.168.1.1' }));
+      const result = await executor.executeTool(
+        makeCall('http-request', { url: 'http://192.168.1.1' })
+      );
       expect(result.message.content).toContain('not allowed');
     });
   });

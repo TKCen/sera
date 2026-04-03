@@ -19,9 +19,11 @@ import {
   LLMTimeoutError,
 } from './llmClient.js';
 import type { IToolExecutor } from './tools/index.js';
+import axios from 'axios';
 import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
+import type { CoreMemoryBlock } from './systemPromptBuilder.js';
 import { loadBootContext } from './bootContext.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
@@ -93,6 +95,7 @@ export class ReasoningLoop {
   private allToolDefs: ToolDefinition[];
   private contextManager: ContextManager;
   private bootContext: string = '';
+  private coreMemoryBlocks: CoreMemoryBlock[] = [];
 
   /** Set to true when SIGTERM received; loop exits after current step. */
   shutdownRequested = false;
@@ -161,6 +164,27 @@ export class ReasoningLoop {
     this.incomingMessages.push({ source: from, content, channel });
   }
 
+  /** Refresh core memory blocks from Core API. */
+  private async refreshCoreMemory(): Promise<void> {
+    const coreUrl = process.env['SERA_CORE_URL'] || 'http://sera-core:3001';
+    const token = process.env['SERA_IDENTITY_TOKEN'];
+    const agentId = process.env['AGENT_INSTANCE_ID'];
+
+    if (!token || !agentId) return;
+
+    try {
+      const res = await axios.get<CoreMemoryBlock[]>(`${coreUrl}/api/memory/${agentId}/core`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      this.coreMemoryBlocks = res.data;
+    } catch (err) {
+      log(
+        'warn',
+        `Failed to refresh core memory: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   /** Refresh the system prompt with current runtime state. */
   private refreshSystemPrompt(): string {
     const availableAgents = this.manifest.subagents?.allowed?.map((sa) => ({
@@ -173,6 +197,7 @@ export class ReasoningLoop {
       timezone: process.env['TZ'] || 'UTC',
       circleName: this.manifest.metadata.circle,
       availableAgents,
+      coreMemoryBlocks: this.coreMemoryBlocks,
       // Budget: 15% of context window per requirement
       tokenBudget: Math.floor(this.contextManager.getContextWindow() * 0.15),
     });
@@ -184,7 +209,10 @@ export class ReasoningLoop {
   async run(input: TaskInput): Promise<TaskOutput> {
     const { taskId, task, context, history = [] } = input;
 
-    // Refresh prompt to get current UTC time and current tool set
+    // Fetch core memory before starting the loop
+    await this.refreshCoreMemory();
+
+    // Refresh prompt to get current UTC time, current tool set, and core memory
     this.systemPrompt = this.refreshSystemPrompt();
 
     const hasTools = this.toolDefs.length > 0;
@@ -726,6 +754,21 @@ export class ReasoningLoop {
             }
 
             messages.push(result.message);
+
+            // Refresh core memory if a core memory tool was called
+            if (
+              result.toolName === 'core_memory_append' ||
+              result.toolName === 'core_memory_replace'
+            ) {
+              if (!result.message.content.includes('Error:')) {
+                await this.refreshCoreMemory();
+                this.systemPrompt = this.refreshSystemPrompt();
+                // Update the system prompt in the message array
+                if (messages.length > 0 && messages[0].role === 'system') {
+                  messages[0].content = this.systemPrompt;
+                }
+              }
+            }
 
             // Emit reflect thought for argument repair
             if (result.argRepaired) {

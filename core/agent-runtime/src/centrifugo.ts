@@ -36,7 +36,16 @@ export interface ToolOutputEvent {
   durationMs?: number;
 }
 
-export type ToolOutputCallback = (event: ToolOutputEvent) => void;
+export interface ToolResultEvent {
+  toolCallId: string;
+  toolName: string;
+  result: string; // Truncated result
+  duration: number; // Execution time in ms
+  error: boolean;
+  timestamp: string;
+}
+
+export type ToolOutputCallback = (event: ToolOutputEvent | ToolResultEvent) => void;
 
 /** Extended set used internally (not emitted to the spec thought channel). */
 export type InternalStepType = ThoughtType | 'tool-call' | 'tool-result' | 'reasoning';
@@ -105,7 +114,7 @@ export class CentrifugoPublisher {
       anomaly?: boolean;
 
       internal?: boolean;
-    },
+    }
   ): Promise<void> {
     const canonical = this.toCanonicalStep(step);
     const channel = `thoughts:${this.agentId}`;
@@ -133,8 +142,12 @@ export class CentrifugoPublisher {
     await this.publish(channel, data);
   }
 
-  async publishToolOutput(event: ToolOutputEvent): Promise<void> {
-    await this.publish(`tooloutput:${this.agentId}`, event);
+  async publishToolOutput(
+    event: ToolOutputEvent | ToolResultEvent,
+    messageId?: string
+  ): Promise<void> {
+    const channel = `tooloutput:${messageId || this.agentId}`;
+    await this.publish(channel, event);
   }
 
   /** Publish an error completion signal so the web UI can stop the spinner. */

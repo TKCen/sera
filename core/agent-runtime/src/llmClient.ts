@@ -7,6 +7,16 @@
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { log } from './logger.js';
+import {
+  pipe,
+  wrapIdleTimeout,
+  wrapToolNameTrim,
+  wrapToolCallArgumentRepair,
+  wrapSanitizeMalformedToolCalls,
+  wrapReasoningFilter,
+  type Chunk,
+} from './streamWrappers.js';
+import type { Readable } from 'stream';
 
 // ── Error Types ───────────────────────────────────────────────────────────────
 
@@ -71,13 +81,22 @@ export interface ToolDefinition {
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | MessageContentBlock[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   /** Internal messages are hidden from the chat UI (Story 5.12). */
   internal?: boolean;
   /** Estimated token count for this message. */
   tokens?: number;
+}
+
+export interface MessageContentBlock {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: {
+    url: string;
+    detail?: 'auto' | 'low' | 'high';
+  };
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max';
@@ -106,7 +125,7 @@ export interface ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
-    model?: string,
+    model?: string
   ): Promise<LLMResponse>;
 }
 
@@ -116,11 +135,7 @@ export class LLMClient implements ILLMClient {
   private http: AxiosInstance;
   private model: string;
 
-  constructor(
-    coreUrl: string,
-    identityToken: string,
-    model: string,
-  ) {
+  constructor(coreUrl: string, identityToken: string, model: string) {
     const timeoutMs = process.env['LLM_TIMEOUT_MS']
       ? parseInt(process.env['LLM_TIMEOUT_MS'], 10)
       : 120_000;
@@ -130,7 +145,7 @@ export class LLMClient implements ILLMClient {
       baseURL: `${coreUrl}/v1/llm`,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${identityToken}`,
+        Authorization: `Bearer ${identityToken}`,
       },
       timeout: timeoutMs,
     });
@@ -149,7 +164,7 @@ export class LLMClient implements ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
-    model?: string,
+    model?: string
   ): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: model || this.model,
@@ -159,6 +174,7 @@ export class LLMClient implements ILLMClient {
         ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
         ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
       })),
+      stream: true,
     };
 
     if (tools && tools.length > 0) {
@@ -176,53 +192,64 @@ export class LLMClient implements ILLMClient {
     // Debug: log tool names and message roles sent to LLM
     if (tools && tools.length > 0) {
       const toolNames = tools.map((t) => t.function.name).join(', ');
-      log('debug', `LLM request: ${(body['messages'] as unknown[]).length} messages, ${tools.length} tools: [${toolNames}]`);
+      log(
+        'debug',
+        `LLM request: ${(body['messages'] as unknown[]).length} messages, ${tools.length} tools: [${toolNames}]`
+      );
     }
 
     try {
       const res = await this.http.post('/chat/completions', body, {
+        responseType: 'stream',
         ...(timeoutMs ? { timeout: timeoutMs } : {}),
       });
-      const data = res.data as Record<string, unknown>;
 
-      const choices = data['choices'] as Array<Record<string, unknown>> | undefined;
-      const choice = choices?.[0];
-      if (!choice) {
-        return { content: '' };
-      }
+      const rawStream = res.data as Readable;
+      const chunkStream = this.parseSSE(rawStream);
 
-      const message = choice['message'] as Record<string, unknown>;
-      const content = (message['content'] as string | null) || '';
-      const reasoning = (message as Record<string, unknown>)['reasoning_content'] as string | undefined;
+      const idleTimeout =
+        timeoutMs ||
+        (process.env['LLM_TIMEOUT_MS'] ? parseInt(process.env['LLM_TIMEOUT_MS'], 10) : 120_000);
 
-      let toolCalls: ToolCall[] | undefined;
-      const rawToolCalls = message['tool_calls'] as Array<Record<string, unknown>> | undefined;
-      if (rawToolCalls && rawToolCalls.length > 0) {
-        toolCalls = rawToolCalls.map((tc) => {
-          const fn = tc['function'] as Record<string, unknown>;
-          return {
-            id: tc['id'] as string,
-            type: 'function' as const,
-            function: {
-              name: fn['name'] as string,
-              arguments: fn['arguments'] as string,
-            },
-          };
-        });
-      }
+      const wrappedStream = pipe(
+        chunkStream,
+        wrapIdleTimeout(idleTimeout),
+        wrapToolNameTrim(),
+        wrapToolCallArgumentRepair(),
+        wrapSanitizeMalformedToolCalls(),
+        wrapReasoningFilter(thinkingLevel)
+      );
 
-      const rawUsage = data['usage'] as Record<string, number> | undefined;
-      const usage = rawUsage
-        ? {
-            promptTokens: rawUsage['prompt_tokens'] ?? 0,
-            completionTokens: rawUsage['completion_tokens'] ?? 0,
-            cacheCreationTokens: rawUsage['cache_creation_input_tokens'] ?? 0,
-            cacheReadTokens: rawUsage['cache_read_input_tokens'] ?? 0,
-            totalTokens: rawUsage['total_tokens'] ?? 0,
+      let content = '';
+      let reasoning = '';
+      const toolCallsMap = new Map<number, ToolCall>();
+      let usage: LLMResponse['usage'];
+      let citations: LLMResponse['citations'];
+
+      for await (const chunk of wrappedStream) {
+        if (chunk.content) content += chunk.content;
+        if (chunk.reasoning) reasoning += chunk.reasoning;
+        if (chunk.toolCallDelta) {
+          const delta = chunk.toolCallDelta;
+          let tc = toolCallsMap.get(delta.index);
+          if (!tc) {
+            tc = {
+              id: delta.id || '',
+              type: 'function',
+              function: { name: delta.name || '', arguments: '' },
+            };
+            toolCallsMap.set(delta.index, tc);
           }
-        : undefined;
+          if (delta.id) tc.id = delta.id;
+          if (delta.name) tc.function.name = delta.name;
+          if (delta.arguments) tc.function.arguments += delta.arguments;
+        }
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
+      }
 
-      const citations = data['citations'] as Array<{ blockId: string; scope: string; relevance: number }> | undefined;
+      const toolCalls = toolCallsMap.size > 0 ? Array.from(toolCallsMap.values()) : undefined;
 
       return { content, reasoning, toolCalls, usage, citations };
     } catch (err) {
@@ -245,20 +272,88 @@ export class LLMClient implements ILLMClient {
         }
 
         if (status === 503) {
-          throw new ProviderUnavailableError(`LLM provider unavailable (circuit open): ${errorMsg ?? err.message}`);
+          throw new ProviderUnavailableError(
+            `LLM provider unavailable (circuit open): ${errorMsg ?? err.message}`
+          );
         }
 
         // Context overflow detection — HTTP 400 with overflow-related error text
         if (status === 400) {
           const combined = `${errorCode ?? ''} ${errorMsg ?? ''}`.toLowerCase();
           if (OVERFLOW_PATTERNS.some((p) => combined.includes(p))) {
-            throw new ContextOverflowError(`Context window overflow: ${errorMsg ?? errorCode ?? 'context too long'}`);
+            throw new ContextOverflowError(
+              `Context window overflow: ${errorMsg ?? errorCode ?? 'context too long'}`
+            );
           }
         }
 
         throw new Error(`LLM proxy returned ${status}: ${errorMsg ?? err.message}`);
       }
       throw err;
+    }
+  }
+
+  /**
+   * Parse OpenAI-compatible SSE stream into an AsyncIterable of Chunks.
+   */
+  private async *parseSSE(stream: Readable): AsyncIterable<Chunk> {
+    let buffer = '';
+    for await (const chunk of stream) {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+        const dataStr = trimmed.substring(5).trim();
+        if (dataStr === '[DONE]') return;
+
+        try {
+          const data = JSON.parse(dataStr);
+          const chunk: Chunk = {};
+
+          if (data.usage) {
+            chunk.usage = {
+              promptTokens: data.usage.prompt_tokens ?? 0,
+              completionTokens: data.usage.completion_tokens ?? 0,
+              cacheCreationTokens: data.usage.cache_creation_input_tokens ?? 0,
+              cacheReadTokens: data.usage.cache_read_input_tokens ?? 0,
+              totalTokens: data.usage.total_tokens ?? 0,
+            };
+          }
+
+          const choice = data.choices?.[0];
+          if (choice) {
+            const delta = choice.delta;
+            if (delta.content) chunk.content = delta.content;
+            if (delta.reasoning_content) chunk.reasoning = delta.reasoning_content;
+            if (choice.finish_reason) chunk.finishReason = choice.finish_reason;
+
+            if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                yield {
+                  ...chunk,
+                  toolCallDelta: {
+                    index: tc.index,
+                    id: tc.id,
+                    name: tc.function?.name,
+                    arguments: tc.function?.arguments,
+                  },
+                };
+              }
+              continue;
+            }
+          }
+
+          if (Object.keys(chunk).length > 0) {
+            yield chunk;
+          }
+        } catch (e) {
+          log('warn', `Failed to parse SSE data: ${dataStr} - ${e}`);
+        }
+      }
     }
   }
 }

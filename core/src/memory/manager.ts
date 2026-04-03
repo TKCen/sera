@@ -36,13 +36,16 @@ export class MemoryManager {
 
     // Namespace by agent or circle if provided
     let memoryPath = rootPath;
+    let logicalNamespace: string = 'global';
     if (opts?.agentId) {
       memoryPath = path.join(rootPath, 'agents', opts.agentId);
+      logicalNamespace = `personal:${opts.agentId}`;
     } else if (opts?.circleId) {
       memoryPath = path.join(rootPath, 'circles', opts.circleId);
+      logicalNamespace = `circle:${opts.circleId}`;
     }
 
-    this.store = new MemoryBlockStore(memoryPath);
+    this.store = new MemoryBlockStore(memoryPath, logicalNamespace);
     this.vectorService = new VectorService(`memory_${opts?.circleId || opts?.agentId || 'global'}`);
 
     if (opts?.circleId !== undefined) {
@@ -80,7 +83,7 @@ export class MemoryManager {
     if (typeof opts.content !== 'string') throw new Error('opts.content is required');
 
     this.checkRateLimit();
-    const entry = await this.store.addEntry(type, opts);
+    const entry = await this.store.addEntry(type, opts, this.agentId);
     await this.indexEntry(entry);
 
     const auditId = this.agentId || this.circleId;

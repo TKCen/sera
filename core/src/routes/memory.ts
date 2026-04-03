@@ -6,6 +6,8 @@ import { MemoryCompactionService } from '../memory/MemoryCompactionService.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { extractLinks } from '../memory/blocks/scoped-types.js';
 import type { KnowledgeBlock, KnowledgeBlockType } from '../memory/blocks/scoped-types.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
+import { pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';
@@ -531,6 +533,76 @@ export function createMemoryRouter(memoryManager: MemoryManager) {
   });
 
   /** POST /api/memory/:agentId/blocks/:id/promote — copy block to a wider scope */
+  // ── Core Memory Block routes (Story 8.1) ──────────────────────────────────
+
+  /** GET /api/memory/:agentId/core — fetch core memory blocks */
+  router.get('/:agentId/core', async (req, res) => {
+    try {
+      const { agentId } = req.params;
+      const coreMemoryService = CoreMemoryService.getInstance(pool);
+      const blocks = await coreMemoryService.listBlocks(agentId);
+      res.json(blocks);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** PUT /api/memory/:agentId/core/:name — full update (operator use) */
+  router.put('/:agentId/core/:name', async (req, res) => {
+    try {
+      const { agentId, name } = req.params;
+      const { content, characterLimit, isReadOnly } = req.body as {
+        content?: string;
+        characterLimit?: number;
+        isReadOnly?: boolean;
+      };
+      const coreMemoryService = CoreMemoryService.getInstance(pool);
+      const updated = await coreMemoryService.updateBlock(agentId, name, {
+        ...(content !== undefined ? { content } : {}),
+        ...(characterLimit !== undefined ? { characterLimit } : {}),
+        ...(isReadOnly !== undefined ? { isReadOnly } : {}),
+      } as any);
+      res.json(updated);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** PATCH /api/memory/:agentId/core/:name — append/replace update (agent tool use) */
+  router.patch('/:agentId/core/:name', async (req, res) => {
+    try {
+      const { agentId, name } = req.params;
+      const { action, content, oldText, newText } = req.body as {
+        action: 'append' | 'replace';
+        content?: string;
+        oldText?: string;
+        newText?: string;
+      };
+
+      const coreMemoryService = CoreMemoryService.getInstance(pool);
+
+      if (action === 'append') {
+        if (typeof content !== 'string') {
+          return res.status(400).json({ error: 'content is required for append action' });
+        }
+        const updated = await coreMemoryService.appendBlock(agentId, name, content);
+        res.json(updated);
+      } else if (action === 'replace') {
+        if (typeof oldText !== 'string' || typeof newText !== 'string') {
+          return res
+            .status(400)
+            .json({ error: 'oldText and newText are required for replace action' });
+        }
+        const updated = await coreMemoryService.replaceInBlock(agentId, name, oldText, newText);
+        res.json(updated);
+      } else {
+        res.status(400).json({ error: 'invalid action' });
+      }
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.post('/:agentId/blocks/:id/promote', async (req, res) => {
     try {
       const agentId = req.params.agentId as string;

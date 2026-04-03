@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { ToolDefinition } from './llmClient.js';
-import { SystemPromptBuilder } from './systemPromptBuilder.js';
+import { SystemPromptBuilder, type CoreMemoryBlock } from './systemPromptBuilder.js';
 
 // ── Minimal Manifest Types (mirrors Core's AgentManifest) ───────────────────
 
@@ -43,6 +43,10 @@ export interface RuntimeManifest {
     denied?: string[];
     /** Explicit core tools always sent to LLM. Remaining allowed tools are deferred. */
     coreTools?: string[];
+    hooks?: Array<{
+      command: string;
+      events: Array<'before_tool_call' | 'after_tool_call'>;
+    }>;
   };
   skills?: string[];
   logging?: {
@@ -133,14 +137,23 @@ export interface SystemPromptContext {
   circleMembers?: string[];
   circleConstitution?: string;
   availableAgents?: Array<{ name: string; role: string }>;
+  coreMemoryBlocks?: CoreMemoryBlock[];
   tokenBudget?: number;
 }
 
 /**
  * Generate a rich, composable system prompt from a manifest and runtime context.
  */
-export function generateSystemPrompt(manifest: RuntimeManifest, context: SystemPromptContext = {}): string {
+export function generateSystemPrompt(
+  manifest: RuntimeManifest,
+  context: SystemPromptContext = {}
+): string {
   const builder = new SystemPromptBuilder();
+
+  // 0. Core Memory (Priority 5, Required)
+  if (context.coreMemoryBlocks) {
+    builder.addCoreMemoryBlocks(context.coreMemoryBlocks);
+  }
 
   // 1. Identity (Priority 0, Required)
   builder.addIdentity(manifest);
@@ -193,93 +206,4 @@ export function generateSystemPrompt(manifest: RuntimeManifest, context: SystemP
   builder.addOutputFormat(manifest.outputFormat);
 
   return builder.build(context.tokenBudget);
-}
-
-/** Rough heuristic: 1 token ~= 4 characters. Accurate enough for budget trimming. */
-const CHARS_PER_TOKEN_ESTIMATE = 4;
-
-/**
- * Build the workspace context section from contextFiles entries.
- * Respects per-file maxTokens, priority-based budget trimming, and blocks path traversal.
- */
-export function buildContextSection(
-  files: NonNullable<RuntimeManifest['contextFiles']>,
-  workspacePath: string,
-  budgetTokens: number
-): string {
-  type Entry = {
-    path: string;
-    label: string;
-    maxTokens?: number;
-    priority?: 'high' | 'normal' | 'low';
-    content: string;
-    tokens: number;
-    exists: boolean;
-  };
-
-  const entries: Entry[] = files.map((f) => {
-    // Block path traversal (e.g. ../../etc/passwd)
-    const fullPath = path.join(workspacePath, f.path);
-    const resolved = path.resolve(fullPath);
-    const wsResolved = path.resolve(workspacePath);
-    if (!resolved.startsWith(wsResolved + path.sep) && resolved !== wsResolved) {
-      return { ...f, content: `*Path traversal blocked: ${f.path}*`, tokens: 10, exists: false };
-    }
-    let content: string;
-    try {
-      content = fs.readFileSync(fullPath, 'utf-8');
-    } catch {
-      return { ...f, content: `*File not found: ${f.path}*`, tokens: 10, exists: false };
-    }
-    if (f.maxTokens !== undefined) {
-      const maxChars = f.maxTokens * CHARS_PER_TOKEN_ESTIMATE;
-      if (content.length > maxChars) {
-        content = content.substring(0, maxChars) + '\n...(truncated)';
-      }
-    }
-    const tokens = Math.ceil(content.length / CHARS_PER_TOKEN_ESTIMATE);
-    return { ...f, content, tokens, exists: true };
-  });
-
-  let totalTokens = entries.reduce((sum, e) => sum + e.tokens, 0);
-
-  if (totalTokens > budgetTokens) {
-    const lowEntries = entries.filter((e) => (e.priority ?? 'normal') === 'low' && e.exists);
-    for (const entry of lowEntries) {
-      if (totalTokens <= budgetTokens) break;
-      totalTokens -= entry.tokens;
-      entry.content = `*Omitted due to token budget: ${entry.path}*`;
-      entry.tokens = 10;
-      totalTokens += 10;
-    }
-  }
-
-  if (totalTokens > budgetTokens) {
-    const normalEntries = entries.filter(
-      (e) => (e.priority ?? 'normal') === 'normal' && e.exists && e.tokens > 10
-    );
-    const excessTokens = totalTokens - budgetTokens;
-    const normalTotalTokens = normalEntries.reduce((sum, e) => sum + e.tokens, 0);
-    if (normalTotalTokens > 0) {
-      for (const entry of normalEntries) {
-        const reduction = Math.ceil((entry.tokens / normalTotalTokens) * excessTokens);
-        const newTokens = Math.max(entry.tokens - reduction, 50);
-        const newChars = newTokens * 4;
-        if (entry.content.length > newChars) {
-          entry.content = entry.content.substring(0, newChars) + '\n...(truncated)';
-          totalTokens -= entry.tokens - newTokens;
-          entry.tokens = newTokens;
-        }
-      }
-    }
-  }
-
-  const lines = ['## Workspace Context'];
-  for (const entry of entries) {
-    lines.push('');
-    lines.push(`### ${entry.label}`);
-    lines.push(entry.content);
-  }
-
-  return lines.join('\n');
 }

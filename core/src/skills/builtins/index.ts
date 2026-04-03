@@ -2,11 +2,16 @@ import type { SkillRegistry } from '../SkillRegistry.js';
 import type { MemoryManager } from '../../memory/manager.js';
 import { webSearchSkill } from './web-search.js';
 import { webFetchSkill } from './web-fetch.js';
+import { imageViewSkill } from './image-view.js';
+import { pdfReadSkill } from './pdf-read.js';
+import { codeEvalSkill } from './code-eval.js';
+import { httpRequestSkill } from './http-request.js';
 import { fileReadSkill } from './file-read.js';
 import { fileWriteSkill } from './file-write.js';
 import { fileListSkill } from './file-list.js';
 import { createKnowledgeStoreSkill } from './knowledge-store.js';
 import { createKnowledgeQuerySkill } from './knowledge-query.js';
+import { createCoreMemoryAppendSkill, createCoreMemoryReplaceSkill } from './core-memory.js';
 import { shellExecSkill } from './shell-exec.js';
 import { scheduleTaskSkill } from './schedule-task.js';
 import { delegateTaskSkill } from './delegate-task.js';
@@ -22,6 +27,10 @@ export function registerBuiltinSkills(
 ): void {
   registry.register(webSearchSkill);
   registry.register(webFetchSkill);
+  registry.register(imageViewSkill);
+  registry.register(pdfReadSkill);
+  registry.register(codeEvalSkill);
+  registry.register(httpRequestSkill);
   registry.register(fileReadSkill);
   registry.register(fileWriteSkill);
   registry.register(fileListSkill);
@@ -30,4 +39,6 @@ export function registerBuiltinSkills(
   registry.register(delegateTaskSkill);
   registry.register(createKnowledgeStoreSkill());
   registry.register(createKnowledgeQuerySkill());
+  registry.register(createCoreMemoryAppendSkill());
+  registry.register(createCoreMemoryReplaceSkill());
 }

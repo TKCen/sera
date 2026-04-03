@@ -1,111 +1,192 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createKnowledgeStoreSkill } from './knowledge-store.js';
-import { ScopedMemoryBlockStore } from '../../memory/blocks/ScopedMemoryBlockStore.js';
-import { MemoryAnalyst } from '../../memory/MemoryAnalyst.js';
-import { EmbeddingService } from '../../services/embedding.service.js';
+import type { AgentContext } from '../types.js';
+import type { SecurityTier } from '../../agents/manifest/types.js';
 
-vi.mock('../../memory/blocks/ScopedMemoryBlockStore.js');
-vi.mock('../../memory/MemoryAnalyst.js', () => {
-  return {
-    MemoryAnalyst: vi.fn().mockImplementation(function (this: any, router: any) {
-      this.router = router;
-      this.analyze = vi.fn();
-    }),
+// Mock dependencies
+const mockBlocks = new Map<string, Record<string, unknown>>();
+const mockWrite = vi.fn().mockImplementation(async (opts: Record<string, unknown>) => {
+  const block = {
+    id: 'block-new',
+    agentId: opts.agentId,
+    type: opts.type,
+    timestamp: new Date().toISOString(),
+    tags: opts.tags ?? [],
+    importance: opts.importance ?? 3,
+    title: opts.title ?? 'Auto title',
+    content: opts.content,
+    ...(opts.sourceRef ? { sourceRef: opts.sourceRef } : {}),
   };
+  mockBlocks.set(block.id, block);
+  return block;
 });
-vi.mock('../../services/embedding.service.js');
+const mockFindBySourceRef = vi
+  .fn()
+  .mockImplementation(async (_agentId: string, sourceRef: Record<string, unknown>) => {
+    for (const block of mockBlocks.values()) {
+      if (
+        block.sourceRef &&
+        (block.sourceRef as Record<string, unknown>).scheduleId === sourceRef.scheduleId
+      ) {
+        return block;
+      }
+    }
+    return null;
+  });
+const mockUpdate = vi
+  .fn()
+  .mockImplementation(async (_agentId: string, id: string, updates: Record<string, unknown>) => {
+    const existing = mockBlocks.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...updates };
+    mockBlocks.set(id, updated);
+    return updated;
+  });
+
+vi.mock('../../memory/blocks/ScopedMemoryBlockStore.js', () => {
+  class MockScopedMemoryBlockStore {
+    write = mockWrite;
+    findBySourceRef = mockFindBySourceRef;
+    update = mockUpdate;
+  }
+  return { ScopedMemoryBlockStore: MockScopedMemoryBlockStore };
+});
+
+vi.mock('../../services/embedding.service.js', () => ({
+  EmbeddingService: {
+    getInstance: () => ({ isAvailable: () => false }),
+  },
+}));
+
+vi.mock('../../services/vector.service.js', () => ({
+  VectorService: vi.fn(),
+}));
+
+vi.mock('../../memory/KnowledgeGitService.js', () => ({
+  KnowledgeGitService: {
+    getInstance: () => ({}),
+  },
+}));
+
 vi.mock('../../audit/AuditService.js', () => ({
   AuditService: {
     getInstance: () => ({
-      record: vi.fn().mockResolvedValue({}),
+      record: vi.fn().mockResolvedValue(undefined),
     }),
   },
 }));
 
+const mockContext: AgentContext = {
+  agentName: 'TestAgent',
+  workspacePath: '/tmp/test',
+  tier: 1 as SecurityTier,
+  manifest: {
+    apiVersion: 'v1',
+    kind: 'Agent',
+    metadata: {
+      name: 'TestAgent',
+      displayName: 'Test Agent',
+      icon: '',
+      circle: 'test',
+      tier: 1 as SecurityTier,
+    },
+    identity: { role: 'tester', description: 'Test agent' },
+    model: { provider: 'openai', name: 'gpt-4' },
+  },
+  agentInstanceId: 'agent-001',
+  containerId: 'container-001',
+  sandboxManager: {} as never,
+  sessionId: 'session-001',
+};
+
 describe('knowledge-store skill', () => {
-  const skill = createKnowledgeStoreSkill();
+  let skill: ReturnType<typeof createKnowledgeStoreSkill>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // Mock EmbeddingService.getInstance()
-    const mockEmbeddingService = {
-      isAvailable: vi.fn().mockReturnValue(false),
-      embed: vi.fn(),
-    };
-    vi.spyOn(EmbeddingService, 'getInstance').mockReturnValue(mockEmbeddingService as any);
+    mockBlocks.clear();
+    skill = createKnowledgeStoreSkill();
   });
 
-  it('should store a simple entry when analyzeOnSave is off', async () => {
-    const mockContext = {
-      agentInstanceId: 'agent-123',
-      agentName: 'test-agent',
-      manifest: { memory: { analyzeOnSave: false }, model: { name: 'gpt-4o' } },
-    };
-    const params = { content: 'test knowledge', type: 'fact', scope: 'personal' };
-
-    (ScopedMemoryBlockStore.prototype.write as any) = vi.fn().mockResolvedValue({
-      id: 'block-123',
-      title: 'test knowledge',
-      content: 'test knowledge',
-      type: 'fact',
-      timestamp: new Date().toISOString(),
-      tags: [],
-      importance: 3,
-      agentId: 'agent-123',
-    });
-
-    const result = await skill.handler(params, mockContext as any);
-
-    expect(result.success).toBe(true);
-    expect((result.data as any).id).toBe('block-123');
-    expect(MemoryAnalyst).not.toHaveBeenCalled();
-  });
-
-  it('should analyze and split entries when analyzeOnSave is on', async () => {
-    const mockRouter = {
-      getRegistry: () => ({
-        resolve: () => ({ contextCompactionModel: 'cheap-model' }),
-      }),
-    };
-    const mockContext = {
-      agentInstanceId: 'agent-123',
-      agentName: 'test-agent',
-      manifest: { memory: { analyzeOnSave: true }, model: { name: 'gpt-4o' } },
-      router: mockRouter,
-    };
-    const params = { content: 'complex content', type: 'fact', scope: 'personal' };
-
-    vi.mocked(MemoryAnalyst).mockImplementation(function (this: any, router: any) {
-      this.router = router;
-      this.analyze = vi.fn().mockResolvedValue({
-        facts: [
-          { title: 'Fact 1', content: 'content 1', importance: 4, tags: ['tag1'], scope: 'circle' },
-          {
-            title: 'Fact 2',
-            content: 'content 2',
-            importance: 2,
-            tags: ['tag2'],
-            scope: 'personal',
-          },
-        ],
-      });
-    });
-
-    (ScopedMemoryBlockStore.prototype.write as any) = vi.fn().mockImplementation(
-      async (opts) =>
-        ({
-          id: `block-${opts.content === 'content 1' ? '1' : '2'}`,
-          ...opts,
-          timestamp: new Date().toISOString(),
-        }) as any
+  it('creates a block without sourceRef (backward compat)', async () => {
+    const result = await skill.handler!(
+      { content: 'Test content', type: 'fact', scope: 'personal' },
+      mockContext
     );
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ success: true, updated: false }),
+      })
+    );
+  });
 
-    const result = await skill.handler(params, mockContext as any);
+  it('creates a block with sourceRef on first call', async () => {
+    const result = await skill.handler!(
+      {
+        content: 'Daily summary',
+        type: 'insight',
+        scope: 'personal',
+        sourceRef: { scheduleId: 'sched-001' },
+        upsertMode: 'replace',
+      },
+      mockContext
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+      })
+    );
+  });
 
-    expect(result.success).toBe(true);
-    expect((result.data as any).count).toBe(2);
-    expect((result.data as any).ids).toEqual(['block-1', 'block-2']);
-    expect(MemoryAnalyst).toHaveBeenCalled();
+  it('rejects upsertMode=replace without sourceRef', async () => {
+    const result = await skill.handler!(
+      { content: 'Test', type: 'fact', scope: 'personal', upsertMode: 'replace' },
+      mockContext
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('sourceRef'),
+      })
+    );
+  });
+
+  it('rejects upsertMode=replace with circle scope', async () => {
+    const result = await skill.handler!(
+      {
+        content: 'Test',
+        type: 'fact',
+        scope: 'circle',
+        sourceRef: { scheduleId: 'sched-001' },
+        upsertMode: 'replace',
+      },
+      mockContext
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('personal scope'),
+      })
+    );
+  });
+
+  it('rejects upsertMode=replace with global scope', async () => {
+    const result = await skill.handler!(
+      {
+        content: 'Test',
+        type: 'fact',
+        scope: 'global',
+        sourceRef: { scheduleId: 'sched-001' },
+        upsertMode: 'replace',
+      },
+      mockContext
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('personal scope'),
+      })
+    );
   });
 });

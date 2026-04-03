@@ -18,6 +18,16 @@ describe('CleanupService', () => {
       teardown: vi.fn(),
     } as unknown as Mocked<SandboxManager>;
 
+    mockRegistry = {
+      listInstances: vi.fn().mockResolvedValue([]),
+      updateInstanceStatus: vi.fn(),
+      deleteExpiredPermissionGrants: vi.fn().mockResolvedValue([]),
+    } as unknown as Mocked<AgentRegistry>;
+
+    mockSandboxManager = {
+      teardown: vi.fn(),
+    } as unknown as Mocked<SandboxManager>;
+
     cleanupService = new CleanupService();
     cleanupService.setRegistry(mockRegistry);
     cleanupService.setSandboxManager(mockSandboxManager);
@@ -73,5 +83,10 @@ describe('CleanupService', () => {
     await cleanupService.runCleanupJob();
     expect(mockSandboxManager.teardown).toHaveBeenCalledWith('agent-1');
     expect(mockRegistry.updateInstanceStatus).toHaveBeenCalledWith('agent-1', 'error');
+  });
+
+  it('should clean up expired permission grants', async () => {
+    await cleanupService.runCleanupJob();
+    expect(mockRegistry.deleteExpiredPermissionGrants).toHaveBeenCalled();
   });
 });

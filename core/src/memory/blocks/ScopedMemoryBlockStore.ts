@@ -16,6 +16,7 @@ import type {
   KnowledgeBlockListFilters,
   KnowledgeBlockType,
   Importance,
+  SourceRef,
 } from './scoped-types.js';
 import { KNOWLEDGE_BLOCK_TYPES } from './scoped-types.js';
 
@@ -42,6 +43,7 @@ export class ScopedMemoryBlockStore {
       importance: block.importance,
       title: block.title,
       ...(block.compacted !== undefined ? { compacted: block.compacted } : {}),
+      ...(block.sourceRef !== undefined ? { sourceRef: block.sourceRef } : {}),
     };
     return matter.stringify(block.content, frontmatter);
   }
@@ -64,6 +66,7 @@ export class ScopedMemoryBlockStore {
         title: (d['title'] as string | undefined) ?? '',
         content: parsed.content.trim(),
         ...(d['compacted'] !== undefined ? { compacted: d['compacted'] as boolean } : {}),
+        ...(d['sourceRef'] !== undefined ? { sourceRef: d['sourceRef'] as SourceRef } : {}),
       };
     } catch (err) {
       logger.warn(`Failed to parse memory block at ${filePath}:`, err);
@@ -87,6 +90,7 @@ export class ScopedMemoryBlockStore {
       importance: opts.importance ?? 3,
       title: opts.title ?? opts.content.slice(0, 80).replace(/\n/g, ' '),
       content: opts.content,
+      ...(opts.sourceRef !== undefined ? { sourceRef: opts.sourceRef } : {}),
     };
     await this.ensureDir(block.agentId, block.type);
     const filePath = path.join(this.blockDir(block.agentId, block.type), this.fileName(block));
@@ -199,6 +203,27 @@ export class ScopedMemoryBlockStore {
 
     results.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     return results;
+  }
+
+  /**
+   * Find a block by its sourceRef metadata (e.g. scheduleId).
+   * Scans the agent's blocks, optionally narrowing to a single type directory.
+   */
+  async findBySourceRef(
+    agentId: string,
+    sourceRef: SourceRef,
+    type?: KnowledgeBlockType
+  ): Promise<KnowledgeBlock | null> {
+    const blocks = await this.list(agentId, type ? { type } : undefined);
+    if (!sourceRef.scheduleId && !sourceRef.taskId && !sourceRef.blockId) return null;
+    for (const block of blocks) {
+      if (!block.sourceRef) continue;
+      const sr = block.sourceRef;
+      if (sourceRef.scheduleId && sr.scheduleId === sourceRef.scheduleId) return block;
+      if (sourceRef.taskId && sr.taskId === sourceRef.taskId) return block;
+      if (sourceRef.blockId && sr.blockId === sourceRef.blockId) return block;
+    }
+    return null;
   }
 
   /** Update an existing block's mutable fields (title, content, tags, importance). */

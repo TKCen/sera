@@ -6,8 +6,9 @@ import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
 import { WorkerAgent } from './WorkerAgent.js';
 import type { BaseAgent } from './BaseAgent.js';
 import type { AgentInstance } from './types.js';
-import { query } from '../lib/database.js';
+import { query, pool } from '../lib/database.js';
 import { MemoryManager } from '../memory/manager.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
 import type { LlmRouter } from '../llm/LlmRouter.js';
 
 export class AgentFactory {
@@ -53,6 +54,9 @@ export class AgentFactory {
        VALUES ($1, $2, $3, $4, 'active', $5, $5, $6)`,
       [id, templateName, name, finalWorkspacePath, now, circleId]
     );
+
+    // Epic 08: Initialize core memory blocks
+    await CoreMemoryService.getInstance(pool).initializeDefaultBlocks(id);
 
     return {
       id,

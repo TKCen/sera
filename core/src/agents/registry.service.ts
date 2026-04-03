@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import type { AgentTemplate, NamedList, CapabilityPolicy, SandboxBoundary } from './schemas.js';
 import type { AgentInstance } from './types.js';
 import { ScheduleService } from '../services/ScheduleService.js';
+import { CoreMemoryService } from '../memory/CoreMemoryService.js';
 import { DEFAULT_HOURLY_QUOTA, DEFAULT_DAILY_QUOTA } from '../metering/MeteringService.js';
 
 import { Logger } from '../lib/logger.js';
@@ -228,6 +229,9 @@ export class AgentRegistry {
 
     // Sync manifest budget limits to token_quotas
     await this.syncManifestBudget(instance.id, templateSpec);
+
+    // Epic 08: Initialize core memory blocks
+    await CoreMemoryService.getInstance(this.pool).initializeDefaultBlocks(instance.id);
 
     return instance;
   }
@@ -642,10 +646,17 @@ export class AgentRegistry {
     agentInstanceId: string
   ): Promise<Array<{ id: string; value: string; grant_type: string }>> {
     const res = await this.pool.query(
-      `SELECT id, value, grant_type
+      `SELECT id, value, grant_type, created_at
        FROM capability_grants
        WHERE agent_instance_id = $1
          AND dimension = 'filesystem'
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > NOW())
+       UNION ALL
+       SELECT id, resource_value AS value, grant_type, created_at
+       FROM permission_grants
+       WHERE agent_instance_id = $1
+         AND resource_type = 'filesystem'
          AND revoked_at IS NULL
          AND (expires_at IS NULL OR expires_at > NOW())
        ORDER BY created_at DESC`,
@@ -660,6 +671,58 @@ export class AgentRegistry {
       [grantId]
     );
     return res.rows[0];
+  }
+
+  // ── Permission Grants (ADR-004) ──────────────────────────────────────────
+
+  async createPermissionGrant(data: {
+    agentInstanceId: string;
+    grantType: 'session' | 'one-time' | 'persistent';
+    resourceType: string;
+    resourceValue: string;
+    mode?: string | undefined;
+    approvedBy?: string | undefined;
+    expiresAt?: string | undefined;
+  }) {
+    const query = `
+      INSERT INTO permission_grants
+        (agent_instance_id, grant_type, resource_type, resource_value, mode, approved_by, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *;
+    `;
+    const res = await this.pool.query(query, [
+      data.agentInstanceId,
+      data.grantType,
+      data.resourceType,
+      data.resourceValue,
+      data.mode ?? 'ro',
+      data.approvedBy ?? null,
+      data.expiresAt ?? null,
+    ]);
+    return res.rows[0];
+  }
+
+  async listActivePermissionGrants(agentInstanceId?: string): Promise<unknown[]> {
+    let query = `
+      SELECT * FROM permission_grants
+      WHERE revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > NOW())
+    `;
+    const params: any[] = [];
+    if (agentInstanceId) {
+      query += ' AND agent_instance_id = $1';
+      params.push(agentInstanceId);
+    }
+    query += ' ORDER BY created_at DESC';
+    const res = await this.pool.query(query, params);
+    return res.rows;
+  }
+
+  async deleteExpiredPermissionGrants() {
+    const res = await this.pool.query(
+      'DELETE FROM permission_grants WHERE expires_at < NOW() RETURNING *'
+    );
+    return res.rows;
   }
 
   // ── Workspace Usage (Story 3.12) ─────────────────────────────────────────

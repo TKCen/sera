@@ -19,9 +19,11 @@ import {
   LLMTimeoutError,
 } from './llmClient.js';
 import type { IToolExecutor } from './tools/index.js';
+import axios from 'axios';
 import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
 import { generateSystemPrompt } from './manifest.js';
+import type { CoreMemoryBlock } from './systemPromptBuilder.js';
 import { loadBootContext } from './bootContext.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
@@ -93,6 +95,7 @@ export class ReasoningLoop {
   private allToolDefs: ToolDefinition[];
   private contextManager: ContextManager;
   private bootContext: string = '';
+  private coreMemoryBlocks: CoreMemoryBlock[] = [];
 
   /** Set to true when SIGTERM received; loop exits after current step. */
   shutdownRequested = false;
@@ -161,6 +164,27 @@ export class ReasoningLoop {
     this.incomingMessages.push({ source: from, content, channel });
   }
 
+  /** Refresh core memory blocks from Core API. */
+  private async refreshCoreMemory(): Promise<void> {
+    const coreUrl = process.env['SERA_CORE_URL'] || 'http://sera-core:3001';
+    const token = process.env['SERA_IDENTITY_TOKEN'];
+    const agentId = process.env['AGENT_INSTANCE_ID'];
+
+    if (!token || !agentId) return;
+
+    try {
+      const res = await axios.get<CoreMemoryBlock[]>(`${coreUrl}/api/memory/${agentId}/core`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      this.coreMemoryBlocks = res.data;
+    } catch (err) {
+      log(
+        'warn',
+        `Failed to refresh core memory: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   /** Refresh the system prompt with current runtime state. */
   private refreshSystemPrompt(): string {
     const availableAgents = this.manifest.subagents?.allowed?.map((sa) => ({
@@ -173,6 +197,7 @@ export class ReasoningLoop {
       timezone: process.env['TZ'] || 'UTC',
       circleName: this.manifest.metadata.circle,
       availableAgents,
+      coreMemoryBlocks: this.coreMemoryBlocks,
       // Budget: 15% of context window per requirement
       tokenBudget: Math.floor(this.contextManager.getContextWindow() * 0.15),
     });
@@ -184,7 +209,10 @@ export class ReasoningLoop {
   async run(input: TaskInput): Promise<TaskOutput> {
     const { taskId, task, context, history = [] } = input;
 
-    // Refresh prompt to get current UTC time and current tool set
+    // Fetch core memory before starting the loop
+    await this.refreshCoreMemory();
+
+    // Refresh prompt to get current UTC time, current tool set, and core memory
     this.systemPrompt = this.refreshSystemPrompt();
 
     const hasTools = this.toolDefs.length > 0;
@@ -226,9 +254,7 @@ export class ReasoningLoop {
     };
 
     // Build initial message array
-    const messages: ChatMessage[] = [
-      { role: 'system', content: this.systemPrompt },
-    ];
+    const messages: ChatMessage[] = [{ role: 'system', content: this.systemPrompt }];
 
     if (this.bootContext) {
       messages.push({
@@ -639,7 +665,7 @@ export class ReasoningLoop {
           // Execute tools and add results
 
           const onToolOutput: ToolOutputCallback = (event) => {
-            this.centrifugo.publishToolOutput(event).catch((err) => {
+            this.centrifugo.publishToolOutput(event, taskId).catch((err) => {
               log(
                 'warn',
                 `Failed to publish tool output: ${err instanceof Error ? err.message : String(err)}`
@@ -648,6 +674,59 @@ export class ReasoningLoop {
           };
           const toolResults = await this.tools.executeToolCalls(response.toolCalls, onToolOutput);
           for (const result of toolResults) {
+            // Handle image-view vision request (#NEW)
+            if (
+              result.toolName === 'image-view' &&
+              result.message.content.includes('"vision_request"')
+            ) {
+              try {
+                const parsed = JSON.parse(result.message.content);
+                if (parsed.__type === 'vision_request') {
+                  const hasVision =
+                    this.manifest.model.name.toLowerCase().includes('vision') ||
+                    this.manifest.model.name.toLowerCase().includes('gpt-4o') ||
+                    this.manifest.model.name.toLowerCase().includes('claude-3');
+
+                  if (!hasVision) {
+                    result.message.content =
+                      'Error: Current model does not support vision/image analysis. Please switch to a vision-capable model.';
+                  } else {
+                    // Inject a vision block in the NEXT turn's user message
+                    // We transform the tool result into a directive for the loop
+                    // But for now, we'll follow the requirement to return it as a vision content block.
+                    // Actually, the requirement says "Include as a vision content block in the next LLM call"
+                    // and "The image content block should be added as a user message with image_url type"
+
+                    // We can't easily add a user message *between* tool results and the next LLM call in this loop
+                    // without modifying how messages are handled.
+                    // Strategy: Replace the tool result content with a placeholder,
+                    // and push a NEW user message with the image block.
+
+                    result.message.content = `[Image "${parsed.path}" loaded and sent to model for analysis]`;
+                    messages.push(result.message);
+
+                    const visionPrompt = parsed.prompt || 'Analyze this image.';
+                    messages.push({
+                      role: 'user',
+                      content: [
+                        { type: 'text', text: visionPrompt },
+                        { type: 'image_url', image_url: { url: parsed.image_url } },
+                      ],
+                    });
+
+                    await think(
+                      'reflect',
+                      `Image "${parsed.path}" loaded and injected into conversation`,
+                      iteration
+                    );
+                    continue; // Skip standard message.push below
+                  }
+                }
+              } catch (e) {
+                // Not a valid vision request JSON, treat as regular text
+              }
+            }
+
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
             result.message.content = this.contextManager.truncateToolOutput(result.message.content);
 
@@ -675,6 +754,21 @@ export class ReasoningLoop {
             }
 
             messages.push(result.message);
+
+            // Refresh core memory if a core memory tool was called
+            if (
+              result.toolName === 'core_memory_append' ||
+              result.toolName === 'core_memory_replace'
+            ) {
+              if (!result.message.content.includes('Error:')) {
+                await this.refreshCoreMemory();
+                this.systemPrompt = this.refreshSystemPrompt();
+                // Update the system prompt in the message array
+                if (messages.length > 0 && messages[0].role === 'system') {
+                  messages[0].content = this.systemPrompt;
+                }
+              }
+            }
 
             // Emit reflect thought for argument repair
             if (result.argRepaired) {

@@ -203,6 +203,7 @@ vi.mock('../agents/Orchestrator.js', () => {
       setCircleContextResolver = vi.fn();
       setHeartbeatService = vi.fn();
       setCleanupService = vi.fn();
+      setDiskQuotaService = vi.fn();
       setPrimaryAgent = vi.fn();
       registerAgent = vi.fn();
       watchAgentsDirectory = vi.fn();

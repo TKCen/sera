@@ -20,6 +20,7 @@ import { AuditService } from '../audit/AuditService.js';
 import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
 import type { HeartbeatService } from './HeartbeatService.js';
 import type { CleanupService } from './CleanupService.js';
+import type { DiskQuotaService } from './DiskQuotaService.js';
 
 const logger = new Logger('Orchestrator');
 
@@ -52,22 +53,14 @@ export class Orchestrator {
   private llmRouter: LlmRouter | undefined;
   private heartbeatService: HeartbeatService | undefined;
   private cleanupService: CleanupService | undefined;
+  private diskQuotaService: DiskQuotaService | undefined;
   private circleContextResolver: ((circleName: string) => string | undefined) | undefined;
-  private diskQuotaInterval: NodeJS.Timeout | undefined;
 
   /** Active file watcher */
   private watcher: fs.FSWatcher | undefined;
   private agentsDir: string | undefined;
 
-  constructor() {
-    // Story 3.12 — periodic disk quota check (every 15 min)
-    this.diskQuotaInterval = setInterval(
-      () => {
-        this.runDiskQuotaCheck().catch((err) => logger.error('Disk quota check error:', err));
-      },
-      15 * 60 * 1000
-    );
-  }
+  constructor() {}
 
   public setRegistry(registry: AgentRegistry): void {
     this.registry = registry;
@@ -83,6 +76,10 @@ export class Orchestrator {
 
   public setCleanupService(service: CleanupService): void {
     this.cleanupService = service;
+  }
+
+  public setDiskQuotaService(service: DiskQuotaService): void {
+    this.diskQuotaService = service;
   }
 
   public setCircleContextResolver(resolver: (circleName: string) => string | undefined): void {
@@ -603,63 +600,6 @@ export class Orchestrator {
 
   // ── Story 3.12: Disk Quota ───────────────────────────────────────────────
 
-  private async runDiskQuotaCheck(): Promise<void> {
-    if (!this.registry) return;
-
-    const running = await this.registry.listInstances({ status: 'running' });
-    const throttled = await this.registry.listInstances({ status: 'throttled' });
-
-    for (const instance of [...running, ...throttled]) {
-      const caps = instance.resolved_capabilities as ResolvedCapabilities;
-      const limitGB: number | undefined = caps?.filesystem?.maxWorkspaceSizeGB;
-
-      const workspacePath = instance.workspace_path;
-      if (!workspacePath) continue;
-
-      // Log startup warning if no limit is set and agent has write access (Story 3.12)
-      if (!limitGB && caps?.filesystem?.write) {
-        logger.warn(
-          `Agent ${instance.name} has filesystem.write but no maxWorkspaceSizeGB — no quota enforced`
-        );
-        continue;
-      }
-
-      if (!limitGB) continue;
-
-      let usedGB = 0;
-      try {
-        const duOutput = execSync(
-          `du -s --block-size=1G "${workspacePath}" 2>/dev/null || echo "0"`,
-          {
-            encoding: 'utf-8',
-            shell: '/bin/sh',
-          }
-        );
-        usedGB = parseInt(duOutput.split('\t')[0] ?? '0', 10) || 0;
-      } catch {
-        // du not available (Windows dev env) — skip
-        continue;
-      }
-
-      await this.registry.updateWorkspaceUsage(instance.id, usedGB);
-
-      const isEphemeral = instance.lifecycle_mode === 'ephemeral';
-
-      if (usedGB >= limitGB) {
-        if (!isEphemeral || instance.status !== 'throttled') {
-          await this.registry.updateInstanceStatus(instance.id, 'throttled');
-          this.publishLifecycleEvent('throttled', instance.id, instance.name);
-          logger.warn(`Agent ${instance.name} exceeded disk quota: ${usedGB}GB / ${limitGB}GB`);
-        }
-      } else if ((instance.status as string) === 'throttled') {
-        // Usage dropped below limit — restore to running
-        await this.registry.updateInstanceStatus(instance.id, 'running');
-        this.publishLifecycleEvent('running', instance.id, instance.name);
-        logger.info(`Agent ${instance.name} usage back within quota: ${usedGB}GB / ${limitGB}GB`);
-      }
-    }
-  }
-
   // ── Docker Events (Story 3.5) ────────────────────────────────────────────
 
   public async startDockerEventListener(): Promise<void> {
@@ -712,7 +652,11 @@ export class Orchestrator {
 
   // ── Centrifugo publish ───────────────────────────────────────────────────
 
-  private publishLifecycleEvent(
+  /**
+   * Publish an agent lifecycle event to Centrifugo.
+   * Story 3.5
+   */
+  public publishLifecycleEvent(
     type: string,
     instanceId: string,
     agentName?: string,
@@ -798,7 +742,7 @@ export class Orchestrator {
 
   public async stop(): Promise<void> {
     if (this.cleanupService) this.cleanupService.stop();
-    if (this.diskQuotaInterval) clearInterval(this.diskQuotaInterval);
+    if (this.diskQuotaService) this.diskQuotaService.stop();
     if (this.watcher) {
       this.watcher.close();
       this.watcher = undefined;

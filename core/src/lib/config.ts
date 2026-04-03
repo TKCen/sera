@@ -51,7 +51,6 @@ function loadProvidersConfig(): ProvidersConfig {
   return defaultProvidersConfig;
 }
 
-
 export const config = {
   // Legacy single-provider access (used by OpenAIProvider)
   get llm(): LLMConfig {

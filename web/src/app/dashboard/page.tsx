@@ -90,7 +90,10 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
     return (
       <Tooltip content="All platform services are responding normally.">
         <div
-          className={cn(commonClasses, 'bg-sera-success/10 border-sera-success/20 text-sera-success')}
+          className={cn(
+            commonClasses,
+            'bg-sera-success/10 border-sera-success/20 text-sera-success'
+          )}
           role="status"
           aria-live="polite"
         >

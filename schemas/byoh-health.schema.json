@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/byoh-health.schema.json",
+  "title": "BYOH Health Response",
+  "description": "JSON body returned by GET /health — the mandatory health endpoint that all harnesses must implement on AGENT_CHAT_PORT.",
+  "type": "object",
+  "required": ["ready", "busy"],
+  "properties": {
+    "ready": {
+      "type": "boolean",
+      "description": "true when the harness has finished initialising and can accept tasks. sera-core waits for ready:true before marking the instance as running."
+    },
+    "busy": {
+      "type": "boolean",
+      "description": "true while a task is actively being executed. false when idle and able to accept a new task."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "ready": true,
+      "busy": false
+    },
+    {
+      "ready": true,
+      "busy": true
+    },
+    {
+      "ready": false,
+      "busy": false
+    }
+  ]
+}

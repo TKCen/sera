@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/byoh-chat-request.schema.json",
+  "title": "BYOH Chat Request",
+  "description": "JSON body for POST /chat — the optional interactive chat endpoint that harnesses may implement on AGENT_CHAT_PORT.",
+  "type": "object",
+  "required": ["message", "sessionId"],
+  "properties": {
+    "message": {
+      "type": "string",
+      "description": "The user's current message text."
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "Opaque conversation session identifier used to correlate turns within a single chat session."
+    },
+    "history": {
+      "type": "array",
+      "description": "Prior conversation turns, ordered oldest-first. May be omitted for single-turn requests.",
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"],
+            "description": "The speaker role for this turn."
+          },
+          "content": {
+            "type": "string",
+            "description": "The message content for this turn."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "messageId": {
+      "type": "string",
+      "description": "Optional idempotency key for this specific message. Callers may retry with the same messageId to avoid duplicate processing."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "message": "What files are in /workspace?",
+      "sessionId": "session-xyz789",
+      "history": [
+        { "role": "user", "content": "Hello" },
+        { "role": "assistant", "content": "Hi! How can I help you today?" }
+      ],
+      "messageId": "msg-001"
+    },
+    {
+      "message": "Summarize the project",
+      "sessionId": "session-abc000"
+    }
+  ]
+}

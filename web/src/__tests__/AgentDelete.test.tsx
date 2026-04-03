@@ -118,7 +118,7 @@ describe('AgentsPage — delete agent', () => {
 
   it('renders a Delete button for each agent in the DOM', () => {
     renderPage();
-    const deleteButtons = screen.getAllByTitle('Delete');
+    const deleteButtons = screen.getAllByLabelText('Delete agent');
     expect(deleteButtons).toHaveLength(2);
   });
 
@@ -126,7 +126,7 @@ describe('AgentsPage — delete agent', () => {
     renderPage();
     // The buttons are in the DOM but inside opacity-0 container — the CSS class
     // controls visibility so the buttons are always accessible programmatically.
-    const deleteButtons = screen.getAllByTitle('Delete');
+    const deleteButtons = screen.getAllByLabelText('Delete agent');
     deleteButtons.forEach((btn) => {
       expect(btn).toBeInTheDocument();
       // Closest parent with the opacity class
@@ -150,7 +150,7 @@ describe('AgentsPage — delete agent', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const [firstDelete] = screen.getAllByTitle('Delete');
+    const [firstDelete] = screen.getAllByLabelText('Delete agent');
     await user.click(firstDelete!);
 
     const dialogTitle = await screen.findByText('Delete Agent');
@@ -165,7 +165,7 @@ describe('AgentsPage — delete agent', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const [firstDelete] = screen.getAllByTitle('Delete');
+    const [firstDelete] = screen.getAllByLabelText('Delete agent');
     await user.click(firstDelete!);
 
     const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
@@ -181,7 +181,7 @@ describe('AgentsPage — delete agent', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const [firstDelete] = screen.getAllByTitle('Delete');
+    const [firstDelete] = screen.getAllByLabelText('Delete agent');
     await user.click(firstDelete!);
 
     const cancelBtn = await screen.findByRole('button', { name: 'Cancel' });
@@ -198,7 +198,7 @@ describe('AgentsPage — delete agent', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const [firstDelete] = screen.getAllByTitle('Delete');
+    const [firstDelete] = screen.getAllByLabelText('Delete agent');
     await user.click(firstDelete!);
 
     const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
@@ -214,7 +214,7 @@ describe('AgentsPage — delete agent', () => {
     mockDeleteFn.mockRejectedValueOnce(new Error('Network error'));
     renderPage();
 
-    const [firstDelete] = screen.getAllByTitle('Delete');
+    const [firstDelete] = screen.getAllByLabelText('Delete agent');
     await user.click(firstDelete!);
 
     const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
@@ -231,7 +231,7 @@ describe('AgentsPage — delete agent', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const deleteButtons = screen.getAllByTitle('Delete');
+    const deleteButtons = screen.getAllByLabelText('Delete agent');
     await user.click(deleteButtons[1]!);
 
     const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
@@ -248,7 +248,7 @@ describe('AgentsPage — delete agent', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const [firstDelete] = screen.getAllByTitle('Delete');
+    const [firstDelete] = screen.getAllByLabelText('Delete agent');
     await user.click(firstDelete!);
 
     const cancelBtn = await screen.findByRole('button', { name: 'Cancel' });

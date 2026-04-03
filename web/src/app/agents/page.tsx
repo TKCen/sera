@@ -132,22 +132,27 @@ function AgentsPageContent() {
         </div>
 
         {circles.length > 0 && (
-          <select
-            aria-label="Filter by circle"
-            value={filterCircle}
-            onChange={(e) => setFilterCircle(e.target.value)}
-            className="sera-input h-9 py-0 w-auto text-xs"
-          >
-            <option value="all">All circles</option>
-            {circles.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label htmlFor="filter-circle" className="sr-only">
+              Filter by circle
+            </label>
+            <select
+              id="filter-circle"
+              value={filterCircle}
+              onChange={(e) => setFilterCircle(e.target.value)}
+              className="sera-input h-9 py-0 w-auto text-xs cursor-pointer"
+            >
+              <option value="all">All circles</option>
+              {circles.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
 
-        <nav aria-label="Filter by status" className="flex items-center gap-1">
+        <div role="group" aria-label="Filter by status" className="flex items-center gap-1">
           {STATUS_OPTIONS.map((s) => (
             <button
               key={s}
@@ -156,13 +161,13 @@ function AgentsPageContent() {
               className={
                 filterStatus === s
                   ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
-                  : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                  : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors cursor-pointer'
               }
             >
               {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
             </button>
           ))}
-        </nav>
+        </div>
       </section>
 
       {isLoading ? (

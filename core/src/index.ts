@@ -6,7 +6,12 @@ import { Logger } from './lib/logger.js';
 import { IntercomService } from './intercom/IntercomService.js';
 import { BridgeService } from './intercom/BridgeService.js';
 import { SandboxManager } from './sandbox/SandboxManager.js';
-import { Orchestrator, HeartbeatService, CleanupService, DiskQuotaService } from './agents/index.js';
+import {
+  Orchestrator,
+  HeartbeatService,
+  CleanupService,
+  DiskQuotaService,
+} from './agents/index.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MCPServerManager } from './mcp/MCPServerManager.js';
 import { MemoryManager } from './memory/manager.js';

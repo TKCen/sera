@@ -12,13 +12,17 @@ const logger = new Logger('DiskQuotaService');
 export class DiskQuotaService {
   private registry: AgentRegistry | undefined;
   private interval: NodeJS.Timeout | undefined;
-  private onLifecycleEvent: ((type: string, instanceId: string, agentName: string) => void) | undefined;
+  private onLifecycleEvent:
+    | ((type: string, instanceId: string, agentName: string) => void)
+    | undefined;
 
   public setRegistry(registry: AgentRegistry): void {
     this.registry = registry;
   }
 
-  public setOnLifecycleEvent(callback: (type: string, instanceId: string, agentName: string) => void): void {
+  public setOnLifecycleEvent(
+    callback: (type: string, instanceId: string, agentName: string) => void
+  ): void {
     this.onLifecycleEvent = callback;
   }
 

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router';
+import { useParams, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api/client';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -29,6 +29,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
 import { AgentDetailManifestTab as ManifestTab } from '@/components/AgentDetailManifestTab';
 import { AgentDetailGrantsTab as GrantsTab } from '@/components/AgentDetailGrantsTab';
@@ -137,12 +138,7 @@ export default function AgentDetailPage() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="px-6 pt-6 pb-4 border-b border-sera-border flex-shrink-0">
-        <Link
-          to="/agents"
-          className="inline-flex items-center gap-1.5 text-xs text-sera-text-muted hover:text-sera-text mb-4 transition-colors"
-        >
-          <ArrowLeft size={12} /> Agents
-        </Link>
+        <Breadcrumbs items={[{ label: 'Agents', href: '/agents' }, { label: displayName }]} />
 
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">

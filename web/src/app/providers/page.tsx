@@ -26,6 +26,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tooltip } from '@/components/ui/tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import {
@@ -114,10 +115,11 @@ function ActivateDialog({
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div>
-            <label className="text-xs text-sera-text-muted block mb-1">
+            <label htmlFor="apiKey" className="text-xs text-sera-text-muted block mb-1">
               API Key ({template.apiKeyEnvVar})
             </label>
             <Input
+              id="apiKey"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -126,8 +128,11 @@ function ActivateDialog({
           </div>
           {!template.baseUrl && (
             <div>
-              <label className="text-xs text-sera-text-muted block mb-1">Base URL (optional)</label>
+              <label htmlFor="baseUrl" className="text-xs text-sera-text-muted block mb-1">
+                Base URL (optional)
+              </label>
               <Input
+                id="baseUrl"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
@@ -156,6 +161,7 @@ function ActivateDialog({
                 >
                   <input
                     type="checkbox"
+                    aria-label={m}
                     checked={selectedModels.has(m) || selectedModels.size === 0}
                     onChange={(e) => {
                       const next = new Set(
@@ -220,13 +226,15 @@ function TestConnectionButton({ modelName }: { modelName: string }) {
   if (status === 'ok') return <CheckCircle2 size={12} className="text-sera-success" />;
   if (status === 'fail') return <XCircle size={12} className="text-sera-error" />;
   return (
-    <button
-      onClick={() => void handleTest()}
-      className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors"
-      title="Test connection"
-    >
-      <Zap size={12} />
-    </button>
+    <Tooltip content="Test connection">
+      <button
+        onClick={() => void handleTest()}
+        className="p-1 text-sera-text-dim hover:text-sera-accent transition-colors cursor-pointer"
+        aria-label="Test connection"
+      >
+        <Zap size={12} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -279,7 +287,8 @@ function DiscoverButton({ providerName }: { providerName: string }) {
               <span className="font-mono text-sera-text-muted">{m}</span>
               <button
                 onClick={() => void handleAddModel(m)}
-                className="text-sera-accent hover:underline text-[10px]"
+                className="text-sera-accent hover:underline text-[10px] cursor-pointer"
+                aria-label={`Add model ${m}`}
               >
                 + Add
               </button>
@@ -335,7 +344,12 @@ export default function ProvidersPage() {
             {providers.length} model{providers.length !== 1 ? 's' : ''} configured
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void refetch()}
+          aria-label="Refresh providers"
+        >
           <RefreshCw size={13} /> Refresh
         </Button>
       </div>
@@ -472,13 +486,15 @@ export default function ProvidersPage() {
                         )}
                         <TestConnectionButton modelName={m.modelName} />
                         {!isDynamic && (
-                          <button
-                            onClick={() => setConfirmDelete(m.modelName)}
-                            className="p-1 text-sera-text-dim hover:text-sera-error transition-colors"
-                            title="Delete provider"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <Tooltip content="Delete provider">
+                            <button
+                              onClick={() => setConfirmDelete(m.modelName)}
+                              className="p-1 text-sera-text-dim hover:text-sera-error transition-colors cursor-pointer"
+                              aria-label="Delete provider"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                     </div>

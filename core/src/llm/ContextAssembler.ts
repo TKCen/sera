@@ -338,7 +338,9 @@ export class ContextAssembler {
     }
 
     const filter: SearchFilter = {};
-    const searchConfig = (manifest.spec?.memory?.search ||
+    // spec.memory is Record<string, unknown>, so we use index access
+    const specSearch = (manifest.spec?.memory as Record<string, any> | undefined)?.search;
+    const searchConfig = (specSearch ||
       manifest.memory?.search) as import('../agents/manifest/types.js').MemorySearchConfig;
     let results;
     try {

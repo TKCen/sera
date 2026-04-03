@@ -205,14 +205,19 @@ export class VectorService {
           }
           const results = await this.client.search(name, searchParams);
           for (const r of results) {
-            vectorResults.push({
+            const res: SearchResult = {
               id: r.id,
               score: r.score,
               payload: (r.payload ?? {}) as VectorPayload,
               namespace: ns,
-              vector: Array.isArray(r.vector) ? (r.vector as number[]) : undefined,
-              timestamp: (r.payload as VectorPayload)?.created_at,
-            });
+            };
+            if (Array.isArray(r.vector) && typeof r.vector[0] === 'number') {
+              res.vector = r.vector as number[];
+            }
+            if ((r.payload as VectorPayload)?.created_at) {
+              res.timestamp = (r.payload as VectorPayload).created_at;
+            }
+            vectorResults.push(res);
           }
         } catch (err) {
           logger.debug(`VectorService.search: vector namespace ${ns} not searchable: ${err}`);
@@ -295,7 +300,7 @@ export class VectorService {
             });
             for (const p of points) {
               const r = mergedMap.get(p.id);
-              if (r && p.vector && Array.isArray(p.vector)) {
+              if (r && Array.isArray(p.vector) && typeof p.vector[0] === 'number') {
                 r.vector = p.vector as number[];
               }
             }
@@ -435,7 +440,7 @@ export class VectorService {
       wait: true,
       points: points.map((p) => ({
         id: p.id,
-        vector: p.vector as number[],
+        vector: p.vector,
         payload: p.payload as Record<string, unknown>,
       })),
     });

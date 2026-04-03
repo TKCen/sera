@@ -6,7 +6,12 @@ import { Logger } from './lib/logger.js';
 import { IntercomService } from './intercom/IntercomService.js';
 import { BridgeService } from './intercom/BridgeService.js';
 import { SandboxManager } from './sandbox/SandboxManager.js';
-import { Orchestrator, HeartbeatService, CleanupService } from './agents/index.js';
+import {
+  Orchestrator,
+  HeartbeatService,
+  CleanupService,
+  DiskQuotaService,
+} from './agents/index.js';
 import { MCPRegistry } from './mcp/registry.js';
 import { MCPServerManager } from './mcp/MCPServerManager.js';
 import { MemoryManager } from './memory/manager.js';
@@ -103,6 +108,7 @@ sandboxManager.setEgressAclManager(egressAclManager);
 const orchestrator = new Orchestrator();
 const heartbeatService = new HeartbeatService();
 const cleanupService = new CleanupService();
+const diskQuotaService = new DiskQuotaService();
 const skillRegistry = new SkillRegistry();
 const agentsDir = path.join(workspaceRoot, 'agents');
 const mcpServersDir = path.join(workspaceRoot, 'mcp-servers');
@@ -156,10 +162,17 @@ orchestrator.setSandboxManager(sandboxManager);
 orchestrator.setRegistry(agentRegistry);
 orchestrator.setHeartbeatService(heartbeatService);
 orchestrator.setCleanupService(cleanupService);
+orchestrator.setDiskQuotaService(diskQuotaService);
 heartbeatService.setRegistry(agentRegistry);
 heartbeatService.setIntercom(intercomService);
 cleanupService.setRegistry(agentRegistry);
 cleanupService.setSandboxManager(sandboxManager);
+diskQuotaService.setRegistry(agentRegistry);
+diskQuotaService.setOnLifecycleEvent((type, id, name) =>
+  orchestrator.publishLifecycleEvent(type, id, name)
+);
+diskQuotaService.start();
+
 sandboxManager.setAgentRegistry(agentRegistry);
 orchestrator.setMetering(meteringEngine, agentScheduler);
 orchestrator.setIdentityService(identityService);

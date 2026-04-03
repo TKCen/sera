@@ -40,3 +40,4 @@ Error: Loading PostCSS Plugin failed: Cannot find native binding. npm has a bug 
     at async processResult (file:///app/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:11876:14)
   Plugin: vite:css
   File: /app/web/src/index.css
+11:44:30 AM [vite] (client) hmr update /src/app/providers/page.tsx

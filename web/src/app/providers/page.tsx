@@ -495,7 +495,11 @@ export default function ProvidersPage() {
                             ) : (
                               <WifiOff size={10} className="text-sera-error" />
                             )}
-                            <span className={dpStatus === 'connected' ? 'text-sera-success' : 'text-sera-error'}>
+                            <span
+                              className={
+                                dpStatus === 'connected' ? 'text-sera-success' : 'text-sera-error'
+                              }
+                            >
                               {dpStatus}
                             </span>
                           </span>

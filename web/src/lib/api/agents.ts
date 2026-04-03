@@ -105,6 +105,7 @@ export async function getAgentSchedules(id: string): Promise<AgentSchedule[]> {
     lastRunStatus: s.lastRunStatus as AgentSchedule['lastRunStatus'],
     nextRunAt: s.nextRunAt,
     enabled: s.status === 'active',
+    source: s.source,
   }));
 }
 

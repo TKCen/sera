@@ -370,6 +370,7 @@ export interface AgentSchedule {
   lastRunStatus?: 'success' | 'error';
   nextRunAt?: string;
   enabled: boolean;
+  source?: 'manifest' | 'api';
 }
 
 export interface AgentToolsResponse {

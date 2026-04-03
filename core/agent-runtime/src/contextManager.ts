@@ -136,17 +136,31 @@ export class ContextManager {
     return this.contextWindow;
   }
 
-  /** Count tokens in a string. */
-  countTokens(text: string): number {
-    if (!text) return 0;
-    return this.enc.encode(text).length;
+  /** Count tokens in a string or content blocks. */
+  countTokens(content: string | import('./llmClient.js').MessageContentBlock[]): number {
+    if (!content) return 0;
+    if (typeof content === 'string') {
+      return this.enc.encode(content).length;
+    }
+    let total = 0;
+    for (const block of content) {
+      if (block.type === 'text' && block.text) {
+        total += this.enc.encode(block.text).length;
+      } else if (block.type === 'image_url') {
+        // Rough estimate for images: 1105 tokens for high detail, 85 for low.
+        // OpenAI pricing: 85 tokens for low detail, 1105 for high detail (1024x1024).
+        // We'll use 1105 as a safe upper bound for auto/high.
+        total += block.image_url?.detail === 'low' ? 85 : 1105;
+      }
+    }
+    return total;
   }
 
   /** Count tokens across all messages. */
   countMessageTokens(messages: ChatMessage[]): number {
     let total = 0;
     for (const msg of messages) {
-      if (msg.tokens === undefined) {
+      if (msg.tokens === undefined || typeof msg.content !== 'string') {
         msg.tokens = this.estimateMessageTokens(msg);
       }
       total += msg.tokens;
@@ -289,7 +303,11 @@ export class ContextManager {
   ): number {
     let truncatedCount = 0;
     for (const msg of messages) {
-      if (msg.role === 'tool' && this.countTokens(msg.content) > maxTokens) {
+      if (
+        msg.role === 'tool' &&
+        typeof msg.content === 'string' &&
+        this.countTokens(msg.content) > maxTokens
+      ) {
         const notice = `\n\n[SERA: tool result retroactively truncated to ${maxTokens} tokens for overflow recovery]`;
         const noticeTokens = this.countTokens(notice);
         msg.content = this.truncateToFit(msg.content, maxTokens - noticeTokens) + notice;
@@ -384,7 +402,7 @@ export class ContextManager {
     let high = content.length;
     while (low < high) {
       const mid = Math.floor((low + high + 1) / 2);
-      if (this.countTokens(content.slice(0, mid)) <= targetTokens) {
+      if (this.enc.encode(content.slice(0, mid)).length <= targetTokens) {
         low = mid;
       } else {
         high = mid - 1;
@@ -417,17 +435,28 @@ export class ContextManager {
 
     let isFallback = false;
     if (this.strategy === 'summarise' && llmClient) {
-      try {
-        return await this.performSummarizeCompaction(
-          messages,
-          targetTokens,
-          label,
-          llmClient,
-          tokensBefore
-        );
-      } catch (err) {
-        log('warn', `ContextManager: summarization failed, falling back to sliding-window: ${err}`);
-        isFallback = true;
+      // Summarization is only for text. If there are images, skip.
+      const hasImages = messages.some(
+        (m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'image_url')
+      );
+      if (hasImages) {
+        log('info', 'ContextManager: images detected, skipping summarization strategy');
+      } else {
+        try {
+          return await this.performSummarizeCompaction(
+            messages,
+            targetTokens,
+            label,
+            llmClient,
+            tokensBefore
+          );
+        } catch (err) {
+          log(
+            'warn',
+            `ContextManager: summarization failed, falling back to sliding-window: ${err}`
+          );
+          isFallback = true;
+        }
       }
     }
 
@@ -492,6 +521,11 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
       ]);
       if (total > targetTokens && nonSystemMessages.length > 0) {
         const first = nonSystemMessages[0]!;
+        if (typeof first.content !== 'string') {
+          // Can't easily truncate multi-modal. Just drop it if it's the only one.
+          nonSystemMessages.shift();
+          return this.performCompaction(messages, targetTokens, label, llmClient);
+        }
         const notice = '[SERA: message truncated due to context window overflow]';
         const noticeTokens = this.countTokens(notice);
         const otherTokens = this.countMessageTokens([
@@ -514,6 +548,10 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
       const total = this.countMessageTokens([...systemMessages, ...nonSystemMessages]);
       if (total > targetTokens && nonSystemMessages.length > 0) {
         const first = nonSystemMessages[0]!;
+        if (typeof first.content !== 'string') {
+          nonSystemMessages.shift();
+          return this.performCompaction(messages, targetTokens, label, llmClient);
+        }
         const notice = '[SERA: message truncated due to context window overflow]';
         const noticeTokens = this.countTokens(notice);
         const otherTokens = this.countMessageTokens([
@@ -571,7 +609,8 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
 
     const conversationText = oldest
       .map((m) => {
-        const content = this.stripEnrichment(m.content ?? '');
+        const content =
+          typeof m.content === 'string' ? this.stripEnrichment(m.content ?? '') : '[Media Content]';
         return `${m.role}: ${content}`;
       })
       .join('\n\n');
@@ -665,7 +704,10 @@ ${conversationText}`;
         if (name) tools.add(name);
       }
 
-      const content = msg.content || '';
+      const content =
+        typeof msg.content === 'string'
+          ? msg.content
+          : msg.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
       if (msg.role === 'user' && content.trim()) {
         userRequests.push(content.trim().slice(0, 160));
       }
@@ -691,7 +733,8 @@ ${conversationText}`;
 
     const timeline = dropped
       .map((msg) => {
-        const truncated = (msg.content || '').trim().slice(0, 160).replace(/\s+/g, ' ');
+        const text = typeof msg.content === 'string' ? msg.content : '[Media Content]';
+        const truncated = text.trim().slice(0, 160).replace(/\s+/g, ' ');
         return `- ${msg.role}: ${truncated}`;
       })
       .join('\n');

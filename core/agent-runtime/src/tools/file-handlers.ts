@@ -6,8 +6,42 @@
 import fs from 'fs';
 import path from 'path';
 import { PermissionDeniedError, MAX_RESULT_BYTES } from './types.js';
+import type { ToolOutputCallback } from '../centrifugo.js';
 
-export function fileRead(workspacePath: string, filePath: string): string {
+export function imageView(workspacePath: string, filePath: string, prompt?: string): string {
+  const resolved = resolveSafe(workspacePath, filePath);
+  if (!fs.existsSync(resolved)) {
+    return `Error: Image file not found: ${filePath}`;
+  }
+
+  const stat = fs.statSync(resolved);
+  if (stat.size > 5 * 1024 * 1024) {
+    return `Error: Image too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). Max size is 5MB.`;
+  }
+
+  const mime = guessMime(resolved);
+  if (!mime.startsWith('image/')) {
+    return `Error: File is not an image: ${filePath} (${mime})`;
+  }
+
+  const buf = fs.readFileSync(resolved);
+  const base64 = buf.toString('base64');
+  const dataUrl = `data:${mime};base64,${base64}`;
+
+  return JSON.stringify({
+    __type: 'vision_request',
+    path: filePath,
+    prompt: prompt ?? 'Analyze this image.',
+    image_url: dataUrl,
+  });
+}
+
+export function fileRead(
+  workspacePath: string,
+  filePath: string,
+  onOutput?: ToolOutputCallback,
+  toolCallId?: string
+): string {
   const resolved = resolveSafe(workspacePath, filePath);
   if (!fs.existsSync(resolved)) {
     return `Error: File not found: ${filePath}`;
@@ -17,6 +51,24 @@ export function fileRead(workspacePath: string, filePath: string): string {
     const buf = fs.readFileSync(resolved);
     const mime = guessMime(resolved);
     return `[binary:${mime}]\n${buf.toString('base64')}`;
+  }
+
+  const stats = fs.statSync(resolved);
+  // Stream if file is > 16KB and we have a callback
+  if (onOutput && toolCallId && stats.size > 16384) {
+    const content = fs.readFileSync(resolved, 'utf-8');
+    const chunkSize = 16384;
+    for (let i = 0; i < content.length; i += chunkSize) {
+      onOutput({
+        toolCallId,
+        toolName: 'file-read',
+        type: 'progress',
+        content: content.substring(i, i + chunkSize),
+        done: false,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return content;
   }
 
   return fs.readFileSync(resolved, 'utf-8');
@@ -107,11 +159,35 @@ export function truncateOutput(content: string): string {
 function isBinaryFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   const binaryExts = new Set([
-    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico',
-    '.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
-    '.exe', '.dll', '.so', '.dylib', '.wasm',
-    '.mp3', '.mp4', '.wav', '.ogg', '.avi', '.mov',
-    '.ttf', '.otf', '.woff', '.woff2',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.bmp',
+    '.webp',
+    '.ico',
+    '.pdf',
+    '.zip',
+    '.tar',
+    '.gz',
+    '.bz2',
+    '.7z',
+    '.rar',
+    '.exe',
+    '.dll',
+    '.so',
+    '.dylib',
+    '.wasm',
+    '.mp3',
+    '.mp4',
+    '.wav',
+    '.ogg',
+    '.avi',
+    '.mov',
+    '.ttf',
+    '.otf',
+    '.woff',
+    '.woff2',
   ]);
   if (binaryExts.has(ext)) return true;
 

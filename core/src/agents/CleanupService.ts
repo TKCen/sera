@@ -51,6 +51,11 @@ export class CleanupService {
     const cutoff = new Date(Date.now() - retentionMs);
 
     try {
+      // ADR-004: Clean up expired permission grants
+      await this.registry.deleteExpiredPermissionGrants().catch((err) => {
+        logger.error('Failed to clean up expired permission grants:', err);
+      });
+
       const stopped = await this.registry.listInstances({ status: 'stopped' });
       const errored = await this.registry.listInstances({ status: 'error' });
 

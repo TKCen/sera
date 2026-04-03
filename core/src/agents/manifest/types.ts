@@ -42,6 +42,10 @@ export interface ModelConfig {
 export interface ToolsConfig {
   allowed?: string[];
   denied?: string[];
+  hooks?: Array<{
+    command: string;
+    events: Array<'before_tool_call' | 'after_tool_call'>;
+  }>;
 }
 
 // ── Subagents ───────────────────────────────────────────────────────────────────
@@ -80,10 +84,27 @@ export interface WorkspaceConfig {
 }
 
 // ── Memory ──────────────────────────────────────────────────────────────────────
+export interface HybridSearchConfig {
+  vectorWeight: number;
+  textWeight: number;
+  minScore: number;
+  maxResults: number;
+  mmr?: {
+    enabled: boolean;
+    lambda: number;
+    candidateMultiplier: number;
+  };
+  temporalDecay?: {
+    enabled: boolean;
+    halfLifeDays: number;
+  };
+}
+
 export interface MemoryConfig {
   personalMemory?: string;
   sharedKnowledge?: string;
   citations?: 'full' | 'brief' | 'off';
+  search?: HybridSearchConfig;
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────────────
@@ -132,6 +153,10 @@ export interface AgentManifest {
     tools?: {
       allowed?: string[];
       denied?: string[];
+      hooks?: Array<{
+        command: string;
+        events: Array<'before_tool_call' | 'after_tool_call'>;
+      }>;
     };
     subagents?: {
       allowed?: Array<{

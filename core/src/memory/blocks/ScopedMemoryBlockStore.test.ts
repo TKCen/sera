@@ -150,6 +150,61 @@ describe('ScopedMemoryBlockStore', () => {
     expect(await store.countByAgent(agentId)).toBe(1);
   });
 
+  // ── sourceRef ────────────────────────────────────────────────────────────────
+
+  it('persists sourceRef in frontmatter and reads it back', async () => {
+    const block = await store.write(
+      makeOpts({ sourceRef: { scheduleId: 'sched-123', taskId: 'task-456' } })
+    );
+    expect(block.sourceRef).toEqual({ scheduleId: 'sched-123', taskId: 'task-456' });
+    const found = await store.readByAgent(agentId, block.id);
+    expect(found).not.toBeNull();
+    expect(found!.sourceRef).toEqual({ scheduleId: 'sched-123', taskId: 'task-456' });
+  });
+
+  it('blocks without sourceRef parse correctly (backward compat)', async () => {
+    const block = await store.write(makeOpts());
+    const found = await store.readByAgent(agentId, block.id);
+    expect(found).not.toBeNull();
+    expect(found!.sourceRef).toBeUndefined();
+  });
+
+  it('update() preserves sourceRef in serialized output', async () => {
+    const block = await store.write(makeOpts({ sourceRef: { scheduleId: 'sched-789' } }));
+    const updated = await store.update(agentId, block.id, { content: 'Updated content' });
+    expect(updated).not.toBeNull();
+    expect(updated!.sourceRef).toEqual({ scheduleId: 'sched-789' });
+    // Read back from disk to confirm persistence
+    const reread = await store.readByAgent(agentId, updated!.id);
+    expect(reread!.sourceRef).toEqual({ scheduleId: 'sched-789' });
+  });
+
+  // ── findBySourceRef ─────────────────────────────────────────────────────────
+
+  it('findBySourceRef returns matching block', async () => {
+    await store.write(makeOpts({ content: 'unrelated' }));
+    const target = await store.write(
+      makeOpts({ content: 'target', sourceRef: { scheduleId: 'find-me' } })
+    );
+    const found = await store.findBySourceRef(agentId, { scheduleId: 'find-me' });
+    expect(found).not.toBeNull();
+    expect(found!.id).toBe(target.id);
+  });
+
+  it('findBySourceRef returns null on miss', async () => {
+    await store.write(makeOpts({ sourceRef: { scheduleId: 'other' } }));
+    const found = await store.findBySourceRef(agentId, { scheduleId: 'no-match' });
+    expect(found).toBeNull();
+  });
+
+  it('findBySourceRef narrows search with type filter', async () => {
+    await store.write(makeOpts({ type: 'fact', sourceRef: { scheduleId: 'shared-id' } }));
+    await store.write(makeOpts({ type: 'insight', sourceRef: { scheduleId: 'shared-id' } }));
+    const found = await store.findBySourceRef(agentId, { scheduleId: 'shared-id' }, 'insight');
+    expect(found).not.toBeNull();
+    expect(found!.type).toBe('insight');
+  });
+
   // ── Invalid frontmatter ──────────────────────────────────────────────────────
 
   it('skips malformed files without crashing', async () => {

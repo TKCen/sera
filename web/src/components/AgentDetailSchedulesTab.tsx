@@ -1,8 +1,13 @@
 import { useState, useCallback } from 'react';
-import { Calendar, Clock, Plus, Trash2, Play, Eraser, AlertTriangle } from 'lucide-react';
+import { Calendar, Clock, Plus, Trash2, Play, Pause, Eraser, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentSchedules, useClearStaleTasks } from '@/hooks/useAgents';
-import { createSchedule, deleteSchedule, triggerSchedule } from '@/lib/api/schedules';
+import {
+  createSchedule,
+  deleteSchedule,
+  triggerSchedule,
+  updateSchedule,
+} from '@/lib/api/schedules';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -94,6 +99,16 @@ export function SchedulesTab({
     }
   };
 
+  const handleToggleStatus = async (schedId: string, currentlyEnabled: boolean) => {
+    try {
+      await updateSchedule(schedId, { status: currentlyEnabled ? 'paused' : 'active' });
+      toast.success(currentlyEnabled ? 'Schedule paused' : 'Schedule activated');
+      void refetch();
+    } catch {
+      toast.error('Failed to update schedule status');
+    }
+  };
+
   const handleClearStale = async () => {
     try {
       const res = await clearStaleTasks.mutateAsync({ agentId: id });
@@ -168,6 +183,13 @@ export function SchedulesTab({
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
                 <button
+                  onClick={() => void handleToggleStatus(sched.id, sched.enabled)}
+                  className="p-1.5 text-sera-text-dim hover:text-sera-accent transition-colors"
+                  title={sched.enabled ? 'Pause schedule' : 'Activate schedule'}
+                >
+                  {sched.enabled ? <Pause size={12} /> : <Play size={12} />}
+                </button>
+                <button
                   onClick={() => void handleTrigger(sched.id)}
                   className="p-1.5 text-sera-text-dim hover:text-sera-accent transition-colors"
                   title="Trigger now"
@@ -176,8 +198,13 @@ export function SchedulesTab({
                 </button>
                 <button
                   onClick={() => setConfirmDelete(sched.id)}
-                  className="p-1.5 text-sera-text-dim hover:text-sera-error transition-colors"
-                  title="Delete schedule"
+                  className="p-1.5 text-sera-text-dim hover:text-sera-error transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={
+                    sched.source === 'manifest'
+                      ? 'Manifest schedules cannot be deleted'
+                      : 'Delete schedule'
+                  }
+                  disabled={sched.source === 'manifest'}
                 >
                   <Trash2 size={12} />
                 </button>

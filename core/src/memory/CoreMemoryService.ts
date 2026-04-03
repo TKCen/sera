@@ -1,7 +1,4 @@
 import type { Pool } from 'pg';
-import { Logger } from '../lib/logger.js';
-
-const logger = new Logger('CoreMemoryService');
 
 export interface CoreMemoryBlock {
   id: string;

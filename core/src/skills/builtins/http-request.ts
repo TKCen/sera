@@ -41,7 +41,7 @@ export const httpRequestSkill: SkillDefinition = {
       required: false,
     },
   ],
-  handler: async (params, context) => {
+  handler: async (params, _context) => {
     // Execution is handled by the agent-runtime
     return {
       success: true,

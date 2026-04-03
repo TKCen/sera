@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createCoreMemoryAppendSkill, createCoreMemoryReplaceSkill } from './core-memory.js';
 import { CoreMemoryService } from '../../memory/CoreMemoryService.js';
 import { AuditService } from '../../audit/AuditService.js';
-import type { Pool } from 'pg';
 
 vi.mock('../../memory/CoreMemoryService.js');
 vi.mock('../../audit/AuditService.js');
@@ -75,7 +74,3 @@ describe('Core Memory Skills', () => {
     });
   });
 });
-
-function any() {
-  return expect.anything();
-}

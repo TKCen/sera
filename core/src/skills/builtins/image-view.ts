@@ -24,7 +24,7 @@ export const imageViewSkill: SkillDefinition = {
       required: false,
     },
   ],
-  handler: async (params, context) => {
+  handler: async (params, _context) => {
     // The actual processing happens in the agent-runtime ReasoningLoop
     // to correctly inject the multi-modal block into the conversation.
     // This handler returns metadata for the runtime to act upon.

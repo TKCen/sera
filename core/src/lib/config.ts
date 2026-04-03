@@ -9,7 +9,7 @@ const CONFIG_PATH = path.join(process.cwd(), 'config', 'llm.json');
 const PROVIDERS_CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json');
 
 // ─── Legacy single-provider config (backward compat) ──────────────────────────
-export interface LLMConfig {
+interface LLMConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -51,18 +51,6 @@ function loadProvidersConfig(): ProvidersConfig {
   return defaultProvidersConfig;
 }
 
-function saveProvidersConfig(cfg: ProvidersConfig) {
-  try {
-    const dir = path.dirname(PROVIDERS_CONFIG_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(PROVIDERS_CONFIG_PATH, JSON.stringify(cfg, null, 2));
-  } catch (err) {
-    logger.error('Failed to save providers config:', err);
-    throw err;
-  }
-}
 
 export const config = {
   // Legacy single-provider access (used by OpenAIProvider)
@@ -98,18 +86,6 @@ export const config = {
   // Multi-provider config
   get providers(): ProvidersConfig {
     return loadProvidersConfig();
-  },
-
-  saveProviderConfig(providerId: string, providerConfig: ProviderConfig) {
-    const cfg = loadProvidersConfig();
-    cfg.providers[providerId] = providerConfig;
-    saveProvidersConfig(cfg);
-  },
-
-  setActiveProvider(providerId: string) {
-    const cfg = loadProvidersConfig();
-    cfg.activeProvider = providerId;
-    saveProvidersConfig(cfg);
   },
 
   getProviderConfig(providerId: string): ProviderConfig | undefined {

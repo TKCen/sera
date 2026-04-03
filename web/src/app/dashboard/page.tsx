@@ -15,6 +15,8 @@ import { EmptyState } from '@/components/EmptyState';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useQuery } from '@tanstack/react-query';
 import { useAgents } from '@/hooks/useAgents';
 import { useHealthDetail } from '@/hooks/useHealth';
@@ -56,37 +58,43 @@ function StatCard({
   isLoading?: boolean;
 }) {
   return (
-    <Link
-      to={to}
-      className="sera-card-static p-4 hover:border-sera-accent/40 transition-colors group"
-      aria-label={`${label}: ${isLoading ? 'loading' : value}`}
-    >
-      <div className="flex items-center justify-between mb-2">
-        <Icon
-          size={18}
-          className={cn(
-            'text-sera-text-muted group-hover:text-sera-accent transition-colors',
-            accent
-          )}
-          aria-hidden="true"
-        />
-      </div>
-      {isLoading ? (
-        <Skeleton className="h-8 w-16 mb-1" />
-      ) : (
-        <div className="text-2xl font-bold text-sera-text">{value}</div>
-      )}
-      <div className="text-xs text-sera-text-muted mt-0.5">{label}</div>
-    </Link>
+    <Card className="p-0 overflow-hidden hover:border-sera-accent/40 transition-colors group">
+      <Link
+        to={to}
+        className="block p-4"
+        aria-label={`${label}: ${isLoading ? 'loading' : value}`}
+      >
+        <div className="flex items-center justify-between mb-2">
+          <Icon
+            size={18}
+            className={cn(
+              'text-sera-text-muted group-hover:text-sera-accent transition-colors',
+              accent
+            )}
+            aria-hidden="true"
+          />
+        </div>
+        {isLoading ? (
+          <Skeleton className="h-8 w-16 mb-1" />
+        ) : (
+          <div className="text-2xl font-bold text-sera-text">{value}</div>
+        )}
+        <div className="text-xs text-sera-text-muted mt-0.5">{label}</div>
+      </Link>
+    </Card>
   );
 }
 
 function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy' | string }) {
   const commonClasses =
-    'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-colors';
+    'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-colors cursor-help';
+
+  let banner;
+  let description;
 
   if (status === 'healthy') {
-    return (
+    description = 'All systems are functioning normally.';
+    banner = (
       <div
         className={cn(commonClasses, 'bg-sera-success/10 border-sera-success/20 text-sera-success')}
         role="status"
@@ -95,9 +103,9 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
         <CheckCircle size={14} aria-hidden="true" /> All systems operational
       </div>
     );
-  }
-  if (status === 'degraded') {
-    return (
+  } else if (status === 'degraded') {
+    description = 'Some services are experiencing issues but the system remains partially functional.';
+    banner = (
       <div
         className={cn(commonClasses, 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400')}
         role="status"
@@ -106,15 +114,23 @@ function HealthBanner({ status }: { status: 'healthy' | 'degraded' | 'unhealthy'
         <AlertTriangle size={14} aria-hidden="true" /> Some services degraded
       </div>
     );
+  } else {
+    description = 'The system is experiencing critical failures.';
+    banner = (
+      <div
+        className={cn(commonClasses, 'bg-sera-error/10 border-sera-error/20 text-sera-error')}
+        role="status"
+        aria-live="polite"
+      >
+        <XCircle size={14} aria-hidden="true" /> System unhealthy
+      </div>
+    );
   }
+
   return (
-    <div
-      className={cn(commonClasses, 'bg-sera-error/10 border-sera-error/20 text-sera-error')}
-      role="status"
-      aria-live="polite"
-    >
-      <XCircle size={14} aria-hidden="true" /> System unhealthy
-    </div>
+    <Tooltip content={description}>
+      {banner}
+    </Tooltip>
   );
 }
 
@@ -126,32 +142,34 @@ function RecentSessions() {
 
   if (isLoading) {
     return (
-      <section className="sera-card-static p-4" aria-busy="true">
-        <div className="flex items-center justify-between mb-3">
+      <Card className="p-0" aria-busy="true">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4">
           <Skeleton className="h-4 w-32" />
-        </div>
-        <div className="space-y-1.5">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-10 w-full" />
-          ))}
-        </div>
-      </section>
+        </CardHeader>
+        <CardContent className="p-4 pt-0">
+          <div className="space-y-1.5">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
   if (error) {
     return (
-      <section className="sera-card-static p-4">
+      <Card className="p-4 border-sera-error/30">
         <Alert variant="error" title="Failed to load recent sessions">
           {error.message}
         </Alert>
-      </section>
+      </Card>
     );
   }
 
   if (!recent.length) {
     return (
-      <section className="sera-card-static p-4">
+      <Card className="p-4">
         <EmptyState
           icon={<MessageSquare size={24} />}
           title="No recent sessions"
@@ -162,45 +180,51 @@ function RecentSessions() {
             </Button>
           }
         />
-      </section>
+      </Card>
     );
   }
 
   return (
-    <section className="sera-card-static p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
+    <Card className="p-0">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-3">
+        <CardTitle className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
           Recent Sessions
-        </h2>
-        <Link to="/chat" className="text-[11px] text-sera-accent hover:underline">
+        </CardTitle>
+        <Link
+          to="/chat"
+          className="text-[11px] text-sera-accent hover:underline"
+          aria-label="View all chat sessions"
+        >
           View all
         </Link>
-      </div>
-      <ul className="space-y-1.5">
-        {recent.map((s) => (
-          <li key={s.id}>
-            <Link
-              to="/chat"
-              className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sera-surface-hover transition-colors"
-            >
-              <MessageSquare
-                size={13}
-                className="text-sera-text-muted flex-shrink-0"
-                aria-hidden="true"
-              />
-              <span className="text-sm text-sera-text flex-1 truncate">{s.title}</span>
-              <span className="text-[10px] text-sera-text-dim">{s.agentName}</span>
-              <span className="text-[10px] text-sera-text-dim">
-                {s.messageCount} msg{s.messageCount !== 1 ? 's' : ''}
-              </span>
-              <span className="text-[10px] text-sera-text-dim">
-                {formatDistanceToNow(s.updatedAt)}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </section>
+      </CardHeader>
+      <CardContent className="p-4 pt-0">
+        <ul className="space-y-1.5">
+          {recent.map((s) => (
+            <li key={s.id}>
+              <Link
+                to="/chat"
+                className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sera-surface-hover transition-colors"
+              >
+                <MessageSquare
+                  size={13}
+                  className="text-sera-text-muted flex-shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="text-sm text-sera-text flex-1 truncate">{s.title}</span>
+                <span className="text-[10px] text-sera-text-dim">{s.agentName}</span>
+                <span className="text-[10px] text-sera-text-dim">
+                  {s.messageCount} msg{s.messageCount !== 1 ? 's' : ''}
+                </span>
+                <span className="text-[10px] text-sera-text-dim">
+                  {formatDistanceToNow(s.updatedAt)}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -308,11 +332,11 @@ export default function DashboardPage() {
         fallbackMessage="The agent status breakdown encountered an error."
         onReset={handleReset}
       >
-        <section className="sera-card-static p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
+        <Card className="p-0">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-3">
+            <CardTitle className="text-xs font-semibold text-sera-text-dim uppercase tracking-wider">
               Agents
-            </h2>
+            </CardTitle>
             <Link
               to="/agents"
               className="text-[11px] text-sera-accent hover:underline"
@@ -320,72 +344,74 @@ export default function DashboardPage() {
             >
               View all
             </Link>
-          </div>
+          </CardHeader>
 
-          {agentsLoading ? (
-            <div className="space-y-1.5" aria-busy="true">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : agentsError ? (
-            <Alert variant="error" title="Failed to load agents">
-              {agentsError.message}
-            </Alert>
-          ) : agents && agents.length > 0 ? (
-            <ul className="space-y-1.5">
-              {agents.map((agent) => (
-                <li key={agent.id}>
-                  <Link
-                    to={`/agents/${agent.id}`}
-                    className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sera-surface-hover transition-colors"
-                  >
-                    <span
-                      className={cn(
-                        'w-2 h-2 rounded-full flex-shrink-0',
-                        agent.status === 'running'
-                          ? 'bg-sera-success'
-                          : agent.status === 'error'
-                            ? 'bg-sera-error'
-                            : 'bg-sera-text-dim'
-                      )}
-                      aria-hidden="true"
-                    />
-                    <span className="text-sm text-sera-text flex-1">
-                      {agent.display_name ?? agent.name}
-                    </span>
-                    <span className="text-[11px] text-sera-text-muted">{agent.template_ref}</span>
-                    <Badge
-                      variant={
-                        agent.status === 'running'
-                          ? 'success'
-                          : agent.status === 'error'
-                            ? 'error'
-                            : 'default'
-                      }
+          <CardContent className="p-4 pt-0">
+            {agentsLoading ? (
+              <div className="space-y-1.5" aria-busy="true">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : agentsError ? (
+              <Alert variant="error" title="Failed to load agents">
+                {agentsError.message}
+              </Alert>
+            ) : agents && agents.length > 0 ? (
+              <ul className="space-y-1.5">
+                {agents.map((agent) => (
+                  <li key={agent.id}>
+                    <Link
+                      to={`/agents/${agent.id}`}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sera-surface-hover transition-colors"
                     >
-                      {agent.status}
-                    </Badge>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState
-              icon={<Bot size={24} />}
-              title="No agents found"
-              description="Create your first agent to start using SERA."
-              action={
-                <Button size="sm" asChild>
-                  <Link to="/agents/new">
-                    <Plus size={14} className="mr-2" />
-                    Create Agent
-                  </Link>
-                </Button>
-              }
-            />
-          )}
-        </section>
+                      <span
+                        className={cn(
+                          'w-2 h-2 rounded-full flex-shrink-0',
+                          agent.status === 'running'
+                            ? 'bg-sera-success'
+                            : agent.status === 'error'
+                              ? 'bg-sera-error'
+                              : 'bg-sera-text-dim'
+                        )}
+                        aria-hidden="true"
+                      />
+                      <span className="text-sm text-sera-text flex-1">
+                        {agent.display_name ?? agent.name}
+                      </span>
+                      <span className="text-[11px] text-sera-text-muted">{agent.template_ref}</span>
+                      <Badge
+                        variant={
+                          agent.status === 'running'
+                            ? 'success'
+                            : agent.status === 'error'
+                              ? 'error'
+                              : 'default'
+                        }
+                      >
+                        {agent.status}
+                      </Badge>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon={<Bot size={24} />}
+                title="No agents found"
+                description="Create your first agent to start using SERA."
+                action={
+                  <Button size="sm" asChild>
+                    <Link to="/agents/new">
+                      <Plus size={14} className="mr-2" />
+                      Create Agent
+                    </Link>
+                  </Button>
+                }
+              />
+            )}
+          </CardContent>
+        </Card>
       </ErrorBoundary>
 
       {/* Recent sessions */}

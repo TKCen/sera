@@ -12,6 +12,23 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'web-fetch',
+      description: 'Fetch a URL and return its text content. Useful for reading web pages, documentation, or API responses.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to fetch',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'file-read',
       description: 'Read the contents of a file from the workspace.',
       parameters: {

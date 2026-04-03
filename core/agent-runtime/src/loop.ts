@@ -639,7 +639,7 @@ export class ReasoningLoop {
           // Execute tools and add results
 
           const onToolOutput: ToolOutputCallback = (event) => {
-            this.centrifugo.publishToolOutput(event).catch((err) => {
+            this.centrifugo.publishToolOutput(event, taskId).catch((err) => {
               log(
                 'warn',
                 `Failed to publish tool output: ${err instanceof Error ? err.message : String(err)}`

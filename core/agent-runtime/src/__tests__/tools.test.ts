@@ -296,9 +296,9 @@ describe('RuntimeToolExecutor', () => {
   });
 
   describe('getToolDefinitions()', () => {
-    it('returns all 11 built-in tools when no filter given', () => {
+    it('returns all 12 built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(11);
+      expect(tools.length).toBe(12);
       const names = tools.map((t) => t.function.name).sort();
       expect(names).toEqual([
         'file-delete',
@@ -312,6 +312,7 @@ describe('RuntimeToolExecutor', () => {
         'shell-exec',
         'spawn-subagent',
         'tool-search',
+        'web-fetch',
       ]);
     });
 

@@ -16,7 +16,7 @@
     "js-tiktoken": "^1.0.21",
     "js-yaml": "^4.1.1",
     "json5": "^2.2.3",
-    "pdf-parse": "^1.1.1",
+    "pdf-parse": "^2.4.5",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use sqlx::Row;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -109,8 +110,39 @@ pub async fn pending_updates() -> Json<Vec<serde_json::Value>> {
 }
 
 /// GET /api/tools — list executable tools
-pub async fn list_tools() -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+pub async fn list_tools(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    // Start with built-in tools
+    let mut tools = vec![
+        serde_json::json!({"name": "file-read", "type": "builtin", "description": "Read file contents"}),
+        serde_json::json!({"name": "file-write", "type": "builtin", "description": "Write file contents"}),
+        serde_json::json!({"name": "file-list", "type": "builtin", "description": "List directory contents"}),
+        serde_json::json!({"name": "shell-exec", "type": "builtin", "description": "Execute shell command"}),
+        serde_json::json!({"name": "http-request", "type": "builtin", "description": "Make HTTP request"}),
+        serde_json::json!({"name": "knowledge-store", "type": "builtin", "description": "Store knowledge block"}),
+        serde_json::json!({"name": "knowledge-query", "type": "builtin", "description": "Query knowledge base"}),
+        serde_json::json!({"name": "web-fetch", "type": "builtin", "description": "Fetch web page"}),
+        serde_json::json!({"name": "glob", "type": "builtin", "description": "File pattern matching"}),
+        serde_json::json!({"name": "grep", "type": "builtin", "description": "Search file contents"}),
+        serde_json::json!({"name": "spawn-ephemeral", "type": "builtin", "description": "Spawn ephemeral subagent"}),
+        serde_json::json!({"name": "tool-search", "type": "builtin", "description": "Search available tools"}),
+        serde_json::json!({"name": "skill-search", "type": "builtin", "description": "Search available skills"}),
+    ];
+
+    // Try to append skills from DB
+    if let Ok(skills) = sera_db::skills::SkillRepository::list_skills(state.db.inner()).await {
+        for skill in skills {
+            tools.push(serde_json::json!({
+                "id": skill.id.to_string(),
+                "name": skill.name,
+                "description": skill.description,
+                "category": skill.category,
+                "version": skill.version,
+                "type": "skill",
+            }));
+        }
+    }
+
+    Json(tools)
 }
 
 /// GET /api/templates — delegates to agent templates
@@ -169,8 +201,79 @@ pub async fn get_schedule(
     }
 }
 
-/// GET /api/schedules/runs — schedule run history (stub)
-pub async fn schedule_runs() -> Json<Vec<serde_json::Value>> {
+/// GET /api/schedules/runs — schedule run history
+pub async fn schedule_runs(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    // Try to query recent task_queue runs joined with schedules
+    let rows = sqlx::query(
+        "SELECT tq.id, tq.task, tq.status, tq.result, tq.created_at, tq.completed_at, s.name as schedule_name
+         FROM task_queue tq
+         JOIN schedules s ON tq.schedule_id = s.id
+         ORDER BY tq.created_at DESC
+         LIMIT 50"
+    )
+    .fetch_all(state.db.inner())
+    .await;
+
+    if let Ok(db_rows) = rows {
+        let runs: Vec<serde_json::Value> = db_rows
+            .into_iter()
+            .map(|r| {
+                let id: String = r.get("id");
+                let task: String = r.get("task");
+                let status: String = r.get("status");
+                let result: Option<String> = r.get("result");
+                let created_at: time::OffsetDateTime = r.get("created_at");
+                let completed_at: Option<time::OffsetDateTime> = r.get("completed_at");
+                let schedule_name: String = r.get("schedule_name");
+
+                serde_json::json!({
+                    "id": id,
+                    "task": task,
+                    "status": status,
+                    "result": result,
+                    "createdAt": created_at.to_string(),
+                    "completedAt": completed_at.map(|t| t.to_string()),
+                    "scheduleName": schedule_name,
+                })
+            })
+            .collect();
+        return Json(runs);
+    }
+
+    // Fallback: try alternate query with schedules table only
+    let fallback_rows = sqlx::query(
+        "SELECT id, agent_name, name, last_run_at, last_run_status
+         FROM schedules
+         WHERE last_run_at IS NOT NULL
+         ORDER BY last_run_at DESC
+         LIMIT 50"
+    )
+    .fetch_all(state.db.inner())
+    .await;
+
+    if let Ok(db_rows) = fallback_rows {
+        let runs: Vec<serde_json::Value> = db_rows
+            .into_iter()
+            .map(|r| {
+                let id: String = r.get("id");
+                let agent_name: Option<String> = r.get("agent_name");
+                let name: String = r.get("name");
+                let last_run_at: Option<time::OffsetDateTime> = r.get("last_run_at");
+                let last_run_status: Option<String> = r.get("last_run_status");
+
+                serde_json::json!({
+                    "id": id,
+                    "agentName": agent_name,
+                    "name": name,
+                    "lastRunAt": last_run_at.map(|t| t.to_string()),
+                    "lastRunStatus": last_run_status,
+                })
+            })
+            .collect();
+        return Json(runs);
+    }
+
+    // Both queries failed — return empty array gracefully
     Json(vec![])
 }
 

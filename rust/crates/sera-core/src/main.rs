@@ -9,6 +9,7 @@ mod routes;
 mod state;
 
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use axum::{
     middleware::from_fn,
@@ -21,7 +22,9 @@ use tracing_subscriber::EnvFilter;
 
 use sera_auth::JwtService;
 use sera_config::core_config::CoreConfig;
+use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
+use sera_docker::ContainerManager;
 
 use crate::state::AppState;
 
@@ -38,8 +41,9 @@ async fn main() -> anyhow::Result<()> {
     let mut config = CoreConfig::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Optionally load providers.json
-    if let Ok(path) = std::env::var("SERA_PROVIDERS_JSON")
-        && let Err(e) = config.load_providers(&path)
+    let providers_path = std::env::var("SERA_PROVIDERS_JSON").ok();
+    if let Some(path) = &providers_path
+        && let Err(e) = config.load_providers(path)
     {
         tracing::warn!("Failed to load providers.json: {e}");
     }
@@ -50,7 +54,17 @@ async fn main() -> anyhow::Result<()> {
     let db = DbPool::connect(&config.database_url).await?;
     tracing::info!("Connected to database");
 
+    // Initialize Docker client
+    let docker = Arc::new(ContainerManager::new().map_err(|e| {
+        tracing::warn!("Docker not available: {e}");
+        anyhow::anyhow!("Docker connection failed: {e}")
+    })?);
+    tracing::info!("Connected to Docker daemon");
+
     // Build shared state
+    let providers = Arc::new(RwLock::new(
+        config.providers.clone().unwrap_or(ProvidersConfig { providers: vec![] }),
+    ));
     let jwt_service = Arc::new(JwtService::new(config.centrifugo.token_secret.clone()));
     let api_key = Arc::new(config.api_key.clone());
     let config = Arc::new(config);
@@ -59,6 +73,9 @@ async fn main() -> anyhow::Result<()> {
         db,
         config: config.clone(),
         jwt: jwt_service.clone(),
+        providers,
+        docker,
+        providers_path,
     };
 
     // Build router
@@ -114,6 +131,15 @@ fn build_router(
             "/api/schedules/{id}",
             patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule),
         )
+        .route("/api/providers", post(routes::providers::add_provider))
+        .route(
+            "/api/providers/{model_name}",
+            patch(routes::providers::update_provider).delete(routes::providers::delete_provider),
+        )
+        .route("/api/circles", post(routes::circles::create_circle))
+        .route("/api/circles/{id}", axum::routing::delete(routes::circles::delete_circle))
+        .route("/api/agents/instances/{id}/start", post(routes::agents::start_instance))
+        .route("/api/agents/instances/{id}/stop", post(routes::agents::stop_instance))
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

@@ -27,4 +27,39 @@ impl CircleRepository {
         .await?;
         Ok(rows)
     }
+
+    pub async fn create_circle(
+        pool: &PgPool,
+        id: &str,
+        name: &str,
+        display_name: &str,
+        description: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO circles (id, name, display_name, description, created_at, updated_at)
+             VALUES ($1::uuid, $2, $3, $4, NOW(), NOW())"
+        )
+        .bind(id)
+        .bind(name)
+        .bind(display_name)
+        .bind(description)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_circle(pool: &PgPool, id: &str) -> Result<(), DbError> {
+        let result = sqlx::query("DELETE FROM circles WHERE id::text = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "circle",
+                key: "id",
+                value: id.to_string(),
+            });
+        }
+        Ok(())
+    }
 }

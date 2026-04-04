@@ -1,7 +1,11 @@
 //! Circles endpoint.
 
-use axum::{extract::State, Json};
-use serde::Serialize;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
+use serde::{Deserialize, Serialize};
 
 use sera_db::circles::CircleRepository;
 
@@ -32,4 +36,43 @@ pub async fn list_circles(
         })
         .collect();
     Ok(Json(circles))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCircleRequest {
+    pub name: String,
+    pub display_name: String,
+    pub description: Option<String>,
+}
+
+/// POST /api/circles
+pub async fn create_circle(
+    State(state): State<AppState>,
+    Json(body): Json<CreateCircleRequest>,
+) -> Result<(StatusCode, Json<CircleResponse>), AppError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    CircleRepository::create_circle(
+        state.db.inner(),
+        &id,
+        &body.name,
+        &body.display_name,
+        body.description.as_deref(),
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(CircleResponse {
+        id,
+        name: body.name,
+        display_name: body.display_name,
+        description: body.description,
+    })))
+}
+
+/// DELETE /api/circles/:id
+pub async fn delete_circle(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    CircleRepository::delete_circle(state.db.inner(), &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

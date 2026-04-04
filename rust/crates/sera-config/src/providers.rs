@@ -75,6 +75,68 @@ impl ProviderEntry {
     }
 }
 
+impl ProvidersConfig {
+    /// Add a new provider entry. Returns error if modelName already exists.
+    pub fn add_provider(&mut self, entry: ProviderEntry) -> Result<(), String> {
+        if self.providers.iter().any(|p| p.model_name == entry.model_name) {
+            return Err(format!("Provider '{}' already exists", entry.model_name));
+        }
+        self.providers.push(entry);
+        Ok(())
+    }
+
+    /// Update fields on an existing provider. Returns error if not found.
+    pub fn update_provider(
+        &mut self,
+        model_name: &str,
+        context_window: Option<u64>,
+        max_tokens: Option<u64>,
+        reasoning: Option<bool>,
+        description: Option<String>,
+        context_strategy: Option<String>,
+    ) -> Result<(), String> {
+        let entry = self
+            .providers
+            .iter_mut()
+            .find(|p| p.model_name == model_name)
+            .ok_or_else(|| format!("Provider '{}' not found", model_name))?;
+
+        if let Some(v) = context_window {
+            entry.context_window = Some(v);
+        }
+        if let Some(v) = max_tokens {
+            entry.max_tokens = Some(v);
+        }
+        if let Some(v) = reasoning {
+            entry.reasoning = v;
+        }
+        if let Some(v) = description {
+            entry.description = Some(v);
+        }
+        if let Some(v) = context_strategy {
+            entry.context_strategy = Some(v);
+        }
+        Ok(())
+    }
+
+    /// Remove a provider by model name. Returns error if not found.
+    pub fn remove_provider(&mut self, model_name: &str) -> Result<(), String> {
+        let len_before = self.providers.len();
+        self.providers.retain(|p| p.model_name != model_name);
+        if self.providers.len() == len_before {
+            return Err(format!("Provider '{}' not found", model_name));
+        }
+        Ok(())
+    }
+
+    /// Save to a JSON file.
+    pub fn save_to_file(&self, path: &str) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize: {e}"))?;
+        std::fs::write(path, json).map_err(|e| format!("Failed to write {path}: {e}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

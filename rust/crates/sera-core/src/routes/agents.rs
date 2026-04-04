@@ -14,6 +14,9 @@ use sera_db::DbError;
 use crate::error::AppError;
 use crate::state::AppState;
 
+// Re-import sqlx for inline queries in start/stop handlers
+use sqlx;
+
 /// Query params for listing instances.
 #[derive(Debug, Deserialize)]
 pub struct ListInstancesQuery {
@@ -192,4 +195,72 @@ pub async fn delete_instance(
     Ok(Json(serde_json::json!({
         "deleted": { "id": id, "name": name }
     })))
+}
+
+/// POST /api/agents/instances/:id/start
+pub async fn start_instance(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<InstanceResponse>, AppError> {
+    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let template_ref = instance.template_ref.as_deref().unwrap_or(&instance.template_name);
+
+    let mut env_vars = std::collections::HashMap::new();
+    env_vars.insert("AGENT_NAME".to_string(), instance.name.clone());
+    env_vars.insert("AGENT_INSTANCE_ID".to_string(), id.clone());
+    env_vars.insert("SERA_CORE_URL".to_string(), "http://sera-core:3001".to_string());
+    env_vars.insert("AGENT_LIFECYCLE_MODE".to_string(),
+        instance.lifecycle_mode.as_deref().unwrap_or("ephemeral").to_string());
+
+    let container_id = state
+        .docker
+        .start_container(
+            &id,
+            &instance.name,
+            template_ref,
+            "sera-agent-worker:latest",
+            "sera_net",
+            env_vars,
+        )
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;
+
+    // Update status and container_id
+    AgentRepository::update_status(state.db.inner(), &id, "running").await?;
+    sqlx::query("UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id::text = $2")
+        .bind(&container_id)
+        .bind(&id)
+        .execute(state.db.inner())
+        .await
+        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    Ok(Json(instance_to_response(row)))
+}
+
+/// POST /api/agents/instances/:id/stop
+pub async fn stop_instance(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<InstanceResponse>, AppError> {
+    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
+
+    if let Some(container_id) = &instance.container_id {
+        state
+            .docker
+            .stop_container(container_id)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;
+    }
+
+    // Update status and clear container_id
+    AgentRepository::update_status(state.db.inner(), &id, "stopped").await?;
+    sqlx::query("UPDATE agent_instances SET container_id = NULL, updated_at = NOW() WHERE id::text = $1")
+        .bind(&id)
+        .execute(state.db.inner())
+        .await
+        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    Ok(Json(instance_to_response(row)))
 }

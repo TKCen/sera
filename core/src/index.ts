@@ -639,6 +639,11 @@ const startServer = async () => {
     )
     .catch((err) => logger.error('Failed to import resources on startup:', err));
 
+  // Re-sync manifest budgets for all instances (merges instance overrides with template defaults)
+  await agentRegistry
+    .syncAllInstanceBudgets()
+    .catch((err) => logger.error('Failed to sync instance budgets on startup:', err));
+
   // Hydrate provider API keys from encrypted secrets store (if SECRETS_MASTER_KEY is set)
   await providerRegistry.hydrateSecrets().catch((err) => {
     logger.warn('Could not hydrate provider secrets (SECRETS_MASTER_KEY may not be set):', err);

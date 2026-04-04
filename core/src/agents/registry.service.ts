@@ -227,7 +227,7 @@ export class AgentRegistry {
     // Story 11.2: Import manifest schedules
     await this.syncManifestSchedules(instance.id, templateSpec, data.templateRef);
 
-    // Sync manifest budget limits to token_quotas
+    // Sync manifest budget limits to token_quotas (syncManifestBudget merges instance overrides)
     await this.syncManifestBudget(instance.id, templateSpec);
 
     // Epic 08: Initialize core memory blocks
@@ -287,9 +287,29 @@ export class AgentRegistry {
   private async syncManifestBudget(instanceId: string, spec: any) {
     if (!spec) return;
 
-    const resources = spec.resources as
+    // Merge: instance overrides take priority over template spec
+    const baseResources = spec.resources as
       | { maxLlmTokensPerHour?: number; maxLlmTokensPerDay?: number }
       | undefined;
+
+    // Fetch instance overrides from DB (they may define budget values that override the template)
+    let overrideResources:
+      | { maxLlmTokensPerHour?: number; maxLlmTokensPerDay?: number }
+      | undefined;
+    try {
+      const res = await this.pool.query(
+        `SELECT overrides->'resources' AS resources FROM agent_instances WHERE id = $1`,
+        [instanceId]
+      );
+      const row = res.rows[0];
+      if (row?.resources && typeof row.resources === 'object') {
+        overrideResources = row.resources as typeof overrideResources;
+      }
+    } catch {
+      // Non-fatal — fall through to template-only resources
+    }
+
+    const resources = { ...baseResources, ...overrideResources };
     if (!resources) return;
 
     const hourly = resources.maxLlmTokensPerHour;
@@ -313,6 +333,19 @@ export class AgentRegistry {
       .catch((err) => {
         logger.error(`Failed to sync manifest budget for ${instanceId}:`, err);
       });
+  }
+
+  /**
+   * Re-syncs manifest budgets for all instances, merging instance overrides with template spec.
+   * Called on startup to ensure overrides are reflected in token_quotas.
+   */
+  async syncAllInstanceBudgets() {
+    const instances = await this.listInstances();
+    for (const inst of instances) {
+      const template = await this.getTemplate(inst.template_ref);
+      const templateSpec = template?.spec ?? {};
+      await this.syncManifestBudget(inst.id, templateSpec);
+    }
   }
 
   async getInstance(id: string): Promise<AgentInstance | null> {

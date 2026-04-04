@@ -161,14 +161,14 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
         return;
       }
 
-      // Single upsert: COALESCE preserves the existing column value when the caller omits a field.
+      // Upsert with explicit casts — PostgreSQL needs type hints when params may be null.
       await query(
         `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, source, updated_at)
-         VALUES ($1, COALESCE($2, $3), COALESCE($4, $5), 'operator', NOW())
+         VALUES ($1, COALESCE($2::int, $3::int), COALESCE($4::int, $5::int), 'operator', NOW())
          ON CONFLICT (agent_id)
          DO UPDATE SET
-           max_tokens_per_hour = COALESCE($2, token_quotas.max_tokens_per_hour),
-           max_tokens_per_day  = COALESCE($4, token_quotas.max_tokens_per_day),
+           max_tokens_per_hour = COALESCE($2::int, token_quotas.max_tokens_per_hour),
+           max_tokens_per_day  = COALESCE($4::int, token_quotas.max_tokens_per_day),
            source = 'operator',
            updated_at = NOW()`,
         [agentId, hourly, DEFAULT_HOURLY_QUOTA, daily, DEFAULT_DAILY_QUOTA]

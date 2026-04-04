@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { MCPRegistry } from '../mcp/registry.js';
 import { SkillRegistry } from '../skills/SkillRegistry.js';
 
-export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillRegistry) {
+export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillRegistry): Router {
   const router = Router();
 
   /**

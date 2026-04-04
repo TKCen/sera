@@ -8,7 +8,7 @@ import { TabLoading } from '@/components/AgentDetailTabLoading';
 import { EmptyState } from '@/components/EmptyState';
 import { cn } from '@/lib/utils';
 
-export function CoreMemoryTab({ id }: { id: string }) {
+export function AgentDetailCoreMemoryTab({ id }: { id: string }) {
   const queryClient = useQueryClient();
   const { data: blocks, isLoading } = useQuery({
     queryKey: ['agent-core-memory', id],

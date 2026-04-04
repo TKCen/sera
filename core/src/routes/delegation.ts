@@ -62,7 +62,7 @@ function getDelegationSignKey(): Uint8Array {
 
 // ── Route factory ────────────────────────────────────────────────────────────
 
-export function createDelegationRouter(intercomService?: IntercomService) {
+export function createDelegationRouter(intercomService?: IntercomService): Router {
   const router = Router();
   const audit = AuditService.getInstance();
 

@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { Eye, Map, Zap, RefreshCw, Wrench, CheckCircle, Brain } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import {
+  Eye,
+  Map,
+  Zap,
+  RotateCcw,
+  Wrench,
+  CheckCircle2,
+  Brain,
+  AlertTriangle,
+  type LucideIcon,
+} from 'lucide-react';
+import { cn, formatTime } from '@/lib/utils';
+import { getStepMeta } from '@/lib/step-metadata';
 import type { ThoughtEvent } from '@/lib/api/types';
 
 interface ThoughtTimelineProps {
@@ -8,62 +19,16 @@ interface ThoughtTimelineProps {
   className?: string;
 }
 
-type StepType = ThoughtEvent['stepType'];
-
-const STEP_META: Record<
-  StepType,
-  { label: string; icon: React.ReactNode; color: string; bg: string }
-> = {
-  observe: {
-    label: 'Observe',
-    icon: <Eye size={12} />,
-    color: 'text-sera-info',
-    bg: 'bg-sera-info/15 border-sera-info/30',
-  },
-  plan: {
-    label: 'Plan',
-    icon: <Map size={12} />,
-    color: 'text-sera-warning',
-    bg: 'bg-sera-warning/15 border-sera-warning/30',
-  },
-  act: {
-    label: 'Act',
-    icon: <Zap size={12} />,
-    color: 'text-sera-success',
-    bg: 'bg-sera-success/15 border-sera-success/30',
-  },
-  reflect: {
-    label: 'Reflect',
-    icon: <RefreshCw size={12} />,
-    color: 'text-[#c084fc]',
-    bg: 'bg-[#c084fc]/15 border-[#c084fc]/30',
-  },
-  'tool-call': {
-    label: 'Tool',
-    icon: <Wrench size={12} />,
-    color: 'text-sera-warning',
-    bg: 'bg-sera-warning/15 border-sera-warning/30',
-  },
-  'tool-result': {
-    label: 'Result',
-    icon: <CheckCircle size={12} />,
-    color: 'text-sera-success',
-    bg: 'bg-sera-success/10 border-sera-success/20',
-  },
-  reasoning: {
-    label: 'Reason',
-    icon: <Brain size={12} />,
-    color: 'text-sera-text-muted',
-    bg: 'bg-sera-surface-hover border-sera-border',
-  },
+const STEP_ICONS: Record<string, LucideIcon> = {
+  Eye,
+  Map,
+  Zap,
+  RotateCcw,
+  Wrench,
+  CheckCircle2,
+  Brain,
+  AlertTriangle,
 };
-
-function formatTime(ts: string): string {
-  const d = new Date(ts);
-  return isNaN(d.getTime())
-    ? ''
-    : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
 
 export function ThoughtTimeline({ thoughts, className }: ThoughtTimelineProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -125,7 +90,8 @@ export function ThoughtTimeline({ thoughts, className }: ThoughtTimelineProps) {
           </p>
         ) : (
           displayed.map((t, i) => {
-            const meta = STEP_META[t.stepType] ?? STEP_META.reasoning;
+            const meta = getStepMeta(t.stepType);
+            const Icon = STEP_ICONS[meta.icon] ?? Brain;
             return (
               <div
                 key={i}
@@ -135,7 +101,9 @@ export function ThoughtTimeline({ thoughts, className }: ThoughtTimelineProps) {
                   'animate-in fade-in-0 slide-in-from-bottom-1 duration-200'
                 )}
               >
-                <div className={cn('flex-shrink-0 mt-0.5', meta.color)}>{meta.icon}</div>
+                <div className={cn('flex-shrink-0 mt-0.5', meta.color)}>
+                  <Icon size={12} />
+                </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <span

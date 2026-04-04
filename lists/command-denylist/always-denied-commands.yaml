@@ -3,9 +3,21 @@ kind: NamedList
 metadata:
   name: always-denied-commands
   type: command-denylist
+  description: >
+    Commands that are never permitted regardless of other policy.
+    Applied automatically to all agents at all boundaries.
 entries:
   - "rm -rf /"
-  - "mkfs*"
-  - "dd if=*"
+  - "rm -rf /*"
+  - "dd if=* of=/dev/*"
+  - "mkfs *"
+  - "> /dev/*"
+  - "curl * | bash"
+  - "curl * | sh"
+  - "wget -O- * | bash"
+  - "wget -O- * | sh"
+  - "eval *"
+  - "chmod +s *"
+  - "sudo *"
   - "shutdown"
   - "reboot"

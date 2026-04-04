@@ -23,7 +23,7 @@ export function createAgentRouter(
   orchestrator: Orchestrator,
   agentRegistry: AgentRegistry,
   skillRegistry: SkillRegistry
-) {
+): Router {
   const router = Router();
 
   // ── List all agent instances (primary endpoint for the web UI) ────────────

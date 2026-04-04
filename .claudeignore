@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.lock
+__pycache__/
+*.log
+.omc/
+.git/
+centrifugo/
+litellm/

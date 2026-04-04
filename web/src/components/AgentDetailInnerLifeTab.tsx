@@ -111,7 +111,7 @@ const ALL_CATEGORIES = [
   'schedule_review',
 ] as const;
 
-export function InnerLifeTab({ id }: { id: string }) {
+export function AgentDetailInnerLifeTab({ id }: { id: string }) {
   const [categoryFilter, setCategoryFilter] = useState<string | undefined>(undefined);
 
   const { data: runs, isLoading } = useScheduleRuns({

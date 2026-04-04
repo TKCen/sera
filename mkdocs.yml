@@ -1,0 +1,181 @@
+site_name: SERA Documentation
+site_description: Sandboxed Extensible Reasoning Agent — Docker-native multi-agent AI orchestration
+site_url: https://tkcen.github.io/sera/
+repo_url: https://github.com/TKCen/sera
+repo_name: TKCen/sera
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+
+plugins:
+  - search
+  - tags
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/TKCen/sera
+
+nav:
+  - Home: index.md
+
+  - Getting Started:
+    - getting-started/index.md
+    - Quick Start: QUICKSTART.md
+    - Configuration: getting-started/configuration.md
+    - Your First Agent: getting-started/first-agent.md
+    - Deployment: DEPLOYMENT.md
+
+  - Architecture:
+    - architecture/index.md
+    - System Overview: architecture/system-overview.md
+    - Component Architecture: architecture/components.md
+    - Agent Architecture: architecture/agents.md
+    - LLM Routing: architecture/llm-routing.md
+    - Docker Sandbox Model: architecture/sandbox.md
+    - Capability Model: architecture/capabilities.md
+    - Memory & RAG: architecture/memory.md
+    - Real-Time Messaging: architecture/messaging.md
+    - Egress Proxy: EGRESS-ENFORCEMENT.md
+
+  - Concepts:
+    - concepts/index.md
+    - Agent Templates & Instances: concepts/agents.md
+    - Skills vs MCP Tools: concepts/skills-and-tools.md
+    - Circles & Coordination: concepts/circles.md
+    - Channels & Integrations: concepts/channels.md
+    - BYOH Agents: BYOH-CONTRACT.md
+    - Audit Trail: concepts/audit.md
+    - Scheduling: concepts/scheduling.md
+    - Prompt Injection Defence: concepts/security.md
+
+  - Guides:
+    - guides/index.md
+    - Creating Custom Agents: guides/creating-agents.md
+    - Writing Skills: guides/writing-skills.md
+    - Setting Up MCP Servers: guides/mcp-servers.md
+    - Discord Integration: guides/discord.md
+    - Authentication & OIDC: guides/authentication.md
+    - Managing Budgets: guides/budgets.md
+
+  - API Reference:
+    - api/index.md
+    - Agent API: api/agents.md
+    - Chat API: api/chat.md
+    - Memory API: api/memory.md
+    - MCP & Tools API: api/mcp-tools.md
+    - Admin API: api/admin.md
+
+  - Development:
+    - development/index.md
+    - Testing Strategy: TESTING.md
+    - Agent Workflow: AGENT-WORKFLOW.md
+    - Skill Ecosystem: SKILL-ECOSYSTEM.md
+    - Migrations: MIGRATIONS.md
+
+  - Roadmap:
+    - roadmap/index.md
+    - Implementation Order: IMPLEMENTATION-ORDER.md
+    - V1 Execution Plan: SERA-V1-EXECUTION-PLAN.md
+
+  - Decisions:
+    - adrs/README.md
+    - "ADR-001: Tool Execution": adrs/001-tool-execution-architecture.md
+    - "ADR-002: Implementation Gaps": adrs/002-implementation-gap-analysis.md
+    - "ADR-003: Scope Validation": adrs/003-scope-validation-framework.md
+    - "ADR-004: Permission Grants": adrs/004-permission-grant-persistence.md
+    - "ADR-005: Core Modularity": adrs/005-core-modularity-and-component-interfaces.md
+    - "ADR-006: Web & Runtime Modularity": adrs/006-web-and-agent-runtime-modularity.md
+    - "ADR-007: Consolidation": adrs/007-duplication-and-consolidation.md
+
+  - Epics:
+    - epics/index.md
+    - "01: Infrastructure": epics/01-infrastructure-foundation.md
+    - "02: Manifest & Registry": epics/02-agent-manifest-and-registry.md
+    - "03: Docker Sandbox": epics/03-docker-sandbox-and-lifecycle.md
+    - "04: LLM Proxy": epics/04-llm-proxy-and-governance.md
+    - "05: Agent Runtime": epics/05-agent-runtime.md
+    - "06: Skill Library": epics/06-skill-library.md
+    - "07: MCP Tools": epics/07-mcp-tool-registry.md
+    - "08: Memory & RAG": epics/08-memory-and-rag.md
+    - "09: Messaging": epics/09-real-time-messaging.md
+    - "10: Circles": epics/10-circles-and-coordination.md
+    - "11: Scheduling & Audit": epics/11-scheduling-and-audit.md
+    - "12: Web Foundation": epics/12-sera-web-foundation.md
+    - "13: Web Agent UX": epics/13-sera-web-agent-ux.md
+    - "14: Web Observability": epics/14-sera-web-observability.md
+    - "15: Plugin SDK": epics/15-plugin-sdk-and-ecosystem.md
+    - "16: Auth & Secrets": epics/16-authentication-and-secrets.md
+    - "17: Identity & Delegation": epics/17-agent-identity-and-delegation.md
+    - "18: Channels": epics/18-integration-channels.md
+    - "19: Memory Consolidation": epics/19-memory-system-consolidation.md
+    - "20: Egress Proxy": epics/20-egress-proxy.md
+    - "21: ACP/IDE Bridge": epics/21-acp-ide-bridge.md
+    - "22: Canvas/A2UI": epics/22-canvas-a2ui.md
+    - "23: Voice Interface": epics/23-voice-interface.md
+    - "24: A2A Federation": epics/24-a2a-federation.md
+    - "25: Media Processing": epics/25-media-processing-pipeline.md
+    - "26: Extended Channels": epics/26-extended-channel-adapters.md
+    - "27: Setup & Diagnostics": epics/27-interactive-setup-and-diagnostics.md
+    - "28: Image Generation": epics/28-image-generation.md
+    - "29: Web Intelligence": epics/29-enhanced-web-intelligence.md

@@ -1,10 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
-import { request } from '@/lib/api/client';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { queryClient } from '@/lib/query-client';
-import { Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
+import { Play, Square, RotateCcw, Bot, Trash2, Activity, Settings, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,
@@ -30,38 +28,24 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
-import { TabLoading } from '@/components/AgentDetailTabLoading';
-import { AgentDetailManifestTab as ManifestTab } from '@/components/AgentDetailManifestTab';
-import { AgentDetailGrantsTab as GrantsTab } from '@/components/AgentDetailGrantsTab';
-import { AgentDetailToolsTab as ToolsTab } from '@/components/AgentDetailToolsTab';
-import { AgentDetailLogsTab as LogsTab } from '@/components/AgentDetailLogsTab';
-import { MemoryTab } from '@/components/AgentDetailMemoryTab';
-import { SchedulesTab } from '@/components/AgentDetailSchedulesTab';
-import { BudgetTab } from '@/components/AgentDetailBudgetTab';
-import { InnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
-import { DelegationsTab } from '@/components/AgentDetailDelegationsTab';
-import { ContextTab } from '@/components/AgentDetailContextTab';
-import { CoreMemoryTab } from '@/components/AgentDetailCoreMemoryTab';
-import { CommandLogTimeline } from '@/components/CommandLogTimeline';
+import { AgentDetailManifestTab } from '@/components/AgentDetailManifestTab';
+import { AgentDetailGrantsTab } from '@/components/AgentDetailGrantsTab';
+import { AgentDetailToolsTab } from '@/components/AgentDetailToolsTab';
+import { AgentDetailLogsTab } from '@/components/AgentDetailLogsTab';
+import { AgentDetailMemoryTab } from '@/components/AgentDetailMemoryTab';
+import { AgentDetailSchedulesTab } from '@/components/AgentDetailSchedulesTab';
+import { AgentDetailBudgetTab } from '@/components/AgentDetailBudgetTab';
+import { AgentDetailInnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
+import { AgentDetailDelegationsTab } from '@/components/AgentDetailDelegationsTab';
+import { AgentDetailContextTab } from '@/components/AgentDetailContextTab';
+import { AgentDetailCoreMemoryTab } from '@/components/AgentDetailCoreMemoryTab';
+import { AgentDetailCommandsTab } from '@/components/AgentDetailCommandsTab';
+import { AgentDetailHealthCheckTab } from '@/components/AgentDetailHealthCheckTab';
+import { AgentDetailSystemPromptTab } from '@/components/AgentDetailSystemPromptTab';
 import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
 import { TemplateDiffBanner } from '@/components/TemplateDiffBanner';
 
-type Tab =
-  | 'overview'
-  | 'tasks'
-  | 'grants'
-  | 'tools'
-  | 'delegations'
-  | 'logs'
-  | 'commands'
-  | 'memory'
-  | 'core-memory'
-  | 'schedules'
-  | 'inner-life'
-  | 'budget'
-  | 'context'
-  | 'prompt'
-  | 'health';
+type Tab = 'overview' | 'activity' | 'configuration' | 'observability';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -78,11 +62,17 @@ export default function AgentDetailPage() {
 
   const initialValues: AgentFormInitialValues | undefined = useMemo(() => {
     if (!agent) return undefined;
-    const overrides = (agent.overrides ?? {}) as Record<string, unknown>;
-    const modelOv = overrides.model as Record<string, unknown> | undefined;
-    const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
-    const permissionsOv = overrides.permissions as Record<string, unknown> | undefined;
-    const toolsOv = overrides.tools as Record<string, unknown> | undefined;
+    const overrides = agent.overrides ?? {};
+    const obj = (key: string): Record<string, unknown> | undefined => {
+      const v = overrides[key];
+      return v && typeof v === 'object' && !Array.isArray(v)
+        ? (v as Record<string, unknown>)
+        : undefined;
+    };
+    const modelOv = obj('model');
+    const resourcesOv = obj('resources');
+    const permissionsOv = obj('permissions');
+    const toolsOv = obj('tools');
 
     return {
       templateRef: agent.template_ref,
@@ -199,33 +189,24 @@ export default function AgentDetailPage() {
         <div className="flex gap-0 mt-4">
           {(
             [
-              'overview',
-              'tasks',
-              'grants',
-              'tools',
-              'delegations',
-              'logs',
-              'commands',
-              'memory',
-              'core-memory',
-              'schedules',
-              'inner-life',
-              'budget',
-              'context',
-              'health',
+              { id: 'overview', label: 'Overview', icon: Bot },
+              { id: 'activity', label: 'Activity', icon: Activity },
+              { id: 'configuration', label: 'Configuration', icon: Settings },
+              { id: 'observability', label: 'Observability', icon: Monitor },
             ] as const
-          ).map((t) => (
+          ).map(({ id: tabId, label, icon: Icon }) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
+              key={tabId}
+              onClick={() => setTab(tabId)}
               className={cn(
-                'px-4 py-2 text-sm font-medium border-b-2 transition-colors',
-                tab === t
+                'px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-2',
+                tab === tabId
                   ? 'border-sera-accent text-sera-accent'
                   : 'border-transparent text-sera-text-muted hover:text-sera-text'
               )}
             >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              <Icon size={15} />
+              {label}
             </button>
           ))}
         </div>
@@ -242,21 +223,139 @@ export default function AgentDetailPage() {
           }}
           fallbackMessage="The agent detail tab content failed to load."
         >
-          {tab === 'overview' && <ManifestTab id={id} />}
-          {tab === 'tasks' && <AgentDetailTasksTab id={id} />}
-          {tab === 'grants' && <GrantsTab id={id} />}
-          {tab === 'tools' && <ToolsTab id={id} />}
-          {tab === 'delegations' && <DelegationsTab id={id} />}
-          {tab === 'logs' && <LogsTab id={id} />}
-          {tab === 'commands' && <CommandsTab id={id} />}
-          {tab === 'memory' && <MemoryTab id={id} />}
-          {tab === 'core-memory' && <CoreMemoryTab id={id} />}
-          {tab === 'schedules' && <SchedulesTab id={id} agentName={agent?.name} />}
-          {tab === 'inner-life' && <InnerLifeTab id={id} />}
-          {tab === 'budget' && <BudgetTab id={id} />}
-          {tab === 'context' && <ContextTab id={id} />}
-          {tab === 'prompt' && <SystemPromptTab id={id} />}
-          {tab === 'health' && <HealthCheckTab id={id} />}
+          {tab === 'overview' && <AgentDetailManifestTab id={id} />}
+
+          {tab === 'activity' && (
+            <div className="p-6 space-y-6">
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Activity size={15} /> Tasks
+                </h3>
+                <AgentDetailTasksTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Delegations
+                </h3>
+                <AgentDetailDelegationsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Inner Life
+                </h3>
+                <AgentDetailInnerLifeTab id={id} />
+              </section>
+            </div>
+          )}
+
+          {tab === 'configuration' && (
+            <div className="p-6 space-y-6">
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Grants
+                </h3>
+                <AgentDetailGrantsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Tools
+                </h3>
+                <AgentDetailToolsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Budget
+                </h3>
+                <AgentDetailBudgetTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Context
+                </h3>
+                <AgentDetailContextTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> System Prompt
+                </h3>
+                <AgentDetailSystemPromptTab id={id} />
+              </section>
+            </div>
+          )}
+
+          {tab === 'observability' && (
+            <div className="p-6 space-y-6">
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Logs
+                </h3>
+                <AgentDetailLogsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Commands
+                </h3>
+                <AgentDetailCommandsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Health Check
+                </h3>
+                <AgentDetailHealthCheckTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Memory
+                </h3>
+                <AgentDetailMemoryTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Core Memory
+                </h3>
+                <AgentDetailCoreMemoryTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Schedules
+                </h3>
+                <AgentDetailSchedulesTab id={id} agentName={agent?.name} />
+              </section>
+            </div>
+          )}
         </ErrorBoundary>
       </div>
 
@@ -332,151 +431,6 @@ export default function AgentDetailPage() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function CommandsTab({ id }: { id: string }) {
-  const { data: sessions, isLoading } = useQuery({
-    queryKey: ['agent-sessions', id],
-    queryFn: () =>
-      request<Array<{ id: string; title: string; updatedAt: string }>>(
-        `/sessions?agentInstanceId=${encodeURIComponent(id)}`
-      ),
-  });
-
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-
-  if (isLoading) return <TabLoading />;
-
-  const sortedSessions = [...(sessions ?? [])].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  );
-
-  // Auto-select most recent session
-  if (!selectedSessionId && sortedSessions.length > 0) {
-    setSelectedSessionId(sortedSessions[0]!.id);
-  }
-
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex-shrink-0 border-b border-sera-border bg-sera-surface-bright/20 p-3">
-        <div className="flex items-center gap-3">
-          <label className="text-[10px] font-bold text-sera-text-muted uppercase tracking-wider flex items-center gap-1.5">
-            Session Context:
-          </label>
-          <select
-            value={selectedSessionId ?? ''}
-            onChange={(e) => setSelectedSessionId(e.target.value)}
-            className="text-xs bg-sera-surface border border-sera-border rounded-md px-3 py-1.5 min-w-[240px] font-medium outline-none focus:ring-1 focus:ring-sera-accent"
-          >
-            {sortedSessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title || 'Untitled Session'} — {new Date(s.updatedAt).toLocaleDateString()}
-              </option>
-            ))}
-            {sortedSessions.length === 0 && <option value="">No sessions found</option>}
-          </select>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        {selectedSessionId ? (
-          <CommandLogTimeline agentId={id} sessionId={selectedSessionId} />
-        ) : (
-          <div className="flex flex-col items-center justify-center p-12 text-sera-text-muted opacity-50">
-            <Bot size={40} className="mb-4 text-sera-accent-soft" />
-            <p className="text-sm font-medium">Select a session to view its command log</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-interface HealthCheckResult {
-  agentId: string;
-  agentName?: string;
-  overallStatus: string;
-  checks: Record<string, { ok: boolean; detail?: string }>;
-}
-
-function HealthCheckTab({ id }: { id: string }) {
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['agent-health-check', id],
-    queryFn: () => request<HealthCheckResult>(`/agents/${encodeURIComponent(id)}/health-check`),
-    enabled: id.length > 0,
-  });
-
-  if (isLoading) return <TabLoading />;
-
-  const overallColor =
-    data?.overallStatus === 'healthy'
-      ? 'text-sera-success'
-      : data?.overallStatus === 'degraded'
-        ? 'text-yellow-400'
-        : 'text-sera-error';
-
-  return (
-    <div className="p-6 max-w-2xl space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-sera-text">Health Check</h3>
-          <p className="text-xs text-sera-text-muted mt-0.5">
-            Diagnostic checks for this agent instance
-          </p>
-        </div>
-        <Button size="sm" variant="outline" onClick={() => void refetch()} disabled={isFetching}>
-          <RotateCcw size={12} className={isFetching ? 'animate-spin' : ''} /> Re-check
-        </Button>
-      </div>
-
-      {data && (
-        <>
-          <div className={cn('text-sm font-semibold', overallColor)}>
-            Status: {data.overallStatus}
-          </div>
-
-          <div className="sera-card-static divide-y divide-sera-border/50">
-            {Object.entries(data.checks).map(([name, check]) => (
-              <div key={name} className="flex items-center gap-3 px-4 py-3">
-                {check.ok ? (
-                  <Check size={14} className="text-sera-success flex-shrink-0" />
-                ) : (
-                  <AlertCircle size={14} className="text-sera-error flex-shrink-0" />
-                )}
-                <span className="text-sm text-sera-text font-medium flex-1">{name}</span>
-                {check.detail && (
-                  <span className="text-xs text-sera-text-muted">{check.detail}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function SystemPromptTab({ id }: { id: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['agent-system-prompt', id],
-    queryFn: () => request<{ prompt: string }>(`/agents/${encodeURIComponent(id)}/system-prompt`),
-    enabled: id.length > 0,
-  });
-
-  if (isLoading) return <TabLoading />;
-
-  return (
-    <div className="p-6 max-w-4xl">
-      <h3 className="text-sm font-semibold text-sera-text mb-3">Resolved System Prompt</h3>
-      <p className="text-xs text-sera-text-muted mb-4">
-        This is the full system prompt sent to the LLM on each request, built from the agent&apos;s
-        template identity, tools, and configuration.
-      </p>
-      <pre className="sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-auto whitespace-pre-wrap max-h-[70vh]">
-        {data?.prompt || 'Unable to generate system prompt.'}
-      </pre>
     </div>
   );
 }

@@ -1,0 +1,9 @@
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: standard-dev-tools
+  type: command-allowlist
+  description: Composite list of standard development tools
+entries:
+  - $ref: lists/command-allowlist/git-commands
+  - $ref: lists/command-allowlist/nodejs-dev

@@ -1,0 +1,9 @@
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: npm-registry
+  type: network-allowlist
+  description: npm package registry endpoints
+entries:
+  - "registry.npmjs.org"
+  - "*.npmjs.com"

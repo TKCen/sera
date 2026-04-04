@@ -114,6 +114,8 @@ services:
       dockerfile: Dockerfile
     container_name: sera-web
     restart: unless-stopped
+    ports:
+      - "${SERA_WEB_PORT:-8080}:80"
     networks:
       - sera_net
       - agent_net

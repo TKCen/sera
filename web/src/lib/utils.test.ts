@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { utilPct, budgetBarColor, cn, formatDistanceToNow } from './utils';
+import {
+  utilPct,
+  budgetBarColor,
+  cn,
+  formatDistanceToNow,
+  formatTime,
+  formatElapsed,
+} from './utils';
 
 describe('utils', () => {
   describe('utilPct', () => {
@@ -59,6 +66,39 @@ describe('utils', () => {
 
     it('handles conditional classes', () => {
       expect(cn('p-4', undefined, null, 'text-red-500')).toBe('p-4 text-red-500');
+    });
+  });
+
+  describe('formatTime', () => {
+    it('formats a valid ISO timestamp as HH:MM:SS', () => {
+      // Use a fixed date to avoid locale issues
+      const result = formatTime('2026-01-15T14:30:45Z');
+      // Should contain digits and colons (locale-dependent format)
+      expect(result).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+    });
+
+    it('returns empty string for invalid timestamp', () => {
+      expect(formatTime('not-a-date')).toBe('');
+      expect(formatTime('')).toBe('');
+    });
+  });
+
+  describe('formatElapsed', () => {
+    it('formats milliseconds', () => {
+      expect(formatElapsed('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.500Z')).toBe('500ms');
+    });
+
+    it('formats seconds', () => {
+      expect(formatElapsed('2026-01-01T00:00:00Z', '2026-01-01T00:00:05Z')).toBe('5.0s');
+    });
+
+    it('formats minutes and seconds', () => {
+      expect(formatElapsed('2026-01-01T00:00:00Z', '2026-01-01T00:02:30Z')).toBe('2m 30s');
+    });
+
+    it('returns empty string for invalid or negative elapsed', () => {
+      expect(formatElapsed('not-a-date', '2026-01-01T00:00:00Z')).toBe('');
+      expect(formatElapsed('2026-01-01T00:00:05Z', '2026-01-01T00:00:00Z')).toBe('');
     });
   });
 

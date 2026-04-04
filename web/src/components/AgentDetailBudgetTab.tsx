@@ -6,7 +6,7 @@ import { BudgetBar } from '@/components/BudgetBar';
 import { Button } from '@/components/ui/button';
 import { TabLoading } from '@/components/AgentDetailTabLoading';
 
-export function BudgetTab({ id }: { id: string }) {
+export function AgentDetailBudgetTab({ id }: { id: string }) {
   const { data: budget, isLoading, refetch } = useAgentBudget(id);
   const patchBudget = usePatchAgentBudget(id);
   const resetBudget = useResetAgentBudget(id);

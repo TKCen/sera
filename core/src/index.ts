@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type Express } from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'node:fs';
@@ -90,7 +90,7 @@ import { createNotificationsRouter } from './routes/notifications.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
 
-const app = express();
+const app: Express = express();
 const logger = new Logger('SERACore');
 
 // ── Workspace Root ───────────────────────────────────────────────────────────
@@ -638,6 +638,11 @@ const startServer = async () => {
       )
     )
     .catch((err) => logger.error('Failed to import resources on startup:', err));
+
+  // Re-sync manifest budgets for all instances (merges instance overrides with template defaults)
+  await agentRegistry
+    .syncAllInstanceBudgets()
+    .catch((err) => logger.error('Failed to sync instance budgets on startup:', err));
 
   // Hydrate provider API keys from encrypted secrets store (if SECRETS_MASTER_KEY is set)
   await providerRegistry.hydrateSecrets().catch((err) => {

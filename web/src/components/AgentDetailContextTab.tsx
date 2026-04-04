@@ -1,23 +1,11 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { request } from '@/lib/api/client';
 import { Loader2, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useAgentContextDebug } from '@/hooks/useAgents';
+import type { ContextDebugResponse } from '@/lib/api/agents';
 
-interface ContextAssemblyEvent {
-  stage: string;
-  detail: Record<string, unknown>;
-  durationMs?: number;
-}
-
-interface ContextDebugResponse {
-  agentId: string;
-  agentName: string;
-  testMessage: string;
-  systemPromptLength: number;
-  events: ContextAssemblyEvent[];
-}
+type ContextAssemblyEvent = ContextDebugResponse['events'][number];
 
 function stageIcon(stage: string) {
   if (stage.includes('error') || stage.includes('skip')) {
@@ -119,17 +107,11 @@ function EventCard({ event, defaultOpen }: { event: ContextAssemblyEvent; defaul
   );
 }
 
-export function ContextTab({ id }: { id: string }) {
+export function AgentDetailContextTab({ id }: { id: string }) {
   const [testMessage, setTestMessage] = useState('Hello');
   const [queryMessage, setQueryMessage] = useState('Hello');
 
-  const { data, isLoading, isError, error, refetch } = useQuery<ContextDebugResponse>({
-    queryKey: ['agent-context-debug', id, queryMessage],
-    queryFn: () =>
-      request<ContextDebugResponse>(
-        `/agents/${id}/context-debug?message=${encodeURIComponent(queryMessage)}`
-      ),
-  });
+  const { data, isLoading, isError, error, refetch } = useAgentContextDebug(id, queryMessage);
 
   const handleRun = () => {
     setQueryMessage(testMessage);

@@ -201,7 +201,25 @@ export class LLMClient implements ILLMClient {
     }
 
     try {
-      const res = await this.http.post('/chat/completions', body, {
+      // Pre-serialize to detect and strip cyclic references before axios tries JSON.stringify.
+      // Bun's JSON.stringify throws on cycles; this produces clean JSON that axios can send.
+      let safeBody: string;
+      try {
+        safeBody = JSON.stringify(body);
+      } catch {
+        // Fallback: strip non-serializable values by round-tripping through a replacer
+        const seen = new WeakSet();
+        safeBody = JSON.stringify(body, (_key, value) => {
+          if (typeof value === 'object' && value !== null) {
+            if (seen.has(value)) return '[Circular]';
+            seen.add(value);
+          }
+          return value;
+        });
+        log('warn', 'LLM request body contained cyclic references — stripped before sending');
+      }
+
+      const res = await this.http.post('/chat/completions', safeBody, {
         responseType: 'stream',
         ...(timeoutMs ? { timeout: timeoutMs } : {}),
       });

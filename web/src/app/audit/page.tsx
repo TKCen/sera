@@ -8,7 +8,9 @@ import {
   CheckCircle2,
   XCircle,
   Filter,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAuditEvents, useVerifyAuditChain } from '@/hooks/useAudit';
 import { useAuth } from '@/hooks/useAuth';
 import { getAuditExportUrl } from '@/lib/api/audit';
@@ -174,6 +176,9 @@ export default function AuditPage() {
       URL.revokeObjectURL(blobUrl);
     } catch (err) {
       console.error('[AuditPage] Export error', err);
+      toast.error('Audit export failed', {
+        description: err instanceof Error ? err.message : 'An unexpected error occurred',
+      });
     } finally {
       setExporting(false);
     }
@@ -238,7 +243,7 @@ export default function AuditPage() {
               disabled={exporting}
               className="flex items-center gap-1 px-3 py-2 text-xs text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover transition-colors"
             >
-              <Download size={13} />
+              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
               {exporting ? 'Exporting…' : 'Export'}
             </button>
           </div>

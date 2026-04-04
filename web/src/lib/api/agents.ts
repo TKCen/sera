@@ -210,6 +210,47 @@ export function applyTemplateUpdate(
   );
 }
 
+// ── Agent Detail Diagnostics ────────────────────────────────────────────────
+
+export interface ContextDebugResponse {
+  agentId: string;
+  agentName: string;
+  testMessage: string;
+  systemPromptLength: number;
+  events: Array<{ stage: string; detail: Record<string, unknown>; durationMs?: number }>;
+}
+
+export function getAgentContextDebug(id: string, message: string): Promise<ContextDebugResponse> {
+  return request<ContextDebugResponse>(
+    `/agents/${encodeURIComponent(id)}/context-debug?message=${encodeURIComponent(message)}`
+  );
+}
+
+export interface AgentHealthCheckResult {
+  agentId: string;
+  agentName?: string;
+  overallStatus: string;
+  checks: Record<string, { ok: boolean; detail?: string }>;
+}
+
+export function getAgentHealthCheck(id: string): Promise<AgentHealthCheckResult> {
+  return request<AgentHealthCheckResult>(`/agents/${encodeURIComponent(id)}/health-check`);
+}
+
+export function getAgentSystemPrompt(id: string): Promise<{ prompt: string }> {
+  return request<{ prompt: string }>(`/agents/${encodeURIComponent(id)}/system-prompt`);
+}
+
+export interface AgentSession {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+export function getAgentSessions(agentId: string): Promise<AgentSession[]> {
+  return request<AgentSession[]>(`/sessions?agentInstanceId=${encodeURIComponent(agentId)}`);
+}
+
 export function skipTemplateUpdate(agentId: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(
     `/agents/${encodeURIComponent(agentId)}/skip-template-update`,

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 import {
   Bot,
@@ -226,11 +227,14 @@ export default function DashboardPage() {
   const { data: health, isLoading: healthLoading, error: healthError } = useHealthDetail();
   const { data: circles, isLoading: circlesLoading, error: circlesError } = useCircles();
   const { data: schedules, isLoading: schedulesLoading, error: schedulesError } = useSchedules({});
+  const [statusFilter, setStatusFilter] = useState<string>('');
 
   const running = agents?.filter((a) => a.status === 'running').length ?? 0;
   const errored = agents?.filter((a) => a.status === 'error').length ?? 0;
   const totalAgents = agents?.length ?? 0;
   const activeSchedules = schedules?.filter((s) => s.status === 'active').length ?? 0;
+
+  const filteredAgents = agents?.filter((a) => !statusFilter || a.status === statusFilter) ?? [];
 
   const handleReset = () => {
     void queryClient.invalidateQueries();
@@ -285,7 +289,7 @@ export default function DashboardPage() {
                 label="Running"
                 value={running}
                 icon={Activity}
-                to="/agents"
+                to="/agents?status=running"
                 accent="text-sera-success"
                 isLoading={agentsLoading}
               />
@@ -340,6 +344,53 @@ export default function DashboardPage() {
           </CardHeader>
 
           <CardContent className="p-4 pt-0">
+            {/* Status filter tabs */}
+            <nav aria-label="Filter agents by status" className="flex items-center gap-1 mb-4">
+              <button
+                onClick={() => setStatusFilter('')}
+                aria-pressed={!statusFilter}
+                className={
+                  !statusFilter
+                    ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
+                    : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                }
+              >
+                All
+              </button>
+              <button
+                onClick={() => setStatusFilter('running')}
+                aria-pressed={statusFilter === 'running'}
+                className={
+                  statusFilter === 'running'
+                    ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
+                    : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                }
+              >
+                Running
+              </button>
+              <button
+                onClick={() => setStatusFilter('stopped')}
+                aria-pressed={statusFilter === 'stopped'}
+                className={
+                  statusFilter === 'stopped'
+                    ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
+                    : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                }
+              >
+                Stopped
+              </button>
+              <button
+                onClick={() => setStatusFilter('error')}
+                aria-pressed={statusFilter === 'error'}
+                className={
+                  statusFilter === 'error'
+                    ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-sera-accent-soft text-sera-accent'
+                    : 'px-2.5 py-1 rounded-md text-xs font-medium text-sera-text-muted hover:bg-sera-surface-hover transition-colors'
+                }
+              >
+                Error
+              </button>
+            </nav>
             {agentsLoading ? (
               <div className="space-y-1.5" aria-busy="true">
                 {Array.from({ length: 3 }).map((_, i) => (
@@ -350,9 +401,9 @@ export default function DashboardPage() {
               <Alert variant="error" title="Failed to load agents">
                 {agentsError.message}
               </Alert>
-            ) : agents && agents.length > 0 ? (
+            ) : filteredAgents && filteredAgents.length > 0 ? (
               <ul className="space-y-1.5">
-                {agents.map((agent) => (
+                {filteredAgents.map((agent) => (
                   <li key={agent.id}>
                     <Link
                       to={`/agents/${agent.id}`}

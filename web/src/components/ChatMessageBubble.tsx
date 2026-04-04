@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 import { ChatThoughtPanel } from '@/components/ChatThoughtPanel';
 import { CodeBlock } from '@/components/CodeBlock';
-import { MessageCopyButton } from '@/components/MessageCopyButton';
+import { CopyButton } from '@/components/CopyButton';
 import type { Message } from '@/lib/api/types';
 
 export interface ChatMessageBubbleProps {
@@ -58,6 +58,7 @@ export function ChatMessageBubble({
             <div
               className="flex items-center gap-2"
               role="status"
+              aria-live="polite"
               aria-label="Generating message..."
             >
               <Loader2 size={14} className="animate-spin text-sera-accent" />
@@ -94,7 +95,7 @@ export function ChatMessageBubble({
           <span className="text-[10px] opacity-40">{msg.createdAt.toLocaleTimeString()}</span>
           {msg.role === 'agent' && msg.content && !msg.streaming && (
             <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-              <MessageCopyButton text={msg.content} />
+              <CopyButton value={msg.content} variant="inline" />
             </span>
           )}
         </div>

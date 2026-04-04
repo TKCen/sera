@@ -72,8 +72,10 @@ export function ProvidersTab() {
 
   const statusMap = new Map<string, string>();
   if (statuses && Array.isArray(statuses)) {
-    for (const s of statuses as Array<{ id: string; status: string }>) {
-      statusMap.set(s.id, s.status);
+    for (const s of statuses) {
+      if (s && typeof s === 'object' && 'id' in s && 'status' in s) {
+        statusMap.set(String(s.id), String(s.status));
+      }
     }
   }
 

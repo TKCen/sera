@@ -62,11 +62,17 @@ export default function AgentDetailPage() {
 
   const initialValues: AgentFormInitialValues | undefined = useMemo(() => {
     if (!agent) return undefined;
-    const overrides = (agent.overrides ?? {}) as Record<string, unknown>;
-    const modelOv = overrides.model as Record<string, unknown> | undefined;
-    const resourcesOv = overrides.resources as Record<string, unknown> | undefined;
-    const permissionsOv = overrides.permissions as Record<string, unknown> | undefined;
-    const toolsOv = overrides.tools as Record<string, unknown> | undefined;
+    const overrides = agent.overrides ?? {};
+    const obj = (key: string): Record<string, unknown> | undefined => {
+      const v = overrides[key];
+      return v && typeof v === 'object' && !Array.isArray(v)
+        ? (v as Record<string, unknown>)
+        : undefined;
+    };
+    const modelOv = obj('model');
+    const resourcesOv = obj('resources');
+    const permissionsOv = obj('permissions');
+    const toolsOv = obj('tools');
 
     return {
       templateRef: agent.template_ref,

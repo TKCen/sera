@@ -10,6 +10,7 @@ import {
   Filter,
   Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAuditEvents, useVerifyAuditChain } from '@/hooks/useAudit';
 import { useAuth } from '@/hooks/useAuth';
 import { getAuditExportUrl } from '@/lib/api/audit';
@@ -175,6 +176,9 @@ export default function AuditPage() {
       URL.revokeObjectURL(blobUrl);
     } catch (err) {
       console.error('[AuditPage] Export error', err);
+      toast.error('Audit export failed', {
+        description: err instanceof Error ? err.message : 'An unexpected error occurred',
+      });
     } finally {
       setExporting(false);
     }

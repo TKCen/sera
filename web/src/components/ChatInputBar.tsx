@@ -77,7 +77,7 @@ export function ChatInputBar({
         type="submit"
         disabled={!input.trim() || !selectedAgent}
         className="flex-shrink-0 h-[38px] w-[38px] rounded-lg bg-sera-accent text-sera-bg flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition-all"
-        aria-label="Send message"
+        aria-label={streaming ? 'Sending message' : 'Send message'}
       >
         {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
       </button>

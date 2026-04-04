@@ -1,0 +1,9 @@
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: git-commands
+  type: command-allowlist
+  description: Standard git operations
+entries:
+  - "git *"
+  - "gh *"

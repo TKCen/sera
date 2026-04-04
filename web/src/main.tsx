@@ -29,6 +29,7 @@ import AgentMemoryGraphPage from '@/app/agents/_id/memory-graph/page';
 import ChannelsPage from '@/app/channels/page';
 import TemplatesPage from '@/app/templates/page';
 import OperatorRequestsPage from '@/app/operator-requests/page';
+import IntrospectionPage from '@/app/introspection/page';
 import LoginPage from '@/app/login/page';
 import AuthCallbackPage from '@/app/auth/callback/page';
 import { ForbiddenView } from '@/views/ForbiddenView';
@@ -79,6 +80,7 @@ createRoot(el).render(
                 <Route path="providers" element={<Navigate to="/settings?tab=models" replace />} />
                 <Route path="memory" element={<MemoryExplorerPage />} />
                 <Route path="memory/:id" element={<MemoryDetailPage />} />
+                <Route path="introspection" element={<IntrospectionPage />} />
                 <Route path="403" element={<ForbiddenView />} />
               </Route>
               <Route path="*" element={<NotFoundView />} />

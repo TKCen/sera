@@ -27,7 +27,6 @@ pub struct TemplateResponse {
     pub builtin: bool,
     pub category: Option<String>,
     pub spec: Value,
-    pub description: Option<String>,
 }
 
 /// Instance response (camelCase for API compatibility).
@@ -62,7 +61,6 @@ pub async fn list_templates(
             builtin: r.builtin,
             category: r.category,
             spec: r.spec,
-            description: r.description,
         })
         .collect();
     Ok(Json(templates))
@@ -90,15 +88,15 @@ pub async fn get_instance(
 
 fn instance_to_response(r: sera_db::agents::InstanceRow) -> InstanceResponse {
     InstanceResponse {
-        id: r.id,
+        id: r.id.to_string(),
         name: r.name,
         display_name: r.display_name,
-        template_ref: r.template_ref,
+        template_ref: r.template_ref.unwrap_or(r.template_name),
         circle: r.circle,
-        status: r.status,
+        status: r.status.unwrap_or_else(|| "active".to_string()),
         lifecycle_mode: r.lifecycle_mode,
-        parent_instance_id: r.parent_instance_id,
-        workspace_path: r.workspace_path,
+        parent_instance_id: r.parent_instance_id.map(|id| id.to_string()),
+        workspace_path: Some(r.workspace_path),
         container_id: r.container_id,
         last_heartbeat_at: r.last_heartbeat_at.map(|t| t.to_string()),
         updated_at: r.updated_at.map(|t| t.to_string()),

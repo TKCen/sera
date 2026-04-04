@@ -8,27 +8,29 @@ use crate::error::DbError;
 /// Row type for agent_templates table.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TemplateRow {
+    pub id: uuid::Uuid,
     pub name: String,
     pub display_name: Option<String>,
     pub builtin: bool,
     pub category: Option<String>,
     pub spec: serde_json::Value,
-    pub description: Option<String>,
+    pub created_at: Option<time::OffsetDateTime>,
     pub updated_at: Option<time::OffsetDateTime>,
 }
 
 /// Row type for agent_instances table.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct InstanceRow {
-    pub id: String,
+    pub id: uuid::Uuid,
     pub name: String,
     pub display_name: Option<String>,
-    pub template_ref: String,
+    pub template_name: String,
+    pub template_ref: Option<String>,
     pub circle: Option<String>,
-    pub status: String,
+    pub status: Option<String>,
     pub lifecycle_mode: Option<String>,
-    pub parent_instance_id: Option<String>,
-    pub workspace_path: Option<String>,
+    pub parent_instance_id: Option<uuid::Uuid>,
+    pub workspace_path: String,
     pub container_id: Option<String>,
     pub last_heartbeat_at: Option<time::OffsetDateTime>,
     pub updated_at: Option<time::OffsetDateTime>,
@@ -38,7 +40,8 @@ pub struct InstanceRow {
 impl InstanceRow {
     /// Convert database row to domain type.
     pub fn into_domain(self) -> AgentInstance {
-        let status = match self.status.as_str() {
+        let status_str = self.status.as_deref().unwrap_or("active");
+        let status = match status_str {
             "created" => AgentStatus::Created,
             "running" => AgentStatus::Running,
             "stopped" => AgentStatus::Stopped,
@@ -51,18 +54,18 @@ impl InstanceRow {
         };
 
         AgentInstance {
-            id: self.id,
+            id: self.id.to_string(),
             name: self.name,
             display_name: self.display_name,
-            template_ref: self.template_ref,
+            template_ref: self.template_ref.unwrap_or(self.template_name.clone()),
             circle: self.circle,
             status,
             overrides: None,
             lifecycle_mode: self.lifecycle_mode.and_then(|m| serde_json::from_str(&format!("\"{m}\"")).ok()),
-            parent_instance_id: self.parent_instance_id,
+            parent_instance_id: self.parent_instance_id.map(|id| id.to_string()),
             resolved_config: None,
             resolved_capabilities: None,
-            workspace_path: self.workspace_path,
+            workspace_path: Some(self.workspace_path),
             workspace_used_gb: None,
             container_id: self.container_id,
             circle_id: None,
@@ -80,7 +83,7 @@ impl AgentRepository {
     /// List all agent templates.
     pub async fn list_templates(pool: &PgPool) -> Result<Vec<TemplateRow>, DbError> {
         let rows = sqlx::query_as::<_, TemplateRow>(
-            "SELECT name, display_name, builtin, category, spec, description, updated_at
+            "SELECT id, name, display_name, builtin, category, spec, created_at, updated_at
              FROM agent_templates
              ORDER BY name"
         )
@@ -92,7 +95,7 @@ impl AgentRepository {
     /// Get a single template by name.
     pub async fn get_template(pool: &PgPool, name: &str) -> Result<TemplateRow, DbError> {
         sqlx::query_as::<_, TemplateRow>(
-            "SELECT name, display_name, builtin, category, spec, description, updated_at
+            "SELECT id, name, display_name, builtin, category, spec, created_at, updated_at
              FROM agent_templates WHERE name = $1"
         )
         .bind(name)
@@ -112,8 +115,8 @@ impl AgentRepository {
     ) -> Result<Vec<InstanceRow>, DbError> {
         let rows = if let Some(status) = status_filter {
             sqlx::query_as::<_, InstanceRow>(
-                "SELECT id, name, display_name, template_ref, circle, status, lifecycle_mode,
-                        parent_instance_id, workspace_path, container_id,
+                "SELECT id, name, display_name, template_name, template_ref, circle, status,
+                        lifecycle_mode, parent_instance_id, workspace_path, container_id,
                         last_heartbeat_at, updated_at, created_at
                  FROM agent_instances WHERE status = $1
                  ORDER BY created_at DESC"
@@ -123,8 +126,8 @@ impl AgentRepository {
             .await?
         } else {
             sqlx::query_as::<_, InstanceRow>(
-                "SELECT id, name, display_name, template_ref, circle, status, lifecycle_mode,
-                        parent_instance_id, workspace_path, container_id,
+                "SELECT id, name, display_name, template_name, template_ref, circle, status,
+                        lifecycle_mode, parent_instance_id, workspace_path, container_id,
                         last_heartbeat_at, updated_at, created_at
                  FROM agent_instances
                  ORDER BY created_at DESC"
@@ -138,10 +141,10 @@ impl AgentRepository {
     /// Get a single instance by ID.
     pub async fn get_instance(pool: &PgPool, id: &str) -> Result<InstanceRow, DbError> {
         sqlx::query_as::<_, InstanceRow>(
-            "SELECT id, name, display_name, template_ref, circle, status, lifecycle_mode,
-                    parent_instance_id, workspace_path, container_id,
+            "SELECT id, name, display_name, template_name, template_ref, circle, status,
+                    lifecycle_mode, parent_instance_id, workspace_path, container_id,
                     last_heartbeat_at, updated_at, created_at
-             FROM agent_instances WHERE id = $1"
+             FROM agent_instances WHERE id::text = $1"
         )
         .bind(id)
         .fetch_optional(pool)
@@ -153,27 +156,6 @@ impl AgentRepository {
         })
     }
 
-    /// Create a new agent instance.
-    pub async fn create_instance(
-        pool: &PgPool,
-        id: &str,
-        name: &str,
-        template_ref: &str,
-        lifecycle_mode: Option<&str>,
-    ) -> Result<(), DbError> {
-        sqlx::query(
-            "INSERT INTO agent_instances (id, name, template_ref, status, lifecycle_mode, created_at, updated_at)
-             VALUES ($1, $2, $3, 'created', $4, NOW(), NOW())"
-        )
-        .bind(id)
-        .bind(name)
-        .bind(template_ref)
-        .bind(lifecycle_mode)
-        .execute(pool)
-        .await?;
-        Ok(())
-    }
-
     /// Update instance status.
     pub async fn update_status(
         pool: &PgPool,
@@ -181,7 +163,7 @@ impl AgentRepository {
         status: &str,
     ) -> Result<(), DbError> {
         let result = sqlx::query(
-            "UPDATE agent_instances SET status = $1, updated_at = NOW() WHERE id = $2"
+            "UPDATE agent_instances SET status = $1, updated_at = NOW() WHERE id::text = $2"
         )
         .bind(status)
         .bind(id)

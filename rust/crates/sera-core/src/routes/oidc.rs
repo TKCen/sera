@@ -51,8 +51,7 @@ pub async fn login(
 
     // Use WEB_ORIGIN (not SERA_EXTERNAL_URL) for frontend redirect
     let web_origin = state.config.web_origin
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| "http://localhost:5173".to_string());
     let redirect_uri = format!("{}/auth/callback", web_origin);
 
@@ -235,10 +234,9 @@ fn decode_token_claims(token: &str) -> Result<OperatorIdentity, AppError> {
 fn map_groups_to_roles(groups: Vec<String>) -> Vec<String> {
     let mut role_mapping: HashMap<String, String> = HashMap::new();
 
-    if let Ok(mapping_str) = std::env::var("OIDC_ROLE_MAPPING") {
-        if let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&mapping_str) {
-            role_mapping = parsed;
-        }
+    if let Ok(mapping_str) = std::env::var("OIDC_ROLE_MAPPING")
+        && let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&mapping_str) {
+        role_mapping = parsed;
     }
 
     let mut roles = std::collections::HashSet::new();
@@ -261,7 +259,7 @@ fn base64_url_decode(s: &str) -> Result<String, String> {
 
     // Add padding if needed
     let mut padded = s.to_string();
-    while padded.len() % 4 != 0 {
+    while !padded.len().is_multiple_of(4) {
         padded.push('=');
     }
 

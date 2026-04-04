@@ -386,10 +386,9 @@ pub async fn test_embedding_config(
         "openai" | "openai-compatible" => {
             // Test OpenAI-compatible /v1/models endpoint
             let mut headers = reqwest::header::HeaderMap::new();
-            if let Some(api_key) = &body.api_key {
-                if let Ok(val) = format!("Bearer {}", api_key).parse() {
-                    headers.insert(reqwest::header::AUTHORIZATION, val);
-                }
+            if let Some(api_key) = &body.api_key
+                && let Ok(val) = format!("Bearer {}", api_key).parse() {
+                headers.insert(reqwest::header::AUTHORIZATION, val);
             }
 
             client

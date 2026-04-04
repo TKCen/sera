@@ -2,6 +2,8 @@
 //!
 //! Loads AGENT.yaml manifests and assembles system prompts using priority-ordered sections.
 
+#![allow(dead_code, non_snake_case)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -385,7 +387,7 @@ impl SystemPromptBuilder {
 
 /// Rough token estimation: 4 characters ≈ 1 token (cl100k_base encoding).
 fn estimate_tokens(text: &str) -> usize {
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 #[cfg(test)]

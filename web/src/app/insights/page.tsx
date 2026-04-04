@@ -221,7 +221,14 @@ function InsightsPageContent() {
           <Skeleton className="h-[200px] rounded-xl" />
         </div>
       ) : (
-        <div aria-live="polite">
+        <div
+          aria-live="polite"
+          className={
+            isFetching
+              ? 'opacity-50 pointer-events-none transition-opacity duration-300'
+              : 'transition-opacity duration-300'
+          }
+        >
           {/* Summary cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <SummaryCard

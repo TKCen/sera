@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type Express } from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'node:fs';
@@ -90,7 +90,7 @@ import { createNotificationsRouter } from './routes/notifications.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
 
-const app = express();
+const app: Express = express();
 const logger = new Logger('SERACore');
 
 // ── Workspace Root ───────────────────────────────────────────────────────────

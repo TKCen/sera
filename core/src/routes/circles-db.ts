@@ -5,7 +5,7 @@ import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('CirclesDbRouter');
 
-export function createCirclesDbRouter(orchestrator: Orchestrator) {
+export function createCirclesDbRouter(orchestrator: Orchestrator): Router {
   const router = Router();
   const circleService = CircleService.getInstance();
 

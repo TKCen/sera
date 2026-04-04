@@ -20,7 +20,7 @@ import {
 
 const MEMORY_TYPES = ['fact', 'preference', 'episode', 'insight', 'task', 'note'] as const;
 
-export function MemoryTab({ id }: { id: string }) {
+export function AgentDetailMemoryTab({ id }: { id: string }) {
   const [scope, setScope] = useState<string>('');
   const { data: blocks, isLoading, refetch } = useAgentMemory(id, scope || undefined);
   const [showCreate, setShowCreate] = useState(false);

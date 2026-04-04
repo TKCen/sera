@@ -16,6 +16,23 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+/** Format an ISO timestamp as HH:MM:SS */
+export function formatTime(ts: string): string {
+  const d = new Date(ts);
+  return isNaN(d.getTime())
+    ? ''
+    : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+/** Format elapsed time between two ISO timestamps as human-readable string */
+export function formatElapsed(from: string, to: string): string {
+  const ms = new Date(to).getTime() - new Date(from).getTime();
+  if (isNaN(ms) || ms < 0) return '';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
 export function formatDistanceToNow(isoDate: string): string {
   const ms = new Date(isoDate).getTime() - Date.now();
   const abs = Math.abs(ms);

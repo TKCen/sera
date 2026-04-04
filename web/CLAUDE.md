@@ -4,27 +4,27 @@ Operator dashboard for SERA — a pure client-side SPA.
 
 ## Tech stack
 
-| Concern | Choice |
-|---|---|
-| Build tool | Vite v6 |
-| Routing | React Router v7 |
-| UI framework | React 19 |
-| Server state | TanStack Query v5 |
-| Components | shadcn/ui + Radix UI |
-| Styling | Tailwind CSS v4 (Aurora Cyber theme) |
-| Real-time | Centrifugo JS client (WebSocket) |
-| Auth flow | OIDC PKCE (Epic 16 Story 16.5) |
+| Concern      | Choice                               |
+| ------------ | ------------------------------------ |
+| Build tool   | Vite v6                              |
+| Routing      | React Router v7                      |
+| UI framework | React 19                             |
+| Server state | TanStack Query v5                    |
+| Components   | shadcn/ui + Radix UI                 |
+| Styling      | Tailwind CSS v4 (Aurora Cyber theme) |
+| Real-time    | Centrifugo JS client (WebSocket)     |
+| Auth flow    | OIDC PKCE (Epic 16 Story 16.5)       |
 
 ## Epic references
 
 Load the relevant epic before implementing a feature area:
 
-| Area | Epic |
-|---|---|
-| Framework setup, API client, Centrifugo hooks, routing | `docs/epics/12-sera-web-foundation.md` |
-| Agent list, chat, thought visualisation, memory graph | `docs/epics/13-sera-web-agent-ux.md` |
-| Dashboards, audit log, provider management, health | `docs/epics/14-sera-web-observability.md` |
-| Auth login flow, role-gated UI | `docs/epics/16-authentication-and-secrets.md` (Stories 16.5) |
+| Area                                                   | Epic                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------ |
+| Framework setup, API client, Centrifugo hooks, routing | `docs/epics/12-sera-web-foundation.md`                       |
+| Agent list, chat, thought visualisation, memory graph  | `docs/epics/13-sera-web-agent-ux.md`                         |
+| Dashboards, audit log, provider management, health     | `docs/epics/14-sera-web-observability.md`                    |
+| Auth login flow, role-gated UI                         | `docs/epics/16-authentication-and-secrets.md` (Stories 16.5) |
 
 ## API communication
 
@@ -64,11 +64,11 @@ bunx tsc --noEmit -p tsconfig.json
 
 The public operator-facing channels differ from the internal ones in some hooks:
 
-| Purpose | Channel |
-|---|---|
-| Agent status | `agent:{agentId}:status` |
-| Token streaming (chat) | `tokens:{agentId}` |
-| Thought stream | `thoughts:{agentId}` |
+| Purpose                | Channel                  |
+| ---------------------- | ------------------------ |
+| Agent status           | `agent:{agentId}:status` |
+| Token streaming (chat) | `tokens:{agentId}`       |
+| Thought stream         | `thoughts:{agentId}`     |
 
 The internal hooks (`useThoughtStream`, `useTokenStream`) use `internal:…` prefixed channels for a different purpose — do not confuse them with the above.
 
@@ -91,3 +91,4 @@ The internal hooks (`useThoughtStream`, `useTokenStream`) use `internal:…` pre
 - **Absolute overlay links swallow button clicks**: A pattern like `<Link className="absolute inset-0" />` at the end of a card makes the whole card clickable but sits above sibling elements in the z-stack. Any interactive element inside the card (buttons, links) must be inside a wrapper with `relative z-10` to escape the overlay's stacking context, otherwise clicks pass through to the overlay link instead.
 - **web/bun.lock must match standalone Docker context**: The Dockerfile builds with `context: ./web`, not the workspace root. The lockfile must be regenerated with `MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/web:/app" -w /app oven/bun:1-alpine bun install` from the repo root. A workspace-generated lockfile resolves fewer packages and causes `--frozen-lockfile` to fail in Docker.
 - **Never bind-mount host web/ into Docker for `bun install`**: This replaces platform-specific binaries (esbuild) with Linux versions, breaking the host. If contaminated: `rm -rf node_modules && bun install`.
+- **sera-web healthcheck reports unhealthy but UI works**: The `wget` command in the healthcheck can't connect to `localhost` inside the container, even though Vite is listening on `0.0.0.0:5173`. `node -e "fetch(...)"` works. See #364.

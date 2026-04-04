@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useAgentDelegations } from '@/hooks/useAgents';
+import { useAgentDelegations, useAgentDelegatedTasks } from '@/hooks/useAgents';
 import { useIssueDelegation } from '@/hooks/useDelegations';
-import { request } from '@/lib/api/client';
 import { TabLoading } from './AgentDetailTabLoading';
+import { EmptyState } from './EmptyState';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -19,30 +18,9 @@ import { toast } from 'sonner';
 import { ShieldCheck, User, Clock, Activity, ArrowRight, ArrowLeft, Plus } from 'lucide-react';
 import { formatDistanceToNow } from '@/lib/utils';
 
-interface TaskDelegation {
-  id: string;
-  agent_instance_id: string;
-  task: string;
-  context: Record<string, unknown> | null;
-  status: string;
-  created_at: string;
-  completed_at: string | null;
-  result: unknown;
-  error: string | null;
-}
-
-function useDelegatedTasks(agentId: string) {
-  return useQuery({
-    queryKey: ['agent-delegated-tasks', agentId],
-    queryFn: () =>
-      request<TaskDelegation[]>(`/agents/${encodeURIComponent(agentId)}/tasks?status=all`),
-    enabled: agentId.length > 0,
-  });
-}
-
-export function DelegationsTab({ id }: { id: string }) {
+export function AgentDetailDelegationsTab({ id }: { id: string }) {
   const { data: delegations, isLoading, refetch } = useAgentDelegations(id);
-  const { data: tasks } = useDelegatedTasks(id);
+  const { data: tasks } = useAgentDelegatedTasks(id);
   const issueDelegation = useIssueDelegation();
 
   const [showIssueDialog, setShowIssueDialog] = useState(false);
@@ -85,15 +63,11 @@ export function DelegationsTab({ id }: { id: string }) {
 
   if (!delegations || delegations.length === 0) {
     return (
-      <div className="p-8 text-center">
-        <div className="mx-auto w-12 h-12 rounded-full bg-sera-surface-hover flex items-center justify-center mb-3">
-          <ShieldCheck size={24} className="text-sera-text-dim" />
-        </div>
-        <h3 className="text-sm font-medium text-sera-text">No inbound delegations</h3>
-        <p className="text-xs text-sera-text-dim mt-1 max-w-xs mx-auto">
-          This agent hasn't received any delegated authority from operators or other agents yet.
-        </p>
-      </div>
+      <EmptyState
+        icon={<ShieldCheck size={24} />}
+        title="No inbound delegations"
+        description="This agent hasn't received any delegated authority from operators or other agents yet."
+      />
     );
   }
 
@@ -263,7 +237,7 @@ export function DelegationsTab({ id }: { id: string }) {
                     <p className="text-xs text-sera-text truncate">{t.task}</p>
                   </div>
                   <span className="text-[10px] text-sera-text-dim flex-shrink-0">
-                    {formatDistanceToNow(t.created_at)}
+                    {formatDistanceToNow(t.createdAt)}
                   </span>
                 </div>
               );

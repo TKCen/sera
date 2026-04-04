@@ -8,7 +8,7 @@ export function createRegistryRouter(
   registry: AgentRegistry,
   importer: ResourceImporter,
   orchestrator: Orchestrator
-) {
+): Router {
   const router = Router();
 
   // Templates

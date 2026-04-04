@@ -3,7 +3,7 @@ import { LspManager } from '../lsp/LspManager.js';
 import path from 'path';
 import { URI } from 'vscode-uri';
 
-const router = Router();
+const router: Router = Router();
 const rootDir = process.cwd();
 const lspManager = new LspManager(rootDir);
 

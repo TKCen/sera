@@ -23,6 +23,12 @@ export const agentsKeys = {
   delegations: (id: string) => ['agents', id, 'delegations'] as const,
   permissionRequests: (agentId?: string) => ['permission-requests', agentId] as const,
   pendingUpdates: () => ['agents', 'pending-updates'] as const,
+  sessions: (id: string) => ['agents', id, 'sessions'] as const,
+  contextDebug: (id: string, message: string) => ['agents', id, 'context-debug', message] as const,
+  healthCheck: (id: string) => ['agents', id, 'health-check'] as const,
+  systemPrompt: (id: string) => ['agents', id, 'system-prompt'] as const,
+  commandLogs: (id: string, sessionId: string) =>
+    ['agents', id, 'command-logs', sessionId] as const,
 };
 
 export function useAgents() {
@@ -299,5 +305,47 @@ export function useApplyTemplateUpdate(agentId: string) {
       void qc.invalidateQueries({ queryKey: templateDiffKeys.diff(agentId) });
       void qc.invalidateQueries({ queryKey: agentsKeys.detail(agentId) });
     },
+  });
+}
+
+// ── Agent Detail Diagnostic Hooks ───────────────────────────────────────────
+
+export function useAgentContextDebug(id: string, message: string) {
+  return useQuery({
+    queryKey: agentsKeys.contextDebug(id, message),
+    queryFn: () => agentsApi.getAgentContextDebug(id, message),
+    enabled: id.length > 0 && message.length > 0,
+  });
+}
+
+export function useAgentDelegatedTasks(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.tasks(id, 'all'),
+    queryFn: () => agentsApi.getAgentTasks(id, 'all'),
+    enabled: id.length > 0,
+  });
+}
+
+export function useAgentSessions(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.sessions(id),
+    queryFn: () => agentsApi.getAgentSessions(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function useAgentHealthCheck(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.healthCheck(id),
+    queryFn: () => agentsApi.getAgentHealthCheck(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function useAgentSystemPrompt(id: string) {
+  return useQuery({
+    queryKey: agentsKeys.systemPrompt(id),
+    queryFn: () => agentsApi.getAgentSystemPrompt(id),
+    enabled: id.length > 0,
   });
 }

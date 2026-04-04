@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { pool } from '../lib/database.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 
-export function createOperatorRequestsRouter(intercom?: IntercomService) {
+export function createOperatorRequestsRouter(intercom?: IntercomService): Router {
   const router = Router();
 
   /**

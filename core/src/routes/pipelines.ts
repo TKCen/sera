@@ -8,7 +8,7 @@ const logger = new Logger('PipelinesRouter');
 
 const PARALLEL_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
-export function createPipelinesRouter(orchestrator: Orchestrator) {
+export function createPipelinesRouter(orchestrator: Orchestrator): Router {
   const router = Router();
   const pipelineService = PipelineService.getInstance();
 

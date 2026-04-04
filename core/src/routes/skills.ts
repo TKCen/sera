@@ -16,7 +16,7 @@ export function createSkillsRouter(
   _skillRegistry: SkillRegistry,
   orchestrator: Orchestrator,
   pool: Pool
-) {
+): Router {
   const router = Router();
 
   // ── List guidance skills (text documents, not executable tools) ───────────

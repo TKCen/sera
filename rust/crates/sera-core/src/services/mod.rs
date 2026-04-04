@@ -41,3 +41,9 @@ pub mod schedule_service;
 pub mod circuit_breaker;
 #[allow(dead_code)]
 pub mod process_manager;
+#[allow(dead_code)]
+pub mod notification_service;
+#[allow(dead_code)]
+pub mod mcp_server_manager;
+#[allow(dead_code)]
+pub mod dynamic_provider_manager;

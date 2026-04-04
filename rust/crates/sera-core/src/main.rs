@@ -197,6 +197,7 @@ fn build_router(
         // Audit — GET log + POST append (frontend uses /api/audit for both)
         .route("/api/audit", get(routes::audit::get_audit_log).post(routes::audit::append_audit))
         .route("/api/audit/log", get(routes::audit::get_audit_log))
+        .route("/api/audit/{sequence}", get(routes::audit::get_audit_by_sequence))
         .route("/api/audit/verify", get(routes::stubs::audit_verify))
         // Secrets CRUD
         .route(
@@ -270,6 +271,8 @@ fn build_router(
         )
         // Config + system stubs
         .route("/api/config/llm", get(routes::config::get_llm_config))
+        .route("/api/config/providers", get(routes::config::list_providers))
+        .route("/api/config/reload", post(routes::config::reload_config))
         .route("/api/federation/peers", get(routes::config::list_federation_peers))
         .route("/api/system/circuit-breakers", get(routes::config::get_circuit_breakers))
         .route("/api/rt/token", get(routes::config::get_rt_token))

@@ -2,12 +2,14 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use sera_db::agents::AgentRepository;
+use sera_db::DbError;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -102,4 +104,92 @@ fn instance_to_response(r: sera_db::agents::InstanceRow) -> InstanceResponse {
         updated_at: r.updated_at.map(|t| t.to_string()),
         created_at: r.created_at.map(|t| t.to_string()),
     }
+}
+
+/// Request body for creating an agent instance.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInstanceRequest {
+    pub template_ref: String,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub circle: Option<String>,
+    pub lifecycle_mode: Option<String>,
+}
+
+/// POST /api/agents/instances
+pub async fn create_instance(
+    State(state): State<AppState>,
+    Json(body): Json<CreateInstanceRequest>,
+) -> Result<(StatusCode, Json<InstanceResponse>), AppError> {
+    // Verify template exists
+    AgentRepository::get_template(state.db.inner(), &body.template_ref).await?;
+
+    // Check for duplicate name
+    if AgentRepository::instance_name_exists(state.db.inner(), &body.name).await? {
+        return Err(AppError::Db(DbError::Conflict(format!(
+            "Agent instance with name '{}' already exists",
+            body.name
+        ))));
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let workspace_path = format!("/workspaces/{}", body.name);
+
+    AgentRepository::create_instance(
+        state.db.inner(),
+        &id,
+        &body.name,
+        &body.template_ref,
+        &body.template_ref,
+        &workspace_path,
+        body.display_name.as_deref(),
+        body.circle.as_deref(),
+        body.lifecycle_mode.as_deref(),
+    )
+    .await?;
+
+    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    Ok((StatusCode::CREATED, Json(instance_to_response(row))))
+}
+
+/// Request body for updating an agent instance.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInstanceRequest {
+    pub name: Option<String>,
+    pub display_name: Option<String>,
+    pub circle: Option<String>,
+    pub lifecycle_mode: Option<String>,
+}
+
+/// PATCH /api/agents/instances/:id
+pub async fn update_instance(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateInstanceRequest>,
+) -> Result<Json<InstanceResponse>, AppError> {
+    AgentRepository::update_instance(
+        state.db.inner(),
+        &id,
+        body.name.as_deref(),
+        body.display_name.as_deref(),
+        body.circle.as_deref(),
+        body.lifecycle_mode.as_deref(),
+    )
+    .await?;
+
+    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    Ok(Json(instance_to_response(row)))
+}
+
+/// DELETE /api/agents/instances/:id
+pub async fn delete_instance(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let name = AgentRepository::delete_instance(state.db.inner(), &id).await?;
+    Ok(Json(serde_json::json!({
+        "deleted": { "id": id, "name": name }
+    })))
 }

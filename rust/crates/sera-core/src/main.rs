@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::{
     middleware::from_fn,
-    routing::get,
+    routing::{get, patch, post},
     Router,
 };
 use tower_http::cors::CorsLayer;
@@ -103,6 +103,17 @@ fn build_router(
         .route("/api/schedules", get(routes::schedules::list_schedules))
         .route("/api/circles", get(routes::circles::list_circles))
         .route("/api/sessions", get(routes::sessions::list_sessions))
+        // Write endpoints
+        .route("/api/agents/instances", post(routes::agents::create_instance))
+        .route(
+            "/api/agents/instances/{id}",
+            patch(routes::agents::update_instance).delete(routes::agents::delete_instance),
+        )
+        .route("/api/schedules", post(routes::schedules::create_schedule))
+        .route(
+            "/api/schedules/{id}",
+            patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule),
+        )
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

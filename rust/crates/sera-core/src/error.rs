@@ -17,6 +17,8 @@ pub enum AppError {
     Db(DbError),
     /// Authentication errors.
     Auth(AuthError),
+    /// Forbidden action.
+    Forbidden(String),
     /// Generic internal errors.
     Internal(anyhow::Error),
 }
@@ -40,6 +42,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Internal(e) => {
                 tracing::error!("Internal error: {e}");
                 (

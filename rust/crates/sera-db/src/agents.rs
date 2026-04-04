@@ -179,4 +179,121 @@ impl AgentRepository {
         }
         Ok(())
     }
+
+    /// Check if an instance name already exists.
+    pub async fn instance_name_exists(pool: &PgPool, name: &str) -> Result<bool, DbError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM agent_instances WHERE name = $1"
+        )
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0 > 0)
+    }
+
+    /// Create a new agent instance. Returns the new instance ID.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_instance(
+        pool: &PgPool,
+        id: &str,
+        name: &str,
+        template_name: &str,
+        template_ref: &str,
+        workspace_path: &str,
+        display_name: Option<&str>,
+        circle: Option<&str>,
+        lifecycle_mode: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO agent_instances (id, name, template_name, template_ref, workspace_path,
+                                          display_name, circle, lifecycle_mode, status, created_at, updated_at)
+             VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, 'created', NOW(), NOW())"
+        )
+        .bind(id)
+        .bind(name)
+        .bind(template_name)
+        .bind(template_ref)
+        .bind(workspace_path)
+        .bind(display_name)
+        .bind(circle)
+        .bind(lifecycle_mode)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update an agent instance's mutable fields.
+    pub async fn update_instance(
+        pool: &PgPool,
+        id: &str,
+        name: Option<&str>,
+        display_name: Option<&str>,
+        circle: Option<&str>,
+        lifecycle_mode: Option<&str>,
+    ) -> Result<(), DbError> {
+        // Build dynamic SET clause
+        let mut sets = vec!["updated_at = NOW()".to_string()];
+        let mut param_idx = 1;
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(v) = name {
+            param_idx += 1;
+            sets.push(format!("name = ${param_idx}"));
+            params.push(v.to_string());
+        }
+        if let Some(v) = display_name {
+            param_idx += 1;
+            sets.push(format!("display_name = ${param_idx}"));
+            params.push(v.to_string());
+        }
+        if let Some(v) = circle {
+            param_idx += 1;
+            sets.push(format!("circle = ${param_idx}"));
+            params.push(v.to_string());
+        }
+        if let Some(v) = lifecycle_mode {
+            param_idx += 1;
+            sets.push(format!("lifecycle_mode = ${param_idx}"));
+            params.push(v.to_string());
+        }
+
+        let query = format!(
+            "UPDATE agent_instances SET {} WHERE id::text = $1",
+            sets.join(", ")
+        );
+
+        let mut q = sqlx::query(&query).bind(id);
+        for p in &params {
+            q = q.bind(p);
+        }
+
+        let result = q.execute(pool).await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "agent_instance",
+                key: "id",
+                value: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Delete an agent instance. Returns the name of the deleted instance.
+    pub async fn delete_instance(pool: &PgPool, id: &str) -> Result<String, DbError> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "DELETE FROM agent_instances WHERE id::text = $1 RETURNING name"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some((name,)) => Ok(name),
+            None => Err(DbError::NotFound {
+                entity: "agent_instance",
+                key: "id",
+                value: id.to_string(),
+            }),
+        }
+    }
 }

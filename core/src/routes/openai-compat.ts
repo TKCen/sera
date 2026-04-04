@@ -65,7 +65,7 @@ class SSEIntercom extends IntercomService {
  * Creates a router for OpenAI-compatible API endpoints.
  * Provides a /chat/completions endpoint that maps to SERA agents.
  */
-export function createOpenAICompatRouter(orchestrator: Orchestrator) {
+export function createOpenAICompatRouter(orchestrator: Orchestrator): Router {
   const router = Router();
 
   router.post('/chat/completions', async (req: Request, res: Response) => {

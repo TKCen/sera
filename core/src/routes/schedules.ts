@@ -21,7 +21,7 @@ function sanitizeRunStatus(value: unknown): string | null {
   return str;
 }
 
-export const createSchedulesRouter = () => {
+export const createSchedulesRouter = (): Router => {
   const router = Router();
   const scheduleService = ScheduleService.getInstance();
 

@@ -5,7 +5,7 @@ import { requireRole } from '../auth/authMiddleware.js';
 /**
  * Creates the audit trail router.
  */
-export const createAuditRouter = () => {
+export const createAuditRouter = (): Router => {
   const router = Router();
   const auditService = AuditService.getInstance();
 

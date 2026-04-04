@@ -13,7 +13,7 @@ import { Logger } from '../lib/logger.js';
 const MEMORY_ROOT = process.env.MEMORY_PATH ?? '/memory';
 const memLogger = new Logger('MemoryRoutes');
 
-export function createMemoryRouter(memoryManager: MemoryManager) {
+export function createMemoryRouter(memoryManager: MemoryManager): Router {
   const router = Router();
   const scopedStore = new ScopedMemoryBlockStore(MEMORY_ROOT);
 

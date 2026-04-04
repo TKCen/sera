@@ -17,7 +17,7 @@ export function createCircleRouter(
   circlesDir: string,
   getAgentManifests: () => AgentManifest[],
   orchestrator: Orchestrator
-) {
+): Router {
   const router = Router();
 
   // ── List all circles ──────────────────────────────────────────────────────

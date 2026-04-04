@@ -169,7 +169,7 @@ export function createChatRouter(
   sessionStore: SessionStore,
   orchestrator: Orchestrator,
   agentRegistry?: AgentRegistry
-) {
+): Router {
   const router = Router();
 
   /**

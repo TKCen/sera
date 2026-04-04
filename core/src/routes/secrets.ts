@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { SecretsManager } from '../secrets/secrets-manager.js';
 import { requireRole } from '../auth/authMiddleware.js';
 
-export function createSecretsRouter() {
+export function createSecretsRouter(): Router {
   const router = Router();
   const secrets = SecretsManager.getInstance();
 

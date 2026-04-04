@@ -163,46 +163,41 @@ impl ToolLoopDetector {
 
     /// Detect A-B-A-B oscillation pattern.
     fn detect_oscillation(&self, current_tool: &str) -> Option<LoopDetectionVerdict> {
-        if self.history.len() < self.config.oscillation_threshold {
+        // Need at least oscillation_threshold * 2 - 1 history entries to detect pattern
+        let min_history = self.config.oscillation_threshold;
+        if self.history.len() < min_history {
             return None;
         }
 
-        // Look at the last N calls to find alternation pattern
-        let window_size = self.config.oscillation_threshold;
+        // Look at the last N calls (most recent first)
         let recent: Vec<_> = self
             .history
             .iter()
             .rev()
-            .take(window_size)
+            .take(min_history)
             .map(|(tool, _)| tool.clone())
             .collect();
 
-        if recent.len() < window_size {
+        if recent.is_empty() {
             return None;
         }
 
-        // Check if we have alternating pattern: current_tool, X, current_tool, X, ...
-        if recent.len() >= 2 {
-            let alt_tool = &recent[1];
-            let mut is_oscillating = true;
+        // recent[0] is the most recent call before the current one.
+        // For A-B-A-B where current=B: recent should be [A, B, A, ...]
+        let alt_tool = &recent[0];
+        if alt_tool == current_tool {
+            return None;
+        }
 
-            for (i, tool) in recent.iter().enumerate() {
-                let expected = if i % 2 == 0 { current_tool } else { alt_tool };
-                if tool != expected {
-                    is_oscillating = false;
-                    break;
-                }
-            }
-
-            if is_oscillating && alt_tool != current_tool {
-                return Some(LoopDetectionVerdict::oscillation(
-                    current_tool,
-                    alt_tool,
-                ));
+        // Check alternating: recent[0]=alt, recent[1]=current, recent[2]=alt, ...
+        for (i, tool) in recent.iter().enumerate() {
+            let expected = if i % 2 == 0 { alt_tool.as_str() } else { current_tool };
+            if tool != expected {
+                return None;
             }
         }
 
-        None
+        Some(LoopDetectionVerdict::oscillation(current_tool, alt_tool))
     }
 
     /// Detect similarity via Jaccard index of tool call sets.
@@ -345,7 +340,7 @@ mod tests {
     #[test]
     fn test_force_text_mode_after_warnings() {
         let config = ToolLoopConfig {
-            consecutive_threshold: 1,
+            consecutive_threshold: 2,
             max_warnings: 2,
             ..Default::default()
         };

@@ -73,3 +73,6 @@ egress-proxy/acls/
 
 # mcp
 .mcp.json
+
+# MkDocs build output
+site/

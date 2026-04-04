@@ -1,0 +1,207 @@
+================================================================================
+SERA AGENT-RUNTIME SECURITY AUDIT — EXECUTIVE SUMMARY
+================================================================================
+
+OVERALL RISK LEVEL: CRITICAL
+
+Audit Date: 2026-04-04
+Scope: D:/projects/homelab/sera/core/agent-runtime/src/ (11 files, ~1,500 lines)
+Auditor: Security Reviewer (Claude Code Agent)
+
+================================================================================
+CRITICAL ISSUES (Fix Immediately — Blocks Production)
+================================================================================
+
+1. CODE EXECUTION SANDBOX ESCAPE
+   File: code-handler.ts:62
+   Issue: Function() constructor with with(sandbox) statement does not isolate code
+   Impact: Remote code execution, host system breakout via prototype chain
+   Fix: Replace with isolated-vm or Worker threads
+   Deadline: IMMEDIATE
+
+2. INCOMPLETE SSRF FILTERING
+   Files: http-handler.ts:19-22, web-handler.ts:25-28
+   Issue: Regex allows 0.0.0.0, 169.254.x.x (AWS metadata), 224-239.x.x (multicast)
+   Impact: Access to internal services, metadata exfiltration, internal network scanning
+   Fix: Whitelist SERA services, block ALL private/reserved IP ranges
+   Deadline: IMMEDIATE
+
+3. SYMLINK/HARDLINK PATH TRAVERSAL
+   File: file-handlers.ts:143-151 (resolveSafe)
+   Issue: startsWith() check doesn't account for symlinks; fs.realpathSync() not used
+   Impact: Arbitrary file read/write outside workspace boundary
+   Fix: Use fs.realpathSync() to resolve all symlinks before validation
+   Deadline: IMMEDIATE
+
+4. SHELL PATH VALIDATION REGEX BYPASS
+   File: shell-handler.ts:213
+   Issue: Regex /(?:^|\s)(\/(?!workspace\b)[^\s]+)/g bypassed by relative paths, quoted spaces
+   Impact: Arbitrary shell command execution inside container
+   Fix: Replace regex with blocklist of dangerous patterns
+   Deadline: IMMEDIATE
+
+================================================================================
+HIGH ISSUES (Fix Within 1 Week)
+================================================================================
+
+5. RIPGREP PATTERN INJECTION
+   File: search-handlers.ts:18, 58, 80, 112
+   Issue: Pattern parameter passed to rg without escaping; agents can inject flags
+   Impact: Symlink traversal, hidden file access, ReDoS via malicious regex
+   Fix: Validate pattern syntax or use Node.js glob library instead of rg
+
+6. SILENT ERROR SWALLOWING IN POLL LOOP
+   File: index.ts:266
+   Issue: Task polling infinite retry without backoff; auth failures masked
+   Impact: Authentication bypass not detected; agent continues running without credentials
+   Fix: Implement exponential backoff with max retry limit and fail-fast
+
+7. SEMAPHORE DEADLOCK — NO TIMEOUT ON ACQUIRE()
+   File: executor.ts:84-107
+   Issue: Semaphore.acquire() has no timeout; if release() not called, deadlock
+   Impact: Agent runtime hangs indefinitely, requires container restart
+   Fix: Add 30s timeout to acquire() with guaranteed release via try-finally
+
+8. MISSING TOKEN VALIDATION IN PROXY
+   File: proxy.ts:64-65
+   Issue: SERA_IDENTITY_TOKEN not validated; requests sent with "Bearer undefined"
+   Impact: Silent auth failure; proxy requests return generic error without indicating auth issue
+   Fix: Validate token at startup; fail fast if missing or empty
+
+9. UNBOUNDED FILE WRITE — DIRECTORY TRAVERSAL + DISK EXHAUSTION
+   File: file-handlers.ts:77-83
+   Issue: fileWrite() creates parent dirs recursively without depth/size limits
+   Impact: Disk exhaustion, arbitrary directory structures, potential escape via deep nesting
+   Fix: Add MAX_DIR_DEPTH (20) and MAX_FILE_SIZE (10MB) checks
+
+10. ERROR CONTEXT LOSS — GENERIC ERROR MESSAGES
+    File: loop.ts:854-882
+    Issue: Tool execution errors caught and logged generically without stack trace
+    Impact: Silent failures; debugging impossible; root cause context lost
+    Fix: Preserve error chain and include stack traces in error responses
+
+================================================================================
+MEDIUM ISSUES (Fix Within 1 Month)
+================================================================================
+
+11. RIPGREP OUTPUT MEMORY EXHAUSTION
+    File: search-handlers.ts:123-151
+    Issue: All matching lines loaded into memory before truncation
+    Impact: Agent OOM on large codebases with many matches
+    Fix: Implement streaming truncation with early exit at 1000 matches
+
+12. RESOURCE CLEANUP MISSING ON TIMEOUT
+    File: tools/shell-handler.ts:84-87
+    Issue: Child processes killed with SIGKILL but file handles not closed
+    Impact: FD limit exhaustion after 100+ timeouts; container stops accepting new files
+    Fix: Add resource cleanup wrapper with guaranteed handle closure
+
+13. SHELL OUTPUT TRUNCATION WITHOUT WARNING
+    File: shell-handler.ts:49-204
+    Issue: Output silently truncated to 50KB; agent not notified
+    Impact: Commands appear to succeed when output is partial
+    Fix: Include truncation flag in response; log when output truncated
+
+14. NO RATE LIMITING ON REMOTE TOOL PROXY
+    File: proxy.ts:95-148
+    Issue: Tool proxy forwards requests without rate limiting
+    Impact: DoS against sera-core; agents can spam thousands of requests
+    Fix: Implement per-agent rate limiting (100 req/min via token bucket)
+
+================================================================================
+DEPENDENCY VULNERABILITIES
+================================================================================
+
+Package: picomatch >=4.0.0 <4.0.4
+Severity: 1 HIGH + 1 MODERATE
+Issues:
+  - ReDoS vulnerability via extglob quantifiers (GHSA-c2c7-rcm5-vvqj)
+  - Method injection in POSIX character classes (GHSA-3v7f-55p6-f55p)
+Path: vitest → vite → tinyglobby → fdir → picomatch
+Impact: Regex DoS when processing glob patterns (dev-only, but fix before release)
+Fix: bun update picomatch
+
+================================================================================
+SECRETS SCAN RESULT
+================================================================================
+
+Status: PASSED — No hardcoded secrets detected
+Coverage: All TypeScript files in core/agent-runtime/src/
+Finding: Secrets correctly managed via environment variables (SERA_IDENTITY_TOKEN)
+
+================================================================================
+OWASP TOP 10 COVERAGE
+================================================================================
+
+A01 Broken Access Control     FAILED - Path traversal via symlinks
+A02 Cryptographic Failures    PASSED - Secrets managed via env vars
+A03 Injection                 FAILED - Code eval sandbox broken, shell injection
+A04 Insecure Design           PARTIAL - Missing resource cleanup strategy
+A05 Security Misconfiguration FAILED - Incomplete SSRF filtering, no rate limits
+A06 Vulnerable Components     FAILED - 2 CVEs in picomatch (transitive)
+A07 Auth Failures             FAILED - No token validation, silent auth failures
+A08 Data Integrity Failures   PARTIAL - Resource leaks, no cleanup guarantees
+A09 Logging Failures          FAILED - Silent error swallowing, no context
+A10 SSRF                      FAILED - Incomplete private IP filtering
+
+================================================================================
+RECOMMENDED REMEDIATION SEQUENCE
+================================================================================
+
+PHASE 1: CRITICAL FIXES (Implement immediately before any production use)
+  1. Replace code sandbox with isolated-vm (Issue #1)
+  2. Fix SSRF filtering with comprehensive IP blocklist (Issue #2)
+  3. Use fs.realpathSync() for path validation (Issue #3)
+  4. Replace shell path regex with pattern blocklist (Issue #4)
+  5. Update picomatch to >=4.0.4 (Dependency audit)
+
+PHASE 2: HIGH FIXES (Complete within 1 week)
+  6-10: Implement fixes for ripgrep injection, poll loop, semaphore, token validation, file write limits
+
+PHASE 3: MEDIUM FIXES (Complete within 1 month)
+  11-14: Implement streaming grep, resource cleanup, output truncation warnings, rate limiting
+
+================================================================================
+BLOCKING STATUS
+================================================================================
+
+PRODUCTION DEPLOYMENT: BLOCKED
+
+This codebase is NOT SAFE for production use. The following issues are blockers:
+  - Critical code execution sandbox escape
+  - Critical SSRF filtering allowing metadata service access
+  - Critical path traversal via symlinks
+  - Critical shell command injection
+  - High silent error swallowing masking auth failures
+  - High deadlock risk on concurrent tool execution
+
+Implement Phase 1 fixes (5 items) before production release. Re-audit after fixes.
+
+================================================================================
+FILES AFFECTED
+================================================================================
+
+core/agent-runtime/src/tools/code-handler.ts       - Code sandbox broken
+core/agent-runtime/src/tools/http-handler.ts       - SSRF incomplete
+core/agent-runtime/src/tools/web-handler.ts        - SSRF incomplete
+core/agent-runtime/src/tools/file-handlers.ts      - Path traversal, unbounded write
+core/agent-runtime/src/tools/shell-handler.ts      - Path validation bypass, no cleanup
+core/agent-runtime/src/tools/search-handlers.ts    - Pattern injection, memory leak
+core/agent-runtime/src/tools/proxy.ts              - No token validation, no rate limit
+core/agent-runtime/src/tools/executor.ts           - Semaphore deadlock risk
+core/agent-runtime/src/loop.ts                     - Error context loss
+core/agent-runtime/src/index.ts                    - Silent error polling
+
+================================================================================
+FULL DETAILED REPORT
+================================================================================
+
+See: D:/projects/homelab/sera/SECURITY_AUDIT_AGENT_RUNTIME.md
+
+This file contains:
+  - Detailed vulnerability descriptions with code examples
+  - Secure code remediation for each issue
+  - Exploitability assessment and blast radius analysis
+  - Prioritization matrix by severity x exploitability x blast radius
+  - Phase-based remediation roadmap
+  - OWASP Top 10 compliance checklist

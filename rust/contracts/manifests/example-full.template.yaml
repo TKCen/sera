@@ -1,0 +1,35 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: example-full
+  displayName: Full Example Template
+  icon: 🚀
+  category: example
+  description: A comprehensive example showing all available fields in an AgentTemplate.
+spec:
+  identity:
+    name: example-agent
+  model:
+    provider: openai
+    model: gpt-4o
+  sandboxBoundary: tier-2
+  policyRef: default-restricted
+  lifecycle:
+    mode: persistent
+  capabilities:
+    network-allowlist: ["api.github.com", "google.com"]
+    command-allowlist: ["ls", "echo"]
+    seraManagement:
+      agents: ["own-circle"]
+  skills:
+    - shell-exec
+    - file-manager
+  tools:
+    allowed: ["bash", "read_file"]
+    denied: ["rm"]
+  workspace:
+    enabled: true
+    persist: true
+  memory:
+    enabled: true
+    strategy: buffer

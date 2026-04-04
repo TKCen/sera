@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   XCircle,
   Filter,
+  Loader2,
 } from 'lucide-react';
 import { useAuditEvents, useVerifyAuditChain } from '@/hooks/useAudit';
 import { useAuth } from '@/hooks/useAuth';
@@ -238,7 +239,7 @@ export default function AuditPage() {
               disabled={exporting}
               className="flex items-center gap-1 px-3 py-2 text-xs text-sera-text-muted hover:text-sera-text hover:bg-sera-surface-hover transition-colors"
             >
-              <Download size={13} />
+              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
               {exporting ? 'Exporting…' : 'Export'}
             </button>
           </div>

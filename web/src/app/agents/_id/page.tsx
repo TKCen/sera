@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { queryClient } from '@/lib/query-client';
-import { Play, Square, RotateCcw, Bot, Trash2, Check, AlertCircle } from 'lucide-react';
+import { Play, Square, RotateCcw, Bot, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,
@@ -10,9 +10,6 @@ import {
   useStopAgent,
   useRestartAgent,
   useDeleteAgent,
-  useAgentSessions,
-  useAgentHealthCheck,
-  useAgentSystemPrompt,
   agentsKeys,
 } from '@/hooks/useAgents';
 import { AgentStatusBadge } from '@/components/AgentStatusBadge';
@@ -31,7 +28,6 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
-import { TabLoading } from '@/components/AgentDetailTabLoading';
 import { AgentDetailManifestTab } from '@/components/AgentDetailManifestTab';
 import { AgentDetailGrantsTab } from '@/components/AgentDetailGrantsTab';
 import { AgentDetailToolsTab } from '@/components/AgentDetailToolsTab';
@@ -43,7 +39,9 @@ import { AgentDetailInnerLifeTab } from '@/components/AgentDetailInnerLifeTab';
 import { AgentDetailDelegationsTab } from '@/components/AgentDetailDelegationsTab';
 import { AgentDetailContextTab } from '@/components/AgentDetailContextTab';
 import { AgentDetailCoreMemoryTab } from '@/components/AgentDetailCoreMemoryTab';
-import { CommandLogTimeline } from '@/components/CommandLogTimeline';
+import { AgentDetailCommandsTab } from '@/components/AgentDetailCommandsTab';
+import { AgentDetailHealthCheckTab } from '@/components/AgentDetailHealthCheckTab';
+import { AgentDetailSystemPromptTab } from '@/components/AgentDetailSystemPromptTab';
 import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
 import { TemplateDiffBanner } from '@/components/TemplateDiffBanner';
 
@@ -249,15 +247,15 @@ export default function AgentDetailPage() {
           {tab === 'tools' && <AgentDetailToolsTab id={id} />}
           {tab === 'delegations' && <AgentDetailDelegationsTab id={id} />}
           {tab === 'logs' && <AgentDetailLogsTab id={id} />}
-          {tab === 'commands' && <CommandsTab id={id} />}
+          {tab === 'commands' && <AgentDetailCommandsTab id={id} />}
           {tab === 'memory' && <AgentDetailMemoryTab id={id} />}
           {tab === 'core-memory' && <AgentDetailCoreMemoryTab id={id} />}
           {tab === 'schedules' && <AgentDetailSchedulesTab id={id} agentName={agent?.name} />}
           {tab === 'inner-life' && <AgentDetailInnerLifeTab id={id} />}
           {tab === 'budget' && <AgentDetailBudgetTab id={id} />}
           {tab === 'context' && <AgentDetailContextTab id={id} />}
-          {tab === 'prompt' && <SystemPromptTab id={id} />}
-          {tab === 'health' && <HealthCheckTab id={id} />}
+          {tab === 'prompt' && <AgentDetailSystemPromptTab id={id} />}
+          {tab === 'health' && <AgentDetailHealthCheckTab id={id} />}
         </ErrorBoundary>
       </div>
 
@@ -333,136 +331,6 @@ export default function AgentDetailPage() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function CommandsTab({ id }: { id: string }) {
-  const { data: sessions, isLoading } = useAgentSessions(id);
-
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-
-  if (isLoading) return <TabLoading />;
-
-  const sortedSessions = useMemo(
-    () =>
-      [...(sessions ?? [])].sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      ),
-    [sessions]
-  );
-
-  // Auto-select most recent session
-  useEffect(() => {
-    if (!selectedSessionId && sortedSessions.length > 0) {
-      setSelectedSessionId(sortedSessions[0]!.id);
-    }
-  }, [sortedSessions, selectedSessionId]);
-
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex-shrink-0 border-b border-sera-border bg-sera-surface-bright/20 p-3">
-        <div className="flex items-center gap-3">
-          <label className="text-[10px] font-bold text-sera-text-muted uppercase tracking-wider flex items-center gap-1.5">
-            Session Context:
-          </label>
-          <select
-            value={selectedSessionId ?? ''}
-            onChange={(e) => setSelectedSessionId(e.target.value)}
-            className="text-xs bg-sera-surface border border-sera-border rounded-md px-3 py-1.5 min-w-[240px] font-medium outline-none focus:ring-1 focus:ring-sera-accent"
-          >
-            {sortedSessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title || 'Untitled Session'} — {new Date(s.updatedAt).toLocaleDateString()}
-              </option>
-            ))}
-            {sortedSessions.length === 0 && <option value="">No sessions found</option>}
-          </select>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        {selectedSessionId ? (
-          <CommandLogTimeline agentId={id} sessionId={selectedSessionId} />
-        ) : (
-          <div className="flex flex-col items-center justify-center p-12 text-sera-text-muted opacity-50">
-            <Bot size={40} className="mb-4 text-sera-accent-soft" />
-            <p className="text-sm font-medium">Select a session to view its command log</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function HealthCheckTab({ id }: { id: string }) {
-  const { data, isLoading, refetch, isFetching } = useAgentHealthCheck(id);
-
-  if (isLoading) return <TabLoading />;
-
-  const overallColor =
-    data?.overallStatus === 'healthy'
-      ? 'text-sera-success'
-      : data?.overallStatus === 'degraded'
-        ? 'text-yellow-400'
-        : 'text-sera-error';
-
-  return (
-    <div className="p-6 max-w-2xl space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-sera-text">Health Check</h3>
-          <p className="text-xs text-sera-text-muted mt-0.5">
-            Diagnostic checks for this agent instance
-          </p>
-        </div>
-        <Button size="sm" variant="outline" onClick={() => void refetch()} disabled={isFetching}>
-          <RotateCcw size={12} className={isFetching ? 'animate-spin' : ''} /> Re-check
-        </Button>
-      </div>
-
-      {data && (
-        <>
-          <div className={cn('text-sm font-semibold', overallColor)}>
-            Status: {data.overallStatus}
-          </div>
-
-          <div className="sera-card-static divide-y divide-sera-border/50">
-            {Object.entries(data.checks).map(([name, check]) => (
-              <div key={name} className="flex items-center gap-3 px-4 py-3">
-                {check.ok ? (
-                  <Check size={14} className="text-sera-success flex-shrink-0" />
-                ) : (
-                  <AlertCircle size={14} className="text-sera-error flex-shrink-0" />
-                )}
-                <span className="text-sm text-sera-text font-medium flex-1">{name}</span>
-                {check.detail && (
-                  <span className="text-xs text-sera-text-muted">{check.detail}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function SystemPromptTab({ id }: { id: string }) {
-  const { data, isLoading } = useAgentSystemPrompt(id);
-
-  if (isLoading) return <TabLoading />;
-
-  return (
-    <div className="p-6 max-w-4xl">
-      <h3 className="text-sm font-semibold text-sera-text mb-3">Resolved System Prompt</h3>
-      <p className="text-xs text-sera-text-muted mb-4">
-        This is the full system prompt sent to the LLM on each request, built from the agent&apos;s
-        template identity, tools, and configuration.
-      </p>
-      <pre className="sera-card-static p-4 text-xs font-mono text-sera-text leading-relaxed overflow-auto whitespace-pre-wrap max-h-[70vh]">
-        {data?.prompt || 'Unable to generate system prompt.'}
-      </pre>
     </div>
   );
 }

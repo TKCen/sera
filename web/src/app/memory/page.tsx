@@ -14,6 +14,7 @@ import { MemoryContent } from '@/components/memory/MemoryContent';
 import { MemoryGraphMinimap } from '@/components/memory/MemoryGraphMinimap';
 import { MemoryStatsHeader } from '@/components/memory/MemoryStatsHeader';
 import { Button } from '@/components/ui/button';
+import { MemoryBlockCreateDialog } from '@/components/MemoryBlockCreateDialog';
 import { usePromoteBlock } from '@/hooks/useMemoryExplorer';
 import { useAgents } from '@/hooks/useAgents';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -27,6 +28,7 @@ function MemoryExplorerContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const { data: agents } = useAgents();
 
   // Build agent UUID → display name lookup
@@ -87,7 +89,7 @@ function MemoryExplorerContent() {
               </Button>
             </>
           )}
-          <Button size="sm">
+          <Button size="sm" onClick={() => setShowCreateDialog(true)}>
             <Plus size={12} className="mr-1" /> New Block
           </Button>
         </div>
@@ -195,6 +197,8 @@ function MemoryExplorerContent() {
           </div>
         </div>
       </div>
+
+      <MemoryBlockCreateDialog open={showCreateDialog} onOpenChange={setShowCreateDialog} />
     </div>
   );
 }

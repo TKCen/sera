@@ -11,6 +11,7 @@ import {
   updateAgentBlock,
   deleteAgentBlock,
   triggerCompaction,
+  addMemoryEntry,
 } from '@/lib/api/memory';
 
 export const memoryExplorerKeys = {
@@ -121,6 +122,22 @@ export function useDeleteBlock() {
   return useMutation({
     mutationFn: ({ agentId, blockId }: { agentId: string; blockId: string }) =>
       deleteAgentBlock(agentId, blockId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
+    },
+  });
+}
+
+export function useCreateMemoryBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      type,
+      entry,
+    }: {
+      type: string;
+      entry: { title: string; content: string; tags?: string[]; refs?: string[]; source?: string };
+    }) => addMemoryEntry(type, entry),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['memory-explorer'] });
     },

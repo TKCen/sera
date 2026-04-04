@@ -32,10 +32,11 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { MultiSelectPicker } from '@/components/MultiSelectPicker';
+import { AddMemberDialog } from '@/components/circle/AddMemberDialog';
+import { EditChannelDialog } from '@/components/circle/EditChannelDialog';
+import { PartyModeDialog } from '@/components/circle/PartyModeDialog';
 
 type Tab = 'overview' | 'channels' | 'knowledge' | 'context';
 
@@ -678,165 +679,36 @@ export default function CircleDetailPage() {
       )}
 
       {/* Add Members Dialog */}
-      <Dialog open={showAddMember} onOpenChange={setShowAddMember}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add Members</DialogTitle>
-            <DialogDescription>Select agents to add to this circle.</DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <MultiSelectPicker
-              items={(allAgents ?? [])
-                .filter((a) => !agents.includes(a.name))
-                .map((a) => ({ id: a.name, label: a.display_name ?? a.name }))}
-              selected={selectedAgentsForCircle}
-              onChange={setSelectedAgentsForCircle}
-              placeholder="Search agents..."
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setShowAddMember(false)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => void handleAddMembers()}
-              disabled={selectedAgentsForCircle.length === 0}
-            >
-              Add Selected
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AddMemberDialog
+        open={showAddMember}
+        onOpenChange={setShowAddMember}
+        allAgents={allAgents ?? []}
+        currentMemberIds={agents}
+        selectedAgents={selectedAgentsForCircle}
+        onSelectedAgentsChange={setSelectedAgentsForCircle}
+        onMembersAdded={() => void handleAddMembers()}
+        isLoading={updateCircle.isPending}
+      />
 
       {/* Edit Party Mode Dialog */}
-      {partyMode && (
-        <Dialog open={showEditParty} onOpenChange={setShowEditParty}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Party Mode Settings</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">Enabled</label>
-                <input
-                  type="checkbox"
-                  checked={partyMode.enabled}
-                  onChange={(e) => handleSavePartyMode({ ...partyMode, enabled: e.target.checked })}
-                  className="h-4 w-4 rounded border-sera-border bg-sera-surface text-sera-accent"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs text-sera-text-muted">Orchestrator Agent</label>
-                <select
-                  value={partyMode.orchestrator ?? ''}
-                  onChange={(e) =>
-                    handleSavePartyMode({ ...partyMode, orchestrator: e.target.value })
-                  }
-                  className="sera-input text-xs w-full"
-                >
-                  <option value="">None</option>
-                  {agents.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs text-sera-text-muted">Selection Strategy</label>
-                <select
-                  value={partyMode.selectionStrategy ?? 'relevance'}
-                  onChange={(e) =>
-                    handleSavePartyMode({ ...partyMode, selectionStrategy: e.target.value })
-                  }
-                  className="sera-input text-xs w-full"
-                >
-                  <option value="relevance">Relevance</option>
-                  <option value="round-robin">Round Robin</option>
-                  <option value="all">All</option>
-                </select>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button size="sm" variant="ghost" onClick={() => setShowEditParty(false)}>
-                Close
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
+      <PartyModeDialog
+        open={showEditParty}
+        onOpenChange={setShowEditParty}
+        partyMode={partyMode}
+        agents={agents}
+        onSave={handleSavePartyMode}
+        isLoading={updateCircle.isPending}
+      />
 
       {/* Edit Channel Dialog */}
-      <Dialog open={!!showEditChannel} onOpenChange={(o) => !o && setShowEditChannel(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {showEditChannel?.index === -1 ? 'Add Channel' : 'Edit Channel'}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-4">
-            <div className="space-y-1.5">
-              <label className="text-xs text-sera-text-muted">Channel Name</label>
-              <Input
-                value={showEditChannel?.channel?.name ?? ''}
-                onChange={(e) =>
-                  setShowEditChannel((prev) => ({
-                    ...prev!,
-                    channel: { ...prev!.channel, name: e.target.value },
-                  }))
-                }
-                placeholder="e.g. general"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-sera-text-muted">Description</label>
-              <Input
-                value={showEditChannel?.channel?.description ?? ''}
-                onChange={(e) =>
-                  setShowEditChannel((prev) => ({
-                    ...prev!,
-                    channel: { ...prev!.channel, description: e.target.value },
-                  }))
-                }
-                placeholder="Channel purpose..."
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-sera-text-muted">Type</label>
-              <select
-                value={showEditChannel?.channel?.type ?? 'persistent'}
-                onChange={(e) =>
-                  setShowEditChannel((prev) => ({
-                    ...prev!,
-                    channel: { ...prev!.channel, type: e.target.value },
-                  }))
-                }
-                className="sera-input text-xs w-full"
-              >
-                <option value="persistent">Persistent</option>
-                <option value="ephemeral">Ephemeral</option>
-              </select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setShowEditChannel(null)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() =>
-                handleSaveChannel(
-                  showEditChannel?.channel,
-                  showEditChannel?.index === -1 ? undefined : showEditChannel?.index
-                )
-              }
-            >
-              Save Channel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <EditChannelDialog
+        open={!!showEditChannel}
+        onOpenChange={(o) => !o && setShowEditChannel(null)}
+        channelData={showEditChannel}
+        onChannelDataChange={setShowEditChannel}
+        onSave={handleSaveChannel}
+        isLoading={updateCircle.isPending}
+      />
 
       {/* Delete confirmation */}
       <Dialog open={showDelete} onOpenChange={setShowDelete}>

@@ -69,12 +69,12 @@ pub async fn create_circle(
     })))
 }
 
-/// GET /api/circles/:name — get a single circle by name or id.
+/// GET /api/circles/{id} — get a single circle by id.
 pub async fn get_circle(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Json<CircleResponse>, AppError> {
-    let row = CircleRepository::get_by_name(state.db.inner(), &name).await?;
+    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
     Ok(Json(CircleResponse {
         id: row.id.to_string(),
         name: row.name,
@@ -83,19 +83,31 @@ pub async fn get_circle(
     }))
 }
 
-/// PUT /api/circles/:id — update a circle.
-#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCircleRequest {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+}
+
+/// PATCH /api/circles/{id} — update a circle.
 pub async fn update_circle(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<CreateCircleRequest>,
+    Json(body): Json<UpdateCircleRequest>,
 ) -> Result<Json<CircleResponse>, AppError> {
-    // Upsert — update display_name and description
+    // Get current circle first to merge updates
+    let current = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+
+    let display_name = body.display_name.unwrap_or(current.display_name);
+    let description = body.description.or(current.description);
+
+    // Update in database
     sqlx::query(
         "UPDATE circles SET display_name = $1, description = $2, updated_at = NOW() WHERE id::text = $3 OR name = $3"
     )
-    .bind(&body.display_name)
-    .bind(&body.description)
+    .bind(&display_name)
+    .bind(&description)
     .bind(&id)
     .execute(state.db.inner())
     .await
@@ -117,4 +129,48 @@ pub async fn delete_circle(
 ) -> Result<StatusCode, AppError> {
     CircleRepository::delete_circle(state.db.inner(), &id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circle_response_serializes() {
+        let circle = CircleResponse {
+            id: "123".to_string(),
+            name: "engineering".to_string(),
+            display_name: "Engineering Circle".to_string(),
+            description: Some("Main engineering team".to_string()),
+        };
+
+        let json = serde_json::to_value(&circle).unwrap();
+        assert_eq!(json["id"], "123");
+        assert_eq!(json["displayName"], "Engineering Circle");
+    }
+
+    #[test]
+    fn create_circle_request_deserializes() {
+        let input = r#"{
+            "name": "eng",
+            "displayName": "Engineering",
+            "description": "Team"
+        }"#;
+
+        let req: CreateCircleRequest = serde_json::from_str(input).unwrap();
+        assert_eq!(req.name, "eng");
+        assert_eq!(req.display_name, "Engineering");
+        assert_eq!(req.description, Some("Team".to_string()));
+    }
+
+    #[test]
+    fn update_circle_request_deserializes() {
+        let input = r#"{
+            "displayName": "New Name"
+        }"#;
+
+        let req: UpdateCircleRequest = serde_json::from_str(input).unwrap();
+        assert_eq!(req.display_name, Some("New Name".to_string()));
+        assert_eq!(req.description, None);
+    }
 }

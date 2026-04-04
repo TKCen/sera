@@ -42,6 +42,7 @@ futures-util.workspace = true
 # qdrant-client and git2 deferred — native deps need Docker build env
 # openidconnect deferred — uses reqwest directly for token exchange
 rand.workspace = true
+cron.workspace = true
 
 [dev-dependencies]
 sera-testing.workspace = true

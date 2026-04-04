@@ -149,7 +149,7 @@ fn build_router(
             "/api/circles",
             get(routes::circles::list_circles).post(routes::circles::create_circle),
         )
-        .route("/api/circles/{id}", get(routes::circles::get_circle).delete(routes::circles::delete_circle))
+        .route("/api/circles/{id}", get(routes::circles::get_circle).patch(routes::circles::update_circle).delete(routes::circles::delete_circle))
         // Sessions — GET list + POST create
         .route(
             "/api/sessions",
@@ -171,6 +171,11 @@ fn build_router(
         )
         .route("/api/agents/instances/{id}/start", post(routes::agents::start_instance))
         .route("/api/agents/instances/{id}/stop", post(routes::agents::stop_instance))
+        .route("/api/agents/instances/{id}/restart", post(routes::agents::restart_instance))
+        .route("/api/agents/instances/{id}/status", get(routes::agents::get_agent_status))
+        .route("/api/agents/instances/{id}/metrics", get(routes::agents::get_agent_metrics))
+        .route("/api/agents/instances/{id}/skills", post(routes::agents::add_agent_skill))
+        .route("/api/agents/instances/{id}/skills/{skill_name}", delete(routes::agents::remove_agent_skill))
         .route("/api/agents/instances/{id}/tools", get(routes::stubs::agent_tools))
         // Providers write endpoints
         .route("/api/providers", post(routes::providers::add_provider))
@@ -216,11 +221,14 @@ fn build_router(
             get(routes::memory::list_blocks).post(routes::memory::create_block),
         )
         .route(
-            "/api/memory/entries/{id}",
+            "/api/memory/blocks/{id}",
             get(routes::memory::get_block)
                 .put(routes::memory::update_block)
                 .delete(routes::memory::delete_block),
         )
+        .route("/api/memory/search", post(routes::memory::search_memory))
+        .route("/api/memory/versions/{agent_id}", get(routes::memory::get_memory_versions))
+        .route("/api/memory/versions/{agent_id}/snapshot", post(routes::memory::create_memory_snapshot))
         // Task queue
         .route("/api/agents/{id}/tasks", get(routes::tasks::list_tasks).post(routes::tasks::enqueue_task))
         .route("/api/agents/{id}/tasks/next", get(routes::tasks::poll_next_task))
@@ -247,6 +255,10 @@ fn build_router(
         .route("/api/mcp-servers/{name}", get(routes::mcp::get_mcp_server).delete(routes::mcp::delete_mcp_server))
         .route("/api/mcp-servers/{name}/health", get(routes::mcp::mcp_server_health))
         .route("/api/mcp-servers/{name}/reload", post(routes::mcp::reload_mcp_server))
+        // Tool management
+        .route("/api/tools", get(routes::mcp::list_tools))
+        .route("/api/tools/execute", post(routes::mcp::execute_tool))
+        .route("/api/tools/validate", post(routes::mcp::validate_tool))
         // LSP proxy
         .route("/api/lsp/definition", post(routes::lsp::definition))
         .route("/api/lsp/references", post(routes::lsp::references))
@@ -301,6 +313,13 @@ fn build_router(
         .route("/api/pipelines/{id}", get(routes::pipelines::get_pipeline))
         // Chat — container routing with SSE streaming
         .route("/api/chat", post(routes::chat::chat))
+        .route("/api/chat/stream", post(routes::chat::stream_chat))
+        .route("/api/chat/completions", post(routes::chat::completions))
+        // Chat session messages
+        .route(
+            "/api/chat/sessions/{id}/messages",
+            post(routes::chat::add_message).get(routes::chat::list_messages),
+        )
         // OpenAI-compatible endpoint
         .route("/v1/chat/completions", post(routes::openai_compat::chat_completions))
         // Embedding — Ollama integration
@@ -308,7 +327,12 @@ fn build_router(
         .route("/api/embedding/status", get(routes::embedding::get_status))
         .route("/api/embedding/models", get(routes::embedding::list_models))
         .route("/api/embedding/test", post(routes::embedding::test_embedding))
-        // Knowledge — git history + merge requests
+        .route("/api/embedding/embed", post(routes::embedding::embed_text))
+        .route("/api/embedding/batch", post(routes::embedding::embed_batch))
+        // Knowledge — agent knowledge + git history + merge requests
+        .route("/api/knowledge/{agent_id}", get(routes::embedding::get_knowledge).post(routes::embedding::update_knowledge))
+        .route("/api/knowledge/{agent_id}/history", get(routes::embedding::get_knowledge_history))
+        .route("/api/knowledge/{agent_id}/diff", get(routes::embedding::get_knowledge_diff))
         .route("/api/knowledge/circles/{id}/history", get(routes::knowledge::get_history))
         .route("/api/knowledge/circles/{id}/merge-requests", get(routes::knowledge::list_merge_requests).post(routes::knowledge::create_merge_request))
         .route("/api/knowledge/circles/{id}/merge-requests/{mr_id}/approve", post(routes::knowledge::approve_merge_request))

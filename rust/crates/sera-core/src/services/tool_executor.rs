@@ -190,23 +190,36 @@ impl ToolExecutor {
     }
 
     /// Validate that a path is within the sandbox workspace.
+    ///
+    /// Uses manual component-level normalization to resolve `..` without
+    /// requiring the path to exist on disk (needed for file writes).
     fn validate_sandbox(&self, workspace: &Path, path: &Path) -> Result<(), ToolExecutorError> {
-        // Canonicalize both paths to resolve any .. or symlinks
-        // Use the path as-is if canonicalize fails (file doesn't exist yet for writes)
-        let workspace_canon = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.to_path_buf());
+        let workspace_norm = Self::normalize_path(workspace);
+        let path_norm = Self::normalize_path(path);
 
-        let path_canon = path
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.join(path.strip_prefix(workspace).unwrap_or(path)));
-
-        if !path_canon.starts_with(&workspace_canon) {
+        if !path_norm.starts_with(&workspace_norm) {
             return Err(ToolExecutorError::SandboxViolation(
                 path.display().to_string(),
             ));
         }
         Ok(())
+    }
+
+    /// Normalize a path by resolving `.` and `..` components without filesystem access.
+    /// This prevents path traversal attacks even when the file doesn't exist yet.
+    fn normalize_path(path: &Path) -> PathBuf {
+        use std::path::Component;
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::CurDir => {}
+                other => normalized.push(other),
+            }
+        }
+        normalized
     }
 
     /// Get the workspace directory for an agent.
@@ -233,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_sandbox_traversal_detection() {
-        let workspace = PathBuf::from("/tmp/workspace/agent-1");
+        let _workspace = PathBuf::from("/tmp/workspace/agent-1");
         let malicious = PathBuf::from("/tmp/workspace/agent-1/../agent-2/secrets");
         let normalized = malicious.components().collect::<PathBuf>();
         assert!(normalized.to_string_lossy().contains(".."));

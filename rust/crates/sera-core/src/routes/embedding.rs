@@ -1,9 +1,14 @@
 //! Embedding service endpoints — Ollama integration for text embeddings.
 #![allow(dead_code, unused_imports)]
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use time::OffsetDateTime;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -103,6 +108,38 @@ pub struct EmbeddingStatus {
     pub status: String,
     pub message: String,
     pub latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedResponse {
+    pub vector: Vec<f32>,
+    pub dimensions: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEmbedRequest {
+    pub texts: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingResult {
+    pub text: String,
+    pub vector: Vec<f32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEmbedResponse {
+    pub embeddings: Vec<EmbeddingResult>,
 }
 
 /// GET /api/embedding/status — check Ollama connectivity
@@ -430,6 +467,95 @@ pub async fn test_embedding_config(
     Ok(Json(result.unwrap_or_else(|e| e)))
 }
 
+/// POST /api/embedding/embed — embed a single text (stub: zero-vector)
+pub async fn embed_text(
+    Json(body): Json<EmbedRequest>,
+) -> Json<EmbedResponse> {
+    let _ = body.text; // stub implementation
+    Json(EmbedResponse {
+        vector: vec![0.0; 1536],
+        dimensions: 1536,
+    })
+}
+
+/// POST /api/embedding/batch — embed multiple texts (stub: zero-vectors)
+pub async fn embed_batch(
+    Json(body): Json<BatchEmbedRequest>,
+) -> Json<BatchEmbedResponse> {
+    let embeddings = body
+        .texts
+        .into_iter()
+        .map(|text| EmbeddingResult {
+            text,
+            vector: vec![0.0; 1536],
+        })
+        .collect();
+
+    Json(BatchEmbedResponse { embeddings })
+}
+
+/// GET /api/knowledge/{agent_id} — get agent knowledge (stub: empty)
+pub async fn get_knowledge(
+    Path(agent_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "agent_id": agent_id,
+        "content": "",
+        "updated_at": serde_json::Value::Null,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateKnowledgeRequest {
+    pub content: String,
+}
+
+/// POST /api/knowledge/{agent_id} — update agent knowledge (stub)
+pub async fn update_knowledge(
+    Path(agent_id): Path<String>,
+    Json(body): Json<UpdateKnowledgeRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let now = OffsetDateTime::now_utc();
+    let timestamp = super::iso8601(now);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "agent_id": agent_id,
+            "content": body.content,
+            "updated_at": timestamp,
+        })),
+    )
+}
+
+/// GET /api/knowledge/{agent_id}/history — get knowledge history (stub: empty)
+pub async fn get_knowledge_history(
+    Path(agent_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "agent_id": agent_id,
+        "versions": [],
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiffQuery {
+    pub v1: Option<String>,
+    pub v2: Option<String>,
+}
+
+/// GET /api/knowledge/{agent_id}/diff — get knowledge diff (stub: empty)
+pub async fn get_knowledge_diff(
+    Path(agent_id): axum::extract::Path<String>,
+    Query(_query): axum::extract::Query<DiffQuery>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "agent_id": agent_id,
+        "diff": "",
+    }))
+}
+
 /// POST /api/embedding/test — test embedding generation
 pub async fn test_embedding(
     State(state): State<AppState>,
@@ -503,5 +629,65 @@ mod tests {
         };
         let json = serde_json::to_string(&model).unwrap();
         assert!(json.contains("nomic-embed-text"));
+    }
+
+    #[test]
+    fn embed_response_shape() {
+        let resp = EmbedResponse {
+            vector: vec![0.0; 1536],
+            dimensions: 1536,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"dimensions\":1536"));
+        assert!(json.contains("\"vector\""));
+    }
+
+    #[test]
+    fn batch_embed_response_shape() {
+        let resp = BatchEmbedResponse {
+            embeddings: vec![
+                EmbeddingResult {
+                    text: "hello".to_string(),
+                    vector: vec![0.0; 1536],
+                },
+                EmbeddingResult {
+                    text: "world".to_string(),
+                    vector: vec![0.0; 1536],
+                },
+            ],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"embeddings\""));
+        assert!(json.contains("hello"));
+        assert!(json.contains("world"));
+    }
+
+    #[test]
+    fn knowledge_response_has_required_fields() {
+        let resp = serde_json::json!({
+            "agent_id": "agent-1",
+            "content": "test content",
+            "updated_at": serde_json::Value::Null,
+        });
+        assert_eq!(resp["agent_id"], "agent-1");
+        assert_eq!(resp["content"], "test content");
+    }
+
+    #[test]
+    fn knowledge_history_response_shape() {
+        let resp = serde_json::json!({
+            "agent_id": "agent-1",
+            "versions": Vec::<String>::new(),
+        });
+        assert!(resp["versions"].is_array());
+    }
+
+    #[test]
+    fn knowledge_diff_response_shape() {
+        let resp = serde_json::json!({
+            "agent_id": "agent-1",
+            "diff": "",
+        });
+        assert_eq!(resp["diff"], "");
     }
 }

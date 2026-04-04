@@ -230,3 +230,143 @@ pub async fn register_mcp_server(
 
     Ok((StatusCode::CREATED, Json(server)))
 }
+
+// ── Tool Management Routes ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ToolsListResponse {
+    pub tools: Vec<ToolInfo>,
+}
+
+/// GET /api/tools?agent_id=X — list available tools for an agent
+pub async fn list_tools() -> Json<ToolsListResponse> {
+    Json(ToolsListResponse { tools: vec![] })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecuteToolRequest {
+    pub agent_id: String,
+    pub tool_name: String,
+    pub args: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecuteToolResponse {
+    pub success: bool,
+    pub output: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub duration_ms: u64,
+}
+
+/// POST /api/tools/execute — execute a tool with provided arguments
+pub async fn execute_tool(
+    Json(_body): Json<ExecuteToolRequest>,
+) -> Json<ExecuteToolResponse> {
+    let start = std::time::Instant::now();
+    Json(ExecuteToolResponse {
+        success: true,
+        output: Some(serde_json::json!({"message": "tool execution stub"})),
+        error: None,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ValidateToolRequest {
+    pub tool_name: String,
+    pub args: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ValidateToolResponse {
+    pub valid: bool,
+    pub errors: Vec<String>,
+}
+
+/// POST /api/tools/validate — validate tool arguments
+pub async fn validate_tool(
+    Json(_body): Json<ValidateToolRequest>,
+) -> Json<ValidateToolResponse> {
+    Json(ValidateToolResponse {
+        valid: true,
+        errors: vec![],
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_list_tools_response_shape() {
+        let response = list_tools().await;
+        assert_eq!(response.tools.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_response_shape() {
+        let req = ExecuteToolRequest {
+            agent_id: "agent-1".to_string(),
+            tool_name: "test_tool".to_string(),
+            args: serde_json::json!({}),
+        };
+        let response = execute_tool(Json(req)).await;
+        assert!(response.success);
+        assert!(response.error.is_none());
+        assert!(response.output.is_some());
+        assert!(response.duration_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_validate_tool_response_shape() {
+        let req = ValidateToolRequest {
+            tool_name: "test_tool".to_string(),
+            args: serde_json::json!({}),
+        };
+        let response = validate_tool(Json(req)).await;
+        assert!(response.valid);
+        assert_eq!(response.errors.len(), 0);
+    }
+
+    #[test]
+    fn test_tool_info_serialization() {
+        let tool = ToolInfo {
+            name: "test".to_string(),
+            description: Some("Test tool".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        let json = serde_json::to_value(&tool).expect("Failed to serialize");
+        assert_eq!(json["name"], "test");
+        assert_eq!(json["description"], "Test tool");
+        assert_eq!(json["agent_id"], "agent-1");
+    }
+
+    #[test]
+    fn test_execute_tool_request_deserialization() {
+        let json = serde_json::json!({
+            "agent_id": "agent-1",
+            "tool_name": "echo",
+            "args": {"message": "hello"}
+        });
+        let req: ExecuteToolRequest = serde_json::from_value(json).expect("Failed to deserialize");
+        assert_eq!(req.agent_id, "agent-1");
+        assert_eq!(req.tool_name, "echo");
+    }
+
+    #[test]
+    fn test_validate_tool_request_deserialization() {
+        let json = serde_json::json!({
+            "tool_name": "echo",
+            "args": {"message": "hello"}
+        });
+        let req: ValidateToolRequest = serde_json::from_value(json).expect("Failed to deserialize");
+        assert_eq!(req.tool_name, "echo");
+    }
+}

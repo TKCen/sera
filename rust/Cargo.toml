@@ -90,6 +90,9 @@ rand = "0.8"
 notify = "7"
 notify-debouncer-mini = "0.5"
 
+# Scheduling
+cron = "0.13"
+
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }
 sera-config = { path = "crates/sera-config" }

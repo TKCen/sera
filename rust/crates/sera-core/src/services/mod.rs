@@ -35,3 +35,9 @@ pub mod memory_manager;
 pub mod skill_registry;
 #[allow(dead_code)]
 pub mod tool_executor;
+#[allow(dead_code)]
+pub mod schedule_service;
+#[allow(dead_code)]
+pub mod circuit_breaker;
+#[allow(dead_code)]
+pub mod process_manager;

@@ -2,8 +2,9 @@
 #![allow(dead_code, unused_imports, unused_variables, clippy::too_many_arguments)]
 
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    http::StatusCode,
     Json,
 };
 use futures_util::StreamExt;
@@ -12,6 +13,7 @@ use std::convert::Infallible;
 
 use crate::error::AppError;
 use crate::state::AppState;
+use sera_db::sessions::SessionRepository;
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
@@ -313,6 +315,174 @@ pub(crate) async fn get_agent_chat_url(state: &AppState, agent_id: &str) -> Resu
     }
 }
 
+// ============================================================================
+// Chat Session Message Routes
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddMessageRequest {
+    pub role: String,
+    pub content: String,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageResponse {
+    pub id: String,
+    pub role: String,
+    pub content: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagesQuery {
+    pub limit: Option<i32>,
+    pub offset: Option<i32>,
+}
+
+/// POST /api/chat/sessions/:id/messages — add a message to a session
+pub async fn add_message(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<AddMessageRequest>,
+) -> Result<(StatusCode, Json<MessageResponse>), AppError> {
+    let message_id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query(
+        "INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW())"
+    )
+    .bind(&message_id)
+    .bind(&session_id)
+    .bind(&body.role)
+    .bind(&body.content)
+    .bind(&body.metadata)
+    .execute(state.db.inner())
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("foreign key") {
+            AppError::Db(sera_db::DbError::NotFound {
+                entity: "session",
+                key: "id",
+                value: session_id.clone(),
+            })
+        } else {
+            AppError::Internal(anyhow::anyhow!("Failed to insert message: {e}"))
+        }
+    })?;
+
+    let row: (Option<String>,) = sqlx::query_as(
+        "SELECT created_at AT TIME ZONE 'UTC' FROM chat_messages WHERE id = $1::uuid"
+    )
+    .bind(&message_id)
+    .fetch_one(state.db.inner())
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch created_at: {e}")))?;
+
+    use super::iso8601_opt;
+    Ok((
+        StatusCode::CREATED,
+        Json(MessageResponse {
+            id: message_id,
+            role: body.role,
+            content: Some(body.content),
+            metadata: body.metadata,
+            created_at: iso8601_opt(
+                row.0.as_deref().and_then(|s| time::OffsetDateTime::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok())
+            ),
+        }),
+    ))
+}
+
+/// GET /api/chat/sessions/:id/messages — list messages with pagination
+pub async fn list_messages(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(params): Query<MessagesQuery>,
+) -> Result<Json<Vec<MessageResponse>>, AppError> {
+    let limit = params.limit.unwrap_or(50).min(500);
+    let offset = params.offset.unwrap_or(0).max(0);
+
+    let rows = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, Option<String>, Option<serde_json::Value>, Option<time::OffsetDateTime>)>(
+        "SELECT id, session_id, role, content, metadata, created_at
+         FROM chat_messages WHERE session_id = $1::uuid
+         ORDER BY created_at ASC
+         LIMIT $2 OFFSET $3"
+    )
+    .bind(&session_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(state.db.inner())
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch messages: {e}")))?;
+
+    use super::iso8601_opt;
+    let messages = rows
+        .into_iter()
+        .map(|(id, _session_id, role, content, metadata, created_at)| MessageResponse {
+            id: id.to_string(),
+            role,
+            content,
+            metadata,
+            created_at: iso8601_opt(created_at),
+        })
+        .collect();
+
+    Ok(Json(messages))
+}
+
+// ============================================================================
+// Chat Streaming & Completion Stubs
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamEventPayload {
+    pub session_id: String,
+    pub message_id: String,
+    pub delta: Option<String>,
+}
+
+/// POST /api/chat/stream — SSE streaming stub
+pub async fn stream_chat(
+    State(_state): State<AppState>,
+) -> Sse<impl futures_util::stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream = futures_util::stream::iter(vec![
+        Ok(Event::default()
+            .event("message")
+            .data(serde_json::to_string(&StreamEventPayload {
+                session_id: uuid::Uuid::new_v4().to_string(),
+                message_id: uuid::Uuid::new_v4().to_string(),
+                delta: Some("This is a streaming response placeholder.".to_string()),
+            }).unwrap_or_default())),
+        Ok(Event::default()
+            .event("done")
+            .data(serde_json::json!({"status": "complete"}).to_string())),
+    ]);
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// POST /api/chat/completions — non-streaming completion stub
+pub async fn completions(
+    State(_state): State<AppState>,
+    Json(_body): Json<ChatRequest>,
+) -> Result<Json<ChatResponse>, AppError> {
+    Ok(Json(ChatResponse {
+        reply: Some("This is a completion stub response.".to_string()),
+        thought: None,
+        thoughts: None,
+        citations: None,
+        session_id: uuid::Uuid::new_v4().to_string(),
+        message_id: Some(uuid::Uuid::new_v4().to_string()),
+        usage: None,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +495,52 @@ mod tests {
         };
         assert_eq!(msg.role, "user");
         assert_eq!(msg.content, "hello");
+    }
+
+    #[test]
+    fn add_message_request_deserializes() {
+        let json = r#"{"role":"assistant","content":"test response"}"#;
+        let req: AddMessageRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.role, "assistant");
+        assert_eq!(req.content, "test response");
+        assert_eq!(req.metadata, None);
+    }
+
+    #[test]
+    fn add_message_request_with_metadata() {
+        let json = r#"{"role":"user","content":"hi","metadata":{"key":"value"}}"#;
+        let req: AddMessageRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.role, "user");
+        assert_eq!(req.content, "hi");
+        assert!(req.metadata.is_some());
+    }
+
+    #[test]
+    fn stream_event_payload_serializes() {
+        let event = StreamEventPayload {
+            session_id: "session-123".to_string(),
+            message_id: "msg-456".to_string(),
+            delta: Some("hello".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("sessionId"));
+        assert!(json.contains("messageId"));
+        assert!(json.contains("hello"));
+    }
+
+    #[test]
+    fn chat_response_serializes() {
+        let resp = ChatResponse {
+            reply: Some("test".to_string()),
+            thought: None,
+            thoughts: None,
+            citations: None,
+            session_id: "sess-1".to_string(),
+            message_id: Some("msg-1".to_string()),
+            usage: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("test"));
+        assert!(json.contains("sess-1"));
     }
 }

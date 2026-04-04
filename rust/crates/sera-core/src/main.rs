@@ -99,6 +99,10 @@ fn build_router(
             "/api/budget/agents/{agent_id}",
             get(routes::metering::get_agent_budget),
         )
+        .route("/api/skills", get(routes::skills::list_skills))
+        .route("/api/schedules", get(routes::schedules::list_schedules))
+        .route("/api/circles", get(routes::circles::list_circles))
+        .route("/api/sessions", get(routes::sessions::list_sessions))
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

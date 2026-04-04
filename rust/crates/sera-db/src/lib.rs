@@ -8,7 +8,11 @@
 pub mod pool;
 pub mod agents;
 pub mod audit;
+pub mod circles;
 pub mod metering;
+pub mod schedules;
+pub mod sessions;
+pub mod skills;
 pub mod error;
 
 pub use pool::DbPool;

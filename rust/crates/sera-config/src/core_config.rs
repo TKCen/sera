@@ -131,23 +131,34 @@ fn require_env(key: &str) -> Result<String, ConfigError> {
 mod tests {
     use super::*;
 
+    // Note: these tests mutate process env vars and must run with `--test-threads=1`
+    // for sera-config, or accept occasional flakiness from parallel execution.
+    // In practice, cargo runs each crate's tests in a single binary so ordering
+    // is the main concern.
+
     #[test]
     fn core_config_requires_database_url() {
-        // SAFETY: single-threaded test
+        // Save, remove, test, restore
+        let saved = env::var("DATABASE_URL").ok();
         unsafe { env::remove_var("DATABASE_URL") };
         let result = CoreConfig::from_env();
+        if let Some(val) = &saved {
+            unsafe { env::set_var("DATABASE_URL", val) };
+        }
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("DATABASE_URL"));
+        assert!(result.unwrap_err().to_string().contains("DATABASE_URL"));
     }
 
     #[test]
     fn core_config_defaults() {
-        // SAFETY: single-threaded test — set DATABASE_URL before reading
+        let saved = env::var("DATABASE_URL").ok();
         unsafe { env::set_var("DATABASE_URL", "postgres://test:test@localhost/sera") };
         let result = CoreConfig::from_env();
-        // Clean up before asserting so other tests aren't affected
-        unsafe { env::remove_var("DATABASE_URL") };
+        // Restore original state
+        match &saved {
+            Some(val) => unsafe { env::set_var("DATABASE_URL", val) },
+            None => unsafe { env::remove_var("DATABASE_URL") },
+        }
         let config = result.unwrap();
         assert_eq!(config.port, 3001);
         assert_eq!(config.api_key, "sera_bootstrap_dev_123");

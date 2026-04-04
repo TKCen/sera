@@ -51,7 +51,7 @@ export function EditChannelDialog({
     if (channelData) {
       onChannelDataChange({
         index: channelData.index,
-        channel: { ...channelData.channel, type: e.target.value },
+        channel: { ...channelData.channel, type: e.target.value as CircleChannelConfig['type'] },
       });
     }
   };
@@ -97,12 +97,10 @@ export function EditChannelDialog({
           </Button>
           <Button
             size="sm"
-            onClick={() =>
-              onSave(
-                channelData?.channel,
-                channelData?.index === -1 ? undefined : channelData?.index
-              )
-            }
+            onClick={() => {
+              if (!channelData) return;
+              onSave(channelData.channel, channelData.index === -1 ? undefined : channelData.index);
+            }}
             disabled={isLoading}
           >
             Save Channel

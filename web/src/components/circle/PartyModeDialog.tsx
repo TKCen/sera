@@ -12,7 +12,7 @@ import type { CirclePartyModeConfig } from '@/lib/api/types';
 interface PartyModeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  partyMode: CirclePartyModeConfig;
+  partyMode: CirclePartyModeConfig | undefined;
   agents: string[];
   onSave: (config: CirclePartyModeConfig) => void;
   isLoading?: boolean;
@@ -65,7 +65,12 @@ export function PartyModeDialog({
             <label className="text-xs text-sera-text-muted">Selection Strategy</label>
             <select
               value={partyMode.selectionStrategy ?? 'relevance'}
-              onChange={(e) => onSave({ ...partyMode, selectionStrategy: e.target.value })}
+              onChange={(e) =>
+                onSave({
+                  ...partyMode,
+                  selectionStrategy: e.target.value as CirclePartyModeConfig['selectionStrategy'],
+                })
+              }
               className="sera-input text-xs w-full"
             >
               <option value="relevance">Relevance</option>

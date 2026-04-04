@@ -1,13 +1,10 @@
 import { useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router';
+import { useParams, Link } from 'react-router';
 import {
   Users,
-  Bot,
   Radio,
-  Zap,
   Database,
   FileText,
-  Network,
   Trash2,
   Save,
   Settings2,
@@ -16,13 +13,9 @@ import {
   X,
   Plus,
 } from 'lucide-react';
-import { toast } from 'sonner';
-import { useCircle, useUpdateCircle, useDeleteCircle } from '@/hooks/useCircles';
-import { useAgents } from '@/hooks/useAgents';
-import * as circlesApi from '@/lib/api/circles';
+import { useCircleDetail } from '@/hooks/useCircleDetail';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { CopyButton } from '@/components/CopyButton';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -37,41 +30,17 @@ import { cn } from '@/lib/utils';
 import { AddMemberDialog } from '@/components/circle/AddMemberDialog';
 import { EditChannelDialog } from '@/components/circle/EditChannelDialog';
 import { PartyModeDialog } from '@/components/circle/PartyModeDialog';
+import { CircleOverviewTab } from '@/components/circle/CircleOverviewTab';
+import { CircleChannelsTab } from '@/components/circle/CircleChannelsTab';
 
 type Tab = 'overview' | 'channels' | 'knowledge' | 'context';
 
 export default function CircleDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const { data: circle, isLoading, refetch } = useCircle(id ?? '');
-  const updateCircle = useUpdateCircle();
-  const deleteCircle = useDeleteCircle();
-
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [showDelete, setShowDelete] = useState(false);
+  const c = useCircleDetail(id);
 
-  // Inline editing for name & description
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
-  const [editingDesc, setEditingDesc] = useState(false);
-  const [descDraft, setDescDraft] = useState('');
-
-  // Modals
-  const [showAddMember, setShowAddMember] = useState(false);
-  const [showEditParty, setShowEditParty] = useState(false);
-  const [showEditChannel, setShowEditChannel] = useState<{
-    index: number;
-    channel: any;
-  } | null>(null);
-
-  const { data: allAgents } = useAgents();
-
-  // Project context editing
-  const [editingContext, setEditingContext] = useState(false);
-  const [contextDraft, setContextDraft] = useState('');
-  const [savingContext, setSavingContext] = useState(false);
-
-  if (isLoading) {
+  if (c.isLoading) {
     return (
       <div className="p-6 space-y-4">
         <Skeleton className="h-8 w-48" />
@@ -80,7 +49,7 @@ export default function CircleDetailPage() {
     );
   }
 
-  if (!circle) {
+  if (!c.circle) {
     return (
       <div className="p-6">
         <p className="text-sm text-sera-text-muted">Circle not found.</p>
@@ -88,175 +57,19 @@ export default function CircleDetailPage() {
     );
   }
 
-  const agents = circle.agents ?? [];
-  const channels = circle.channels ?? [];
-  const connections = circle.connections ?? [];
-  const partyMode = circle.partyMode;
-  const knowledge = circle.knowledge;
-  // DB circles have `constitution`, YAML circles have `projectContext.content`
-  const projectContent =
-    ((circle as unknown as Record<string, unknown>).constitution as string | undefined) ??
-    (typeof circle.projectContext === 'object' && circle.projectContext !== null
-      ? ((circle.projectContext as Record<string, unknown>).content as string | undefined)
-      : typeof circle.projectContext === 'string'
-        ? circle.projectContext
-        : undefined);
-
-  async function handleDelete() {
-    if (!id) return;
-    try {
-      await deleteCircle.mutateAsync(id);
-      toast.success(
-        `Deleted circle "${circle?.displayName ?? circle?.metadata?.displayName ?? id}"`
-      );
-      void navigate('/circles');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete');
-    }
-  }
-
-  async function handleSaveBasicInfo() {
-    if (!id || !circle) return;
-    try {
-      const manifest = { ...(circle as any) };
-      if (manifest.metadata) {
-        manifest.metadata.displayName = nameDraft.trim() || id;
-        manifest.metadata.description = descDraft.trim() || undefined;
-      } else {
-        manifest.displayName = nameDraft.trim() || id;
-        manifest.description = descDraft.trim() || undefined;
-      }
-
-      await updateCircle.mutateAsync({
-        name: id,
-        manifest,
-      });
-      toast.success('Circle updated');
-      setEditingName(false);
-      setEditingDesc(false);
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update');
-    }
-  }
-
-  const [selectedAgentsForCircle, setSelectedAgentsForCircle] = useState<string[]>([]);
-
-  async function handleAddMembers() {
-    if (!id || !circle || selectedAgentsForCircle.length === 0) return;
-    try {
-      const currentMembers = circle.agents ?? [];
-      const newMembers = [...new Set([...currentMembers, ...selectedAgentsForCircle])];
-
-      await updateCircle.mutateAsync({
-        name: id,
-        manifest: { ...circle, agents: newMembers } as any,
-      });
-      toast.success('Members added');
-      setShowAddMember(false);
-      setSelectedAgentsForCircle([]);
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add members');
-    }
-  }
-
-  async function handleRemoveMember(agent: string) {
-    if (!id || !circle) return;
-    try {
-      const newMembers = (circle.agents ?? []).filter((a) => a !== agent);
-      await updateCircle.mutateAsync({
-        name: id,
-        manifest: { ...circle, agents: newMembers } as any,
-      });
-      toast.success(`Removed ${agent}`);
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove member');
-    }
-  }
-
-  async function handleSavePartyMode(config: any) {
-    if (!id || !circle) return;
-    try {
-      await updateCircle.mutateAsync({
-        name: id,
-        manifest: { ...circle, partyMode: config } as any,
-      });
-      toast.success('Party Mode updated');
-      setShowEditParty(false);
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update Party Mode');
-    }
-  }
-
-  async function handleSaveChannel(channel: any, index?: number) {
-    if (!id || !circle) return;
-    try {
-      const channels = [...(circle.channels ?? [])];
-      if (index !== undefined && index >= 0) {
-        channels[index] = channel;
-      } else {
-        channels.push(channel);
-      }
-
-      await updateCircle.mutateAsync({
-        name: id,
-        manifest: { ...circle, channels } as any,
-      });
-      toast.success(index !== undefined ? 'Channel updated' : 'Channel added');
-      setShowEditChannel(null);
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save channel');
-    }
-  }
-
-  async function handleDeleteChannel(index: number) {
-    if (!id || !circle) return;
-    try {
-      const channels = (circle.channels ?? []).filter((_, i) => i !== index);
-      await updateCircle.mutateAsync({
-        name: id,
-        manifest: { ...circle, channels } as any,
-      });
-      toast.success('Channel deleted');
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete channel');
-    }
-  }
-
-  async function handleSaveContext() {
-    if (!id) return;
-    setSavingContext(true);
-    try {
-      await circlesApi.updateCircleContext(id, contextDraft);
-      toast.success('Project context saved');
-      setEditingContext(false);
-      void refetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save context');
-    } finally {
-      setSavingContext(false);
-    }
-  }
-
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Settings2 size={14} /> },
-    { key: 'channels', label: `Channels (${channels.length})`, icon: <Radio size={14} /> },
+    { key: 'channels', label: `Channels (${c.channels.length})`, icon: <Radio size={14} /> },
     { key: 'knowledge', label: 'Knowledge', icon: <Database size={14} /> },
     { key: 'context', label: 'Context', icon: <FileText size={14} /> },
   ];
 
   return (
     <div className="p-6 max-w-5xl">
-      {/* Breadcrumbs */}
       <Breadcrumbs
         items={[
           { label: 'Circles', href: '/circles' },
-          { label: circle.displayName ?? circle.metadata?.displayName ?? id ?? '' },
+          { label: c.circle.displayName ?? c.circle.metadata?.displayName ?? id ?? '' },
         ]}
       />
 
@@ -266,22 +79,22 @@ export default function CircleDetailPage() {
           <Users size={24} className="text-sera-accent" />
         </div>
         <div className="flex-1 min-w-0">
-          {editingName ? (
+          {c.editingName ? (
             <div className="flex items-center gap-2">
               <Input
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
+                value={c.nameDraft}
+                onChange={(e) => c.setNameDraft(e.target.value)}
                 className="text-lg font-bold h-8 max-w-md"
                 autoFocus
               />
               <button
-                onClick={() => void handleSaveBasicInfo()}
+                onClick={() => void c.handleSaveBasicInfo()}
                 className="p-1.5 rounded text-sera-success hover:bg-sera-success/10"
               >
                 <Check size={18} />
               </button>
               <button
-                onClick={() => setEditingName(false)}
+                onClick={() => c.setEditingName(false)}
                 className="p-1.5 rounded text-sera-text-muted hover:bg-sera-surface-hover"
               >
                 <X size={18} />
@@ -290,13 +103,10 @@ export default function CircleDetailPage() {
           ) : (
             <div className="flex items-center gap-2 group/name">
               <h1 className="text-xl font-bold text-sera-text">
-                {circle.displayName ?? circle.metadata?.displayName}
+                {c.circle.displayName ?? c.circle.metadata?.displayName}
               </h1>
               <button
-                onClick={() => {
-                  setNameDraft(circle.displayName ?? circle.metadata?.displayName ?? '');
-                  setEditingName(true);
-                }}
+                onClick={c.startEditName}
                 className="p-1 rounded text-sera-text-dim opacity-0 group-hover/name:opacity-100 hover:bg-sera-surface-hover transition-opacity"
               >
                 <Pencil size={14} />
@@ -306,31 +116,28 @@ export default function CircleDetailPage() {
 
           <div className="flex items-center gap-1">
             <span className="text-xs text-sera-text-dim font-mono">
-              {circle.name ?? circle.metadata?.name}
+              {c.circle.name ?? c.circle.metadata?.name}
             </span>
-            <CopyButton value={circle.name ?? circle.metadata?.name ?? id ?? ''} />
+            <CopyButton value={c.circle.name ?? c.circle.metadata?.name ?? id ?? ''} />
           </div>
 
-          {/* Description — inline editable */}
           <div className="mt-1">
-            {editingDesc ? (
+            {c.editingDesc ? (
               <div className="flex items-center gap-2">
                 <Input
-                  value={descDraft}
-                  onChange={(e) => setDescDraft(e.target.value)}
+                  value={c.descDraft}
+                  onChange={(e) => c.setDescDraft(e.target.value)}
                   className="text-xs h-7 max-w-md"
                   autoFocus
                 />
                 <button
-                  onClick={() => {
-                    void handleSaveBasicInfo();
-                  }}
+                  onClick={() => void c.handleSaveBasicInfo()}
                   className="p-1 rounded text-sera-success hover:bg-sera-success/10"
                 >
                   <Check size={14} />
                 </button>
                 <button
-                  onClick={() => setEditingDesc(false)}
+                  onClick={() => c.setEditingDesc(false)}
                   className="p-1 rounded text-sera-text-muted hover:bg-sera-surface-hover"
                 >
                   <X size={14} />
@@ -339,13 +146,10 @@ export default function CircleDetailPage() {
             ) : (
               <div className="flex items-center gap-1.5 group/desc">
                 <p className="text-sm text-sera-text-muted">
-                  {circle.description ?? circle.metadata?.description ?? 'No description'}
+                  {c.circle.description ?? c.circle.metadata?.description ?? 'No description'}
                 </p>
                 <button
-                  onClick={() => {
-                    setDescDraft(circle.description ?? circle.metadata?.description ?? '');
-                    setEditingDesc(true);
-                  }}
+                  onClick={c.startEditDesc}
                   className="p-1 rounded text-sera-text-dim opacity-0 group-hover/desc:opacity-100 hover:bg-sera-surface-hover transition-opacity"
                   title="Edit description"
                 >
@@ -359,7 +163,7 @@ export default function CircleDetailPage() {
         <Button
           variant="danger"
           size="sm"
-          onClick={() => setShowDelete(true)}
+          onClick={() => c.setShowDelete(true)}
           className="flex-shrink-0"
         >
           <Trash2 size={13} />
@@ -388,194 +192,30 @@ export default function CircleDetailPage() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <div className="space-y-6">
-          {/* Agents membership */}
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-sera-text flex items-center gap-2">
-                <Bot size={15} />
-                Members ({agents.length})
-              </h2>
-              <Button size="sm" variant="outline" onClick={() => setShowAddMember(true)}>
-                <Plus size={12} /> Add Member
-              </Button>
-            </div>
-            {agents.length === 0 ? (
-              <p className="text-xs text-sera-text-dim">No agents in this circle.</p>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {agents.map((agent) => (
-                  <div
-                    key={agent}
-                    className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3 group/member"
-                  >
-                    <Link
-                      to={`/agents?search=${encodeURIComponent(agent)}`}
-                      className="flex-1 flex items-center gap-3 min-w-0"
-                    >
-                      <div className="h-8 w-8 rounded-full bg-sera-accent-soft flex items-center justify-center flex-shrink-0">
-                        <Bot size={14} className="text-sera-accent" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="text-sm font-medium text-sera-text truncate block">
-                          {agent}
-                        </span>
-                      </div>
-                    </Link>
-                    <button
-                      onClick={() => void handleRemoveMember(agent)}
-                      className="p-1 rounded text-sera-text-dim opacity-0 group-hover/member:opacity-100 hover:bg-sera-error/10 hover:text-sera-error transition-all"
-                      title="Remove from circle"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Party Mode */}
-          {partyMode && (
-            <section>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-sera-text flex items-center gap-2">
-                  <Zap size={15} />
-                  Party Mode
-                </h2>
-                <Button size="sm" variant="outline" onClick={() => setShowEditParty(true)}>
-                  <Pencil size={12} /> Edit
-                </Button>
-              </div>
-              <div className="sera-card-static rounded-lg p-4 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-sera-text-muted w-28">Status</span>
-                  <Badge variant={partyMode.enabled ? 'success' : 'default'}>
-                    {partyMode.enabled ? 'Enabled' : 'Disabled'}
-                  </Badge>
-                </div>
-                {partyMode.orchestrator && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-sera-text-muted w-28">Orchestrator</span>
-                    <span className="text-xs text-sera-text font-mono">
-                      {partyMode.orchestrator}
-                    </span>
-                  </div>
-                )}
-                {partyMode.selectionStrategy && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-sera-text-muted w-28">Strategy</span>
-                    <Badge variant="accent">{partyMode.selectionStrategy}</Badge>
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* Connections */}
-          {connections.length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold text-sera-text mb-3 flex items-center gap-2">
-                <Network size={15} />
-                Connections ({connections.length})
-              </h2>
-              <div className="space-y-2">
-                {connections.map((conn, i) => (
-                  <div
-                    key={i}
-                    className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3"
-                  >
-                    <Network size={14} className="text-sera-text-muted flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <Link
-                        to={`/circles/${conn.circle}`}
-                        className="text-sm font-medium text-sera-accent hover:underline"
-                      >
-                        {conn.circle}
-                      </Link>
-                      {conn.bridgeChannels && conn.bridgeChannels.length > 0 && (
-                        <div className="flex items-center gap-1 mt-1 flex-wrap">
-                          {conn.bridgeChannels.map((ch) => (
-                            <Badge key={ch} variant="default" className="text-[10px]">
-                              {ch}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <Badge variant="default">
-                      {typeof conn.auth === 'string' ? conn.auth : 'custom'}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
+        <CircleOverviewTab
+          agents={c.agents}
+          partyMode={c.partyMode}
+          connections={c.connections}
+          onAddMember={() => c.setShowAddMember(true)}
+          onRemoveMember={c.handleRemoveMember}
+          onEditPartyMode={() => c.setShowEditParty(true)}
+        />
       )}
 
       {activeTab === 'channels' && (
-        <div>
-          <div className="flex justify-end mb-4">
-            <Button
-              size="sm"
-              onClick={() =>
-                setShowEditChannel({ index: -1, channel: { name: '', type: 'persistent' } })
-              }
-            >
-              <Plus size={14} /> Add Channel
-            </Button>
-          </div>
-          {channels.length === 0 ? (
-            <p className="text-xs text-sera-text-dim py-8 text-center">
-              No channels configured for this circle.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {channels.map((ch, i) => (
-                <div
-                  key={ch.id ?? ch.name ?? i}
-                  className="sera-card-static rounded-lg px-4 py-3 flex items-center gap-3 group/channel"
-                >
-                  <Radio size={14} className="text-sera-text-muted flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-sera-text">{ch.name}</span>
-                    {ch.description && (
-                      <p className="text-xs text-sera-text-dim mt-0.5">{ch.description}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {ch.type && (
-                      <Badge variant={ch.type === 'persistent' ? 'accent' : 'warning'}>
-                        {ch.type}
-                      </Badge>
-                    )}
-                    {ch.id && (
-                      <span className="text-[10px] text-sera-text-dim font-mono">{ch.id}</span>
-                    )}
-                    <button
-                      onClick={() => setShowEditChannel({ index: i, channel: ch })}
-                      className="p-1 rounded text-sera-text-dim opacity-0 group-hover/channel:opacity-100 hover:bg-sera-surface-hover transition-all"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      onClick={() => void handleDeleteChannel(i)}
-                      className="p-1 rounded text-sera-text-dim opacity-0 group-hover/channel:opacity-100 hover:bg-sera-error/10 hover:text-sera-error transition-all"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <CircleChannelsTab
+          channels={c.channels}
+          onAddChannel={() =>
+            c.setShowEditChannel({ index: -1, channel: { name: '', type: 'persistent' } })
+          }
+          onEditChannel={(i, ch) => c.setShowEditChannel({ index: i, channel: ch })}
+          onDeleteChannel={c.handleDeleteChannel}
+        />
       )}
 
       {activeTab === 'knowledge' && (
         <div>
-          {!knowledge ? (
+          {!c.knowledge ? (
             <p className="text-xs text-sera-text-dim py-8 text-center">
               No knowledge configuration for this circle.
             </p>
@@ -584,7 +224,7 @@ export default function CircleDetailPage() {
               <div className="flex justify-end">
                 <Button asChild size="sm" variant="outline">
                   <Link
-                    to={`/memory?scope=circle&search=${encodeURIComponent(knowledge.qdrantCollection)}`}
+                    to={`/memory?scope=circle&search=${encodeURIComponent(c.knowledge.qdrantCollection)}`}
                   >
                     <Database size={14} /> Browse Knowledge
                   </Link>
@@ -594,14 +234,14 @@ export default function CircleDetailPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-sera-text-muted w-36">Qdrant Collection</span>
                   <span className="text-xs text-sera-text font-mono">
-                    {knowledge.qdrantCollection}
+                    {c.knowledge.qdrantCollection}
                   </span>
                 </div>
-                {knowledge.postgresSchema && (
+                {c.knowledge.postgresSchema && (
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-sera-text-muted w-36">Postgres Schema</span>
                     <span className="text-xs text-sera-text font-mono">
-                      {knowledge.postgresSchema}
+                      {c.knowledge.postgresSchema}
                     </span>
                   </div>
                 )}
@@ -613,48 +253,43 @@ export default function CircleDetailPage() {
 
       {activeTab === 'context' && (
         <div>
-          {editingContext ? (
+          {c.editingContext ? (
             <div className="space-y-3">
               <textarea
-                value={contextDraft}
-                onChange={(e) => setContextDraft(e.target.value)}
+                value={c.contextDraft}
+                onChange={(e) => c.setContextDraft(e.target.value)}
                 className="sera-input w-full min-h-[300px] font-mono text-xs p-3 rounded-lg resize-y"
                 placeholder="Write project context in markdown…"
               />
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
-                  onClick={() => {
-                    void handleSaveContext();
-                  }}
-                  disabled={savingContext}
+                  onClick={() => void c.handleSaveContext()}
+                  disabled={c.savingContext}
                 >
                   <Save size={13} />
-                  {savingContext ? 'Saving…' : 'Save'}
+                  {c.savingContext ? 'Saving…' : 'Save'}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setEditingContext(false)}>
+                <Button variant="ghost" size="sm" onClick={() => c.setEditingContext(false)}>
                   Cancel
                 </Button>
               </div>
             </div>
-          ) : projectContent ? (
+          ) : c.projectContent ? (
             <div>
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs text-sera-text-muted">Project context (markdown)</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => {
-                    setContextDraft(projectContent);
-                    setEditingContext(true);
-                  }}
+                  onClick={() => c.startEditContext(c.projectContent)}
                 >
                   <Pencil size={12} />
                   Edit
                 </Button>
               </div>
               <pre className="sera-card-static rounded-lg p-4 text-xs text-sera-text whitespace-pre-wrap font-mono leading-relaxed max-h-[500px] overflow-y-auto">
-                {projectContent}
+                {c.projectContent}
               </pre>
             </div>
           ) : (
@@ -662,14 +297,7 @@ export default function CircleDetailPage() {
               <p className="text-xs text-sera-text-dim mb-3">
                 No project context set for this circle.
               </p>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setContextDraft('');
-                  setEditingContext(true);
-                }}
-              >
+              <Button variant="ghost" size="sm" onClick={() => c.startEditContext()}>
                 <Plus size={13} />
                 Add Context
               </Button>
@@ -678,40 +306,37 @@ export default function CircleDetailPage() {
         </div>
       )}
 
-      {/* Add Members Dialog */}
+      {/* Dialogs */}
       <AddMemberDialog
-        open={showAddMember}
-        onOpenChange={setShowAddMember}
-        allAgents={allAgents ?? []}
-        currentMemberIds={agents}
-        selectedAgents={selectedAgentsForCircle}
-        onSelectedAgentsChange={setSelectedAgentsForCircle}
-        onMembersAdded={() => void handleAddMembers()}
-        isLoading={updateCircle.isPending}
+        open={c.showAddMember}
+        onOpenChange={c.setShowAddMember}
+        allAgents={c.allAgents}
+        currentMemberIds={c.agents}
+        selectedAgents={c.selectedAgentsForCircle}
+        onSelectedAgentsChange={c.setSelectedAgentsForCircle}
+        onMembersAdded={() => void c.handleAddMembers()}
+        isLoading={c.isPending}
       />
 
-      {/* Edit Party Mode Dialog */}
       <PartyModeDialog
-        open={showEditParty}
-        onOpenChange={setShowEditParty}
-        partyMode={partyMode}
-        agents={agents}
-        onSave={handleSavePartyMode}
-        isLoading={updateCircle.isPending}
+        open={c.showEditParty}
+        onOpenChange={c.setShowEditParty}
+        partyMode={c.partyMode}
+        agents={c.agents}
+        onSave={c.handleSavePartyMode}
+        isLoading={c.isPending}
       />
 
-      {/* Edit Channel Dialog */}
       <EditChannelDialog
-        open={!!showEditChannel}
-        onOpenChange={(o) => !o && setShowEditChannel(null)}
-        channelData={showEditChannel}
-        onChannelDataChange={setShowEditChannel}
-        onSave={handleSaveChannel}
-        isLoading={updateCircle.isPending}
+        open={!!c.showEditChannel}
+        onOpenChange={(o) => !o && c.setShowEditChannel(null)}
+        channelData={c.showEditChannel}
+        onChannelDataChange={c.setShowEditChannel}
+        onSave={c.handleSaveChannel}
+        isLoading={c.isPending}
       />
 
-      {/* Delete confirmation */}
-      <Dialog open={showDelete} onOpenChange={setShowDelete}>
+      <Dialog open={c.showDelete} onOpenChange={c.setShowDelete}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Circle</DialogTitle>
@@ -721,19 +346,17 @@ export default function CircleDetailPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setShowDelete(false)}>
+            <Button variant="ghost" size="sm" onClick={() => c.setShowDelete(false)}>
               Cancel
             </Button>
             <Button
               variant="danger"
               size="sm"
-              onClick={() => {
-                void handleDelete();
-              }}
-              disabled={deleteCircle.isPending}
+              onClick={() => void c.handleDelete()}
+              disabled={c.isDeletePending}
             >
               <Trash2 size={13} />
-              {deleteCircle.isPending ? 'Deleting…' : 'Delete Circle'}
+              {c.isDeletePending ? 'Deleting…' : 'Delete Circle'}
             </Button>
           </div>
         </DialogContent>

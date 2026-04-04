@@ -7,6 +7,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tracing::{info, error};
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -89,8 +91,8 @@ pub async fn create_identity(
     let key_id = format!("sk-{}", &uuid::Uuid::new_v4().to_string()[..12]);
     let now = time::OffsetDateTime::now_utc();
 
-    // In production: proper hash (e.g., bcrypt, argon2)
-    let key_hash = format!("hash:{key_id}");
+    // Hash key using SHA-256 (never store raw key)
+    let key_hash = format!("{:x}", Sha256::digest(key_id.as_bytes()));
 
     sqlx::query(
         "INSERT INTO service_identities (id, agent_instance_id, service_name, key_id, key_hash, status, created_at)
@@ -158,7 +160,7 @@ pub async fn rotate_key(
         .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid identity ID format")))?;
 
     let new_key_id = format!("sk-{}", &uuid::Uuid::new_v4().to_string()[..12]);
-    let new_key_hash = format!("hash:{new_key_id}");
+    let new_key_hash = format!("{:x}", Sha256::digest(new_key_id.as_bytes()));
     let now = time::OffsetDateTime::now_utc();
 
     let result = sqlx::query(
@@ -180,6 +182,15 @@ pub async fn rotate_key(
             value: identity_id,
         }));
     }
+
+    // Log key rotation event for audit trail
+    info!(
+        agent_id = %_parsed_agent_id,
+        service_identity_id = %parsed_identity_id,
+        new_key_id = %new_key_id,
+        rotated_at = %now,
+        "Service identity key rotated"
+    );
 
     Ok(Json(serde_json::json!({
         "id": parsed_identity_id.to_string(),

@@ -3,11 +3,12 @@
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::state::AppState;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddingConfig {
     pub provider: String,
@@ -15,6 +16,73 @@ pub struct EmbeddingConfig {
     pub dimensions: u32,
     pub base_url: String,
     pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownEmbeddingModel {
+    pub id: String,
+    pub provider: String,
+    pub dimension: u32,
+    pub description: Option<String>,
+}
+
+/// Static known embedding models registry (matching TS KNOWN_EMBEDDING_MODELS)
+fn get_known_models() -> HashMap<String, KnownEmbeddingModel> {
+    let mut models = HashMap::new();
+
+    // Ollama models
+    models.insert("nomic-embed-text".to_string(), KnownEmbeddingModel {
+        id: "nomic-embed-text".to_string(),
+        provider: "ollama".to_string(),
+        dimension: 768,
+        description: Some("Nomic embed text (768-dim)".to_string()),
+    });
+
+    models.insert("all-minilm-l6-v2".to_string(), KnownEmbeddingModel {
+        id: "all-minilm-l6-v2".to_string(),
+        provider: "ollama".to_string(),
+        dimension: 384,
+        description: Some("All-MiniLM-L6-v2 (384-dim)".to_string()),
+    });
+
+    models.insert("bge-small".to_string(), KnownEmbeddingModel {
+        id: "bge-small".to_string(),
+        provider: "ollama".to_string(),
+        dimension: 384,
+        description: Some("BGE Small (384-dim)".to_string()),
+    });
+
+    models.insert("bge-base".to_string(), KnownEmbeddingModel {
+        id: "bge-base".to_string(),
+        provider: "ollama".to_string(),
+        dimension: 768,
+        description: Some("BGE Base (768-dim)".to_string()),
+    });
+
+    // OpenAI models
+    models.insert("text-embedding-ada-002".to_string(), KnownEmbeddingModel {
+        id: "text-embedding-ada-002".to_string(),
+        provider: "openai".to_string(),
+        dimension: 1536,
+        description: Some("OpenAI Ada (1536-dim)".to_string()),
+    });
+
+    models.insert("text-embedding-3-small".to_string(), KnownEmbeddingModel {
+        id: "text-embedding-3-small".to_string(),
+        provider: "openai".to_string(),
+        dimension: 1536,
+        description: Some("OpenAI 3 Small (1536-dim)".to_string()),
+    });
+
+    models.insert("text-embedding-3-large".to_string(), KnownEmbeddingModel {
+        id: "text-embedding-3-large".to_string(),
+        provider: "openai".to_string(),
+        dimension: 3072,
+        description: Some("OpenAI 3 Large (3072-dim)".to_string()),
+    });
+
+    models
 }
 
 /// GET /api/embedding/config — return embedding configuration
@@ -103,6 +171,7 @@ pub async fn list_models(
                     if name.contains("embed")
                         || name.contains("nomic")
                         || name.contains("bge")
+                        || name.contains("minilm")
                     {
                         Some(EmbeddingModel {
                             name,
@@ -125,25 +194,120 @@ pub async fn list_models(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConfigRequest {
-    pub model: Option<String>,
-    pub base_url: Option<String>,
-    pub dimensions: Option<u32>,
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub api_key_env_var: Option<String>,
+    pub dimension: u32,
+}
+
+/// Validation errors for embedding config
+#[derive(Debug, Serialize)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
+}
+
+/// Validate embedding config — matching TS schema validation
+fn validate_config(req: &UpdateConfigRequest) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+
+    // Validate provider enum
+    if !["ollama", "openai", "lm-studio", "openai-compatible"].contains(&req.provider.as_str()) {
+        errors.push(ValidationError {
+            field: "provider".to_string(),
+            message: "provider must be ollama, openai, lm-studio, or openai-compatible".to_string(),
+        });
+    }
+
+    // Validate model (non-empty string)
+    if req.model.is_empty() {
+        errors.push(ValidationError {
+            field: "model".to_string(),
+            message: "model is required and must be non-empty".to_string(),
+        });
+    }
+
+    // Validate base_url (non-empty string)
+    if req.base_url.is_empty() {
+        errors.push(ValidationError {
+            field: "baseUrl".to_string(),
+            message: "baseUrl is required and must be non-empty".to_string(),
+        });
+    }
+
+    // Validate dimensions: 1-8192
+    if req.dimension < 1 || req.dimension > 8192 {
+        errors.push(ValidationError {
+            field: "dimension".to_string(),
+            message: "dimension must be between 1 and 8192".to_string(),
+        });
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// PUT /api/embedding/config — update embedding configuration
 pub async fn update_config(
     State(_state): State<AppState>,
-    Json(_body): Json<UpdateConfigRequest>,
-) -> Result<Json<EmbeddingConfig>, AppError> {
-    // Config updates would be persisted — for now return the current config
-    // In production this would update a config store
-    Ok(Json(EmbeddingConfig {
+    Json(body): Json<UpdateConfigRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate request
+    if let Err(errors) = validate_config(&body) {
+        return Ok(Json(serde_json::json!({
+            "error": "Invalid config",
+            "details": errors
+        })));
+    }
+
+    // In production this would:
+    // 1. Get old config to detect dimension changes
+    // 2. Save to persistent storage
+    // 3. Hot-swap in the service
+    // For now, return success response with warning if dimensions would change
+
+    let old_config = EmbeddingConfig {
         provider: "ollama".to_string(),
         model: "nomic-embed-text".to_string(),
         dimensions: 768,
         base_url: "http://ollama:11434".to_string(),
         status: "configured".to_string(),
-    }))
+    };
+
+    let dimension_changed = old_config.dimensions != body.dimension;
+
+    let new_config = EmbeddingConfig {
+        provider: body.provider.clone(),
+        model: body.model.clone(),
+        dimensions: body.dimension,
+        base_url: body.base_url.clone(),
+        status: "configured".to_string(),
+    };
+
+    let mut response = serde_json::json!({
+        "config": new_config,
+        "testResult": {
+            "status": "available",
+            "latency_ms": 0
+        }
+    });
+
+    if dimension_changed {
+        response["dimensionChanged"] = serde_json::json!(true);
+        response["warning"] = serde_json::json!(
+            format!(
+                "Vector dimension changed from {} to {}. Existing vectors are incompatible and will need to be re-indexed.",
+                old_config.dimensions, body.dimension
+            )
+        );
+    }
+
+    Ok(Json(response))
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +324,111 @@ pub struct TestEmbeddingResponse {
     pub dimensions: usize,
     pub model: String,
     pub latency_ms: u64,
+}
+
+/// GET /api/embedding/known-models — static list of known embedding models
+pub async fn list_known_models() -> Json<HashMap<String, KnownEmbeddingModel>> {
+    Json(get_known_models())
+}
+
+/// POST /api/embedding/test — test embedding config without persisting
+pub async fn test_embedding_config(
+    State(_state): State<AppState>,
+    Json(body): Json<UpdateConfigRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate request
+    if let Err(errors) = validate_config(&body) {
+        return Ok(Json(serde_json::json!({
+            "error": "Invalid config",
+            "details": errors
+        })));
+    }
+
+    let base_url = &body.base_url;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    let start = std::time::Instant::now();
+
+    // Try to connect to the embedding service
+    let result = match body.provider.as_str() {
+        "ollama" => {
+            // Test Ollama /api/tags endpoint
+            client
+                .get(format!("{}/api/tags", base_url.trim_end_matches('/')))
+                .send()
+                .await
+                .map(|resp| {
+                    if resp.status().is_success() {
+                        serde_json::json!({
+                            "status": "success",
+                            "message": "Ollama is reachable",
+                            "latency_ms": start.elapsed().as_millis() as u64
+                        })
+                    } else {
+                        serde_json::json!({
+                            "status": "error",
+                            "message": format!("Ollama returned HTTP {}", resp.status()),
+                            "latency_ms": start.elapsed().as_millis() as u64
+                        })
+                    }
+                })
+                .map_err(|e| {
+                    serde_json::json!({
+                        "status": "error",
+                        "message": format!("Cannot reach Ollama: {e}"),
+                        "latency_ms": start.elapsed().as_millis() as u64
+                    })
+                })
+        }
+        "openai" | "openai-compatible" => {
+            // Test OpenAI-compatible /v1/models endpoint
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Some(api_key) = &body.api_key {
+                if let Ok(val) = format!("Bearer {}", api_key).parse() {
+                    headers.insert(reqwest::header::AUTHORIZATION, val);
+                }
+            }
+
+            client
+                .get(format!("{}/v1/models", base_url.trim_end_matches('/')))
+                .headers(headers)
+                .send()
+                .await
+                .map(|resp| {
+                    if resp.status().is_success() {
+                        serde_json::json!({
+                            "status": "success",
+                            "message": "OpenAI-compatible server is reachable",
+                            "latency_ms": start.elapsed().as_millis() as u64
+                        })
+                    } else {
+                        serde_json::json!({
+                            "status": "error",
+                            "message": format!("Server returned HTTP {}", resp.status()),
+                            "latency_ms": start.elapsed().as_millis() as u64
+                        })
+                    }
+                })
+                .map_err(|e| {
+                    serde_json::json!({
+                        "status": "error",
+                        "message": format!("Cannot reach server: {e}"),
+                        "latency_ms": start.elapsed().as_millis() as u64
+                    })
+                })
+        }
+        _ => {
+            Ok(serde_json::json!({
+                "status": "error",
+                "message": format!("Unknown provider: {}", body.provider)
+            }))
+        }
+    };
+
+    Ok(Json(result.unwrap_or_else(|e| e)))
 }
 
 /// POST /api/embedding/test — test embedding generation

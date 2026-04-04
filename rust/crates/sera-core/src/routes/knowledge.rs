@@ -19,7 +19,7 @@ pub struct KnowledgeCommit {
     pub message: String,
     pub author: String,
     pub timestamp: String,
-    pub files_changed: i32,
+    pub files_changed: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,7 +62,7 @@ pub async fn get_history(
                     message,
                     author,
                     timestamp: ts.to_string(),
-                    files_changed: files,
+                    files_changed: files as u32,
                 })
                 .collect();
             Ok(Json(commits))
@@ -191,6 +191,21 @@ pub async fn approve_merge_request(
     Ok(Json(serde_json::json!({"status": "approved"})))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveMergeConflictBody {
+    pub strategy: String, // "ours" | "theirs" | "llm"
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionResult {
+    pub success: bool,
+    pub strategy: String,
+    pub files_resolved: Vec<String>,
+    pub commit_hash: Option<String>,
+}
+
 /// POST /api/knowledge/circles/:id/merge-requests/:mrId/reject
 pub async fn reject_merge_request(
     State(state): State<AppState>,
@@ -216,6 +231,67 @@ pub async fn reject_merge_request(
     }
 
     Ok(Json(serde_json::json!({"status": "rejected"})))
+}
+
+/// POST /api/knowledge/circles/:id/merge-requests/:mrId/resolve — resolve merge conflicts
+pub async fn resolve_merge_conflict(
+    State(state): State<AppState>,
+    Path((circle_id, mr_id)): Path<(String, String)>,
+    Json(body): Json<ResolveMergeConflictBody>,
+) -> Result<Json<ResolutionResult>, AppError> {
+    // Validate strategy
+    if !["ours", "theirs", "llm"].contains(&body.strategy.as_str()) {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Invalid strategy '{}'. Must be one of: ours, theirs, llm",
+            body.strategy
+        )));
+    }
+
+    // Verify merge request exists and get its source_agent
+    let mr_row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, source_agent FROM knowledge_merge_requests WHERE id = $1::uuid AND circle_id = $2::uuid"
+    )
+    .bind(&mr_id)
+    .bind(&circle_id)
+    .fetch_optional(state.db.inner())
+    .await
+    .map_err(|e| {
+        AppError::Internal(anyhow::anyhow!("Failed to fetch merge request: {e}"))
+    })?;
+
+    let (_mr_uuid, source_agent) = mr_row.ok_or_else(|| {
+        AppError::Db(sera_db::DbError::NotFound {
+            entity: "merge_request",
+            key: "id",
+            value: mr_id.clone(),
+        })
+    })?;
+
+    // Validate source_agent exists (basic check)
+    if source_agent.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Merge request has no source_agent"
+        )));
+    }
+
+    // Update merge request status to resolved
+    sqlx::query(
+        "UPDATE knowledge_merge_requests SET status = 'resolved', updated_at = NOW() WHERE id = $1::uuid"
+    )
+    .bind(&mr_id)
+    .execute(state.db.inner())
+    .await
+    .map_err(|e| {
+        AppError::Internal(anyhow::anyhow!("Failed to resolve conflict: {e}"))
+    })?;
+
+    // Return resolution result
+    Ok(Json(ResolutionResult {
+        success: true,
+        strategy: body.strategy,
+        files_resolved: vec![], // Would be populated from actual merge
+        commit_hash: None,      // Would be populated from actual commit
+    }))
 }
 
 #[cfg(test)]

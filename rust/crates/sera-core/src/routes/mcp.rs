@@ -75,10 +75,19 @@ pub async fn list_mcp_servers(
 pub async fn get_mcp_server(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Result<Json<McpServer>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let registry = state.mcp_registry.read().await;
     match registry.get(&name) {
-        Some(server) => Ok(Json(server.clone())),
+        Some(server) => {
+            // In production, would call client.listTools() to get real tools
+            // For now, return server info with tools from registry
+            Ok(Json(serde_json::json!({
+                "name": server.name,
+                "status": server.status,
+                "toolCount": server.tools.len(),
+                "tools": server.tools,
+            })))
+        }
         None => Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "mcp_server",
             key: "name",
@@ -101,27 +110,40 @@ pub async fn mcp_server_health(
         })
     })?;
 
-    // Ping the MCP server
+    // Ping the MCP server with latency measurement
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap_or_default();
 
+    let start = std::time::Instant::now();
     let health = match client.get(&server.url).send().await {
-        Ok(resp) if resp.status().is_success() => serde_json::json!({
-            "name": name,
-            "status": "healthy",
-            "latency_ms": 0,
-        }),
-        Ok(resp) => serde_json::json!({
-            "name": name,
-            "status": "degraded",
-            "error": format!("HTTP {}", resp.status()),
-        }),
+        Ok(resp) if resp.status().is_success() => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            serde_json::json!({
+                "name": name,
+                "status": "healthy",
+                "toolCount": server.tools.len(),
+                "latency_ms": latency_ms,
+                "checked_at": time::OffsetDateTime::now_utc().to_string(),
+            })
+        }
+        Ok(resp) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            serde_json::json!({
+                "name": name,
+                "status": "degraded",
+                "error": format!("HTTP {}", resp.status()),
+                "latency_ms": latency_ms,
+                "checked_at": time::OffsetDateTime::now_utc().to_string(),
+            })
+        }
         Err(e) => serde_json::json!({
             "name": name,
             "status": "unhealthy",
             "error": e.to_string(),
+            "latency_ms": start.elapsed().as_millis() as u64,
+            "checked_at": time::OffsetDateTime::now_utc().to_string(),
         }),
     };
 
@@ -142,14 +164,37 @@ pub async fn reload_mcp_server(
         })
     })?;
 
-    // Reset status — in production this would re-establish the connection
+    // In production: disconnect old connection, reconnect, refresh tool list
+    // For now: reset status and update timestamp
     server.status = "connected".to_string();
     server.last_health_check = Some(time::OffsetDateTime::now_utc().to_string());
 
+    let tool_count = server.tools.len();
     Ok(Json(serde_json::json!({
-        "name": name,
-        "status": "reloaded",
+        "message": format!("MCP server \"{}\" reloaded", name),
+        "toolCount": tool_count,
     })))
+}
+
+/// DELETE /api/mcp-servers/:name — unregister an MCP server
+pub async fn delete_mcp_server(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut registry = state.mcp_registry.write().await;
+    let removed = registry.remove(&name);
+
+    if removed {
+        Ok(Json(serde_json::json!({
+            "message": format!("MCP server \"{}\" unregistered successfully", name),
+        })))
+    } else {
+        Err(AppError::Db(sera_db::DbError::NotFound {
+            entity: "mcp_server",
+            key: "name",
+            value: name,
+        }))
+    }
 }
 
 #[derive(Deserialize)]

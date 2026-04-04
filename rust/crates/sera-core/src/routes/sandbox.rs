@@ -2,7 +2,7 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -11,6 +11,13 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Policy violation error for forbidden actions
+#[derive(Debug, Serialize)]
+pub struct PolicyViolation {
+    pub error: String,
+    pub violation: String,
+}
 
 #[derive(Deserialize)]
 pub struct SpawnRequest {

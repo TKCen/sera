@@ -21,6 +21,7 @@ pub struct CoreConfig {
     pub oidc_client_id: Option<String>,
     pub oidc_client_secret: Option<String>,
     pub external_url: Option<String>,
+    pub web_origin: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +108,7 @@ impl CoreConfig {
         let oidc_client_id = env::var("OIDC_CLIENT_ID").ok();
         let oidc_client_secret = env::var("OIDC_CLIENT_SECRET").ok();
         let external_url = env::var("SERA_EXTERNAL_URL").ok();
+        let web_origin = env::var("WEB_ORIGIN").ok();
 
         Ok(Self {
             database_url,
@@ -122,6 +124,7 @@ impl CoreConfig {
             oidc_client_id,
             oidc_client_secret,
             external_url,
+            web_origin,
         })
     }
 

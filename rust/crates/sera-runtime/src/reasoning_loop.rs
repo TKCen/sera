@@ -22,7 +22,7 @@ pub async fn run(config: &RuntimeConfig, input: TaskInput) -> anyhow::Result<Tas
     let context_manager =
         ContextManager::new(config.context_window, config.compaction_strategy.clone());
 
-    let max_iterations = input.max_iterations.unwrap_or(25);
+    let max_iterations = input.max_iterations.unwrap_or(10);
     let mut messages: Vec<ChatMessage> = Vec::new();
     let mut tool_records: Vec<ToolCallRecord> = Vec::new();
     let mut usage = UsageStats::default();

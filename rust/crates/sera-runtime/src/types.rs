@@ -76,6 +76,8 @@ pub struct ToolCallRecord {
 pub struct UsageStats {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
+    pub cache_creation_tokens: u32,
+    pub cache_read_tokens: u32,
     pub total_tokens: u32,
     pub iterations: u32,
 }
@@ -100,6 +102,12 @@ pub struct LlmUsage {
     pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub cache_creation_tokens: u32,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub cache_read_tokens: u32,
     #[serde(default)]
     #[allow(dead_code)]
     pub total_tokens: u32,

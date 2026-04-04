@@ -3,6 +3,13 @@
 pub mod file_ops;
 pub mod http_request;
 pub mod shell_exec;
+pub mod knowledge;
+pub mod web_fetch;
+pub mod glob;
+pub mod grep;
+pub mod spawn;
+pub mod tool_search;
+pub mod centrifugo;
 
 use crate::types::{FunctionDefinition, ToolDefinition};
 
@@ -29,6 +36,14 @@ impl ToolRegistry {
             Box::new(file_ops::FileList),
             Box::new(shell_exec::ShellExec),
             Box::new(http_request::HttpRequest),
+            Box::new(knowledge::KnowledgeStore),
+            Box::new(knowledge::KnowledgeQuery),
+            Box::new(web_fetch::WebFetch),
+            Box::new(glob::Glob),
+            Box::new(grep::Grep),
+            Box::new(spawn::SpawnEphemeral),
+            Box::new(tool_search::ToolSearch),
+            Box::new(tool_search::SkillSearch),
         ];
         Self { tools }
     }

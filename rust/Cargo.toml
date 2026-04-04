@@ -58,6 +58,8 @@ insta = { version = "1", features = ["yaml"] }
 sha2 = "0.10"
 aes-gcm = "0.10"
 hex = "0.4"
+base64 = "0.22"
+urlencoding = "2"
 
 # Streaming
 tokio-stream = "0.1"

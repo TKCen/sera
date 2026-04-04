@@ -8,7 +8,9 @@ mod context;
 mod error;
 mod health;
 mod llm_client;
+mod manifest;
 mod reasoning_loop;
+mod tool_loop_detector;
 mod tools;
 mod types;
 

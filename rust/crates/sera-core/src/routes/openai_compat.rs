@@ -34,6 +34,20 @@ pub struct OpenAIMessage {
     pub content: String,
 }
 
+/// OpenAI error response (nested format)
+#[derive(Serialize)]
+pub struct ErrorResponse {
+    pub error: ErrorDetail,
+}
+
+#[derive(Serialize)]
+pub struct ErrorDetail {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub code: Option<String>,
+}
+
 /// OpenAI-compatible chat completion response (non-streaming).
 #[derive(Serialize)]
 pub struct ChatCompletionResponse {
@@ -43,6 +57,8 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<Choice>,
     pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -50,6 +66,24 @@ pub struct Choice {
     pub index: u32,
     pub message: OpenAIMessage,
     pub finish_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: ToolFunction,
+}
+
+#[derive(Serialize)]
+pub struct ToolFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Serialize)]
@@ -89,6 +123,27 @@ pub async fn chat_completions(
     State(state): State<AppState>,
     Json(body): Json<ChatCompletionRequest>,
 ) -> Result<Response, AppError> {
+    // Validate required fields
+    if body.model.is_empty() {
+        return Ok(Json(ErrorResponse {
+            error: ErrorDetail {
+                message: "model is required".to_string(),
+                error_type: "invalid_request_error".to_string(),
+                code: Some("missing_required_parameter".to_string()),
+            },
+        }).into_response());
+    }
+
+    if body.messages.is_empty() {
+        return Ok(Json(ErrorResponse {
+            error: ErrorDetail {
+                message: "messages array is required and cannot be empty".to_string(),
+                error_type: "invalid_request_error".to_string(),
+                code: Some("invalid_request_error".to_string()),
+            },
+        }).into_response());
+    }
+
     let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
     let created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -97,7 +152,18 @@ pub async fn chat_completions(
     let model = body.model.clone();
 
     // Find agent by model name (model maps to agent template)
-    let agent_id = resolve_agent_for_model(&state, &body.model).await?;
+    let agent_id = match resolve_agent_for_model(&state, &body.model).await {
+        Ok(id) => id,
+        Err(_) => {
+            return Ok(Json(ErrorResponse {
+                error: ErrorDetail {
+                    message: format!("Model '{}' not found", body.model),
+                    error_type: "invalid_request_error".to_string(),
+                    code: Some("model_not_found".to_string()),
+                },
+            }).into_response());
+        }
+    };
 
     // Build the chat message from the last user message
     let last_user_msg = body
@@ -138,19 +204,19 @@ pub async fn chat_completions(
                 let sse_stream = async_stream::stream! {
                     tokio::pin!(byte_stream);
 
-                    // Send initial role chunk
-                    let initial = ChatCompletionChunk {
-                        id: req_id.clone(),
-                        object: "chat.completion.chunk".to_string(),
-                        created,
-                        model: model_name.clone(),
-                        choices: vec![StreamChoice {
-                            index: 0,
-                            delta: Delta { role: Some("assistant".to_string()), content: None },
-                            finish_reason: None,
-                        }],
-                    };
-                    yield Ok::<_, Infallible>(Event::default().data(serde_json::to_string(&initial).unwrap_or_default()));
+                    // Send initial role chunk in OpenAI format
+                    let initial = serde_json::json!({
+                        "id": req_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": { "role": "assistant" },
+                            "finish_reason": serde_json::Value::Null
+                        }]
+                    });
+                    yield Ok::<_, Infallible>(Event::default().data(initial.to_string()));
 
                     while let Some(chunk) = byte_stream.next().await {
                         match chunk {
@@ -261,12 +327,15 @@ pub async fn chat_completions(
                             content,
                         },
                         finish_reason: "stop".to_string(),
+                        tool_calls: None,
+                        logprobs: None,
                     }],
                     usage: Usage {
                         prompt_tokens: 0,
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
+                    system_fingerprint: None,
                 })
                 .into_response())
             }
@@ -279,23 +348,43 @@ pub async fn chat_completions(
 }
 
 /// Resolve which agent to use for a given model name.
+/// Lookup: exact template name match → fallback to any running agent
 async fn resolve_agent_for_model(state: &AppState, model: &str) -> Result<String, AppError> {
-    // Try to find a running agent whose template matches this model
+    // Try to find a running agent whose template name matches the model
     let row: Option<(uuid::Uuid,)> = sqlx::query_as(
-        "SELECT ai.id FROM agent_instances ai
-         JOIN agent_templates at ON ai.template_name = at.name
-         WHERE ai.status = 'running'
-         ORDER BY ai.created_at DESC LIMIT 1"
+        "SELECT id FROM agent_instances
+         WHERE template_name = $1 AND status = 'running'
+         LIMIT 1"
+    )
+    .bind(model)
+    .fetch_optional(state.db.inner())
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
+
+    if let Some((id,)) = row {
+        return Ok(id.to_string());
+    }
+
+    // Fallback: any running agent
+    let fallback: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM agent_instances WHERE status = 'running' LIMIT 1"
     )
     .fetch_optional(state.db.inner())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
-    match row {
+    match fallback {
         Some((id,)) => Ok(id.to_string()),
-        None => Err(AppError::Internal(anyhow::anyhow!(
-            "No running agent for model: {model}"
-        ))),
+        None => {
+            let error = ErrorResponse {
+                error: ErrorDetail {
+                    message: format!("Model '{}' not found", model),
+                    error_type: "invalid_request_error".to_string(),
+                    code: Some("model_not_found".to_string()),
+                },
+            };
+            Err(AppError::Forbidden(serde_json::to_string(&error).unwrap_or_default()))
+        }
     }
 }
 

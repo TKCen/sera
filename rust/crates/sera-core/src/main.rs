@@ -212,6 +212,29 @@ fn build_router(
         .route("/api/operator-requests/pending/count", get(routes::operator_requests::pending_count))
         .route("/api/operator-requests", get(routes::operator_requests::list_requests))
         .route("/api/operator-requests/{id}/respond", post(routes::operator_requests::respond_to_request))
+        // Heartbeat + lifecycle
+        .route("/api/agents/{id}/heartbeat", post(routes::heartbeat::heartbeat))
+        .route("/api/agents/{id}/lifecycle", get(routes::heartbeat::get_lifecycle))
+        .route("/api/agents/{id}/lifecycle/start", post(routes::agents::start_instance))
+        .route("/api/agents/{id}/lifecycle/stop", post(routes::agents::stop_instance))
+        // Notification channels
+        .route(
+            "/api/channels",
+            get(routes::channels::list_channels).post(routes::channels::create_channel),
+        )
+        .route("/api/channels/{id}", delete(routes::channels::delete_channel))
+        // MCP servers (stub)
+        .route("/api/mcp-servers", get(routes::mcp::list_mcp_servers))
+        // Webhooks
+        .route(
+            "/api/webhooks",
+            get(routes::webhooks::list_webhooks).post(routes::webhooks::create_webhook),
+        )
+        // Config + system stubs
+        .route("/api/config/llm", get(routes::config::get_llm_config))
+        .route("/api/federation/peers", get(routes::config::list_federation_peers))
+        .route("/api/system/circuit-breakers", get(routes::config::get_circuit_breakers))
+        .route("/api/rt/token", get(routes::config::get_rt_token))
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

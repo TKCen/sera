@@ -3,8 +3,12 @@
 pub mod health;
 pub mod agents;
 pub mod audit;
+pub mod channels;
 pub mod circles;
+pub mod config;
+pub mod heartbeat;
 pub mod llm_proxy;
+pub mod mcp;
 pub mod memory;
 pub mod metering;
 pub mod operator_requests;
@@ -14,3 +18,4 @@ pub mod secrets;
 pub mod sessions;
 pub mod skills;
 pub mod tasks;
+pub mod webhooks;

@@ -1,0 +1,33 @@
+# Test infrastructure — starts only the services needed for integration tests.
+# Usage: docker compose -f docker-compose.yaml -f docker-compose.test.yaml up -d
+#
+# Does NOT start sera-core, sera-web, Centrifugo, egress proxy, or agent containers.
+# Tests connect to these services directly via localhost ports.
+
+services:
+  sera-db:
+    environment:
+      - POSTGRES_DB=sera_test
+    ports:
+      - "5433:5432"
+
+  qdrant:
+    ports:
+      - "6334:6333"
+
+  # Disable services not needed for integration tests
+  sera-core:
+    profiles:
+      - disabled
+  sera-web:
+    profiles:
+      - disabled
+  centrifugo:
+    profiles:
+      - disabled
+  sera-egress-proxy:
+    profiles:
+      - disabled
+  sera-agent-worker:
+    profiles:
+      - disabled

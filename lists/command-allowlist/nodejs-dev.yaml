@@ -1,0 +1,11 @@
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: nodejs-dev
+  type: command-allowlist
+  description: Node.js and Bun development tools
+entries:
+  - "node *"
+  - "npm *"
+  - "bunx *"
+  - "bun *"

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Zap, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import { Tooltip } from '@/components/ui/tooltip';
 import { request } from '@/lib/api/client';
 
@@ -13,8 +14,11 @@ export function TestConnectionButton({ modelName }: { modelName: string }) {
         method: 'POST',
       });
       setStatus('ok');
-    } catch {
+    } catch (err) {
       setStatus('fail');
+      toast.error(`Connection test failed for ${modelName}`, {
+        description: err instanceof Error ? err.message : undefined,
+      });
     }
     setTimeout(() => setStatus('idle'), 4000);
   };

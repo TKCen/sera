@@ -1,0 +1,10 @@
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: github-apis
+  type: network-allowlist
+  description: GitHub API and raw content endpoints
+entries:
+  - "api.github.com"
+  - "raw.githubusercontent.com"
+  - "objects.githubusercontent.com"

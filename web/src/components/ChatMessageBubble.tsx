@@ -58,6 +58,7 @@ export function ChatMessageBubble({
             <div
               className="flex items-center gap-2"
               role="status"
+              aria-live="polite"
               aria-label="Generating message..."
             >
               <Loader2 size={14} className="animate-spin text-sera-accent" />

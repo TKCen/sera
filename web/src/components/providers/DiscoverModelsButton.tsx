@@ -12,8 +12,9 @@ export function DiscoverModelsButton({ providerName }: { providerName: string })
   const handleDiscover = async () => {
     try {
       const result = await discover.mutateAsync(providerName);
-      setModels(result.models);
-      toast.success(`Found ${result.models.length} models`);
+      const discovered = result.models ?? [];
+      setModels(discovered);
+      toast.success(`Found ${discovered.length} models`);
     } catch {
       toast.error('Discovery failed');
     }

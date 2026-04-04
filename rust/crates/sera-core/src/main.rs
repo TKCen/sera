@@ -184,6 +184,34 @@ fn build_router(
             "/api/secrets/{key}",
             get(routes::secrets::get_secret).delete(routes::secrets::delete_secret),
         )
+        // Budget read endpoints
+        .route("/api/budget", get(routes::metering::get_global_budget))
+        .route("/api/budget/agents", get(routes::metering::get_agent_rankings))
+        // Metering read endpoints
+        .route("/api/metering/summary", get(routes::metering::get_metering_summary))
+        // LLM Proxy
+        .route("/v1/llm/models", get(routes::llm_proxy::list_models))
+        .route("/v1/llm/chat/completions", post(routes::llm_proxy::chat_completions))
+        // Memory blocks
+        .route(
+            "/api/memory/blocks",
+            get(routes::memory::list_blocks).post(routes::memory::create_block),
+        )
+        .route(
+            "/api/memory/entries/{id}",
+            get(routes::memory::get_block)
+                .put(routes::memory::update_block)
+                .delete(routes::memory::delete_block),
+        )
+        // Task queue
+        .route("/api/agents/{id}/tasks", post(routes::tasks::enqueue_task))
+        .route("/api/agents/{id}/tasks/next", get(routes::tasks::poll_next_task))
+        .route("/api/agents/{id}/tasks/{task_id}/result", post(routes::tasks::submit_task_result))
+        .route("/api/agents/{id}/tasks/history", get(routes::tasks::get_task_history))
+        // Operator requests
+        .route("/api/operator-requests/pending/count", get(routes::operator_requests::pending_count))
+        .route("/api/operator-requests", get(routes::operator_requests::list_requests))
+        .route("/api/operator-requests/{id}/respond", post(routes::operator_requests::respond_to_request))
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

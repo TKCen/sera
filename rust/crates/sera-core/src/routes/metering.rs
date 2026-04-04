@@ -111,3 +111,47 @@ pub async fn record_usage(
     .await?;
     Ok(StatusCode::CREATED)
 }
+
+/// GET /api/budget — global usage totals (last 7 days by day).
+pub async fn get_global_budget(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = MeteringRepository::global_daily_usage(state.db.inner()).await?;
+    let usage: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "date": r.date.to_string(),
+                "totalTokens": r.total_tokens
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({"usage": usage})))
+}
+
+/// GET /api/budget/agents — per-agent token rankings.
+pub async fn get_agent_rankings(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = MeteringRepository::agent_rankings(state.db.inner()).await?;
+    let rankings: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "agentId": r.agent_id,
+                "totalTokens": r.total_tokens
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({"rankings": rankings})))
+}
+
+/// GET /api/metering/summary — today's totals across all agents.
+pub async fn get_metering_summary(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let row = MeteringRepository::today_summary(state.db.inner()).await?;
+    Ok(Json(serde_json::json!({
+        "todayTotalTokens": row.total_tokens.unwrap_or(0)
+    })))
+}

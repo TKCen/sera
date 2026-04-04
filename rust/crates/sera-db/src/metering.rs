@@ -18,6 +18,20 @@ pub struct QuotaRow {
     pub max_tokens_per_day: i64,
 }
 
+/// Row type for daily usage aggregation.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DailyUsageRow {
+    pub date: time::Date,
+    pub total_tokens: i64,
+}
+
+/// Row type for agent ranking.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AgentRankingRow {
+    pub agent_id: String,
+    pub total_tokens: i64,
+}
+
 /// Metering repository for database operations.
 pub struct MeteringRepository;
 
@@ -132,6 +146,65 @@ impl MeteringRepository {
             .execute(pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    /// Global usage totals grouped by day (last 7 days).
+    pub async fn global_daily_usage(pool: &PgPool) -> Result<Vec<DailyUsageRow>, DbError> {
+        let rows = sqlx::query_as::<_, DailyUsageRow>(
+            "SELECT DATE_TRUNC('day', created_at)::date AS date,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+             FROM token_usage
+             WHERE created_at >= NOW() - INTERVAL '7 days'
+             GROUP BY DATE_TRUNC('day', created_at)::date
+             ORDER BY date ASC",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Per-agent token rankings (total tokens per agent, descending).
+    pub async fn agent_rankings(pool: &PgPool) -> Result<Vec<AgentRankingRow>, DbError> {
+        let rows = sqlx::query_as::<_, AgentRankingRow>(
+            "SELECT agent_id, COALESCE(SUM(total_tokens), 0) AS total_tokens
+             FROM token_usage
+             GROUP BY agent_id
+             ORDER BY total_tokens DESC",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Single agent usage grouped by day (last 7 days).
+    pub async fn agent_daily_usage(
+        pool: &PgPool,
+        agent_id: &str,
+    ) -> Result<Vec<DailyUsageRow>, DbError> {
+        let rows = sqlx::query_as::<_, DailyUsageRow>(
+            "SELECT DATE_TRUNC('day', created_at)::date AS date,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+             FROM token_usage
+             WHERE agent_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
+             GROUP BY DATE_TRUNC('day', created_at)::date
+             ORDER BY date ASC",
+        )
+        .bind(agent_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Metering summary — today's totals across all agents.
+    pub async fn today_summary(pool: &PgPool) -> Result<UsageAggRow, DbError> {
+        let row = sqlx::query_as::<_, UsageAggRow>(
+            "SELECT COALESCE(SUM(total_tokens), 0) AS total_tokens
+             FROM token_usage
+             WHERE created_at >= DATE_TRUNC('day', NOW())",
+        )
+        .fetch_one(pool)
+        .await?;
+        Ok(row)
     }
 
     /// Check budget for an agent. Returns (allowed, hourly_used, hourly_quota, daily_used, daily_quota).

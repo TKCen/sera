@@ -13,6 +13,8 @@ pub mod metering;
 pub mod schedules;
 pub mod sessions;
 pub mod skills;
+pub mod api_keys;
+pub mod delegations;
 pub mod memory;
 pub mod notifications;
 pub mod operator_requests;

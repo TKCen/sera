@@ -126,10 +126,6 @@ fn build_router(
             "/api/schedules",
             get(routes::schedules::list_schedules).post(routes::schedules::create_schedule),
         )
-        .route(
-            "/api/schedules/{id}",
-            patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule),
-        )
         // Circles — GET list + POST create
         .route(
             "/api/circles",
@@ -235,6 +231,61 @@ fn build_router(
         .route("/api/federation/peers", get(routes::config::list_federation_peers))
         .route("/api/system/circuit-breakers", get(routes::config::get_circuit_breakers))
         .route("/api/rt/token", get(routes::config::get_rt_token))
+        // Auth — API key management
+        .route("/api/auth/me", get(routes::auth::get_me))
+        .route(
+            "/api/auth/api-keys",
+            get(routes::auth::list_api_keys).post(routes::auth::create_api_key),
+        )
+        .route("/api/auth/api-keys/{id}", delete(routes::auth::delete_api_key))
+        // Delegation
+        .route("/api/delegation", get(routes::delegation::list_delegations))
+        .route("/api/delegation/issue", post(routes::delegation::issue_delegation))
+        .route(
+            "/api/delegation/{id}",
+            delete(routes::delegation::revoke_delegation),
+        )
+        .route("/api/delegation/{id}/children", get(routes::delegation::get_delegation_children))
+        .route("/api/agents/{agent_id}/delegations", get(routes::delegation::get_agent_delegations))
+        // Registry — advanced template/instance CRUD
+        .route(
+            "/api/registry/templates",
+            get(routes::registry::list_templates).post(routes::registry::upsert_template),
+        )
+        .route(
+            "/api/registry/templates/{name}",
+            get(routes::registry::get_template)
+                .put(routes::registry::update_template)
+                .delete(routes::registry::delete_template),
+        )
+        .route("/api/registry/instances", get(routes::agents::list_instances).post(routes::agents::create_instance))
+        // Stubs — sandbox, intercom, pipelines, chat, embedding, knowledge
+        .route("/api/sandbox/spawn", post(routes::stubs::sandbox_spawn))
+        .route("/api/sandbox/exec", post(routes::stubs::sandbox_exec))
+        .route("/api/intercom/publish", post(routes::stubs::intercom_publish))
+        .route("/api/intercom/dm", post(routes::stubs::intercom_dm))
+        .route("/api/pipelines", post(routes::stubs::create_pipeline))
+        .route("/api/pipelines/{id}", get(routes::stubs::get_pipeline))
+        .route("/api/chat", post(routes::stubs::chat))
+        .route("/v1/chat/completions", post(routes::stubs::openai_chat_completions))
+        .route("/api/embedding/config", get(routes::stubs::embedding_config))
+        .route("/api/embedding/status", get(routes::stubs::embedding_status))
+        .route("/api/knowledge/circles/{id}/history", get(routes::stubs::knowledge_history))
+        // Agent sub-route stubs
+        .route("/api/agents/{id}/logs", get(routes::stubs::agent_logs))
+        .route("/api/agents/{id}/subagents", get(routes::stubs::agent_subagents))
+        .route("/api/agents/pending-updates", get(routes::stubs::pending_updates))
+        .route("/api/tools", get(routes::stubs::list_tools))
+        .route("/api/templates", get(routes::stubs::list_templates))
+        // Schedule detail + runs
+        .route("/api/schedules/{id}", get(routes::stubs::get_schedule).patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule))
+        .route("/api/schedules/runs", get(routes::stubs::schedule_runs))
+        // Memory advanced
+        .route("/api/memory/overview", get(routes::stubs::memory_overview))
+        .route("/api/memory/{agent_id}/core", get(routes::stubs::agent_core_memory))
+        .route("/api/memory/{agent_id}/core/{name}", axum::routing::put(routes::stubs::update_core_memory))
+        .route("/api/memory/{agent_id}/blocks", get(routes::stubs::agent_scoped_blocks))
+        .route("/api/memory/{agent_id}/blocks/{block_id}", delete(routes::stubs::delete_agent_block))
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

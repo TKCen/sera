@@ -17,6 +17,10 @@ pub struct CoreConfig {
     pub ollama: OllamaConfig,
     pub secrets_master_key: String,
     pub providers: Option<ProvidersConfig>,
+    pub oidc_issuer: Option<String>,
+    pub oidc_client_id: Option<String>,
+    pub oidc_client_secret: Option<String>,
+    pub external_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +103,11 @@ impl CoreConfig {
         let secrets_master_key = env::var("SECRETS_MASTER_KEY")
             .unwrap_or_else(|_| "sera-dev-master-key-change-me".to_string());
 
+        let oidc_issuer = env::var("OIDC_ISSUER").ok();
+        let oidc_client_id = env::var("OIDC_CLIENT_ID").ok();
+        let oidc_client_secret = env::var("OIDC_CLIENT_SECRET").ok();
+        let external_url = env::var("SERA_EXTERNAL_URL").ok();
+
         Ok(Self {
             database_url,
             port,
@@ -109,6 +118,10 @@ impl CoreConfig {
             ollama,
             secrets_master_key,
             providers: None,
+            oidc_issuer,
+            oidc_client_id,
+            oidc_client_secret,
+            external_url,
         })
     }
 

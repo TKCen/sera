@@ -59,9 +59,26 @@ sha2 = "0.10"
 aes-gcm = "0.10"
 hex = "0.4"
 
+# Streaming
+tokio-stream = "0.1"
+async-stream = "0.3"
+futures-util = "0.3"
+
+# Knowledge / Vector
+qdrant-client = "1"
+git2 = "0.19"
+
+# OIDC
+openidconnect = "4"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }
+rand = "0.8"
 
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }

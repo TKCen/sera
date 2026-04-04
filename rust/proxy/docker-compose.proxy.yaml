@@ -1,0 +1,48 @@
+# Overlay for Phase 5: reverse proxy cutover
+# Usage: docker compose -f docker-compose.yaml -f rust/proxy/docker-compose.proxy.yaml up -d
+
+services:
+  # Reverse proxy in front of both Rust and TS backends
+  sera-proxy:
+    image: nginx:alpine
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./rust/proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      sera-core:
+        condition: service_healthy
+      sera-core-rs:
+        condition: service_healthy
+    networks:
+      - sera_net
+
+  # Rust backend (sera-core-rs)
+  sera-core-rs:
+    build:
+      context: ./rust
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://sera:sera@sera-db:5432/sera
+      PORT: "3002"
+      SERA_API_KEY: sera_bootstrap_dev_123
+      CENTRIFUGO_URL: http://sera-centrifugo:8000
+      CENTRIFUGO_API_KEY: sera-api-key
+      CENTRIFUGO_TOKEN_SECRET: sera-token-secret
+      OLLAMA_URL: http://ollama:11434
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      sera-db:
+        condition: service_healthy
+    networks:
+      - sera_net
+      - agent_net
+
+  # TS backend stays on 3001 (existing config)
+  # sera-core already defined in docker-compose.yaml

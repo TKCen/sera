@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 
 use axum::{
     middleware::from_fn,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use tower_http::cors::CorsLayer;
@@ -69,6 +69,16 @@ async fn main() -> anyhow::Result<()> {
     let api_key = Arc::new(config.api_key.clone());
     let config = Arc::new(config);
 
+    // Initialize Centrifugo client
+    let centrifugo = {
+        let c = &config.centrifugo;
+        Some(Arc::new(sera_events::CentrifugoClient::new(
+            c.api_url.clone(),
+            c.api_key.clone(),
+            c.token_secret.clone(),
+        )))
+    };
+
     let app_state = AppState {
         db,
         config: config.clone(),
@@ -76,6 +86,8 @@ async fn main() -> anyhow::Result<()> {
         providers,
         docker,
         providers_path,
+        centrifugo,
+        mcp_registry: Arc::new(RwLock::new(routes::mcp::McpRegistry::new())),
     };
 
     // Build router
@@ -219,8 +231,15 @@ fn build_router(
             get(routes::channels::list_channels).post(routes::channels::create_channel),
         )
         .route("/api/channels/{id}", delete(routes::channels::delete_channel))
-        // MCP servers (stub)
-        .route("/api/mcp-servers", get(routes::mcp::list_mcp_servers))
+        // MCP servers
+        .route("/api/mcp-servers", get(routes::mcp::list_mcp_servers).post(routes::mcp::register_mcp_server))
+        .route("/api/mcp-servers/{name}", get(routes::mcp::get_mcp_server))
+        .route("/api/mcp-servers/{name}/health", get(routes::mcp::mcp_server_health))
+        .route("/api/mcp-servers/{name}/reload", post(routes::mcp::reload_mcp_server))
+        // LSP proxy
+        .route("/api/lsp/definition", post(routes::lsp::definition))
+        .route("/api/lsp/references", post(routes::lsp::references))
+        .route("/api/lsp/symbols", post(routes::lsp::symbols))
         // Webhooks
         .route(
             "/api/webhooks",
@@ -259,18 +278,42 @@ fn build_router(
                 .delete(routes::registry::delete_template),
         )
         .route("/api/registry/instances", get(routes::agents::list_instances).post(routes::agents::create_instance))
-        // Stubs — sandbox, intercom, pipelines, chat, embedding, knowledge
-        .route("/api/sandbox/spawn", post(routes::stubs::sandbox_spawn))
-        .route("/api/sandbox/exec", post(routes::stubs::sandbox_exec))
-        .route("/api/intercom/publish", post(routes::stubs::intercom_publish))
-        .route("/api/intercom/dm", post(routes::stubs::intercom_dm))
-        .route("/api/pipelines", post(routes::stubs::create_pipeline))
-        .route("/api/pipelines/{id}", get(routes::stubs::get_pipeline))
-        .route("/api/chat", post(routes::stubs::chat))
-        .route("/v1/chat/completions", post(routes::stubs::openai_chat_completions))
-        .route("/api/embedding/config", get(routes::stubs::embedding_config))
-        .route("/api/embedding/status", get(routes::stubs::embedding_status))
-        .route("/api/knowledge/circles/{id}/history", get(routes::stubs::knowledge_history))
+        // Sandbox — real bollard implementation
+        .route("/api/sandbox/spawn", post(routes::sandbox::spawn))
+        .route("/api/sandbox/exec", post(routes::sandbox::exec))
+        // Intercom — Centrifugo HTTP client
+        .route("/api/intercom/publish", post(routes::intercom::publish))
+        .route("/api/intercom/dm", post(routes::intercom::dm))
+        // Pipelines — workflow engine
+        .route("/api/pipelines", post(routes::pipelines::create_pipeline))
+        .route("/api/pipelines/{id}", get(routes::pipelines::get_pipeline))
+        // Chat — container routing with SSE streaming
+        .route("/api/chat", post(routes::chat::chat))
+        // OpenAI-compatible endpoint
+        .route("/v1/chat/completions", post(routes::openai_compat::chat_completions))
+        // Embedding — Ollama integration
+        .route("/api/embedding/config", get(routes::embedding::get_config).put(routes::embedding::update_config))
+        .route("/api/embedding/status", get(routes::embedding::get_status))
+        .route("/api/embedding/models", get(routes::embedding::list_models))
+        .route("/api/embedding/test", post(routes::embedding::test_embedding))
+        // Knowledge — git history + merge requests
+        .route("/api/knowledge/circles/{id}/history", get(routes::knowledge::get_history))
+        .route("/api/knowledge/circles/{id}/merge-requests", get(routes::knowledge::list_merge_requests).post(routes::knowledge::create_merge_request))
+        .route("/api/knowledge/circles/{id}/merge-requests/{mr_id}/approve", post(routes::knowledge::approve_merge_request))
+        .route("/api/knowledge/circles/{id}/merge-requests/{mr_id}/reject", post(routes::knowledge::reject_merge_request))
+        // Permission requests
+        .route("/api/permission-requests", get(routes::permission_requests::list_requests).post(routes::permission_requests::create_request))
+        .route("/api/permission-requests/{id}/approve", post(routes::permission_requests::approve_request))
+        .route("/api/permission-requests/{id}/deny", post(routes::permission_requests::deny_request))
+        // Service identities
+        .route("/api/agents/{agent_id}/service-identities", get(routes::service_identities::list_identities).post(routes::service_identities::create_identity))
+        .route("/api/agents/{agent_id}/service-identities/{identity_id}", delete(routes::service_identities::delete_identity))
+        .route("/api/agents/{agent_id}/service-identities/{identity_id}/rotate", post(routes::service_identities::rotate_key))
+        // OIDC auth flow
+        .route("/api/auth/oidc-config", get(routes::oidc::get_oidc_config))
+        .route("/api/auth/login", get(routes::oidc::login))
+        .route("/api/auth/oidc/callback", post(routes::oidc::callback))
+        .route("/api/auth/logout", post(routes::oidc::logout))
         // Agent sub-route stubs
         .route("/api/agents/{id}/logs", get(routes::stubs::agent_logs))
         .route("/api/agents/{id}/subagents", get(routes::stubs::agent_subagents))

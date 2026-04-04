@@ -8,6 +8,7 @@ use bollard::Docker;
 use std::collections::HashMap;
 
 use crate::error::DockerError;
+use crate::ExecOutput;
 
 /// Manages Docker container lifecycle for agent instances.
 pub struct ContainerManager {
@@ -101,5 +102,85 @@ impl ContainerManager {
 
         tracing::info!(container_id, "Stopped and removed agent container");
         Ok(())
+    }
+
+    /// Execute a command in a running container.
+    pub async fn exec_in_container(
+        &self,
+        container_id: &str,
+        command: &[String],
+        working_dir: Option<&str>,
+    ) -> Result<ExecOutput, DockerError> {
+        use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
+        use futures_util::stream::StreamExt;
+
+        let exec_opts = CreateExecOptions {
+            cmd: Some(command.to_vec()),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: working_dir.map(|s| s.to_string()),
+            ..Default::default()
+        };
+
+        let exec_id = self
+            .docker
+            .create_exec(container_id, exec_opts)
+            .await
+            .map_err(|e| DockerError::Api(format!("Failed to create exec: {e}")))?;
+
+        let mut output = ExecOutput {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+
+        let start_opts = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        let result = self
+            .docker
+            .start_exec(&exec_id.id, Some(start_opts))
+            .await
+            .map_err(|e| DockerError::Api(format!("Failed to start exec: {e}")))?;
+
+        // Collect stdout/stderr from the attached stream
+        if let StartExecResults::Attached { output: mut stream, input: _ } = result {
+            while let Some(msg) = stream.next().await {
+                match msg {
+                    Ok(bollard::container::LogOutput::StdOut { message }) => {
+                        output.stdout.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    Ok(bollard::container::LogOutput::StdErr { message }) => {
+                        output.stderr.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("Exec stream error: {e}");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Get exit code
+        let inspect = self
+            .docker
+            .inspect_exec(&exec_id.id)
+            .await
+            .map_err(|e| DockerError::Api(format!("Failed to inspect exec: {e}")))?;
+
+        if let Some(code) = inspect.exit_code {
+            output.exit_code = code;
+        }
+
+        tracing::debug!(
+            container_id,
+            exit_code = output.exit_code,
+            "Executed command in container"
+        );
+
+        Ok(output)
     }
 }

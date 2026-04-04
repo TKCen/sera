@@ -8,6 +8,7 @@ use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
 use sera_docker::ContainerManager;
+use sera_events::CentrifugoClient;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -19,4 +20,6 @@ pub struct AppState {
     pub providers: Arc<RwLock<ProvidersConfig>>,
     pub docker: Arc<ContainerManager>,
     pub providers_path: Option<String>,
+    pub centrifugo: Option<Arc<CentrifugoClient>>,
+    pub mcp_registry: Arc<RwLock<crate::routes::mcp::McpRegistry>>,
 }

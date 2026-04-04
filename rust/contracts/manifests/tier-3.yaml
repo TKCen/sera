@@ -1,0 +1,13 @@
+apiVersion: sera/v1
+kind: SandboxBoundary
+metadata:
+  name: tier-3
+spec:
+  linux:
+    capabilities: []
+    readOnlyRootfs: true
+  allowedImages:
+    - "sera-agent-worker:latest"
+  capabilities:
+    network-allowlist: []
+    command-denylist: ["*"]

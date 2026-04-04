@@ -1,0 +1,22 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: byoh-rust-example
+  displayName: BYOH Rust Example
+  icon: "🦀"
+  builtin: false
+  category: examples
+  description: >
+    Minimal Rust agent demonstrating the BYOH contract. Reads task from stdin,
+    calls the SERA LLM proxy, writes result to stdout. Sub-5MB binary with
+    sub-200ms cold start.
+spec:
+  identity:
+    role: "Example BYOH Rust agent"
+  model:
+    name: default
+  sandboxBoundary: tier-1
+  lifecycle:
+    mode: ephemeral
+  sandbox:
+    image: sera-byoh-rust-agent:latest

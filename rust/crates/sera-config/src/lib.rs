@@ -1,8 +1,16 @@
-//! SERA Config — environment variable loading for BYOH containers.
+//! SERA Config — environment variable and file-based configuration.
+//!
+//! Two config scopes:
+//! - `SeraConfig`: BYOH agent container config (env vars per BYOH contract)
+//! - `CoreConfig`: sera-core server config (env vars + providers.json)
+
+pub mod core_config;
+pub mod providers;
 
 use std::env;
 
 /// Configuration loaded from BYOH contract environment variables.
+/// Used by sera-runtime and sera-byoh-agent inside containers.
 #[derive(Debug, Clone)]
 pub struct SeraConfig {
     pub core_url: String,
@@ -58,7 +66,6 @@ mod tests {
 
     #[test]
     fn config_requires_identity_token() {
-        // Clear any existing env
         // SAFETY: single-threaded test, no other threads reading this var
         unsafe { env::remove_var("SERA_IDENTITY_TOKEN") };
         let result = SeraConfig::from_env();

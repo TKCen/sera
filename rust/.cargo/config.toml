@@ -1,0 +1,5 @@
+# Use lld for faster link times on Windows
+# Install: rustup component add llvm-tools (or install LLVM separately)
+# Uncomment if lld-link is available on your system:
+# [target.x86_64-pc-windows-msvc]
+# linker = "lld-link"

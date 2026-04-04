@@ -1,0 +1,12 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: example-minimal
+  displayName: Minimal Example
+spec:
+  model:
+    provider: openai
+    model: gpt-4o
+  sandboxBoundary: tier-3
+  lifecycle:
+    mode: ephemeral

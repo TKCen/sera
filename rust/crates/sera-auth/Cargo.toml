@@ -1,0 +1,15 @@
+[package]
+name = "sera-auth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sera-domain.workspace = true
+sera-db.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+jsonwebtoken.workspace = true
+axum.workspace = true

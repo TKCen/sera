@@ -1,6 +1,28 @@
-//! SERA Domain Types — shared types matching the BYOH contract schemas.
+//! SERA Domain Types — shared types matching the BYOH contract schemas
+//! and the full sera-core domain model.
+
+pub mod agent;
+pub mod audit;
+pub mod capability;
+pub mod chat;
+pub mod intercom;
+pub mod manifest;
+pub mod metering;
+pub mod policy;
+pub mod sandbox;
+pub mod secrets;
+pub mod session;
+pub mod skill;
 
 use serde::{Deserialize, Serialize};
+
+/// Lifecycle mode for agent instances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LifecycleMode {
+    Persistent,
+    Ephemeral,
+}
 
 /// Task input sent to agent containers via stdin.
 /// Matches schemas/byoh-task-input.schema.json
@@ -62,5 +84,15 @@ mod tests {
         let json = r#"{"taskId":"t1","task":"do something"}"#;
         let input: TaskInput = serde_json::from_str(json).unwrap();
         assert!(input.context.is_none());
+    }
+
+    #[test]
+    fn lifecycle_mode_serialize() {
+        let mode = LifecycleMode::Persistent;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"persistent\"");
+
+        let parsed: LifecycleMode = serde_json::from_str("\"ephemeral\"").unwrap();
+        assert_eq!(parsed, LifecycleMode::Ephemeral);
     }
 }

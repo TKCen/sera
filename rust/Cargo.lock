@@ -1820,6 +1820,8 @@ name = "sera-config"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1898,10 +1900,12 @@ dependencies = [
 name = "sera-events"
 version = "0.1.0"
 dependencies = [
+ "jsonwebtoken",
  "reqwest",
  "sera-domain",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "time",
  "tokio",

@@ -6,5 +6,10 @@
 //! - No leaking `sqlx::Row` or SQL types into handler/business layers
 
 pub mod pool;
+pub mod agents;
+pub mod audit;
+pub mod metering;
+pub mod error;
 
 pub use pool::DbPool;
+pub use error::DbError;

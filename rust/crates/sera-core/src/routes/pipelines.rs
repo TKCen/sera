@@ -97,7 +97,7 @@ pub async fn create_pipeline(
         description: body.description,
         status: "pending".to_string(),
         steps: step_statuses,
-        created_at: now.to_string(),
+        created_at: super::iso8601(now),
         completed_at: None,
     })))
 }
@@ -125,8 +125,8 @@ pub async fn get_pipeline(
                 description: desc,
                 status,
                 steps,
-                created_at: created.to_string(),
-                completed_at: completed.map(|t| t.to_string()),
+                created_at: super::iso8601(created),
+                completed_at: completed.map(super::iso8601),
             }))
         }
         None => Err(AppError::Db(sera_db::DbError::NotFound {

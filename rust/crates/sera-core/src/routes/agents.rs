@@ -34,9 +34,8 @@ pub struct TemplateResponse {
     pub spec: Value,
 }
 
-/// Instance response (camelCase for API compatibility).
+/// Instance response — snake_case to match the TypeScript core's response shape.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct InstanceResponse {
     pub id: String,
     pub name: String,
@@ -48,6 +47,10 @@ pub struct InstanceResponse {
     pub parent_instance_id: Option<String>,
     pub workspace_path: Option<String>,
     pub container_id: Option<String>,
+    pub sandbox_boundary: Option<String>,
+    pub overrides: Option<serde_json::Value>,
+    pub resolved_config: Option<serde_json::Value>,
+    pub resolved_capabilities: Option<serde_json::Value>,
     pub last_heartbeat_at: Option<String>,
     pub updated_at: Option<String>,
     pub created_at: Option<String>,
@@ -92,6 +95,7 @@ pub async fn get_instance(
 }
 
 fn instance_to_response(r: sera_db::agents::InstanceRow) -> InstanceResponse {
+    use super::iso8601_opt;
     InstanceResponse {
         id: r.id.to_string(),
         name: r.name,
@@ -103,9 +107,13 @@ fn instance_to_response(r: sera_db::agents::InstanceRow) -> InstanceResponse {
         parent_instance_id: r.parent_instance_id.map(|id| id.to_string()),
         workspace_path: Some(r.workspace_path),
         container_id: r.container_id,
-        last_heartbeat_at: r.last_heartbeat_at.map(|t| t.to_string()),
-        updated_at: r.updated_at.map(|t| t.to_string()),
-        created_at: r.created_at.map(|t| t.to_string()),
+        sandbox_boundary: r.sandbox_boundary,
+        overrides: r.overrides,
+        resolved_config: r.resolved_config,
+        resolved_capabilities: r.resolved_capabilities,
+        last_heartbeat_at: iso8601_opt(r.last_heartbeat_at),
+        updated_at: iso8601_opt(r.updated_at),
+        created_at: iso8601_opt(r.created_at),
     }
 }
 
@@ -205,12 +213,99 @@ pub async fn start_instance(
     let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
     let template_ref = instance.template_ref.as_deref().unwrap_or(&instance.template_name);
 
+    // Issue a JWT identity token for the agent container
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let identity_token = state.jwt.issue(sera_auth::JwtClaims {
+        sub: instance.name.clone(),
+        iss: "sera".to_string(),
+        exp: now_secs + 86400 * 30, // 30 days
+        agent_id: Some(instance.name.clone()),
+        instance_id: Some(id.clone()),
+    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;
+
+    // ── Workspace provisioning ──────────────────────────────────────────────
+    // Build the agent manifest YAML from template spec + instance overrides,
+    // write it to /workspaces/<name>/AGENT.yaml so the agent-runtime can load it.
+    //
+    // Inside this container: /workspaces/<name>/
+    // On the Docker host: $HOST_WORKSPACES_DIR/<name>/
+    // The agent container bind mount must use the HOST path.
+    let workspace_container_dir = format!("/workspaces/{}", instance.name);
+    // For Docker bind mounts, we need the HOST path that the Docker daemon can resolve.
+    // HOST_WORKSPACES_DIR should be an absolute path (e.g. D:/projects/homelab/sera/workspaces
+    // on Docker Desktop for Windows, or /home/user/sera/workspaces on Linux).
+    // Falls back to /workspaces which works on native Linux Docker.
+    let host_workspaces = std::env::var("HOST_WORKSPACES_DIR")
+        .unwrap_or_else(|_| "/workspaces".to_string());
+    let workspace_host_dir = format!("{}/{}", host_workspaces, instance.name);
+
+    // Create the directory inside our container (we have /workspaces mounted)
+    std::fs::create_dir_all(&workspace_container_dir).ok();
+
+    // Read template spec
+    let template = AgentRepository::get_template(state.db.inner(), template_ref).await?;
+    let mut manifest = template.spec.clone();
+
+    // Merge instance overrides on top of template spec
+    #[allow(clippy::collapsible_if)]
+    if let Some(overrides) = &instance.overrides {
+        if let (Some(base), Some(over)) = (manifest.as_object_mut(), overrides.as_object()) {
+            for (k, v) in over {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    // Add metadata block for agent-runtime
+    if let Some(obj) = manifest.as_object_mut() {
+        obj.insert("metadata".to_string(), serde_json::json!({
+            "name": instance.name,
+            "displayName": instance.display_name,
+            "instanceId": id,
+            "templateRef": template_ref,
+        }));
+    }
+
+    // Write AGENT.yaml inside our container's mounted /workspaces
+    if let Ok(yaml_str) = serde_yaml::to_string(&manifest) {
+        let _ = std::fs::write(format!("{}/AGENT.yaml", workspace_container_dir), yaml_str);
+    }
+
+    // Set permissions for non-root agent user (uid 1001)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&workspace_container_dir, std::fs::Permissions::from_mode(0o777));
+    }
+
+    // Build bind mounts — use HOST path so Docker daemon can find the directory
+    let binds = vec![
+        format!("{}:/workspace:rw", workspace_host_dir),
+        // Memory mount - per instance
+        format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
+        // Knowledge mounts
+        format!("{}/knowledge/agents/{}:/knowledge/personal:ro", host_workspaces.replace("/workspaces", ""), instance.name),
+        format!("{}/knowledge/shared:/knowledge/shared:ro", host_workspaces.replace("/workspaces", "")),
+    ];
+
     let mut env_vars = std::collections::HashMap::new();
     env_vars.insert("AGENT_NAME".to_string(), instance.name.clone());
     env_vars.insert("AGENT_INSTANCE_ID".to_string(), id.clone());
     env_vars.insert("SERA_CORE_URL".to_string(), "http://sera-core:3001".to_string());
+    env_vars.insert("SERA_IDENTITY_TOKEN".to_string(), identity_token);
+    env_vars.insert("WORKSPACE_PATH".to_string(), "/workspace".to_string());
     env_vars.insert("AGENT_LIFECYCLE_MODE".to_string(),
         instance.lifecycle_mode.as_deref().unwrap_or("ephemeral").to_string());
+    env_vars.insert("CENTRIFUGO_API_URL".to_string(),
+        std::env::var("CENTRIFUGO_API_URL").unwrap_or_else(|_| "http://centrifugo:8000/api".to_string()));
+    env_vars.insert("CENTRIFUGO_API_KEY".to_string(),
+        std::env::var("CENTRIFUGO_API_KEY").unwrap_or_else(|_| "sera-api-key".to_string()));
+    env_vars.insert("AGENT_HEARTBEAT_INTERVAL_MS".to_string(), "30000".to_string());
+    env_vars.insert("SERA_LLM_PROXY_URL".to_string(), "http://sera-core:3001/v1/llm".to_string());
+    env_vars.insert("AGENT_CHAT_PORT".to_string(), "3100".to_string());
 
     let container_id = state
         .docker
@@ -221,6 +316,8 @@ pub async fn start_instance(
             "sera-agent-worker:latest",
             "sera_net",
             env_vars,
+            Some(binds),
+            None,
         )
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;

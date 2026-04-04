@@ -148,4 +148,29 @@ impl TaskRepository {
             value: id.to_string(),
         })
     }
+
+    /// Get a single task by ID (alias for get_task).
+    pub async fn get_by_id(pool: &PgPool, id: &str) -> Result<TaskRow, DbError> {
+        Self::get_task(pool, id).await
+    }
+
+    /// Cancel a queued or running task.
+    pub async fn cancel(pool: &PgPool, task_id: &str) -> Result<(), DbError> {
+        let result = sqlx::query(
+            "UPDATE task_queue SET status = 'failed', error = 'Cancelled by operator', completed_at = NOW()
+             WHERE id = $1::uuid AND status IN ('queued', 'running')",
+        )
+        .bind(task_id)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "task",
+                key: "id",
+                value: task_id.to_string(),
+            });
+        }
+        Ok(())
+    }
 }

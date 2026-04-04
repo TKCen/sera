@@ -39,14 +39,17 @@ pub async fn list_sessions(
         SessionRepository::list_sessions(state.db.inner(), params.agent_name.as_deref()).await?;
     let sessions: Vec<SessionResponse> = rows
         .into_iter()
-        .map(|r| SessionResponse {
-            id: r.id.to_string(),
-            agent_name: r.agent_name,
-            agent_instance_id: r.agent_instance_id.map(|id| id.to_string()),
-            title: r.title,
-            message_count: r.message_count,
-            created_at: r.created_at.map(|t| t.to_string()),
-            updated_at: r.updated_at.map(|t| t.to_string()),
+        .map(|r| {
+            use super::iso8601_opt;
+            SessionResponse {
+                id: r.id.to_string(),
+                agent_name: r.agent_name,
+                agent_instance_id: r.agent_instance_id.map(|id| id.to_string()),
+                title: r.title,
+                message_count: r.message_count,
+                created_at: iso8601_opt(r.created_at),
+                updated_at: iso8601_opt(r.updated_at),
+            }
         })
         .collect();
     Ok(Json(sessions))
@@ -59,7 +62,7 @@ pub struct MessageResponse {
     pub id: String,
     pub role: String,
     pub content: Option<String>,
-    pub tool_calls: Option<serde_json::Value>,
+    pub metadata: Option<serde_json::Value>,
     pub created_at: Option<String>,
 }
 
@@ -80,24 +83,30 @@ pub async fn get_session(
     let row = SessionRepository::get_by_id(state.db.inner(), &id).await?;
     let messages = SessionRepository::get_messages(state.db.inner(), &id).await?;
 
-    let session = SessionResponse {
-        id: row.id.to_string(),
-        agent_name: row.agent_name,
-        agent_instance_id: row.agent_instance_id.map(|id| id.to_string()),
-        title: row.title,
-        message_count: row.message_count,
-        created_at: row.created_at.map(|t| t.to_string()),
-        updated_at: row.updated_at.map(|t| t.to_string()),
+    let session = {
+        use super::iso8601_opt;
+        SessionResponse {
+            id: row.id.to_string(),
+            agent_name: row.agent_name,
+            agent_instance_id: row.agent_instance_id.map(|id| id.to_string()),
+            title: row.title,
+            message_count: row.message_count,
+            created_at: iso8601_opt(row.created_at),
+            updated_at: iso8601_opt(row.updated_at),
+        }
     };
 
     let msgs: Vec<MessageResponse> = messages
         .into_iter()
-        .map(|m| MessageResponse {
-            id: m.id.to_string(),
-            role: m.role,
-            content: m.content,
-            tool_calls: m.tool_calls,
-            created_at: m.created_at.map(|t| t.to_string()),
+        .map(|m| {
+            use super::iso8601_opt;
+            MessageResponse {
+                id: m.id.to_string(),
+                role: m.role,
+                content: m.content,
+                metadata: m.metadata,
+                created_at: iso8601_opt(m.created_at),
+            }
         })
         .collect();
 
@@ -131,14 +140,17 @@ pub async fn create_session(
 
     Ok((
         StatusCode::CREATED,
-        Json(SessionResponse {
-            id: row.id.to_string(),
-            agent_name: row.agent_name,
-            agent_instance_id: row.agent_instance_id.map(|id| id.to_string()),
-            title: row.title,
-            message_count: row.message_count,
-            created_at: row.created_at.map(|t| t.to_string()),
-            updated_at: row.updated_at.map(|t| t.to_string()),
+        Json({
+            use super::iso8601_opt;
+            SessionResponse {
+                id: row.id.to_string(),
+                agent_name: row.agent_name,
+                agent_instance_id: row.agent_instance_id.map(|id| id.to_string()),
+                title: row.title,
+                message_count: row.message_count,
+                created_at: iso8601_opt(row.created_at),
+                updated_at: iso8601_opt(row.updated_at),
+            }
         }),
     ))
 }
@@ -157,14 +169,17 @@ pub async fn update_session(
     Json(body): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionResponse>, AppError> {
     let row = SessionRepository::update_title(state.db.inner(), &id, &body.title).await?;
-    Ok(Json(SessionResponse {
-        id: row.id.to_string(),
-        agent_name: row.agent_name,
-        agent_instance_id: row.agent_instance_id.map(|id| id.to_string()),
-        title: row.title,
-        message_count: row.message_count,
-        created_at: row.created_at.map(|t| t.to_string()),
-        updated_at: row.updated_at.map(|t| t.to_string()),
+    Ok(Json({
+        use super::iso8601_opt;
+        SessionResponse {
+            id: row.id.to_string(),
+            agent_name: row.agent_name,
+            agent_instance_id: row.agent_instance_id.map(|id| id.to_string()),
+            title: row.title,
+            message_count: row.message_count,
+            created_at: iso8601_opt(row.created_at),
+            updated_at: iso8601_opt(row.updated_at),
+        }
     }))
 }
 

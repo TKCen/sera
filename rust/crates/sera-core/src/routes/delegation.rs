@@ -13,7 +13,6 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DelegationResponse {
     pub id: String,
     pub principal_type: String,
@@ -28,6 +27,7 @@ pub struct DelegationResponse {
 }
 
 fn to_response(r: sera_db::delegations::DelegationRow) -> DelegationResponse {
+    use super::iso8601_opt;
     DelegationResponse {
         id: r.id.to_string(),
         principal_type: r.principal_type,
@@ -36,8 +36,8 @@ fn to_response(r: sera_db::delegations::DelegationRow) -> DelegationResponse {
         actor_agent_id: r.actor_agent_id,
         scope: r.scope,
         grant_type: r.grant_type,
-        issued_at: r.issued_at.map(|t| t.to_string()),
-        expires_at: r.expires_at.map(|t| t.to_string()),
+        issued_at: iso8601_opt(r.issued_at),
+        expires_at: iso8601_opt(r.expires_at),
         use_count: r.use_count,
     }
 }

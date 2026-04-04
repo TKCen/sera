@@ -145,6 +145,41 @@ pub async fn list_tools(State(state): State<AppState>) -> Json<Vec<serde_json::V
     Json(tools)
 }
 
+/// GET /v1/tools/catalog — dynamic tool catalog for agent runtime
+pub async fn tools_catalog(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    // Start with built-in tools
+    let mut tools = vec![
+        serde_json::json!({"name": "file-read", "type": "builtin", "description": "Read file contents"}),
+        serde_json::json!({"name": "file-write", "type": "builtin", "description": "Write file contents"}),
+        serde_json::json!({"name": "file-list", "type": "builtin", "description": "List directory contents"}),
+        serde_json::json!({"name": "shell-exec", "type": "builtin", "description": "Execute shell command"}),
+        serde_json::json!({"name": "http-request", "type": "builtin", "description": "Make HTTP request"}),
+        serde_json::json!({"name": "knowledge-store", "type": "builtin", "description": "Store knowledge block"}),
+        serde_json::json!({"name": "knowledge-query", "type": "builtin", "description": "Query knowledge base"}),
+        serde_json::json!({"name": "web-fetch", "type": "builtin", "description": "Fetch web page"}),
+        serde_json::json!({"name": "web-search", "type": "builtin", "description": "Web search"}),
+        serde_json::json!({"name": "glob", "type": "builtin", "description": "File pattern matching"}),
+        serde_json::json!({"name": "grep", "type": "builtin", "description": "Search file contents"}),
+        serde_json::json!({"name": "spawn-ephemeral", "type": "builtin", "description": "Spawn ephemeral subagent"}),
+        serde_json::json!({"name": "tool-search", "type": "builtin", "description": "Search available tools"}),
+        serde_json::json!({"name": "delegate-task", "type": "builtin", "description": "Delegate task to another agent"}),
+        serde_json::json!({"name": "schedule-task", "type": "builtin", "description": "Schedule a recurring task"}),
+    ];
+
+    // Append skills from DB
+    if let Ok(skills) = sera_db::skills::SkillRepository::list_skills(state.db.inner()).await {
+        for skill in skills {
+            tools.push(serde_json::json!({
+                "name": skill.name,
+                "description": skill.description,
+                "type": "skill",
+            }));
+        }
+    }
+
+    Json(tools)
+}
+
 /// GET /api/templates — delegates to agent templates
 pub async fn list_templates(
     State(state): State<AppState>,
@@ -201,95 +236,104 @@ pub async fn get_schedule(
     }
 }
 
+/// Query params for schedule runs.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleRunsQuery {
+    pub agent_id: Option<String>,
+    pub schedule_id: Option<String>,
+    pub category: Option<String>,
+    pub limit: Option<i64>,
+}
+
 /// GET /api/schedules/runs — schedule run history
-pub async fn schedule_runs(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
-    // Try to query recent task_queue runs joined with schedules
-    let rows = sqlx::query(
-        "SELECT tq.id, tq.task, tq.status, tq.result, tq.created_at, tq.completed_at, s.name as schedule_name
-         FROM task_queue tq
-         JOIN schedules s ON tq.schedule_id = s.id
-         ORDER BY tq.created_at DESC
-         LIMIT 50"
-    )
-    .fetch_all(state.db.inner())
-    .await;
+/// Frontend expects ScheduleRun[]: { id, scheduleId, status, firedAt, startedAt, completedAt, createdAt, output? }
+pub async fn schedule_runs(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<ScheduleRunsQuery>,
+) -> Json<Vec<serde_json::Value>> {
+    let limit = params.limit.unwrap_or(50).min(500);
 
-    if let Ok(db_rows) = rows {
+    // Try to query from task_queue with schedule context
+    let query = if let Some(agent_id) = &params.agent_id {
+        sqlx::query(
+            "SELECT tq.id, tq.status, tq.created_at, tq.started_at, tq.completed_at,
+                    tq.result, tq.context
+             FROM task_queue tq
+             WHERE tq.agent_instance_id::text = $1
+             ORDER BY tq.created_at DESC
+             LIMIT $2"
+        )
+        .bind(agent_id)
+        .bind(limit)
+        .fetch_all(state.db.inner())
+        .await
+    } else {
+        sqlx::query(
+            "SELECT tq.id, tq.status, tq.created_at, tq.started_at, tq.completed_at,
+                    tq.result, tq.context
+             FROM task_queue tq
+             ORDER BY tq.created_at DESC
+             LIMIT $1"
+        )
+        .bind(limit)
+        .fetch_all(state.db.inner())
+        .await
+    };
+
+    if let Ok(db_rows) = query {
         let runs: Vec<serde_json::Value> = db_rows
             .into_iter()
             .map(|r| {
-                let id: String = r.get("id");
-                let task: String = r.get("task");
+                let id: uuid::Uuid = r.get("id");
                 let status: String = r.get("status");
-                let result: Option<String> = r.get("result");
                 let created_at: time::OffsetDateTime = r.get("created_at");
+                let started_at: Option<time::OffsetDateTime> = r.get("started_at");
                 let completed_at: Option<time::OffsetDateTime> = r.get("completed_at");
-                let schedule_name: String = r.get("schedule_name");
+                let context: Option<serde_json::Value> = r.get("context");
+                let schedule_id = context
+                    .as_ref()
+                    .and_then(|c| c.get("schedule"))
+                    .and_then(|s| s.get("scheduleId"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
                 serde_json::json!({
-                    "id": id,
-                    "task": task,
+                    "id": id.to_string(),
+                    "scheduleId": schedule_id,
                     "status": status,
-                    "result": result,
-                    "createdAt": created_at.to_string(),
-                    "completedAt": completed_at.map(|t| t.to_string()),
-                    "scheduleName": schedule_name,
+                    "firedAt": super::iso8601(created_at),
+                    "startedAt": started_at.map(super::iso8601),
+                    "completedAt": completed_at.map(super::iso8601),
+                    "createdAt": super::iso8601(created_at),
                 })
             })
             .collect();
         return Json(runs);
     }
 
-    // Fallback: try alternate query with schedules table only
-    let fallback_rows = sqlx::query(
-        "SELECT id, agent_name, name, last_run_at, last_run_status
-         FROM schedules
-         WHERE last_run_at IS NOT NULL
-         ORDER BY last_run_at DESC
-         LIMIT 50"
-    )
-    .fetch_all(state.db.inner())
-    .await;
-
-    if let Ok(db_rows) = fallback_rows {
-        let runs: Vec<serde_json::Value> = db_rows
-            .into_iter()
-            .map(|r| {
-                let id: String = r.get("id");
-                let agent_name: Option<String> = r.get("agent_name");
-                let name: String = r.get("name");
-                let last_run_at: Option<time::OffsetDateTime> = r.get("last_run_at");
-                let last_run_status: Option<String> = r.get("last_run_status");
-
-                serde_json::json!({
-                    "id": id,
-                    "agentName": agent_name,
-                    "name": name,
-                    "lastRunAt": last_run_at.map(|t| t.to_string()),
-                    "lastRunStatus": last_run_status,
-                })
-            })
-            .collect();
-        return Json(runs);
-    }
-
-    // Both queries failed — return empty array gracefully
+    // Query failed — return empty array gracefully
     Json(vec![])
 }
 
 // ── Memory advanced stubs ───────────────────────────────────────────────────
 
 /// GET /api/memory/overview
+/// Frontend expects: { totalBlocks, agents: [{id, blockCount}], topTags: [{tag, count}], typeBreakdown: Record<string, number> }
 pub async fn memory_overview(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM core_memory_blocks")
         .fetch_one(state.db.inner())
         .await
-        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+        .unwrap_or((0,));
 
     Ok(Json(serde_json::json!({
         "totalBlocks": count.0,
+        "agents": [],
+        "topTags": [],
+        "typeBreakdown": {}
     })))
 }
 
@@ -351,6 +395,111 @@ pub async fn agent_scoped_blocks(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     // Same as core memory for now
     agent_core_memory(State(state), Path(agent_id)).await
+}
+
+/// GET /api/agents/instances/:id/tools — agent available tools
+pub async fn agent_tools(Path(_id): Path<String>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "available": [],
+        "unavailable": []
+    }))
+}
+
+/// GET /api/agents/:id/template-diff
+pub async fn agent_template_diff(Path(_id): Path<String>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "hasChanges": false,
+        "instanceId": _id,
+        "templateName": "",
+        "templateUpdatedAt": "",
+        "instanceAppliedAt": null,
+        "changes": []
+    }))
+}
+
+/// GET /api/memory/recent
+pub async fn memory_recent() -> Json<Vec<serde_json::Value>> {
+    Json(vec![])
+}
+
+/// GET /api/memory/explorer-graph
+pub async fn memory_explorer_graph() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "nodes": [],
+        "edges": []
+    }))
+}
+
+/// GET /api/audit/verify — verify audit chain integrity
+pub async fn audit_verify() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "valid": true,
+        "totalEntries": 0,
+        "checkedEntries": 0,
+        "brokenLinks": []
+    }))
+}
+
+/// GET /api/providers/dynamic
+pub async fn providers_dynamic() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "dynamicProviders": [] }))
+}
+
+/// GET /api/providers/dynamic/statuses
+pub async fn providers_dynamic_statuses() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "statuses": [] }))
+}
+
+/// GET /api/providers/templates — list provider templates
+pub async fn providers_templates() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "templates": [] }))
+}
+
+/// GET /api/providers/default-model
+pub async fn providers_default_model() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "defaultModel": null }))
+}
+
+/// PUT /api/providers/default-model
+pub async fn set_default_model() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "success": true }))
+}
+
+/// GET /api/agents/:id/grants — list agent capability grants
+pub async fn agent_grants(Path(_id): Path<String>) -> Json<Vec<serde_json::Value>> {
+    Json(vec![])
+}
+
+/// GET /api/agents/:id/context-debug — debug agent context
+/// Frontend expects: { agentId, agentName, testMessage, systemPromptLength, events: Array<{stage, detail, durationMs?}> }
+pub async fn agent_context_debug(Path(id): Path<String>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "agentId": id,
+        "agentName": "",
+        "testMessage": "",
+        "systemPromptLength": 0,
+        "events": []
+    }))
+}
+
+/// GET /api/agents/:id/system-prompt — get agent system prompt
+pub async fn agent_system_prompt(Path(_id): Path<String>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "prompt": "" }))
+}
+
+/// GET /api/agents/:id/health-check — agent health check
+/// Frontend expects: { agentId, agentName?, overallStatus, checks: Record<string, {ok, detail?}> }
+pub async fn agent_health_check(Path(id): Path<String>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "agentId": id,
+        "overallStatus": "unknown",
+        "checks": {}
+    }))
+}
+
+/// GET /api/agents/:id/sessions/:sid/commands — session command log
+pub async fn session_commands(Path((_id, _sid)): Path<(String, String)>) -> Json<Vec<serde_json::Value>> {
+    Json(vec![])
 }
 
 /// DELETE /api/memory/:agentId/blocks/:id

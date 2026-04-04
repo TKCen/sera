@@ -35,6 +35,7 @@ pub struct ChatMessage {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply: Option<String>,
@@ -64,12 +65,14 @@ pub struct Citation {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamResponse {
     pub session_id: String,
     pub message_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageInfo {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -286,10 +289,20 @@ pub(crate) async fn get_agent_chat_url(state: &AppState, agent_id: &str) -> Resu
     .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error looking up agent: {e}")))?;
 
     match row {
-        Some((Some(container_id),)) => {
-            // Use container name on sera_net with default port 3000
-            let container_name = format!("sera-agent-{}", &container_id[..8.min(container_id.len())]);
-            Ok(format!("http://{}:3000", container_name))
+        Some((Some(_container_id),)) => {
+            // Use container name on sera_net with chat port 3100
+            // Container naming matches sera-docker: sera-agent-{name}-{instance_id[..8]}
+            // Note: container.rs uses instance_id for naming, NOT container_id
+            let name_row: Option<(String,)> = sqlx::query_as(
+                "SELECT name FROM agent_instances WHERE id = $1::uuid"
+            )
+            .bind(agent_id)
+            .fetch_optional(state.db.inner())
+            .await
+            .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+            let agent_name = name_row.map(|r| r.0).unwrap_or_default();
+            let container_name = format!("sera-agent-{}-{}", agent_name.to_lowercase(), &agent_id[..8.min(agent_id.len())]);
+            Ok(format!("http://{}:3100", container_name))
         }
         Some(_) => Err(AppError::Internal(anyhow::anyhow!(
             "Agent has no running container"

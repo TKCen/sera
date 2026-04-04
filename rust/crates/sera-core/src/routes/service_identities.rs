@@ -40,8 +40,8 @@ fn to_service_identity(
         service_name,
         key_id,
         status,
-        created_at: created_at.to_string(),
-        rotated_at: rotated_at.map(|t| t.to_string()),
+        created_at: super::iso8601(created_at),
+        rotated_at: rotated_at.map(super::iso8601),
     }
 }
 

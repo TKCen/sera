@@ -79,6 +79,23 @@ impl SkillRepository {
         Ok(row)
     }
 
+    /// Get a skill by name.
+    pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<SkillRow, DbError> {
+        sqlx::query_as::<_, SkillRow>(
+            "SELECT id, skill_id, name, version, description, triggers, requires, conflicts,
+                    max_tokens, source, category, tags, applies_to, created_at, updated_at
+             FROM skills WHERE name = $1"
+        )
+        .bind(name)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| DbError::NotFound {
+            entity: "skill",
+            key: "name",
+            value: name.to_string(),
+        })
+    }
+
     /// Delete a skill by name.
     pub async fn delete_skill(pool: &PgPool, name: &str) -> Result<bool, DbError> {
         let result = sqlx::query("DELETE FROM skills WHERE name = $1")

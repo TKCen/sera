@@ -34,7 +34,7 @@ pub async fn list_federation_peers() -> Json<serde_json::Value> {
 
 /// GET /api/system/circuit-breakers — stub
 pub async fn get_circuit_breakers() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"breakers": {}}))
+    Json(serde_json::json!({"circuitBreakers": []}))
 }
 
 /// GET /api/rt/token — issue a Centrifugo connection token.
@@ -60,5 +60,5 @@ pub async fn get_rt_token(
         .jwt
         .issue(claims)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("{e}")))?;
-    Ok(Json(serde_json::json!({"token": token})))
+    Ok(Json(serde_json::json!({"token": token, "expiresAt": exp})))
 }

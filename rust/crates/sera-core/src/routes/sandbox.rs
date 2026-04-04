@@ -61,6 +61,8 @@ pub async fn spawn(
             &body.image,
             &body.network,
             body.env,
+            None,
+            None,
         )
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker spawn failed: {e}")))?;

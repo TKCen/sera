@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sqlx;
 
 use sera_db::circles::CircleRepository;
 
@@ -66,6 +67,47 @@ pub async fn create_circle(
         display_name: body.display_name,
         description: body.description,
     })))
+}
+
+/// GET /api/circles/:name — get a single circle by name or id.
+pub async fn get_circle(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<CircleResponse>, AppError> {
+    let row = CircleRepository::get_by_name(state.db.inner(), &name).await?;
+    Ok(Json(CircleResponse {
+        id: row.id.to_string(),
+        name: row.name,
+        display_name: row.display_name,
+        description: row.description,
+    }))
+}
+
+/// PUT /api/circles/:id — update a circle.
+#[allow(dead_code)]
+pub async fn update_circle(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CreateCircleRequest>,
+) -> Result<Json<CircleResponse>, AppError> {
+    // Upsert — update display_name and description
+    sqlx::query(
+        "UPDATE circles SET display_name = $1, description = $2, updated_at = NOW() WHERE id::text = $3 OR name = $3"
+    )
+    .bind(&body.display_name)
+    .bind(&body.description)
+    .bind(&id)
+    .execute(state.db.inner())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    Ok(Json(CircleResponse {
+        id: row.id.to_string(),
+        name: row.name,
+        display_name: row.display_name,
+        description: row.description,
+    }))
 }
 
 /// DELETE /api/circles/:id

@@ -36,8 +36,8 @@ fn to_response(r: sera_db::operator_requests::OperatorRequestRow) -> OperatorReq
         payload: r.payload,
         status: r.status,
         response: r.response,
-        created_at: r.created_at.to_string(),
-        resolved_at: r.resolved_at.map(|t| t.to_string()),
+        created_at: super::iso8601(r.created_at),
+        resolved_at: r.resolved_at.map(super::iso8601),
     }
 }
 

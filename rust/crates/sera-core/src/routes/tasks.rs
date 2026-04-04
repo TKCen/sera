@@ -21,6 +21,8 @@ pub struct TaskResponse {
     pub context: Option<serde_json::Value>,
     pub status: String,
     pub priority: i32,
+    pub retry_count: i32,
+    pub max_retries: i32,
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -30,6 +32,8 @@ pub struct TaskResponse {
 }
 
 fn task_to_response(r: sera_db::tasks::TaskRow) -> TaskResponse {
+    use super::iso8601;
+    use super::iso8601_opt;
     TaskResponse {
         id: r.id.to_string(),
         agent_instance_id: r.agent_instance_id.to_string(),
@@ -37,13 +41,40 @@ fn task_to_response(r: sera_db::tasks::TaskRow) -> TaskResponse {
         context: r.context,
         status: r.status,
         priority: r.priority,
-        created_at: r.created_at.to_string(),
-        started_at: r.started_at.map(|t| t.to_string()),
-        completed_at: r.completed_at.map(|t| t.to_string()),
+        retry_count: r.retry_count,
+        max_retries: r.max_retries,
+        created_at: iso8601(r.created_at),
+        started_at: iso8601_opt(r.started_at),
+        completed_at: iso8601_opt(r.completed_at),
         result: r.result,
         error: r.error,
         exit_reason: r.exit_reason,
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListTasksQuery {
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// GET /api/agents/:id/tasks — list tasks (optionally filtered by status)
+pub async fn list_tasks(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<ListTasksQuery>,
+) -> Result<Json<Vec<TaskResponse>>, AppError> {
+    let limit = params.limit.unwrap_or(50).min(500);
+    // If status=all or no status, get full history; otherwise filter
+    let rows = if params.status.as_deref() == Some("all") || params.status.is_none() {
+        TaskRepository::get_history(state.db.inner(), &agent_id, limit).await?
+    } else {
+        // Use history and filter in-memory (DB method doesn't support status filter yet)
+        let all = TaskRepository::get_history(state.db.inner(), &agent_id, limit).await?;
+        let status_filter = params.status.unwrap_or_default();
+        all.into_iter().filter(|t| t.status == status_filter).collect()
+    };
+    Ok(Json(rows.into_iter().map(task_to_response).collect()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,4 +153,22 @@ pub async fn get_task_history(
     let limit = params.limit.unwrap_or(50).min(500);
     let rows = TaskRepository::get_history(state.db.inner(), &agent_id, limit).await?;
     Ok(Json(rows.into_iter().map(task_to_response).collect()))
+}
+
+/// GET /api/agents/:id/tasks/:taskId — get a single task
+pub async fn get_task(
+    State(state): State<AppState>,
+    Path((_agent_id, task_id)): Path<(String, String)>,
+) -> Result<Json<TaskResponse>, AppError> {
+    let row = TaskRepository::get_by_id(state.db.inner(), &task_id).await?;
+    Ok(Json(task_to_response(row)))
+}
+
+/// DELETE /api/agents/:id/tasks/:taskId — cancel a queued task
+pub async fn cancel_task(
+    State(state): State<AppState>,
+    Path((_agent_id, task_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    TaskRepository::cancel(state.db.inner(), &task_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
 }

@@ -27,6 +27,7 @@ pub struct AuditLogQuery {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEntryResponse {
+    pub id: String,
     pub sequence: i64,
     pub timestamp: String,
     pub actor_type: String,
@@ -41,7 +42,7 @@ pub struct AuditEntryResponse {
 pub async fn get_audit_log(
     State(state): State<AppState>,
     Query(params): Query<AuditLogQuery>,
-) -> Result<Json<Vec<AuditEntryResponse>>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let limit = params.limit.unwrap_or(50).min(1000);
     let offset = params.offset.unwrap_or(0);
 
@@ -56,19 +57,36 @@ pub async fn get_audit_log(
 
     let entries: Vec<AuditEntryResponse> = rows
         .into_iter()
-        .map(|r| AuditEntryResponse {
-            sequence: r.sequence,
-            timestamp: r.timestamp.to_string(),
-            actor_type: r.actor_type,
-            actor_id: r.actor_id,
-            acting_context: r.acting_context,
-            event_type: r.event_type,
-            payload: r.payload,
-            hash: r.hash,
+        .map(|r| {
+            use super::iso8601;
+            AuditEntryResponse {
+                id: format!("audit-{}", r.sequence),
+                sequence: r.sequence,
+                timestamp: iso8601(r.timestamp),
+                actor_type: r.actor_type,
+                actor_id: r.actor_id,
+                acting_context: r.acting_context,
+                event_type: r.event_type,
+                payload: r.payload,
+                hash: r.hash,
+            }
         })
         .collect();
 
-    Ok(Json(entries))
+    let total = AuditRepository::count_entries(
+        state.db.inner(),
+        params.actor_id.as_deref(),
+        params.event_type.as_deref(),
+    )
+    .await
+    .unwrap_or(entries.len() as i64);
+
+    Ok(Json(serde_json::json!({
+        "entries": entries,
+        "total": total,
+        "page": 1,
+        "pageSize": limit,
+    })))
 }
 
 /// Request body for appending an audit event.

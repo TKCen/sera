@@ -36,6 +36,7 @@ base64.workspace = true
 urlencoding.workspace = true
 
 tokio-stream.workspace = true
+tokio-util.workspace = true
 async-stream.workspace = true
 futures-util.workspace = true
 # qdrant-client and git2 deferred — native deps need Docker build env
@@ -45,3 +46,4 @@ rand.workspace = true
 [dev-dependencies]
 sera-testing.workspace = true
 insta.workspace = true
+tempfile.workspace = true

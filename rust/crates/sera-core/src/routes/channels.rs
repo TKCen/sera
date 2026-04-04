@@ -37,7 +37,7 @@ pub async fn list_channels(
             r#type: r.r#type,
             config: r.config,
             enabled: r.enabled,
-            created_at: r.created_at.map(|t| t.to_string()),
+            created_at: r.created_at.map(super::iso8601),
             description: r.description,
         })
         .collect();
@@ -77,7 +77,7 @@ pub async fn create_channel(
             r#type: row.r#type,
             config: row.config,
             enabled: row.enabled,
-            created_at: row.created_at.map(|t| t.to_string()),
+            created_at: row.created_at.map(super::iso8601),
             description: row.description,
         }),
     ))

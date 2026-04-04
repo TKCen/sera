@@ -98,6 +98,25 @@ pub async fn create_skill(
     ))
 }
 
+/// GET /api/skills/:name
+pub async fn get_skill(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<SkillResponse>, AppError> {
+    let row = SkillRepository::get_by_name(state.db.inner(), &name).await?;
+    Ok(Json(SkillResponse {
+        id: row.id.to_string(),
+        skill_id: row.skill_id,
+        name: row.name,
+        version: row.version,
+        description: row.description,
+        triggers: row.triggers,
+        source: row.source,
+        category: row.category,
+        tags: row.tags,
+    }))
+}
+
 /// DELETE /api/skills/:name
 pub async fn delete_skill(
     State(state): State<AppState>,

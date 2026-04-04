@@ -194,7 +194,7 @@ pub struct TokenResponse {
 
 /// GET /api/intercom/centrifugo/token — get connection token for agent
 pub async fn get_connection_token(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<TokenQuery>,
 ) -> Result<Json<TokenResponse>, AppError> {
     if params.agent_id.is_empty() {
@@ -203,10 +203,20 @@ pub async fn get_connection_token(
         )));
     }
 
-    // TODO: Generate JWT token for Centrifugo connection
-    Ok(Json(TokenResponse {
-        token: format!("token-{}", params.agent_id),
-    }))
+    // Generate JWT token for Centrifugo connection
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let token = state.jwt.issue(sera_auth::JwtClaims {
+        sub: params.agent_id.clone(),
+        iss: "sera".to_string(),
+        exp: now_secs + 3600, // 1 hour
+        agent_id: Some(params.agent_id.clone()),
+        instance_id: None,
+    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue Centrifugo token: {e}")))?;
+
+    Ok(Json(TokenResponse { token }))
 }
 
 /// Query params for subscription token endpoint

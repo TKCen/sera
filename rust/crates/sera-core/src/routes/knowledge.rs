@@ -61,7 +61,7 @@ pub async fn get_history(
                     sha,
                     message,
                     author,
-                    timestamp: ts.to_string(),
+                    timestamp: super::iso8601(ts),
                     files_changed: files as u32,
                 })
                 .collect();
@@ -107,7 +107,7 @@ pub async fn list_merge_requests(
                     title,
                     status,
                     source_agent: agent,
-                    created_at: ts.to_string(),
+                    created_at: super::iso8601(ts),
                 })
                 .collect();
             Ok(Json(requests))
@@ -159,7 +159,7 @@ pub async fn create_merge_request(
             title: body.title,
             status: "pending".to_string(),
             source_agent: body.source_agent,
-            created_at: now.to_string(),
+            created_at: super::iso8601(now),
         }),
     ))
 }

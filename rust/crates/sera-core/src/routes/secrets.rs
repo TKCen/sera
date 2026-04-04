@@ -49,8 +49,8 @@ pub async fn list_secrets(
             tags: r.tags,
             allowed_agents: r.allowed_agents,
             exposure: r.exposure,
-            created_at: r.created_at.map(|t| t.to_string()),
-            updated_at: r.updated_at.map(|t| t.to_string()),
+            created_at: r.created_at.map(super::iso8601),
+            updated_at: r.updated_at.map(super::iso8601),
         })
         .collect();
     Ok(Json(secrets))

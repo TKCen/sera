@@ -1,5 +1,17 @@
 //! API route modules.
 
+/// Format a `time::OffsetDateTime` as an ISO 8601 / RFC 3339 string
+/// that JavaScript's `new Date()` can parse.
+pub fn iso8601(dt: time::OffsetDateTime) -> String {
+    dt.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| dt.to_string())
+}
+
+/// Optional variant for `Option<time::OffsetDateTime>`.
+pub fn iso8601_opt(dt: Option<time::OffsetDateTime>) -> Option<String> {
+    dt.map(iso8601)
+}
+
 pub mod health;
 pub mod agents;
 pub mod audit;

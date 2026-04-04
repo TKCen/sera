@@ -33,8 +33,8 @@ fn block_to_response(r: sera_db::memory::MemoryBlockRow) -> MemoryBlockResponse 
         content: r.content,
         character_limit: r.character_limit,
         is_read_only: r.is_read_only,
-        created_at: r.created_at.to_string(),
-        updated_at: r.updated_at.to_string(),
+        created_at: super::iso8601(r.created_at),
+        updated_at: super::iso8601(r.updated_at),
     }
 }
 

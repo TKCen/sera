@@ -125,7 +125,7 @@ pub async fn mcp_server_health(
                 "status": "healthy",
                 "toolCount": server.tools.len(),
                 "latency_ms": latency_ms,
-                "checked_at": time::OffsetDateTime::now_utc().to_string(),
+                "checked_at": super::iso8601(time::OffsetDateTime::now_utc()),
             })
         }
         Ok(resp) => {
@@ -135,7 +135,7 @@ pub async fn mcp_server_health(
                 "status": "degraded",
                 "error": format!("HTTP {}", resp.status()),
                 "latency_ms": latency_ms,
-                "checked_at": time::OffsetDateTime::now_utc().to_string(),
+                "checked_at": super::iso8601(time::OffsetDateTime::now_utc()),
             })
         }
         Err(e) => serde_json::json!({
@@ -143,7 +143,7 @@ pub async fn mcp_server_health(
             "status": "unhealthy",
             "error": e.to_string(),
             "latency_ms": start.elapsed().as_millis() as u64,
-            "checked_at": time::OffsetDateTime::now_utc().to_string(),
+            "checked_at": super::iso8601(time::OffsetDateTime::now_utc()),
         }),
     };
 
@@ -167,7 +167,7 @@ pub async fn reload_mcp_server(
     // In production: disconnect old connection, reconnect, refresh tool list
     // For now: reset status and update timestamp
     server.status = "connected".to_string();
-    server.last_health_check = Some(time::OffsetDateTime::now_utc().to_string());
+    server.last_health_check = Some(super::iso8601(time::OffsetDateTime::now_utc()));
 
     let tool_count = server.tools.len();
     Ok(Json(serde_json::json!({
@@ -222,7 +222,7 @@ pub async fn register_mcp_server(
         transport: body.transport,
         status: "connected".to_string(),
         tools: body.tools,
-        last_health_check: Some(time::OffsetDateTime::now_utc().to_string()),
+        last_health_check: Some(super::iso8601(time::OffsetDateTime::now_utc())),
     };
 
     let mut registry = state.mcp_registry.write().await;

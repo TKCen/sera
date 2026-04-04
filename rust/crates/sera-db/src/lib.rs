@@ -13,6 +13,7 @@ pub mod metering;
 pub mod schedules;
 pub mod sessions;
 pub mod skills;
+pub mod secrets;
 pub mod error;
 
 pub use pool::DbPool;

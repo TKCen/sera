@@ -99,6 +99,41 @@ impl MeteringRepository {
         Ok(row)
     }
 
+    /// Upsert token quota for an agent.
+    /// Uses COALESCE so that passing None for a field preserves the existing value.
+    pub async fn upsert_quota(
+        pool: &PgPool,
+        agent_id: &str,
+        max_tokens_per_hour: Option<i64>,
+        max_tokens_per_day: Option<i64>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, source, updated_at)
+             VALUES ($1, COALESCE($2, 100000), COALESCE($3, 1000000), 'operator', NOW())
+             ON CONFLICT (agent_id)
+             DO UPDATE SET
+               max_tokens_per_hour = COALESCE($2, token_quotas.max_tokens_per_hour),
+               max_tokens_per_day  = COALESCE($3, token_quotas.max_tokens_per_day),
+               source = 'operator',
+               updated_at = NOW()"
+        )
+        .bind(agent_id)
+        .bind(max_tokens_per_hour)
+        .bind(max_tokens_per_day)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Reset usage counters for an agent by deleting their token_usage rows.
+    pub async fn reset_usage(pool: &PgPool, agent_id: &str) -> Result<u64, DbError> {
+        let result = sqlx::query("DELETE FROM token_usage WHERE agent_id = $1")
+            .bind(agent_id)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Check budget for an agent. Returns (allowed, hourly_used, hourly_quota, daily_used, daily_quota).
     pub async fn check_budget(
         pool: &PgPool,

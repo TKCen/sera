@@ -7,5 +7,6 @@ pub mod circles;
 pub mod metering;
 pub mod providers;
 pub mod schedules;
+pub mod secrets;
 pub mod sessions;
 pub mod skills;

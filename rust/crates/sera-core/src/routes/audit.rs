@@ -2,9 +2,11 @@
 
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use sera_db::audit::AuditRepository;
 
@@ -29,6 +31,7 @@ pub struct AuditEntryResponse {
     pub timestamp: String,
     pub actor_type: String,
     pub actor_id: String,
+    pub acting_context: Option<serde_json::Value>,
     pub event_type: String,
     pub payload: serde_json::Value,
     pub hash: String,
@@ -58,6 +61,7 @@ pub async fn get_audit_log(
             timestamp: r.timestamp.to_string(),
             actor_type: r.actor_type,
             actor_id: r.actor_id,
+            acting_context: r.acting_context,
             event_type: r.event_type,
             payload: r.payload,
             hash: r.hash,
@@ -65,4 +69,61 @@ pub async fn get_audit_log(
         .collect();
 
     Ok(Json(entries))
+}
+
+/// Request body for appending an audit event.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendAuditRequest {
+    pub actor_type: String,
+    pub actor_id: String,
+    pub acting_context: Option<serde_json::Value>,
+    pub event_type: String,
+    pub payload: serde_json::Value,
+}
+
+/// Audit append response.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendAuditResponse {
+    pub sequence: i64,
+    pub hash: String,
+}
+
+/// POST /api/audit
+pub async fn append_audit(
+    State(state): State<AppState>,
+    Json(body): Json<AppendAuditRequest>,
+) -> Result<(StatusCode, Json<AppendAuditResponse>), AppError> {
+    // Get the latest hash for chain continuation
+    let prev = AuditRepository::get_latest(state.db.inner()).await?;
+    let prev_hash = prev.as_ref().map(|r| r.hash.as_str());
+
+    // Compute SHA-256 hash: prev_hash + actor_type + actor_id + event_type + payload
+    let mut hasher = Sha256::new();
+    if let Some(ph) = prev_hash {
+        hasher.update(ph.as_bytes());
+    }
+    hasher.update(body.actor_type.as_bytes());
+    hasher.update(body.actor_id.as_bytes());
+    hasher.update(body.event_type.as_bytes());
+    hasher.update(body.payload.to_string().as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+
+    let sequence = AuditRepository::append(
+        state.db.inner(),
+        &body.actor_type,
+        &body.actor_id,
+        body.acting_context.as_ref(),
+        &body.event_type,
+        &body.payload,
+        &hash,
+        prev_hash,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AppendAuditResponse { sequence, hash }),
+    ))
 }

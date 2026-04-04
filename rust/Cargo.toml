@@ -54,6 +54,11 @@ anyhow = "1"
 # Testing
 insta = { version = "1", features = ["yaml"] }
 
+# Crypto
+sha2 = "0.10"
+aes-gcm = "0.10"
+hex = "0.4"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }

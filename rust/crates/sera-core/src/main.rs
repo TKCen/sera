@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 
 use axum::{
     middleware::from_fn,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use tower_http::cors::CorsLayer;
@@ -111,35 +111,79 @@ fn build_router(
         .route("/api/agents", get(routes::agents::list_instances))
         .route("/api/agents/{id}", get(routes::agents::get_instance))
         .route("/api/providers/list", get(routes::providers::list_providers))
-        .route("/api/audit/log", get(routes::audit::get_audit_log))
         .route(
             "/api/budget/agents/{agent_id}",
             get(routes::metering::get_agent_budget),
         )
-        .route("/api/skills", get(routes::skills::list_skills))
-        .route("/api/schedules", get(routes::schedules::list_schedules))
-        .route("/api/circles", get(routes::circles::list_circles))
-        .route("/api/sessions", get(routes::sessions::list_sessions))
-        // Write endpoints
+        // Skills — GET list + POST create
+        .route(
+            "/api/skills",
+            get(routes::skills::list_skills).post(routes::skills::create_skill),
+        )
+        .route("/api/skills/{name}", delete(routes::skills::delete_skill))
+        // Schedules — GET list + POST create
+        .route(
+            "/api/schedules",
+            get(routes::schedules::list_schedules).post(routes::schedules::create_schedule),
+        )
+        .route(
+            "/api/schedules/{id}",
+            patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule),
+        )
+        // Circles — GET list + POST create
+        .route(
+            "/api/circles",
+            get(routes::circles::list_circles).post(routes::circles::create_circle),
+        )
+        .route("/api/circles/{id}", delete(routes::circles::delete_circle))
+        // Sessions — GET list + POST create
+        .route(
+            "/api/sessions",
+            get(routes::sessions::list_sessions).post(routes::sessions::create_session),
+        )
+        .route(
+            "/api/sessions/{id}",
+            get(routes::sessions::get_session)
+                .put(routes::sessions::update_session)
+                .delete(routes::sessions::delete_session),
+        )
+        // Agent instance write endpoints
         .route("/api/agents/instances", post(routes::agents::create_instance))
         .route(
             "/api/agents/instances/{id}",
             patch(routes::agents::update_instance).delete(routes::agents::delete_instance),
         )
-        .route("/api/schedules", post(routes::schedules::create_schedule))
-        .route(
-            "/api/schedules/{id}",
-            patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule),
-        )
+        .route("/api/agents/instances/{id}/start", post(routes::agents::start_instance))
+        .route("/api/agents/instances/{id}/stop", post(routes::agents::stop_instance))
+        // Providers write endpoints
         .route("/api/providers", post(routes::providers::add_provider))
         .route(
             "/api/providers/{model_name}",
             patch(routes::providers::update_provider).delete(routes::providers::delete_provider),
         )
-        .route("/api/circles", post(routes::circles::create_circle))
-        .route("/api/circles/{id}", axum::routing::delete(routes::circles::delete_circle))
-        .route("/api/agents/instances/{id}/start", post(routes::agents::start_instance))
-        .route("/api/agents/instances/{id}/stop", post(routes::agents::stop_instance))
+        // Budget write endpoints
+        .route(
+            "/api/budget/agents/{agent_id}/budget",
+            patch(routes::metering::update_agent_budget),
+        )
+        .route(
+            "/api/budget/agents/{agent_id}/budget/reset",
+            post(routes::metering::reset_agent_budget),
+        )
+        // Metering record endpoint
+        .route("/api/metering/usage", post(routes::metering::record_usage))
+        // Audit — GET log + POST append
+        .route("/api/audit/log", get(routes::audit::get_audit_log))
+        .route("/api/audit", post(routes::audit::append_audit))
+        // Secrets CRUD
+        .route(
+            "/api/secrets",
+            get(routes::secrets::list_secrets).post(routes::secrets::create_secret),
+        )
+        .route(
+            "/api/secrets/{key}",
+            get(routes::secrets::get_secret).delete(routes::secrets::delete_secret),
+        )
         .layer(from_fn(move |req, next| {
             let jwt = jwt_service.clone();
             let key = api_key.clone();

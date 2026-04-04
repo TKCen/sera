@@ -78,17 +78,10 @@ impl LlmClient {
 /// Result of a chat completion request.
 pub struct LlmChatResult {
     pub message: ChatMessage,
+    #[allow(dead_code)]
     pub finish_reason: String,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
 }
 
-impl Default for crate::types::LlmUsage {
-    fn default() -> Self {
-        Self {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-        }
-    }
-}
+

@@ -1,16 +1,18 @@
 //! Agent detail view.
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::api::Agent;
 use super::View;
 
 /// Displays details for a single agent.
+#[allow(dead_code)]
 pub struct AgentDetailView {
     agent: Option<Agent>,
 }
 
+#[allow(dead_code)]
 impl AgentDetailView {
     /// Create a new agent detail view.
     pub fn new() -> Self {

@@ -42,15 +42,14 @@ async fn main() -> Result<()> {
     loop {
         terminal.draw(|f| app.render(f))?;
 
-        if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char('r') => app.refresh().await,
-                        other => app.handle_key(other).await,
-                    }
-                }
+        if event::poll(Duration::from_millis(250))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Char('r') => app.refresh().await,
+                other => app.handle_key(other).await,
             }
         }
     }

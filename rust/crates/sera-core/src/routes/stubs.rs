@@ -1,6 +1,7 @@
 //! Stub endpoints — return 501 Not Implemented or empty data.
 //! These exist to prevent 404s for known TS routes that haven't been
 //! fully ported yet.
+#![allow(dead_code, unused_imports)]
 
 use axum::{
     extract::{Path, State},

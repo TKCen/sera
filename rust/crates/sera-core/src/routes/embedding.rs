@@ -1,4 +1,5 @@
 //! Embedding service endpoints — Ollama integration for text embeddings.
+#![allow(dead_code, unused_imports)]
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};

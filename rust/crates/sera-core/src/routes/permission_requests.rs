@@ -1,4 +1,5 @@
 //! Permission request endpoints for filesystem/network access grants.
+#![allow(dead_code, unused_imports, clippy::type_complexity, clippy::too_many_arguments)]
 
 use axum::{
     extract::{Path, Query, State},

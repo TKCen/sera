@@ -4,7 +4,8 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 /// Create a centered block with a title.
-pub fn centered_block(title: &str) -> ratatui::widgets::Block {
+#[allow(dead_code)]
+pub fn centered_block(title: &str) -> ratatui::widgets::Block<'_> {
     ratatui::widgets::Block::default()
         .title(format!(" {} ", title))
         .borders(ratatui::widgets::Borders::ALL)
@@ -12,16 +13,19 @@ pub fn centered_block(title: &str) -> ratatui::widgets::Block {
 }
 
 /// Create a styled error message.
-pub fn error_text(message: &str) -> Paragraph {
+#[allow(dead_code)]
+pub fn error_text(message: &str) -> Paragraph<'_> {
     Paragraph::new(message).style(Style::default().fg(Color::Red).bold())
 }
 
 /// Create a styled info message.
-pub fn info_text(message: &str) -> Paragraph {
+#[allow(dead_code)]
+pub fn info_text(message: &str) -> Paragraph<'_> {
     Paragraph::new(message).style(Style::default().fg(Color::Green))
 }
 
 /// Create a styled warning message.
-pub fn warning_text(message: &str) -> Paragraph {
+#[allow(dead_code)]
+pub fn warning_text(message: &str) -> Paragraph<'_> {
     Paragraph::new(message).style(Style::default().fg(Color::Yellow))
 }

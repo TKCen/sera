@@ -1,4 +1,5 @@
 //! Service identity endpoints for agent delegation.
+#![allow(dead_code, unused_imports, clippy::type_complexity)]
 
 use axum::{
     extract::{Path, State},

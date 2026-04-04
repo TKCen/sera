@@ -1,5 +1,6 @@
 //! LSP (Language Server Protocol) proxy endpoints.
 //! Routes LSP requests to managed language server processes.
+#![allow(dead_code, unused_imports)]
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,5 @@
 //! Intercom messaging endpoints — publish to channels and send DMs via Centrifugo.
+#![allow(dead_code, unused_imports)]
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;

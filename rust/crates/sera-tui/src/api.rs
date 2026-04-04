@@ -21,6 +21,7 @@ pub struct Agent {
 }
 
 /// Request payload for the chat endpoint.
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ChatRequest {
     pub message: String,
@@ -32,6 +33,7 @@ pub struct ChatRequest {
 }
 
 /// Response from the chat endpoint.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatResponse {
     pub session_id: String,
@@ -81,6 +83,7 @@ impl ApiClient {
     }
 
     /// Make an authenticated POST request.
+    #[allow(dead_code)]
     async fn post<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -114,13 +117,14 @@ impl ApiClient {
     }
 
     /// Get logs for an agent.
-    pub async fn get_agent_logs(&self, id: &str) -> Result<Vec<LogEntry>> {
+    pub async fn get_agent_logs(&self, _id: &str) -> Result<Vec<LogEntry>> {
         // This is a placeholder — the actual endpoint may differ
         // For now, return an empty list
         Ok(Vec::new())
     }
 
     /// Send a chat message to an agent.
+    #[allow(dead_code)]
     pub async fn send_chat(&self, agent_id: &str, message: &str) -> Result<ChatResponse> {
         let body = json!({
             "message": message,

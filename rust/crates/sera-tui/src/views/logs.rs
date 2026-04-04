@@ -1,17 +1,19 @@
 //! Logs view for displaying agent logs.
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::api::LogEntry;
 use super::View;
 
 /// Displays scrollable log entries.
+#[allow(dead_code)]
 pub struct LogsView {
     logs: Vec<LogEntry>,
     scroll_offset: usize,
 }
 
+#[allow(dead_code)]
 impl LogsView {
     /// Create a new logs view.
     pub fn new() -> Self {

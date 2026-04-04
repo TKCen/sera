@@ -1,5 +1,6 @@
 //! MCP (Model Context Protocol) server registry endpoints.
 //! Manages an in-memory registry of MCP server connections backed by config.
+#![allow(dead_code, unused_imports)]
 
 use axum::{
     extract::{Path, State},

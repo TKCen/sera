@@ -326,7 +326,7 @@ fn build_router(
         // Memory advanced
         .route("/api/memory/overview", get(routes::stubs::memory_overview))
         .route("/api/memory/{agent_id}/core", get(routes::stubs::agent_core_memory))
-        .route("/api/memory/{agent_id}/core/{name}", axum::routing::put(routes::stubs::update_core_memory))
+        .route("/api/memory/{agent_id}/core/{name}", put(routes::stubs::update_core_memory))
         .route("/api/memory/{agent_id}/blocks", get(routes::stubs::agent_scoped_blocks))
         .route("/api/memory/{agent_id}/blocks/{block_id}", delete(routes::stubs::delete_agent_block))
         .layer(from_fn(move |req, next| {

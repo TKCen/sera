@@ -10,7 +10,9 @@ pub struct TaskInput {
     pub prompt: String,
     #[serde(default)]
     pub context: Vec<ChatMessage>,
+    #[allow(dead_code)]
     pub agent_id: Option<String>,
+    #[allow(dead_code)]
     pub session_id: Option<String>,
     pub max_iterations: Option<u32>,
 }
@@ -92,13 +94,14 @@ pub struct LlmChoice {
     pub finish_reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct LlmUsage {
     #[serde(default)]
     pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
     #[serde(default)]
+    #[allow(dead_code)]
     pub total_tokens: u32,
 }
 

@@ -1,5 +1,6 @@
 //! OpenAI-compatible chat completions endpoint.
 //! Maps OpenAI API format to SERA agent processing.
+#![allow(dead_code, unused_imports)]
 
 use axum::{
     extract::State,
@@ -122,7 +123,7 @@ pub async fn chat_completions(
                     .unwrap_or_default();
 
                 let resp = client
-                    .post(&format!("{url}/chat"))
+                    .post(format!("{url}/chat"))
                     .json(&serde_json::json!({
                         "message": last_user_msg,
                         "stream": true,
@@ -135,7 +136,6 @@ pub async fn chat_completions(
                 let byte_stream = resp.bytes_stream();
 
                 let sse_stream = async_stream::stream! {
-                    let mut buffer = String::new();
                     tokio::pin!(byte_stream);
 
                     // Send initial role chunk
@@ -206,7 +206,7 @@ pub async fn chat_completions(
                         }],
                     };
                     yield Ok(Event::default().data(serde_json::to_string(&final_chunk).unwrap_or_default()));
-                    yield Ok(Event::default().data("[DONE]".to_string()));
+                    yield Ok(Event::default().data("[DONE]"));
                 };
 
                 Ok(Sse::new(sse_stream)
@@ -228,7 +228,7 @@ pub async fn chat_completions(
                     .unwrap_or_default();
 
                 let resp = client
-                    .post(&format!("{url}/chat"))
+                    .post(format!("{url}/chat"))
                     .json(&serde_json::json!({
                         "message": last_user_msg,
                         "stream": false,

@@ -1,6 +1,7 @@
 //! Runtime error types.
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum RuntimeError {
     #[error("LLM client error: {0}")]
     Llm(String),

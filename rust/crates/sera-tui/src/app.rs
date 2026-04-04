@@ -4,7 +4,7 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use crate::api::{Agent, ApiClient};
+use crate::api::ApiClient;
 use crate::views::{agents::AgentsView, View};
 
 /// Active view in the TUI.

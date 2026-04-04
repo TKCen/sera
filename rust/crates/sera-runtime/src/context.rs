@@ -45,10 +45,9 @@ impl ContextManager {
         let mut result = Vec::new();
 
         // Always keep the system message
-        if let Some(sys) = messages.first() {
-            if sys.role == "system" {
-                result.push(sys.clone());
-            }
+        if let Some(sys) = messages.first()
+            && sys.role == "system" {
+            result.push(sys.clone());
         }
 
         // Add messages from the end until we hit the limit
@@ -73,10 +72,9 @@ impl ContextManager {
         let mut result = Vec::new();
 
         // Keep system message
-        if let Some(sys) = messages.first() {
-            if sys.role == "system" {
-                result.push(sys.clone());
-            }
+        if let Some(sys) = messages.first()
+            && sys.role == "system" {
+            result.push(sys.clone());
         }
 
         // Insert a summary of dropped messages

@@ -1,4 +1,5 @@
 //! Knowledge management endpoints — git history and merge requests.
+#![allow(dead_code, unused_imports, clippy::type_complexity)]
 
 use axum::{
     extract::{Path, Query, State},

@@ -19,7 +19,7 @@ enum State {
 pub async fn run(config: &RuntimeConfig, input: TaskInput) -> anyhow::Result<TaskOutput> {
     let llm_client = LlmClient::new(config);
     let tool_registry = ToolRegistry::new();
-    let mut context_manager =
+    let context_manager =
         ContextManager::new(config.context_window, config.compaction_strategy.clone());
 
     let max_iterations = input.max_iterations.unwrap_or(25);

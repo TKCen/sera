@@ -1,4 +1,5 @@
 //! Chat endpoint — routes messages to agent containers via their chat server.
+#![allow(dead_code, unused_imports, unused_variables, clippy::too_many_arguments)]
 
 use axum::{
     extract::State,
@@ -59,7 +60,7 @@ pub async fn chat(
     if body.stream {
         // Stream SSE from container to client
         let resp = client
-            .post(&format!("{chat_url}/chat"))
+            .post(format!("{chat_url}/chat"))
             .json(&serde_json::json!({
                 "message": body.message,
                 "sessionId": body.session_id,
@@ -97,7 +98,7 @@ pub async fn chat(
 
                             // Forward the SSE event
                             if let Some(data) = event_str.strip_prefix("data: ") {
-                                yield Ok::<_, Infallible>(Event::default().data(data.to_string()));
+                                yield Ok::<_, Infallible>(Event::default().data(data));
                             } else {
                                 yield Ok::<_, Infallible>(Event::default().data(event_str));
                             }
@@ -123,7 +124,7 @@ pub async fn chat(
     } else {
         // Non-streaming: proxy request and return full response
         let resp = client
-            .post(&format!("{chat_url}/chat"))
+            .post(format!("{chat_url}/chat"))
             .json(&serde_json::json!({
                 "message": body.message,
                 "sessionId": body.session_id,

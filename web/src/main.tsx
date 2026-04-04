@@ -1,7 +1,7 @@
 import './index.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -28,8 +28,6 @@ import MemoryDetailPage from '@/app/memory/_id/page';
 import AgentMemoryGraphPage from '@/app/agents/_id/memory-graph/page';
 import ChannelsPage from '@/app/channels/page';
 import TemplatesPage from '@/app/templates/page';
-import ProvidersPage from '@/app/providers/page';
-import MCPServersPage from '@/app/mcp-servers/page';
 import OperatorRequestsPage from '@/app/operator-requests/page';
 import LoginPage from '@/app/login/page';
 import AuthCallbackPage from '@/app/auth/callback/page';
@@ -72,10 +70,13 @@ createRoot(el).render(
                 <Route path="schedules" element={<SchedulesPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="tools" element={<ToolsPage />} />
-                <Route path="mcp-servers" element={<MCPServersPage />} />
+                <Route
+                  path="mcp-servers"
+                  element={<Navigate to="/settings?tab=integrations" replace />}
+                />
                 <Route path="operator-requests" element={<OperatorRequestsPage />} />
                 <Route path="channels" element={<ChannelsPage />} />
-                <Route path="providers" element={<ProvidersPage />} />
+                <Route path="providers" element={<Navigate to="/settings?tab=models" replace />} />
                 <Route path="memory" element={<MemoryExplorerPage />} />
                 <Route path="memory/:id" element={<MemoryDetailPage />} />
                 <Route path="403" element={<ForbiddenView />} />

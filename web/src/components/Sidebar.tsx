@@ -3,22 +3,16 @@ import {
   LayoutDashboard,
   MessageSquare,
   Bot,
-  CalendarClock,
   BarChart3,
   Settings,
   CircleIcon,
   Users,
-  Wrench,
   LayoutTemplate,
   ChevronLeft,
   LogOut,
   Shield,
   ScrollText,
-  HeartPulse,
-  Radio,
-  Server,
   Brain,
-  Puzzle,
   Inbox,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
@@ -48,33 +42,22 @@ const navGroups: NavGroup[] = [
       { label: 'Dashboard', href: '/', icon: <LayoutDashboard size={16} /> },
       { label: 'Chat', href: '/chat', icon: <MessageSquare size={16} /> },
       { label: 'Agents', href: '/agents', icon: <Bot size={16} /> },
-      { label: 'Templates', href: '/templates', icon: <LayoutTemplate size={16} /> },
       { label: 'Circles', href: '/circles', icon: <Users size={16} /> },
-      { label: 'Tools', href: '/tools', icon: <Wrench size={16} /> },
-      { label: 'MCP Servers', href: '/mcp-servers', icon: <Puzzle size={16} /> },
-      { label: 'Operator Requests', href: '/operator-requests', icon: <Inbox size={16} /> },
+      { label: 'Templates', href: '/templates', icon: <LayoutTemplate size={16} /> },
+    ],
+  },
+  {
+    title: 'Observe',
+    items: [
+      { label: 'Insights', href: '/insights', icon: <BarChart3 size={16} /> },
       { label: 'Memory', href: '/memory', icon: <Brain size={16} /> },
     ],
   },
   {
-    title: 'Automation',
+    title: 'Admin',
     items: [
-      { label: 'Schedules', href: '/schedules', icon: <CalendarClock size={16} /> },
-      { label: 'Channels', href: '/channels', icon: <Radio size={16} />, requireRoles: ['admin'] },
-    ],
-  },
-  {
-    title: 'Analytics',
-    items: [
-      { label: 'Insights', href: '/insights', icon: <BarChart3 size={16} /> },
       { label: 'Audit', href: '/audit', icon: <ScrollText size={16} /> },
-    ],
-  },
-  {
-    title: 'System',
-    items: [
-      { label: 'Health', href: '/health', icon: <HeartPulse size={16} /> },
-      { label: 'Providers', href: '/providers', icon: <Server size={16} /> },
+      { label: 'Operator Requests', href: '/operator-requests', icon: <Inbox size={16} /> },
       {
         label: 'Settings',
         href: '/settings',

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { queryClient } from '@/lib/query-client';
-import { Play, Square, RotateCcw, Bot, Trash2 } from 'lucide-react';
+import { Play, Square, RotateCcw, Bot, Trash2, Activity, Settings, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAgent,
@@ -45,22 +45,7 @@ import { AgentDetailSystemPromptTab } from '@/components/AgentDetailSystemPrompt
 import { AgentDetailTasksTab } from '@/components/AgentDetailTasksTab';
 import { TemplateDiffBanner } from '@/components/TemplateDiffBanner';
 
-type Tab =
-  | 'overview'
-  | 'tasks'
-  | 'grants'
-  | 'tools'
-  | 'delegations'
-  | 'logs'
-  | 'commands'
-  | 'memory'
-  | 'core-memory'
-  | 'schedules'
-  | 'inner-life'
-  | 'budget'
-  | 'context'
-  | 'prompt'
-  | 'health';
+type Tab = 'overview' | 'activity' | 'configuration' | 'observability';
 
 export default function AgentDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -198,33 +183,24 @@ export default function AgentDetailPage() {
         <div className="flex gap-0 mt-4">
           {(
             [
-              'overview',
-              'tasks',
-              'grants',
-              'tools',
-              'delegations',
-              'logs',
-              'commands',
-              'memory',
-              'core-memory',
-              'schedules',
-              'inner-life',
-              'budget',
-              'context',
-              'health',
+              { id: 'overview', label: 'Overview', icon: Bot },
+              { id: 'activity', label: 'Activity', icon: Activity },
+              { id: 'configuration', label: 'Configuration', icon: Settings },
+              { id: 'observability', label: 'Observability', icon: Monitor },
             ] as const
-          ).map((t) => (
+          ).map(({ id: tabId, label, icon: Icon }) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
+              key={tabId}
+              onClick={() => setTab(tabId)}
               className={cn(
-                'px-4 py-2 text-sm font-medium border-b-2 transition-colors',
-                tab === t
+                'px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-2',
+                tab === tabId
                   ? 'border-sera-accent text-sera-accent'
                   : 'border-transparent text-sera-text-muted hover:text-sera-text'
               )}
             >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              <Icon size={15} />
+              {label}
             </button>
           ))}
         </div>
@@ -242,20 +218,138 @@ export default function AgentDetailPage() {
           fallbackMessage="The agent detail tab content failed to load."
         >
           {tab === 'overview' && <AgentDetailManifestTab id={id} />}
-          {tab === 'tasks' && <AgentDetailTasksTab id={id} />}
-          {tab === 'grants' && <AgentDetailGrantsTab id={id} />}
-          {tab === 'tools' && <AgentDetailToolsTab id={id} />}
-          {tab === 'delegations' && <AgentDetailDelegationsTab id={id} />}
-          {tab === 'logs' && <AgentDetailLogsTab id={id} />}
-          {tab === 'commands' && <AgentDetailCommandsTab id={id} />}
-          {tab === 'memory' && <AgentDetailMemoryTab id={id} />}
-          {tab === 'core-memory' && <AgentDetailCoreMemoryTab id={id} />}
-          {tab === 'schedules' && <AgentDetailSchedulesTab id={id} agentName={agent?.name} />}
-          {tab === 'inner-life' && <AgentDetailInnerLifeTab id={id} />}
-          {tab === 'budget' && <AgentDetailBudgetTab id={id} />}
-          {tab === 'context' && <AgentDetailContextTab id={id} />}
-          {tab === 'prompt' && <AgentDetailSystemPromptTab id={id} />}
-          {tab === 'health' && <AgentDetailHealthCheckTab id={id} />}
+
+          {tab === 'activity' && (
+            <div className="p-6 space-y-6">
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Activity size={15} /> Tasks
+                </h3>
+                <AgentDetailTasksTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Delegations
+                </h3>
+                <AgentDetailDelegationsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Inner Life
+                </h3>
+                <AgentDetailInnerLifeTab id={id} />
+              </section>
+            </div>
+          )}
+
+          {tab === 'configuration' && (
+            <div className="p-6 space-y-6">
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Grants
+                </h3>
+                <AgentDetailGrantsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Tools
+                </h3>
+                <AgentDetailToolsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Budget
+                </h3>
+                <AgentDetailBudgetTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> Context
+                </h3>
+                <AgentDetailContextTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Settings size={15} /> System Prompt
+                </h3>
+                <AgentDetailSystemPromptTab id={id} />
+              </section>
+            </div>
+          )}
+
+          {tab === 'observability' && (
+            <div className="p-6 space-y-6">
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Logs
+                </h3>
+                <AgentDetailLogsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Commands
+                </h3>
+                <AgentDetailCommandsTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Health Check
+                </h3>
+                <AgentDetailHealthCheckTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Memory
+                </h3>
+                <AgentDetailMemoryTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Core Memory
+                </h3>
+                <AgentDetailCoreMemoryTab id={id} />
+              </section>
+
+              <hr className="border-sera-border" />
+
+              <section className="space-y-4">
+                <h3 className="text-sm font-semibold text-sera-text flex items-center gap-2">
+                  <Monitor size={15} /> Schedules
+                </h3>
+                <AgentDetailSchedulesTab id={id} agentName={agent?.name} />
+              </section>
+            </div>
+          )}
         </ErrorBoundary>
       </div>
 

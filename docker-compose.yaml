@@ -74,6 +74,40 @@ services:
       qdrant:
         condition: service_healthy
 
+  # ── Rust Shadow Server ────────────────────────────────────────────────────────
+  # Read-only shadow of sera-core on port 3002.
+  # Runs the same queries against the same DB — used to validate Rust migration.
+  sera-core-rs:
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+    container_name: sera-core-rs
+    restart: unless-stopped
+    volumes:
+      - ./core/config:/app/config:ro
+    environment:
+      - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
+      - PORT=3002
+      - RUST_LOG=info
+      - SERA_PROVIDERS_JSON=/app/config/providers.json
+      - CENTRIFUGO_API_URL=http://centrifugo:8000/api
+      - CENTRIFUGO_API_KEY=sera-api-key
+      - CENTRIFUGO_TOKEN_SECRET=sera-token-secret
+      - QDRANT_URL=http://qdrant:6333
+    ports:
+      - "3002:3002"
+    networks:
+      - sera_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3002/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      sera-db:
+        condition: service_healthy
+
   sera-web:
     build:
       context: ./web

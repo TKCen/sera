@@ -59,6 +59,11 @@ services:
       - VITE_API_URL=http://sera-core:3001
       - VITE_DEV_API_KEY=${SERA_BOOTSTRAP_API_KEY:-sera-dev-key-change-me}
 
+  sera-core-rs:
+    environment:
+      - RUST_LOG=debug
+      - SERA_API_KEY=${SERA_BOOTSTRAP_API_KEY:-sera-dev-key-change-me}
+
   # Egress proxy — no dev overrides, uses base definition from docker-compose.yaml
   sera-egress-proxy: {}
 

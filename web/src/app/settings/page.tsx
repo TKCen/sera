@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Radio, Layers, Settings2, Sliders, Activity, Plus, Search } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router';
+import { Radio, Layers, Settings2, Sliders, Activity, Plus, Search, Wrench } from 'lucide-react';
 import {
   useProviders,
   useDynamicProviders,
@@ -15,15 +16,35 @@ import { DynamicProviderCard } from '@/components/DynamicProviderCard';
 import { GeneralTab } from '@/components/GeneralTab';
 import { CircuitBreakersTab } from '@/components/CircuitBreakersTab';
 import { EmbeddingsTab } from '@/components/EmbeddingsTab';
+import { MCPServersTab } from '@/components/MCPServersTab';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ModelConfigRow } from '@/components/ModelConfigRow';
 import { AddDynamicProviderForm } from '@/components/AddDynamicProviderForm';
 
-type Tab = 'providers' | 'models' | 'general' | 'circuit-breakers' | 'embeddings';
+type Tab = 'providers' | 'models' | 'general' | 'circuit-breakers' | 'embeddings' | 'integrations';
+
+function isValidTab(value: unknown): value is Tab {
+  return [
+    'providers',
+    'models',
+    'general',
+    'circuit-breakers',
+    'embeddings',
+    'integrations',
+  ].includes(String(value));
+}
 
 function SettingsPageContent() {
-  const [tab, setTab] = useState<Tab>('providers');
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab') as Tab | null;
+  const [tab, setTab] = useState<Tab>(tabParam && isValidTab(tabParam) ? tabParam : 'providers');
   const [showAddDynamic, setShowAddDynamic] = useState(false);
+
+  useEffect(() => {
+    if (tabParam && isValidTab(tabParam)) {
+      setTab(tabParam);
+    }
+  }, [tabParam]);
 
   const {
     data: providersData,
@@ -54,10 +75,11 @@ function SettingsPageContent() {
   };
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'providers', label: 'Providers', icon: <Layers size={14} /> },
-    { id: 'models', label: 'Models', icon: <Settings2 size={14} /> },
-    { id: 'circuit-breakers', label: 'Circuit Breakers', icon: <Activity size={14} /> },
+    { id: 'providers', label: 'Models', icon: <Layers size={14} /> },
+    { id: 'models', label: 'Model Config', icon: <Settings2 size={14} /> },
     { id: 'embeddings', label: 'Embeddings', icon: <Search size={14} /> },
+    { id: 'integrations', label: 'Integrations', icon: <Wrench size={14} /> },
+    { id: 'circuit-breakers', label: 'Circuit Breakers', icon: <Activity size={14} /> },
     { id: 'general', label: 'General', icon: <Sliders size={14} /> },
   ];
 
@@ -215,6 +237,7 @@ function SettingsPageContent() {
           )}
 
           {tab === 'embeddings' && <EmbeddingsTab />}
+          {tab === 'integrations' && <MCPServersTab />}
           {tab === 'general' && <GeneralTab registeredModels={registeredModels} />}
         </>
       )}

@@ -109,8 +109,9 @@ export class AgentSpawner {
       ],
       HostConfig: {
         Binds: binds,
-        // host network so pi-agent can reach LM Studio on localhost:1234
         NetworkMode: 'host',
+        // Map host.docker.internal so containers can reach host services (LM Studio)
+        ExtraHosts: ['host.docker.internal:host-gateway'],
       },
       Labels: {
         'sera.dogfeed': 'true',
@@ -169,9 +170,38 @@ export class AgentSpawner {
     // Escape single quotes in prompt for shell embedding
     const escapedPrompt = prompt.replace(/'/g, "'\\''");
 
-    const lines = [
-      'set -e',
-      '',
+    const lines = ['set -e', ''];
+
+    // pi-agent needs LM Studio config with host.docker.internal (Docker can't reach host localhost)
+    if (tier === 'pi-agent') {
+      lines.push(
+        '# Configure pi-agent to reach LM Studio on the Docker host',
+        'mkdir -p /root/.pi/agent',
+        'cat > /root/.pi/agent/models.json <<PIEOF',
+        '{',
+        '  "providers": {',
+        '    "lmstudio": {',
+        '      "baseUrl": "http://host.docker.internal:1234/v1",',
+        '      "api": "openai-completions",',
+        '      "apiKey": "dummy",',
+        '      "models": [{',
+        `        "id": "${this.config.piAgentModel}",`,
+        `        "name": "Local Model",`,
+        '        "reasoning": false,',
+        '        "input": ["text"],',
+        '        "contextWindow": 190000,',
+        '        "maxTokens": 4096,',
+        '        "cost": {"input":0,"output":0,"cacheRead":0,"cacheWrite":0}',
+        '      }]',
+        '    }',
+        '  }',
+        '}',
+        'PIEOF',
+        ''
+      );
+    }
+
+    lines.push(
       '# Clone from the mounted repo (local clone is fast — hardlinks objects)',
       'git clone /repo /workspace',
       'cd /workspace',
@@ -182,8 +212,8 @@ export class AgentSpawner {
       `git config user.email "${this.config.gitUserEmail}"`,
       '',
       '# Run the coding agent',
-      `echo '${escapedPrompt}' | \\`,
-    ];
+      `echo '${escapedPrompt}' | \\`
+    );
 
     if (tier === 'pi-agent') {
       lines.push(

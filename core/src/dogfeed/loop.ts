@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import { Logger } from '../lib/logger.js';
 import type { DogfeedConfig, DogfeedTask, DogfeedCycleResult, CycleStatus } from './types.js';
-import { createDefaultConfig, DOGFEED_BRANCH_PREFIX, DOGFEED_CO_AUTHOR } from './constants.js';
+import { createDefaultConfig, DOGFEED_BRANCH_PREFIX } from './constants.js';
 import { DogfeedAnalyzer } from './analyzer.js';
 import { AgentSpawner } from './agent-spawner.js';
 import { VerifyMerge } from './verify-merge.js';

@@ -64,8 +64,8 @@ fn to_permission_response(
         justification,
         status,
         reviewed_by,
-        reviewed_at: reviewed_at.map(|t| t.to_string()),
-        created_at: created_at.to_string(),
+        reviewed_at: reviewed_at.map(super::iso8601),
+        created_at: super::iso8601(created_at),
     }
 }
 
@@ -112,13 +112,15 @@ pub async fn create_request(
 }
 
 /// GET /api/permission-requests — list permission requests
+/// Note: The `permission_requests` table may not exist in all deployments.
+/// Falls back to returning an empty array if the table is missing.
 pub async fn list_requests(
     State(state): State<AppState>,
     Query(query): Query<ListPermissionRequestsQuery>,
 ) -> Result<Json<Vec<PermissionRequestResponse>>, AppError> {
     let status_filter = query.status.unwrap_or_else(|| "pending".to_string());
 
-    let rows: Vec<(uuid::Uuid, uuid::Uuid, String, String, String, Option<String>, String, Option<String>, Option<time::OffsetDateTime>, time::OffsetDateTime)> =
+    let rows_result: Result<Vec<(uuid::Uuid, uuid::Uuid, String, String, String, Option<String>, String, Option<String>, Option<time::OffsetDateTime>, time::OffsetDateTime)>, _> =
         if let Some(agent_id) = &query.agent_id {
             let parsed_id = uuid::Uuid::parse_str(agent_id)
                 .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
@@ -138,8 +140,20 @@ pub async fn list_requests(
             .bind(&status_filter)
             .fetch_all(state.db.inner())
             .await
+        };
+
+    // If the table doesn't exist, return empty array instead of 500
+    let rows = match rows_result {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("does not exist") || msg.contains("permission_requests") {
+                tracing::warn!("permission_requests table not found, returning empty list");
+                return Ok(Json(vec![]));
+            }
+            return Err(AppError::Internal(anyhow::anyhow!("Failed to list permission requests: {e}")));
         }
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to list permission requests: {e}")))?;
+    };
 
     let results: Vec<PermissionRequestResponse> = rows
         .into_iter()

@@ -24,6 +24,10 @@ impl ContainerManager {
     }
 
     /// Create and start a container for an agent instance.
+    ///
+    /// `binds` — optional list of Docker bind mount strings (e.g. `"/host/path:/container/path:rw"`).
+    /// `tier` — optional tier level (1-3) for resource limits, or None for no limits.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_container(
         &self,
         instance_id: &str,
@@ -32,26 +36,42 @@ impl ContainerManager {
         image: &str,
         network: &str,
         env_vars: HashMap<String, String>,
+        binds: Option<Vec<String>>,
+        tier: Option<u32>,
     ) -> Result<String, DockerError> {
-        let container_name = format!("sera-agent-{}", &instance_id[..8]);
+        let container_name = format!("sera-agent-{}-{}", instance_name.to_lowercase(), &instance_id[..8]);
 
         let env: Vec<String> = env_vars
             .into_iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
 
+        // Apply resource limits based on tier
+        let (cpu_shares, memory, pids_limit) = match tier {
+            Some(1) => (Some(256), Some(256 * 1024 * 1024), Some(256)),
+            Some(2) => (Some(512), Some(512 * 1024 * 1024), Some(512)),
+            Some(3) | Some(_) => (Some(1024), Some(1024 * 1024 * 1024), Some(1024)),
+            None => (None, None, None),
+        };
+
         let config = Config {
             image: Some(image.to_string()),
             hostname: Some(container_name.clone()),
             env: Some(env),
             labels: Some(HashMap::from([
-                ("sera.agent.id".to_string(), instance_id.to_string()),
-                ("sera.agent.name".to_string(), instance_name.to_string()),
+                ("sera.sandbox".to_string(), "true".to_string()),
+                ("sera.agent".to_string(), instance_name.to_string()),
+                ("sera.instance".to_string(), instance_id.to_string()),
+                ("sera.type".to_string(), "agent".to_string()),
                 ("sera.template".to_string(), template_name.to_string()),
                 ("sera.managed".to_string(), "true".to_string()),
             ])),
             host_config: Some(bollard::models::HostConfig {
                 network_mode: Some(network.to_string()),
+                binds,
+                cpu_shares,
+                memory,
+                pids_limit,
                 ..Default::default()
             }),
             ..Default::default()

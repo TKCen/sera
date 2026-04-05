@@ -57,4 +57,69 @@ mod tests {
         assert!(parsed.allowed);
         assert_eq!(parsed.hourly_quota, 100_000);
     }
+
+    #[test]
+    fn usage_status_roundtrip() {
+        for status in [UsageStatus::Success, UsageStatus::Error] {
+            let json = serde_json::to_string(&status).unwrap();
+            let parsed: UsageStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, parsed);
+        }
+    }
+
+    #[test]
+    fn usage_record_with_all_fields() {
+        let record = UsageRecord {
+            agent_id: "agent-123".to_string(),
+            circle_id: Some("circle-456".to_string()),
+            model: "claude-opus-4-6".to_string(),
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            total_tokens: 1500,
+            cost_usd: Some(0.05),
+            latency_ms: Some(2500),
+            status: Some(UsageStatus::Success),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let parsed: UsageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.agent_id, "agent-123");
+        assert_eq!(parsed.circle_id, Some("circle-456".to_string()));
+        assert_eq!(parsed.total_tokens, 1500);
+        assert_eq!(parsed.status, Some(UsageStatus::Success));
+    }
+
+    #[test]
+    fn usage_record_minimal_fields() {
+        let record = UsageRecord {
+            agent_id: "agent-123".to_string(),
+            circle_id: None,
+            model: "gpt-4o".to_string(),
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            cost_usd: None,
+            latency_ms: None,
+            status: None,
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains("circle_id"));
+        assert!(!json.contains("cost_usd"));
+        let parsed: UsageRecord = serde_json::from_str(&json).unwrap();
+        assert!(parsed.circle_id.is_none());
+        assert!(parsed.cost_usd.is_none());
+    }
+
+    #[test]
+    fn budget_status_over_quota() {
+        let status = BudgetStatus {
+            allowed: false,
+            hourly_used: 150_000,
+            hourly_quota: 100_000,
+            daily_used: 2_000_000,
+            daily_quota: 1_000_000,
+        };
+        assert!(!status.allowed);
+        assert!(status.hourly_used > status.hourly_quota);
+        assert!(status.daily_used > status.daily_quota);
+    }
 }

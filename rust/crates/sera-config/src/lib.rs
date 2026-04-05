@@ -6,6 +6,9 @@
 
 pub mod core_config;
 pub mod providers;
+pub mod watchers;
+
+pub use watchers::{FileWatcher, FileWatcherError, ResourceType, WatchAction, WatchEvent};
 
 use std::env;
 

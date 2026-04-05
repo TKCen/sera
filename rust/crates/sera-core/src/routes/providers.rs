@@ -49,7 +49,7 @@ pub async fn list_providers(
         None => vec![],
     };
 
-    Ok(Json(serde_json::to_value(providers).unwrap_or_default()))
+    Ok(Json(serde_json::json!({ "providers": providers })))
 }
 
 #[derive(Debug, Deserialize)]

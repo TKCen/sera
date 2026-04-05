@@ -106,6 +106,35 @@ impl AuditRepository {
         Ok(rows)
     }
 
+    /// Count total entries matching filters (for pagination).
+    pub async fn count_entries(
+        pool: &PgPool,
+        actor_id: Option<&str>,
+        event_type: Option<&str>,
+    ) -> Result<i64, DbError> {
+        let mut query = String::from("SELECT COUNT(*) FROM audit_trail WHERE 1=1");
+        let mut param_idx = 1;
+
+        if actor_id.is_some() {
+            query.push_str(&format!(" AND actor_id = ${param_idx}"));
+            param_idx += 1;
+        }
+        if event_type.is_some() {
+            query.push_str(&format!(" AND event_type = ${param_idx}"));
+        }
+
+        let mut q = sqlx::query_as::<_, (i64,)>(&query);
+        if let Some(aid) = actor_id {
+            q = q.bind(aid);
+        }
+        if let Some(et) = event_type {
+            q = q.bind(et);
+        }
+
+        let (count,) = q.fetch_one(pool).await?;
+        Ok(count)
+    }
+
     /// Verify integrity of the last N records.
     pub async fn get_chain_for_verification(
         pool: &PgPool,

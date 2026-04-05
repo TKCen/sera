@@ -49,6 +49,6 @@ pub async fn get_lifecycle(
         status: row.status.unwrap_or_else(|| "active".to_string()),
         lifecycle_mode: row.lifecycle_mode,
         container_id: row.container_id,
-        last_heartbeat_at: row.last_heartbeat_at.map(|t| t.to_string()),
+        last_heartbeat_at: super::iso8601_opt(row.last_heartbeat_at),
     }))
 }

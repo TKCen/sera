@@ -7,6 +7,7 @@ mod error;
 mod middleware;
 mod routes;
 mod state;
+mod services;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -115,7 +116,12 @@ fn build_router(
     // Public routes (no auth)
     let public = Router::new()
         .route("/api/health", get(routes::health::health))
-        .route("/api/health/detail", get(routes::health::health_detail));
+        .route("/api/health/detail", get(routes::health::health_detail))
+        // OIDC auth flow — must be public (user not yet authenticated)
+        .route("/api/auth/oidc-config", get(routes::oidc::get_oidc_config))
+        .route("/api/auth/login", get(routes::oidc::login))
+        .route("/api/auth/oidc/callback", post(routes::oidc::callback))
+        .route("/api/auth/logout", post(routes::oidc::logout));
 
     // Protected routes (require auth)
     let protected = Router::new()
@@ -132,7 +138,7 @@ fn build_router(
             "/api/skills",
             get(routes::skills::list_skills).post(routes::skills::create_skill),
         )
-        .route("/api/skills/{name}", delete(routes::skills::delete_skill))
+        .route("/api/skills/{name}", get(routes::skills::get_skill).delete(routes::skills::delete_skill))
         // Schedules — GET list + POST create
         .route(
             "/api/schedules",
@@ -143,7 +149,7 @@ fn build_router(
             "/api/circles",
             get(routes::circles::list_circles).post(routes::circles::create_circle),
         )
-        .route("/api/circles/{id}", delete(routes::circles::delete_circle))
+        .route("/api/circles/{id}", get(routes::circles::get_circle).patch(routes::circles::update_circle).delete(routes::circles::delete_circle))
         // Sessions — GET list + POST create
         .route(
             "/api/sessions",
@@ -155,14 +161,22 @@ fn build_router(
                 .put(routes::sessions::update_session)
                 .delete(routes::sessions::delete_session),
         )
-        // Agent instance write endpoints
+        // Agent instance CRUD
         .route("/api/agents/instances", post(routes::agents::create_instance))
         .route(
             "/api/agents/instances/{id}",
-            patch(routes::agents::update_instance).delete(routes::agents::delete_instance),
+            get(routes::agents::get_instance)
+                .patch(routes::agents::update_instance)
+                .delete(routes::agents::delete_instance),
         )
         .route("/api/agents/instances/{id}/start", post(routes::agents::start_instance))
         .route("/api/agents/instances/{id}/stop", post(routes::agents::stop_instance))
+        .route("/api/agents/instances/{id}/restart", post(routes::agents::restart_instance))
+        .route("/api/agents/instances/{id}/status", get(routes::agents::get_agent_status))
+        .route("/api/agents/instances/{id}/metrics", get(routes::agents::get_agent_metrics))
+        .route("/api/agents/instances/{id}/skills", post(routes::agents::add_agent_skill))
+        .route("/api/agents/instances/{id}/skills/{skill_name}", delete(routes::agents::remove_agent_skill))
+        .route("/api/agents/instances/{id}/tools", get(routes::stubs::agent_tools))
         // Providers write endpoints
         .route("/api/providers", post(routes::providers::add_provider))
         .route(
@@ -172,17 +186,19 @@ fn build_router(
         // Budget write endpoints
         .route(
             "/api/budget/agents/{agent_id}/budget",
-            patch(routes::metering::update_agent_budget),
+            get(routes::metering::get_agent_budget).patch(routes::metering::update_agent_budget),
         )
         .route(
             "/api/budget/agents/{agent_id}/budget/reset",
             post(routes::metering::reset_agent_budget),
         )
-        // Metering record endpoint
-        .route("/api/metering/usage", post(routes::metering::record_usage))
-        // Audit — GET log + POST append
+        // Metering record + read endpoints
+        .route("/api/metering/usage", get(routes::metering::get_usage).post(routes::metering::record_usage))
+        // Audit — GET log + POST append (frontend uses /api/audit for both)
+        .route("/api/audit", get(routes::audit::get_audit_log).post(routes::audit::append_audit))
         .route("/api/audit/log", get(routes::audit::get_audit_log))
-        .route("/api/audit", post(routes::audit::append_audit))
+        .route("/api/audit/{sequence}", get(routes::audit::get_audit_by_sequence))
+        .route("/api/audit/verify", get(routes::stubs::audit_verify))
         // Secrets CRUD
         .route(
             "/api/secrets",
@@ -206,15 +222,19 @@ fn build_router(
             get(routes::memory::list_blocks).post(routes::memory::create_block),
         )
         .route(
-            "/api/memory/entries/{id}",
+            "/api/memory/blocks/{id}",
             get(routes::memory::get_block)
                 .put(routes::memory::update_block)
                 .delete(routes::memory::delete_block),
         )
+        .route("/api/memory/search", post(routes::memory::search_memory))
+        .route("/api/memory/versions/{agent_id}", get(routes::memory::get_memory_versions))
+        .route("/api/memory/versions/{agent_id}/snapshot", post(routes::memory::create_memory_snapshot))
         // Task queue
-        .route("/api/agents/{id}/tasks", post(routes::tasks::enqueue_task))
+        .route("/api/agents/{id}/tasks", get(routes::tasks::list_tasks).post(routes::tasks::enqueue_task))
         .route("/api/agents/{id}/tasks/next", get(routes::tasks::poll_next_task))
         .route("/api/agents/{id}/tasks/{task_id}/result", post(routes::tasks::submit_task_result))
+        .route("/api/agents/{id}/tasks/{task_id}", get(routes::tasks::get_task).delete(routes::tasks::cancel_task))
         .route("/api/agents/{id}/tasks/history", get(routes::tasks::get_task_history))
         // Operator requests
         .route("/api/operator-requests/pending/count", get(routes::operator_requests::pending_count))
@@ -233,9 +253,13 @@ fn build_router(
         .route("/api/channels/{id}", delete(routes::channels::delete_channel))
         // MCP servers
         .route("/api/mcp-servers", get(routes::mcp::list_mcp_servers).post(routes::mcp::register_mcp_server))
-        .route("/api/mcp-servers/{name}", get(routes::mcp::get_mcp_server))
+        .route("/api/mcp-servers/{name}", get(routes::mcp::get_mcp_server).delete(routes::mcp::delete_mcp_server))
         .route("/api/mcp-servers/{name}/health", get(routes::mcp::mcp_server_health))
         .route("/api/mcp-servers/{name}/reload", post(routes::mcp::reload_mcp_server))
+        // Tool management
+        .route("/api/tools", get(routes::mcp::list_tools))
+        .route("/api/tools/execute", post(routes::mcp::execute_tool))
+        .route("/api/tools/validate", post(routes::mcp::validate_tool))
         // LSP proxy
         .route("/api/lsp/definition", post(routes::lsp::definition))
         .route("/api/lsp/references", post(routes::lsp::references))
@@ -247,6 +271,8 @@ fn build_router(
         )
         // Config + system stubs
         .route("/api/config/llm", get(routes::config::get_llm_config))
+        .route("/api/config/providers", get(routes::config::list_providers))
+        .route("/api/config/reload", post(routes::config::reload_config))
         .route("/api/federation/peers", get(routes::config::list_federation_peers))
         .route("/api/system/circuit-breakers", get(routes::config::get_circuit_breakers))
         .route("/api/rt/token", get(routes::config::get_rt_token))
@@ -284,11 +310,19 @@ fn build_router(
         // Intercom — Centrifugo HTTP client
         .route("/api/intercom/publish", post(routes::intercom::publish))
         .route("/api/intercom/dm", post(routes::intercom::dm))
+        .route("/api/intercom/centrifugo/token", get(routes::intercom::get_connection_token))
         // Pipelines — workflow engine
         .route("/api/pipelines", post(routes::pipelines::create_pipeline))
         .route("/api/pipelines/{id}", get(routes::pipelines::get_pipeline))
         // Chat — container routing with SSE streaming
         .route("/api/chat", post(routes::chat::chat))
+        .route("/api/chat/stream", post(routes::chat::stream_chat))
+        .route("/api/chat/completions", post(routes::chat::completions))
+        // Chat session messages
+        .route(
+            "/api/chat/sessions/{id}/messages",
+            post(routes::chat::add_message).get(routes::chat::list_messages),
+        )
         // OpenAI-compatible endpoint
         .route("/v1/chat/completions", post(routes::openai_compat::chat_completions))
         // Embedding — Ollama integration
@@ -296,7 +330,12 @@ fn build_router(
         .route("/api/embedding/status", get(routes::embedding::get_status))
         .route("/api/embedding/models", get(routes::embedding::list_models))
         .route("/api/embedding/test", post(routes::embedding::test_embedding))
-        // Knowledge — git history + merge requests
+        .route("/api/embedding/embed", post(routes::embedding::embed_text))
+        .route("/api/embedding/batch", post(routes::embedding::embed_batch))
+        // Knowledge — agent knowledge + git history + merge requests
+        .route("/api/knowledge/{agent_id}", get(routes::embedding::get_knowledge).post(routes::embedding::update_knowledge))
+        .route("/api/knowledge/{agent_id}/history", get(routes::embedding::get_knowledge_history))
+        .route("/api/knowledge/{agent_id}/diff", get(routes::embedding::get_knowledge_diff))
         .route("/api/knowledge/circles/{id}/history", get(routes::knowledge::get_history))
         .route("/api/knowledge/circles/{id}/merge-requests", get(routes::knowledge::list_merge_requests).post(routes::knowledge::create_merge_request))
         .route("/api/knowledge/circles/{id}/merge-requests/{mr_id}/approve", post(routes::knowledge::approve_merge_request))
@@ -309,21 +348,30 @@ fn build_router(
         .route("/api/agents/{agent_id}/service-identities", get(routes::service_identities::list_identities).post(routes::service_identities::create_identity))
         .route("/api/agents/{agent_id}/service-identities/{identity_id}", delete(routes::service_identities::delete_identity))
         .route("/api/agents/{agent_id}/service-identities/{identity_id}/rotate", post(routes::service_identities::rotate_key))
-        // OIDC auth flow
-        .route("/api/auth/oidc-config", get(routes::oidc::get_oidc_config))
-        .route("/api/auth/login", get(routes::oidc::login))
-        .route("/api/auth/oidc/callback", post(routes::oidc::callback))
-        .route("/api/auth/logout", post(routes::oidc::logout))
         // Agent sub-route stubs
         .route("/api/agents/{id}/logs", get(routes::stubs::agent_logs))
         .route("/api/agents/{id}/subagents", get(routes::stubs::agent_subagents))
+        .route("/api/agents/{id}/template-diff", get(routes::stubs::agent_template_diff))
+        .route("/api/agents/{id}/grants", get(routes::stubs::agent_grants))
+        .route("/api/agents/{id}/context-debug", get(routes::stubs::agent_context_debug))
+        .route("/api/agents/{id}/system-prompt", get(routes::stubs::agent_system_prompt))
+        .route("/api/agents/{id}/health-check", get(routes::stubs::agent_health_check))
+        .route("/api/agents/{id}/sessions/{sid}/commands", get(routes::stubs::session_commands))
         .route("/api/agents/pending-updates", get(routes::stubs::pending_updates))
         .route("/api/tools", get(routes::stubs::list_tools))
+        .route("/v1/tools/catalog", get(routes::stubs::tools_catalog))
         .route("/api/templates", get(routes::stubs::list_templates))
         // Schedule detail + runs
         .route("/api/schedules/{id}", get(routes::stubs::get_schedule).patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule))
         .route("/api/schedules/runs", get(routes::stubs::schedule_runs))
+        // Provider dynamic/template stubs
+        .route("/api/providers/dynamic", get(routes::stubs::providers_dynamic))
+        .route("/api/providers/dynamic/statuses", get(routes::stubs::providers_dynamic_statuses))
+        .route("/api/providers/templates", get(routes::stubs::providers_templates))
+        .route("/api/providers/default-model", get(routes::stubs::providers_default_model).put(routes::stubs::set_default_model))
         // Memory advanced
+        .route("/api/memory/recent", get(routes::stubs::memory_recent))
+        .route("/api/memory/explorer-graph", get(routes::stubs::memory_explorer_graph))
         .route("/api/memory/overview", get(routes::stubs::memory_overview))
         .route("/api/memory/{agent_id}/core", get(routes::stubs::agent_core_memory))
         .route("/api/memory/{agent_id}/core/{name}", put(routes::stubs::update_core_memory))

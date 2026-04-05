@@ -48,6 +48,22 @@ impl CircleRepository {
         Ok(())
     }
 
+    /// Get a circle by name (or id).
+    pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<CircleRow, DbError> {
+        sqlx::query_as::<_, CircleRow>(
+            "SELECT id, name, display_name, description, constitution, created_at, updated_at
+             FROM circles WHERE name = $1 OR id::text = $1"
+        )
+        .bind(name)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| DbError::NotFound {
+            entity: "circle",
+            key: "name",
+            value: name.to_string(),
+        })
+    }
+
     pub async fn delete_circle(pool: &PgPool, id: &str) -> Result<(), DbError> {
         let result = sqlx::query("DELETE FROM circles WHERE id::text = $1")
             .bind(id)

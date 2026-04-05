@@ -158,23 +158,10 @@ impl SecretsRepository {
     }
 }
 
-/// Generate a random 12-byte nonce using basic randomness.
+/// Generate a random 12-byte nonce using cryptographically secure randomness.
 fn rand_nonce() -> [u8; 12] {
+    use rand::RngCore;
     let mut buf = [0u8; 12];
-    // Use std::time for seeding — not cryptographically strong but adequate
-    // for dev. In production, use OsRng from rand crate.
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    for (i, b) in buf.iter_mut().enumerate() {
-        *b = ((seed >> (i * 8)) & 0xFF) as u8;
-    }
-    // Mix in process ID for uniqueness across concurrent calls
-    let pid = std::process::id();
-    buf[8] ^= (pid & 0xFF) as u8;
-    buf[9] ^= ((pid >> 8) & 0xFF) as u8;
-    buf[10] ^= ((pid >> 16) & 0xFF) as u8;
-    buf[11] ^= ((pid >> 24) & 0xFF) as u8;
+    rand::rngs::OsRng.fill_bytes(&mut buf);
     buf
 }

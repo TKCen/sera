@@ -46,9 +46,9 @@ pub async fn list_api_keys(
             id: r.id.to_string(),
             name: r.name,
             roles: r.roles,
-            created_at: r.created_at.map(|t| t.to_string()),
-            expires_at: r.expires_at.map(|t| t.to_string()),
-            last_used_at: r.last_used_at.map(|t| t.to_string()),
+            created_at: r.created_at.map(super::iso8601),
+            expires_at: r.expires_at.map(super::iso8601),
+            last_used_at: r.last_used_at.map(super::iso8601),
         })
         .collect();
     Ok(Json(keys))

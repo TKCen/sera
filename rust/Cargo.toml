@@ -12,6 +12,7 @@ members = [
   "crates/sera-runtime",
   "crates/sera-tui",
   "crates/sera-byoh-agent",
+  "crates/sera-runtime",
 ]
 
 [workspace.package]
@@ -53,6 +54,7 @@ anyhow = "1"
 
 # Testing
 insta = { version = "1", features = ["yaml"] }
+tempfile = "3"
 
 # Crypto
 sha2 = "0.10"
@@ -60,11 +62,13 @@ aes-gcm = "0.10"
 hex = "0.4"
 base64 = "0.22"
 urlencoding = "2"
+zeroize = { version = "1", features = ["derive"] }
 
 # Streaming
 tokio-stream = "0.1"
 async-stream = "0.3"
 futures-util = "0.3"
+tokio-util = "0.7"
 
 # Knowledge / Vector
 qdrant-client = "1"
@@ -81,6 +85,13 @@ crossterm = "0.28"
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }
 rand = "0.8"
+
+# File watching
+notify = "7"
+notify-debouncer-mini = "0.5"
+
+# Scheduling
+cron = "0.13"
 
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }

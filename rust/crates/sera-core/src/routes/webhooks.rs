@@ -36,7 +36,7 @@ pub async fn list_webhooks(
             url_path: r.url_path,
             event_type: r.event_type,
             enabled: r.enabled,
-            created_at: r.created_at.to_string(),
+            created_at: super::iso8601(r.created_at),
         })
         .collect();
     Ok(Json(webhooks))
@@ -73,7 +73,7 @@ pub async fn create_webhook(
             url_path: row.url_path,
             event_type: row.event_type,
             enabled: row.enabled,
-            created_at: row.created_at.to_string(),
+            created_at: super::iso8601(row.created_at),
         }),
     ))
 }

@@ -37,7 +37,16 @@ impl AuditHashChain {
     /// Iterates through records, recomputes each hash, and compares with stored hash.
     /// Returns error with the sequence number of the first broken record.
     pub fn verify_chain(records: &[sera_domain::audit::AuditRecord]) -> Result<(), AuditVerifyError> {
+        let mut expected_prev_hash: Option<String> = None;
+
         for record in records.iter() {
+            // Verify chain linkage: record's prev_hash must match the previous record's hash
+            if record.prev_hash.as_deref() != expected_prev_hash.as_deref() {
+                return Err(AuditVerifyError {
+                    broken_at: record.sequence.clone(),
+                });
+            }
+
             let actor_type = match record.actor_type {
                 sera_domain::audit::ActorType::Operator => "operator",
                 sera_domain::audit::ActorType::Agent => "agent",
@@ -60,6 +69,8 @@ impl AuditHashChain {
                     broken_at: record.sequence.clone(),
                 });
             }
+
+            expected_prev_hash = Some(record.hash.clone());
         }
         Ok(())
     }

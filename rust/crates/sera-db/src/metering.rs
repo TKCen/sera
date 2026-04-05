@@ -14,8 +14,8 @@ pub struct UsageAggRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct QuotaRow {
     pub agent_id: String,
-    pub max_tokens_per_hour: i64,
-    pub max_tokens_per_day: i64,
+    pub max_tokens_per_hour: i32,
+    pub max_tokens_per_day: i32,
 }
 
 /// Row type for daily usage aggregation.
@@ -217,9 +217,9 @@ impl MeteringRepository {
         let (hourly_quota, daily_quota) = match &quota {
             Some(q) => {
                 // Quota of 0 means unlimited
-                (q.max_tokens_per_hour, q.max_tokens_per_day)
+                (q.max_tokens_per_hour as i64, q.max_tokens_per_day as i64)
             }
-            None => (100_000, 1_000_000), // Defaults from MeteringService
+            None => (100_000i64, 1_000_000i64), // Defaults from MeteringService
         };
 
         let hourly_used = Self::get_usage_in_window(pool, agent_id, 1).await?;

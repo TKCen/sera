@@ -32,6 +32,10 @@ pub struct InstanceRow {
     pub parent_instance_id: Option<uuid::Uuid>,
     pub workspace_path: String,
     pub container_id: Option<String>,
+    pub sandbox_boundary: Option<String>,
+    pub overrides: Option<serde_json::Value>,
+    pub resolved_config: Option<serde_json::Value>,
+    pub resolved_capabilities: Option<serde_json::Value>,
     pub last_heartbeat_at: Option<time::OffsetDateTime>,
     pub updated_at: Option<time::OffsetDateTime>,
     pub created_at: Option<time::OffsetDateTime>,
@@ -60,11 +64,11 @@ impl InstanceRow {
             template_ref: self.template_ref.unwrap_or(self.template_name.clone()),
             circle: self.circle,
             status,
-            overrides: None,
+            overrides: self.overrides,
             lifecycle_mode: self.lifecycle_mode.and_then(|m| serde_json::from_str(&format!("\"{m}\"")).ok()),
             parent_instance_id: self.parent_instance_id.map(|id| id.to_string()),
-            resolved_config: None,
-            resolved_capabilities: None,
+            resolved_config: self.resolved_config,
+            resolved_capabilities: self.resolved_capabilities,
             workspace_path: Some(self.workspace_path),
             workspace_used_gb: None,
             container_id: self.container_id,
@@ -117,6 +121,7 @@ impl AgentRepository {
             sqlx::query_as::<_, InstanceRow>(
                 "SELECT id, name, display_name, template_name, template_ref, circle, status,
                         lifecycle_mode, parent_instance_id, workspace_path, container_id,
+                        sandbox_boundary, overrides, resolved_config, resolved_capabilities,
                         last_heartbeat_at, updated_at, created_at
                  FROM agent_instances WHERE status = $1
                  ORDER BY created_at DESC"
@@ -128,6 +133,7 @@ impl AgentRepository {
             sqlx::query_as::<_, InstanceRow>(
                 "SELECT id, name, display_name, template_name, template_ref, circle, status,
                         lifecycle_mode, parent_instance_id, workspace_path, container_id,
+                        sandbox_boundary, overrides, resolved_config, resolved_capabilities,
                         last_heartbeat_at, updated_at, created_at
                  FROM agent_instances
                  ORDER BY created_at DESC"
@@ -143,6 +149,7 @@ impl AgentRepository {
         sqlx::query_as::<_, InstanceRow>(
             "SELECT id, name, display_name, template_name, template_ref, circle, status,
                     lifecycle_mode, parent_instance_id, workspace_path, container_id,
+                    sandbox_boundary, overrides, resolved_config, resolved_capabilities,
                     last_heartbeat_at, updated_at, created_at
              FROM agent_instances WHERE id::text = $1"
         )

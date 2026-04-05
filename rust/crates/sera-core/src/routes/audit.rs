@@ -1,7 +1,7 @@
 //! Audit log endpoint.
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -27,6 +27,7 @@ pub struct AuditLogQuery {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEntryResponse {
+    pub id: String,
     pub sequence: i64,
     pub timestamp: String,
     pub actor_type: String,
@@ -35,13 +36,14 @@ pub struct AuditEntryResponse {
     pub event_type: String,
     pub payload: serde_json::Value,
     pub hash: String,
+    pub prev_hash: Option<String>,
 }
 
 /// GET /api/audit/log
 pub async fn get_audit_log(
     State(state): State<AppState>,
     Query(params): Query<AuditLogQuery>,
-) -> Result<Json<Vec<AuditEntryResponse>>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let limit = params.limit.unwrap_or(50).min(1000);
     let offset = params.offset.unwrap_or(0);
 
@@ -56,19 +58,37 @@ pub async fn get_audit_log(
 
     let entries: Vec<AuditEntryResponse> = rows
         .into_iter()
-        .map(|r| AuditEntryResponse {
-            sequence: r.sequence,
-            timestamp: r.timestamp.to_string(),
-            actor_type: r.actor_type,
-            actor_id: r.actor_id,
-            acting_context: r.acting_context,
-            event_type: r.event_type,
-            payload: r.payload,
-            hash: r.hash,
+        .map(|r| {
+            use super::iso8601;
+            AuditEntryResponse {
+                id: format!("audit-{}", r.sequence),
+                sequence: r.sequence,
+                timestamp: iso8601(r.timestamp),
+                actor_type: r.actor_type,
+                actor_id: r.actor_id,
+                acting_context: r.acting_context,
+                event_type: r.event_type,
+                payload: r.payload,
+                hash: r.hash,
+                prev_hash: r.prev_hash,
+            }
         })
         .collect();
 
-    Ok(Json(entries))
+    let total = AuditRepository::count_entries(
+        state.db.inner(),
+        params.actor_id.as_deref(),
+        params.event_type.as_deref(),
+    )
+    .await
+    .unwrap_or(entries.len() as i64);
+
+    Ok(Json(serde_json::json!({
+        "entries": entries,
+        "total": total,
+        "page": 1,
+        "pageSize": limit,
+    })))
 }
 
 /// Request body for appending an audit event.
@@ -88,6 +108,41 @@ pub struct AppendAuditRequest {
 pub struct AppendAuditResponse {
     pub sequence: i64,
     pub hash: String,
+}
+
+/// GET /api/audit/{sequence} — single audit event by sequence number
+pub async fn get_audit_by_sequence(
+    State(state): State<AppState>,
+    Path(sequence): Path<i64>,
+) -> Result<Json<AuditEntryResponse>, AppError> {
+    // Query by sequence — using get_entries with limit 1 to find specific sequence
+    let rows = AuditRepository::get_entries(
+        state.db.inner(),
+        None,
+        None,
+        1000, // fetch enough to search
+        0,
+    )
+    .await?;
+
+    let audit_row = rows
+        .into_iter()
+        .find(|r| r.sequence == sequence)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Audit entry not found")))?;
+
+    use super::iso8601;
+    Ok(Json(AuditEntryResponse {
+        id: format!("audit-{}", audit_row.sequence),
+        sequence: audit_row.sequence,
+        timestamp: iso8601(audit_row.timestamp),
+        actor_type: audit_row.actor_type,
+        actor_id: audit_row.actor_id,
+        acting_context: audit_row.acting_context,
+        event_type: audit_row.event_type,
+        payload: audit_row.payload,
+        hash: audit_row.hash,
+        prev_hash: audit_row.prev_hash,
+    }))
 }
 
 /// POST /api/audit

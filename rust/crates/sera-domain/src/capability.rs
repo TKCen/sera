@@ -66,3 +66,95 @@ pub struct SecretsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<Vec<String>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolved_capabilities_default() {
+        let caps = ResolvedCapabilities::default();
+        assert!(caps.filesystem.is_none());
+        assert!(caps.network.is_none());
+        assert!(caps.exec.is_none());
+    }
+
+    #[test]
+    fn resolved_capabilities_full() {
+        let caps = ResolvedCapabilities {
+            filesystem: Some(FilesystemCapability {
+                write: true,
+                max_workspace_size_gb: Some(50.0),
+            }),
+            network: Some(NetworkCapability {
+                outbound: Some(vec!["api.github.com".to_string()]),
+            }),
+            exec: Some(ExecCapability {
+                commands: Some(vec!["bash".to_string(), "python".to_string()]),
+            }),
+            resources: Some(ResourceCapability {
+                cpu_shares: Some(1024),
+                memory_limit: Some(1_000_000_000),
+            }),
+            security: Some(SecurityCapability {
+                readonly_rootfs: false,
+            }),
+            secrets: Some(SecretsCapability {
+                access: Some(vec!["db-password".to_string()]),
+            }),
+            capabilities: Some(vec!["CAP_NET_BIND_SERVICE".to_string()]),
+            skill_packages: Some(vec!["core-skills".to_string()]),
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        let parsed: ResolvedCapabilities = serde_json::from_str(&json).unwrap();
+        assert!(parsed.filesystem.unwrap().write);
+        assert_eq!(parsed.exec.unwrap().commands.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn filesystem_capability_write_flag() {
+        let cap = FilesystemCapability {
+            write: true,
+            max_workspace_size_gb: Some(100.0),
+        };
+        let json = serde_json::to_string(&cap).unwrap();
+        let parsed: FilesystemCapability = serde_json::from_str(&json).unwrap();
+        assert!(parsed.write);
+        assert_eq!(parsed.max_workspace_size_gb, Some(100.0));
+    }
+
+    #[test]
+    fn network_capability_outbound_list() {
+        let cap = NetworkCapability {
+            outbound: Some(vec![
+                "api.github.com".to_string(),
+                "registry.docker.com".to_string(),
+            ]),
+        };
+        let json = serde_json::to_string(&cap).unwrap();
+        let parsed: NetworkCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.outbound.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn exec_capability_commands() {
+        let cap = ExecCapability {
+            commands: Some(vec!["ls".to_string(), "cat".to_string(), "echo".to_string()]),
+        };
+        let json = serde_json::to_string(&cap).unwrap();
+        let parsed: ExecCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.commands.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn resource_capability_limits() {
+        let cap = ResourceCapability {
+            cpu_shares: Some(2048),
+            memory_limit: Some(4_000_000_000),
+        };
+        let json = serde_json::to_string(&cap).unwrap();
+        let parsed: ResourceCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.cpu_shares, Some(2048));
+        assert_eq!(parsed.memory_limit, Some(4_000_000_000));
+    }
+}

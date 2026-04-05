@@ -22,7 +22,7 @@ pub struct MessageRow {
     pub session_id: uuid::Uuid,
     pub role: String,
     pub content: Option<String>,
-    pub tool_calls: Option<serde_json::Value>,
+    pub metadata: Option<serde_json::Value>,
     pub created_at: Option<time::OffsetDateTime>,
 }
 
@@ -73,7 +73,7 @@ impl SessionRepository {
     /// Get messages for a session.
     pub async fn get_messages(pool: &PgPool, session_id: &str) -> Result<Vec<MessageRow>, DbError> {
         let rows = sqlx::query_as::<_, MessageRow>(
-            "SELECT id, session_id, role, content, tool_calls, created_at
+            "SELECT id, session_id, role, content, metadata, created_at
              FROM chat_messages WHERE session_id = $1::uuid
              ORDER BY created_at ASC"
         )

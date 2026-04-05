@@ -29,6 +29,27 @@ pub struct ScheduleResponse {
     pub next_run_at: Option<String>,
     pub category: Option<String>,
     pub description: Option<String>,
+    pub task_prompt: String,
+}
+
+/// Extract task_prompt from task column (JSONB).
+/// - If task is {"prompt": "some text"}, extract "some text"
+/// - If task is a plain string, use it directly
+/// - If null, use empty string
+fn extract_task_prompt(task: &serde_json::Value) -> String {
+    if task.is_null() {
+        return String::new();
+    }
+    if task.is_string() {
+        return task.as_str().unwrap_or("").to_string();
+    }
+    #[allow(clippy::collapsible_if)]
+    if let Some(prompt) = task.get("prompt") {
+        if let Some(prompt_str) = prompt.as_str() {
+            return prompt_str.to_string();
+        }
+    }
+    String::new()
 }
 
 /// GET /api/schedules
@@ -47,11 +68,12 @@ pub async fn list_schedules(
             r#type: r.r#type,
             source: r.source,
             status: r.status,
-            last_run_at: r.last_run_at.map(|t| t.to_string()),
+            last_run_at: super::iso8601_opt(r.last_run_at),
             last_run_status: r.last_run_status,
-            next_run_at: r.next_run_at.map(|t| t.to_string()),
+            next_run_at: super::iso8601_opt(r.next_run_at),
             category: r.category,
             description: r.description,
+            task_prompt: extract_task_prompt(&r.task),
         })
         .collect();
     Ok(Json(schedules))

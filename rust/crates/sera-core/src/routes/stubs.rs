@@ -20,29 +20,6 @@ fn not_impl() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
-// ── Sandbox stubs ───────────────────────────────────────────────────────────
-
-/// POST /api/sandbox/spawn
-pub async fn sandbox_spawn() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
-}
-
-/// POST /api/sandbox/exec
-pub async fn sandbox_exec() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
-}
-
-// ── Intercom stubs ──────────────────────────────────────────────────────────
-
-/// POST /api/intercom/publish
-pub async fn intercom_publish() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
-}
-
-/// POST /api/intercom/dm
-pub async fn intercom_dm() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
-}
 
 // ── Pipeline stubs ──────────────────────────────────────────────────────────
 
@@ -105,8 +82,36 @@ pub async fn agent_subagents(Path(_id): Path<String>) -> Json<Vec<serde_json::Va
 }
 
 /// GET /api/agents/pending-updates
-pub async fn pending_updates() -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+pub async fn pending_updates(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let rows = sqlx::query(
+        "SELECT ai.id, ai.name, ai.template_ref, ai.updated_at, at.updated_at as template_updated_at
+         FROM agent_instances ai
+         JOIN agent_templates at ON ai.template_name = at.name
+         WHERE at.updated_at > ai.updated_at OR at.updated_at IS NULL"
+    )
+    .fetch_all(state.db.inner())
+    .await
+    .unwrap_or_default();
+
+    let updates: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let id: uuid::Uuid = r.get("id");
+            let updated_at: Option<time::OffsetDateTime> = r.get("updated_at");
+            let template_updated_at: Option<time::OffsetDateTime> = r.get("template_updated_at");
+            serde_json::json!({
+                "agentId": id.to_string(),
+                "agentName": r.get::<String, _>("name"),
+                "templateRef": r.get::<Option<String>, _>("template_ref"),
+                "instanceUpdatedAt": updated_at.map(super::iso8601),
+                "templateUpdatedAt": template_updated_at.map(super::iso8601)
+            })
+        })
+        .collect();
+
+    Ok(Json(updates))
 }
 
 /// GET /api/tools — list executable tools
@@ -324,14 +329,35 @@ pub async fn schedule_runs(
 pub async fn memory_overview(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Total block count
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM core_memory_blocks")
         .fetch_one(state.db.inner())
         .await
         .unwrap_or((0,));
 
+    // Agents with block counts
+    let agent_rows = sqlx::query(
+        "SELECT agent_instance_id, COUNT(*) as block_count FROM core_memory_blocks GROUP BY agent_instance_id"
+    )
+    .fetch_all(state.db.inner())
+    .await
+    .unwrap_or_default();
+
+    let agents: Vec<serde_json::Value> = agent_rows
+        .iter()
+        .map(|r| {
+            let agent_id: uuid::Uuid = r.get("agent_instance_id");
+            let block_count: i64 = r.get("block_count");
+            serde_json::json!({
+                "id": agent_id.to_string(),
+                "blockCount": block_count
+            })
+        })
+        .collect();
+
     Ok(Json(serde_json::json!({
         "totalBlocks": count.0,
-        "agents": [],
+        "agents": agents,
         "topTags": [],
         "typeBreakdown": {}
     })))
@@ -398,11 +424,25 @@ pub async fn agent_scoped_blocks(
 }
 
 /// GET /api/agents/instances/:id/tools — agent available tools
-pub async fn agent_tools(Path(_id): Path<String>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "available": [],
+pub async fn agent_tools(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Get agent instance to find resolved capabilities
+    let agent = sera_db::agents::AgentRepository::get_instance(state.db.inner(), &id).await?;
+
+    let available = agent
+        .resolved_capabilities
+        .as_ref()
+        .and_then(|caps| caps.get("tools"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(Json(serde_json::json!({
+        "available": available,
         "unavailable": []
-    }))
+    })))
 }
 
 /// GET /api/agents/:id/template-diff
@@ -418,8 +458,36 @@ pub async fn agent_template_diff(Path(_id): Path<String>) -> Json<serde_json::Va
 }
 
 /// GET /api/memory/recent
-pub async fn memory_recent() -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+pub async fn memory_recent(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, agent_instance_id, name, content, character_limit, is_read_only, created_at, updated_at
+         FROM core_memory_blocks ORDER BY updated_at DESC LIMIT 20"
+    )
+    .fetch_all(state.db.inner())
+    .await
+    .unwrap_or_default();
+
+    let blocks: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let id: uuid::Uuid = r.get("id");
+            let agent_id: uuid::Uuid = r.get("agent_instance_id");
+            let updated_at: time::OffsetDateTime = r.get("updated_at");
+            serde_json::json!({
+                "id": id.to_string(),
+                "agentInstanceId": agent_id.to_string(),
+                "name": r.get::<String, _>("name"),
+                "content": r.get::<String, _>("content"),
+                "characterLimit": r.get::<i32, _>("character_limit"),
+                "isReadOnly": r.get::<bool, _>("is_read_only"),
+                "updatedAt": super::iso8601(updated_at)
+            })
+        })
+        .collect();
+
+    Ok(Json(blocks))
 }
 
 /// GET /api/memory/explorer-graph
@@ -431,23 +499,84 @@ pub async fn memory_explorer_graph() -> Json<serde_json::Value> {
 }
 
 /// GET /api/audit/verify — verify audit chain integrity
-pub async fn audit_verify() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "valid": true,
-        "totalEntries": 0,
-        "checkedEntries": 0,
-        "brokenLinks": []
-    }))
+pub async fn audit_verify(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = sera_db::audit::AuditRepository::get_chain_for_verification(state.db.inner(), 1000)
+        .await
+        .unwrap_or_default();
+
+    let total = rows.len() as i64;
+    let mut checked = 0i64;
+    let mut broken_links = vec![];
+
+    for (idx, row) in rows.iter().enumerate() {
+        checked += 1;
+
+        // Verify prev_hash matches previous entry's hash
+        if idx > 0 {
+            let prev_row = &rows[idx - 1];
+            if let Some(ph) = &row.prev_hash && ph != &prev_row.hash {
+                broken_links.push(serde_json::json!({
+                    "sequence": row.sequence,
+                    "expected": prev_row.hash,
+                    "actual": ph
+                }));
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "valid": broken_links.is_empty(),
+        "totalEntries": total,
+        "checkedEntries": checked,
+        "brokenLinks": broken_links
+    })))
 }
 
 /// GET /api/providers/dynamic
-pub async fn providers_dynamic() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "dynamicProviders": [] }))
+pub async fn providers_dynamic(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let providers = state.providers.read().await;
+    let dynamic_providers = providers
+        .providers
+        .iter()
+        .filter(|p| p.dynamic_provider_id.is_some())
+        .map(|p| {
+            serde_json::json!({
+                "modelName": p.model_name,
+                "provider": p.provider,
+                "api": p.api,
+                "baseUrl": p.base_url,
+                "dynamicProviderId": p.dynamic_provider_id
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Json(serde_json::json!({ "dynamicProviders": dynamic_providers }))
 }
 
 /// GET /api/providers/dynamic/statuses
-pub async fn providers_dynamic_statuses() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "statuses": [] }))
+pub async fn providers_dynamic_statuses(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let providers = state.providers.read().await;
+    let statuses: Vec<serde_json::Value> = providers
+        .providers
+        .iter()
+        .filter(|p| p.dynamic_provider_id.is_some())
+        .map(|p| {
+            serde_json::json!({
+                "modelName": p.model_name,
+                "status": "configured",
+                "lastCheckedAt": None::<String>,
+                "errors": None::<Vec<String>>
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "statuses": statuses }))
 }
 
 /// GET /api/providers/templates — list provider templates
@@ -466,8 +595,36 @@ pub async fn set_default_model() -> Json<serde_json::Value> {
 }
 
 /// GET /api/agents/:id/grants — list agent capability grants
-pub async fn agent_grants(Path(_id): Path<String>) -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+pub async fn agent_grants(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, agent_instance_id, capability, action, granted_at, granted_by
+         FROM capability_grants WHERE agent_instance_id = $1::uuid"
+    )
+    .bind(&id)
+    .fetch_all(state.db.inner())
+    .await
+    .unwrap_or_default();
+
+    let grants: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let id: uuid::Uuid = r.get("id");
+            let granted_at: Option<time::OffsetDateTime> = r.get("granted_at");
+            serde_json::json!({
+                "id": id.to_string(),
+                "agentInstanceId": r.get::<uuid::Uuid, _>("agent_instance_id").to_string(),
+                "capability": r.get::<String, _>("capability"),
+                "action": r.get::<String, _>("action"),
+                "grantedAt": granted_at.map(super::iso8601),
+                "grantedBy": r.get::<Option<String>, _>("granted_by")
+            })
+        })
+        .collect();
+
+    Ok(Json(grants))
 }
 
 /// GET /api/agents/:id/context-debug — debug agent context
@@ -489,17 +646,80 @@ pub async fn agent_system_prompt(Path(_id): Path<String>) -> Json<serde_json::Va
 
 /// GET /api/agents/:id/health-check — agent health check
 /// Frontend expects: { agentId, agentName?, overallStatus, checks: Record<string, {ok, detail?}> }
-pub async fn agent_health_check(Path(id): Path<String>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
+pub async fn agent_health_check(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let row = sera_db::agents::AgentRepository::get_instance(state.db.inner(), &id).await?;
+
+    // Check heartbeat — extract OffsetDateTime from the row
+    let heartbeat_ok = if let Some(hb) = row.last_heartbeat_at {
+        let now = time::OffsetDateTime::now_utc();
+        let age_secs = (now - hb).whole_seconds();
+        age_secs < 60
+    } else {
+        false
+    };
+
+    let status_str = row.status.as_deref().unwrap_or("unknown");
+    let overall_status = match status_str {
+        "running" if heartbeat_ok => "healthy",
+        "running" => "stale",
+        "stopped" => "stopped",
+        _ => "unknown",
+    };
+
+    Ok(Json(serde_json::json!({
         "agentId": id,
-        "overallStatus": "unknown",
-        "checks": {}
-    }))
+        "agentName": row.name,
+        "overallStatus": overall_status,
+        "checks": {
+            "heartbeat": {
+                "ok": heartbeat_ok,
+                "detail": row.last_heartbeat_at.map(super::iso8601)
+            },
+            "status": {
+                "ok": status_str == "running",
+                "detail": status_str
+            }
+        }
+    })))
 }
 
 /// GET /api/agents/:id/sessions/:sid/commands — session command log
-pub async fn session_commands(Path((_id, _sid)): Path<(String, String)>) -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+pub async fn session_commands(
+    State(state): State<AppState>,
+    Path((_id, sid)): Path<(String, String)>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, session_id, task, status, result, error, created_at, started_at, completed_at
+         FROM task_queue WHERE session_id = $1 ORDER BY created_at DESC"
+    )
+    .bind(&sid)
+    .fetch_all(state.db.inner())
+    .await
+    .unwrap_or_default();
+
+    let commands: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let id: uuid::Uuid = r.get("id");
+            let created_at: time::OffsetDateTime = r.get("created_at");
+            serde_json::json!({
+                "id": id.to_string(),
+                "sessionId": r.get::<String, _>("session_id"),
+                "task": r.get::<String, _>("task"),
+                "status": r.get::<String, _>("status"),
+                "result": r.get::<Option<String>, _>("result"),
+                "error": r.get::<Option<String>, _>("error"),
+                "createdAt": super::iso8601(created_at),
+                "startedAt": r.get::<Option<time::OffsetDateTime>, _>("started_at").map(super::iso8601),
+                "completedAt": r.get::<Option<time::OffsetDateTime>, _>("completed_at").map(super::iso8601)
+            })
+        })
+        .collect();
+
+    Ok(Json(commands))
 }
 
 /// DELETE /api/memory/:agentId/blocks/:id

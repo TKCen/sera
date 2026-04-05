@@ -196,11 +196,12 @@ impl ProcessManager {
             error: None,
         };
 
-        // TODO: Implement workflow execution orchestration
-        // - For sequential mode: execute steps in order, respecting dependencies
-        // - For parallel mode: execute independent steps concurrently
-        // - Track step status, timeouts, and failures
-        // - Update execution status based on overall progress
+        // Phase 5: Implement workflow execution orchestration. Required:
+        // - Sequential mode: execute steps in order, respecting dependencies
+        // - Parallel mode: execute independent steps concurrently (tokio::spawn)
+        // - Step-level timeout handling (tokio::time::timeout)
+        // - Persist execution state to database after each step
+        // - Handle failures: mark step status, propagate errors
 
         Ok(execution)
     }

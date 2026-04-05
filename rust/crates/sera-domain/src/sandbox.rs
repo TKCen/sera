@@ -62,4 +62,94 @@ mod tests {
             assert_eq!(tier, parsed);
         }
     }
+
+    #[test]
+    fn sandbox_tier_json_format() {
+        assert_eq!(serde_json::to_string(&SandboxTier::Tier1).unwrap(), "\"1\"");
+        assert_eq!(serde_json::to_string(&SandboxTier::Tier2).unwrap(), "\"2\"");
+        assert_eq!(serde_json::to_string(&SandboxTier::Tier3).unwrap(), "\"3\"");
+    }
+
+    #[test]
+    fn sandbox_status_roundtrip() {
+        for status in [SandboxStatus::Running, SandboxStatus::Removing] {
+            let json = serde_json::to_string(&status).unwrap();
+            let parsed: SandboxStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, parsed);
+        }
+    }
+
+    #[test]
+    fn sandbox_info_minimal() {
+        let info = SandboxInfo {
+            container_id: "container-123".to_string(),
+            agent_name: "test-agent".to_string(),
+            sandbox_type: "docker".to_string(),
+            image: "sera-agent:latest".to_string(),
+            status: SandboxStatus::Running,
+            created_at: "2026-04-05T00:00:00Z".to_string(),
+            tier: SandboxTier::Tier2,
+            instance_id: "inst-456".to_string(),
+            lifecycle_mode: None,
+            proxy_enabled: None,
+            container_ip: None,
+            chat_url: None,
+            parent_agent: None,
+            subagent_role: None,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: SandboxInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.container_id, "container-123");
+        assert_eq!(parsed.tier, SandboxTier::Tier2);
+        assert_eq!(parsed.status, SandboxStatus::Running);
+    }
+
+    #[test]
+    fn sandbox_info_full() {
+        let info = SandboxInfo {
+            container_id: "container-789".to_string(),
+            agent_name: "subagent".to_string(),
+            sandbox_type: "docker".to_string(),
+            image: "sera-subagent:v1.0".to_string(),
+            status: SandboxStatus::Running,
+            created_at: "2026-04-05T12:00:00Z".to_string(),
+            tier: SandboxTier::Tier3,
+            instance_id: "inst-999".to_string(),
+            lifecycle_mode: Some(LifecycleMode::Persistent),
+            proxy_enabled: Some(true),
+            container_ip: Some("172.17.0.5".to_string()),
+            chat_url: Some("http://sera-core:3001/chat/inst-999".to_string()),
+            parent_agent: Some("parent-agent".to_string()),
+            subagent_role: Some("executor".to_string()),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: SandboxInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.lifecycle_mode, Some(LifecycleMode::Persistent));
+        assert_eq!(parsed.proxy_enabled, Some(true));
+        assert_eq!(parsed.parent_agent, Some("parent-agent".to_string()));
+    }
+
+    #[test]
+    fn sandbox_info_optional_fields_not_serialized() {
+        let info = SandboxInfo {
+            container_id: "c1".to_string(),
+            agent_name: "a1".to_string(),
+            sandbox_type: "docker".to_string(),
+            image: "img".to_string(),
+            status: SandboxStatus::Running,
+            created_at: "2026-04-05T00:00:00Z".to_string(),
+            tier: SandboxTier::Tier1,
+            instance_id: "inst1".to_string(),
+            lifecycle_mode: None,
+            proxy_enabled: None,
+            container_ip: None,
+            chat_url: None,
+            parent_agent: None,
+            subagent_role: None,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains("lifecycle_mode"));
+        assert!(!json.contains("proxy_enabled"));
+        assert!(!json.contains("parent_agent"));
+    }
 }

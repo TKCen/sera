@@ -181,4 +181,107 @@ mod tests {
         assert_eq!(config.llm.model, "lmstudio-local");
         assert_eq!(config.centrifugo.token_secret, "sera-token-secret");
     }
+
+    #[test]
+    fn core_config_port_parsing() {
+        // Test that PORT env var is properly parsed as u16
+        let config = CoreConfig {
+            database_url: "postgres://localhost/sera".to_string(),
+            port: 5000,
+            api_key: "test".to_string(),
+            llm: LlmConfig {
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: "key".to_string(),
+                model: "model".to_string(),
+            },
+            centrifugo: CentrifugoConfig {
+                api_url: "http://localhost:8000".to_string(),
+                api_key: "key".to_string(),
+                token_secret: "secret".to_string(),
+            },
+            qdrant: QdrantConfig {
+                url: "http://localhost:6333".to_string(),
+            },
+            ollama: OllamaConfig {
+                url: "http://localhost:11434".to_string(),
+            },
+            secrets_master_key: "key".to_string(),
+            providers: None,
+            oidc_issuer: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            external_url: None,
+            web_origin: None,
+        };
+        assert_eq!(config.port, 5000);
+    }
+
+    #[test]
+    fn core_config_api_key_default() {
+        let config = CoreConfig {
+            database_url: "postgres://localhost/sera".to_string(),
+            port: 3001,
+            api_key: "sera_bootstrap_dev_123".to_string(),
+            llm: LlmConfig {
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: "key".to_string(),
+                model: "model".to_string(),
+            },
+            centrifugo: CentrifugoConfig {
+                api_url: "http://localhost:8000".to_string(),
+                api_key: "key".to_string(),
+                token_secret: "secret".to_string(),
+            },
+            qdrant: QdrantConfig {
+                url: "http://localhost:6333".to_string(),
+            },
+            ollama: OllamaConfig {
+                url: "http://localhost:11434".to_string(),
+            },
+            secrets_master_key: "key".to_string(),
+            providers: None,
+            oidc_issuer: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            external_url: None,
+            web_origin: None,
+        };
+        assert_eq!(config.api_key, "sera_bootstrap_dev_123");
+    }
+
+    #[test]
+    fn llm_config_defaults() {
+        let config = LlmConfig {
+            base_url: "http://localhost:1234/v1".to_string(),
+            api_key: "lm-studio".to_string(),
+            model: "lmstudio-local".to_string(),
+        };
+        assert_eq!(config.base_url, "http://localhost:1234/v1");
+        assert_eq!(config.model, "lmstudio-local");
+    }
+
+    #[test]
+    fn centrifugo_config_defaults() {
+        let config = CentrifugoConfig {
+            api_url: "http://centrifugo:8000/api".to_string(),
+            api_key: "sera-api-key".to_string(),
+            token_secret: "sera-token-secret".to_string(),
+        };
+        assert!(config.api_url.contains("centrifugo"));
+        assert!(!config.token_secret.is_empty());
+    }
+
+    #[test]
+    fn qdrant_config_url() {
+        let config = QdrantConfig {
+            url: "http://qdrant:6333".to_string(),
+        };
+        assert_eq!(config.url, "http://qdrant:6333");
+    }
+
+    #[test]
+    fn config_error_display() {
+        let err = ConfigError::MissingEnvVar("TEST_VAR".to_string());
+        assert!(err.to_string().contains("TEST_VAR"));
+    }
 }

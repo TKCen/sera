@@ -149,8 +149,8 @@ impl ScheduleService {
     ///
     /// This integrates with the job queue to process the schedule.
     pub async fn trigger_schedule(&self, _id: Uuid) -> Result<(), ScheduleError> {
-        // TODO: Implement once job_queue integration is ready
-        // For now, this is a stub that would enqueue a schedule execution job
+        // Phase 5: Implement job queue integration (pg-boss or similar) to enqueue
+        // schedule execution jobs. Currently a stub that would enqueue a schedule execution job.
         Ok(())
     }
 
@@ -158,8 +158,9 @@ impl ScheduleService {
     ///
     /// This should be called periodically (e.g., every minute) to process due cron schedules.
     pub async fn process_due_schedules(&self) -> Result<usize, ScheduleError> {
-        // TODO: Implement schedule evaluation against next_run_at
-        // This would query schedules where next_run_at <= NOW() and enqueue them
+        // Phase 5: Implement periodic schedule evaluation. Query schedules where
+        // next_run_at <= NOW() and enqueue them via job queue. Requires background
+        // task runner (tokio spawn + interval timer or external scheduler).
         Ok(0)
     }
 

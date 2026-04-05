@@ -90,4 +90,101 @@ mod tests {
         let parsed: NamedListType = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, NamedListType::NetworkAllowlist);
     }
+
+    #[test]
+    fn named_list_all_types() {
+        let types = vec![
+            NamedListType::NetworkAllowlist,
+            NamedListType::NetworkDenylist,
+            NamedListType::CommandAllowlist,
+            NamedListType::CommandDenylist,
+            NamedListType::SecretList,
+        ];
+        for list_type in types {
+            let json = serde_json::to_string(&list_type).unwrap();
+            let parsed: NamedListType = serde_json::from_str(&json).unwrap();
+            assert_eq!(list_type, parsed);
+        }
+    }
+
+    #[test]
+    fn named_list_yaml_parse() {
+        let yaml = r#"
+apiVersion: sera/v1
+kind: NamedList
+metadata:
+  name: trusted-hosts
+  type: network-allowlist
+  description: Trusted external hosts
+  alwaysEnforced: true
+entries:
+  - api.github.com
+  - registry.docker.com
+"#;
+        let list: NamedList = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(list.metadata.name, "trusted-hosts");
+        assert_eq!(list.metadata.list_type, NamedListType::NetworkAllowlist);
+        assert!(list.metadata.always_enforced);
+        assert_eq!(list.entries.len(), 2);
+    }
+
+    #[test]
+    fn sandbox_boundary_yaml_parse() {
+        let yaml = r#"
+apiVersion: sera/v1
+kind: SandboxBoundary
+metadata:
+  name: tier-2
+  description: Tier 2 sandbox with network access
+spec:
+  linux:
+    capabilities:
+      - NET_BIND_SERVICE
+    seccomp: default
+    readOnlyRootfs: false
+    runAsNonRoot: true
+  allowedImages:
+    - sera-agent:*
+"#;
+        let boundary: SandboxBoundary = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(boundary.metadata.name, "tier-2");
+        let linux = boundary.spec.linux.unwrap();
+        assert_eq!(linux.capabilities.len(), 1);
+        assert!(!linux.read_only_rootfs);
+        assert!(linux.run_as_non_root);
+    }
+
+    #[test]
+    fn sandbox_boundary_minimal() {
+        let yaml = r#"
+apiVersion: sera/v1
+kind: SandboxBoundary
+metadata:
+  name: tier-1
+spec: {}
+"#;
+        let boundary: SandboxBoundary = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(boundary.metadata.name, "tier-1");
+        assert!(boundary.spec.linux.is_none());
+        assert!(boundary.spec.allowed_images.is_none());
+    }
+
+    #[test]
+    fn named_list_json_roundtrip() {
+        let list = NamedList {
+            api_version: "sera/v1".to_string(),
+            kind: "NamedList".to_string(),
+            metadata: NamedListMetadata {
+                name: "test-list".to_string(),
+                list_type: NamedListType::CommandAllowlist,
+                description: Some("Test".to_string()),
+                always_enforced: false,
+            },
+            entries: vec![serde_json::json!("echo"), serde_json::json!("ls")],
+        };
+        let json = serde_json::to_string(&list).unwrap();
+        let parsed: NamedList = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.metadata.name, "test-list");
+        assert_eq!(parsed.entries.len(), 2);
+    }
 }

@@ -1,0 +1,45 @@
+# Rust core override — replaces TS sera-core with Rust binary on the same port.
+# Usage: docker compose -f docker-compose.yaml -f docker-compose.rust.yaml up -d sera-core
+#
+# The TS Discord adapter is NOT included — use the Discord bridge sidecar instead:
+#   cd tools/discord-bridge && node --experimental-strip-types --env-file=.env src/index.ts
+
+services:
+  sera-core:
+    image: sera-sera-core:latest
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+    container_name: sera-core
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./core/config:/app/config:ro
+      - ./workspaces:/workspaces
+    entrypoint: []
+    command: ["/app/sera-core"]
+    environment:
+      - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
+      - PORT=3001
+      - RUST_LOG=debug
+      - SERA_API_KEY=${SERA_BOOTSTRAP_API_KEY:-sera_bootstrap_dev_123}
+      - SERA_PROVIDERS_JSON=/app/config/providers.json
+      - CENTRIFUGO_API_URL=http://centrifugo:8000/api
+      - CENTRIFUGO_API_KEY=sera-api-key
+      - CENTRIFUGO_TOKEN_SECRET=sera-token-secret
+      - QDRANT_URL=http://qdrant:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3001:3001"
+    networks:
+      - sera_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      sera-db:
+        condition: service_healthy

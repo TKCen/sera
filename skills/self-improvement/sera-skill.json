@@ -1,0 +1,28 @@
+{
+  "$schema": "https://sera.dev/schemas/sera-skill.schema.json",
+  "name": "self-improvement",
+  "displayName": "Self-Improvement Analysis",
+  "description": "Analyze recent interactions and stored knowledge to identify concrete improvement opportunities across skills, tools, knowledge, and behavior. Acts on trivial improvements immediately and logs insights.",
+  "version": "0.1.0",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "scope": {
+        "type": "string",
+        "enum": ["skills", "knowledge", "tools", "behavior", "all"],
+        "default": "all",
+        "description": "Which area to focus the improvement analysis on"
+      },
+      "lookback_hours": {
+        "type": "number",
+        "default": 24,
+        "description": "How many hours of recent activity to analyze"
+      }
+    },
+    "additionalProperties": false
+  },
+  "compatibleHarnesses": ["sera"],
+  "tags": ["meta", "self-evolution", "inner-life"],
+  "author": "SERA Project",
+  "license": "MIT"
+}

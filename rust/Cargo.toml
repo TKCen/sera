@@ -92,6 +92,7 @@ notify-debouncer-mini = "0.5"
 
 # Scheduling
 cron = "0.13"
+chrono = "0.4"
 
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }

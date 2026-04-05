@@ -133,6 +133,7 @@ pub async fn chat(
         let session_clone = session_id.clone();
         let context_clone = body.context.clone();
         let msg_id_clone = message_id.clone();
+        let agent_id_clone = agent_id.clone();
 
         tokio::spawn(async move {
             if let Err(e) = process_chat_background(
@@ -142,6 +143,7 @@ pub async fn chat(
                 &session_clone,
                 context_clone,
                 &msg_id_clone,
+                &agent_id_clone,
             )
             .await
             {
@@ -200,14 +202,17 @@ pub async fn chat(
     }
 }
 
-/// Background task to process chat in stream mode
+/// Background task to process chat in stream mode.
+/// Sends the message to the agent container, then publishes the response
+/// to Centrifugo so the web UI receives it via the `tokens:{agentId}` channel.
 async fn process_chat_background(
     state: &AppState,
     chat_url: &str,
     message: &str,
     session_id: &str,
     context: Vec<ChatMessage>,
-    _message_id: &str,
+    message_id: &str,
+    agent_id: &str,
 ) -> Result<(), anyhow::Error> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -223,8 +228,42 @@ async fn process_chat_background(
         .send()
         .await?;
 
-    let _response_body: ContainerChatResponse = resp.json().await?;
-    // TODO: Persist to database and emit via Centrifugo when ready
+    let response_body: ContainerChatResponse = resp.json().await?;
+    let reply = response_body.result.unwrap_or_else(|| "No response generated.".to_string());
+
+    // Publish response to Centrifugo for the web UI token stream
+    if let Some(centrifugo) = &state.centrifugo {
+        let channel = format!("tokens:{}", agent_id);
+
+        // Send the complete reply as a single token
+        centrifugo
+            .publish(
+                &channel,
+                serde_json::json!({
+                    "token": reply,
+                    "done": false,
+                    "messageId": message_id,
+                }),
+            )
+            .await
+            .unwrap_or_else(|e| tracing::error!("Centrifugo publish error: {e}"));
+
+        // Send done signal
+        centrifugo
+            .publish(
+                &channel,
+                serde_json::json!({
+                    "token": "",
+                    "done": true,
+                    "messageId": message_id,
+                }),
+            )
+            .await
+            .unwrap_or_else(|e| tracing::error!("Centrifugo done signal error: {e}"));
+    } else {
+        tracing::warn!("Centrifugo client not configured — stream response not delivered");
+    }
+
     Ok(())
 }
 

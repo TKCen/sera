@@ -64,6 +64,24 @@ services:
       - RUST_LOG=debug
       - SERA_API_KEY=${SERA_BOOTSTRAP_API_KEY:-sera-dev-key-change-me}
 
+  # Dogfeed coding agent — on-demand container for self-improvement cycles
+  # Phase 0 bootstrap: TS orchestration. Phase 1+: moves to sera-core-rs (Rust).
+  sera-dogfeed-agent:
+    image: sera-dogfeed-agent:latest
+    build:
+      context: ./docker/dogfeed-agent
+      dockerfile: Dockerfile
+    profiles: ["dogfeed"]
+    volumes:
+      - .:/workspace
+      - ${USERPROFILE:-.}/.claude:/root/.claude:ro
+      - ${USERPROFILE:-.}/.config/gh:/root/.config/gh:ro
+    environment:
+      - DOGFEED_REPO_PATH=/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    network_mode: host
+
   # Egress proxy — no dev overrides, uses base definition from docker-compose.yaml
   sera-egress-proxy: {}
 

@@ -35,6 +35,7 @@ interface ChatRequest {
 }
 
 interface ChatResponse {
+  reply?: string;
   response?: string;
   result?: string;
   error?: string;
@@ -73,7 +74,7 @@ async function forwardToSera(message: string, channelId: string): Promise<string
   }
 
   const data = (await res.json()) as ChatResponse;
-  return data.response ?? data.result ?? 'No response.';
+  return data.reply ?? data.response ?? data.result ?? 'No response.';
 }
 
 async function sendChunked(msg: Message, text: string): Promise<void> {
@@ -111,6 +112,16 @@ async function sendChunked(msg: Message, text: string): Promise<void> {
 }
 
 client.on(Events.MessageCreate, async (msg: Message) => {
+  // DMs arrive as partials — fetch full message before processing
+  if (msg.partial) {
+    try {
+      msg = await msg.fetch();
+    } catch (err) {
+      console.error('Failed to fetch partial message:', err);
+      return;
+    }
+  }
+
   // Ignore bots (including self)
   if (msg.author.bot) return;
 

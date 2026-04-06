@@ -8,6 +8,15 @@
 
 import type { ToolDefinition } from '../llmClient.js';
 
+export const TOOL_GROUPS: Record<string, string[]> = {
+  core: ['tool-search', 'skill-search'],
+  memory: ['knowledge-store', 'knowledge-query'],
+  filesystem: ['file-read', 'read_file', 'file-write', 'file-list', 'file-delete', 'glob', 'grep'],
+  web: ['web-fetch', 'http-request'],
+  compute: ['code-eval', 'shell-exec', 'pdf-read', 'image-view'],
+  orchestration: ['spawn-subagent', 'run-tool'],
+};
+
 export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     type: 'function',

@@ -1,6 +1,6 @@
-import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../lib/database.js';
 import type { AgentContext, SkillDefinition } from '../types.js';
+import { ScheduleService } from '../../services/ScheduleService.js';
 
 /**
  * schedule-task Skill
@@ -116,7 +116,7 @@ export const scheduleTaskSkill: SkillDefinition = {
       name: 'action',
       type: 'string',
       description:
-        'The action to perform: create, list, get, activate, deactivate, update, or delete a schedule.',
+        'The action to perform: create, list, get, activate, deactivate, update, or delete a schedule. Aliases: schedule=create, pause=deactivate, resume=activate.',
       required: true,
     },
     {
@@ -189,36 +189,50 @@ export const scheduleTaskSkill: SkillDefinition = {
     }
     const { targetId } = resolved;
 
-    // Normalize task to a JSON string — the `task` column is type JSON in Postgres.
-    // The LLM may send a plain string prompt or a structured object.
-    const taskPrompt =
-      task == null
-        ? undefined
-        : typeof task === 'string'
-          ? JSON.stringify({ prompt: task })
-          : JSON.stringify(task);
-
     try {
-      switch (action) {
+      // Normalize action aliases
+      const normalizedAction =
+        action === 'schedule'
+          ? 'create'
+          : action === 'pause'
+            ? 'deactivate'
+            : action === 'resume'
+              ? 'activate'
+              : action;
+
+      switch (normalizedAction) {
         case 'create': {
-          if (!name || !cron || !taskPrompt) {
+          if (!name || !cron || !task) {
             return {
               success: false,
               error: 'name, cron, and task are required for create action.',
             };
           }
-          const newId = uuidv4();
-          const now = new Date().toISOString();
-          await query(
-            `INSERT INTO schedules (id, agent_instance_id, agent_name, name, expression, type, task, source, status, category, created_at, updated_at)
-             VALUES ($1, $2, (SELECT name FROM agent_instances WHERE id = $2), $3, $4, 'cron', $5, 'api', 'active', $6, $7, $7)`,
-            [newId, targetId, name, cron, taskPrompt, category ?? null, now]
-          );
+
+          // Look up agent name for the service
+          const agentRes = await query('SELECT name FROM agent_instances WHERE id = $1', [
+            targetId,
+          ]);
+          const agentName = (agentRes.rows[0]?.name as string | undefined) ?? '';
+
+          const scheduleService = ScheduleService.getInstance();
+          const created = await scheduleService.createSchedule({
+            agent_instance_id: targetId,
+            agent_name: agentName,
+            name,
+            type: 'cron',
+            expression: cron,
+            task: typeof task === 'string' ? task : JSON.stringify(task),
+            status: 'active',
+            source: 'api',
+            ...(category !== undefined ? { category } : {}),
+          });
+
           const targetLabel = targetId === callerAgentId ? '' : ` for agent ${targetId}`;
           return {
             success: true,
             data: {
-              scheduleId: newId,
+              scheduleId: created.id,
               message: `Schedule "${name}" created successfully${targetLabel}.`,
             },
           };
@@ -252,32 +266,40 @@ export const scheduleTaskSkill: SkillDefinition = {
         case 'activate': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for activate action.' };
-          const actRes = await query(
-            `UPDATE schedules SET status = 'active', updated_at = NOW()
-             WHERE id = $1 AND agent_instance_id = $2`,
+
+          // Verify ownership before updating
+          const ownerCheck = await query(
+            'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, targetId]
           );
-          if (actRes.rowCount === 0)
+          if (ownerCheck.rows.length === 0)
             return {
               success: false,
               error: 'Schedule not found or not owned by the target agent.',
             };
+
+          const scheduleService = ScheduleService.getInstance();
+          await scheduleService.updateSchedule(scheduleId, { status: 'active' });
           return { success: true, data: { message: 'Schedule activated successfully.' } };
         }
 
         case 'deactivate': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for deactivate action.' };
-          const deactRes = await query(
-            `UPDATE schedules SET status = 'paused', updated_at = NOW()
-             WHERE id = $1 AND agent_instance_id = $2`,
+
+          // Verify ownership before updating
+          const ownerCheck = await query(
+            'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, targetId]
           );
-          if (deactRes.rowCount === 0)
+          if (ownerCheck.rows.length === 0)
             return {
               success: false,
               error: 'Schedule not found or not owned by the target agent.',
             };
+
+          const scheduleService = ScheduleService.getInstance();
+          await scheduleService.updateSchedule(scheduleId, { status: 'paused' });
           return {
             success: true,
             data: { message: 'Schedule deactivated (paused) successfully.' },
@@ -287,7 +309,7 @@ export const scheduleTaskSkill: SkillDefinition = {
         case 'delete': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for delete action.' };
-          // Check if manifest-sourced — cannot delete
+          // Check ownership and source — cannot delete manifest schedules
           const sourceCheck = await query(
             'SELECT source FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, targetId]
@@ -302,15 +324,9 @@ export const scheduleTaskSkill: SkillDefinition = {
               success: false,
               error: 'Cannot delete manifest-managed schedules. Use deactivate instead.',
             };
-          const delRes = await query(
-            'DELETE FROM schedules WHERE id = $1 AND agent_instance_id = $2',
-            [scheduleId, targetId]
-          );
-          if (delRes.rowCount === 0)
-            return {
-              success: false,
-              error: 'Schedule not found or not owned by the target agent.',
-            };
+
+          const scheduleService = ScheduleService.getInstance();
+          await scheduleService.deleteSchedule(scheduleId);
           return { success: true, data: { message: 'Schedule deleted successfully.' } };
         }
 
@@ -330,7 +346,7 @@ export const scheduleTaskSkill: SkillDefinition = {
           const current = currentRes.rows[0];
 
           // Manifest schedules: only allow status changes (activate/deactivate)
-          if (current.source === 'manifest' && (name || cron || taskPrompt || category)) {
+          if (current.source === 'manifest' && (name || cron || task || category)) {
             return {
               success: false,
               error:
@@ -338,16 +354,19 @@ export const scheduleTaskSkill: SkillDefinition = {
             };
           }
 
-          const updName = name ?? current.name;
-          const updCron = cron ?? (current.expression || current.cron);
-          const updTask = taskPrompt ?? current.task;
-          const updStatus = status ?? current.status;
-          const updCategory = category ?? current.category ?? null;
+          // Build updates object using ScheduleService field names
+          const updates: Record<string, unknown> = {};
+          if (name !== undefined) updates['name'] = name;
+          if (cron !== undefined) updates['expression'] = cron;
+          if (task !== undefined)
+            updates['task'] = typeof task === 'string' ? task : JSON.stringify(task);
+          if (status !== undefined) updates['status'] = status;
+          if (category !== undefined) updates['category'] = category;
 
-          await query(
-            `UPDATE schedules SET name = $1, expression = $2, task = $3, status = $4, category = $5, updated_at = NOW()
-             WHERE id = $6`,
-            [updName, updCron, updTask, updStatus, updCategory, scheduleId]
+          const scheduleService = ScheduleService.getInstance();
+          await scheduleService.updateSchedule(
+            scheduleId,
+            updates as Parameters<typeof scheduleService.updateSchedule>[1]
           );
           return { success: true, data: { message: 'Schedule updated successfully.' } };
         }
@@ -356,7 +375,7 @@ export const scheduleTaskSkill: SkillDefinition = {
           return { success: false, error: `Unsupported action: ${action}` };
       }
     } catch (err: unknown) {
-      return { success: false, error: `Database error: ${(err as Error).message}` };
+      return { success: false, error: `Error: ${(err as Error).message}` };
     }
   },
 };

@@ -92,8 +92,12 @@ interface RetryState {
 function selectActiveGroups(task: string, manifestGroups: string[] = []): Set<string> {
   const active = new Set<string>(['core', 'memory']);
 
-  // Merge manifest-declared groups
+  // Merge manifest-declared groups (skip unknown group names)
   for (const g of manifestGroups) {
+    if (!(g in TOOL_GROUPS)) {
+      // Unknown group — skip silently to avoid empty gated sets
+      continue;
+    }
     active.add(g);
   }
 
@@ -145,33 +149,8 @@ export class ReasoningLoop {
     // Initial system prompt — will be refreshed per task with current time/tools
     this.systemPrompt = this.refreshSystemPrompt();
 
-    // Dynamic tool exposure (#535): if tool count exceeds CORE_TOOL_LIMIT,
-    // defer the excess tools and keep tool-search in the core set.
-    const coreLimit = manifest.tools?.coreTools
-      ? this.allToolDefs.filter((t) =>
-          (manifest.tools!.coreTools as string[]).includes(t.function.name)
-        )
-      : undefined;
-
-    if (coreLimit) {
-      // Explicit coreTools list from manifest
-      const searchTool = this.allToolDefs.find((t) => t.function.name === 'tool-search');
-      this.toolDefs = [...coreLimit, ...(searchTool ? [searchTool] : [])];
-    } else if (this.allToolDefs.length > CORE_TOOL_LIMIT) {
-      // Auto-defer: keep first CORE_TOOL_LIMIT tools + tool-search
-      const searchTool = this.allToolDefs.find((t) => t.function.name === 'tool-search');
-      const withoutSearch = this.allToolDefs.filter((t) => t.function.name !== 'tool-search');
-      this.toolDefs = [
-        ...withoutSearch.slice(0, CORE_TOOL_LIMIT),
-        ...(searchTool ? [searchTool] : []),
-      ];
-      log(
-        'info',
-        `Tool deferral active: ${this.toolDefs.length} core + ${withoutSearch.length - CORE_TOOL_LIMIT} deferred of ${this.allToolDefs.length} total`
-      );
-    } else {
-      this.toolDefs = this.allToolDefs;
-    }
+    // toolDefs will be set per-run in run() via context-aware gating (#535).
+    this.toolDefs = this.allToolDefs;
   }
 
   /**
@@ -269,6 +248,13 @@ export class ReasoningLoop {
     } else {
       this.toolDefs = gatedToolDefs;
     }
+
+    // Guard: if gating produced empty toolset but we have tools available, fall back
+    if (this.toolDefs.length === 0 && this.allToolDefs.length > 0) {
+      log('warn', 'Tool gating produced empty set — falling back to all tools');
+      this.toolDefs = this.allToolDefs;
+    }
+
     log(
       'info',
       `Tool gating: groups=[${[...activeGroups].join(',')}] active=${this.toolDefs.length}/${this.allToolDefs.length}`

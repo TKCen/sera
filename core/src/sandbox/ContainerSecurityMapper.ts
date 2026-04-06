@@ -61,7 +61,7 @@ export class ContainerSecurityMapper {
     // egress proxy. Only active when EGRESS_PROXY_URL is set (graceful
     // degradation if proxy not deployed).
     const egressProxyUrl = process.env.EGRESS_PROXY_URL;
-    const proxyEnabled = networkMode === 'agent_net' && !!egressProxyUrl;
+    const proxyEnabled = networkMode === 'agent_net' && !!egressProxyUrl && tier > 1;
     if (proxyEnabled) {
       env.push(`HTTP_PROXY=${egressProxyUrl}`);
       env.push(`HTTPS_PROXY=${egressProxyUrl}`);
@@ -104,6 +104,7 @@ export class ContainerSecurityMapper {
         CapDrop: ['ALL'],
         ...(linuxCaps.length > 0 ? { CapAdd: linuxCaps } : {}),
         ReadonlyRootfs: caps.security?.readonlyRootfs ?? false,
+        ...(tier === 1 ? { SecurityOpt: ['no-new-privileges'] } : {}),
       },
     };
 

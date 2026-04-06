@@ -6,6 +6,7 @@
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { Centrifuge } from 'centrifuge';
 import { log } from './logger.js';
+import { safeStringify } from './json.js';
 
 export interface IntercomMessage {
   id: string;
@@ -93,9 +94,11 @@ export class CentrifugoPublisher {
 
   async publish(channel: string, data: unknown): Promise<void> {
     try {
-      await this.http.post('', {
-        method: 'publish',
-        params: { channel, data },
+      // Use safeStringify to handle cyclic references in tool results/args
+      // before axios attempts its own JSON.stringify internally.
+      const body = safeStringify({ method: 'publish', params: { channel, data } });
+      await this.http.post('', body, {
+        headers: { 'Content-Type': 'application/json' },
       });
     } catch (err) {
       const msg = err instanceof AxiosError ? err.message : String(err);

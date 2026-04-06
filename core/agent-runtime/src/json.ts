@@ -11,8 +11,9 @@ export function parseJson<T = any>(text: string): T {
   let cleaned = text.trim();
 
   // 1. Strip markdown code blocks if present
-  const codeBlockMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/m)
-                      || cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const codeBlockMatch =
+    cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/m) ||
+    cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
 
   if (codeBlockMatch && codeBlockMatch[1]) {
     cleaned = codeBlockMatch[1].trim();
@@ -74,7 +75,9 @@ export function parseJson<T = any>(text: string): T {
               try {
                 return JSON.parse(potentialJson);
               } catch (innerErr) {
-                throw new Error(`Failed to parse extracted JSON: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}`);
+                throw new Error(
+                  `Failed to parse extracted JSON: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}`
+                );
               }
             }
           }
@@ -82,7 +85,9 @@ export function parseJson<T = any>(text: string): T {
       }
     }
 
-    throw new Error(`No valid JSON found in input: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(
+      `No valid JSON found in input: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 
@@ -92,4 +97,24 @@ export function safeParseJson<T = any>(text: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * JSON.stringify that handles cyclic references by replacing them with '[Circular]'.
+ * Use at serialization boundaries where third-party objects (e.g. axios responses,
+ * tool results) may contain circular refs.
+ */
+export function safeStringify(value: unknown, indent?: number): string {
+  const seen = new WeakSet();
+  return JSON.stringify(
+    value,
+    (_key, val) => {
+      if (typeof val === 'object' && val !== null) {
+        if (seen.has(val)) return '[Circular]';
+        seen.add(val);
+      }
+      return val;
+    },
+    indent
+  );
 }

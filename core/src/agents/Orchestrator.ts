@@ -902,14 +902,20 @@ export class Orchestrator {
   }
 
   /**
-   * Reconcile tasks on startup: mark 'running' tasks with no active container as failed/orphaned.
+   * Reconcile tasks and agent instances on startup.
+   *
+   * - Marks task_queue entries with status='running' as 'failed' when the
+   *   owning agent container no longer exists (orphaned by restart).
+   * - Marks agent_instances with status='running' as 'stopped' when their
+   *   container no longer exists (DB record left stale after restart).
    */
   public async reconcileTasks(): Promise<void> {
     const activeInstanceIds = this.sandboxManager
       ? await this.sandboxManager.getActiveInstanceIds()
       : [];
 
-    let queryText = `
+    // ── Reconcile task_queue ─────────────────────────────────────────────────
+    let taskQueryText = `
        UPDATE task_queue
        SET status = 'failed',
            exit_reason = 'orphaned',
@@ -917,17 +923,39 @@ export class Orchestrator {
            completed_at = now()
        WHERE status = 'running'`;
 
-    const params: string[] = [];
+    const taskParams: string[] = [];
     if (activeInstanceIds.length > 0) {
-      queryText += ` AND agent_instance_id NOT IN (${activeInstanceIds.map((_, i) => `$${i + 1}`).join(', ')})`;
-      params.push(...activeInstanceIds);
+      taskQueryText += ` AND agent_instance_id NOT IN (${activeInstanceIds.map((_, i) => `$${i + 1}`).join(', ')})`;
+      taskParams.push(...activeInstanceIds);
     }
 
-    const result = await query(queryText, params);
-    const count = result.rowCount ?? 0;
-    if (count > 0) {
+    const taskResult = await query(taskQueryText, taskParams);
+    const taskCount = taskResult.rowCount ?? 0;
+    if (taskCount > 0) {
       logger.info(
-        `Reconciled ${count} orphaned tasks on startup (ignored ${activeInstanceIds.length} active instances)`
+        `Reconciled ${taskCount} orphaned tasks on startup (ignored ${activeInstanceIds.length} active instances)`
+      );
+    }
+
+    // ── Reconcile agent_instances ────────────────────────────────────────────
+    // Instances left in 'running' status whose containers are gone need to be
+    // marked 'stopped' so the UI and queue logic reflect the actual state.
+    let instanceQueryText = `
+       UPDATE agent_instances
+       SET status = 'stopped', updated_at = now()
+       WHERE status = 'running'`;
+
+    const instanceParams: string[] = [];
+    if (activeInstanceIds.length > 0) {
+      instanceQueryText += ` AND id NOT IN (${activeInstanceIds.map((_, i) => `$${i + 1}`).join(', ')})`;
+      instanceParams.push(...activeInstanceIds);
+    }
+
+    const instanceResult = await query(instanceQueryText, instanceParams);
+    const instanceCount = instanceResult.rowCount ?? 0;
+    if (instanceCount > 0) {
+      logger.info(
+        `Reconciled ${instanceCount} stale running agent instances on startup (ignored ${activeInstanceIds.length} active instances)`
       );
     }
   }

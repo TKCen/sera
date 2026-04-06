@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -13,7 +13,7 @@ import {
   CheckCircle2,
   type LucideIcon,
 } from 'lucide-react';
-import { cn, formatElapsed } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { getStepMeta } from '@/lib/step-metadata';
 
 import type { Message, MessageThought } from '@/lib/api/types';
@@ -62,12 +62,64 @@ interface ChatThoughtPanelProps {
   onToggleThoughts: (id: string) => void;
 }
 
+// Context assembly events that should be collapsed into a single summary line
+const CONTEXT_EVENTS = new Set([
+  'context.assembly_started',
+  'context.assembly_completed',
+  'context.circle_constitution_skipped',
+  'context.circle_constitution_injected',
+  'context.skills_injected',
+  'context.tools_resolved',
+  'context.memory_retrieved',
+  'context.token_budget',
+]);
+
+type ContextSummaryStep = { type: 'context_summary'; count: number; key: string };
+type DisplayStep = MessageThought | ContextSummaryStep;
+
+function isContextEvent(thought: MessageThought): boolean {
+  return CONTEXT_EVENTS.has(thought.stepType) || CONTEXT_EVENTS.has(thought.content ?? '');
+}
+
 export function ChatThoughtPanel({
   msg,
   showThinking,
   isExpanded,
   onToggleThoughts,
 }: ChatThoughtPanelProps) {
+  // Collapse context assembly events into a single summary line
+  const displaySteps = useMemo((): DisplayStep[] => {
+    const result: DisplayStep[] = [];
+    let contextGroup: MessageThought[] = [];
+    let contextGroupStartKey = '';
+
+    for (let i = 0; i < msg.thoughts.length; i++) {
+      const thought = msg.thoughts[i]!;
+      if (isContextEvent(thought)) {
+        if (contextGroup.length === 0) contextGroupStartKey = `${thought.timestamp}-${i}`;
+        contextGroup.push(thought);
+      } else {
+        if (contextGroup.length > 0) {
+          result.push({
+            type: 'context_summary',
+            count: contextGroup.length,
+            key: contextGroupStartKey,
+          });
+          contextGroup = [];
+        }
+        result.push(thought);
+      }
+    }
+    if (contextGroup.length > 0) {
+      result.push({
+        type: 'context_summary',
+        count: contextGroup.length,
+        key: contextGroupStartKey,
+      });
+    }
+    return result;
+  }, [msg.thoughts]);
+
   if (msg.role !== 'agent') return null;
   if (!showThinking) return null;
   if (msg.thoughts.length === 0 && !msg.streaming) return null;
@@ -106,7 +158,7 @@ export function ChatThoughtPanel({
       <div
         className={cn(
           'overflow-hidden transition-all duration-300',
-          isExpanded ? 'max-h-[1200px] opacity-100 mt-2' : 'max-h-0 opacity-0'
+          isExpanded ? 'max-h-[400px] opacity-100 mt-2 overflow-y-auto' : 'max-h-0 opacity-0'
         )}
       >
         <div
@@ -115,10 +167,27 @@ export function ChatThoughtPanel({
             msg.streaming ? 'border-sera-accent/50' : 'border-sera-border'
           )}
         >
-          {msg.thoughts.map((thought, i) => {
+          {displaySteps.map((step, i) => {
+            // ── Context summary block ────────────────────────────────────────
+            if ('type' in step && step.type === 'context_summary') {
+              return (
+                <div
+                  key={step.key}
+                  className="flex items-center gap-2 text-xs text-sera-text-muted py-0.5 animate-in fade-in duration-200"
+                >
+                  <span className="text-sera-text-dim flex-shrink-0">⚙</span>
+                  <span>
+                    Context prepared ({step.count} step{step.count !== 1 ? 's' : ''})
+                  </span>
+                </div>
+              );
+            }
+
+            const thought = step as MessageThought;
+
             // ── Reasoning block ──────────────────────────────────────────────
             if (thought.stepType === 'reasoning') {
-              const isLast = i === msg.thoughts.length - 1;
+              const isLast = i === displaySteps.length - 1;
               const reasonColor = stepColor('reasoning');
               return (
                 <details
@@ -190,11 +259,6 @@ export function ChatThoughtPanel({
                     <span className={cn('text-[11px] font-semibold', stepColor('tool-call'))}>
                       {toolName}
                     </span>
-                    {i > 0 && (
-                      <span className="ml-auto text-[10px] text-sera-text-muted/50">
-                        {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
-                      </span>
-                    )}
                   </div>
                   {paramDisplay && (
                     <pre className="ml-4 text-[10.5px] text-sera-text-muted leading-relaxed bg-sera-bg/60 border border-sera-border rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap break-all [scrollbar-width:thin]">
@@ -298,11 +362,6 @@ export function ChatThoughtPanel({
                   <div className="flex items-center gap-1.5">
                     <span className={cn(errMeta.color, 'flex-shrink-0')}>{stepIcon('error')}</span>
                     <span className={cn('text-[11px] font-semibold', errMeta.color)}>Error</span>
-                    {i > 0 && (
-                      <span className="ml-auto text-[10px] text-sera-text-muted/50">
-                        {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
-                      </span>
-                    )}
                   </div>
                   <p className="text-[11px] text-sera-error/80 mt-1 ml-4 leading-relaxed">
                     {thought.content}
@@ -323,11 +382,6 @@ export function ChatThoughtPanel({
                 <span className="text-[11px] text-sera-text-muted leading-relaxed flex-1">
                   {thought.content}
                 </span>
-                {i > 0 && (
-                  <span className="text-[10px] text-sera-text-muted/50 flex-shrink-0">
-                    {formatElapsed(msg.thoughts[i - 1]!.timestamp, thought.timestamp)}
-                  </span>
-                )}
               </div>
             );
           })}

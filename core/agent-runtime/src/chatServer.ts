@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ReasoningLoop, TaskOutput } from './loop.js';
 import type { ChatMessage } from './llmClient.js';
 import { log } from './logger.js';
+import { safeStringify } from './json.js';
 
 const CHAT_PORT = parseInt(process.env['AGENT_CHAT_PORT'] || '3100', 10);
 
@@ -42,8 +43,11 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 function sendJson(res: http.ServerResponse, status: number, data: unknown): void {
-  const body = JSON.stringify(data);
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  const body = safeStringify(data);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  });
   res.end(body);
 }
 
@@ -52,7 +56,7 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
  */
 export function startChatServer(
   loop: ReasoningLoop,
-  onBusy: () => boolean,
+  onBusy: () => boolean
 ): { port: number; stop: () => void } {
   let ready = true;
 
@@ -67,7 +71,9 @@ export function startChatServer(
 
     // Boot context preview
     if (req.method === 'GET' && url.pathname === '/boot-context') {
-      sendJson(res, 200, { content: (loop as unknown as { bootContext: string }).bootContext || '' });
+      sendJson(res, 200, {
+        content: (loop as unknown as { bootContext: string }).bootContext || '',
+      });
       return;
     }
 
@@ -93,7 +99,10 @@ export function startChatServer(
       }
 
       const taskId = body.messageId || uuidv4();
-      log('info', `Chat request received (taskId=${taskId}): "${body.message.substring(0, 80)}..."`);
+      log(
+        'info',
+        `Chat request received (taskId=${taskId}): "${body.message.substring(0, 80)}..."`
+      );
 
       try {
         const output = await loop.run({

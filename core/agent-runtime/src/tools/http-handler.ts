@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { safeStringify } from '../json.js';
 
 export async function httpRequest(
   url: string,
@@ -16,7 +17,8 @@ export async function httpRequest(
 
   // Allow sera-core and other SERA service hostnames (internal Docker network).
   // Block raw private IPs unless they resolve to a known SERA service.
-  const SERA_INTERNAL_HOSTS = /^https?:\/\/(sera-core|sera-db|sera-centrifugo|centrifugo|sera-qdrant|sera-egress-proxy)(:\d+)?/i;
+  const SERA_INTERNAL_HOSTS =
+    /^https?:\/\/(sera-core|sera-db|sera-centrifugo|centrifugo|sera-qdrant|sera-egress-proxy)(:\d+)?/i;
   if (
     !SERA_INTERNAL_HOSTS.test(url) &&
     /^https?:\/\/(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/i.test(url)
@@ -52,10 +54,10 @@ export async function httpRequest(
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      data: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
+      data: typeof response.data === 'string' ? response.data : safeStringify(response.data),
     };
 
-    return JSON.stringify(output, null, 2);
+    return safeStringify(output, 2);
   } catch (err) {
     return `Error: HTTP request failed: ${err instanceof Error ? err.message : String(err)}`;
   }

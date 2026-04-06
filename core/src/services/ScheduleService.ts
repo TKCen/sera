@@ -3,6 +3,7 @@ import { pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { AuditService } from '../audit/AuditService.js';
+import { ChannelRouter } from '../channels/ChannelRouter.js';
 import { v4 as uuidv4 } from 'uuid';
 import { validateCronExpression, computeNextRunAt } from '../lib/cron-utils.js';
 
@@ -301,6 +302,30 @@ export class ScheduleService {
 
     logger.info(`Triggering schedule ${schedule.name} for agent ${schedule.agent_name}`);
 
+    // Orchestration task: if the task JSON has a `tool` field, route to a bridge agent's queue
+    // instead of running the schedule's own agent process.
+    const orchestrationResult = await maybeRouteOrchestrationTask(schedule, taskPrompt);
+    if (orchestrationResult !== null) {
+      await this.updateRunStatus(id, orchestrationResult.ok ? 'success' : 'error');
+      if (!orchestrationResult.ok) {
+        throw new Error(orchestrationResult.reason);
+      }
+      await AuditService.getInstance().record({
+        actorType: 'system',
+        actorId: 'system',
+        actingContext: null,
+        eventType: 'schedule.fired',
+        payload: {
+          scheduleId: schedule.id,
+          agentId: schedule.agent_instance_id,
+          orchestration: true,
+          tool: orchestrationResult.tool,
+          bridgeAgentId: orchestrationResult.bridgeAgentId,
+        },
+      });
+      return { status: 'triggered' };
+    }
+
     if (!this.orchestrator) {
       logger.error('Orchestrator not set in ScheduleService');
       throw new Error('Internal error: Orchestrator not available');
@@ -564,6 +589,85 @@ export class ScheduleService {
     this.boss = null;
     this.initialized = false;
   }
+}
+
+type OrchestrationResult =
+  | { ok: true; tool: string; bridgeAgentId: string }
+  | { ok: false; reason: string; tool?: string; bridgeAgentId?: never };
+
+/**
+ * If the schedule task JSON contains a `tool` field, route it as an orchestration task
+ * by inserting into the bridge agent's task queue and emitting `task.assigned`.
+ * Returns null if this is not an orchestration task (no `tool` field).
+ */
+async function maybeRouteOrchestrationTask(
+  schedule: Schedule,
+  taskPrompt: string
+): Promise<OrchestrationResult | null> {
+  // Parse the task JSON to check for a `tool` field
+  const taskObj: unknown =
+    typeof schedule.task === 'object' && schedule.task !== null
+      ? schedule.task
+      : (() => {
+          try {
+            return JSON.parse(String(schedule.task));
+          } catch {
+            return null;
+          }
+        })();
+
+  if (!taskObj || typeof taskObj !== 'object') return null;
+  const tool = (taskObj as Record<string, unknown>)['tool'];
+  if (typeof tool !== 'string' || !tool) return null;
+
+  const bridgeName = `${tool}-bridge`;
+
+  // Resolve the bridge agent ID
+  const { rows: agentRows } = await pool.query<{ id: string }>(
+    'SELECT id FROM agent_instances WHERE name = $1 LIMIT 1',
+    [bridgeName]
+  );
+  const bridgeAgent = agentRows[0];
+  if (!bridgeAgent) {
+    logger.error(`Orchestration task: bridge agent "${bridgeName}" not found`);
+    return { ok: false, reason: `Bridge agent "${bridgeName}" not found`, tool };
+  }
+
+  const taskId = uuidv4();
+  const scheduleContext = JSON.stringify({
+    schedule: {
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      category: schedule.category ?? null,
+      firedAt: new Date().toISOString(),
+    },
+  });
+
+  await pool.query(
+    `INSERT INTO task_queue (id, agent_instance_id, task, context, status) VALUES ($1, $2, $3, $4, 'queued')`,
+    [taskId, bridgeAgent.id, taskPrompt, scheduleContext]
+  );
+
+  ChannelRouter.getInstance().route({
+    id: uuidv4(),
+    eventType: 'task.assigned',
+    title: `Orchestration task assigned to ${bridgeName}`,
+    body: taskPrompt.substring(0, 200),
+    severity: 'info',
+    metadata: {
+      taskId,
+      agentId: bridgeAgent.id,
+      prompt: taskPrompt.substring(0, 200),
+      tool,
+      scheduleId: schedule.id,
+    },
+    timestamp: new Date().toISOString(),
+  });
+
+  logger.info(
+    `Orchestration task ${taskId} enqueued for bridge agent "${bridgeName}" (tool: ${tool})`
+  );
+  return { ok: true, tool, bridgeAgentId: bridgeAgent.id };
 }
 
 /** Normalize a task value to valid JSON for the JSONB column. */

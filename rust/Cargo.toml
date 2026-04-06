@@ -12,6 +12,7 @@ members = [
   "crates/sera-runtime",
   "crates/sera-tui",
   "crates/sera-byoh-agent",
+  "crates/sera-runtime",
 ]
 
 [workspace.package]

@@ -101,7 +101,17 @@ export class SkillRegistry {
 
     // Allowed via tools.allowed patterns
     if (manifest.tools?.allowed) {
-      return manifest.tools.allowed.some((p) => SkillRegistry.matches(p, toolId));
+      // If any pattern explicitly matches, allow it
+      if (manifest.tools.allowed.some((p) => SkillRegistry.matches(p, toolId))) {
+        return true;
+      }
+      // MCP tools (source: 'mcp') pass through unless explicitly denied above.
+      // tools.allowed governs builtin tools only — MCP tools are additive.
+      const skill = this.skills.get(toolId);
+      if (skill?.source === 'mcp') {
+        return true;
+      }
+      return false;
     }
 
     // Open access if neither is specified

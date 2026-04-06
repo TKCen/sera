@@ -221,6 +221,23 @@ describe('SkillRegistry', () => {
       registry.register(dummySkill('github.api'));
       expect(registry.isToolAllowedForAgent(manifest, 'github.api')).toBe(true);
     });
+
+    it('should allow MCP tools through when tools.allowed lists only builtin tools', () => {
+      registry.register(dummySkill('file-read', 'builtin'));
+      registry.register(dummySkill('shell-exec', 'builtin'));
+      registry.register(dummySkill('test-server/my-tool', 'mcp'));
+
+      const manifest = minimalManifest({
+        tools: { allowed: ['file-read'] },
+      });
+
+      // MCP tool passes through regardless of tools.allowed
+      expect(registry.isToolAllowedForAgent(manifest, 'test-server/my-tool')).toBe(true);
+      // Explicitly listed builtin tool is allowed
+      expect(registry.isToolAllowedForAgent(manifest, 'file-read')).toBe(true);
+      // Non-MCP tool not in allowed list is rejected
+      expect(registry.isToolAllowedForAgent(manifest, 'shell-exec')).toBe(false);
+    });
   });
 
   describe('matches (static)', () => {

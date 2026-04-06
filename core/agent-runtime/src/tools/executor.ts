@@ -179,7 +179,11 @@ export class RuntimeToolExecutor implements IToolExecutor {
     if (!allowedTools || allowedTools.length === 0) {
       return allTools;
     }
-    return allTools.filter((t) => allowedTools.includes(t.function.name));
+    return allTools.filter(
+      (t) =>
+        allowedTools.includes(t.function.name) ||
+        this.remoteCatalog.some((r) => r.function.name === t.function.name)
+    );
   }
 
   /** Execute a single tool call and return a tool-role ChatMessage with repair metadata. */

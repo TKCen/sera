@@ -527,9 +527,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Resolve an agent by UUID or by name, returning its row with the resolved `id`. */
 async function getAgentRow(nameOrId: string): Promise<AgentRow | null> {
-  const col = UUID_RE.test(nameOrId) ? 'id' : 'name';
+  if (UUID_RE.test(nameOrId)) {
+    const r = await pool.query<AgentRow>(
+      `SELECT id, lifecycle_mode FROM agent_instances WHERE id = $1`,
+      [nameOrId]
+    );
+    return r.rows[0] ?? null;
+  }
   const r = await pool.query<AgentRow>(
-    `SELECT id, lifecycle_mode FROM agent_instances WHERE ${col} = $1`,
+    `SELECT id, lifecycle_mode FROM agent_instances WHERE name = $1`,
     [nameOrId]
   );
   return r.rows[0] ?? null;

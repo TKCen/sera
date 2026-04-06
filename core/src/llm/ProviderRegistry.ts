@@ -20,6 +20,7 @@
 
 import fs from 'fs';
 import { Logger } from '../lib/logger.js';
+import { validateProviderBaseUrl } from './url-validation.js';
 
 const logger = new Logger('ProviderRegistry');
 
@@ -292,6 +293,12 @@ export class ProviderRegistry {
   }
 
   register(config: ProviderConfig): void {
+    if (config.baseUrl) {
+      const check = validateProviderBaseUrl(config.baseUrl, config.provider);
+      if (!check.valid) {
+        throw new Error(`Provider baseUrl rejected: ${check.reason}`);
+      }
+    }
     this.configs.set(config.modelName, config);
   }
 

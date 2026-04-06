@@ -531,8 +531,8 @@ app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permi
 app.use('/api', authMiddleware, createConfigRouter());
 app.use('/api/schedules', authMiddleware, createSchedulesRouter());
 app.use('/v1', createOpenAICompatRouter(orchestrator));
-app.use('/api/lsp', lspRouter);
-app.use('/api/federation', createFederationRouter());
+app.use('/api/lsp', authMiddleware, lspRouter);
+app.use('/api/federation', authMiddleware, createFederationRouter());
 app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
 
 app.use(

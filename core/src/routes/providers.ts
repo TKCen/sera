@@ -247,7 +247,12 @@ export function createProvidersRouter(
 
       try {
         await dynamicProviderManager.addProvider(parsed.data);
-        res.status(201).json(parsed.data);
+        // Return the config without the literal API key — it has been moved to the secrets store
+        const { apiKey: _apiKey, ...safeConfig } = parsed.data;
+        res.status(201).json({
+          ...safeConfig,
+          ...(parsed.data.apiKey ? { apiKey: '***' } : {}),
+        });
       } catch (err: unknown) {
         logger.error('Failed to add dynamic provider:', err);
         res.status(502).json({ error: (err as Error).message });

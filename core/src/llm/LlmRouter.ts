@@ -43,6 +43,7 @@ import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { Logger } from '../lib/logger.js';
 import type { ProviderConfig, ProviderRegistry } from './ProviderRegistry.js';
 import type { ChatMessage } from '../agents/types.js';
+import { validateProviderBaseUrl } from './url-validation.js';
 
 const logger = new Logger('LlmRouter');
 
@@ -466,6 +467,14 @@ export class LlmRouter {
     context: Context,
     extraOptions?: StreamOptions
   ): AssistantMessageEventStream {
+    // SSRF protection: validate baseUrl before sending any API-key-bearing request.
+    if (config.baseUrl) {
+      const check = validateProviderBaseUrl(config.baseUrl, config.provider);
+      if (!check.valid) {
+        throw new Error(`Provider baseUrl rejected: ${check.reason}`);
+      }
+    }
+
     const model = this.buildModel(config);
     const apiKey = this.resolveApiKey(config);
     const opts: StreamOptions = {

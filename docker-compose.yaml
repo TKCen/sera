@@ -110,6 +110,16 @@ services:
       sera-db:
         condition: service_healthy
 
+  # sera-shadow-proxy:
+  #   build: ./tools/shadow-proxy
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - PRIMARY_URL=http://sera-core:3001
+  #     - SHADOW_URL=http://sera-core-rs:3002
+  #   depends_on:
+  #     - sera-core
+
   sera-web:
     build:
       context: ./web

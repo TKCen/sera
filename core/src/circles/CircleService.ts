@@ -142,6 +142,23 @@ export class CircleService {
     const circle = await this.getCircle(circleId);
     if (!circle) throw new Error(`Circle "${circleId}" not found`);
 
+    // Enforce allowedCircles: if the agent has a non-empty whitelist, the
+    // target circle must appear in it (matched by name or id).
+    const agentRow = await query(`SELECT allowed_circles FROM agent_instances WHERE id = $1`, [
+      agentInstanceId,
+    ]);
+    const agentRecord = agentRow.rows[0] as { allowed_circles: string[] | null } | undefined;
+    const whitelist = agentRecord?.allowed_circles ?? [];
+    if (
+      whitelist.length > 0 &&
+      !whitelist.includes(circle.id) &&
+      !whitelist.includes(circle.name)
+    ) {
+      throw new Error(
+        `Agent "${agentInstanceId}" is not allowed to join circle "${circle.name}" — not in allowedCircles`
+      );
+    }
+
     await query(`UPDATE agent_instances SET circle_id = $1, updated_at = NOW() WHERE id = $2`, [
       circle.id,
       agentInstanceId,

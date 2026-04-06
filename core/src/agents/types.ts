@@ -56,6 +56,7 @@ export interface AgentInstance {
   workspace_used_gb?: number;
   container_id?: string;
   circle_id?: string | null;
+  allowed_circles?: string[];
   last_heartbeat_at?: string | Date;
   updated_at: string | Date;
   created_at: string | Date;

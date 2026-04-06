@@ -711,6 +711,12 @@ const startServer = async () => {
 
   await orchestrator.startDockerEventListener();
 
+  // Clean up zombie containers from previous crash, then start periodic sweep
+  sandboxManager
+    .sweepZombieContainers()
+    .catch((err: unknown) => logger.error('Startup zombie sweep failed:', err));
+  sandboxManager.startZombieSweep();
+
   const channelOptions = {
     rateLimitWindow: config.channels.rateLimit.windowMs,
     maxMessagesPerWindow: config.channels.rateLimit.maxMessages,
@@ -790,6 +796,7 @@ const shutdown = async () => {
   orchestrator.stopWatching();
   heartbeatService.stop();
   cleanupService.stop();
+  sandboxManager.stopZombieSweep();
   await lspManager.stopAll();
   await PgBossService.getInstance().stop();
 };

@@ -15,6 +15,7 @@ export class SkillLibrary {
   private static instance: SkillLibrary;
   private watcher: chokidar.FSWatcher | null = null;
   private intercom: IntercomService | null = null;
+  private reloadTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   private constructor(private pool: Pool) {}
 
@@ -133,38 +134,50 @@ export class SkillLibrary {
       interval: 100,
     });
 
-    this.watcher.on('all', async (event, filePath) => {
+    this.watcher.on('all', (event, filePath) => {
       if (event !== 'add' && event !== 'change') return;
 
-      const ext = path.extname(filePath);
-      if (ext === '.md') {
-        // Individual skill reload
-        try {
-          const source = filePath.includes('skills' + path.sep + 'builtin')
-            ? 'bundled'
-            : 'external';
-          const doc = await this.parseSkillFile(filePath, source as 'bundled' | 'external');
-          if (doc) {
-            await this.upsertSkill(doc);
-            logger.info(`Skill hot-reloaded: ${doc.name} v${doc.version}`);
-            this.emitReloadEvent('skill', doc.name, doc.version);
+      // Debounce: wait 300ms after last change before processing.
+      // This handles partial writes where the OS fires multiple events.
+      const existing = this.reloadTimers.get(filePath);
+      if (existing) clearTimeout(existing);
+
+      this.reloadTimers.set(
+        filePath,
+        setTimeout(async () => {
+          this.reloadTimers.delete(filePath);
+
+          const ext = path.extname(filePath);
+          if (ext === '.md') {
+            // Individual skill reload
+            try {
+              const source = filePath.includes('skills' + path.sep + 'builtin')
+                ? 'bundled'
+                : 'external';
+              const doc = await this.parseSkillFile(filePath, source as 'bundled' | 'external');
+              if (doc) {
+                await this.upsertSkill(doc);
+                logger.info(`Skill hot-reloaded: ${doc.name} v${doc.version}`);
+                this.emitReloadEvent('skill', doc.name, doc.version);
+              }
+            } catch (err: unknown) {
+              logger.error(`Failed to hot-reload skill ${filePath}:`, err);
+            }
+          } else if (ext === '.yaml' && filePath.includes('packages')) {
+            // Package reload
+            try {
+              const pkg = await this.parsePackageFile(filePath);
+              if (pkg) {
+                await this.upsertPackage(pkg);
+                logger.info(`Skill package hot-reloaded: ${pkg.name} v${pkg.version}`);
+                this.emitReloadEvent('package', pkg.name, pkg.version);
+              }
+            } catch (err: unknown) {
+              logger.error(`Failed to hot-reload package ${filePath}:`, err);
+            }
           }
-        } catch (err: unknown) {
-          logger.error(`Failed to hot-reload skill ${filePath}:`, err);
-        }
-      } else if (ext === '.yaml' && filePath.includes('packages')) {
-        // Package reload
-        try {
-          const pkg = await this.parsePackageFile(filePath);
-          if (pkg) {
-            await this.upsertPackage(pkg);
-            logger.info(`Skill package hot-reloaded: ${pkg.name} v${pkg.version}`);
-            this.emitReloadEvent('package', pkg.name, pkg.version);
-          }
-        } catch (err: unknown) {
-          logger.error(`Failed to hot-reload package ${filePath}:`, err);
-        }
-      }
+        }, 300)
+      );
     });
 
     logger.info(`Watching skills directory for changes...`);
@@ -184,6 +197,10 @@ export class SkillLibrary {
   }
 
   public stopWatching(): void {
+    for (const timer of this.reloadTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reloadTimers.clear();
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;

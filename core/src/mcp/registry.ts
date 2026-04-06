@@ -24,6 +24,7 @@ export class MCPRegistry {
   private manager?: MCPServerManager;
   private intercom?: IntercomService;
   private watcher?: chokidar.FSWatcher;
+  private reloadTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private onRegisterHooks: ((name: string) => void)[] = [];
   private onUnregisterHooks: ((name: string) => void)[] = [];
 
@@ -135,33 +136,73 @@ export class MCPRegistry {
 
     this.watcher = chokidar.watch(dir, { ignoreInitial: true });
 
-    this.watcher.on('add', async (filePath) => {
-      if (filePath.match(/\.mcp\.(yaml|yml|json)$/)) {
-        logger.info(`Detected new MCP manifest: ${path.basename(filePath)}`);
-        await this.loadManifest(filePath).catch((err) =>
-          logger.error(`Failed to load ${filePath}:`, err)
-        );
-      }
+    this.watcher.on('add', (filePath) => {
+      if (!filePath.match(/\.mcp\.(yaml|yml|json)$/)) return;
+
+      const existing = this.reloadTimers.get(filePath);
+      if (existing) clearTimeout(existing);
+
+      this.reloadTimers.set(
+        filePath,
+        setTimeout(async () => {
+          this.reloadTimers.delete(filePath);
+          logger.info(`Detected new MCP manifest: ${path.basename(filePath)}`);
+          await this.loadManifest(filePath).catch((err) =>
+            logger.error(`Failed to load ${filePath}:`, err)
+          );
+        }, 300)
+      );
     });
 
-    this.watcher.on('change', async (filePath) => {
-      if (filePath.match(/\.mcp\.(yaml|yml|json)$/)) {
-        logger.info(`Detected MCP manifest change: ${path.basename(filePath)}`);
-        await this.loadManifest(filePath).catch((err) =>
-          logger.error(`Failed to reload ${filePath}:`, err)
-        );
-      }
+    this.watcher.on('change', (filePath) => {
+      if (!filePath.match(/\.mcp\.(yaml|yml|json)$/)) return;
+
+      const existing = this.reloadTimers.get(filePath);
+      if (existing) clearTimeout(existing);
+
+      this.reloadTimers.set(
+        filePath,
+        setTimeout(async () => {
+          this.reloadTimers.delete(filePath);
+          logger.info(`Detected MCP manifest change: ${path.basename(filePath)}`);
+          await this.loadManifest(filePath).catch((err) =>
+            logger.error(`Failed to reload ${filePath}:`, err)
+          );
+        }, 300)
+      );
     });
 
-    this.watcher.on('unlink', async (filePath) => {
-      if (filePath.match(/\.mcp\.(yaml|yml|json)$/)) {
-        const name = path.basename(filePath).split('.')[0];
-        if (name) {
-          logger.info(`MCP manifest removed: ${name}`);
-          await this.unregisterClient(name);
-        }
-      }
+    this.watcher.on('unlink', (filePath) => {
+      if (!filePath.match(/\.mcp\.(yaml|yml|json)$/)) return;
+
+      const existing = this.reloadTimers.get(filePath);
+      if (existing) clearTimeout(existing);
+
+      this.reloadTimers.set(
+        filePath,
+        setTimeout(async () => {
+          this.reloadTimers.delete(filePath);
+          const name = path.basename(filePath).split('.')[0];
+          if (name) {
+            logger.info(`MCP manifest removed: ${name}`);
+            await this.unregisterClient(name).catch((err) =>
+              logger.error(`Failed to unregister ${name}:`, err)
+            );
+          }
+        }, 300)
+      );
     });
+  }
+
+  public stopWatching(): void {
+    for (const timer of this.reloadTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reloadTimers.clear();
+    if (this.watcher) {
+      this.watcher.close();
+      delete this.watcher;
+    }
   }
 
   private async loadManifest(filePath: string) {

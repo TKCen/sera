@@ -260,6 +260,12 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
   };
 }
 
+/** Inactivity timeout for streaming responses (ms). Configurable via env var. */
+const STREAM_INACTIVITY_TIMEOUT_MS = parseInt(
+  process.env['STREAM_INACTIVITY_TIMEOUT_MS'] ?? '30000',
+  10
+);
+
 /**
  * Bridge a pi-mono AssistantMessageEventStream to a Node.js Readable that emits
  * OpenAI Server-Sent Events.  The caller can pipe() this to an Express Response.
@@ -269,6 +275,10 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
  *   toolcall_end    → data: { choices[0].delta.tool_calls }
  *   done            → data: { choices[0].finish_reason } + data: [DONE]
  *   error           → stream.destroy(err)
+ *
+ * An inactivity watchdog fires if no chunk is received for
+ * STREAM_INACTIVITY_TIMEOUT_MS milliseconds, sending an error SSE and
+ * destroying the stream.
  */
 function eventStreamToReadable(
   eventStream: AssistantMessageEventStream,
@@ -287,10 +297,44 @@ function eventStreamToReadable(
       choices: [{ index: 0, delta, finish_reason: finishReason }],
     })}\n\n`;
 
+  // ── Inactivity watchdog ────────────────────────────────────────────────────
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const resetTimer = () => {
+    if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      if (!passThrough.destroyed) {
+        logger.warn(
+          `Stream inactivity timeout after ${STREAM_INACTIVITY_TIMEOUT_MS}ms | model=${modelName}`
+        );
+        const errorEvent = `data: ${JSON.stringify({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model: modelName,
+          choices: [{ index: 0, delta: {}, finish_reason: 'error' }],
+          error: { message: 'Stream inactivity timeout', type: 'timeout' },
+        })}\n\n`;
+        passThrough.push(errorEvent);
+        passThrough.destroy(new Error('Stream inactivity timeout'));
+      }
+    }, STREAM_INACTIVITY_TIMEOUT_MS);
+  };
+
+  const clearTimer = () => {
+    if (inactivityTimer !== null) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  };
+  // ──────────────────────────────────────────────────────────────────────────
+
   (async () => {
+    resetTimer();
     try {
       for await (const event of eventStream) {
         if (passThrough.destroyed) break;
+        resetTimer();
 
         if (event.type === 'text_delta') {
           passThrough.push(chunk({ content: event.delta }, null));
@@ -318,15 +362,18 @@ function eventStreamToReadable(
             )
           );
         } else if (event.type === 'done') {
+          clearTimer();
           passThrough.push(chunk({}, toFinishReason(event.reason)));
           passThrough.push('data: [DONE]\n\n');
           passThrough.push(null);
         } else if (event.type === 'error') {
+          clearTimer();
           const errMsg = event.error.errorMessage ?? 'LLM provider error';
           passThrough.destroy(new Error(errMsg));
         }
       }
     } catch (err) {
+      clearTimer();
       passThrough.destroy(err as Error);
     }
   })();

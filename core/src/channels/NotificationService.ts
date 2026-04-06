@@ -408,19 +408,22 @@ export class NotificationService {
     }));
   }
 
-  private redactConfig(type: string, config: Record<string, unknown>): Record<string, unknown> {
-    const sensitive = new Set([
+  private redactConfig(_type: string, config: Record<string, unknown>): Record<string, unknown> {
+    // Redact any config key whose lowercase name contains a sensitive substring.
+    // This catches camelCase variants (webhookUrl, botToken, signingSecret, smtpPassword, etc.)
+    // as well as snake_case variants (webhook_url, api_key, etc.).
+    const sensitiveSubstrings = [
+      'token',
       'secret',
       'password',
-      'smtpPassword',
-      'botToken',
-      'appToken',
-      'signingSecret',
-      'token',
-    ]);
+      'apikey',
+      'webhook',
+    ];
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(config)) {
-      out[k] = sensitive.has(k) ? '[redacted]' : v;
+      const lower = k.toLowerCase();
+      const isSensitive = sensitiveSubstrings.some((sub) => lower.includes(sub));
+      out[k] = isSensitive ? '[redacted]' : v;
     }
     return out;
   }

@@ -28,6 +28,7 @@ import { requireRole } from '../auth/authMiddleware.js';
 import { Logger } from '../lib/logger.js';
 import type { DynamicProviderManager } from '../llm/DynamicProviderManager.js';
 import { ProviderHealthService } from '../llm/ProviderHealthService.js';
+import { ModelDiscoveryService } from '../services/ModelDiscoveryService.js';
 
 const logger = new Logger('ProvidersRoute');
 
@@ -295,6 +296,43 @@ export function createProvidersRouter(
       }
     }
   );
+
+  // ── Model Discovery ────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/providers/models
+   * Returns discovered models from all supported cloud providers (openrouter, google, kilocode).
+   * Results are cached for 1 hour. Add ?force=true to bypass the cache.
+   */
+  router.get('/models', async (req: Request, res: Response) => {
+    try {
+      const force = req.query['force'] === 'true';
+      const discovery = ModelDiscoveryService.getInstance();
+      const models = await discovery.discoverAll(force);
+      res.json({ models });
+    } catch (err: unknown) {
+      logger.error('Model discovery (all) failed:', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/providers/models/:provider
+   * Returns discovered models for a specific provider (openrouter, google, kilocode).
+   * Results are cached for 1 hour. Add ?force=true to bypass the cache.
+   */
+  router.get('/models/:provider', async (req: Request, res: Response) => {
+    const provider = String(req.params['provider']);
+    try {
+      const force = req.query['force'] === 'true';
+      const discovery = ModelDiscoveryService.getInstance();
+      const models = await discovery.discoverModels(provider, force);
+      res.json({ provider, models });
+    } catch (err: unknown) {
+      logger.error(`Model discovery for provider ${provider} failed:`, err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // ── Static Providers ────────────────────────────────────────────────────────
 

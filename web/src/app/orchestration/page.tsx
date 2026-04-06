@@ -14,8 +14,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const orchestrationKeys = {
   bridges: ['orchestration', 'bridges'] as const,
-  tasks: (agentId: string, status?: string) =>
-    ['orchestration', 'tasks', agentId, status] as const,
+  tasks: (agentId: string, status?: string) => ['orchestration', 'tasks', agentId, status] as const,
   queueDepth: (agentId: string) => ['orchestration', 'queue-depth', agentId] as const,
 };
 
@@ -49,7 +48,8 @@ function statusBadgeClass(status: AgentTask['status']): string {
 }
 
 function agentStatusBadgeClass(status: string): string {
-  if (status === 'running') return 'bg-sera-success/15 text-sera-success border border-sera-success/30';
+  if (status === 'running')
+    return 'bg-sera-success/15 text-sera-success border border-sera-success/30';
   if (status === 'error') return 'bg-sera-error/15 text-sera-error border border-sera-error/30';
   return 'bg-sera-warning/15 text-sera-warning border border-sera-warning/30';
 }
@@ -82,8 +82,7 @@ function BridgeCard({ agent }: { agent: orchestrationApi.BridgeAgent }) {
     refetchInterval: 15000,
   });
 
-  const displayName =
-    BRIDGE_NAMES[agent.name] ?? agent.display_name ?? agent.name;
+  const displayName = BRIDGE_NAMES[agent.name] ?? agent.display_name ?? agent.name;
 
   return (
     <Card className="sera-card-static">
@@ -98,9 +97,7 @@ function BridgeCard({ agent }: { agent: orchestrationApi.BridgeAgent }) {
       <CardContent className="px-4 pb-4">
         <p className="text-xs text-sera-text-dim">
           Queue:{' '}
-          <span className="text-sera-text font-medium">
-            {depth === undefined ? '…' : depth}
-          </span>
+          <span className="text-sera-text font-medium">{depth === undefined ? '…' : depth}</span>
         </p>
         <p className="text-[10px] text-sera-text-dim mt-1 truncate">{agent.name}</p>
       </CardContent>
@@ -130,7 +127,9 @@ function TaskRow({ task, agentName }: { task: AgentTask; agentName: string }) {
         <td className="py-3 px-4 text-xs text-sera-text max-w-xs truncate">{prompt}</td>
         <td className="py-3 px-4 text-xs text-sera-text-muted">{agentName}</td>
         <td className="py-3 px-4">
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${statusBadgeClass(task.status)}`}>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${statusBadgeClass(task.status)}`}
+          >
             {task.status}
           </span>
         </td>
@@ -482,13 +481,27 @@ function OrchestrationPageContent() {
               <table className="w-full text-sm" aria-label="Orchestration tasks">
                 <thead>
                   <tr className="border-b border-sera-border text-[11px] uppercase tracking-wider text-sera-text-dim">
-                    <th scope="col" className="text-left py-3 px-4">ID</th>
-                    <th scope="col" className="text-left py-3 px-4">Prompt</th>
-                    <th scope="col" className="text-left py-3 px-4">Bridge</th>
-                    <th scope="col" className="text-left py-3 px-4">Status</th>
-                    <th scope="col" className="text-left py-3 px-4">Pri</th>
-                    <th scope="col" className="text-left py-3 px-4">Created</th>
-                    <th scope="col" className="text-left py-3 px-4">Duration</th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      ID
+                    </th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      Prompt
+                    </th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      Bridge
+                    </th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      Status
+                    </th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      Pri
+                    </th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      Created
+                    </th>
+                    <th scope="col" className="text-left py-3 px-4">
+                      Duration
+                    </th>
                     <th scope="col" className="py-3 px-4" aria-label="Expand" />
                   </tr>
                 </thead>
@@ -530,10 +543,7 @@ function OrchestrationPageContent() {
                 <Plus size={14} className="text-sera-accent" />
                 New Task
               </h2>
-              <CreateTaskForm
-                bridges={bridges ?? []}
-                onCreated={() => setShowCreate(false)}
-              />
+              <CreateTaskForm bridges={bridges ?? []} onCreated={() => setShowCreate(false)} />
             </div>
           </aside>
         )}

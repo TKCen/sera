@@ -252,11 +252,13 @@ export class ModelDiscoveryService {
         return this.kiloCodeFallback();
       }
 
-      return rawModels.map((m): DiscoveredModel => ({
-        id: m.id,
-        name: m.name ?? m.id,
-        provider: 'kilocode',
-      }));
+      return rawModels.map(
+        (m): DiscoveredModel => ({
+          id: m.id,
+          name: m.name ?? m.id,
+          provider: 'kilocode',
+        })
+      );
     } catch (err: unknown) {
       logger.warn(
         `Failed to fetch Kilo Code models: ${(err as Error).message} — returning hardcoded list`

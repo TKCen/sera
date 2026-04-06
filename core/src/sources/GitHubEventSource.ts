@@ -167,9 +167,7 @@ export class GitHubEventSource {
   private async handleErrorResponse(response: Response): Promise<void> {
     if (response.status === 403 || response.status === 429) {
       this.currentIntervalMs = Math.min(this.currentIntervalMs * 2, BACKOFF_CAP_MS);
-      logger.warn(
-        `Rate limited (${response.status}) — backing off to ${this.currentIntervalMs}ms`
-      );
+      logger.warn(`Rate limited (${response.status}) — backing off to ${this.currentIntervalMs}ms`);
     } else {
       logger.warn(`GitHub API error: ${response.status} ${response.statusText}`);
     }

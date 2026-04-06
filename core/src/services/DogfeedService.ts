@@ -165,11 +165,10 @@ export class DogfeedService {
 
     let stdout = '';
     try {
-      const result = await execFileAsync(
-        'bunx',
-        ['eslint', '--format', 'json', coreDir],
-        { cwd: REPO_ROOT, timeout: 60_000 }
-      );
+      const result = await execFileAsync('bunx', ['eslint', '--format', 'json', coreDir], {
+        cwd: REPO_ROOT,
+        timeout: 60_000,
+      });
       stdout = result.stdout;
     } catch (err) {
       // ESLint exits non-zero when it finds issues — that is expected
@@ -204,9 +203,7 @@ export class DogfeedService {
 
       const ruleIds = [
         ...new Set(
-          fileResult.messages
-            .filter((m) => m.fix !== undefined && m.ruleId)
-            .map((m) => m.ruleId!)
+          fileResult.messages.filter((m) => m.fix !== undefined && m.ruleId).map((m) => m.ruleId!)
         ),
       ]
         .slice(0, 5)
@@ -237,11 +234,10 @@ export class DogfeedService {
     let stderr = '';
 
     try {
-      await execFileAsync(
-        'bunx',
-        ['tsc', '--noEmit', '-p', tsconfigPath],
-        { cwd: REPO_ROOT, timeout: 120_000 }
-      );
+      await execFileAsync('bunx', ['tsc', '--noEmit', '-p', tsconfigPath], {
+        cwd: REPO_ROOT,
+        timeout: 120_000,
+      });
       logger.info('TypeScript: no errors');
       return [];
     } catch (err) {
@@ -348,11 +344,7 @@ export class DogfeedService {
         if (SKIP_PATH_FRAGMENTS.some((frag) => filePath.includes(frag))) return;
 
         const basename = path.basename(filePath);
-        if (
-          basename === 'index.ts' ||
-          basename === 'types.ts' ||
-          basename === 'constants.ts'
-        ) {
+        if (basename === 'index.ts' || basename === 'types.ts' || basename === 'constants.ts') {
           return;
         }
 
@@ -382,9 +374,7 @@ export class DogfeedService {
       });
     }
 
-    logger.info(
-      `Test coverage: ${missing.length} untested files → ${tasks.length} tasks queued`
-    );
+    logger.info(`Test coverage: ${missing.length} untested files → ${tasks.length} tasks queued`);
     return tasks;
   }
 
@@ -437,9 +427,7 @@ export class DogfeedService {
         [taskId, bridgeAgent.id, task.prompt, priority, context]
       );
 
-      logger.info(
-        `Queued task ${taskId} → ${bridgeName} [${task.category}/${task.complexity}]`
-      );
+      logger.info(`Queued task ${taskId} → ${bridgeName} [${task.category}/${task.complexity}]`);
       queued++;
     }
 
@@ -452,10 +440,7 @@ export class DogfeedService {
    * Recursively walk a directory, calling visitor for each file.
    * Uses an iterative stack to avoid deep call-stack growth on large trees.
    */
-  private async walkDir(
-    dir: string,
-    visitor: (filePath: string) => Promise<void>
-  ): Promise<void> {
+  private async walkDir(dir: string, visitor: (filePath: string) => Promise<void>): Promise<void> {
     const stack = [dir];
 
     while (stack.length > 0) {

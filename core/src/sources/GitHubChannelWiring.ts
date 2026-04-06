@@ -51,7 +51,9 @@ export async function ensureGitHubRoutingRules(): Promise<void> {
         [id, rule.eventType, [], rule.minSeverity]
       );
 
-      logger.info(`Created default GitHub routing rule: ${rule.eventType} → min_severity=${rule.minSeverity}`);
+      logger.info(
+        `Created default GitHub routing rule: ${rule.eventType} → min_severity=${rule.minSeverity}`
+      );
     }
   } catch (err) {
     logger.warn('Failed to ensure GitHub routing rules:', err);

@@ -412,13 +412,7 @@ export class NotificationService {
     // Redact any config key whose lowercase name contains a sensitive substring.
     // This catches camelCase variants (webhookUrl, botToken, signingSecret, smtpPassword, etc.)
     // as well as snake_case variants (webhook_url, api_key, etc.).
-    const sensitiveSubstrings = [
-      'token',
-      'secret',
-      'password',
-      'apikey',
-      'webhook',
-    ];
+    const sensitiveSubstrings = ['token', 'secret', 'password', 'apikey', 'webhook'];
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(config)) {
       const lower = k.toLowerCase();

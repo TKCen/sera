@@ -68,10 +68,7 @@ export class CITaskCoordinator {
         id: string;
         agent_instance_id: string;
         task: string;
-      }>(
-        `SELECT id, agent_instance_id, task FROM task_queue WHERE id = $1`,
-        [taskId]
-      );
+      }>(`SELECT id, agent_instance_id, task FROM task_queue WHERE id = $1`, [taskId]);
 
       const row = rows[0];
       if (!row) return null;

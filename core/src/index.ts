@@ -88,6 +88,7 @@ import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
 import { createNotificationsRouter } from './routes/notifications.js';
 import { createOrchestrationMetricsRouter } from './routes/orchestration-metrics.js';
+import { createTracesRouter } from './routes/traces.js';
 import { rateLimitStub } from './middleware/rateLimitStub.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
@@ -561,6 +562,9 @@ app.use('/api/channels', authMiddleware, notifProtectedRouter);
 
 // Orchestration Metrics
 app.use('/api/orchestration', authMiddleware, rateLimitStub, createOrchestrationMetricsRouter());
+
+// Epic 30 — Interaction Traces
+app.use('/api/traces', authMiddleware, createTracesRouter());
 
 // Global Error Handler
 app.use(errorSanitizerMiddleware);

@@ -8,7 +8,7 @@
  * @see docs/epics/04-llm-proxy-and-governance.md § Story 4.3, 4.4
  */
 
-import { query } from '../lib/database.js';
+import { query, pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 import { AuditService } from '../audit/AuditService.js';
 
@@ -112,45 +112,86 @@ export class MeteringService {
    * Returns the budget status with used/quota for both hourly and daily windows.
    *
    * Story 4.3: This check must complete before any upstream LLM call is made.
+   *
+   * Uses a PostgreSQL advisory lock keyed on the agent ID hash to serialize
+   * concurrent budget checks for the same agent, preventing two simultaneous
+   * requests from both passing the check and exceeding the budget.
    */
   async checkBudget(agentId: string): Promise<BudgetStatus> {
-    // Fetch quota (or use defaults)
-    const quotaResult = await query(
-      `SELECT max_tokens_per_hour, max_tokens_per_day FROM token_quotas WHERE agent_id = $1`,
-      [agentId]
-    );
+    const lockKey = this.agentLockKey(agentId);
 
-    const hourlyQuota = parseInt(
-      quotaResult.rows[0]?.max_tokens_per_hour ?? String(DEFAULT_HOURLY_QUOTA),
-      10
-    );
-    const dailyQuota = parseInt(
-      quotaResult.rows[0]?.max_tokens_per_day ?? String(DEFAULT_DAILY_QUOTA),
-      10
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
 
-    // Fetch current usage
-    const hourlyUsed = await this.getUsage(agentId, 1);
-    const dailyUsed = await this.getUsage(agentId, 24);
+      // Fetch quota (or use defaults)
+      const quotaResult = await client.query(
+        `SELECT max_tokens_per_hour, max_tokens_per_day FROM token_quotas WHERE agent_id = $1`,
+        [agentId]
+      );
 
-    // 0 means unlimited — skip enforcement for that window
-    const hourlyOk = hourlyQuota === 0 || hourlyUsed < hourlyQuota;
-    const dailyOk = dailyQuota === 0 || dailyUsed < dailyQuota;
-    const allowed = hourlyOk && dailyOk;
+      const hourlyQuota = parseInt(
+        quotaResult.rows[0]?.max_tokens_per_hour ?? String(DEFAULT_HOURLY_QUOTA),
+        10
+      );
+      const dailyQuota = parseInt(
+        quotaResult.rows[0]?.max_tokens_per_day ?? String(DEFAULT_DAILY_QUOTA),
+        10
+      );
 
-    if (!allowed) {
-      await AuditService.getInstance()
-        .record({
-          actorType: 'agent',
-          actorId: agentId,
-          actingContext: null,
-          eventType: 'budget.exceeded',
-          payload: { hourlyUsed, hourlyQuota, dailyUsed, dailyQuota },
-        })
-        .catch((err) => logger.error('Audit record failed:', err));
+      // Fetch current usage within the same transaction
+      const hourlyResult = await client.query(
+        `SELECT COALESCE(SUM(total_tokens), 0) AS total
+         FROM token_usage
+         WHERE agent_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
+        [agentId]
+      );
+      const hourlyUsed = parseInt(hourlyResult.rows[0]?.total ?? '0', 10);
+
+      const dailyResult = await client.query(
+        `SELECT COALESCE(SUM(total_tokens), 0) AS total
+         FROM token_usage
+         WHERE agent_id = $1 AND created_at > NOW() - INTERVAL '24 hours'`,
+        [agentId]
+      );
+      const dailyUsed = parseInt(dailyResult.rows[0]?.total ?? '0', 10);
+
+      await client.query('COMMIT');
+
+      // 0 means unlimited — skip enforcement for that window
+      const hourlyOk = hourlyQuota === 0 || hourlyUsed < hourlyQuota;
+      const dailyOk = dailyQuota === 0 || dailyUsed < dailyQuota;
+      const allowed = hourlyOk && dailyOk;
+
+      if (!allowed) {
+        await AuditService.getInstance()
+          .record({
+            actorType: 'agent',
+            actorId: agentId,
+            actingContext: null,
+            eventType: 'budget.exceeded',
+            payload: { hourlyUsed, hourlyQuota, dailyUsed, dailyQuota },
+          })
+          .catch((err) => logger.error('Audit record failed:', err));
+      }
+
+      return { allowed, hourlyUsed, hourlyQuota, dailyUsed, dailyQuota };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
+  }
 
-    return { allowed, hourlyUsed, hourlyQuota, dailyUsed, dailyQuota };
+  /** Generate a stable integer lock key from an agent ID string. */
+  private agentLockKey(agentId: string): number {
+    let hash = 0;
+    for (let i = 0; i < agentId.length; i++) {
+      hash = ((hash << 5) - hash + agentId.charCodeAt(i)) | 0;
+    }
+    return hash;
   }
 
   /**

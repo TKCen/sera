@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { SecretsManager } from '../secrets/secrets-manager.js';
 import { requireRole } from '../auth/authMiddleware.js';
+import { sanitizeErrorMessage } from '../middleware/errorSanitizer.js';
 
 export function createSecretsRouter(): Router {
   const router = Router();
@@ -23,7 +24,9 @@ export function createSecretsRouter(): Router {
       res.json(list);
     } catch (err: unknown) {
       const error = err as Error;
-      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
+      res
+        .status(error.message.includes('Unauthorized') ? 403 : 500)
+        .json({ error: sanitizeErrorMessage(error.message) });
     }
   });
 
@@ -43,7 +46,9 @@ export function createSecretsRouter(): Router {
       res.json(secret);
     } catch (err: unknown) {
       const error = err as Error;
-      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
+      res
+        .status(error.message.includes('Unauthorized') ? 403 : 500)
+        .json({ error: sanitizeErrorMessage(error.message) });
     }
   });
 
@@ -77,7 +82,9 @@ export function createSecretsRouter(): Router {
       res.status(201).json({ message: 'Secret stored' });
     } catch (err: unknown) {
       const error = err as Error;
-      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
+      res
+        .status(error.message.includes('Unauthorized') ? 403 : 500)
+        .json({ error: sanitizeErrorMessage(error.message) });
     }
   });
 
@@ -96,7 +103,7 @@ export function createSecretsRouter(): Router {
       res.json({ message: 'Key rotation complete' });
     } catch (err: unknown) {
       const error = err as Error;
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: sanitizeErrorMessage(error.message) });
     }
   });
 
@@ -116,7 +123,9 @@ export function createSecretsRouter(): Router {
       res.json({ message: 'Secret deleted' });
     } catch (err: unknown) {
       const error = err as Error;
-      res.status(error.message.includes('Unauthorized') ? 403 : 500).json({ error: error.message });
+      res
+        .status(error.message.includes('Unauthorized') ? 403 : 500)
+        .json({ error: sanitizeErrorMessage(error.message) });
     }
   });
 

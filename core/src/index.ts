@@ -91,6 +91,7 @@ import { createOrchestrationMetricsRouter } from './routes/orchestration-metrics
 import { rateLimitStub } from './middleware/rateLimitStub.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
+import { errorSanitizerMiddleware } from './middleware/errorSanitizer.js';
 
 const app: Express = express();
 const logger = new Logger('SERACore');
@@ -562,20 +563,7 @@ app.use('/api/channels', authMiddleware, notifProtectedRouter);
 app.use('/api/orchestration', authMiddleware, rateLimitStub, createOrchestrationMetricsRouter());
 
 // Global Error Handler
-app.use(
-  (
-    err: unknown,
-    _req: import('express').Request,
-    res: import('express').Response,
-    _next: import('express').NextFunction
-  ) => {
-    logger.error('Unhandled API Error:', err);
-    const status = (err as { status?: number }).status || 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-);
+app.use(errorSanitizerMiddleware);
 
 const startServer = async () => {
   mcpRegistry.setIntercom(intercomService);

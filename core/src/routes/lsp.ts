@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { LspManager } from '../lsp/LspManager.js';
 import path from 'path';
 import { URI } from 'vscode-uri';
+import { sanitizeErrorMessage } from '../middleware/errorSanitizer.js';
 
 const router: Router = Router();
 const rootDir = process.cwd();
@@ -51,7 +52,9 @@ router.post('/definition', async (req, res) => {
     res.json({ definition });
   } catch (error: unknown) {
     const err = error as Error;
-    res.status(err.message.startsWith('Access denied') ? 403 : 500).json({ error: err.message });
+    res
+      .status(err.message.startsWith('Access denied') ? 403 : 500)
+      .json({ error: sanitizeErrorMessage(err.message) });
   }
 });
 
@@ -77,7 +80,9 @@ router.post('/references', async (req, res) => {
     res.json({ references });
   } catch (error: unknown) {
     const err = error as Error;
-    res.status(err.message.startsWith('Access denied') ? 403 : 500).json({ error: err.message });
+    res
+      .status(err.message.startsWith('Access denied') ? 403 : 500)
+      .json({ error: sanitizeErrorMessage(err.message) });
   }
 });
 
@@ -103,7 +108,9 @@ router.post('/symbols', async (req, res) => {
     res.json({ symbols });
   } catch (error: unknown) {
     const err = error as Error;
-    res.status(err.message.startsWith('Access denied') ? 403 : 500).json({ error: err.message });
+    res
+      .status(err.message.startsWith('Access denied') ? 403 : 500)
+      .json({ error: sanitizeErrorMessage(err.message) });
   }
 });
 

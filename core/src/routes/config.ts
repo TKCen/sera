@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { config } from '../lib/config.js';
 import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
 import { Logger } from '../lib/logger.js';
+import { sanitizeErrorMessage } from '../middleware/errorSanitizer.js';
 
 const logger = new Logger('ConfigRouter');
 
@@ -36,7 +37,9 @@ export function createConfigRouter(): Router {
       res.json({ success: true });
     } catch (err: unknown) {
       logger.error('Failed to update LLM config:', err);
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res
+        .status(500)
+        .json({ error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)) });
     }
   });
 
@@ -52,7 +55,10 @@ export function createConfigRouter(): Router {
       });
     } catch (err: unknown) {
       logger.error('LLM test failed:', err);
-      res.json({ success: false, error: err instanceof Error ? err.message : String(err) });
+      res.json({
+        success: false,
+        error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+      });
     }
   });
 

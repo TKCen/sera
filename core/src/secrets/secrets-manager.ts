@@ -63,6 +63,10 @@ export class SecretsManager {
     return this.provider.list(filter, context);
   }
 
+  async rotateEncryptionKey(newKey: string): Promise<void> {
+    return this.provider.rotateEncryptionKey(newKey);
+  }
+
   async healthCheck(): Promise<boolean> {
     return this.provider.healthCheck();
   }

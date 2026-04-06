@@ -27,6 +27,16 @@ export interface SecretFilter {
 }
 
 /**
+ * Redacts a secret name for safe logging.
+ * Shows only the last 3 characters, prefixed with "***".
+ * e.g. "my-api-key" → "***key", "ab" → "***ab", "" → "***"
+ */
+export function redactSecretName(name: string): string {
+  const suffix = name.slice(-3);
+  return `***${suffix}`;
+}
+
+/**
  * Pluggable secrets provider interface.
  */
 export interface SecretsProvider {
@@ -52,6 +62,11 @@ export interface SecretsProvider {
    * List metadata for all secrets matching the filter.
    */
   list(filter: SecretFilter, context: SecretAccessContext): Promise<SecretMetadata[]>;
+
+  /**
+   * Rotate the encryption key: re-encrypt all secrets with newKey.
+   */
+  rotateEncryptionKey(newKey: string): Promise<void>;
 
   /**
    * Perform a health check on the secrets backend.

@@ -113,10 +113,24 @@ function selectActiveGroups(task: string, manifestGroups: string[] = []): Set<st
 
   const lower = task.toLowerCase();
 
-  if (/url|fetch|http/.test(lower)) active.add('web');
-  if (/exec|run|shell|bash|script|code/.test(lower)) active.add('compute');
-  if (/spawn|delegate|subagent/.test(lower)) active.add('orchestration');
-  if (/file|read|write|edit|glob|grep/.test(lower)) active.add('filesystem');
+  // Web: URL fetching, HTTP requests, browsing
+  if (/url|fetch|http|web|browse|download|api|endpoint|request/.test(lower)) active.add('web');
+
+  // Compute: code execution, shell commands
+  if (/exec|run|shell|bash|script|code|eval|command|terminal|pip|npm|install/.test(lower))
+    active.add('compute');
+
+  // Orchestration: agent management, delegation, scheduling, circles
+  if (
+    /spawn|delegate|subagent|agent|circle|schedule|task|create|manage|start|stop|restart|deploy|orchestrat/.test(
+      lower
+    )
+  )
+    active.add('orchestration');
+
+  // Filesystem: file operations
+  if (/file|read|write|edit|glob|grep|directory|folder|path|save|load|open/.test(lower))
+    active.add('filesystem');
 
   return active;
 }

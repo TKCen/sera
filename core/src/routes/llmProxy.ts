@@ -24,6 +24,7 @@ import type { MeteringService } from '../metering/MeteringService.js';
 import { rateLimitStub } from '../middleware/rateLimitStub.js';
 import type { LlmRouter } from '../llm/LlmRouter.js';
 import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
+import { providerFromModel } from '../llm/CircuitBreakerService.js';
 import { Logger } from '../lib/logger.js';
 import type { Pool } from 'pg';
 import type { Orchestrator } from '../agents/Orchestrator.js';
@@ -213,6 +214,18 @@ export function createLlmProxyRouter(
 
       // ── 3. Streaming path ──────────────────────────────────────────────────
       if (stream === true) {
+        // Pre-flight circuit breaker check for streaming
+        const streamProvider = providerFromModel(modelName);
+        const streamBreaker = circuitBreakerService.getProviderState(streamProvider);
+        if (streamBreaker?.state === 'open') {
+          res.status(503).json({
+            error: 'provider_unavailable',
+            provider: streamProvider,
+            message: `Provider ${streamProvider} is currently unavailable (circuit open)`,
+          });
+          return;
+        }
+
         try {
           logger.info(`Proxy stream | agent=${agentId} model=${modelName}`);
           const streamRes = await llmRouter.chatCompletionStream(

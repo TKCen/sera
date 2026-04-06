@@ -140,6 +140,14 @@ export class CircuitBreakerService {
     }
   }
 
+  /** Check if a provider's circuit is currently open (proactive pre-flight). */
+  isOpen(model: string): boolean {
+    const provider = providerFromModel(model);
+    const breaker = this.breakers.get(provider);
+    if (!breaker) return false; // No breaker = never been called = not open
+    return breaker.opened;
+  }
+
   /**
    * Return current state of all known circuit breakers.
    * Used by GET /api/system/circuit-breakers.

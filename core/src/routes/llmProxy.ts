@@ -31,8 +31,10 @@ import type { Pool } from 'pg';
 import type { Orchestrator } from '../agents/Orchestrator.js';
 import { ContextAssembler } from '../llm/ContextAssembler.js';
 import type { ContextCompactionService } from '../llm/ContextCompactionService.js';
+import { TraceService } from '../services/TraceService.js';
 
 const logger = new Logger('LLMProxy');
+const traceService = TraceService.getInstance();
 
 // ── Scope guard — agent-facing proxy endpoints ────────────────────────────────
 
@@ -90,6 +92,7 @@ export function createLlmProxyRouter(
       const identity = req.agentIdentity!;
       const agentId = identity?.agentId ?? req.operator?.sub ?? 'unknown';
       const circleId = identity?.circleId ?? null;
+      const sessionId = (req.headers['x-sera-session-id'] as string | undefined) ?? agentId;
 
       // ── 1. Budget gate (Story 4.3) ─────────────────────────────────────────
       // INVARIANT: No upstream call must be made if budget is exceeded.
@@ -441,6 +444,49 @@ export function createLlmProxyRouter(
             status: callStatus,
           })
           .catch((err) => logger.error('Failed to record metering:', err));
+
+        // ── 5a. Accumulate trace data (Story 30.1) ────────────────────────────
+        // Non-blocking — record messages and token usage into the in-memory
+        // accumulator keyed by agentId::sessionId.
+        try {
+          const requestMessages = chatRequest.messages as Array<{
+            role: string;
+            content: string;
+          }>;
+          for (const msg of requestMessages) {
+            traceService.addMessage(agentId, sessionId, {
+              role: msg.role as 'user' | 'assistant' | 'system' | 'tool',
+              content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+              timestamp: new Date().toISOString(),
+            });
+          }
+          const respChoice = (
+            llmResponse.response.choices as Array<{
+              message?: { role?: string; content?: string };
+            }>
+          )?.[0];
+          if (respChoice?.message?.content) {
+            traceService.addMessage(agentId, sessionId, {
+              role: 'assistant',
+              content: respChoice.message.content,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          const usage = llmResponse.response.usage;
+          traceService.recordTokens(
+            agentId,
+            sessionId,
+            usage?.prompt_tokens ?? 0,
+            usage?.completion_tokens ?? 0
+          );
+          traceService.setModel(agentId, sessionId, modelName);
+          // Persist and reset accumulator for this turn
+          traceService
+            .persist(agentId, sessionId)
+            .catch((err) => logger.error('Failed to persist interaction trace:', err));
+        } catch (traceErr) {
+          logger.warn('Trace accumulation error (non-fatal):', traceErr);
+        }
 
         // ── 6. Return response ─────────────────────────────────────────────────
         logger.debug(

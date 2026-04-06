@@ -1,6 +1,11 @@
 import { execSync } from 'child_process';
 import type { SkillDefinition } from '../types.js';
 import { TierPolicy } from '../../sandbox/TierPolicy.js';
+import { scanCommand, shouldBlock, hasWarnings } from '../../tools/security/threat-patterns.js';
+import { AuditService } from '../../audit/AuditService.js';
+import { Logger } from '../../lib/logger.js';
+
+const logger = new Logger('shell-exec');
 
 /**
  * Built-in skill: shell-exec
@@ -28,6 +33,48 @@ export const shellExecSkill: SkillDefinition = {
     const command = params['command'];
     if (!command || typeof command !== 'string') {
       return { success: false, error: 'Parameter "command" is required and must be a string' };
+    }
+
+    // ── Threat Pattern Scanning ─────────────────────────────────────────────
+    const threatMatches = scanCommand(command);
+    const blocked = shouldBlock(threatMatches);
+
+    if (threatMatches.length > 0) {
+      // Log to audit trail (fire-and-forget — do not block execution on audit errors)
+      AuditService.getInstance()
+        .record({
+          actorType: 'agent',
+          actorId: context.agentInstanceId ?? context.agentName,
+          actingContext: { agentName: context.agentName, sessionId: context.sessionId },
+          eventType: 'threat.detected',
+          payload: {
+            command,
+            agentInstanceId: context.agentInstanceId,
+            agentName: context.agentName,
+            blocked,
+            matches: threatMatches,
+          },
+        })
+        .catch((err: unknown) => {
+          logger.error('Failed to record threat detection audit event:', err);
+        });
+
+      if (blocked) {
+        const categories = [...new Set(threatMatches.map((m) => m.category))].join(', ');
+        const riskLevels = [...new Set(threatMatches.map((m) => m.riskLevel))].join(', ');
+        logger.warn(
+          `Blocking shell command — threat patterns matched: ${categories} (risk: ${riskLevels})`
+        );
+        return {
+          success: false,
+          error: `Command blocked by threat pattern scanner. Categories: ${categories}. Risk: ${riskLevels}.`,
+        };
+      }
+
+      if (hasWarnings(threatMatches)) {
+        const categories = [...new Set(threatMatches.map((m) => m.category))].join(', ');
+        logger.warn(`Shell command matched threat patterns (Medium risk): ${categories}`);
+      }
     }
 
     try {

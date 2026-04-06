@@ -73,7 +73,11 @@ describe('ContextManager', () => {
       process.env['MAX_CONTEXT_TOKENS'] = '10';
       const smallMgr = new ContextManager('gpt-4o-mini');
       const messages: ChatMessage[] = [
-        { role: 'system', content: 'You are a helpful assistant with a very long identity description that fills up the context.' },
+        {
+          role: 'system',
+          content:
+            'You are a helpful assistant with a very long identity description that fills up the context.',
+        },
         { role: 'user', content: 'Hello, please tell me something interesting about the world.' },
       ];
       expect(smallMgr.isNearLimit(messages)).toBe(true);
@@ -313,7 +317,10 @@ describe('ContextManager', () => {
       delete process.env['MAX_CONTEXT_TOKENS'];
       const tinyMgr = new ContextManager('gpt-4o-mini');
       const messages: ChatMessage[] = [
-        { role: 'system', content: 'System prompt with enough words to completely fill the window and more.' },
+        {
+          role: 'system',
+          content: 'System prompt with enough words to completely fill the window and more.',
+        },
         { role: 'user', content: 'User message that pushes well over the tiny limit we set.' },
       ];
       const result = tinyMgr.truncateToContextBudget('any content', messages);
@@ -367,19 +374,15 @@ describe('ContextManager', () => {
       expect(messages[1]!.content).toContain('This session is being continued');
       expect(messages[1]!.content).toContain('Summary:');
 
-      // Check summary content
+      // Check summary content — sections produced by generateCompactionSummary
       const summary = messages[1]!.content;
-      expect(summary).toContain('Scope:');
-      expect(summary).toContain('Tools mentioned:');
-      expect(summary).toContain('Recent user requests:');
-      expect(summary).toContain('Pending work:');
-      expect(summary).toContain('Key files:');
-      expect(summary).toContain('Key timeline:');
+      expect(summary).toContain('Task Context:');
+      expect(summary).toContain('Tools Used:');
+      expect(summary).toContain('Decisions:');
+      expect(summary).toContain('Pending Work:');
 
       // Verify specific extractions
-      expect(summary).toContain('core/src/index.ts');
-      expect(summary).toContain('agent-runtime/src/loop.ts');
-      expect(summary).toContain('package.json');
+      expect(summary).toContain('fix a bug in core/src/index.ts');
       expect(summary).toContain('todo: fix the memory leak');
 
       smallMgr.free();
@@ -398,10 +401,7 @@ describe('ContextManager', () => {
       const m3: ChatMessage = { role: 'user', content: 'Msg 3' };
       const m4: ChatMessage = { role: 'assistant', content: 'Msg 4' };
 
-      const messages: ChatMessage[] = [
-        { role: 'system', content: 'System' },
-        m1, m2, m3, m4
-      ];
+      const messages: ChatMessage[] = [{ role: 'system', content: 'System' }, m1, m2, m3, m4];
 
       // We want to drop exactly 2 messages (m1 and m2)
       // m1, m2 are dropped. m3, m4 are kept because they are the last 2.
@@ -413,9 +413,9 @@ describe('ContextManager', () => {
       // Mock countMessageTokens to force it to look like we are over limit when all are present,
       // but under when m3, m4 are present.
       const realCount = smallMgr.countMessageTokens;
-      smallMgr.countMessageTokens = function(msgs) {
+      smallMgr.countMessageTokens = function (msgs) {
         if (msgs.length === 5) return 200; // All 5
-        if (msgs.length === 4 && msgs.some(m => m.content.includes('Summary:'))) return 50; // System + Summary + m3 + m4
+        if (msgs.length === 4 && msgs.some((m) => m.content.includes('Summary:'))) return 50; // System + Summary + m3 + m4
         return realCount.call(this, msgs);
       };
 
@@ -563,7 +563,10 @@ describe('ContextManager', () => {
       const smallMgr = new ContextManager('gpt-4o-mini');
 
       const messages: ChatMessage[] = [
-        { role: 'user', content: ('<memory>Secret knowledge</memory>Tell me about the task.' + ' ').repeat(50) },
+        {
+          role: 'user',
+          content: ('<memory>Secret knowledge</memory>Tell me about the task.' + ' ').repeat(50),
+        },
       ];
 
       const mockLLM = {
@@ -580,6 +583,149 @@ describe('ContextManager', () => {
       delete process.env['CONTEXT_COMPACTION_STRATEGY'];
       delete process.env['CONTEXT_WINDOW'];
       delete process.env['PRESERVE_RECENT_MESSAGES'];
+    });
+  });
+
+  describe('generateCompactionSummary()', () => {
+    it('includes all four required sections', async () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'Please implement the login feature.' },
+        {
+          role: 'assistant',
+          content: 'I will use JWT for authentication.',
+          tool_calls: [
+            { id: 'tc1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+          ],
+        },
+        { role: 'tool', content: 'Command succeeded.', tool_call_id: 'tc1' },
+        { role: 'assistant', content: 'Next step: need to add password hashing.' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      expect(summary).toContain('Task Context:');
+      expect(summary).toContain('Tools Used:');
+      expect(summary).toContain('Decisions:');
+      expect(summary).toContain('Pending Work:');
+    });
+
+    it('extracts user task context into Task Context section', async () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'Refactor the authentication module.' },
+        { role: 'assistant', content: 'Working on it.' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      expect(summary).toContain('Refactor the authentication module.');
+    });
+
+    it('extracts tool names and result snippets into Tools Used section', async () => {
+      const messages: ChatMessage[] = [
+        {
+          role: 'assistant',
+          content: 'Running shell command.',
+          tool_calls: [
+            { id: 'tc1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } },
+          ],
+        },
+        { role: 'tool', content: 'file1.ts\nfile2.ts', tool_call_id: 'tc1' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      expect(summary).toContain('shell');
+      expect(summary).toContain('file1.ts');
+    });
+
+    it('extracts assistant decisions into Decisions section', async () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'Which approach should we use?' },
+        { role: 'assistant', content: 'I decided to use the repository pattern for data access.' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      expect(summary).toContain('repository pattern');
+    });
+
+    it('extracts pending work into Pending Work section', async () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'Start the refactor.' },
+        { role: 'assistant', content: 'Need to add error handling next.' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      expect(summary).toContain('Need to add error handling next.');
+    });
+
+    it('returns none placeholders when no tools, decisions, or pending work exist', async () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'Hello.' },
+        { role: 'assistant', content: 'Hi there.' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      // All sections still present
+      expect(summary).toContain('Task Context:');
+      expect(summary).toContain('Tools Used:');
+      expect(summary).toContain('Decisions:');
+      expect(summary).toContain('Pending Work:');
+      // No-content placeholders
+      expect(summary).toContain('none');
+    });
+
+    it('skips cleared tool results', async () => {
+      const messages: ChatMessage[] = [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: 'tc1', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+          ],
+        },
+        { role: 'tool', content: '[cleared — re-read if needed]', tool_call_id: 'tc1' },
+      ];
+
+      const summary = await mgr.generateCompactionSummary(messages);
+      expect(summary).not.toContain('[cleared — re-read if needed]');
+    });
+
+    it('injects structured summary as system message during sliding-window compaction', async () => {
+      process.env['MAX_CONTEXT_TOKENS'] = '40';
+      process.env['CONTEXT_WINDOW'] = '40';
+      const smallMgr = new ContextManager('gpt-4o-mini');
+
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        {
+          role: 'assistant',
+          content: 'I will use JWT.',
+          tool_calls: [
+            { id: 'tc1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+          ],
+        },
+        { role: 'tool', content: 'done', tool_call_id: 'tc1' },
+        { role: 'user', content: 'Implement feature X.' },
+        { role: 'assistant', content: 'Need to add tests next.' },
+        { role: 'user', content: 'Keep going.' },
+      ];
+
+      await smallMgr.compact(messages);
+
+      // Find the injected continuation system message
+      const continuation = messages.find(
+        (m) =>
+          m.role === 'system' &&
+          typeof m.content === 'string' &&
+          (m.content as string).includes('Summary:')
+      );
+      expect(continuation).toBeDefined();
+      const content = continuation!.content as string;
+      expect(content).toContain('Task Context:');
+      expect(content).toContain('Tools Used:');
+      expect(content).toContain('Decisions:');
+      expect(content).toContain('Pending Work:');
+
+      smallMgr.free();
+      delete process.env['MAX_CONTEXT_TOKENS'];
+      delete process.env['CONTEXT_WINDOW'];
     });
   });
 });

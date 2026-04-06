@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * CLI utility to create a task for a SERA bridge agent.
  *
@@ -13,8 +11,10 @@
  *     --prompt "Fix lint errors in core/src/routes/"
  */
 
-const SERA_CORE_URL = process.env.SERA_CORE_URL || 'http://localhost:3001';
-const SERA_API_KEY = process.env.SERA_API_KEY || 'sera_bootstrap_dev_123';
+import { argv, env, exit } from 'node:process';
+
+const SERA_CORE_URL = env.SERA_CORE_URL || 'http://localhost:3001';
+const SERA_API_KEY = env.SERA_API_KEY || 'sera_bootstrap_dev_123';
 
 interface ParsedArgs {
   agent?: string;
@@ -40,11 +40,11 @@ interface TaskResponse {
  */
 function parseArgs(): ParsedArgs {
   const args: ParsedArgs = {};
-  for (let i = 2; i < process.argv.length; i++) {
-    const arg = process.argv[i];
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
     if (arg.startsWith('--')) {
       const key = arg.slice(2);
-      const value = process.argv[i + 1];
+      const value = argv[i + 1];
       if (value && !value.startsWith('--')) {
         args[key as keyof ParsedArgs] = value;
         i++; // skip the value in next iteration
@@ -144,7 +144,7 @@ async function main(): Promise<void> {
       console.error('  --prompt <text>           [required] Task prompt');
       console.error('  --agent <name>            [optional] Agent name (default: omc-bridge)');
       console.error('  --timeout <duration>      [optional] Timeout (e.g., 30m)');
-      process.exit(1);
+      exit(1);
     }
 
     // Resolve agent ID
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
     console.log(`Priority: ${task.priority}`);
   } catch (err) {
     console.error('Error:', (err as Error).message);
-    process.exit(1);
+    exit(1);
   }
 }
 

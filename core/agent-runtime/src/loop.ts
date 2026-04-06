@@ -79,7 +79,7 @@ export interface TaskOutput {
 const MAX_ITERATIONS = 10;
 const MAX_OVERFLOW_RETRIES = 3;
 const MAX_TIMEOUT_RETRIES = 2;
-const MAX_PROVIDER_RETRIES = 3;
+const MAX_PROVIDER_RETRIES = 1;
 const PROVIDER_RETRY_BASE_MS = 2000;
 const TIMEOUT_COMPACTION_THRESHOLD = 0.65;
 /** Max tools sent per LLM call. Beyond this, remaining tools are deferred and discoverable via tool-search. */

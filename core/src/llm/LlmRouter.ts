@@ -548,6 +548,7 @@ export class LlmRouter {
   /**
    * Execute a non-streaming chat completion.
    * Token usage is extracted from the completed AssistantMessage.
+   * Iterates the failoverModels chain on dispatch errors.
    */
   async chatCompletion(
     request: ChatCompletionRequest,
@@ -559,43 +560,82 @@ export class LlmRouter {
     );
 
     const config = this.registry.resolve(request.model);
-    const context = toContext(request);
-    const opts: StreamOptions = {
-      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-      ...(request.thinkingLevel
-        ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
-        : {}),
-    };
+    const failoverChain = [request.model, ...(config.failoverModels ?? [])];
+    let lastError: Error | null = null;
 
-    const eventStream = this.dispatch(config, context, opts);
-    const msg = await eventStream.result();
+    for (const modelName of failoverChain) {
+      try {
+        const modelConfig = this.registry.resolve(modelName);
+        const context = toContext(request);
+        const opts: StreamOptions = {
+          ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+          ...(request.thinkingLevel
+            ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
+            : {}),
+        };
 
-    const latencyMs = Date.now() - latencyStart;
-    logger.debug(
-      `LlmRouter done | agent=${agentId} tokens=${msg.usage.totalTokens} latency=${latencyMs}ms`
-    );
+        const eventStream = this.dispatch(modelConfig, context, opts);
+        const msg = await eventStream.result();
 
-    return { response: toCompletionResponse(msg, request.model), latencyMs };
+        const latencyMs = Date.now() - latencyStart;
+        if (modelName !== request.model) {
+          logger.warn(`Failover: ${request.model} → ${modelName} | agent=${agentId}`);
+        }
+        logger.debug(
+          `LlmRouter done | agent=${agentId} model=${modelName} tokens=${msg.usage.totalTokens} latency=${latencyMs}ms`
+        );
+
+        return { response: toCompletionResponse(msg, modelName), latencyMs };
+      } catch (err) {
+        lastError = err as Error;
+        logger.warn(
+          `LlmRouter dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}`
+        );
+        // Continue to next model in failover chain
+      }
+    }
+
+    throw lastError ?? new Error('All models in failover chain failed');
   }
 
   /**
    * Start a streaming completion and return a Readable that emits OpenAI SSE.
    * The caller is responsible for piping the stream to the HTTP response.
+   * Iterates the failoverModels chain on dispatch errors.
    */
   async chatCompletionStream(request: ChatCompletionRequest, agentId: string): Promise<Readable> {
     logger.debug(`LlmRouter stream | agent=${agentId} model=${request.model}`);
 
     const config = this.registry.resolve(request.model);
-    const context = toContext(request);
-    const opts: StreamOptions = {
-      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-      ...(request.thinkingLevel
-        ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
-        : {}),
-    };
+    const failoverChain = [request.model, ...(config.failoverModels ?? [])];
+    let lastError: Error | null = null;
 
-    const eventStream = this.dispatch(config, context, opts);
-    return eventStreamToReadable(eventStream, request.model);
+    for (const modelName of failoverChain) {
+      try {
+        const modelConfig = this.registry.resolve(modelName);
+        const context = toContext(request);
+        const opts: StreamOptions = {
+          ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+          ...(request.thinkingLevel
+            ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
+            : {}),
+        };
+
+        const eventStream = this.dispatch(modelConfig, context, opts);
+        if (modelName !== request.model) {
+          logger.warn(`Failover: ${request.model} → ${modelName} | agent=${agentId}`);
+        }
+        return eventStreamToReadable(eventStream, modelName);
+      } catch (err) {
+        lastError = err as Error;
+        logger.warn(
+          `LlmRouter stream dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}`
+        );
+        // Continue to next model in failover chain
+      }
+    }
+
+    throw lastError ?? new Error('All models in failover chain failed');
   }
 
   /** List all explicitly registered models with enough info for the UI. API keys are omitted. */

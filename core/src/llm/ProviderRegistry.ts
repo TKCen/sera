@@ -95,6 +95,11 @@ export interface ProviderConfig {
    * Default: auto-detected from model name (qwen3*, o1*, o3*, deepseek-r1*).
    */
   reasoning?: boolean | undefined;
+  /**
+   * Ordered list of fallback model names to try when this model's provider fails.
+   * Each name must be resolvable via ProviderRegistry.resolve().
+   */
+  failoverModels?: string[] | undefined;
 }
 
 export interface DynamicProviderConfig {
@@ -562,6 +567,7 @@ export class ProviderRegistry {
       contextCompactionModel?: string;
       reasoning?: boolean;
       description?: string;
+      failoverModels?: string[];
     }
   ): void {
     const existing = this.configs.get(modelName);
@@ -580,6 +586,7 @@ export class ProviderRegistry {
       existing.contextCompactionModel = overrides.contextCompactionModel;
     if (overrides.reasoning !== undefined) existing.reasoning = overrides.reasoning;
     if (overrides.description !== undefined) existing.description = overrides.description;
+    if (overrides.failoverModels !== undefined) existing.failoverModels = overrides.failoverModels;
 
     logger.info(`Updated config for model ${modelName}:`, overrides);
   }

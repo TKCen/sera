@@ -15,6 +15,7 @@
  * @see docs/epics/04-llm-proxy-and-governance.md
  */
 
+import { PassThrough } from 'stream';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { IdentityService } from '../auth/IdentityService.js';
@@ -238,8 +239,81 @@ export function createLlmProxyRouter(
           res.setHeader('Connection', 'keep-alive');
           res.setHeader('X-Accel-Buffering', 'no');
 
+          // ── Metering: intercept SSE chunks to count tokens ──────────────
+          let streamedTokens = 0;
+          const streamStart = Date.now();
+
+          const meter = new PassThrough();
+
+          meter.on('data', (chunk: Buffer) => {
+            const text = chunk.toString('utf8');
+            const lines = text.split('\n');
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr === '[DONE]') continue;
+              try {
+                const parsed = JSON.parse(jsonStr) as {
+                  choices?: Array<{
+                    delta?: {
+                      content?: string;
+                      tool_calls?: Array<{ function?: { arguments?: string } }>;
+                    };
+                  }>;
+                  usage?: { completion_tokens?: number };
+                };
+                const delta = parsed.choices?.[0]?.delta;
+                if (delta?.content) {
+                  streamedTokens += Math.ceil(delta.content.length / 4);
+                }
+                if (delta?.tool_calls) {
+                  for (const tc of delta.tool_calls) {
+                    if (tc.function?.arguments) {
+                      streamedTokens += Math.ceil(tc.function.arguments.length / 4);
+                    }
+                  }
+                }
+                // If the provider sends usage in the final chunk, prefer it
+                if (parsed.usage) {
+                  streamedTokens = parsed.usage.completion_tokens ?? streamedTokens;
+                }
+              } catch {
+                // Not valid JSON — skip
+              }
+            }
+          });
+
+          meter.on('end', () => {
+            const latencyMs = Date.now() - streamStart;
+            meteringService
+              .recordUsage({
+                agentId,
+                circleId,
+                model: modelName,
+                promptTokens: 0,
+                completionTokens: streamedTokens,
+                totalTokens: streamedTokens,
+                latencyMs,
+                status: 'success',
+              })
+              .catch((err) => logger.error('Failed to record streaming metering:', err));
+          });
+
           streamRes.on('error', (err: Error) => {
             logger.error(`LLM stream error | agent=${agentId}:`, err.message);
+            meteringService
+              .recordUsage({
+                agentId,
+                circleId,
+                model: modelName,
+                promptTokens: 0,
+                completionTokens: streamedTokens,
+                totalTokens: streamedTokens,
+                latencyMs: Date.now() - streamStart,
+                status: 'error',
+              })
+              .catch((merr) => logger.error('Failed to record streaming error metering:', merr));
+
             if (!res.headersSent) {
               res.status(502).json({
                 error: {
@@ -252,8 +326,8 @@ export function createLlmProxyRouter(
               res.end();
             }
           });
-          streamRes.pipe(res);
-          streamRes.on('end', () => res.end());
+
+          streamRes.pipe(meter).pipe(res);
           return;
         } catch (err: unknown) {
           const streamErr = err as { code?: string; provider?: string; message: string };

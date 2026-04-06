@@ -175,6 +175,9 @@ export function generateSystemPrompt(
   // 6. Memory Instructions (Priority 50, Required)
   builder.addMemoryInstructions();
 
+  // 6b. Memory Management Instructions (Priority 55, Required)
+  builder.addMemoryManagementInstructions();
+
   // 7. Time & Context (Priority 60, Required)
   builder.addTimeContext(context.timezone);
 

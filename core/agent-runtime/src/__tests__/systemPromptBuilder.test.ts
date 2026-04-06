@@ -162,6 +162,72 @@ describe('SystemPromptBuilder', () => {
     expect(prompt).not.toContain('## Workspace Context');
   });
 
+  describe('addMemoryManagementInstructions', () => {
+    it('includes memory tier descriptions', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addMemoryManagementInstructions();
+      const prompt = builder.build();
+
+      expect(prompt).toContain('## Memory Management');
+      expect(prompt).toContain('Core memory');
+      expect(prompt).toContain('Personal memory');
+      expect(prompt).toContain('Circle memory');
+      expect(prompt).toContain('Global memory');
+    });
+
+    it('includes store instruction with core-memory-replace tool name', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addMemoryManagementInstructions();
+      const prompt = builder.build();
+
+      expect(prompt).toContain('core-memory-replace');
+      expect(prompt).toContain('knowledge-store');
+    });
+
+    it('includes evict instruction', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addMemoryManagementInstructions();
+      const prompt = builder.build();
+
+      expect(prompt).toContain('Move rarely-needed details to long-term storage');
+    });
+
+    it('includes consolidate instruction with knowledge-rewrite tool name', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addMemoryManagementInstructions();
+      const prompt = builder.build();
+
+      expect(prompt).toContain('knowledge-rewrite');
+    });
+
+    it('is marked required and appears between memory-instructions and time-context by priority', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addMemoryInstructions();
+      builder.addMemoryManagementInstructions();
+      builder.addTimeContext();
+      const prompt = builder.build();
+
+      const memIdx = prompt.indexOf('## Memory & Knowledge');
+      const mgmtIdx = prompt.indexOf('## Memory Management');
+      const timeIdx = prompt.indexOf('## System Context');
+
+      expect(memIdx).toBeGreaterThanOrEqual(0);
+      expect(mgmtIdx).toBeGreaterThan(memIdx);
+      expect(timeIdx).toBeGreaterThan(mgmtIdx);
+    });
+
+    it('is not dropped when token budget is tight (required=true)', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addMemoryManagementInstructions();
+      builder.addPrinciples(mockManifest); // optional, priority 10
+
+      // Set budget too small for both — required section must survive
+      const prompt = builder.build(5);
+
+      expect(prompt).toContain('## Memory Management');
+    });
+  });
+
   describe('Workspace Context Trimming', () => {
     beforeEach(() => {
       vi.mocked(fs.existsSync).mockImplementation(() => true);

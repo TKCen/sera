@@ -4,7 +4,6 @@ import { SkillInjector } from '../skills/SkillInjector.js';
 import type { ChatMessage } from './LlmRouter.js';
 import { Orchestrator } from '../agents/Orchestrator.js';
 import { AgentFactory } from '../agents/AgentFactory.js';
-import { IdentityService } from '../agents/identity/IdentityService.js';
 import { EmbeddingService } from '../services/embedding.service.js';
 import { VectorService } from '../services/vector.service.js';
 import type {
@@ -89,10 +88,12 @@ export class ContextAssembler {
 
   /**
    * Assembles the context for an LLM call:
-   * 1. Replace the Runtime's bare system prompt with the full IdentityService prompt
-   * 2. Skill injection
-   * 3. RAG — embed current message, search all accessible namespaces,
-   *    inject top-K memory blocks into the system prompt.
+   * 1. Preserve the agent-runtime's system prompt as the base (core memory blocks,
+   *    workspace context, reasoning hints, output format instructions)
+   * 2. Append circle constitution enrichment (if not already present)
+   * 3. Skill injection appended to the base prompt
+   * 4. RAG — embed current message, search all accessible namespaces,
+   *    inject top-K memory blocks appended to the system prompt.
    *
    * @param onEvent - Optional callback for context assembly events (for thought stream)
    */
@@ -138,10 +139,14 @@ export class ContextAssembler {
       },
     });
 
-    // ── 1. Generate rich base prompt (replaces Runtime's bare fallback) ──────
-    // IdentityService.generateStreamingSystemPrompt includes: identity, response
-    // format, stability guidelines, subagents, circle context, and tier info.
-    // The circle constitution is embedded as ## Project Context in the prompt.
+    // ── 1. Preserve agent-provided system prompt as the base ─────────────────
+    // The agent-runtime builds a comprehensive prompt with core memory blocks
+    // (persona/human at priority 5), workspace context files, reasoning hints,
+    // output format instructions, and priority-based token budgeting.
+    // Core enriches this prompt rather than replacing it.
+    const agentSystemPrompt = systemMessage.content ?? '';
+
+    // Load the circle constitution for injection into the enrichment sections.
     const circleContextStart = Date.now();
     const circleContext = await this.loadCircleConstitution(instance?.circle_id);
 
@@ -164,18 +169,24 @@ export class ContextAssembler {
       });
     }
 
-    const richPrompt = IdentityService.generateStreamingSystemPrompt(manifest, circleContext);
+    // Build a base prompt that includes the agent's system prompt plus the
+    // circle constitution as an enrichment section (if present and not already
+    // included by the agent-runtime).
+    const baseWithConstitution =
+      circleContext && !agentSystemPrompt.includes(circleContext)
+        ? `${agentSystemPrompt}\n\n## Project Context\n\n${circleContext}`
+        : agentSystemPrompt;
 
-    // ── 2. Inject skills (and constitution if not already in rich prompt) ────
-    // Pass null for circleId because the constitution is already injected by
-    // IdentityService as ## Project Context — avoids double injection.
+    // ── 2. Inject skills into the agent-provided prompt ───────────────────────
+    // Pass null for circleId because the constitution is already appended above
+    // — avoids double injection by SkillInjector.
     const skillsStart = Date.now();
     const skillsPrompt = await this.skillInjector.inject(
-      richPrompt,
+      baseWithConstitution,
       manifest.skills ?? [],
       manifest.skillPackages ?? [],
       currentMessage,
-      null // circleId null — constitution already in richPrompt
+      null // circleId null — constitution already appended above
     );
     emit({
       stage: 'context.skills_injected',
@@ -185,7 +196,7 @@ export class ContextAssembler {
         circleId: instance?.circle_id ?? null,
         promptLengthChars: skillsPrompt.length,
         tokenCount: Math.ceil(skillsPrompt.length / 4),
-        promptSource: 'IdentityService.generateStreamingSystemPrompt',
+        promptSource: 'agent-runtime',
       },
       durationMs: Date.now() - skillsStart,
     });
@@ -223,7 +234,7 @@ export class ContextAssembler {
 
     // ── 4. Emit token budget visualization for context debugger ─────────────
     const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-    const systemPromptTokens = estimateTokens(richPrompt);
+    const systemPromptTokens = estimateTokens(agentSystemPrompt);
     const skillTokens = Math.max(0, estimateTokens(skillsPrompt) - systemPromptTokens);
     const memoryTokens = memoryContext ? estimateTokens(memoryContext) : 0;
     const historyTokens = messages
@@ -258,7 +269,7 @@ export class ContextAssembler {
         finalPromptLengthChars: newSystemContent.length,
         finalTokenCount: Math.ceil(newSystemContent.length / 4),
         memoryInjected: !!memoryContext,
-        promptSource: 'IdentityService.generateStreamingSystemPrompt',
+        promptSource: 'agent-runtime',
         totalDurationMs,
       },
       durationMs: totalDurationMs,

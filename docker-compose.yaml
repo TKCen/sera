@@ -86,6 +86,7 @@ services:
     container_name: sera-core-rs
     restart: unless-stopped
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./core/config:/app/config:ro
     environment:
       - DATABASE_URL=postgresql://sera_user:sera_pass@sera-db:5432/sera_db
@@ -115,7 +116,7 @@ services:
     container_name: sera-shadow-proxy
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3003:3000"
     environment:
       - PRIMARY_URL=http://sera-core:3001
       - SHADOW_URL=http://sera-core-rs:3002

@@ -72,7 +72,12 @@
           "type": "object",
           "properties": {
             "allowed": { "type": "array", "items": { "type": "string" } },
-            "denied": { "type": "array", "items": { "type": "string" } }
+            "denied": { "type": "array", "items": { "type": "string" } },
+            "skillGroups": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Tool groups to always activate regardless of task keyword matching (e.g. [\"filesystem\", \"web\"])."
+            }
           }
         },
         "subagents": {

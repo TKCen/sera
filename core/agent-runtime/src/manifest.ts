@@ -43,6 +43,8 @@ export interface RuntimeManifest {
     denied?: string[];
     /** Explicit core tools always sent to LLM. Remaining allowed tools are deferred. */
     coreTools?: string[];
+    /** Tool groups to always activate regardless of task keyword matching. */
+    skillGroups?: string[];
     hooks?: Array<{
       command: string;
       events: Array<'before_tool_call' | 'after_tool_call'>;

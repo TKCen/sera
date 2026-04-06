@@ -19,6 +19,7 @@ import {
   LLMTimeoutError,
 } from './llmClient.js';
 import type { IToolExecutor } from './tools/index.js';
+import { TOOL_GROUPS } from './tools/definitions.js';
 import axios from 'axios';
 import type { CentrifugoPublisher, ToolOutputCallback } from './centrifugo.js';
 import type { RuntimeManifest } from './manifest.js';
@@ -79,6 +80,31 @@ interface RetryState {
   timeoutCompactionAttempts: number;
   providerUnavailableAttempts: number;
   toolResultTruncationAttempted: boolean;
+}
+
+// ── Tool group selection ──────────────────────────────────────────────────────
+
+/**
+ * Determine which tool groups should be active for a given task string.
+ * Always-on: core + memory. Additional groups activated by keyword matching.
+ * Manifest-declared skillGroups are always merged in.
+ */
+function selectActiveGroups(task: string, manifestGroups: string[] = []): Set<string> {
+  const active = new Set<string>(['core', 'memory']);
+
+  // Merge manifest-declared groups
+  for (const g of manifestGroups) {
+    active.add(g);
+  }
+
+  const lower = task.toLowerCase();
+
+  if (/url|fetch|http/.test(lower)) active.add('web');
+  if (/exec|run|shell|bash|script|code/.test(lower)) active.add('compute');
+  if (/spawn|delegate|subagent/.test(lower)) active.add('orchestration');
+  if (/file|read|write|edit|glob|grep/.test(lower)) active.add('filesystem');
+
+  return active;
 }
 
 // ── ReasoningLoop ─────────────────────────────────────────────────────────────
@@ -211,6 +237,42 @@ export class ReasoningLoop {
 
     // Fetch core memory before starting the loop
     await this.refreshCoreMemory();
+
+    // Context-aware tool gating: select groups active for this task, then filter allToolDefs.
+    // Always-on groups (core, memory) + keyword-triggered + manifest skillGroups.
+    const activeGroups = selectActiveGroups(task, this.manifest.tools?.skillGroups);
+    const activeToolNames = new Set<string>();
+    for (const [group, names] of Object.entries(TOOL_GROUPS)) {
+      if (activeGroups.has(group)) {
+        for (const n of names) activeToolNames.add(n);
+      }
+    }
+    const gatedToolDefs = this.allToolDefs.filter((t) => activeToolNames.has(t.function.name));
+
+    // Apply existing CORE_TOOL_LIMIT cap on the gated set
+    const manifestCoreTools = this.manifest.tools?.coreTools;
+    if (manifestCoreTools) {
+      const searchTool = gatedToolDefs.find((t) => t.function.name === 'tool-search');
+      this.toolDefs = [
+        ...gatedToolDefs.filter((t) => (manifestCoreTools as string[]).includes(t.function.name)),
+        ...(searchTool && !(manifestCoreTools as string[]).includes('tool-search')
+          ? [searchTool]
+          : []),
+      ];
+    } else if (gatedToolDefs.length > CORE_TOOL_LIMIT) {
+      const searchTool = gatedToolDefs.find((t) => t.function.name === 'tool-search');
+      const withoutSearch = gatedToolDefs.filter((t) => t.function.name !== 'tool-search');
+      this.toolDefs = [
+        ...withoutSearch.slice(0, CORE_TOOL_LIMIT),
+        ...(searchTool ? [searchTool] : []),
+      ];
+    } else {
+      this.toolDefs = gatedToolDefs;
+    }
+    log(
+      'info',
+      `Tool gating: groups=[${[...activeGroups].join(',')}] active=${this.toolDefs.length}/${this.allToolDefs.length}`
+    );
 
     // Refresh prompt to get current UTC time, current tool set, and core memory
     this.systemPrompt = this.refreshSystemPrompt();

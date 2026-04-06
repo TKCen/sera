@@ -347,14 +347,20 @@ export function createToolProxyRouter(
         return;
       }
 
+      // Resolve the agent's actual manifest for permission checks
+      const agentManifest =
+        orchestrator?.getManifestByInstanceId(identity.agentId) ??
+        orchestrator?.getManifest(identity.agentId) ??
+        ({} as AgentManifest);
+
       // Build a minimal AgentContext from the JWT identity.
-      // Remote-invoked skills don't have full context (no manifest, no sandbox).
+      // Remote-invoked skills don't have full context (no sandbox).
       const agentContext = {
         agentName: identity.agentName ?? identity.agentId,
         agentInstanceId: identity.agentId,
         workspacePath: '/workspace',
         tier: 2,
-        manifest: {} as AgentManifest,
+        manifest: agentManifest,
         containerId: undefined,
         sessionId: '',
         sandboxManager: undefined,

@@ -360,6 +360,7 @@ export class ProviderRegistry {
         groq: ['GROQ_API_KEY'],
         mistral: ['MISTRAL_API_KEY'],
         openrouter: ['OPENROUTER_API_KEY'],
+        kilocode: ['KILOCODE_API_KEY'],
       };
       const envVars = standardEnvVars[config.provider];
       if (envVars?.some((v) => process.env[v])) {
@@ -451,6 +452,7 @@ export class ProviderRegistry {
         groq: ['GROQ_API_KEY'],
         mistral: ['MISTRAL_API_KEY'],
         openrouter: ['OPENROUTER_API_KEY'],
+        kilocode: ['KILOCODE_API_KEY'],
       };
       const envVars = standardEnvVars[config.provider];
       if (envVars) {

@@ -187,6 +187,12 @@ export class CoreMemoryService {
         characterLimit: 2000,
         isReadOnly: false,
       },
+      {
+        name: 'context',
+        content: 'No current task context.',
+        characterLimit: 5000,
+        isReadOnly: false,
+      },
     ];
 
     for (const block of defaults) {
@@ -197,5 +203,24 @@ export class CoreMemoryService {
         [agentInstanceId, block.name, block.content, block.characterLimit, block.isReadOnly]
       );
     }
+  }
+
+  /**
+   * Render all core memory blocks for injection into the agent system prompt.
+   * Each block is wrapped with labeled markers so the agent can identify and
+   * update them via memory tools.
+   */
+  async renderForSystemPrompt(agentInstanceId: string): Promise<string> {
+    const blocks = await this.listBlocks(agentInstanceId);
+    if (blocks.length === 0) return '';
+
+    const rendered = blocks
+      .map(
+        (b) =>
+          `<core_memory name="${b.name}" char_limit="${b.characterLimit}">\n${b.content}\n</core_memory>`
+      )
+      .join('\n');
+
+    return `<core_memory_blocks>\n${rendered}\n</core_memory_blocks>`;
   }
 }

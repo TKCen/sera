@@ -17,7 +17,7 @@ describe('CoreMemoryService', () => {
   it('initializes default blocks', async () => {
     mockPool.query.mockResolvedValue({ rowCount: 1 });
     await service.initializeDefaultBlocks(agentId);
-    expect(mockPool.query).toHaveBeenCalledTimes(2);
+    expect(mockPool.query).toHaveBeenCalledTimes(3);
     expect(mockPool.query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO core_memory_blocks'),
       expect.arrayContaining([agentId, 'persona'])
@@ -26,6 +26,50 @@ describe('CoreMemoryService', () => {
       expect.stringContaining('INSERT INTO core_memory_blocks'),
       expect.arrayContaining([agentId, 'human'])
     );
+    expect(mockPool.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO core_memory_blocks'),
+      expect.arrayContaining([agentId, 'context'])
+    );
+  });
+
+  it('renders blocks for system prompt injection', async () => {
+    const mockBlocks = [
+      {
+        id: '1',
+        agentInstanceId: agentId,
+        name: 'persona',
+        content: 'You are a helpful assistant.',
+        characterLimit: 2000,
+        isReadOnly: false,
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: '2',
+        agentInstanceId: agentId,
+        name: 'human',
+        content: 'The user is a developer.',
+        characterLimit: 2000,
+        isReadOnly: false,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    mockPool.query.mockResolvedValueOnce({ rows: mockBlocks });
+
+    const rendered = await service.renderForSystemPrompt(agentId);
+    expect(rendered).toContain('<core_memory_blocks>');
+    expect(rendered).toContain('<core_memory name="persona"');
+    expect(rendered).toContain('You are a helpful assistant.');
+    expect(rendered).toContain('<core_memory name="human"');
+    expect(rendered).toContain('The user is a developer.');
+    expect(rendered).toContain('</core_memory_blocks>');
+  });
+
+  it('returns empty string when no blocks exist', async () => {
+    mockPool.query.mockResolvedValueOnce({ rows: [] });
+    const rendered = await service.renderForSystemPrompt(agentId);
+    expect(rendered).toBe('');
   });
 
   it('updates a block', async () => {

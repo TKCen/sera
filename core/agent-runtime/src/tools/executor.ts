@@ -485,7 +485,7 @@ export class RuntimeToolExecutor implements IToolExecutor {
         .catch(() => ({ status: 'allow' as const }));
 
       let finalError = errorMsg;
-      if (afterResult.modifiedResult !== undefined) {
+      if ('modifiedResult' in afterResult && afterResult.modifiedResult !== undefined) {
         finalError = afterResult.modifiedResult;
       }
 

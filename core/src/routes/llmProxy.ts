@@ -225,6 +225,20 @@ export function createLlmProxyRouter(
           res.setHeader('Connection', 'keep-alive');
           res.setHeader('X-Accel-Buffering', 'no');
 
+          streamRes.on('error', (err: Error) => {
+            logger.error(`LLM stream error | agent=${agentId}:`, err.message);
+            if (!res.headersSent) {
+              res.status(502).json({
+                error: {
+                  message: `Upstream LLM error: ${err.message}`,
+                  type: 'upstream_error',
+                },
+              });
+            } else {
+              // Headers already sent (partial stream) — just end the response
+              res.end();
+            }
+          });
           streamRes.pipe(res);
           streamRes.on('end', () => res.end());
           return;

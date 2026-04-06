@@ -315,12 +315,22 @@ export function createLlmProxyRouter(
               .catch((merr) => logger.error('Failed to record streaming error metering:', merr));
 
             if (!res.headersSent) {
-              res.status(502).json({
-                error: {
-                  message: `Upstream LLM error: ${err.message}`,
-                  type: 'upstream_error',
-                },
-              });
+              const is429 = err.message?.includes('429') || err.message?.includes('rate');
+              if (is429) {
+                res.status(429).json({
+                  error: 'rate_limited',
+                  message:
+                    'Upstream provider is rate-limited. Retry shortly or configure failover models.',
+                  retryAfterMs: 30000,
+                });
+              } else {
+                res.status(502).json({
+                  error: {
+                    message: `Upstream LLM error: ${err.message}`,
+                    type: 'upstream_error',
+                  },
+                });
+              }
             } else {
               // Headers already sent (partial stream) — just end the response
               res.end();
@@ -336,6 +346,18 @@ export function createLlmProxyRouter(
               error: 'provider_unavailable',
               provider: streamErr.provider,
               message: streamErr.message,
+            });
+            return;
+          }
+          const is429Stream =
+            streamErr.message?.includes('429') || streamErr.message?.includes('rate');
+          if (is429Stream) {
+            logger.warn(`Rate-limited by upstream provider | agent=${agentId} model=${modelName}`);
+            res.status(429).json({
+              error: 'rate_limited',
+              message:
+                'Upstream provider is rate-limited. Retry shortly or configure failover models.',
+              retryAfterMs: 30000,
             });
             return;
           }
@@ -384,6 +406,18 @@ export function createLlmProxyRouter(
             status: 'error',
           })
           .catch((merr) => logger.error('Failed to record error metering:', merr));
+
+        const is429 = cbErr.message?.includes('429') || cbErr.message?.includes('rate');
+        if (is429) {
+          logger.warn(`Rate-limited by upstream provider | agent=${agentId} model=${modelName}`);
+          res.status(429).json({
+            error: 'rate_limited',
+            message:
+              'Upstream provider is rate-limited. Retry shortly or configure failover models.',
+            retryAfterMs: 30000,
+          });
+          return;
+        }
 
         logger.error(`LLM proxy error | agent=${agentId}:`, err);
         res.status(502).json({

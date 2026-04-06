@@ -8,6 +8,23 @@ vi.mock('../../lib/database.js', () => ({
   query: vi.fn(),
 }));
 
+// Mock ScheduleService
+const mockUpdateSchedule = vi.fn().mockResolvedValue({});
+const mockDeleteSchedule = vi.fn().mockResolvedValue(undefined);
+const mockCreateSchedule = vi
+  .fn()
+  .mockImplementation((data) => Promise.resolve({ id: 'new-sched-id', ...data }));
+
+vi.mock('../../services/ScheduleService.js', () => ({
+  ScheduleService: {
+    getInstance: () => ({
+      createSchedule: mockCreateSchedule,
+      updateSchedule: mockUpdateSchedule,
+      deleteSchedule: mockDeleteSchedule,
+    }),
+  },
+}));
+
 import { query } from '../../lib/database.js';
 const mockQuery = vi.mocked(query);
 
@@ -37,6 +54,11 @@ const mockContext: AgentContext = {
 describe('schedule-task skill', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUpdateSchedule.mockResolvedValue({});
+    mockDeleteSchedule.mockResolvedValue(undefined);
+    mockCreateSchedule.mockImplementation((data) =>
+      Promise.resolve({ id: 'new-sched-id', ...data })
+    );
   });
 
   describe('get action', () => {
@@ -76,7 +98,8 @@ describe('schedule-task skill', () => {
 
   describe('activate action', () => {
     it('sets status to active', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 } as never);
+      // Ownership check query
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'sched-1' }], rowCount: 1 } as never);
 
       const result = await scheduleTaskSkill.handler(
         { action: 'activate', scheduleId: 'sched-1' },
@@ -88,16 +111,14 @@ describe('schedule-task skill', () => {
           data: expect.objectContaining({ message: expect.stringContaining('activated') }),
         })
       );
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining("status = 'active'"),
-        expect.arrayContaining(['sched-1'])
-      );
+      expect(mockUpdateSchedule).toHaveBeenCalledWith('sched-1', { status: 'active' });
     });
   });
 
   describe('deactivate action', () => {
     it('sets status to paused', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 } as never);
+      // Ownership check query
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'sched-1' }], rowCount: 1 } as never);
 
       const result = await scheduleTaskSkill.handler(
         { action: 'deactivate', scheduleId: 'sched-1' },
@@ -109,10 +130,7 @@ describe('schedule-task skill', () => {
           data: expect.objectContaining({ message: expect.stringContaining('paused') }),
         })
       );
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining("status = 'paused'"),
-        expect.arrayContaining(['sched-1'])
-      );
+      expect(mockUpdateSchedule).toHaveBeenCalledWith('sched-1', { status: 'paused' });
     });
   });
 
@@ -142,8 +160,6 @@ describe('schedule-task skill', () => {
         rows: [{ source: 'api' }],
         rowCount: 1,
       } as never);
-      // Delete query
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 } as never);
 
       const result = await scheduleTaskSkill.handler(
         { action: 'delete', scheduleId: 'sched-api' },

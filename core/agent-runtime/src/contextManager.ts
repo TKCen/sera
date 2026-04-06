@@ -236,6 +236,121 @@ export class ContextManager {
   }
 
   /**
+   * Generate a structured compaction summary for the given messages.
+   *
+   * Produces a human-readable block with four sections:
+   * - Task Context: what the agent was working on
+   * - Tools Used: tool names invoked and a sample of their results
+   * - Decisions: assistant conclusions extracted from the conversation
+   * - Pending Work: incomplete items detected via keyword heuristics
+   *
+   * @param messages Messages to summarize (typically the ones being dropped).
+   * @returns A formatted multi-section summary string.
+   */
+  async generateCompactionSummary(messages: ChatMessage[]): Promise<string> {
+    const tools = new Set<string>();
+    const toolResults: Array<{ name: string; snippet: string }> = [];
+    const decisions: string[] = [];
+    const pendingWork: string[] = [];
+    const taskContext: string[] = [];
+
+    const PENDING_KEYWORDS = [
+      'todo',
+      'next',
+      'pending',
+      'follow up',
+      'remaining',
+      'incomplete',
+      'need to',
+      'should',
+    ];
+    const DECISION_KEYWORDS = [
+      'decided',
+      'will use',
+      'chosen',
+      'using',
+      'implemented',
+      'fixed',
+      'resolved',
+      'confirmed',
+    ];
+
+    // First pass: build tool call id → name map
+    const toolCallIdToName = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          toolCallIdToName.set(tc.id, tc.function.name);
+          tools.add(tc.function.name);
+        }
+      }
+    }
+
+    // Second pass: extract content per role
+    for (const msg of messages) {
+      const rawContent =
+        typeof msg.content === 'string'
+          ? msg.content
+          : msg.content.map((b) => (b.type === 'text' ? (b.text ?? '') : '')).join(' ');
+
+      if (msg.role === 'user' && rawContent.trim()) {
+        taskContext.push(rawContent.trim().slice(0, 200));
+      }
+
+      if (msg.role === 'assistant' && rawContent.trim()) {
+        const lower = rawContent.toLowerCase();
+        if (DECISION_KEYWORDS.some((kw) => lower.includes(kw))) {
+          decisions.push(rawContent.trim().slice(0, 200));
+        }
+        if (PENDING_KEYWORDS.some((kw) => lower.includes(kw))) {
+          pendingWork.push(rawContent.trim().slice(0, 200));
+        }
+      }
+
+      if (msg.role === 'tool' && msg.tool_call_id) {
+        const name = toolCallIdToName.get(msg.tool_call_id) ?? 'unknown';
+        if (rawContent.trim() && rawContent !== '[cleared — re-read if needed]') {
+          toolResults.push({ name, snippet: rawContent.trim().slice(0, 150) });
+        }
+      }
+    }
+
+    const toolSummary =
+      toolResults.length > 0
+        ? toolResults
+            .slice(-6)
+            .map((r) => `  - ${r.name}: ${r.snippet}`)
+            .join('\n')
+        : tools.size > 0
+          ? `  Tools invoked: ${Array.from(tools).join(', ')}`
+          : '  none';
+
+    const sections = [
+      `Task Context:\n${
+        taskContext
+          .slice(-3)
+          .map((t) => `  - ${t}`)
+          .join('\n') || '  (no user messages)'
+      }`,
+      `Tools Used:\n${toolSummary}`,
+      `Decisions:\n${
+        decisions
+          .slice(-5)
+          .map((d) => `  - ${d}`)
+          .join('\n') || '  none'
+      }`,
+      `Pending Work:\n${
+        pendingWork
+          .slice(-5)
+          .map((p) => `  - ${p}`)
+          .join('\n') || '  none'
+      }`,
+    ];
+
+    return sections.join('\n\n');
+  }
+
+  /**
    * Compact the message history using the configured strategy.
    * Always preserves system messages and the N most recent messages verbatim.
    *
@@ -458,20 +573,20 @@ export class ContextManager {
     let continuationMsg: ChatMessage | undefined;
 
     if (droppedCount > 0) {
-      const generateContinuation = (msgs: ChatMessage[]): ChatMessage => ({
+      const generateContinuation = async (msgs: ChatMessage[]): Promise<ChatMessage> => ({
         role: 'system',
         content: `This session is being continued from a previous conversation that ran out of context.
 The summary below covers the earlier portion of the conversation.
 
 Summary:
-${this.summarizeMessages(msgs)}
+${await this.generateCompactionSummary(msgs)}
 
 Recent messages are preserved verbatim.
 Continue the conversation from where it left off without asking the user any further questions.
 Resume directly — do not acknowledge the summary, do not recap what was happening, and do not preface with continuation text.`,
       });
 
-      continuationMsg = generateContinuation(droppedMessages);
+      continuationMsg = await generateContinuation(droppedMessages);
 
       // If summary overhead pushes us back over, drop more if allowed
       while (
@@ -481,7 +596,7 @@ Resume directly — do not acknowledge the summary, do not recap what was happen
       ) {
         droppedMessages.push(nonSystemMessages.shift()!);
         droppedCount++;
-        continuationMsg = generateContinuation(droppedMessages);
+        continuationMsg = await generateContinuation(droppedMessages);
       }
 
       // Final check: if dropping all didn't help (huge system prompt or single huge recent message),

@@ -72,7 +72,10 @@ describe('ContextAssembler', () => {
     const result = await assembler.assemble('agent-1', messages);
 
     expect(result[0]!.content).toBe('Prompt with Skills');
-    expect(IdentityService.generateStreamingSystemPrompt).toHaveBeenCalled();
+    // IdentityService.generateStreamingSystemPrompt is no longer called —
+    // ContextAssembler preserves the agent-runtime's system prompt as the base
+    // and appends enrichments rather than replacing the prompt.
+    expect(IdentityService.generateStreamingSystemPrompt).not.toHaveBeenCalled();
     expect(SkillInjector.prototype.inject).toHaveBeenCalled();
   });
 

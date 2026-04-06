@@ -1,5 +1,5 @@
-import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../lib/database.js';
+import { ScheduleService } from '../../services/ScheduleService.js';
 import type { AgentContext, SkillDefinition } from '../types.js';
 
 /**
@@ -232,18 +232,27 @@ export const scheduleTaskSkill: SkillDefinition = {
               error: 'name, cron, and task are required for create action.',
             };
           }
-          const newId = uuidv4();
-          const now = new Date().toISOString();
-          await query(
-            `INSERT INTO schedules (id, agent_instance_id, agent_name, name, expression, type, task, source, status, category, created_at, updated_at)
-             VALUES ($1, $2, (SELECT name FROM agent_instances WHERE id = $2), $3, $4, 'cron', $5, 'api', 'active', $6, $7, $7)`,
-            [newId, targetId, name, cron, taskPrompt, category ?? null, now]
-          );
+          const scheduleService = ScheduleService.getInstance();
+          const agentNameRes = await query('SELECT name FROM agent_instances WHERE id = $1', [
+            targetId,
+          ]);
+          const agentName = agentNameRes.rows[0]?.name ?? null;
+          const created = await scheduleService.createSchedule({
+            agent_instance_id: targetId,
+            agent_name: agentName,
+            name,
+            expression: cron,
+            type: 'cron',
+            task: taskPrompt,
+            source: 'api',
+            status: 'active',
+            ...(category ? { category } : {}),
+          });
           const targetLabel = targetId === callerAgentId ? '' : ` for agent ${targetId}`;
           return {
             success: true,
             data: {
-              scheduleId: newId,
+              scheduleId: created.id,
               message: `Schedule "${name}" created successfully${targetLabel}.`,
             },
           };
@@ -277,32 +286,32 @@ export const scheduleTaskSkill: SkillDefinition = {
         case 'activate': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for activate action.' };
-          const actRes = await query(
-            `UPDATE schedules SET status = 'active', updated_at = NOW()
-             WHERE id = $1 AND agent_instance_id = $2`,
+          const actCheck = await query(
+            'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, targetId]
           );
-          if (actRes.rowCount === 0)
+          if (actCheck.rows.length === 0)
             return {
               success: false,
               error: 'Schedule not found or not owned by the target agent.',
             };
+          await ScheduleService.getInstance().updateSchedule(scheduleId, { status: 'active' });
           return { success: true, data: { message: 'Schedule activated successfully.' } };
         }
 
         case 'deactivate': {
           if (!scheduleId)
             return { success: false, error: 'scheduleId is required for deactivate action.' };
-          const deactRes = await query(
-            `UPDATE schedules SET status = 'paused', updated_at = NOW()
-             WHERE id = $1 AND agent_instance_id = $2`,
+          const deactCheck = await query(
+            'SELECT id FROM schedules WHERE id = $1 AND agent_instance_id = $2',
             [scheduleId, targetId]
           );
-          if (deactRes.rowCount === 0)
+          if (deactCheck.rows.length === 0)
             return {
               success: false,
               error: 'Schedule not found or not owned by the target agent.',
             };
+          await ScheduleService.getInstance().updateSchedule(scheduleId, { status: 'paused' });
           return {
             success: true,
             data: { message: 'Schedule deactivated (paused) successfully.' },
@@ -327,15 +336,7 @@ export const scheduleTaskSkill: SkillDefinition = {
               success: false,
               error: 'Cannot delete manifest-managed schedules. Use deactivate instead.',
             };
-          const delRes = await query(
-            'DELETE FROM schedules WHERE id = $1 AND agent_instance_id = $2',
-            [scheduleId, targetId]
-          );
-          if (delRes.rowCount === 0)
-            return {
-              success: false,
-              error: 'Schedule not found or not owned by the target agent.',
-            };
+          await ScheduleService.getInstance().deleteSchedule(scheduleId);
           return { success: true, data: { message: 'Schedule deleted successfully.' } };
         }
 
@@ -363,17 +364,14 @@ export const scheduleTaskSkill: SkillDefinition = {
             };
           }
 
-          const updName = name ?? current.name;
-          const updCron = cron ?? (current.expression || current.cron);
-          const updTask = taskPrompt ?? current.task;
-          const updStatus = status ?? current.status;
-          const updCategory = category ?? current.category ?? null;
+          const updates: Record<string, unknown> = {};
+          if (name) updates.name = name;
+          if (cron) updates.expression = cron;
+          if (taskPrompt) updates.task = taskPrompt;
+          if (status) updates.status = status;
+          if (category) updates.category = category;
 
-          await query(
-            `UPDATE schedules SET name = $1, expression = $2, task = $3, status = $4, category = $5, updated_at = NOW()
-             WHERE id = $6`,
-            [updName, updCron, updTask, updStatus, updCategory, scheduleId]
-          );
+          await ScheduleService.getInstance().updateSchedule(scheduleId, updates);
           return { success: true, data: { message: 'Schedule updated successfully.' } };
         }
 

@@ -52,6 +52,59 @@ function endpointKey(result: ParityResult): string {
   return `${result.method} ${normalized}`;
 }
 
+interface TableRow {
+  endpoint: string;
+  method: string;
+  statusMatch: string;
+  bodyMatch: string;
+  tsLatency: string;
+  rustLatency: string;
+}
+
+function padR(s: string, n: number): string {
+  return s.length >= n ? s : s + ' '.repeat(n - s.length);
+}
+
+function padL(s: string, n: number): string {
+  return s.length >= n ? s : ' '.repeat(n - s.length) + s;
+}
+
+function renderTable(rows: TableRow[]): void {
+  const cols: (keyof TableRow)[] = [
+    'endpoint',
+    'method',
+    'statusMatch',
+    'bodyMatch',
+    'tsLatency',
+    'rustLatency',
+  ];
+  const headers: Record<keyof TableRow, string> = {
+    endpoint: 'Endpoint',
+    method: 'Method',
+    statusMatch: 'Status Match',
+    bodyMatch: 'Body Match',
+    tsLatency: 'TS Latency',
+    rustLatency: 'Rust Latency',
+  };
+
+  const widths = cols.map((col) =>
+    Math.max(headers[col].length, ...rows.map((r) => r[col].length))
+  );
+
+  const sep = '+' + widths.map((w) => '-'.repeat(w + 2)).join('+') + '+';
+  const headerRow =
+    '|' + cols.map((col, i) => ' ' + padR(headers[col], widths[i]!) + ' ').join('|') + '|';
+
+  console.log(sep);
+  console.log(headerRow);
+  console.log(sep);
+  for (const row of rows) {
+    const line = '|' + cols.map((col, i) => ' ' + padR(row[col], widths[i]!) + ' ').join('|') + '|';
+    console.log(line);
+  }
+  console.log(sep);
+}
+
 function main(): void {
   const results = readResults();
 
@@ -70,6 +123,7 @@ function main(): void {
   console.log(`Total requests:  ${totalRequests}`);
   console.log(`Matching:        ${matching} (${matchPct}%)`);
   console.log(`Mismatching:     ${mismatching} (${mismatchPct}%)`);
+  console.log(`Overall parity:  ${matchPct}%`);
 
   // Per-endpoint breakdown
   const endpoints = new Map<string, EndpointStats>();
@@ -91,21 +145,58 @@ function main(): void {
     }
   }
 
+  // Latency averages per endpoint
+  const latencyMap = new Map<string, { tsTotal: number; rustTotal: number; count: number }>();
+  for (const result of results) {
+    const key = endpointKey(result);
+    const isConnError =
+      result.diff === 'shadow_timeout' || result.diff === 'shadow_connection_refused';
+    if (!isConnError) {
+      let lat = latencyMap.get(key);
+      if (!lat) {
+        lat = { tsTotal: 0, rustTotal: 0, count: 0 };
+        latencyMap.set(key, lat);
+      }
+      lat.tsTotal += result.latencyPrimaryMs;
+      lat.rustTotal += result.latencyShadowMs;
+      lat.count++;
+    }
+  }
+
   // Sort by endpoint key for consistent output
   const sorted = [...endpoints.entries()].sort(([a], [b]) => a.localeCompare(b));
 
-  console.log('\nPer-endpoint breakdown:');
-  for (const [key, stats] of sorted) {
-    const pct = ((stats.matching / stats.total) * 100).toFixed(0);
-    const mismatchCount = stats.total - stats.matching;
-    const arrow =
-      mismatchCount > 0 ? ` \u2190 ${mismatchCount} diff${mismatchCount === 1 ? '' : 's'}` : '';
-    console.log(`  ${key.padEnd(40)} ${stats.matching}/${stats.total} (${pct}%)${arrow}`);
+  console.log('\nPer-endpoint summary table:');
 
-    // Show first unique diff for mismatching endpoints
-    if (stats.diffs.length > 0) {
+  const rows: TableRow[] = sorted.map(([key, stats]) => {
+    const [method = '', ...pathParts] = key.split(' ');
+    const path = pathParts.join(' ');
+    const statusMatchCount = results.filter((r) => endpointKey(r) === key && r.statusMatch).length;
+    const bodyMatchCount = results.filter((r) => endpointKey(r) === key && r.bodyMatch).length;
+    const lat = latencyMap.get(key);
+    const tsLatency = lat && lat.count > 0 ? `${(lat.tsTotal / lat.count).toFixed(0)}ms` : 'n/a';
+    const rustLatency =
+      lat && lat.count > 0 ? `${(lat.rustTotal / lat.count).toFixed(0)}ms` : 'n/a';
+    return {
+      endpoint: path,
+      method,
+      statusMatch: `${statusMatchCount}/${stats.total}`,
+      bodyMatch: `${bodyMatchCount}/${stats.total}`,
+      tsLatency,
+      rustLatency,
+    };
+  });
+
+  renderTable(rows);
+
+  // Sample diffs for mismatching endpoints
+  const withDiffs = sorted.filter(([, stats]) => stats.diffs.length > 0);
+  if (withDiffs.length > 0) {
+    console.log('\nSample diffs (first unique diff per endpoint):');
+    for (const [key, stats] of withDiffs) {
       const preview = stats.diffs[0]!.split('\n')[0]!;
-      console.log(`    sample diff: ${preview}`);
+      console.log(`  ${key}`);
+      console.log(`    ${preview}`);
     }
   }
 
@@ -123,7 +214,7 @@ function main(): void {
     }
   }
 
-  // Latency summary
+  // Overall latency summary
   const validLatencies = results.filter(
     (r) =>
       r.latencyShadowMs > 0 && r.diff !== 'shadow_timeout' && r.diff !== 'shadow_connection_refused'
@@ -133,10 +224,18 @@ function main(): void {
       validLatencies.reduce((s, r) => s + r.latencyPrimaryMs, 0) / validLatencies.length;
     const avgShadow =
       validLatencies.reduce((s, r) => s + r.latencyShadowMs, 0) / validLatencies.length;
-    console.log('\nLatency (avg):');
-    console.log(`  Primary: ${avgPrimary.toFixed(0)}ms`);
-    console.log(`  Shadow:  ${avgShadow.toFixed(0)}ms`);
+    console.log('\nLatency averages (all endpoints):');
+    console.log(`  TS (primary): ${avgPrimary.toFixed(0)}ms`);
+    console.log(`  Rust (shadow): ${avgShadow.toFixed(0)}ms`);
+    const delta = avgShadow - avgPrimary;
+    const sign = delta >= 0 ? '+' : '';
+    console.log(`  Delta: ${sign}${delta.toFixed(0)}ms`);
   }
+
+  // Final parity line
+  console.log(
+    `\nOverall parity: ${padL(matchPct, 5)}%  (${matching}/${totalRequests} requests fully matching)`
+  );
 }
 
 main();

@@ -15,6 +15,7 @@ import type {
 } from '../services/vector.service.js';
 import { Logger } from '../lib/logger.js';
 import { MemoryBlockStore } from '../memory/blocks/MemoryBlockStore.js';
+import type { ProviderRegistry } from './ProviderRegistry.js';
 
 const logger = new Logger('ContextAssembler');
 
@@ -22,24 +23,14 @@ const logger = new Logger('ContextAssembler');
 const DEFAULT_MEMORY_CHAR_BUDGET = 16_000; // ~4000 tokens
 const DEFAULT_TOP_K = 8;
 
-// ── Model context window sizes (shared with agent-runtime/contextManager.ts) ──
-const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+// Fallback context window sizes for auto-detected cloud models not in providers.json
+const FALLBACK_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-4o': 128_000,
   'gpt-4o-mini': 128_000,
-  'gpt-4-turbo': 128_000,
-  'gpt-4': 8_192,
-  'gpt-3.5-turbo': 16_385,
-  'claude-opus-4': 200_000,
-  'claude-sonnet-4': 200_000,
-  'claude-haiku-4': 200_000,
   'claude-3-5-sonnet': 200_000,
   'claude-3-5-haiku': 200_000,
   'claude-3-opus': 200_000,
-  'qwen2.5-coder-7b': 32_768,
-  'qwen2.5-coder-32b': 32_768,
-  'qwen3.5-35b-a3b': 131_072,
-  'llama3.1:8b': 128_000,
-  'llama3.2': 128_000,
+  'gemini-pro': 1_000_000,
 };
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
@@ -81,10 +72,30 @@ export class ContextAssembler {
 
   constructor(
     pool: Pool,
-    private orchestrator: Orchestrator
+    private orchestrator: Orchestrator,
+    private registry?: ProviderRegistry
   ) {
     this.pool = pool;
     this.skillInjector = new SkillInjector(pool);
+  }
+
+  /** Resolve context window for a model, preferring provider config over hardcoded fallbacks. */
+  private getContextWindow(modelName: string): number {
+    // Try provider registry first (has per-model contextWindow from providers.json)
+    try {
+      const config = this.registry?.resolve(modelName);
+      if (config?.contextWindow) return config.contextWindow;
+    } catch {
+      // Model not in registry — fall through to fallback
+    }
+
+    // Prefix-match against fallback table for auto-detected cloud models
+    const lower = modelName.toLowerCase();
+    for (const [prefix, window] of Object.entries(FALLBACK_CONTEXT_WINDOWS)) {
+      if (lower.startsWith(prefix)) return window;
+    }
+
+    return DEFAULT_CONTEXT_WINDOW;
   }
 
   /**
@@ -231,7 +242,7 @@ export class ContextAssembler {
       .reduce((sum, m) => sum + estimateTokens(m.content ?? ''), 0);
 
     const modelName = manifest.spec?.model?.name ?? manifest.model?.name ?? 'default';
-    const contextWindow = MODEL_CONTEXT_WINDOWS[modelName] ?? DEFAULT_CONTEXT_WINDOW;
+    const contextWindow = this.getContextWindow(modelName);
     const remaining = Math.max(
       0,
       contextWindow - systemPromptTokens - skillTokens - memoryTokens - historyTokens

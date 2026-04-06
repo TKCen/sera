@@ -14,28 +14,7 @@ import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import type { ChatMessage, ILLMClient } from './llmClient.js';
 import { log } from './logger.js';
 
-// ── Model context window sizes (tokens) ───────────────────────────────────────
-
-const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  'gpt-4o': 128_000,
-  'gpt-4o-mini': 128_000,
-  'gpt-4-turbo': 128_000,
-  'gpt-4': 8_192,
-  'gpt-3.5-turbo': 16_385,
-  'claude-opus-4': 200_000,
-  'claude-sonnet-4': 200_000,
-  'claude-haiku-4': 200_000,
-  'claude-3-5-sonnet': 200_000,
-  'claude-3-5-haiku': 200_000,
-  'claude-3-opus': 200_000,
-  'qwen2.5-coder-7b': 32_768,
-  'qwen2.5-coder-32b': 32_768,
-  'qwen3.5-35b-a3b': 131_072,
-  'llama3.1:8b': 128_000,
-  'llama3.2': 128_000,
-};
-
-const DEFAULT_CONTEXT_WINDOW = 32_768;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_HIGH_WATER_PCT = 0.95;
 const DEFAULT_CLEAR_THRESHOLD_PCT = 0.8;
 const AGGRESSIVE_COMPACT_PCT = 0.5;
@@ -373,16 +352,11 @@ export class ContextManager {
   // ── Private helpers ───────────────────────────────────────────────────────
 
   private resolveContextWindow(modelName: string): number {
-    // Exact match
-    if (MODEL_CONTEXT_WINDOWS[modelName] !== undefined) {
-      return MODEL_CONTEXT_WINDOWS[modelName]!;
-    }
-    // Prefix match (e.g. 'qwen2.5-coder-7b-instruct' → 'qwen2.5-coder-7b')
-    for (const [key, value] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
-      if (modelName.startsWith(key) || key.startsWith(modelName)) {
-        return value;
-      }
-    }
+    // Basic heuristic for known model families (CONTEXT_WINDOW env var takes priority — see constructor)
+    const lower = modelName.toLowerCase();
+    if (lower.includes('claude')) return 200_000;
+    if (lower.includes('gpt-4')) return 128_000;
+    if (lower.includes('gemini')) return 1_000_000;
     return DEFAULT_CONTEXT_WINDOW;
   }
 

@@ -94,6 +94,7 @@ export class AuditService {
       timestamp,
       actorType,
       actorId,
+      null, // genesis has no acting_context
       eventType,
       payload,
       prevHash
@@ -137,6 +138,7 @@ export class AuditService {
         timestamp,
         entry.actorType,
         entry.actorId,
+        entry.actingContext,
         entry.eventType,
         validatedPayload as Record<string, unknown>,
         prevHash
@@ -191,6 +193,7 @@ export class AuditService {
         record.timestamp,
         record.actor_type,
         record.actor_id,
+        record.acting_context as Record<string, unknown> | null,
         record.event_type,
         record.payload as Record<string, unknown>,
         record.prev_hash
@@ -296,6 +299,7 @@ export class AuditService {
     timestamp: Date,
     actorType: string,
     actorId: string,
+    actingContext: Record<string, unknown> | null,
     eventType: string,
     payload: Record<string, unknown>,
     prevHash: string | null
@@ -305,6 +309,7 @@ export class AuditService {
       timestamp.toISOString(),
       actorType,
       actorId,
+      actingContext ? JSON.stringify(this.sortObjectKeys(actingContext)) : '',
       eventType,
       JSON.stringify(this.sortObjectKeys(payload)),
       prevHash || '',

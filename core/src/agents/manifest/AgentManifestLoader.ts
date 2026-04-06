@@ -159,6 +159,29 @@ export class AgentManifestLoader {
       const model = obj['model'] as Record<string, unknown>;
       AgentManifestLoader.requireString(model, 'provider', `${ctx} model`);
       AgentManifestLoader.requireString(model, 'name', `${ctx} model`);
+    } else {
+      // ── identity (spec-wrapped format) ────────────────────────────────────
+      const spec = obj['spec'] as Record<string, unknown>;
+
+      if (spec['identity'] !== undefined) {
+        AgentManifestLoader.requireObject(spec, 'identity', `${ctx} spec`);
+        const identity = spec['identity'] as Record<string, unknown>;
+        AgentManifestLoader.requireString(identity, 'role', `${ctx} spec.identity`);
+        AgentManifestLoader.requireString(identity, 'description', `${ctx} spec.identity`);
+      }
+
+      // ── model (spec-wrapped format) ───────────────────────────────────────
+      if (spec['model'] !== undefined) {
+        AgentManifestLoader.requireObject(spec, 'model', `${ctx} spec`);
+        const model = spec['model'] as Record<string, unknown>;
+        AgentManifestLoader.requireString(model, 'name', `${ctx} spec.model`);
+        if (model['temperature'] !== undefined && typeof model['temperature'] !== 'number') {
+          throw new ManifestValidationError(
+            `"model.temperature" must be a number${ctx}`,
+            'spec.model.temperature'
+          );
+        }
+      }
     }
 
     // ── resources ─────────────────────────────────────────────────────────────

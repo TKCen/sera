@@ -13,12 +13,27 @@ interface ParityResult {
   diff?: string;
   latencyPrimaryMs: number;
   latencyShadowMs: number;
+  conventionMismatches: number;
+  dataMismatches: number;
+  conventionFields: string[];
+  dataFields: string[];
 }
 
 interface EndpointStats {
   total: number;
   matching: number;
+  conventionOnly: number;
+  dataDiff: number;
+  notImplemented: number;
   diffs: string[];
+  conventionCount: number;
+  dataCount: number;
+}
+
+interface FieldStats {
+  path: string;
+  conventionCount: number;
+  dataCount: number;
 }
 
 function readResults(): ParityResult[] {
@@ -35,7 +50,13 @@ function readResults(): ParityResult[] {
   const results: ParityResult[] = [];
   for (const line of lines) {
     try {
-      results.push(JSON.parse(line) as ParityResult);
+      const parsed = JSON.parse(line) as ParityResult;
+      // Back-compat: older records may not have the new fields
+      parsed.conventionMismatches = parsed.conventionMismatches ?? 0;
+      parsed.dataMismatches = parsed.dataMismatches ?? 0;
+      parsed.conventionFields = parsed.conventionFields ?? [];
+      parsed.dataFields = parsed.dataFields ?? [];
+      results.push(parsed);
     } catch {
       // Skip malformed lines
     }
@@ -52,11 +73,43 @@ function endpointKey(result: ParityResult): string {
   return `${result.method} ${normalized}`;
 }
 
+function normalizeFieldPath(path: string): string {
+  // Normalize array indices to [] and UUIDs to :id
+  return path
+    .replace(/\[\d+\]/g, '[]')
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
+}
+
+function analyzeFields(results: ParityResult[]): FieldStats[] {
+  const fieldMap = new Map<string, { convention: number; data: number }>();
+
+  for (const r of results) {
+    for (const f of r.conventionFields) {
+      const normalized = normalizeFieldPath(f);
+      const entry = fieldMap.get(normalized) ?? { convention: 0, data: 0 };
+      entry.convention++;
+      fieldMap.set(normalized, entry);
+    }
+    for (const f of r.dataFields) {
+      const normalized = normalizeFieldPath(f);
+      const entry = fieldMap.get(normalized) ?? { convention: 0, data: 0 };
+      entry.data++;
+      fieldMap.set(normalized, entry);
+    }
+  }
+
+  return [...fieldMap.entries()]
+    .map(([path, stats]) => ({ path, conventionCount: stats.convention, dataCount: stats.data }))
+    .sort((a, b) => b.conventionCount + b.dataCount - (a.conventionCount + a.dataCount));
+}
+
 interface TableRow {
   endpoint: string;
   method: string;
   statusMatch: string;
   bodyMatch: string;
+  convention: string;
+  dataDiff: string;
   tsLatency: string;
   rustLatency: string;
 }
@@ -75,6 +128,8 @@ function renderTable(rows: TableRow[]): void {
     'method',
     'statusMatch',
     'bodyMatch',
+    'convention',
+    'dataDiff',
     'tsLatency',
     'rustLatency',
   ];
@@ -83,6 +138,8 @@ function renderTable(rows: TableRow[]): void {
     method: 'Method',
     statusMatch: 'Status Match',
     bodyMatch: 'Body Match',
+    convention: 'Convention',
+    dataDiff: 'Data Diff',
     tsLatency: 'TS Latency',
     rustLatency: 'Rust Latency',
   };
@@ -105,6 +162,10 @@ function renderTable(rows: TableRow[]): void {
   console.log(sep);
 }
 
+function isNotImplemented(result: ParityResult): boolean {
+  return result.shadowStatus === 405 || result.shadowStatus === 501 || result.shadowStatus === 404;
+}
+
 function main(): void {
   const results = readResults();
 
@@ -119,11 +180,16 @@ function main(): void {
   const matchPct = ((matching / totalRequests) * 100).toFixed(1);
   const mismatchPct = ((mismatching / totalRequests) * 100).toFixed(1);
 
+  // Convention-adjusted parity: matches + convention-only mismatches
+  const conventionAdjusted = results.filter(
+    (r) => r.statusMatch && (r.bodyMatch || (r.dataMismatches === 0 && r.conventionMismatches > 0))
+  ).length;
+  const conventionAdjustedPct = ((conventionAdjusted / totalRequests) * 100).toFixed(1);
+
   console.log('=== Parity Report ===');
   console.log(`Total requests:  ${totalRequests}`);
   console.log(`Matching:        ${matching} (${matchPct}%)`);
   console.log(`Mismatching:     ${mismatching} (${mismatchPct}%)`);
-  console.log(`Overall parity:  ${matchPct}%`);
 
   // Per-endpoint breakdown
   const endpoints = new Map<string, EndpointStats>();
@@ -132,19 +198,108 @@ function main(): void {
     const key = endpointKey(result);
     let stats = endpoints.get(key);
     if (!stats) {
-      stats = { total: 0, matching: 0, diffs: [] };
+      stats = {
+        total: 0,
+        matching: 0,
+        conventionOnly: 0,
+        dataDiff: 0,
+        notImplemented: 0,
+        diffs: [],
+        conventionCount: 0,
+        dataCount: 0,
+      };
       endpoints.set(key, stats);
     }
     stats.total++;
+    stats.conventionCount += result.conventionMismatches;
+    stats.dataCount += result.dataMismatches;
+
     if (result.statusMatch && result.bodyMatch) {
       stats.matching++;
+    } else if (isNotImplemented(result)) {
+      stats.notImplemented++;
+    } else if (
+      result.statusMatch &&
+      result.dataMismatches === 0 &&
+      result.conventionMismatches > 0
+    ) {
+      stats.conventionOnly++;
     } else {
+      stats.dataDiff++;
       if (result.diff && !stats.diffs.includes(result.diff)) {
         stats.diffs.push(result.diff);
       }
     }
   }
 
+  // === Convention Analysis ===
+  const allConventionFields = analyzeFields(results);
+  const totalConventionMismatches = results.reduce((s, r) => s + r.conventionMismatches, 0);
+  const endpointsWithConvention = [...endpoints.values()].filter(
+    (s) => s.conventionCount > 0
+  ).length;
+
+  if (totalConventionMismatches > 0) {
+    console.log('\n=== Convention Analysis ===');
+    console.log(
+      `Convention-only mismatches: ${totalConventionMismatches} (across ${endpointsWithConvention} endpoints)`
+    );
+    const topConvention = allConventionFields.filter((f) => f.conventionCount > 0).slice(0, 10);
+    if (topConvention.length > 0) {
+      console.log('Top convention fields:');
+      for (const field of topConvention) {
+        // Derive the camelCase counterpart for display
+        const snake = field.path;
+        const camel = snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+        const label = snake === camel ? snake : `${snake} / ${camel}`;
+        console.log(`  ${padR(label, 36)} — ${field.conventionCount} occurrences`);
+      }
+    }
+  }
+
+  // === Route Coverage ===
+  const sorted = [...endpoints.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const totalRoutes = endpoints.size;
+  let fullyMatching = 0;
+  let conventionOnlyRoutes = 0;
+  let dataDiffRoutes = 0;
+  let notImplementedRoutes = 0;
+
+  for (const [, stats] of sorted) {
+    if (stats.matching === stats.total) {
+      fullyMatching++;
+    } else if (stats.notImplemented > 0 && stats.notImplemented === stats.total - stats.matching) {
+      notImplementedRoutes++;
+    } else if (stats.conventionOnly > 0 && stats.dataDiff === 0) {
+      conventionOnlyRoutes++;
+    } else {
+      dataDiffRoutes++;
+    }
+  }
+
+  console.log('\n=== Route Coverage ===');
+  console.log(`Total unique routes tested: ${totalRoutes}`);
+  console.log(
+    `  Fully matching:    ${fullyMatching} (${((fullyMatching / totalRoutes) * 100).toFixed(1)}%)`
+  );
+  console.log(
+    `  Convention only:   ${conventionOnlyRoutes} (${((conventionOnlyRoutes / totalRoutes) * 100).toFixed(1)}%)  <- would match with serde rename`
+  );
+  console.log(
+    `  Data differences:  ${dataDiffRoutes} (${((dataDiffRoutes / totalRoutes) * 100).toFixed(1)}%)`
+  );
+  console.log(
+    `  Not implemented:   ${notImplementedRoutes} (${((notImplementedRoutes / totalRoutes) * 100).toFixed(1)}%)  <- 405/501 responses`
+  );
+
+  // === Aggregate Parity ===
+  console.log('\n=== Aggregate Parity ===');
+  console.log(`Strict parity:       ${padL(matchPct, 5)}%  (matching status + body exactly)`);
+  console.log(
+    `Convention-adjusted: ${padL(conventionAdjustedPct, 5)}%  (ignoring camelCase/snake_case diffs)`
+  );
+
+  // Per-endpoint table
   // Latency averages per endpoint
   const latencyMap = new Map<string, { tsTotal: number; rustTotal: number; count: number }>();
   for (const result of results) {
@@ -163,9 +318,6 @@ function main(): void {
     }
   }
 
-  // Sort by endpoint key for consistent output
-  const sorted = [...endpoints.entries()].sort(([a], [b]) => a.localeCompare(b));
-
   console.log('\nPer-endpoint summary table:');
 
   const rows: TableRow[] = sorted.map(([key, stats]) => {
@@ -182,6 +334,8 @@ function main(): void {
       method,
       statusMatch: `${statusMatchCount}/${stats.total}`,
       bodyMatch: `${bodyMatchCount}/${stats.total}`,
+      convention: stats.conventionCount > 0 ? String(stats.conventionCount) : '-',
+      dataDiff: stats.dataCount > 0 ? String(stats.dataCount) : '-',
       tsLatency,
       rustLatency,
     };
@@ -197,6 +351,17 @@ function main(): void {
       const preview = stats.diffs[0]!.split('\n')[0]!;
       console.log(`  ${key}`);
       console.log(`    ${preview}`);
+    }
+  }
+
+  // === Top Mismatched Fields ===
+  if (allConventionFields.length > 0) {
+    console.log('\n=== Top Mismatched Fields ===');
+    for (const field of allConventionFields.slice(0, 15)) {
+      const parts: string[] = [];
+      if (field.conventionCount > 0) parts.push(`convention (${field.conventionCount}x)`);
+      if (field.dataCount > 0) parts.push(`data (${field.dataCount}x)`);
+      console.log(`  ${padR(field.path, 40)} — ${parts.join(', ')}`);
     }
   }
 

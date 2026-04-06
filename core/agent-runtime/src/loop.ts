@@ -8,6 +8,7 @@
 import type {
   ILLMClient,
   ChatMessage,
+  MessageContentBlock,
   ToolDefinition,
   LLMResponse,
   ThinkingLevel,
@@ -29,6 +30,15 @@ import { loadBootContext } from './bootContext.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
 import { log } from './logger.js';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function contentAsString(content: string | MessageContentBlock[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((block) => (block.type === 'text' && block.text !== undefined ? block.text : ''))
+    .join('');
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -461,13 +471,13 @@ export class ReasoningLoop {
                   messages.push(tr.message);
                   if (
                     MEMORY_TOOLS.includes(tr.toolName) &&
-                    !tr.message.content.includes('Error:')
+                    !contentAsString(tr.message.content).includes('Error:')
                   ) {
                     savedCount++;
                   }
                   await think(
                     'reflect',
-                    `Flush tool result: ${tr.message.content.substring(0, 100)}`,
+                    `Flush tool result: ${contentAsString(tr.message.content).substring(0, 100)}`,
                     iteration,
                     {
                       internal: true,
@@ -739,10 +749,10 @@ export class ReasoningLoop {
             // Handle image-view vision request (#NEW)
             if (
               result.toolName === 'image-view' &&
-              result.message.content.includes('"vision_request"')
+              contentAsString(result.message.content).includes('"vision_request"')
             ) {
               try {
-                const parsed = JSON.parse(result.message.content);
+                const parsed = JSON.parse(contentAsString(result.message.content));
                 if (parsed.__type === 'vision_request') {
                   const hasVision =
                     this.manifest.model.name.toLowerCase().includes('vision') ||
@@ -790,11 +800,13 @@ export class ReasoningLoop {
             }
 
             // 1. Per-result absolute cap (TOOL_OUTPUT_MAX_TOKENS)
-            result.message.content = this.contextManager.truncateToolOutput(result.message.content);
+            result.message.content = this.contextManager.truncateToolOutput(
+              contentAsString(result.message.content)
+            );
 
             // 2. Context-aware budget guard — truncate further if remaining budget is tight
             const budgetCheck = this.contextManager.truncateToContextBudget(
-              result.message.content,
+              contentAsString(result.message.content),
               messages
             );
             if (budgetCheck.compactionNeeded) {

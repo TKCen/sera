@@ -20,8 +20,24 @@ export class ContainerSecurityMapper {
     proxyEnabled: boolean;
   } {
     // ── Resource Limits ─────────────────────────────────────────────────────
-    const cpuShares = caps.resources?.cpu_shares || 0;
-    const memoryBytes = (caps.resources?.memory_limit || 0) * 1024 * 1024;
+    // Tier-based defaults when capabilities don't specify explicit resource limits.
+    // These prevent unconstrained containers from starving the host.
+    const TIER_DEFAULTS: Record<number, { cpuShares: number; memoryMb: number }> = {
+      1: { cpuShares: 256, memoryMb: 512 }, // Most restricted
+      2: { cpuShares: 512, memoryMb: 1024 }, // Standard
+      3: { cpuShares: 1024, memoryMb: 2048 }, // Privileged
+    };
+    const tierDefaults = TIER_DEFAULTS[tier] ?? TIER_DEFAULTS[1]!;
+
+    const cpuShares = caps.resources?.cpu_shares || tierDefaults.cpuShares;
+    const memoryBytes = (caps.resources?.memory_limit || tierDefaults.memoryMb) * 1024 * 1024;
+
+    const TIER_PID_LIMITS: Record<number, number> = {
+      1: 64,
+      2: 256,
+      3: 512,
+    };
+    const pidsLimit = TIER_PID_LIMITS[tier] ?? 64;
 
     // ── Network Mode (Story 3.2, 20.3) ──────────────────────────────────────
     // Agent containers always need agent_net to reach sera-core (LLM proxy,
@@ -81,6 +97,7 @@ export class ContainerSecurityMapper {
       HostConfig: {
         CpuShares: cpuShares,
         Memory: memoryBytes,
+        PidsLimit: pidsLimit,
         NetworkMode: networkMode,
         Binds: binds,
         AutoRemove: isEphemeral,

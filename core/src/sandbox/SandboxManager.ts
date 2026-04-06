@@ -34,6 +34,8 @@ export class SandboxManager {
   private egressAclManager?: EgressAclManager;
   /** Optional agent registry — set via setAgentRegistry() for Story 3.10 persistent grants */
   private agentRegistry?: AgentRegistry;
+  /** Periodic zombie sweep timer */
+  private zombieSweepInterval: NodeJS.Timeout | undefined;
 
   constructor(docker?: Docker, storageFactory?: StorageProviderFactory) {
     this.docker =
@@ -318,15 +320,24 @@ export class SandboxManager {
 
     const container = this.docker.getContainer(containerId);
     try {
-      await container.stop({ t: 5 });
+      await container.stop({ t: 10 });
     } catch {
-      // May already be stopped
+      // May already be stopped — try force kill as fallback
+      try {
+        await container.kill();
+      } catch {
+        // Already stopped or not running
+      }
     }
     try {
-      await container.remove({ force: false });
+      await container.remove({ force: true });
     } catch {
       // Auto-removed ephemeral containers will already be gone
     }
+
+    // Always remove from internal tracking even if Docker operations fail
+    this.containers.delete(containerId);
+    this.instanceToContainer.delete(instanceId);
 
     // Story 20.2 — remove per-agent ACL from the egress proxy
     if (this.egressAclManager) {
@@ -335,8 +346,6 @@ export class SandboxManager {
         .catch((err: unknown) => logger.error('Failed to remove egress ACL:', err));
     }
 
-    this.containers.delete(containerId);
-    this.instanceToContainer.delete(instanceId);
     this.audit('teardown', sandbox?.agentName ?? instanceId, { instanceId, containerId });
   }
 
@@ -488,6 +497,83 @@ export class SandboxManager {
       logger.info('Docker lifecycle event listener started');
     } catch (err: unknown) {
       logger.warn('Failed to start Docker event listener (is Docker running?):', err);
+    }
+  }
+
+  // ── Zombie Container Sweep ───────────────────────────────────────────────────
+
+  /**
+   * Sweep for zombie containers — SERA-managed containers that exist in Docker
+   * but are not tracked in our internal state. These can occur when teardown
+   * fails or the process crashes during container lifecycle operations.
+   */
+  async sweepZombieContainers(): Promise<{ cleaned: number; errors: string[] }> {
+    const errors: string[] = [];
+    let cleaned = 0;
+
+    try {
+      // List all SERA-managed containers (labeled sera.sandbox=true)
+      const containers = await this.docker.listContainers({
+        all: true, // include stopped containers
+        filters: { label: ['sera.sandbox=true'] },
+      });
+
+      for (const containerInfo of containers) {
+        const containerId = containerInfo.Id;
+        const containerName = containerInfo.Names?.[0]?.replace(/^\//, '') ?? containerId;
+        const instanceId = containerInfo.Labels?.['sera.instance'];
+
+        // Check if this container is tracked in our internal state
+        const isTracked = instanceId !== undefined && this.instanceToContainer.has(instanceId);
+
+        if (!isTracked) {
+          // This is a zombie — exists in Docker but not in our tracking
+          const state = containerInfo.State; // 'running', 'exited', 'dead', etc.
+
+          logger.warn(
+            `Zombie container found: ${containerName} (state=${state}, instance=${instanceId ?? 'unknown'})`
+          );
+
+          try {
+            const container = this.docker.getContainer(containerId);
+            if (state === 'running') {
+              await container.stop({ t: 10 }).catch(() => {});
+            }
+            await container.remove({ force: true });
+            cleaned++;
+            logger.info(`Cleaned zombie container: ${containerName}`);
+          } catch (err) {
+            const msg = `Failed to clean zombie ${containerName}: ${(err as Error).message}`;
+            logger.error(msg);
+            errors.push(msg);
+          }
+        }
+      }
+    } catch (err) {
+      errors.push(`Sweep failed: ${(err as Error).message}`);
+      logger.error('Zombie container sweep failed:', err);
+    }
+
+    if (cleaned > 0) {
+      logger.info(`Zombie sweep complete: cleaned ${cleaned} container(s)`);
+    }
+    return { cleaned, errors };
+  }
+
+  /** Start a periodic zombie container sweep (default: every 5 minutes). */
+  startZombieSweep(intervalMs: number = 300_000): void {
+    this.zombieSweepInterval = setInterval(() => {
+      this.sweepZombieContainers().catch((err: unknown) =>
+        logger.error('Zombie sweep error:', err)
+      );
+    }, intervalMs);
+  }
+
+  /** Stop the periodic zombie container sweep. */
+  stopZombieSweep(): void {
+    if (this.zombieSweepInterval) {
+      clearInterval(this.zombieSweepInterval);
+      this.zombieSweepInterval = undefined;
     }
   }
 

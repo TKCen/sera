@@ -218,6 +218,38 @@ export class SystemPromptBuilder {
     });
   }
 
+  /** Memory Management Instructions: when and how to use memory tools (Required, Priority 55) */
+  addMemoryManagementInstructions(): this {
+    const lines = [
+      '## Memory Management',
+      'SERA provides a tiered memory system. Understand each tier and use it proactively:',
+      '',
+      '**Memory Tiers:**',
+      '- **Core memory** — Small, always-in-context blocks for essential facts about the user and your persona. Editable via `core-memory-replace`.',
+      '- **Personal memory** — Your private long-term knowledge store (knowledge-store / knowledge-query). Persists across sessions.',
+      '- **Circle memory** — Shared knowledge within your circle. Accessible to all circle members.',
+      '- **Global memory** — Platform-wide knowledge shared across all agents and circles.',
+      '',
+      '**When to store:**',
+      '- If you learn something important about the user (preferences, goals, constraints), update core memory using `core-memory-replace`.',
+      '- If you produce a significant finding, decision, or analysis result, save it with `knowledge-store` so it is available in future sessions.',
+      '',
+      '**When to evict:**',
+      '- Move rarely-needed details to long-term storage (knowledge-store) to keep working memory focused.',
+      '- Do not let core memory blocks grow stale — replace outdated content with `core-memory-replace`.',
+      '',
+      '**When to consolidate:**',
+      '- If memory blocks are getting long, use `knowledge-rewrite` to consolidate and compress them.',
+      '- Prefer dense, factual summaries over verbose prose in memory blocks.',
+    ];
+    return this.addSection({
+      id: 'memory-management',
+      priority: 55,
+      content: lines.join('\n'),
+      required: true,
+    });
+  }
+
   /** Time & Context: current time/date (Required, Priority 60) */
   addTimeContext(timezone: string = 'UTC'): this {
     const now = new Date();

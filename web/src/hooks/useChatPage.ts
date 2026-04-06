@@ -69,7 +69,7 @@ export function useChatPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [showThinking, setShowThinking] = useState(true);
+  const [showThinking, setShowThinking] = useState(false);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<string>>(new Set());
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -187,9 +187,18 @@ export function useChatPage() {
         // Delay clearing the streaming state to allow any remaining queued
         // tokens to be processed (Centrifugo may deliver them slightly after
         // the done packet). Without this, late tokens are silently dropped.
+        const completedMsgId = streamingMsgId.current;
         setTimeout(() => {
           setStreaming(false);
           streamingMsgId.current = null;
+          // Auto-collapse thoughts when streaming completes
+          if (completedMsgId) {
+            setExpandedThoughts((prev) => {
+              const next = new Set(prev);
+              next.delete(completedMsgId);
+              return next;
+            });
+          }
           void fetchSessions();
           inputRef.current?.focus();
         }, 500);

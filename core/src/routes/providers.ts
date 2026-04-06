@@ -122,9 +122,25 @@ export function createProvidersRouter(
   });
 
   /**
+   * GET /api/providers
+   * Lists all models/providers currently configured.
+   * Express 5: use empty string for the mount-point route instead of '/'.
+   */
+  router.get('', async (_req: Request, res: Response) => {
+    try {
+      const models = await llmRouter.listModels();
+      res.json({ providers: models });
+    } catch (err: unknown) {
+      logger.error('Failed to list providers:', err);
+      res.status(502).json({ error: 'Failed to retrieve provider list' });
+    }
+  });
+
+  /**
    * GET /api/providers/list
    * Lists all models/providers currently configured.
    * Note: Express 5 doesn't match router.get('/') for mounted sub-routers.
+   * Kept as alias for backwards compatibility.
    */
   router.get('/list', async (_req: Request, res: Response) => {
     try {
@@ -144,7 +160,8 @@ export function createProvidersRouter(
    * Note: Adding a new model is hot-reloadable (no LiteLLM restart needed).
    * Routing strategy and fallback chain changes require a restart.
    */
-  router.post('/', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
+  // Express 5: use empty string for POST at the mount-point route
+  router.post('', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
     const parsed = AddProviderSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid provider config', details: parsed.error.flatten() });

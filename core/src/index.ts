@@ -87,6 +87,7 @@ import { AuditService } from './audit/AuditService.js';
 import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
 import { createNotificationsRouter } from './routes/notifications.js';
+import { createOrchestrationMetricsRouter } from './routes/orchestration-metrics.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
 
@@ -555,6 +556,9 @@ const { publicRouter: notifPublicRouter, protectedRouter: notifProtectedRouter }
 app.use('/api/notifications', notifPublicRouter);
 app.use('/api/notifications', authMiddleware, notifProtectedRouter);
 app.use('/api/channels', authMiddleware, notifProtectedRouter);
+
+// Orchestration Metrics
+app.use('/api/orchestration', authMiddleware, createOrchestrationMetricsRouter());
 
 // Global Error Handler
 app.use(

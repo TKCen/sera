@@ -179,6 +179,7 @@ export class AgentRegistry {
     templateRef: string;
     workspacePath?: string;
     circle?: string;
+    allowedCircles?: string[];
     overrides?: Record<string, unknown>;
     lifecycleMode?: 'persistent' | 'ephemeral';
     parentInstanceId?: string;
@@ -204,9 +205,9 @@ export class AgentRegistry {
     const query = `
       INSERT INTO agent_instances (
         id, name, display_name, template_name, template_ref, workspace_path,
-        circle, lifecycle_mode, parent_instance_id, overrides, status,
+        circle, allowed_circles, lifecycle_mode, parent_instance_id, overrides, status,
         resolved_config, template_applied_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'created', $11, NOW())
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'created', $12, NOW())
       RETURNING *;
     `;
     const res = await this.pool.query(query, [
@@ -217,6 +218,7 @@ export class AgentRegistry {
       data.templateRef, // template_ref: canonical column used by registry and orchestrator
       workspacePath,
       data.circle,
+      data.allowedCircles ?? [],
       data.lifecycleMode ?? 'persistent',
       data.parentInstanceId,
       data.overrides ?? {},
@@ -434,7 +436,14 @@ export class AgentRegistry {
   }
 
   async updateInstance(id: string, fields: Record<string, unknown>) {
-    const allowed = ['name', 'display_name', 'circle', 'lifecycle_mode', 'overrides'];
+    const allowed = [
+      'name',
+      'display_name',
+      'circle',
+      'allowed_circles',
+      'lifecycle_mode',
+      'overrides',
+    ];
     const setClauses: string[] = [];
     const values: unknown[] = [id];
     let idx = 2;

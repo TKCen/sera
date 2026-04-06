@@ -105,7 +105,16 @@ export function createAgentRouter(
   router.post(
     '/instances',
     asyncHandler(async (req, res) => {
-      const { templateRef, name, displayName, circle, overrides, lifecycleMode, start } = req.body;
+      const {
+        templateRef,
+        name,
+        displayName,
+        circle,
+        allowedCircles,
+        overrides,
+        lifecycleMode,
+        start,
+      } = req.body;
 
       // Support legacy field name
       const templateName = templateRef ?? req.body.templateName;
@@ -135,6 +144,7 @@ export function createAgentRouter(
         displayName,
         templateRef: templateName,
         circle,
+        ...(Array.isArray(allowedCircles) ? { allowedCircles } : {}),
         overrides,
         lifecycleMode,
       });
@@ -377,10 +387,11 @@ export function createAgentRouter(
         return;
       }
 
-      const { name, displayName, circle, lifecycleMode, overrides } = req.body as {
+      const { name, displayName, circle, allowedCircles, lifecycleMode, overrides } = req.body as {
         name?: string;
         displayName?: string;
         circle?: string;
+        allowedCircles?: string[];
         lifecycleMode?: string;
         overrides?: Record<string, unknown>;
       };
@@ -389,6 +400,7 @@ export function createAgentRouter(
         ...(name !== undefined ? { name } : {}),
         ...(displayName !== undefined ? { display_name: displayName } : {}),
         ...(circle !== undefined ? { circle } : {}),
+        ...(Array.isArray(allowedCircles) ? { allowed_circles: allowedCircles } : {}),
         ...(lifecycleMode !== undefined ? { lifecycle_mode: lifecycleMode } : {}),
         ...(overrides !== undefined ? { overrides } : {}),
       });

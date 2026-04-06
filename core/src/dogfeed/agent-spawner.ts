@@ -228,7 +228,7 @@ export class AgentSpawner {
       '# Stage and commit any changes',
       'if [ -n "$(git status --porcelain)" ]; then',
       '  git add -A',
-      `  git commit -m "dogfeed(${task.category}): ${task.description.replace(/"/g, '\\"')}"`,
+      `  git commit -m "dogfeed(${task.category}): ${task.description.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
       '  # Push back to the mounted repo',
       `  git push origin ${branchName}`,
       '  echo "DOGFEED_CHANGES=yes"',

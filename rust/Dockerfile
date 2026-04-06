@@ -12,9 +12,9 @@ FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies (rustls = no libssl-dev needed)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends pkg-config libssl-dev && \
+    apt-get install -y --no-install-recommends pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy full workspace source

@@ -102,3 +102,4 @@ DATABASE_URL=postgres://sera:sera@localhost:5432/sera cargo test --workspace --f
 - **sqlx compile-time checks need `DATABASE_URL`**: Set it in `.env` or as env var. Without it, `sqlx::query!` macros won't compile. Use `sqlx::query()` (runtime) during early development if no DB is available.
 - **bollard on Windows uses named pipes**: Docker client connects via `//./pipe/docker_engine` on Windows, not `/var/run/docker.sock`. The bollard crate handles this automatically.
 - **serde_yaml 0.9 is deprecated but stable**: The crate works fine; the maintainer recommends alternatives for new projects, but for SERA's manifest parsing it's adequate.
+- **Use `tls-rustls` not `tls-native-tls` for sqlx and reqwest**: WSL2 and minimal Docker images lack `libssl-dev`. Using `rustls-tls` (pure Rust TLS) avoids the system OpenSSL dependency. Set `default-features = false` on reqwest to prevent it pulling in `native-tls`.

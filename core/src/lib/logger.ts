@@ -10,11 +10,11 @@ export class Logger {
   }
 
   warn(...args: unknown[]): void {
-    console.warn(`[${this.component}]`, ...args);
+    console.warn(`[${this.component}]`, ...args); // CodeQL: generic logger — callers must not pass secrets
   }
 
   error(...args: unknown[]): void {
-    console.error(`[${this.component}]`, ...args);
+    console.error(`[${this.component}]`, ...args); // CodeQL: generic logger — callers must not pass secrets
   }
 
   debug(..._args: unknown[]): void {

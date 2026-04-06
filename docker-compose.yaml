@@ -110,15 +110,25 @@ services:
       sera-db:
         condition: service_healthy
 
-  # sera-shadow-proxy:
-  #   build: ./tools/shadow-proxy
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - PRIMARY_URL=http://sera-core:3001
-  #     - SHADOW_URL=http://sera-core-rs:3002
-  #   depends_on:
-  #     - sera-core
+  sera-shadow-proxy:
+    build: ./tools/shadow-proxy
+    container_name: sera-shadow-proxy
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PRIMARY_URL=http://sera-core:3001
+      - SHADOW_URL=http://sera-core-rs:3002
+      - DIFF_LOG_PATH=/data/parity-diffs.jsonl
+    volumes:
+      - shadow_proxy_data:/data
+    networks:
+      - sera_net
+    depends_on:
+      sera-core:
+        condition: service_healthy
+      sera-core-rs:
+        condition: service_healthy
 
   sera-web:
     build:
@@ -232,3 +242,4 @@ volumes:
   sera_db_data:
   qdrant_data:
   egress_logs:
+  shadow_proxy_data:

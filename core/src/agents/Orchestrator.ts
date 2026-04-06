@@ -641,6 +641,7 @@ export class Orchestrator {
         if (this.heartbeatService) {
           this.heartbeatService.removeHeartbeat(instanceId);
         }
+        await this.resetRunningTasksForAgent(instanceId);
         this.publishLifecycleEvent(status, instanceId, event.agentName);
       } else if (action === 'oom') {
         const agent = this.agents.get(instanceId);
@@ -649,6 +650,7 @@ export class Orchestrator {
         if (this.heartbeatService) {
           this.heartbeatService.removeHeartbeat(instanceId);
         }
+        await this.resetRunningTasksForAgent(instanceId);
         logger.warn(`OOM kill: agent=${event.agentName} instance=${instanceId}`);
         this.publishLifecycleEvent('error', instanceId, event.agentName);
       } else if (action === 'stop') {
@@ -658,6 +660,7 @@ export class Orchestrator {
         if (this.heartbeatService) {
           this.heartbeatService.removeHeartbeat(instanceId);
         }
+        await this.resetRunningTasksForAgent(instanceId);
       }
     });
 
@@ -666,6 +669,53 @@ export class Orchestrator {
       const instances = await this.registry.listInstances();
       const knownIds = new Set(instances.map((i) => i.id));
       await this.sandboxManager.checkDanglingContainers(knownIds);
+    }
+  }
+
+  /**
+   * When a container stops or dies, reset its running tasks.
+   * Tasks under max_retries are re-queued; exhausted tasks are failed.
+   * Issue #745
+   */
+  private async resetRunningTasksForAgent(instanceId: string): Promise<void> {
+    try {
+      // Re-queue tasks that still have retries remaining
+      const requeued = await query(
+        `UPDATE task_queue
+         SET status = 'queued',
+             retry_count = retry_count + 1,
+             started_at = NULL,
+             error = 'Agent container stopped unexpectedly'
+         WHERE agent_instance_id = $1
+           AND status = 'running'
+           AND retry_count < max_retries
+         RETURNING id`,
+        [instanceId]
+      );
+
+      // Fail tasks that have exhausted their retries
+      const failed = await query(
+        `UPDATE task_queue
+         SET status = 'failed',
+             exit_reason = 'container_stopped',
+             error = 'Agent container stopped unexpectedly',
+             completed_at = now()
+         WHERE agent_instance_id = $1
+           AND status = 'running'
+           AND retry_count >= max_retries
+         RETURNING id`,
+        [instanceId]
+      );
+
+      const requeuedCount = requeued.rowCount ?? 0;
+      const failedCount = failed.rowCount ?? 0;
+      if (requeuedCount > 0 || failedCount > 0) {
+        logger.info(
+          `Container stop for instance ${instanceId}: re-queued ${requeuedCount} task(s), failed ${failedCount} task(s)`
+        );
+      }
+    } catch (err) {
+      logger.error(`Failed to reset running tasks for instance ${instanceId}:`, err);
     }
   }
 

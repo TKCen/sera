@@ -31,12 +31,12 @@ tokio = { version = "1", features = ["full"] }
 
 # HTTP
 axum = "0.8"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-native-tls", "postgres", "json", "time", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json", "time", "uuid"] }
 
 # Auth
 jsonwebtoken = "9"
@@ -92,6 +92,7 @@ notify-debouncer-mini = "0.5"
 
 # Scheduling
 cron = "0.13"
+chrono = "0.4"
 
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }

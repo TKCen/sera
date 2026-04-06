@@ -43,6 +43,7 @@ futures-util.workspace = true
 # openidconnect deferred — uses reqwest directly for token exchange
 rand.workspace = true
 cron.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 sera-testing.workspace = true

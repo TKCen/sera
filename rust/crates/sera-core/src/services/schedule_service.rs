@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use cron::Schedule;
 use std::str::FromStr;
 
-use sera_db::{DbPool, schedules::ScheduleRepository};
+use sera_db::{DbPool, schedules::ScheduleRepository, tasks::TaskRepository};
 
 /// Error type for schedule operations.
 #[derive(Debug, thiserror::Error)]
@@ -145,12 +145,56 @@ impl ScheduleService {
         Ok(())
     }
 
-    /// Enqueue a schedule trigger as a job.
-    ///
-    /// This integrates with the job queue to process the schedule.
-    pub async fn trigger_schedule(&self, _id: Uuid) -> Result<(), ScheduleError> {
-        // Phase 5: Implement job queue integration (pg-boss or similar) to enqueue
-        // schedule execution jobs. Currently a stub that would enqueue a schedule execution job.
+    /// Parse a cron expression, accepting both 5-field (standard unix) and 6-field (with seconds).
+    fn parse_cron(expr: &str) -> Option<Schedule> {
+        Schedule::from_str(expr)
+            .or_else(|_| Schedule::from_str(&format!("0 {expr}")))
+            .ok()
+    }
+
+    /// Compute the next run time for a cron expression.
+    fn next_run_at(expr: &str) -> Option<OffsetDateTime> {
+        let schedule = Self::parse_cron(expr)?;
+        let next = schedule.upcoming(chrono::Utc).next()?;
+        OffsetDateTime::from_unix_timestamp(next.timestamp()).ok()
+    }
+
+    /// Enqueue a task for the agent owning the given schedule.
+    pub async fn trigger_schedule(&self, id: Uuid) -> Result<(), ScheduleError> {
+        // Look up the schedule to get agent_instance_id and task prompt
+        let rows = ScheduleRepository::list_schedules(self.pool.inner()).await?;
+        let schedule = rows.into_iter().find(|r| r.id == id)
+            .ok_or_else(|| ScheduleError::NotFound(id.to_string()))?;
+
+        let agent_instance_id = schedule.agent_instance_id
+            .ok_or_else(|| ScheduleError::NotFound(format!("schedule {id} has no agent_instance_id")))?;
+
+        // Extract prompt text from task JSON
+        let task_text = if let Some(p) = schedule.task.get("prompt").and_then(|v| v.as_str()) {
+            p.to_string()
+        } else {
+            schedule.task.to_string()
+        };
+
+        let context = serde_json::json!({
+            "schedule": {
+                "scheduleId": id.to_string(),
+                "scheduleName": schedule.name,
+                "category": schedule.category,
+            }
+        });
+
+        TaskRepository::enqueue(
+            self.pool.inner(),
+            &agent_instance_id.to_string(),
+            &task_text,
+            Some(&context),
+            Some(50), // schedules get higher priority than default 100
+        )
+        .await
+        .map_err(ScheduleError::Db)?;
+
+        tracing::info!("Triggered schedule '{}' (id={}) for agent {}", schedule.name, id, agent_instance_id);
         Ok(())
     }
 
@@ -158,10 +202,40 @@ impl ScheduleService {
     ///
     /// This should be called periodically (e.g., every minute) to process due cron schedules.
     pub async fn process_due_schedules(&self) -> Result<usize, ScheduleError> {
-        // Phase 5: Implement periodic schedule evaluation. Query schedules where
-        // next_run_at <= NOW() and enqueue them via job queue. Requires background
-        // task runner (tokio spawn + interval timer or external scheduler).
-        Ok(0)
+        let due = ScheduleRepository::list_due(self.pool.inner()).await?;
+        let count = due.len();
+        if count == 0 {
+            return Ok(0);
+        }
+
+        tracing::info!("Processing {} due schedule(s)", count);
+        let now = OffsetDateTime::now_utc();
+
+        for schedule in due {
+            let id = schedule.id;
+            let name = schedule.name.clone();
+
+            // Enqueue the task
+            if let Err(e) = self.trigger_schedule(id).await {
+                tracing::error!("Failed to trigger schedule '{}' ({}): {}", name, id, e);
+                continue;
+            }
+
+            // Calculate next_run_at from expression
+            let next = schedule.expression.as_deref()
+                .and_then(Self::next_run_at);
+
+            if let Err(e) = ScheduleRepository::update_run_times(
+                self.pool.inner(),
+                id,
+                now,
+                next,
+            ).await {
+                tracing::error!("Failed to update run times for schedule '{}': {}", name, e);
+            }
+        }
+
+        Ok(count)
     }
 
     /// Schedule a one-shot task to run after a delay.

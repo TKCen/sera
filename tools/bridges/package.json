@@ -1,0 +1,13 @@
+{
+  "name": "sera-bridges",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "omc": "node --experimental-strip-types omc-bridge/index.ts",
+    "omo": "node --experimental-strip-types omo-bridge/index.ts",
+    "omx": "node --experimental-strip-types omx-bridge/index.ts",
+    "gemini": "node --experimental-strip-types gemini-bridge/index.ts",
+    "start:all": "node --experimental-strip-types manager.ts start"
+  },
+  "engines": { "node": ">=22" }
+}

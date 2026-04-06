@@ -166,7 +166,11 @@ Streaming (`"stream": true`) is supported and returns standard SSE chunks.
 
 ## 4. Security Inheritance
 
-SERA injects the following environment variables to route all outbound traffic through its egress proxy:
+### Egress Proxy _(Phase 2 — not yet injected)_
+
+> **Status:** `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are **not currently injected** by `SandboxManager`. This is planned for Phase 2.
+
+When the egress proxy is enabled in a future release, SERA will inject:
 
 ```
 HTTP_PROXY=http://sera-egress-proxy:3128
@@ -174,9 +178,9 @@ HTTPS_PROXY=http://sera-egress-proxy:3128
 NO_PROXY=sera-core,centrifugo,localhost,127.0.0.1
 ```
 
-Most HTTP client libraries respect these variables automatically (Python `requests`, Node.js `got`/`axios` with proxy agent, Go `net/http`, curl, wget). Your harness does not need explicit proxy configuration if it uses a standard HTTP client.
+Most HTTP client libraries respect these variables automatically (Python `requests`, Node.js `got`/`axios` with proxy agent, Go `net/http`, curl, wget). Your harness will not need explicit proxy configuration if it uses a standard HTTP client.
 
-**`NO_PROXY` exclusions** prevent proxy routing for:
+**`NO_PROXY` exclusions** will prevent proxy routing for:
 
 - `sera-core` — direct communication with the SERA API
 - `centrifugo` — real-time message bus
@@ -200,14 +204,14 @@ CPU and memory limits are enforced by Docker via the `SandboxBoundary` tier assi
 
 These limits are applied to the container's Docker `HostConfig` at creation time and cannot be bypassed from within the container.
 
-### Proxy Enforcement Notes
+### Proxy Enforcement Notes _(Phase 2)_
 
-> **Advisory vs. enforced:** Setting `HTTP_PROXY`/`HTTPS_PROXY` is advisory — a harness that opens raw TCP sockets can bypass the proxy. Enforcement varies by deployment:
+> **Not yet active.** `HTTP_PROXY`/`HTTPS_PROXY` injection and iptables enforcement are both Phase 2 work.
 >
-> - **Docker Desktop (Windows/macOS):** iptables enforcement is not feasible. Proxy compliance is advisory only.
+> When implemented, enforcement will vary by deployment:
+>
+> - **Docker Desktop (Windows/macOS):** iptables enforcement is not feasible. Proxy compliance will be advisory only.
 > - **Linux with Docker CE:** iptables rules on `agent_net` can DROP non-proxy outbound traffic, providing hard enforcement. Production deployments should use Linux with iptables enforcement enabled.
->
-> SERA does not currently inject iptables rules automatically. This is a planned v2 feature.
 
 ---
 
@@ -329,27 +333,45 @@ If your process is a shell script or wrapper, ensure SIGTERM is forwarded to chi
 
 ---
 
-## Mandatory Environment Variables
+## Injected Environment Variables
 
-These variables are **always** injected by SERA at container start. Your harness must read and use them.
+### Always injected
 
-| Variable                      | Description                                                                       | Example                                    |
-| ----------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------ |
-| `SERA_CORE_URL`               | Base URL for sera-core API                                                        | `http://sera-core:3001`                    |
-| `SERA_IDENTITY_TOKEN`         | JWT for authenticating with sera-core; include as `Authorization: Bearer <token>` | `eyJhbGci...`                              |
-| `SERA_LLM_PROXY_URL`          | Full URL for the LLM proxy endpoint                                               | `http://sera-core:3001/v1/llm`             |
-| `AGENT_NAME`                  | Template or manifest name                                                         | `my-summariser`                            |
-| `AGENT_INSTANCE_ID`           | Unique instance UUID                                                              | `inst-4f2a9c1e`                            |
-| `AGENT_CHAT_PORT`             | Port your health/chat HTTP server must bind to                                    | `3100`                                     |
-| `AGENT_HEARTBEAT_INTERVAL_MS` | Heartbeat interval in milliseconds                                                | `30000`                                    |
-| `AGENT_LIFECYCLE_MODE`        | `persistent` or `ephemeral`                                                       | `ephemeral`                                |
-| `HTTP_PROXY`                  | Egress proxy URL (set when proxy is deployed)                                     | `http://sera-egress-proxy:3128`            |
-| `HTTPS_PROXY`                 | Egress proxy URL (same value as HTTP_PROXY)                                       | `http://sera-egress-proxy:3128`            |
-| `NO_PROXY`                    | Comma-separated hosts excluded from proxy                                         | `sera-core,centrifugo,localhost,127.0.0.1` |
+These variables are injected by `SandboxManager` at container start for every agent instance.
+
+| Variable                      | Description                                                                       | Example                            |
+| ----------------------------- | --------------------------------------------------------------------------------- | ---------------------------------- |
+| `SERA_CORE_URL`               | Base URL for sera-core API                                                        | `http://sera-core:3001`            |
+| `SERA_LLM_PROXY_URL`          | Full URL for the LLM proxy endpoint                                               | `http://sera-core:3001/v1/llm`     |
+| `AGENT_NAME`                  | Template or manifest name                                                         | `my-summariser`                    |
+| `AGENT_INSTANCE_ID`           | Unique instance UUID                                                              | `inst-4f2a9c1e`                    |
+| `AGENT_CHAT_PORT`             | Port your health/chat HTTP server must bind to (from `spec.sandbox.chatPort`)     | `3100`                             |
+| `AGENT_HEARTBEAT_INTERVAL_MS` | Heartbeat interval in milliseconds                                                | `30000`                            |
+| `AGENT_LIFECYCLE_MODE`        | `persistent` or `ephemeral`                                                       | `ephemeral`                        |
+| `CENTRIFUGO_API_URL`          | Internal Centrifugo API URL (used by agent-runtime for real-time events)          | `http://centrifugo:8000/api`       |
+| `CENTRIFUGO_API_KEY`          | Centrifugo API key                                                                | _(set via server env)_             |
+
+### Conditionally injected
+
+| Variable                | Condition                                             | Description                                              |
+| ----------------------- | ----------------------------------------------------- | -------------------------------------------------------- |
+| `SERA_IDENTITY_TOKEN`   | Only when `request.token` is present                  | JWT for authenticating with sera-core API and LLM proxy  |
+| `SERA_SKILLS_DIR`       | Only when skill packages are granted to the agent     | Mount path for pre-loaded skill packages (`/sera/skills`) |
+| `SERA_SECRET_<NAME>`    | One per agent-env secret granted to the instance      | Decrypted secret value; `NAME` is uppercased             |
+
+### Phase 2 — not yet injected
+
+These variables are planned but **not currently set** by `SandboxManager`:
+
+| Variable      | Planned Purpose                                        |
+| ------------- | ------------------------------------------------------ |
+| `HTTP_PROXY`  | Route outbound HTTP through the Squid egress proxy     |
+| `HTTPS_PROXY` | Route outbound HTTPS through the Squid egress proxy    |
+| `NO_PROXY`    | Exclude internal hostnames from proxy routing          |
 
 ---
 
-## Reserved Environment Variables (v2)
+## Reserved Environment Variables
 
 These variables are reserved for future use and must not be used for other purposes:
 
@@ -379,11 +401,13 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import requests
 
-# --- Read mandatory env vars ---
+# --- Read env vars ---
 SERA_CORE_URL         = os.environ["SERA_CORE_URL"]
-SERA_IDENTITY_TOKEN   = os.environ["SERA_IDENTITY_TOKEN"]
 SERA_LLM_PROXY_URL    = os.environ["SERA_LLM_PROXY_URL"]
 AGENT_CHAT_PORT       = int(os.environ.get("AGENT_CHAT_PORT", "3100"))
+# SERA_IDENTITY_TOKEN is injected only when a token is present on the spawn request.
+# Agents that always run with a token can use os.environ["SERA_IDENTITY_TOKEN"].
+SERA_IDENTITY_TOKEN   = os.environ.get("SERA_IDENTITY_TOKEN", "")
 
 _ready = False
 _busy  = False

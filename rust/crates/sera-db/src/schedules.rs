@@ -178,6 +178,43 @@ impl ScheduleRepository {
         }
     }
 
+    /// List active schedules that are due to run (next_run_at <= NOW() or never run).
+    pub async fn list_due(pool: &PgPool) -> Result<Vec<ScheduleRow>, DbError> {
+        let rows = sqlx::query_as::<_, ScheduleRow>(
+            "SELECT s.id, s.agent_id, s.agent_instance_id,
+                    COALESCE(s.agent_name, ai.name) as agent_name,
+                    s.name, s.cron, s.expression, s.type, s.task, s.source, s.status,
+                    s.last_run_at, s.last_run_status, s.next_run_at,
+                    s.category, s.description, s.created_at, s.updated_at
+             FROM schedules s
+             LEFT JOIN agent_instances ai ON ai.id = s.agent_instance_id
+             WHERE s.status = 'active'
+               AND (s.next_run_at IS NULL OR s.next_run_at <= NOW())"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Update last_run_at and next_run_at after a schedule fires.
+    pub async fn update_run_times(
+        pool: &PgPool,
+        id: uuid::Uuid,
+        last_run_at: time::OffsetDateTime,
+        next_run_at: Option<time::OffsetDateTime>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE schedules SET last_run_at = $2, next_run_at = $3, updated_at = NOW()
+             WHERE id = $1"
+        )
+        .bind(id)
+        .bind(last_run_at)
+        .bind(next_run_at)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Delete a schedule. Returns error if not found.
     pub async fn delete_schedule(pool: &PgPool, id: &str) -> Result<(), DbError> {
         let result = sqlx::query(

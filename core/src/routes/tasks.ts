@@ -9,6 +9,7 @@ import { Router, type Request, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../lib/database.js';
 import { IntercomService } from '../intercom/IntercomService.js';
+import { ChannelRouter } from '../channels/ChannelRouter.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('TasksRouter');
@@ -108,6 +109,16 @@ export function createTasksRouter(intercom: IntercomService): Router {
       .catch(() => {
         /* best-effort */
       });
+
+    ChannelRouter.getInstance().route({
+      id: uuidv4(),
+      eventType: 'task.assigned',
+      title: `Task assigned to agent`,
+      body: task.substring(0, 200),
+      severity: 'info',
+      metadata: { taskId, agentId, prompt: task.substring(0, 200) },
+      timestamp: new Date().toISOString(),
+    });
 
     logger.info(`Task ${taskId} enqueued for agent ${agentId}`);
     return res.status(201).json({ taskId, status: 'queued', priority: resolvedPriority });
@@ -336,6 +347,26 @@ export function createTasksRouter(intercom: IntercomService): Router {
         /* best-effort */
       });
 
+    const durationMs = row.started_at ? Date.now() - new Date(row.started_at).getTime() : undefined;
+    const channelEventType = succeeded ? 'task.completed' : 'task.failed';
+    ChannelRouter.getInstance().route({
+      id: uuidv4(),
+      eventType: channelEventType,
+      title: succeeded ? `Task completed` : `Task failed`,
+      body: succeeded
+        ? `Task finished successfully`
+        : `Task failed: ${body.error ?? 'unknown error'}`,
+      severity: succeeded ? 'info' : 'warning',
+      metadata: {
+        taskId,
+        agentId,
+        prompt: row.task.substring(0, 200),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(succeeded ? {} : { error: body.error ?? null }),
+      },
+      timestamp: new Date().toISOString(),
+    });
+
     // ── Notify delegating agent if this was a delegated task (#268) ─────
     const taskContext = row.context as Record<string, unknown> | null;
     const delegation = taskContext?.delegation as { fromInstanceId?: string } | undefined;
@@ -496,9 +527,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Resolve an agent by UUID or by name, returning its row with the resolved `id`. */
 async function getAgentRow(nameOrId: string): Promise<AgentRow | null> {
-  const col = UUID_RE.test(nameOrId) ? 'id' : 'name';
+  if (UUID_RE.test(nameOrId)) {
+    const r = await pool.query<AgentRow>(
+      `SELECT id, lifecycle_mode FROM agent_instances WHERE id = $1`,
+      [nameOrId]
+    );
+    return r.rows[0] ?? null;
+  }
   const r = await pool.query<AgentRow>(
-    `SELECT id, lifecycle_mode FROM agent_instances WHERE ${col} = $1`,
+    `SELECT id, lifecycle_mode FROM agent_instances WHERE name = $1`,
     [nameOrId]
   );
   return r.rows[0] ?? null;

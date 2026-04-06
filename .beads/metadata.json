@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "sera",
+  "project_id": "ef14c20d-9404-4491-a60c-7c87b8b07e6e"
+}

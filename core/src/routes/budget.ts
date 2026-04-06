@@ -16,23 +16,21 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
    */
   router.get('/', async (_req: Request, res: Response) => {
     try {
+      // Use token_usage only — usage_events also receives every insert, so
+      // UNION ALL would double-count every request (#751).
       const result = await query(
         `SELECT
            DATE_TRUNC('day', created_at) AS date,
            SUM(total_tokens) AS total_tokens
-         FROM (
-           SELECT total_tokens, created_at FROM token_usage
-           UNION ALL
-           SELECT total_tokens, created_at FROM usage_events
-         ) combined_usage
+         FROM token_usage
          WHERE created_at >= NOW() - INTERVAL '7 days'
          GROUP BY DATE_TRUNC('day', created_at)
          ORDER BY date ASC`
       );
 
       const usage = result.rows.map((row) => ({
-        date: row.date.toISOString().split('T')[0],
-        totalTokens: parseInt(row.total_tokens, 10),
+        date: (row.date as Date).toISOString().split('T')[0],
+        totalTokens: parseInt(row.total_tokens as string, 10),
       }));
 
       res.json({ usage });
@@ -48,22 +46,19 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
    */
   router.get('/agents', async (_req: Request, res: Response) => {
     try {
+      // Use token_usage only — see #751.
       const result = await query(
         `SELECT
            agent_id,
            SUM(total_tokens) AS total_tokens
-         FROM (
-           SELECT agent_id, total_tokens FROM token_usage
-           UNION ALL
-           SELECT agent_id, total_tokens FROM usage_events
-         ) combined_usage
+         FROM token_usage
          GROUP BY agent_id
          ORDER BY total_tokens DESC`
       );
 
       const rankings = result.rows.map((row) => ({
-        agentId: row.agent_id,
-        totalTokens: parseInt(row.total_tokens, 10),
+        agentId: row.agent_id as string,
+        totalTokens: parseInt(row.total_tokens as string, 10),
       }));
 
       res.json({ rankings });
@@ -80,15 +75,12 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
   router.get('/agents/:id', async (req: Request, res: Response) => {
     try {
       const agentId = req.params.id;
+      // Use token_usage only — see #751.
       const result = await query(
         `SELECT
            DATE_TRUNC('day', created_at) AS date,
            SUM(total_tokens) AS total_tokens
-         FROM (
-           SELECT agent_id, total_tokens, created_at FROM token_usage
-           UNION ALL
-           SELECT agent_id, total_tokens, created_at FROM usage_events
-         ) combined_usage
+         FROM token_usage
          WHERE agent_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
          GROUP BY DATE_TRUNC('day', created_at)
          ORDER BY date ASC`,
@@ -96,8 +88,8 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
       );
 
       const usage = result.rows.map((row) => ({
-        date: row.date.toISOString().split('T')[0],
-        totalTokens: parseInt(row.total_tokens, 10),
+        date: (row.date as Date).toISOString().split('T')[0],
+        totalTokens: parseInt(row.total_tokens as string, 10),
       }));
 
       res.json({ agentId, usage });
@@ -161,6 +153,21 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
         return;
       }
 
+      // Read current values so the INSERT path (new row) preserves unspecified fields
+      // rather than falling back to process-level defaults (#750).
+      const existing = await query(
+        `SELECT max_tokens_per_hour, max_tokens_per_day FROM token_quotas WHERE agent_id = $1`,
+        [agentId]
+      );
+      const currentHourly: number =
+        existing.rows[0]?.max_tokens_per_hour != null
+          ? parseInt(String(existing.rows[0].max_tokens_per_hour), 10)
+          : DEFAULT_HOURLY_QUOTA;
+      const currentDaily: number =
+        existing.rows[0]?.max_tokens_per_day != null
+          ? parseInt(String(existing.rows[0].max_tokens_per_day), 10)
+          : DEFAULT_DAILY_QUOTA;
+
       // Upsert with explicit casts — PostgreSQL needs type hints when params may be null.
       await query(
         `INSERT INTO token_quotas (agent_id, max_tokens_per_hour, max_tokens_per_day, source, updated_at)
@@ -171,7 +178,7 @@ export function createBudgetRouter(meteringService?: MeteringService): Router {
            max_tokens_per_day  = COALESCE($4::int, token_quotas.max_tokens_per_day),
            source = 'operator',
            updated_at = NOW()`,
-        [agentId, hourly, DEFAULT_HOURLY_QUOTA, daily, DEFAULT_DAILY_QUOTA]
+        [agentId, hourly, currentHourly, daily, currentDaily]
       );
 
       logger.info(

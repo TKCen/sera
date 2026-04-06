@@ -310,6 +310,7 @@ export class AuditService {
       prevHash || '',
     ].join('|');
 
+    // lgtm[js/insufficient-password-hashing] — SHA-256 for audit hash chain integrity, not password storage
     return crypto.createHash('sha256').update(canonical).digest('hex');
   }
 

@@ -21,12 +21,15 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+use std::time::Duration;
+
 use sera_auth::JwtService;
 use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
 use sera_docker::ContainerManager;
 
+use crate::services::schedule_service::ScheduleService;
 use crate::state::AppState;
 
 #[tokio::main]
@@ -80,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
         )))
     };
 
+    let schedule_svc = Arc::new(ScheduleService::new(db.clone()));
+
     let app_state = AppState {
         db,
         config: config.clone(),
@@ -89,10 +94,24 @@ async fn main() -> anyhow::Result<()> {
         providers_path,
         centrifugo,
         mcp_registry: Arc::new(RwLock::new(routes::mcp::McpRegistry::new())),
+        schedule_svc: schedule_svc.clone(),
     };
 
     // Build router
     let app = build_router(app_state, jwt_service, api_key);
+
+    // Spawn schedule tick loop — fires every 60s to process due cron schedules
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            match schedule_svc.process_due_schedules().await {
+                Ok(n) if n > 0 => tracing::info!("Schedule tick: triggered {} schedule(s)", n),
+                Ok(_) => {}
+                Err(e) => tracing::error!("Schedule tick error: {}", e),
+            }
+        }
+    });
 
     // Start server
     let addr = format!("0.0.0.0:{port}");

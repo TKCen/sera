@@ -219,6 +219,8 @@ export class ProviderHealthService {
       google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
       groq: ['GROQ_API_KEY'],
       mistral: ['MISTRAL_API_KEY'],
+      openrouter: ['OPENROUTER_API_KEY'],
+      kilocode: ['KILOCODE_API_KEY'],
     };
     if (config.provider) {
       const envVars = standardEnvVars[config.provider];

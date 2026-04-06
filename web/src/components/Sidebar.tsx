@@ -15,6 +15,7 @@ import {
   Brain,
   Inbox,
   Radio,
+  GitBranch,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { request } from '@/lib/api/client';
@@ -53,6 +54,7 @@ const navGroups: NavGroup[] = [
       { label: 'Insights', href: '/insights', icon: <BarChart3 size={16} /> },
       { label: 'Memory', href: '/memory', icon: <Brain size={16} /> },
       { label: 'Introspection', href: '/introspection', icon: <Radio size={16} /> },
+      { label: 'Orchestration', href: '/orchestration', icon: <GitBranch size={16} /> },
     ],
   },
   {

@@ -87,6 +87,8 @@ import { AuditService } from './audit/AuditService.js';
 import { ScheduleService } from './services/ScheduleService.js';
 import { createDelegationRouter, expireOldDelegationTokens } from './routes/delegation.js';
 import { createNotificationsRouter } from './routes/notifications.js';
+import { createOrchestrationMetricsRouter } from './routes/orchestration-metrics.js';
+import { rateLimitStub } from './middleware/rateLimitStub.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
 
@@ -530,8 +532,8 @@ app.use('/api/permission-requests', authMiddleware, createPermissionRouter(permi
 app.use('/api', authMiddleware, createConfigRouter());
 app.use('/api/schedules', authMiddleware, createSchedulesRouter());
 app.use('/v1', createOpenAICompatRouter(orchestrator));
-app.use('/api/lsp', lspRouter);
-app.use('/api/federation', createFederationRouter());
+app.use('/api/lsp', authMiddleware, rateLimitStub, lspRouter);
+app.use('/api/federation', authMiddleware, rateLimitStub, createFederationRouter());
 app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
 
 app.use(
@@ -555,6 +557,9 @@ const { publicRouter: notifPublicRouter, protectedRouter: notifProtectedRouter }
 app.use('/api/notifications', notifPublicRouter);
 app.use('/api/notifications', authMiddleware, notifProtectedRouter);
 app.use('/api/channels', authMiddleware, notifProtectedRouter);
+
+// Orchestration Metrics
+app.use('/api/orchestration', authMiddleware, rateLimitStub, createOrchestrationMetricsRouter());
 
 // Global Error Handler
 app.use(

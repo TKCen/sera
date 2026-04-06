@@ -32,7 +32,8 @@ export function createAgentRouter(
    * and live orchestrator status.
    */
   router.get(
-    '/',
+    // Express 5: use empty string instead of '/' for the mount-point route
+    '',
     asyncHandler(async (_req, res) => {
       const instances = await agentRegistry.listInstances();
       const liveAgents = new Map(orchestrator.listAgents().map((a) => [a.id, a]));
@@ -453,6 +454,38 @@ export function createAgentRouter(
       });
 
       res.json(thoughts);
+    })
+  );
+
+  // ── Get a single agent instance by name or UUID ─────────────────────────
+  // Express 5: '/:id' matches GET /api/agents/:id (named sub-path, not root).
+  // Web calls getAgent(name) → GET /api/agents/:name for the detail page.
+  router.get(
+    '/:id',
+    asyncHandler(async (req, res) => {
+      const id = req.params.id as string;
+      // Try lookup by UUID first, then by name
+      let instance = await agentRegistry.getInstance(id);
+      if (!instance) {
+        instance = await agentRegistry.getInstanceByName(id);
+      }
+      if (!instance) {
+        res.status(404).json({ error: `Agent "${id}" not found` });
+        return;
+      }
+      const lineageDepth = instance.parent_instance_id
+        ? await agentRegistry.getLineageDepth(instance.id)
+        : 0;
+      const caps = instance.resolved_capabilities as
+        | Record<string, Record<string, unknown>>
+        | undefined;
+      const workspaceLimitGB = caps?.filesystem?.maxWorkspaceSizeGB as number | undefined;
+      res.json({
+        ...instance,
+        lineageDepth,
+        workspaceUsageGB: instance.workspace_used_gb ?? null,
+        workspaceLimitGB: workspaceLimitGB ?? null,
+      });
     })
   );
 

@@ -43,6 +43,7 @@ import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { Logger } from '../lib/logger.js';
 import type { ProviderConfig, ProviderRegistry } from './ProviderRegistry.js';
 import type { ChatMessage } from '../agents/types.js';
+import { validateProviderBaseUrl } from './url-validation.js';
 
 const logger = new Logger('LlmRouter');
 
@@ -259,6 +260,12 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
   };
 }
 
+/** Inactivity timeout for streaming responses (ms). Configurable via env var. */
+const STREAM_INACTIVITY_TIMEOUT_MS = parseInt(
+  process.env['STREAM_INACTIVITY_TIMEOUT_MS'] ?? '30000',
+  10
+);
+
 /**
  * Bridge a pi-mono AssistantMessageEventStream to a Node.js Readable that emits
  * OpenAI Server-Sent Events.  The caller can pipe() this to an Express Response.
@@ -268,6 +275,10 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
  *   toolcall_end    → data: { choices[0].delta.tool_calls }
  *   done            → data: { choices[0].finish_reason } + data: [DONE]
  *   error           → stream.destroy(err)
+ *
+ * An inactivity watchdog fires if no chunk is received for
+ * STREAM_INACTIVITY_TIMEOUT_MS milliseconds, sending an error SSE and
+ * destroying the stream.
  */
 function eventStreamToReadable(
   eventStream: AssistantMessageEventStream,
@@ -286,10 +297,44 @@ function eventStreamToReadable(
       choices: [{ index: 0, delta, finish_reason: finishReason }],
     })}\n\n`;
 
+  // ── Inactivity watchdog ────────────────────────────────────────────────────
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const resetTimer = () => {
+    if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      if (!passThrough.destroyed) {
+        logger.warn(
+          `Stream inactivity timeout after ${STREAM_INACTIVITY_TIMEOUT_MS}ms | model=${modelName}`
+        );
+        const errorEvent = `data: ${JSON.stringify({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model: modelName,
+          choices: [{ index: 0, delta: {}, finish_reason: 'error' }],
+          error: { message: 'Stream inactivity timeout', type: 'timeout' },
+        })}\n\n`;
+        passThrough.push(errorEvent);
+        passThrough.destroy(new Error('Stream inactivity timeout'));
+      }
+    }, STREAM_INACTIVITY_TIMEOUT_MS);
+  };
+
+  const clearTimer = () => {
+    if (inactivityTimer !== null) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  };
+  // ──────────────────────────────────────────────────────────────────────────
+
   (async () => {
+    resetTimer();
     try {
       for await (const event of eventStream) {
         if (passThrough.destroyed) break;
+        resetTimer();
 
         if (event.type === 'text_delta') {
           passThrough.push(chunk({ content: event.delta }, null));
@@ -317,15 +362,18 @@ function eventStreamToReadable(
             )
           );
         } else if (event.type === 'done') {
+          clearTimer();
           passThrough.push(chunk({}, toFinishReason(event.reason)));
           passThrough.push('data: [DONE]\n\n');
           passThrough.push(null);
         } else if (event.type === 'error') {
+          clearTimer();
           const errMsg = event.error.errorMessage ?? 'LLM provider error';
           passThrough.destroy(new Error(errMsg));
         }
       }
     } catch (err) {
+      clearTimer();
       passThrough.destroy(err as Error);
     }
   })();
@@ -439,6 +487,24 @@ export class LlmRouter {
     if (config.provider === 'lmstudio' || config.provider === 'ollama') {
       return 'lm-studio';
     }
+    // Standard env var fallback for cloud providers
+    if (config.provider) {
+      const standardEnvVars: Record<string, string[]> = {
+        openai: ['OPENAI_API_KEY'],
+        anthropic: ['ANTHROPIC_API_KEY'],
+        google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        groq: ['GROQ_API_KEY'],
+        mistral: ['MISTRAL_API_KEY'],
+        openrouter: ['OPENROUTER_API_KEY'],
+        kilocode: ['KILOCODE_API_KEY'],
+      };
+      const envVars = standardEnvVars[config.provider];
+      if (envVars) {
+        for (const v of envVars) {
+          if (process.env[v]) return process.env[v];
+        }
+      }
+    }
     return undefined;
   }
 
@@ -448,6 +514,14 @@ export class LlmRouter {
     context: Context,
     extraOptions?: StreamOptions
   ): AssistantMessageEventStream {
+    // SSRF protection: validate baseUrl before sending any API-key-bearing request.
+    if (config.baseUrl) {
+      const check = validateProviderBaseUrl(config.baseUrl, config.provider);
+      if (!check.valid) {
+        throw new Error(`Provider baseUrl rejected: ${check.reason}`);
+      }
+    }
+
     const model = this.buildModel(config);
     const apiKey = this.resolveApiKey(config);
     const opts: StreamOptions = {

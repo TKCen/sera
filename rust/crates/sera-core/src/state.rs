@@ -10,6 +10,8 @@ use sera_db::DbPool;
 use sera_docker::ContainerManager;
 use sera_events::CentrifugoClient;
 
+use crate::services::schedule_service::ScheduleService;
+
 /// Shared application state.
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -22,4 +24,5 @@ pub struct AppState {
     pub providers_path: Option<String>,
     pub centrifugo: Option<Arc<CentrifugoClient>>,
     pub mcp_registry: Arc<RwLock<crate::routes::mcp::McpRegistry>>,
+    pub schedule_svc: Arc<ScheduleService>,
 }

@@ -58,7 +58,7 @@ export class WebhookChannel implements Channel {
     await axios.post(this.cfg.url, payload, {
       headers,
       ...(this.cfg.timeout !== undefined ? { timeout: this.cfg.timeout } : {}),
-      validateStatus: (status) => status < 500,
+      validateStatus: (status) => status >= 200 && status < 300,
     });
 
     logger.info(`Webhook sent: ${event.eventType} → ${this.cfg.url}`);

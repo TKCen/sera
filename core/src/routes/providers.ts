@@ -28,6 +28,7 @@ import { requireRole } from '../auth/authMiddleware.js';
 import { Logger } from '../lib/logger.js';
 import type { DynamicProviderManager } from '../llm/DynamicProviderManager.js';
 import { ProviderHealthService } from '../llm/ProviderHealthService.js';
+import { ModelDiscoveryService } from '../services/ModelDiscoveryService.js';
 
 const logger = new Logger('ProvidersRoute');
 
@@ -122,9 +123,25 @@ export function createProvidersRouter(
   });
 
   /**
+   * GET /api/providers
+   * Lists all models/providers currently configured.
+   * Express 5: use empty string for the mount-point route instead of '/'.
+   */
+  router.get('', async (_req: Request, res: Response) => {
+    try {
+      const models = await llmRouter.listModels();
+      res.json({ providers: models });
+    } catch (err: unknown) {
+      logger.error('Failed to list providers:', err);
+      res.status(502).json({ error: 'Failed to retrieve provider list' });
+    }
+  });
+
+  /**
    * GET /api/providers/list
    * Lists all models/providers currently configured.
    * Note: Express 5 doesn't match router.get('/') for mounted sub-routers.
+   * Kept as alias for backwards compatibility.
    */
   router.get('/list', async (_req: Request, res: Response) => {
     try {
@@ -144,7 +161,8 @@ export function createProvidersRouter(
    * Note: Adding a new model is hot-reloadable (no LiteLLM restart needed).
    * Routing strategy and fallback chain changes require a restart.
    */
-  router.post('/', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
+  // Express 5: use empty string for POST at the mount-point route
+  router.post('', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
     const parsed = AddProviderSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid provider config', details: parsed.error.flatten() });
@@ -229,7 +247,12 @@ export function createProvidersRouter(
 
       try {
         await dynamicProviderManager.addProvider(parsed.data);
-        res.status(201).json(parsed.data);
+        // Return the config without the literal API key — it has been moved to the secrets store
+        const { apiKey: _apiKey, ...safeConfig } = parsed.data;
+        res.status(201).json({
+          ...safeConfig,
+          ...(parsed.data.apiKey ? { apiKey: '***' } : {}),
+        });
       } catch (err: unknown) {
         logger.error('Failed to add dynamic provider:', err);
         res.status(502).json({ error: (err as Error).message });
@@ -278,6 +301,43 @@ export function createProvidersRouter(
       }
     }
   );
+
+  // ── Model Discovery ────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/providers/models
+   * Returns discovered models from all supported cloud providers (openrouter, google, kilocode).
+   * Results are cached for 1 hour. Add ?force=true to bypass the cache.
+   */
+  router.get('/models', async (req: Request, res: Response) => {
+    try {
+      const force = req.query['force'] === 'true';
+      const discovery = ModelDiscoveryService.getInstance();
+      const models = await discovery.discoverAll(force);
+      res.json({ models });
+    } catch (err: unknown) {
+      logger.error('Model discovery (all) failed:', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * GET /api/providers/models/:provider
+   * Returns discovered models for a specific provider (openrouter, google, kilocode).
+   * Results are cached for 1 hour. Add ?force=true to bypass the cache.
+   */
+  router.get('/models/:provider', async (req: Request, res: Response) => {
+    const provider = String(req.params['provider']);
+    try {
+      const force = req.query['force'] === 'true';
+      const discovery = ModelDiscoveryService.getInstance();
+      const models = await discovery.discoverModels(provider, force);
+      res.json({ provider, models });
+    } catch (err: unknown) {
+      logger.error(`Model discovery for provider ${provider} failed:`, err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // ── Static Providers ────────────────────────────────────────────────────────
 

@@ -7,14 +7,17 @@ export class AgentScheduler {
   /**
    * Check if an agent is within its hourly token quota.
    * @param agentId The unique ID of the agent.
-   * @param limit The hourly token limit for the agent.
+   * @param limit The hourly token limit for the agent. Pass 0 for unlimited.
    * @returns Promise<boolean> True if the agent is within quota.
    */
   async isWithinQuota(agentId: string, limit: number): Promise<boolean> {
+    // 0 means unlimited — skip the quota check entirely (#748)
+    if (limit === 0) return true;
+
     try {
       const result = await query(
         `SELECT COALESCE(SUM(total_tokens), 0) AS total
-         FROM usage_events
+         FROM token_usage
          WHERE agent_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
         [agentId]
       );

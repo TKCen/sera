@@ -62,6 +62,7 @@ export class MCPRegistry {
     try {
       await client.connect();
       this.clients.set(name, { client });
+      this.attachReconnectHook(name, client);
       logger.info(`Registered host-side MCP server: ${name}`);
       this.broadcast('registered', name);
       for (const hook of this.onRegisterHooks) hook(name);
@@ -86,6 +87,7 @@ export class MCPRegistry {
     try {
       await client.connect();
       this.clients.set(name, { client, instanceId: info.instanceId, manifest });
+      this.attachReconnectHook(name, client);
       logger.info(`Registered containerized MCP server: ${name}`);
       this.broadcast('registered', name);
       for (const hook of this.onRegisterHooks) hook(name);
@@ -95,6 +97,13 @@ export class MCPRegistry {
       await this.manager.stopServer(info.instanceId);
       throw err;
     }
+  }
+
+  private attachReconnectHook(name: string, client: MCPClient): void {
+    client.onReconnect(() => {
+      logger.info(`MCP server "${name}" reconnected — broadcasting status update`);
+      this.broadcast('reconnected', name);
+    });
   }
 
   async unregisterClient(name: string) {

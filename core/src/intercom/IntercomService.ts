@@ -216,8 +216,8 @@ export class IntercomService {
       }
     };
 
-    // Fire and forget
-    persistThought();
+    // Persist before publishing so consumers can query immediately
+    await persistThought();
 
     await this.publish(channel, event);
   }

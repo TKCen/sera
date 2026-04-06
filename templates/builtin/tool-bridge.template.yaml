@@ -1,0 +1,27 @@
+apiVersion: sera/v1
+kind: AgentTemplate
+
+metadata:
+  name: tool-bridge
+  displayName: Tool Bridge
+  builtin: true
+  category: integration
+  description: >
+    Host-native CLI tool bridge (poll-based task consumer). Bridge processes
+    register as persistent agent instances and poll the task queue for work.
+    No Docker container is spawned — the bridge runs directly on the host.
+
+spec:
+
+  # ── Model ──────────────────────────────────────────────────────────────────
+  # Bridges do not use an LLM directly; the tool they wrap does the inference.
+  model:
+    name: none
+    provider: none
+
+  # ── Sandbox ────────────────────────────────────────────────────────────────
+  sandboxBoundary: tier-3
+
+  # ── Lifecycle ──────────────────────────────────────────────────────────────
+  lifecycle:
+    mode: persistent

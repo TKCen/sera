@@ -439,6 +439,23 @@ export class LlmRouter {
     if (config.provider === 'lmstudio' || config.provider === 'ollama') {
       return 'lm-studio';
     }
+    // Standard env var fallback for cloud providers
+    if (config.provider) {
+      const standardEnvVars: Record<string, string[]> = {
+        openai: ['OPENAI_API_KEY'],
+        anthropic: ['ANTHROPIC_API_KEY'],
+        google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        groq: ['GROQ_API_KEY'],
+        mistral: ['MISTRAL_API_KEY'],
+        openrouter: ['OPENROUTER_API_KEY'],
+      };
+      const envVars = standardEnvVars[config.provider];
+      if (envVars) {
+        for (const v of envVars) {
+          if (process.env[v]) return process.env[v];
+        }
+      }
+    }
     return undefined;
   }
 

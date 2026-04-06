@@ -359,6 +359,7 @@ export class ProviderRegistry {
         google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
         groq: ['GROQ_API_KEY'],
         mistral: ['MISTRAL_API_KEY'],
+        openrouter: ['OPENROUTER_API_KEY'],
       };
       const envVars = standardEnvVars[config.provider];
       if (envVars?.some((v) => process.env[v])) {
@@ -449,6 +450,7 @@ export class ProviderRegistry {
         google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
         groq: ['GROQ_API_KEY'],
         mistral: ['MISTRAL_API_KEY'],
+        openrouter: ['OPENROUTER_API_KEY'],
       };
       const envVars = standardEnvVars[config.provider];
       if (envVars) {
@@ -502,6 +504,7 @@ export class ProviderRegistry {
       google: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
       groq: ['GROQ_API_KEY'],
       mistral: ['MISTRAL_API_KEY'],
+      openrouter: ['OPENROUTER_API_KEY'],
     };
 
     let ingested = 0;

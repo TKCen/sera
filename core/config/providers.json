@@ -53,6 +53,52 @@
       "apiKey": "lm-studio",
       "description": "Discovered from af (text-embedding-embeddinggemma-300m-qat)",
       "dynamicProviderId": "agw"
+    },
+    {
+      "modelName": "openrouter/free",
+      "api": "openai-completions",
+      "provider": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "description": "OpenRouter free model router — auto-selects best available free model",
+      "contextWindow": 131072,
+      "maxTokens": 4096
+    },
+    {
+      "modelName": "qwen/qwen3-235b-a22b:free",
+      "api": "openai-completions",
+      "provider": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "description": "Qwen 3.6 Plus (free) via OpenRouter — agentic coding, reasoning, 1M context",
+      "contextWindow": 1048576,
+      "maxTokens": 8192,
+      "reasoning": true
+    },
+    {
+      "modelName": "gemini-3-flash-preview",
+      "api": "openai-completions",
+      "provider": "google",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "description": "Google Gemini 3 Flash Preview via AI Studio",
+      "contextWindow": 1048576,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "gemini-3.1-pro-preview",
+      "api": "openai-completions",
+      "provider": "google",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "description": "Google Gemini 3.1 Pro Preview via AI Studio — strongest reasoning",
+      "contextWindow": 1048576,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "gemini-3.1-flash-lite-preview",
+      "api": "openai-completions",
+      "provider": "google",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "description": "Google Gemini 3.1 Flash Lite Preview via AI Studio — fast + cheap",
+      "contextWindow": 1048576,
+      "maxTokens": 8192
     }
   ]
 }

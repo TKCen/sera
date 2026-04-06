@@ -131,6 +131,23 @@ export const CredentialResolutionDeniedSchema = z.object({
   reason: z.string(),
 });
 
+export const ThreatDetectedSchema = z.object({
+  command: z.string(),
+  agentInstanceId: z.string().optional(),
+  agentName: z.string(),
+  blocked: z.boolean(),
+  matches: z.array(
+    z.object({
+      category: z.string(),
+      patternName: z.string(),
+      riskLevel: z.enum(['Low', 'Medium', 'High', 'Critical']),
+      description: z.string(),
+      confidence: z.number(),
+      matchedText: z.string(),
+    })
+  ),
+});
+
 /** Registry of schemas by event type */
 export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
   'agent.spawned': AgentSpawnedSchema,
@@ -155,6 +172,7 @@ export const EVENT_SCHEMAS: Record<string, z.ZodSchema> = {
   'delegation.revoked': DelegationRevokedSchema,
   'delegation.derived': DelegationDerivedSchema,
   'credential.resolution.denied': CredentialResolutionDeniedSchema,
+  'threat.detected': ThreatDetectedSchema,
 };
 
 /**

@@ -1,0 +1,38 @@
+# Shadow proxy overlay — enables side-by-side TS/Rust parity testing.
+# Usage: docker compose -f docker-compose.yaml -f docker-compose.shadow.yaml up -d
+#
+# What this overlay does:
+#   - Ensures sera-core (TS, port 3001) and sera-core-rs (Rust, port 3002) are both running
+#   - Starts sera-shadow-proxy on port 3000 forwarding to both
+#   - Mounts ./parity-logs on the host so diff output is readable without exec
+#
+# After the stack is up, run the parity test:
+#   bash tools/shadow-proxy/run-parity-test.sh
+
+services:
+  sera-core:
+    # No changes to the TS core — inherit all settings from docker-compose.yaml
+    {}
+
+  sera-core-rs:
+    # Rust shadow server — already defined in docker-compose.yaml, activate here
+    restart: unless-stopped
+
+  sera-shadow-proxy:
+    restart: unless-stopped
+    environment:
+      - PRIMARY_URL=http://sera-core:3001
+      - SHADOW_URL=http://sera-core-rs:3002
+      - DIFF_LOG_PATH=/data/parity-diffs.jsonl
+    volumes:
+      # Named volume (inherited) + host-bind for easy inspection
+      - shadow_proxy_data:/data
+      - ./parity-logs:/data/host
+    depends_on:
+      sera-core:
+        condition: service_healthy
+      sera-core-rs:
+        condition: service_healthy
+
+volumes:
+  shadow_proxy_data:

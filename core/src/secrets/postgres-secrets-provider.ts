@@ -1,11 +1,12 @@
 import crypto from 'crypto';
-import { query } from '../lib/database.js';
+import { query, pool } from '../lib/database.js';
 import type {
   SecretsProvider,
   SecretAccessContext,
   SecretMetadata,
   SecretFilter,
 } from './interfaces.js';
+import { redactSecretName } from './interfaces.js';
 import { Logger } from '../lib/logger.js';
 
 const logger = new Logger('PostgresSecretsProvider');
@@ -72,7 +73,9 @@ export class PostgresSecretsProvider implements SecretsProvider {
     // Access control: operator has full access, agent must be in allowed_agents
     if (!context.operator) {
       if (!allowed_agents.includes(context.agentName) && !allowed_agents.includes('*')) {
-        logger.warn(`Access denied to secret "${name}" for agent "${context.agentName}"`);
+        logger.warn(
+          `Access denied to secret "${redactSecretName(name)}" for agent "${context.agentName}"`
+        );
         return null;
       }
     }
@@ -80,7 +83,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
     try {
       return this.decrypt(encrypted_value, iv);
     } catch (err) {
-      logger.error(`Failed to decrypt secret "${name}":`, err);
+      logger.error(`Failed to decrypt secret "${redactSecretName(name)}":`, err);
       throw new Error('Secret decryption failed');
     }
   }
@@ -158,6 +161,50 @@ export class PostgresSecretsProvider implements SecretsProvider {
       rotatedAt: row.rotated_at,
       expiresAt: row.expires_at,
     }));
+  }
+
+  async rotateEncryptionKey(newKey: string): Promise<void> {
+    const newKeyBuf = Buffer.from(newKey, 'hex');
+    if (newKeyBuf.length !== 32) {
+      throw new Error('New key must be a 32-byte hex string (64 characters)');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const result = await client.query<{
+        name: string;
+        encrypted_value: Buffer;
+        iv: Buffer;
+      }>('SELECT name, encrypted_value, iv FROM secrets WHERE deleted_at IS NULL');
+
+      for (const row of result.rows) {
+        const plaintext = this.decrypt(row.encrypted_value, row.iv);
+
+        const iv = crypto.randomBytes(IV_LENGTH);
+        const cipher = crypto.createCipheriv(ALGORITHM, newKeyBuf, iv, {
+          authTagLength: AUTH_TAG_LENGTH,
+        });
+        const encryptedContent = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+        const authTag = cipher.getAuthTag();
+        const encryptedValue = Buffer.concat([encryptedContent, authTag]);
+
+        await client.query(
+          'UPDATE secrets SET encrypted_value = $1, iv = $2, updated_at = NOW() WHERE name = $3',
+          [encryptedValue, iv, row.name]
+        );
+      }
+
+      await client.query('COMMIT');
+      logger.info(`Key rotation complete: re-encrypted ${result.rows.length} secret(s)`);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      logger.error('Key rotation failed, transaction rolled back:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async healthCheck(): Promise<boolean> {

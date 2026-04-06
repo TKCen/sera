@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PostgresSecretsProvider } from './postgres-secrets-provider.js';
+import { redactSecretName } from './interfaces.js';
 import * as db from '../lib/database.js';
+
+// Fake pg client used to simulate pool.connect() in rotateEncryptionKey tests
+const mockClient = {
+  query: vi.fn(),
+  release: vi.fn(),
+};
 
 vi.mock('../lib/database.js', () => ({
   query: vi.fn(),
+  pool: {
+    connect: vi.fn(),
+  },
 }));
 
 vi.mock('argon2', () => ({
@@ -214,5 +224,109 @@ describe('PostgresSecretsProvider', () => {
       vi.mocked(db.query).mockRejectedValue(new Error('DB Down'));
       expect(await provider.healthCheck()).toBe(false);
     });
+  });
+
+  describe('rotateEncryptionKey', () => {
+    const NEW_KEY = 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'; // 32 bytes hex
+
+    beforeEach(() => {
+      (db.pool.connect as ReturnType<typeof vi.fn>).mockResolvedValue(mockClient);
+      mockClient.query.mockReset();
+      mockClient.release.mockReset();
+    });
+
+    it('should throw if newKey is not 32 bytes', async () => {
+      const provider = new PostgresSecretsProvider();
+      await expect(provider.rotateEncryptionKey('tooshort')).rejects.toThrow(
+        'New key must be a 32-byte hex string (64 characters)'
+      );
+    });
+
+    it('should re-encrypt all secrets with the new key and commit', async () => {
+      const provider = new PostgresSecretsProvider();
+      const secretValue = 'my-precious-secret';
+
+      // Encrypt a value with the OLD key so the provider can decrypt it
+      const { encryptedValue, iv } = (
+        provider as unknown as { encrypt: (v: string) => { encryptedValue: Buffer; iv: Buffer } }
+      ).encrypt(secretValue);
+
+      // Sequence: BEGIN, SELECT, UPDATE (×1), COMMIT
+      mockClient.query
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({
+          rows: [{ name: 'my-secret', encrypted_value: encryptedValue, iv }],
+        }) // SELECT
+        .mockResolvedValueOnce(undefined) // UPDATE
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      await provider.rotateEncryptionKey(NEW_KEY);
+
+      expect(mockClient.query).toHaveBeenCalledWith('BEGIN');
+      expect(mockClient.query).toHaveBeenCalledWith('COMMIT');
+      expect(mockClient.release).toHaveBeenCalled();
+
+      // Find the UPDATE call — args are (sql, [encryptedValue, iv, name])
+      const updateParams = mockClient.query.mock.calls.find(
+        (c: unknown[]) =>
+          typeof c[0] === 'string' &&
+          (c[0] as string).includes('UPDATE secrets SET encrypted_value')
+      )![1] as [Buffer, Buffer, string];
+
+      expect(updateParams[2]).toBe('my-secret');
+
+      // Verify that the new ciphertext decrypts correctly with the new key
+      process.env.SECRETS_MASTER_KEY = NEW_KEY;
+      const verifyProvider = new PostgresSecretsProvider();
+      const decryptedValue = (
+        verifyProvider as unknown as {
+          decrypt: (e: Buffer, iv: Buffer) => string;
+        }
+      ).decrypt(updateParams[0], updateParams[1]);
+      process.env.SECRETS_MASTER_KEY = MASTER_KEY;
+
+      expect(decryptedValue).toBe(secretValue);
+    });
+
+    it('should rollback on decryption error and rethrow', async () => {
+      const provider = new PostgresSecretsProvider();
+
+      mockClient.query
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              name: 'bad-secret',
+              encrypted_value: Buffer.from('corrupt'),
+              iv: Buffer.alloc(12),
+            },
+          ],
+        }) // SELECT — corrupted ciphertext will cause decrypt to throw
+        .mockResolvedValueOnce(undefined); // ROLLBACK
+
+      await expect(provider.rotateEncryptionKey(NEW_KEY)).rejects.toThrow();
+
+      expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
+      expect(mockClient.release).toHaveBeenCalled();
+    });
+  });
+});
+
+describe('redactSecretName', () => {
+  it('returns last 3 chars prefixed with ***', () => {
+    expect(redactSecretName('my-api-key')).toBe('***key');
+  });
+
+  it('handles names shorter than 3 chars', () => {
+    expect(redactSecretName('ab')).toBe('***ab');
+    expect(redactSecretName('x')).toBe('***x');
+  });
+
+  it('handles empty string', () => {
+    expect(redactSecretName('')).toBe('***');
+  });
+
+  it('handles exactly 3 chars', () => {
+    expect(redactSecretName('abc')).toBe('***abc');
   });
 });

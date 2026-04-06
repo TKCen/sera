@@ -82,6 +82,25 @@ export function createSecretsRouter(): Router {
   });
 
   /**
+   * POST /api/secrets/rotate-key
+   * Rotate the encryption key — re-encrypts all secrets with the new key.
+   */
+  router.post('/rotate-key', requireRole(['admin']), async (req, res) => {
+    try {
+      const { newKey } = req.body as { newKey?: string };
+      if (!newKey) {
+        res.status(400).json({ error: 'newKey is required' });
+        return;
+      }
+      await secrets.rotateEncryptionKey(newKey);
+      res.json({ message: 'Key rotation complete' });
+    } catch (err: unknown) {
+      const error = err as Error;
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /**
    * DELETE /api/secrets/:key
    * Delete a secret.
    */

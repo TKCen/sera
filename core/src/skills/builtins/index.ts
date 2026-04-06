@@ -11,6 +11,9 @@ import { fileWriteSkill } from './file-write.js';
 import { fileListSkill } from './file-list.js';
 import { createKnowledgeStoreSkill } from './knowledge-store.js';
 import { createKnowledgeQuerySkill } from './knowledge-query.js';
+import { createKnowledgeUpdateSkill } from './knowledge-update.js';
+import { createKnowledgeDeleteSkill } from './knowledge-delete.js';
+import { createKnowledgeRewriteSkill } from './knowledge-rewrite.js';
 import { createCoreMemoryAppendSkill, createCoreMemoryReplaceSkill } from './core-memory.js';
 import { shellExecSkill } from './shell-exec.js';
 import { scheduleTaskSkill } from './schedule-task.js';
@@ -41,6 +44,9 @@ export function registerBuiltinSkills(
   registry.register(manageAgentSkill);
   registry.register(createKnowledgeStoreSkill());
   registry.register(createKnowledgeQuerySkill());
+  registry.register(createKnowledgeUpdateSkill());
+  registry.register(createKnowledgeDeleteSkill());
+  registry.register(createKnowledgeRewriteSkill());
   registry.register(createCoreMemoryAppendSkill());
   registry.register(createCoreMemoryReplaceSkill());
 }

@@ -588,8 +588,10 @@ export class LlmRouter {
         return { response: toCompletionResponse(msg, modelName), latencyMs };
       } catch (err) {
         lastError = err as Error;
+        const is429 = lastError.message.includes('429') || lastError.message.includes('rate');
         logger.warn(
-          `LlmRouter dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}`
+          `LlmRouter dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}` +
+            (is429 ? ' [RATE_LIMITED — trying next model]' : '')
         );
         // Continue to next model in failover chain
       }
@@ -628,8 +630,10 @@ export class LlmRouter {
         return eventStreamToReadable(eventStream, modelName);
       } catch (err) {
         lastError = err as Error;
+        const is429 = lastError.message.includes('429') || lastError.message.includes('rate');
         logger.warn(
-          `LlmRouter stream dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}`
+          `LlmRouter stream dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}` +
+            (is429 ? ' [RATE_LIMITED — trying next model]' : '')
         );
         // Continue to next model in failover chain
       }

@@ -95,6 +95,14 @@ export class CircuitBreakerService {
       breaker = new CircuitBreaker(fn, {
         ...this.options,
         name: `llm-${provider}`,
+        // Don't count rate limits toward circuit breaker threshold —
+        // the provider is healthy, just temporarily limited
+        errorFilter: (err: Error) => {
+          if (err.message?.includes('429') || err.message?.includes('rate limit')) {
+            return true; // true = filter out (don't count as failure)
+          }
+          return false;
+        },
       });
 
       breaker.on('open', () => {

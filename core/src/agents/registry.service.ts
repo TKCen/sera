@@ -404,13 +404,32 @@ export class AgentRegistry {
   }
 
   async updateInstanceStatus(id: string, status: string, containerId?: string) {
-    const query = `
-      UPDATE agent_instances
-      SET status = $2, container_id = COALESCE($3, container_id), updated_at = NOW()
-      WHERE id = $1
-      RETURNING *;
-    `;
-    const res = await this.pool.query(query, [id, status, containerId]);
+    let query: string;
+    let params: (string | null | undefined)[];
+
+    if (status === 'unresponsive') {
+      // Guard: only mark unresponsive if no recent heartbeat arrived
+      // This prevents the race where a heartbeat arrives between the stale check and this UPDATE
+      const staleMs = parseInt(process.env.HEARTBEAT_STALE_MS ?? '120000', 10);
+      query = `
+        UPDATE agent_instances
+        SET status = $2, container_id = COALESCE($3, container_id), updated_at = NOW()
+        WHERE id = $1
+          AND (last_heartbeat_at IS NULL OR last_heartbeat_at < NOW() - INTERVAL '1 millisecond' * $4)
+        RETURNING *;
+      `;
+      params = [id, status, containerId ?? null, String(staleMs)];
+    } else {
+      query = `
+        UPDATE agent_instances
+        SET status = $2, container_id = COALESCE($3, container_id), updated_at = NOW()
+        WHERE id = $1
+        RETURNING *;
+      `;
+      params = [id, status, containerId ?? null];
+    }
+
+    const res = await this.pool.query(query, params);
     return res.rows[0];
   }
 

@@ -100,18 +100,36 @@ export class CoreMemoryService {
     name: string,
     contentToAppend: string
   ): Promise<CoreMemoryBlock> {
-    const block = await this.getBlock(agentInstanceId, name);
-    if (!block) throw new Error(`Block ${name} not found`);
-    if (block.isReadOnly) throw new Error(`Block ${name} is read-only`);
+    // Atomic append using a single UPDATE with validation — no read-modify-write race
+    const res = await this.pool.query(
+      `UPDATE core_memory_blocks
+       SET content = RTRIM(content || E'\\n' || $3),
+           updated_at = NOW()
+       WHERE agent_instance_id = $1 AND name = $2
+         AND is_read_only = false
+         AND LENGTH(RTRIM(content || E'\\n' || $3)) <= character_limit
+       RETURNING id, agent_instance_id as "agentInstanceId", name, content,
+                 character_limit as "characterLimit", is_read_only as "isReadOnly",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [agentInstanceId, name, contentToAppend]
+    );
 
-    const newContent = (block.content + '\n' + contentToAppend).trim();
-    if (newContent.length > block.characterLimit) {
-      throw new Error(
-        `Append failed: Content exceeds character limit of ${block.characterLimit} for block ${name}`
-      );
+    if (res.rowCount === 0) {
+      // Determine the specific error — block not found, read-only, or over limit
+      const block = await this.getBlock(agentInstanceId, name);
+      if (!block) throw new Error(`Block ${name} not found`);
+      if (block.isReadOnly) throw new Error(`Block ${name} is read-only`);
+      const wouldBe = (block.content + '\n' + contentToAppend).trim();
+      if (wouldBe.length > block.characterLimit) {
+        throw new Error(
+          `Append failed: Content exceeds character limit of ${block.characterLimit} for block ${name}`
+        );
+      }
+      // Unexpected — retry once (concurrent update may have changed state)
+      throw new Error(`Append failed for block ${name} — concurrent modification detected`);
     }
 
-    return this.updateBlock(agentInstanceId, name, { content: newContent });
+    return res.rows[0] as CoreMemoryBlock;
   }
 
   async replaceInBlock(
@@ -120,22 +138,39 @@ export class CoreMemoryService {
     oldText: string,
     newText: string
   ): Promise<CoreMemoryBlock> {
-    const block = await this.getBlock(agentInstanceId, name);
-    if (!block) throw new Error(`Block ${name} not found`);
-    if (block.isReadOnly) throw new Error(`Block ${name} is read-only`);
+    // Atomic replace — single UPDATE with validation, no read-modify-write race.
+    // The WHERE clause ensures oldText is present AND the result fits the limit.
+    const res = await this.pool.query(
+      `UPDATE core_memory_blocks
+       SET content = REPLACE(content, $3, $4),
+           updated_at = NOW()
+       WHERE agent_instance_id = $1 AND name = $2
+         AND is_read_only = false
+         AND content LIKE '%' || $3 || '%'
+         AND LENGTH(REPLACE(content, $3, $4)) <= character_limit
+       RETURNING id, agent_instance_id as "agentInstanceId", name, content,
+                 character_limit as "characterLimit", is_read_only as "isReadOnly",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [agentInstanceId, name, oldText, newText]
+    );
 
-    if (!block.content.includes(oldText)) {
-      throw new Error(`Replace failed: Text "${oldText}" not found in block ${name}`);
+    if (res.rowCount === 0) {
+      const block = await this.getBlock(agentInstanceId, name);
+      if (!block) throw new Error(`Block ${name} not found`);
+      if (block.isReadOnly) throw new Error(`Block ${name} is read-only`);
+      if (!block.content.includes(oldText)) {
+        throw new Error(`Replace failed: Text "${oldText}" not found in block ${name}`);
+      }
+      const newContent = block.content.replace(oldText, newText);
+      if (newContent.length > block.characterLimit) {
+        throw new Error(
+          `Replace failed: New content exceeds character limit of ${block.characterLimit} for block ${name}`
+        );
+      }
+      throw new Error(`Replace failed for block ${name} — concurrent modification detected`);
     }
 
-    const newContent = block.content.replace(oldText, newText);
-    if (newContent.length > block.characterLimit) {
-      throw new Error(
-        `Replace failed: New content exceeds character limit of ${block.characterLimit} for block ${name}`
-      );
-    }
-
-    return this.updateBlock(agentInstanceId, name, { content: newContent });
+    return res.rows[0] as CoreMemoryBlock;
   }
 
   async initializeDefaultBlocks(agentInstanceId: string): Promise<void> {

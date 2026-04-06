@@ -47,36 +47,32 @@ describe('CoreMemoryService', () => {
   });
 
   it('appends to a block', async () => {
-    const existingBlock = {
+    const updatedBlock = {
       id: '1',
       name: 'persona',
-      content: 'Line 1',
+      content: 'Line 1\nLine 2',
       characterLimit: 2000,
       isReadOnly: false,
     };
-    const updatedBlock = { ...existingBlock, content: 'Line 1\nLine 2' };
 
-    mockPool.query
-      .mockResolvedValueOnce({ rows: [existingBlock] }) // getBlock
-      .mockResolvedValueOnce({ rowCount: 1, rows: [updatedBlock] }); // updateBlock
+    // Atomic UPDATE succeeds directly — no separate getBlock call
+    mockPool.query.mockResolvedValueOnce({ rowCount: 1, rows: [updatedBlock] });
 
     const updated = await service.appendBlock(agentId, 'persona', 'Line 2');
     expect(updated.content).toBe('Line 1\nLine 2');
   });
 
   it('replaces text in a block', async () => {
-    const existingBlock = {
+    const updatedBlock = {
       id: '1',
       name: 'persona',
-      content: 'The quick brown fox',
+      content: 'The quick red fox',
       characterLimit: 2000,
       isReadOnly: false,
     };
-    const updatedBlock = { ...existingBlock, content: 'The quick red fox' };
 
-    mockPool.query
-      .mockResolvedValueOnce({ rows: [existingBlock] }) // getBlock
-      .mockResolvedValueOnce({ rowCount: 1, rows: [updatedBlock] }); // updateBlock
+    // Atomic UPDATE succeeds directly — no separate getBlock call
+    mockPool.query.mockResolvedValueOnce({ rowCount: 1, rows: [updatedBlock] });
 
     const updated = await service.replaceInBlock(agentId, 'persona', 'brown', 'red');
     expect(updated.content).toBe('The quick red fox');
@@ -90,7 +86,10 @@ describe('CoreMemoryService', () => {
       characterLimit: 2,
       isReadOnly: false,
     };
-    mockPool.query.mockResolvedValueOnce({ rows: [existingBlock] });
+
+    mockPool.query
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // atomic UPDATE — WHERE clause rejects
+      .mockResolvedValueOnce({ rows: [existingBlock] }); // diagnostic getBlock
 
     await expect(service.appendBlock(agentId, 'persona', 'Too long')).rejects.toThrow(
       /exceeds character limit/
@@ -105,7 +104,10 @@ describe('CoreMemoryService', () => {
       characterLimit: 2000,
       isReadOnly: true,
     };
-    mockPool.query.mockResolvedValueOnce({ rows: [existingBlock] });
+
+    mockPool.query
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // atomic UPDATE — WHERE clause rejects
+      .mockResolvedValueOnce({ rows: [existingBlock] }); // diagnostic getBlock
 
     await expect(service.appendBlock(agentId, 'persona', 'More text')).rejects.toThrow(
       /is read-only/

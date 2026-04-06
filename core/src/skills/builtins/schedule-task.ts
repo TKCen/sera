@@ -189,6 +189,31 @@ export const scheduleTaskSkill: SkillDefinition = {
     }
     const { targetId } = resolved;
 
+    // Normalize action aliases — LLMs may use synonyms for the canonical action names.
+    const ACTION_ALIASES: Record<string, string> = {
+      add: 'create',
+      new: 'create',
+      schedule: 'create',
+      remove: 'delete',
+      destroy: 'delete',
+      cancel: 'delete',
+      pause: 'deactivate',
+      disable: 'deactivate',
+      stop: 'deactivate',
+      resume: 'activate',
+      enable: 'activate',
+      start: 'activate',
+      edit: 'update',
+      modify: 'update',
+      patch: 'update',
+      show: 'get',
+      fetch: 'get',
+      read: 'get',
+      'list-schedules': 'list',
+      'get-all': 'list',
+    };
+    const normalizedAction = ACTION_ALIASES[action] ?? action;
+
     // Normalize task to a JSON string — the `task` column is type JSON in Postgres.
     // The LLM may send a plain string prompt or a structured object.
     const taskPrompt =
@@ -199,7 +224,7 @@ export const scheduleTaskSkill: SkillDefinition = {
           : JSON.stringify(task);
 
     try {
-      switch (action) {
+      switch (normalizedAction) {
         case 'create': {
           if (!name || !cron || !taskPrompt) {
             return {
@@ -353,7 +378,10 @@ export const scheduleTaskSkill: SkillDefinition = {
         }
 
         default:
-          return { success: false, error: `Unsupported action: ${action}` };
+          return {
+            success: false,
+            error: `Unsupported action: "${action}". Valid actions: create, list, get, activate, deactivate, update, delete.`,
+          };
       }
     } catch (err: unknown) {
       return { success: false, error: `Database error: ${(err as Error).message}` };

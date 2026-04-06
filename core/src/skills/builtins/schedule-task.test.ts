@@ -158,6 +158,61 @@ describe('schedule-task skill', () => {
     });
   });
 
+  describe('action alias normalization', () => {
+    it('treats "add" as "create"', async () => {
+      const result = await scheduleTaskSkill.handler({ action: 'add' }, mockContext);
+      // Missing required fields → create validation error, not "Unsupported action"
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('name, cron, and task are required'),
+        })
+      );
+    });
+
+    it('treats "pause" as "deactivate"', async () => {
+      const result = await scheduleTaskSkill.handler({ action: 'pause' }, mockContext);
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('scheduleId is required'),
+        })
+      );
+    });
+
+    it('treats "resume" as "activate"', async () => {
+      const result = await scheduleTaskSkill.handler({ action: 'resume' }, mockContext);
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('scheduleId is required'),
+        })
+      );
+    });
+
+    it('treats "remove" as "delete"', async () => {
+      const result = await scheduleTaskSkill.handler({ action: 'remove' }, mockContext);
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('scheduleId is required'),
+        })
+      );
+    });
+
+    it('returns descriptive error with valid action list for unknown actions', async () => {
+      const result = await scheduleTaskSkill.handler({ action: 'frobnicate' }, mockContext);
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining(
+            'Valid actions: create, list, get, activate, deactivate, update, delete'
+          ),
+        })
+      );
+    });
+  });
+
   describe('list action', () => {
     it('includes source and description fields', async () => {
       const rows = [

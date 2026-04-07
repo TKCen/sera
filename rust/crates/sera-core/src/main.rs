@@ -377,7 +377,6 @@ fn build_router(
         .route("/api/agents/{id}/health-check", get(routes::stubs::agent_health_check))
         .route("/api/agents/{id}/sessions/{sid}/commands", get(routes::stubs::session_commands))
         .route("/api/agents/pending-updates", get(routes::stubs::pending_updates))
-        .route("/api/tools", get(routes::stubs::list_tools))
         .route("/v1/tools/catalog", get(routes::stubs::tools_catalog))
         .route("/api/templates", get(routes::stubs::list_templates))
         // Schedule detail + runs

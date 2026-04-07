@@ -272,8 +272,6 @@ export class LLMClient implements ILLMClient {
         const errorMsg = errorObj?.['message'] as string | undefined;
         const errorCode = errorObj?.['code'] as string | undefined;
 
-        log('error', `LLM proxy error: ${status} — ${JSON.stringify(body)}`);
-
         if (status === 429) {
           throw new BudgetExceededError(`Token budget exceeded: ${errorMsg ?? 'rate limited'}`);
         }
@@ -294,6 +292,7 @@ export class LLMClient implements ILLMClient {
           }
         }
 
+        log('error', `LLM proxy error: ${status} — ${safeStringify(body)}`);
         throw new Error(`LLM proxy returned ${status}: ${errorMsg ?? err.message}`);
       }
       throw err;

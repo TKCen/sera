@@ -24,6 +24,7 @@ import type { AuthService } from '../auth/auth-service.js';
 import type { MeteringService } from '../metering/MeteringService.js';
 import { rateLimitStub } from '../middleware/rateLimitStub.js';
 import type { LlmRouter } from '../llm/LlmRouter.js';
+import { RateLimitedError } from '../llm/LlmRouter.js';
 import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
 import { providerFromModel } from '../llm/CircuitBreakerService.js';
 import { Logger } from '../lib/logger.js';
@@ -318,13 +319,21 @@ export function createLlmProxyRouter(
               .catch((merr) => logger.error('Failed to record streaming error metering:', merr));
 
             if (!res.headersSent) {
-              const is429 = err.message?.includes('429') || err.message?.includes('rate');
+              const is429 =
+                err instanceof RateLimitedError ||
+                err.message?.includes('429') ||
+                err.message?.toLowerCase().includes('rate limit') ||
+                err.message?.toLowerCase().includes('rate_limit');
               if (is429) {
+                const retryAfterSec =
+                  err instanceof RateLimitedError ? err.retryAfterSec : undefined;
+                const retryAfterMs = retryAfterSec !== undefined ? retryAfterSec * 1000 : 30000;
                 res.status(429).json({
                   error: 'rate_limited',
                   message:
                     'Upstream provider is rate-limited. Retry shortly or configure failover models.',
-                  retryAfterMs: 30000,
+                  retryAfterMs,
+                  ...(retryAfterSec !== undefined ? { retryAfter: retryAfterSec } : {}),
                 });
               } else {
                 res.status(502).json({
@@ -353,14 +362,21 @@ export function createLlmProxyRouter(
             return;
           }
           const is429Stream =
-            streamErr.message?.includes('429') || streamErr.message?.includes('rate');
+            err instanceof RateLimitedError ||
+            streamErr.message?.includes('429') ||
+            streamErr.message?.toLowerCase().includes('rate limit') ||
+            streamErr.message?.toLowerCase().includes('rate_limit');
           if (is429Stream) {
             logger.warn(`Rate-limited by upstream provider | agent=${agentId} model=${modelName}`);
+            const retryAfterSec =
+              err instanceof RateLimitedError ? (err as RateLimitedError).retryAfterSec : undefined;
+            const retryAfterMs = retryAfterSec !== undefined ? retryAfterSec * 1000 : 30000;
             res.status(429).json({
               error: 'rate_limited',
               message:
                 'Upstream provider is rate-limited. Retry shortly or configure failover models.',
-              retryAfterMs: 30000,
+              retryAfterMs,
+              ...(retryAfterSec !== undefined ? { retryAfter: retryAfterSec } : {}),
             });
             return;
           }
@@ -410,14 +426,22 @@ export function createLlmProxyRouter(
           })
           .catch((merr) => logger.error('Failed to record error metering:', merr));
 
-        const is429 = cbErr.message?.includes('429') || cbErr.message?.includes('rate');
+        const is429 =
+          err instanceof RateLimitedError ||
+          cbErr.message?.includes('429') ||
+          cbErr.message?.toLowerCase().includes('rate limit') ||
+          cbErr.message?.toLowerCase().includes('rate_limit');
         if (is429) {
           logger.warn(`Rate-limited by upstream provider | agent=${agentId} model=${modelName}`);
+          const retryAfterSec =
+            err instanceof RateLimitedError ? (err as RateLimitedError).retryAfterSec : undefined;
+          const retryAfterMs = retryAfterSec !== undefined ? retryAfterSec * 1000 : 30000;
           res.status(429).json({
             error: 'rate_limited',
             message:
               'Upstream provider is rate-limited. Retry shortly or configure failover models.',
-            retryAfterMs: 30000,
+            retryAfterMs,
+            ...(retryAfterSec !== undefined ? { retryAfter: retryAfterSec } : {}),
           });
           return;
         }

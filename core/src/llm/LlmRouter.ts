@@ -47,6 +47,20 @@ import { validateProviderBaseUrl } from './url-validation.js';
 
 const logger = new Logger('LlmRouter');
 
+/**
+ * Try to parse a Retry-After value (in seconds) from an error message string.
+ * Handles patterns like "retry after 30s", "retry-after: 30", "30 seconds later".
+ * Returns undefined if no retry delay is found.
+ */
+function parseRetryAfterFromMessage(msg: string): number | undefined {
+  const match = /retry.after[:\s]+(\d+)/i.exec(msg) ?? /\b(\d+)\s*seconds?\s*later/i.exec(msg);
+  if (match?.[1]) {
+    const parsed = parseInt(match[1], 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 // ── Re-exported types (backward-compat with LiteLLMClient consumers) ──────────
 
 export type { ChatMessage };
@@ -369,7 +383,22 @@ function eventStreamToReadable(
         } else if (event.type === 'error') {
           clearTimer();
           const errMsg = event.error.errorMessage ?? 'LLM provider error';
-          passThrough.destroy(new Error(errMsg));
+          const is429 =
+            errMsg.includes('429') ||
+            errMsg.toLowerCase().includes('rate limit') ||
+            errMsg.toLowerCase().includes('rate_limit');
+          if (is429) {
+            // Parse Retry-After seconds if encoded in the error message (e.g. "retry after 30s")
+            const retryAfterSec = parseRetryAfterFromMessage(errMsg);
+            passThrough.destroy(
+              new RateLimitedError(
+                `Rate limited by upstream provider (429): ${errMsg}`,
+                retryAfterSec
+              )
+            );
+          } else {
+            passThrough.destroy(new Error(errMsg));
+          }
         }
       }
     } catch (err) {
@@ -382,6 +411,20 @@ function eventStreamToReadable(
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
+
+/**
+ * Thrown when an upstream provider returns HTTP 429.
+ * Carries the optional Retry-After value (in seconds) extracted from headers.
+ */
+export class RateLimitedError extends Error {
+  readonly retryAfterSec: number | undefined;
+
+  constructor(message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = 'RateLimitedError';
+    this.retryAfterSec = retryAfterSec;
+  }
+}
 
 /** Sanitised model entry returned by GET /api/providers — no API keys. */
 export interface ModelListItem {
@@ -588,12 +631,30 @@ export class LlmRouter {
         return { response: toCompletionResponse(msg, modelName), latencyMs };
       } catch (err) {
         lastError = err as Error;
-        const is429 = lastError.message.includes('429') || lastError.message.includes('rate');
+        const is429 =
+          lastError.message.includes('429') ||
+          lastError.message.toLowerCase().includes('rate limit') ||
+          lastError.message.toLowerCase().includes('rate_limit');
         logger.warn(
           `LlmRouter dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}` +
             (is429 ? ' [RATE_LIMITED — trying next model]' : '')
         );
         // Continue to next model in failover chain
+      }
+    }
+
+    // Re-wrap 429 errors so callers get a typed RateLimitedError with retryAfterSec
+    if (lastError !== null) {
+      const msg = lastError.message;
+      const is429 =
+        msg.includes('429') ||
+        msg.toLowerCase().includes('rate limit') ||
+        msg.toLowerCase().includes('rate_limit');
+      if (is429 && !(lastError instanceof RateLimitedError)) {
+        throw new RateLimitedError(
+          `Rate limited by upstream provider (429): ${msg}`,
+          parseRetryAfterFromMessage(msg)
+        );
       }
     }
 
@@ -630,12 +691,30 @@ export class LlmRouter {
         return eventStreamToReadable(eventStream, modelName);
       } catch (err) {
         lastError = err as Error;
-        const is429 = lastError.message.includes('429') || lastError.message.includes('rate');
+        const is429 =
+          lastError.message.includes('429') ||
+          lastError.message.toLowerCase().includes('rate limit') ||
+          lastError.message.toLowerCase().includes('rate_limit');
         logger.warn(
           `LlmRouter stream dispatch failed for model=${modelName} | agent=${agentId}: ${lastError.message}` +
             (is429 ? ' [RATE_LIMITED — trying next model]' : '')
         );
         // Continue to next model in failover chain
+      }
+    }
+
+    // Re-wrap 429 errors so callers get a typed RateLimitedError with retryAfterSec
+    if (lastError !== null) {
+      const msg = lastError.message;
+      const is429 =
+        msg.includes('429') ||
+        msg.toLowerCase().includes('rate limit') ||
+        msg.toLowerCase().includes('rate_limit');
+      if (is429 && !(lastError instanceof RateLimitedError)) {
+        throw new RateLimitedError(
+          `Rate limited by upstream provider (429): ${msg}`,
+          parseRetryAfterFromMessage(msg)
+        );
       }
     }
 

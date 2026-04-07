@@ -10,6 +10,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import type { ToolDefinition } from './llmClient.js';
 import { SystemPromptBuilder, type CoreMemoryBlock } from './systemPromptBuilder.js';
+import { buildSkillsMetadataBlock } from './tools/skill-handler.js';
 
 // ── Minimal Manifest Types (mirrors Core's AgentManifest) ───────────────────
 
@@ -168,6 +169,9 @@ export function generateSystemPrompt(
 
   // 4. Available Tools (Priority 30, Required)
   builder.addAvailableTools(context.tools || []);
+
+  // 4b. Skills Metadata (Priority 35, Optional) — Tier 1 progressive disclosure
+  builder.addSkillsMetadata(buildSkillsMetadataBlock());
 
   // 5. Tool Usage Guidelines (Priority 40, Required)
   builder.addToolUsageGuidelines();

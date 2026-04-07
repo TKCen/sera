@@ -242,6 +242,126 @@ describe('SessionStore', () => {
     });
   });
 
+  describe('searchMessages', () => {
+    const messageRow = {
+      id: 'm1',
+      session_id: 's1',
+      role: 'user',
+      content: 'What is the capital of France?',
+      metadata: null,
+      created_at: '2026-03-17T10:00:00Z',
+    };
+
+    it('queries with agent_instance_id and ILIKE pattern', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [messageRow],
+      } as unknown as import('pg').QueryResult<Record<string, unknown>>);
+
+      const results = await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'France',
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.content).toBe('What is the capital of France?');
+
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('ILIKE');
+      expect(params![0]).toBe('agent-abc');
+      expect(params![1]).toBe('%France%');
+    });
+
+    it('applies roles filter', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<
+        Record<string, unknown>
+      >);
+
+      await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'test',
+        roles: ['user', 'assistant'],
+      });
+
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('ANY');
+      expect(params).toContainEqual(['user', 'assistant']);
+    });
+
+    it('applies start_date filter', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<
+        Record<string, unknown>
+      >);
+
+      await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'test',
+        startDate: '2026-01-01T00:00:00Z',
+      });
+
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('>=');
+      expect(params).toContain('2026-01-01T00:00:00Z');
+    });
+
+    it('applies end_date filter', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<
+        Record<string, unknown>
+      >);
+
+      await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'test',
+        endDate: '2026-12-31T23:59:59Z',
+      });
+
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('<=');
+      expect(params).toContain('2026-12-31T23:59:59Z');
+    });
+
+    it('clamps limit to max 50', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<
+        Record<string, unknown>
+      >);
+
+      await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'test',
+        limit: 999,
+      });
+
+      const [, params] = mockQuery.mock.calls[0]!;
+      expect(params).toContain(50);
+    });
+
+    it('defaults limit to 10', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<
+        Record<string, unknown>
+      >);
+
+      await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'test',
+      });
+
+      const [, params] = mockQuery.mock.calls[0]!;
+      expect(params).toContain(10);
+    });
+
+    it('returns empty array when no matches', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] } as unknown as import('pg').QueryResult<
+        Record<string, unknown>
+      >);
+
+      const results = await store.searchMessages({
+        agentInstanceId: 'agent-abc',
+        query: 'nonexistent',
+      });
+
+      expect(results).toHaveLength(0);
+    });
+  });
+
   describe('updateSessionTitle', () => {
     it('updates and returns the session', async () => {
       mockQuery.mockResolvedValueOnce({

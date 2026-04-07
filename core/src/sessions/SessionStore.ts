@@ -15,6 +15,7 @@ import type {
   SessionMessage,
   CreateSessionOptions,
   AddMessageOptions,
+  SearchMessagesOptions,
 } from './types.js';
 
 const logger = new Logger('SessionStore');
@@ -161,6 +162,51 @@ export class SessionStore {
        ORDER BY created_at ASC`,
       [sessionId]
     );
+    return result.rows.map((row) => this.rowToMessage(row as Record<string, unknown>));
+  }
+
+  /**
+   * Search messages by text across all sessions belonging to an agent instance.
+   * Uses ILIKE for case-insensitive substring matching.
+   */
+  async searchMessages(opts: SearchMessagesOptions): Promise<SessionMessage[]> {
+    const { agentInstanceId, query: searchQuery, roles, startDate, endDate, limit = 10 } = opts;
+    const clampedLimit = Math.min(limit, 50);
+
+    const conditions: string[] = [`cs.agent_instance_id = $1`, `cm.content ILIKE $2`];
+    const values: unknown[] = [agentInstanceId, `%${searchQuery}%`];
+    let paramIndex = 3;
+
+    if (roles && roles.length > 0) {
+      conditions.push(`cm.role = ANY($${paramIndex})`);
+      values.push(roles);
+      paramIndex++;
+    }
+
+    if (startDate) {
+      conditions.push(`cm.created_at >= $${paramIndex}`);
+      values.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      conditions.push(`cm.created_at <= $${paramIndex}`);
+      values.push(endDate);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.join(' AND ');
+    const sql = `
+      SELECT cm.id, cm.session_id, cm.role, cm.content, cm.metadata, cm.created_at
+      FROM chat_messages cm
+      JOIN chat_sessions cs ON cs.id = cm.session_id
+      WHERE ${whereClause}
+      ORDER BY cm.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+    values.push(clampedLimit);
+
+    const result = await query(sql, values);
     return result.rows.map((row) => this.rowToMessage(row as Record<string, unknown>));
   }
 

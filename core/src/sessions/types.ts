@@ -60,3 +60,12 @@ export interface AddMessageOptions {
   content: string;
   metadata?: Record<string, unknown>;
 }
+
+export interface SearchMessagesOptions {
+  agentInstanceId: string;
+  query: string;
+  roles?: MessageRole[];
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
+}

@@ -26,6 +26,7 @@ export class MCPRegistry {
   private intercom?: IntercomService;
   private watcher?: chokidar.FSWatcher;
   private reloadTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private fileToServerName: Map<string, string> = new Map();
   private onRegisterHooks: ((name: string) => void)[] = [];
   private onUnregisterHooks: ((name: string) => void)[] = [];
 
@@ -192,7 +193,8 @@ export class MCPRegistry {
         filePath,
         setTimeout(async () => {
           this.reloadTimers.delete(filePath);
-          const name = path.basename(filePath).split('.')[0];
+          const name = this.fileToServerName.get(filePath);
+          this.fileToServerName.delete(filePath);
           if (name) {
             logger.info(`MCP manifest removed: ${name}`);
             await this.unregisterClient(name).catch((err) =>
@@ -230,6 +232,7 @@ export class MCPRegistry {
       throw err;
     }
 
+    this.fileToServerName.set(filePath, manifest.metadata.name);
     await this.registerContainerServer(manifest);
   }
 

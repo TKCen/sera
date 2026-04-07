@@ -151,21 +151,34 @@ export class MCPServerManager {
         throw new MCPManifestValidationError(`"mounts" must be an array${ctx}`, 'mounts');
       }
       for (let i = 0; i < obj['mounts'].length; i++) {
-        const m = obj['mounts'][i] as Record<string, unknown>;
+        const m = obj['mounts'][i];
+        if (!m || typeof m !== 'object' || Array.isArray(m)) {
+          throw new MCPManifestValidationError(
+            `mounts[${i}] must be an object${ctx}`,
+            `mounts[${i}]`
+          );
+        }
+        const mount = m as Record<string, unknown>;
         const mCtx = `${ctx} mounts[${i}]`;
-        if (!m['hostPath'] || typeof m['hostPath'] !== 'string') {
+        if (!mount['hostPath'] || typeof mount['hostPath'] !== 'string') {
           throw new MCPManifestValidationError(
             `Missing or invalid "hostPath" string${mCtx}`,
             `mounts[${i}].hostPath`
           );
         }
-        if (!m['containerPath'] || typeof m['containerPath'] !== 'string') {
+        if ((mount['hostPath'] as string).includes('..')) {
+          throw new MCPManifestValidationError(
+            `"hostPath" must not contain path traversal sequences${mCtx}`,
+            `mounts[${i}].hostPath`
+          );
+        }
+        if (!mount['containerPath'] || typeof mount['containerPath'] !== 'string') {
           throw new MCPManifestValidationError(
             `Missing or invalid "containerPath" string${mCtx}`,
             `mounts[${i}].containerPath`
           );
         }
-        if (m['mode'] !== undefined && m['mode'] !== 'ro' && m['mode'] !== 'rw') {
+        if (mount['mode'] !== undefined && mount['mode'] !== 'ro' && mount['mode'] !== 'rw') {
           throw new MCPManifestValidationError(
             `"mode" must be "ro" or "rw"${mCtx}`,
             `mounts[${i}].mode`
@@ -186,6 +199,24 @@ export class MCPServerManager {
         throw new MCPManifestValidationError(
           `"healthCheck.command" must be an array of strings${ctx}`,
           'healthCheck.command'
+        );
+      }
+      if (hc['interval'] !== undefined && typeof hc['interval'] !== 'string') {
+        throw new MCPManifestValidationError(
+          `"healthCheck.interval" must be a string${ctx}`,
+          'healthCheck.interval'
+        );
+      }
+      if (hc['timeout'] !== undefined && typeof hc['timeout'] !== 'string') {
+        throw new MCPManifestValidationError(
+          `"healthCheck.timeout" must be a string${ctx}`,
+          'healthCheck.timeout'
+        );
+      }
+      if (hc['retries'] !== undefined && typeof hc['retries'] !== 'number') {
+        throw new MCPManifestValidationError(
+          `"healthCheck.retries" must be a number${ctx}`,
+          'healthCheck.retries'
         );
       }
     }

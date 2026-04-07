@@ -133,6 +133,53 @@ describe('LLMClient', () => {
       );
     });
 
+    it('throws BudgetExceededError on HTTP 429 when error is a plain string (Gemini/Google pattern)', async () => {
+      const error = new AxiosError('Request failed');
+      error.response = {
+        status: 429,
+        // llmProxy returns error as a string 'rate_limited', not an object
+        data: { error: 'rate_limited', message: 'Upstream provider is rate-limited.' },
+        statusText: 'Too Many Requests',
+        headers: {},
+        config: {} as any,
+      };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(
+        BudgetExceededError
+      );
+    });
+
+    it('BudgetExceededError message includes retryAfter when proxy provides it', async () => {
+      const error = new AxiosError('Request failed');
+      error.response = {
+        status: 429,
+        data: { error: 'rate_limited', retryAfter: 60 },
+        statusText: 'Too Many Requests',
+        headers: {},
+        config: {} as any,
+      };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(
+        /Retry after: 60s/
+      );
+    });
+
+    it('BudgetExceededError message includes HTTP status code', async () => {
+      const error = new AxiosError('Request failed');
+      error.response = {
+        status: 429,
+        data: { error: 'rate_limited' },
+        statusText: 'Too Many Requests',
+        headers: {},
+        config: {} as any,
+      };
+      mockPost.mockRejectedValueOnce(error);
+      const client = new LLMClient('http://core:3000', 'test-token', 'gpt-4');
+      await expect(client.chat([{ role: 'user', content: 'Hi' }])).rejects.toThrow(/HTTP 429/);
+    });
+
     it('throws ProviderUnavailableError on HTTP 503', async () => {
       const error = new AxiosError('Service Unavailable');
       error.response = {

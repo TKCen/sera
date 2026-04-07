@@ -321,12 +321,23 @@ export class LLMClient implements ILLMClient {
 
         const status = err.response?.status;
         const body = err.response?.data as Record<string, unknown> | undefined;
-        const errorObj = body?.['error'] as Record<string, unknown> | undefined;
-        const errorMsg = errorObj?.['message'] as string | undefined;
+        // `body['error']` may be a string (e.g. 'rate_limited') or an object with { message, code }
+        const rawError = body?.['error'];
+        const errorObj =
+          rawError !== null && typeof rawError === 'object'
+            ? (rawError as Record<string, unknown>)
+            : undefined;
+        const errorMsg: string | undefined =
+          typeof rawError === 'string' ? rawError : (errorObj?.['message'] as string | undefined);
         const errorCode = errorObj?.['code'] as string | undefined;
+        // Retry-After in seconds from the proxy response body (set by llmProxy when available)
+        const retryAfterSec = body?.['retryAfter'] as number | undefined;
 
         if (status === 429) {
-          throw new BudgetExceededError(`Token budget exceeded: ${errorMsg ?? 'rate limited'}`);
+          const retryHint = retryAfterSec !== undefined ? ` Retry after: ${retryAfterSec}s.` : '';
+          throw new BudgetExceededError(
+            `Rate limited by upstream provider (HTTP 429): ${errorMsg ?? 'rate_limited'}.${retryHint}`
+          );
         }
 
         if (status === 503) {

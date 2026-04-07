@@ -4,7 +4,8 @@ import yaml from 'js-yaml';
 import chokidar from 'chokidar';
 import { MCPClient, type MCPClientOptions } from './client.js';
 import { Logger } from '../lib/logger.js';
-import type { MCPServerManager, MCPServerManifest } from './MCPServerManager.js';
+import { MCPServerManager, MCPManifestValidationError } from './MCPServerManager.js';
+import type { MCPServerManifest } from './MCPServerManager.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 
 const logger = new Logger('MCPRegistry');
@@ -25,6 +26,7 @@ export class MCPRegistry {
   private intercom?: IntercomService;
   private watcher?: chokidar.FSWatcher;
   private reloadTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private fileToServerName: Map<string, string> = new Map();
   private onRegisterHooks: ((name: string) => void)[] = [];
   private onUnregisterHooks: ((name: string) => void)[] = [];
 
@@ -191,7 +193,8 @@ export class MCPRegistry {
         filePath,
         setTimeout(async () => {
           this.reloadTimers.delete(filePath);
-          const name = path.basename(filePath).split('.')[0];
+          const name = this.fileToServerName.get(filePath);
+          this.fileToServerName.delete(filePath);
           if (name) {
             logger.info(`MCP manifest removed: ${name}`);
             await this.unregisterClient(name).catch((err) =>
@@ -216,10 +219,20 @@ export class MCPRegistry {
 
   private async loadManifest(filePath: string) {
     const content = fs.readFileSync(filePath, 'utf8');
-    const manifest = filePath.endsWith('.json')
-      ? JSON.parse(content)
-      : (yaml.load(content) as MCPServerManifest);
+    const raw = filePath.endsWith('.json') ? (JSON.parse(content) as unknown) : yaml.load(content);
 
+    let manifest: MCPServerManifest;
+    try {
+      manifest = MCPServerManager.validateManifest(raw, filePath);
+    } catch (err) {
+      if (err instanceof MCPManifestValidationError) {
+        logger.error(`Invalid MCP manifest at ${filePath}: ${err.message}`);
+        return;
+      }
+      throw err;
+    }
+
+    this.fileToServerName.set(filePath, manifest.metadata.name);
     await this.registerContainerServer(manifest);
   }
 

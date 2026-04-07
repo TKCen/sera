@@ -118,3 +118,28 @@ export function safeStringify(value: unknown, indent?: number): string {
     indent
   );
 }
+
+/**
+ * Recursively sort all object keys before serialization, producing a
+ * deterministic byte-identical output for logically equivalent payloads.
+ * Used for LLM request bodies to maximize KV cache hit rates across
+ * providers — see docs/designs/kv-cache-optimization.md §P2.1.
+ *
+ * Also handles circular references (same as safeStringify).
+ */
+export function stableStringify(value: unknown, indent?: number): string {
+  const seen = new WeakSet();
+  return JSON.stringify(sortKeys(value, seen), null, indent);
+}
+
+function sortKeys(val: unknown, seen: WeakSet<WeakKey>): unknown {
+  if (val === null || typeof val !== 'object') return val;
+  if (seen.has(val)) return '[Circular]';
+  seen.add(val);
+  if (Array.isArray(val)) return val.map((item) => sortKeys(item, seen));
+  return Object.fromEntries(
+    Object.entries(val as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => [k, sortKeys(v, seen)])
+  );
+}

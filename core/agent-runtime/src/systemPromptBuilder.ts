@@ -250,18 +250,23 @@ export class SystemPromptBuilder {
     });
   }
 
-  /** Time & Context: current time/date (Required, Priority 60) */
+  /** Time & Context: current time/date (Required, Priority 135) */
   addTimeContext(timezone: string = 'UTC'): this {
     const now = new Date();
+    // Truncate to hourly granularity for KV cache stability — sub-hour
+    // precision is rarely needed in the system prompt and full-precision
+    // timestamps invalidate the entire cache suffix on every call.
+    const hourTruncated = new Date(now);
+    hourTruncated.setMinutes(0, 0, 0);
     const lines = [
       '## System Context',
-      `- Current UTC Time: ${now.toISOString()}`,
+      `- Current UTC Time: ${hourTruncated.toISOString()}`,
       `- Local Timezone: ${timezone}`,
-      `- Current Date: ${now.toISOString().split('T')[0]}`,
+      `- Current Date: ${hourTruncated.toISOString().split('T')[0]}`,
     ];
     return this.addSection({
       id: 'time-context',
-      priority: 60,
+      priority: 135,
       content: lines.join('\n'),
       required: true,
     });

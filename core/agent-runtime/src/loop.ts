@@ -286,6 +286,10 @@ export class ReasoningLoop {
       this.toolDefs = this.allToolDefs;
     }
 
+    // Sort tools alphabetically for deterministic serialization order,
+    // improving KV cache hit rates — see kv-cache-optimization.md §P1.2.
+    this.toolDefs = this.toolDefs.sort((a, b) => a.function.name.localeCompare(b.function.name));
+
     log(
       'info',
       `Tool gating: groups=[${[...activeGroups].join(',')}] active=${this.toolDefs.length}/${this.allToolDefs.length}`

@@ -128,9 +128,16 @@ describe('ContextAssembler', () => {
     ] as unknown as never[];
     const result = await assembler.assemble('agent-1', messages);
 
+    // System message contains the skills prompt but NOT the memory (injected separately)
     expect(result[0]!.content).toContain('Prompt with Skills');
-    expect(result[0]!.content).toContain('<injected_memory>');
-    expect(result[0]!.content).toContain(
+    expect(result[0]!.content).not.toContain('<injected_memory>');
+    // Memory is injected as a separate user message before the last user message
+    // Input: [system, user("hello")] → Output: [system, user(memory), user("hello")]
+    expect(result).toHaveLength(3);
+    expect(result[1]!.role).toBe('user');
+    expect(result[1]!.content).toContain('[Retrieved context]');
+    expect(result[1]!.content).toContain('<injected_memory>');
+    expect(result[1]!.content).toContain(
       '<memory source="personal:agent-1" id="1" relevance="0.900">Memory Content</memory>'
     );
   });

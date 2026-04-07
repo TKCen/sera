@@ -47,6 +47,13 @@ export interface TaskInput {
   task: string;
   context?: string;
   history?: ChatMessage[];
+  /**
+   * Whether to use LLM streaming for this task.
+   * Defaults to true for backwards compatibility.
+   * Set to false for channel adapters that don't support streaming
+   * (e.g. webhooks, API callers that want a single complete response).
+   */
+  streaming?: boolean;
 }
 
 export interface TaskOutput {
@@ -236,7 +243,7 @@ export class ReasoningLoop {
    * Run the reasoning loop for the given task.
    */
   async run(input: TaskInput): Promise<TaskOutput> {
-    const { taskId, task, context, history = [] } = input;
+    const { taskId, task, context, history = [], streaming = true } = input;
 
     // Fetch core memory before starting the loop
     await this.refreshCoreMemory();
@@ -453,7 +460,9 @@ export class ReasoningLoop {
                 flushTools,
                 this.manifest.model.temperature,
                 this.manifest.model.thinkingLevel as ThinkingLevel | undefined,
-                30_000
+                30_000,
+                undefined,
+                streaming
               );
 
               if (flushResponse.toolCalls && flushResponse.toolCalls.length > 0) {
@@ -525,14 +534,20 @@ export class ReasoningLoop {
               messages,
               this.toolDefs,
               this.manifest.model.temperature,
-              this.manifest.model.thinkingLevel as ThinkingLevel | undefined
+              this.manifest.model.thinkingLevel as ThinkingLevel | undefined,
+              undefined,
+              undefined,
+              streaming
             );
           } else {
             response = await this.llm.chat(
               messages,
               undefined,
               this.manifest.model.temperature,
-              this.manifest.model.thinkingLevel as ThinkingLevel | undefined
+              this.manifest.model.thinkingLevel as ThinkingLevel | undefined,
+              undefined,
+              undefined,
+              streaming
             );
           }
         } catch (llmErr) {

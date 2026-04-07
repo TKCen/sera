@@ -126,7 +126,8 @@ export interface ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
-    model?: string
+    model?: string,
+    streaming?: boolean
   ): Promise<LLMResponse>;
 }
 
@@ -167,7 +168,8 @@ export class LLMClient implements ILLMClient {
     temperature?: number,
     thinkingLevel?: ThinkingLevel,
     timeoutMs?: number,
-    model?: string
+    model?: string,
+    streaming: boolean = true
   ): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: model || this.model,
@@ -177,7 +179,7 @@ export class LLMClient implements ILLMClient {
         ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
         ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
       })),
-      stream: true,
+      stream: streaming,
     };
 
     if (tools && tools.length > 0) {
@@ -206,6 +208,57 @@ export class LLMClient implements ILLMClient {
       // Bun's JSON.stringify throws on cycles; safeStringify handles them gracefully.
       const safeBody = safeStringify(body);
 
+      if (!streaming) {
+        // ── Non-streaming path ─────────────────────────────────────────────
+        const res = await this.http.post<{
+          choices: Array<{
+            message: {
+              content: string | null;
+              tool_calls?: Array<{
+                id: string;
+                type: string;
+                function: { name: string; arguments: string };
+              }>;
+            };
+          }>;
+          usage?: {
+            prompt_tokens: number;
+            completion_tokens: number;
+            cache_creation_input_tokens?: number;
+            cache_read_input_tokens?: number;
+            total_tokens: number;
+          };
+        }>('/chat/completions', safeBody, {
+          ...(timeoutMs ? { timeout: timeoutMs } : {}),
+        });
+
+        const choice = res.data.choices[0];
+        const content = choice?.message.content ?? '';
+        const rawUsage = res.data.usage;
+        const usage: LLMResponse['usage'] = rawUsage
+          ? {
+              promptTokens: rawUsage.prompt_tokens,
+              completionTokens: rawUsage.completion_tokens,
+              cacheCreationTokens: rawUsage.cache_creation_input_tokens ?? 0,
+              cacheReadTokens: rawUsage.cache_read_input_tokens ?? 0,
+              totalTokens: rawUsage.total_tokens,
+            }
+          : undefined;
+
+        const rawToolCalls = choice?.message.tool_calls;
+        const toolCalls: ToolCall[] | undefined =
+          rawToolCalls && rawToolCalls.length > 0
+            ? rawToolCalls.map((tc) => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.function.name, arguments: tc.function.arguments },
+              }))
+            : undefined;
+
+        return { content, toolCalls, usage };
+      }
+
+      // ── Streaming path (default) ───────────────────────────────────────
       const res = await this.http.post('/chat/completions', safeBody, {
         responseType: 'stream',
         ...(timeoutMs ? { timeout: timeoutMs } : {}),

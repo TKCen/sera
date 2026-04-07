@@ -362,6 +362,23 @@ export class SystemPromptBuilder {
     });
   }
 
+  /**
+   * Skills Metadata: Tier 1 compact listing (Optional, Priority 35).
+   *
+   * Injects only skill names and descriptions so agents know what is
+   * available without spending tokens on full skill content. Full content
+   * is loaded on demand via the view_skill tool.
+   */
+  addSkillsMetadata(metadataBlock: string): this {
+    if (!metadataBlock) return this;
+    return this.addSection({
+      id: 'skills-metadata',
+      priority: 35,
+      content: metadataBlock,
+      required: false,
+    });
+  }
+
   /** Output Format: preferences (Optional, Priority 130) */
   addOutputFormat(format?: string): this {
     if (!format) return this;

@@ -308,10 +308,11 @@ describe('RuntimeToolExecutor', () => {
   describe('getToolDefinitions()', () => {
     it('returns all built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(17);
+      expect(tools.length).toBe(20);
       const names = tools.map((t) => t.function.name).sort();
       expect(names).toEqual([
         'code-eval',
+        'conversation-search',
         'file-delete',
         'file-list',
         'file-read',
@@ -320,6 +321,7 @@ describe('RuntimeToolExecutor', () => {
         'grep',
         'http-request',
         'image-view',
+        'list_skills',
         'pdf-read',
         'read_file',
         'run-tool',
@@ -327,6 +329,7 @@ describe('RuntimeToolExecutor', () => {
         'skill-search',
         'spawn-subagent',
         'tool-search',
+        'view_skill',
         'web-fetch',
       ]);
     });

@@ -308,7 +308,7 @@ describe('RuntimeToolExecutor', () => {
   describe('getToolDefinitions()', () => {
     it('returns all built-in tools when no filter given', () => {
       const tools = executor.getToolDefinitions();
-      expect(tools.length).toBe(16);
+      expect(tools.length).toBe(17);
       const names = tools.map((t) => t.function.name).sort();
       expect(names).toEqual([
         'code-eval',
@@ -324,6 +324,7 @@ describe('RuntimeToolExecutor', () => {
         'read_file',
         'run-tool',
         'shell-exec',
+        'skill-search',
         'spawn-subagent',
         'tool-search',
         'web-fetch',

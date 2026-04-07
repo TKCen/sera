@@ -29,6 +29,7 @@ import type { CoreMemoryBlock } from './systemPromptBuilder.js';
 import { loadBootContext } from './bootContext.js';
 import { ContextManager } from './contextManager.js';
 import { ToolLoopDetector } from './toolLoopDetector.js';
+import { SessionStore } from './session.js';
 import { log } from './logger.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -155,6 +156,7 @@ export class ReasoningLoop {
   /** All tools including deferred ones (for tool-search). */
   private allToolDefs: ToolDefinition[];
   private contextManager: ContextManager;
+  private sessionStore: SessionStore;
   private bootContext: string = '';
   private coreMemoryBlocks: CoreMemoryBlock[] = [];
 
@@ -175,6 +177,8 @@ export class ReasoningLoop {
     this.contextManager = new ContextManager(manifest.model.name);
 
     const workspacePath = process.env['WORKSPACE_PATH'] || '/workspace';
+    this.sessionStore = new SessionStore(workspacePath);
+    this.sessionStore.cleanup();
     this.bootContext = loadBootContext(manifest, workspacePath);
 
     // Initial system prompt — will be refreshed per task with current time/tools
@@ -352,6 +356,21 @@ export class ReasoningLoop {
       role: 'user',
       content: context ? `${context}\n\n${task}` : task,
     });
+
+    // ── Session resume ─────────────────────────────────────────────────────
+    const savedSession = this.sessionStore.load();
+    let sessionCreatedAt: string | undefined;
+    if (savedSession && savedSession.taskId === taskId) {
+      const restored = this.sessionStore.deserialize(savedSession);
+      messages.length = 0;
+      messages.push(...restored);
+      totalPromptTokens = savedSession.totalUsage.promptTokens;
+      totalCompletionTokens = savedSession.totalUsage.completionTokens;
+      sessionCreatedAt = savedSession.createdAt;
+      log('info', `Resumed session for task ${taskId} (${restored.length} messages)`);
+    } else {
+      sessionCreatedAt = new Date().toISOString();
+    }
 
     const toolNames = this.toolDefs.map((t) => t.function.name).join(', ') || 'none';
     await think(
@@ -681,6 +700,18 @@ export class ReasoningLoop {
           );
         }
 
+        // Auto-save session after each iteration (debounced)
+        const agentId = process.env['AGENT_INSTANCE_ID'] || this.manifest.metadata.name;
+        this.sessionStore.save(
+          this.sessionStore.serialize(
+            messages,
+            agentId,
+            taskId,
+            { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens },
+            sessionCreatedAt
+          )
+        );
+
         // Emit chain-of-thought reasoning if present (e.g. Qwen / DeepSeek)
         if (response.reasoning) {
           await this.centrifugo.publishThought('observe', response.reasoning, iteration);
@@ -918,6 +949,10 @@ export class ReasoningLoop {
           `ReasoningLoop complete after ${iteration} iteration(s) — ${finalReply.length} chars`
         );
 
+        // Clean up session file on successful completion
+        this.sessionStore.flush();
+        this.sessionStore.delete();
+
         return {
           taskId,
           result: finalReply,
@@ -934,6 +969,19 @@ export class ReasoningLoop {
         'reflect',
         `Reached maximum iterations (${MAX_ITERATIONS}) — stopping`,
         MAX_ITERATIONS
+      );
+
+      // Force-save session so it can be resumed
+      this.sessionStore.flush();
+      const agentIdFinal = process.env['AGENT_INSTANCE_ID'] || this.manifest.metadata.name;
+      this.sessionStore.saveSync(
+        this.sessionStore.serialize(
+          messages,
+          agentIdFinal,
+          taskId,
+          { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens },
+          sessionCreatedAt
+        )
       );
 
       return {
@@ -963,6 +1011,19 @@ export class ReasoningLoop {
       if (err instanceof BudgetExceededError) exitReason = 'budget_exceeded';
       else if (err instanceof ProviderUnavailableError) exitReason = 'provider_unavailable';
       else if (err instanceof ContextOverflowError) exitReason = 'context_overflow';
+
+      // Force-save session so it can be resumed after error
+      this.sessionStore.flush();
+      const agentIdErr = process.env['AGENT_INSTANCE_ID'] || this.manifest.metadata.name;
+      this.sessionStore.saveSync(
+        this.sessionStore.serialize(
+          messages,
+          agentIdErr,
+          taskId,
+          { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens },
+          sessionCreatedAt
+        )
+      );
 
       return {
         taskId,

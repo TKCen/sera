@@ -99,6 +99,86 @@
       "description": "Google Gemini 3.1 Flash Lite Preview via AI Studio — fast + cheap",
       "contextWindow": 1048576,
       "maxTokens": 8192
+    },
+    {
+      "modelName": "minimax/minimax-m2.1:free",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "MiniMax M2.1 (free) via Kilo Gateway — strong reasoning, zero cost",
+      "contextWindow": 131072,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "z-ai/glm-4.7:free",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "GLM 4.7 (free) via Kilo Gateway (Z.AI) — agent-centric, zero cost",
+      "contextWindow": 131072,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "moonshotai/kimi-k2.5",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "Kimi K2.5 (free) via Kilo Gateway (MoonshotAI) — agentic capabilities, zero cost",
+      "contextWindow": 131072,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "giga-potato",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "Giga Potato (free) via Kilo Gateway — zero cost",
+      "contextWindow": 131072,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "arcee-ai/trinity-large-preview:free",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "Arcee Trinity Large Preview (free) via Kilo Gateway — zero cost",
+      "contextWindow": 131072,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "mistralai/devstral-small",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "Mistral Devstral Small via Kilo Gateway — agentic coding, $0.07/$0.10 per 1M tokens",
+      "contextWindow": 131072,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "meta-llama/llama-4-maverick",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "Llama 4 Maverick via Kilo Gateway (Meta) — multimodal, $0.16/$0.60 per 1M tokens",
+      "contextWindow": 1048576,
+      "maxTokens": 8192
+    },
+    {
+      "modelName": "deepseek/deepseek-v3-0324",
+      "api": "openai-completions",
+      "provider": "kilocode",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "apiKeyEnvVar": "KILOCODE_API_KEY",
+      "description": "DeepSeek v3 0324 via Kilo Gateway — strong coding, $0.30/$0.88 per 1M tokens",
+      "contextWindow": 131072,
+      "maxTokens": 8192
     }
   ]
 }

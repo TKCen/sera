@@ -7,7 +7,7 @@
 
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import { log } from './logger.js';
-import { safeStringify } from './json.js';
+import { safeStringify, stableStringify } from './json.js';
 import {
   pipe,
   wrapIdleTimeout,
@@ -204,9 +204,9 @@ export class LLMClient implements ILLMClient {
     }
 
     try {
-      // Pre-serialize to detect and strip cyclic references before axios tries JSON.stringify.
-      // Bun's JSON.stringify throws on cycles; safeStringify handles them gracefully.
-      const safeBody = safeStringify(body);
+      // Pre-serialize with sorted keys for deterministic output (improves KV
+      // cache hit rates) and handles cyclic references gracefully.
+      const safeBody = stableStringify(body);
 
       if (!streaming) {
         // ── Non-streaming path ─────────────────────────────────────────────

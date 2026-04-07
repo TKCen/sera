@@ -241,7 +241,10 @@ export class ContextAssembler {
       });
     }
 
-    const newSystemContent = memoryContext ? `${skillsPrompt}\n\n${memoryContext}` : skillsPrompt;
+    // RAG memory is injected as a separate user-role message rather than
+    // appended to the system prompt, keeping the system prefix stable across
+    // turns for KV cache efficiency — see docs/designs/kv-cache-optimization.md §P0.2.
+    const newSystemContent = skillsPrompt;
 
     // ── 4. Emit token budget visualization for context debugger ─────────────
     const estimateTokens = (text: string) => Math.ceil(text.length / 4);
@@ -286,7 +289,23 @@ export class ContextAssembler {
       durationMs: totalDurationMs,
     });
 
-    return messages.map((m) => (m.role === 'system' ? { ...m, content: newSystemContent } : m));
+    const enrichedMessages = messages.map((m) =>
+      m.role === 'system' ? { ...m, content: newSystemContent } : m
+    );
+
+    // Inject RAG memory as a separate user message before the last user message
+    // so the system prompt prefix stays cache-friendly across turns.
+    if (memoryContext) {
+      const lastUserIdx = enrichedMessages.findLastIndex((m) => m.role === 'user');
+      if (lastUserIdx !== -1) {
+        enrichedMessages.splice(lastUserIdx, 0, {
+          role: 'user' as const,
+          content: `[Retrieved context]\n${memoryContext}`,
+        });
+      }
+    }
+
+    return enrichedMessages;
   }
 
   /**

@@ -205,15 +205,19 @@ describe('SystemPromptBuilder', () => {
       builder.addMemoryInstructions();
       builder.addMemoryManagementInstructions();
       builder.addTimeContext();
+      builder.addOutputFormat('Markdown');
       const prompt = builder.build();
 
       const memIdx = prompt.indexOf('## Memory & Knowledge');
       const mgmtIdx = prompt.indexOf('## Memory Management');
+      const outputIdx = prompt.indexOf('## Output Format');
       const timeIdx = prompt.indexOf('## System Context');
 
       expect(memIdx).toBeGreaterThanOrEqual(0);
       expect(mgmtIdx).toBeGreaterThan(memIdx);
-      expect(timeIdx).toBeGreaterThan(mgmtIdx);
+      // time-context (priority 135) now appears after output-format (priority 130)
+      expect(outputIdx).toBeGreaterThan(mgmtIdx);
+      expect(timeIdx).toBeGreaterThan(outputIdx);
     });
 
     it('is not dropped when token budget is tight (required=true)', () => {
@@ -225,6 +229,32 @@ describe('SystemPromptBuilder', () => {
       const prompt = builder.build(5);
 
       expect(prompt).toContain('## Memory Management');
+    });
+  });
+
+  describe('Time Context', () => {
+    it('truncates timestamps to hourly granularity for cache stability', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addTimeContext();
+      const prompt = builder.build();
+
+      // The timestamp should have :00:00.000Z (minutes/seconds/ms zeroed)
+      const timeMatch = prompt.match(/Current UTC Time: (.+)/);
+      expect(timeMatch).toBeTruthy();
+      const timestamp = timeMatch![1]!;
+      expect(timestamp).toMatch(/T\d{2}:00:00\.000Z$/);
+    });
+
+    it('places time-context after output-format (priority 135 > 130)', () => {
+      const builder = new SystemPromptBuilder();
+      builder.addTimeContext();
+      builder.addOutputFormat('JSON');
+      const prompt = builder.build();
+
+      const outputIdx = prompt.indexOf('## Output Format');
+      const timeIdx = prompt.indexOf('## System Context');
+      expect(outputIdx).toBeGreaterThanOrEqual(0);
+      expect(timeIdx).toBeGreaterThan(outputIdx);
     });
   });
 

@@ -552,12 +552,18 @@ export class ContextManager {
     const droppedMessages: ChatMessage[] = [];
     const keepLimit = Math.min(nonSystemMessages.length, this.preserveRecentMessages);
 
-    // Initial drop to reach target (before accounting for summary overhead)
+    // Drop messages in groups of COMPACTION_STEP from the oldest end instead
+    // of shifting one-by-one. Stepped compaction improves KV cache hit rates
+    // by reducing the frequency of prefix changes — see kv-cache-optimization.md §P1.1.
+    const COMPACTION_STEP = 4;
     while (
       nonSystemMessages.length > keepLimit &&
       this.countMessageTokens([...systemMessages, ...nonSystemMessages]) >= targetTokens
     ) {
-      droppedMessages.push(nonSystemMessages.shift()!);
+      const toDrop = Math.min(COMPACTION_STEP, nonSystemMessages.length - keepLimit);
+      for (let i = 0; i < toDrop; i++) {
+        droppedMessages.push(nonSystemMessages.shift()!);
+      }
     }
 
     // Force at least one drop if we are over limit, to trigger summary injection logic

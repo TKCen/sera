@@ -9,7 +9,7 @@
 import type { ToolDefinition } from '../llmClient.js';
 
 export const TOOL_GROUPS: Record<string, string[]> = {
-  core: ['tool-search', 'skill-search'],
+  core: ['tool-search', 'skill-search', 'list_skills', 'view_skill', 'conversation-search'],
   memory: ['knowledge-store', 'knowledge-query'],
   filesystem: ['file-read', 'read_file', 'file-write', 'file-list', 'file-delete', 'glob', 'grep'],
   web: ['web-fetch', 'http-request'],
@@ -407,6 +407,81 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
           tag: {
             type: 'string',
             description: 'Filter by tag (e.g., "research", "engineering").',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_skills',
+      description:
+        'List all available skills with their names and descriptions (Tier 1 metadata). ' +
+        'Use this to discover what skills are available, then call view_skill to get full details.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'view_skill',
+      description:
+        'Get the full content (Tier 2) of a named skill. ' +
+        'Returns the complete skill definition including instructions and parameters. ' +
+        'Optionally loads supporting reference files (Tier 3) when include_references is true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'The skill name to load (as returned by list_skills).',
+          },
+          include_references: {
+            type: 'boolean',
+            description: 'If true, also load supporting reference files from the skill package.',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'conversation-search',
+      description:
+        'Search your own conversation history for past messages. ' +
+        'Useful for recalling what was discussed, finding previous decisions, or reviewing prior tool results. ' +
+        'Returns matching messages ordered by most recent first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Text to search for in conversation messages (case-insensitive).',
+          },
+          roles: {
+            type: 'array',
+            items: { type: 'string', enum: ['user', 'assistant', 'tool', 'system'] },
+            description: 'Filter by message role. Defaults to all roles.',
+          },
+          start_date: {
+            type: 'string',
+            description: 'ISO 8601 start date filter (e.g. "2025-01-01T00:00:00Z").',
+          },
+          end_date: {
+            type: 'string',
+            description: 'ISO 8601 end date filter (e.g. "2025-12-31T23:59:59Z").',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results to return. Default 10, max 50.',
           },
         },
         required: ['query'],

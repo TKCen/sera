@@ -41,6 +41,48 @@ export function createSessionRouter(sessionStore: SessionStore): Router {
   });
 
   /**
+   * Search messages across all sessions for a given agent instance.
+   * GET /api/sessions/search?agentInstanceId=...&q=...&roles=user,assistant&startDate=...&endDate=...&limit=10
+   *
+   * Used by the conversation_search built-in tool in agent-runtime.
+   */
+  router.get('/search', async (req, res) => {
+    try {
+      const agentInstanceId = req.query['agentInstanceId'] as string | undefined;
+      const q = req.query['q'] as string | undefined;
+
+      if (!agentInstanceId) {
+        return res.status(400).json({ error: 'agentInstanceId is required' });
+      }
+      if (!q) {
+        return res.status(400).json({ error: 'q (search query) is required' });
+      }
+
+      const rolesRaw = req.query['roles'] as string | undefined;
+      const roles = rolesRaw
+        ? (rolesRaw.split(',').map((r) => r.trim()) as ('user' | 'assistant' | 'system' | 'tool')[])
+        : undefined;
+      const startDate = req.query['startDate'] as string | undefined;
+      const endDate = req.query['endDate'] as string | undefined;
+      const limitRaw = req.query['limit'] as string | undefined;
+      const limit = limitRaw ? parseInt(limitRaw, 10) : 10;
+
+      const messages = await sessionStore.searchMessages({
+        agentInstanceId,
+        query: q,
+        ...(roles !== undefined ? { roles } : {}),
+        ...(startDate !== undefined ? { startDate } : {}),
+        ...(endDate !== undefined ? { endDate } : {}),
+        limit,
+      });
+
+      res.json(messages);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
    * Get a session with its messages.
    * GET /api/sessions/:id
    */

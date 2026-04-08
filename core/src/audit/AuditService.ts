@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { pool } from '../lib/database.js';
 import { Logger } from '../lib/logger.js';
 import { validatePayload } from './schemas.js';
+import { QueryBuilder } from '../lib/query-builder.js';
 
 const logger = new Logger('AuditService');
 
@@ -230,34 +231,33 @@ export class AuditService {
     offset?: number;
   }): Promise<{ entries: AuditRecord[]; total: number }> {
     const { actorId, eventType, from, to, limit = 50, offset = 0 } = filters;
-    const conditions: string[] = [];
-    const params: unknown[] = [];
+    const qb = new QueryBuilder();
 
     if (actorId) {
-      params.push(actorId);
-      conditions.push(`actor_id = $${params.length}`);
+      qb.addCondition('actor_id = ?', actorId);
     }
     if (eventType) {
-      params.push(eventType);
-      conditions.push(`event_type = $${params.length}`);
+      qb.addCondition('event_type = ?', eventType);
     }
     if (from) {
-      params.push(new Date(from));
-      conditions.push(`timestamp >= $${params.length}`);
+      qb.addCondition('timestamp >= ?', new Date(from));
     }
     if (to) {
-      params.push(new Date(to));
-      conditions.push(`timestamp <= $${params.length}`);
+      qb.addCondition('timestamp <= ?', new Date(to));
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause = qb.buildWhere();
+    const params = qb.getParams();
 
-    const countRes = await pool.query(`SELECT COUNT(*) FROM audit_trail ${whereClause}`, params);
+    const countRes = await pool.query(`SELECT COUNT(*) FROM audit_trail${whereClause}`, params);
     const total = parseInt(countRes.rows[0].count, 10);
 
+    const limitPlaceholder = qb.addParam(limit);
+    const offsetPlaceholder = qb.addParam(offset);
+
     const entriesRes = await pool.query(
-      `SELECT * FROM audit_trail ${whereClause} ORDER BY sequence DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-      [...params, limit, offset]
+      `SELECT * FROM audit_trail${whereClause} ORDER BY sequence DESC LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
+      qb.getParams()
     );
 
     return { entries: entriesRes.rows, total };

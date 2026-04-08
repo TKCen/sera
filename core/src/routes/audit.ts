@@ -1,6 +1,19 @@
 import { Router } from 'express';
 import { AuditService } from '../audit/AuditService.js';
 import { requireRole } from '../auth/authMiddleware.js';
+import { z } from 'zod';
+import { QueryBuilder } from '../lib/query-builder.js';
+
+const AuditQuerySchema = z.object({
+  actorId: z.string().optional(),
+  eventType: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+  principalId: z.string().optional(),
+  delegationId: z.string().optional(),
+});
 
 /**
  * Creates the audit trail router.
@@ -16,48 +29,56 @@ export const createAuditRouter = (): Router => {
    */
   router.get('/', requireRole(['admin']), async (req, res) => {
     try {
-      const { actorId, eventType, from, to, limit, offset, principalId, delegationId } = req.query;
+      const {
+        actorId,
+        eventType,
+        from,
+        to,
+        limit,
+        offset,
+        principalId,
+        delegationId,
+      } = AuditQuerySchema.parse(req.query);
 
       // Delegation-specific filters use raw SQL via pool; otherwise use AuditService
       if (principalId || delegationId) {
         const { pool } = await import('../lib/database.js');
-        const conditions: string[] = [];
-        const params: unknown[] = [];
+        const qb = new QueryBuilder();
 
         if (principalId) {
-          params.push(principalId as string);
-          conditions.push(`acting_context->>'principal'->>'id' = $${params.length}`);
+          qb.addCondition("acting_context->>'principal'->>'id' = ?", principalId);
         }
         if (delegationId) {
-          params.push(delegationId as string);
-          conditions.push(`acting_context->>'delegationTokenId' = $${params.length}`);
+          qb.addCondition("acting_context->>'delegationTokenId' = ?", delegationId);
         }
 
-        const whereClause = `WHERE ${conditions.join(' AND ')}`;
-        const limitVal = limit ? parseInt(limit as string, 10) : 50;
-        const offsetVal = offset ? parseInt(offset as string, 10) : 0;
+        const whereClause = qb.buildWhere();
+        const params = qb.getParams();
 
         const countRes = await pool.query(
-          `SELECT COUNT(*) FROM audit_trail ${whereClause}`,
+          `SELECT COUNT(*) FROM audit_trail${whereClause}`,
           params
         );
         const total = parseInt(countRes.rows[0].count, 10);
 
+        const limitPlaceholder = qb.addParam(limit);
+        const offsetPlaceholder = qb.addParam(offset);
+
         const entriesRes = await pool.query(
-          `SELECT * FROM audit_trail ${whereClause} ORDER BY sequence DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-          [...params, limitVal, offsetVal]
+          `SELECT * FROM audit_trail${whereClause} ORDER BY sequence DESC LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
+          qb.getParams()
         );
 
         return res.json({ entries: entriesRes.rows, total });
       }
 
       const result = await auditService.getEntries({
-        actorId: actorId as string,
-        eventType: eventType as string,
-        from: from as string,
-        to: to as string,
-        limit: limit ? parseInt(limit as string, 10) : 50,
-        offset: offset ? parseInt(offset as string, 10) : 0,
+        actorId,
+        eventType,
+        from,
+        to,
+        limit,
+        offset,
       });
 
       res.json(result);

@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { validateProviderBaseUrl, validateProviderBaseUrlAsync } from './url-validation.js';
+import { validateProviderBaseUrlAsync } from './url-validation.js';
 import { Logger } from '../lib/logger.js';
 import type {
   DynamicProviderConfig,
@@ -148,7 +148,7 @@ export class DynamicProviderManager {
         headers['Authorization'] = `Bearer ${inputKey}`;
       }
 
-      // codeql [js/ssrf] - baseUrl is validated by validateProviderBaseUrl above
+      // codeql [js/ssrf] - url is built from baseUrl which is validated by validateProviderBaseUrlAsync above
       const res = await fetch(url, { headers });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -250,8 +250,9 @@ export class DynamicProviderManager {
   /** Returns dynamic provider configs with API keys omitted for API responses. */
   listProviders(): Omit<DynamicProviderConfig, 'apiKey'>[] {
     return [...this.providers.values()].map((cfg) => {
-      const { apiKey: _apiKey, ...rest } = cfg;
-      return rest;
+      const rest = { ...cfg };
+      delete (rest as any).apiKey;
+      return rest as Omit<DynamicProviderConfig, 'apiKey'>;
     });
   }
 

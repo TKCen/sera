@@ -224,10 +224,19 @@ export async function validateProviderBaseUrlAsync(
         reason: `Host "${host}" resolves to private IP "${address}", which is not permitted.`,
       };
     }
-    // Note: IPv6 check omitted here for brevity as it follows same pattern
+
+    if (isPrivateIPv6(address)) {
+      return {
+        valid: false,
+        reason: `Host "${host}" resolves to private IPv6 "${address}", which is not permitted.`,
+      };
+    }
   } catch (err) {
     // If DNS fails, we reject for safety
-    return { valid: false, reason: `DNS resolution failed for "${host}": ${(err as Error).message}` };
+    return {
+      valid: false,
+      reason: `DNS resolution failed for "${host}": ${(err as Error).message}`,
+    };
   }
 
   return { valid: true };

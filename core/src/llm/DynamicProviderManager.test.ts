@@ -183,8 +183,8 @@ describe('DynamicProviderManager', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
 
       // Should call testConnection immediately
       expect(testConnectionSpy).toHaveBeenCalled();
@@ -260,8 +260,8 @@ describe('DynamicProviderManager', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
 
       // Should check only t1 immediately
       expect(testConnectionSpy).toHaveBeenCalledTimes(1);
@@ -344,8 +344,8 @@ describe('DynamicProviderManager', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
 
       const statuses = manager.getStatuses();
       expect(statuses).toHaveLength(1);
@@ -386,8 +386,8 @@ describe('DynamicProviderManager', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
 
       const statuses = manager.getStatuses();
       expect(statuses).toHaveLength(1);

@@ -394,10 +394,13 @@ export class ProviderRegistry {
     authStatus: 'configured' | 'missing' | 'not-required';
   })[] {
     return this.list().map((cfg) => {
-      const { apiKey: _apiKey, ...rest } = cfg;
+      const rest = { ...cfg };
+      delete (rest as any).apiKey;
       return {
         ...rest,
         authStatus: this.getAuthStatus(cfg),
+      } as Omit<ProviderConfig, 'apiKey'> & {
+        authStatus: 'configured' | 'missing' | 'not-required';
       };
     });
   }

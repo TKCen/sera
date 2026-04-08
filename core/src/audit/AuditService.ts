@@ -313,7 +313,12 @@ export class AuditService {
       secret: _4,
       token: _5,
       ...safePayload
-    } = payload as any;
+    } = payload as Record<string, unknown>;
+    void _1;
+    void _2;
+    void _3;
+    void _4;
+    void _5;
 
     const canonical = [
       sequence.toString(),

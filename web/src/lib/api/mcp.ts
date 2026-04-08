@@ -4,6 +4,7 @@ export interface MCPServerInfo {
   name: string;
   status: 'connected' | 'disconnected' | 'error';
   toolCount: number;
+  protected?: boolean;
 }
 
 export interface MCPServerDetail extends MCPServerInfo {

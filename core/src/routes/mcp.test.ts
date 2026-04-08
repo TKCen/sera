@@ -12,6 +12,7 @@ describe('MCP Routes', () => {
     getClient: ReturnType<typeof vi.fn>;
     registerContainerServer: ReturnType<typeof vi.fn>;
     unregisterClient: ReturnType<typeof vi.fn>;
+    isProtected: ReturnType<typeof vi.fn>;
   };
   let skillRegistryMock: Partial<SkillRegistry>;
 
@@ -24,6 +25,7 @@ describe('MCP Routes', () => {
       getClient: vi.fn(),
       registerContainerServer: vi.fn().mockResolvedValue({}),
       unregisterClient: vi.fn().mockResolvedValue(true),
+      isProtected: vi.fn().mockReturnValue(false),
     };
 
     skillRegistryMock = {};
@@ -171,6 +173,13 @@ describe('MCP Routes', () => {
       mcpRegistryMock.unregisterClient.mockResolvedValueOnce(false);
       const res = await request(app).delete('/api/mcp-servers/nonexistent');
       expect(res.status).toBe(404);
+    });
+
+    it('returns 403 for protected server', async () => {
+      mcpRegistryMock.isProtected.mockReturnValueOnce(true);
+      const res = await request(app).delete('/api/mcp-servers/sera-core');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('protected');
     });
   });
 });

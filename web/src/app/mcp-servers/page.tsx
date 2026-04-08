@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip } from '@/components/ui/tooltip';
 import { EmptyState } from '@/components/EmptyState';
 import { useMCPServers, useUnregisterMCPServer, useReloadMCPServer } from '@/hooks/useMCPServers';
 import { MCPServerDialog } from '@/components/MCPServerDialog';
@@ -100,14 +101,29 @@ function ServerCard({
           <RefreshCw size={12} /> Reload
         </Button>
         <div className="flex-1" />
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 text-[11px] gap-1 text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
-          onClick={() => onUnregister(server.name)}
-        >
-          <Trash2 size={12} /> Remove
-        </Button>
+        {server.protected ? (
+          <Tooltip content="Builtin servers cannot be removed">
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-[11px] gap-1 text-red-400/50"
+                disabled
+              >
+                <Trash2 size={12} /> Remove
+              </Button>
+            </div>
+          </Tooltip>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-[11px] gap-1 text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={() => onUnregister(server.name)}
+          >
+            <Trash2 size={12} /> Remove
+          </Button>
+        )}
       </div>
     </div>
   );

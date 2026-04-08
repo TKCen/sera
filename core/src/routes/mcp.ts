@@ -114,11 +114,19 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    */
   router.delete('/:name', async (req, res) => {
     try {
-      const success = await mcpRegistry.unregisterClient(req.params.name);
+      const name = req.params.name;
+
+      if (mcpRegistry.isProtected(name)) {
+        return res.status(403).json({
+          error: `Cannot unregister protected MCP server "${name}"`,
+        });
+      }
+
+      const success = await mcpRegistry.unregisterClient(name);
       if (success) {
-        res.json({ message: `MCP server "${req.params.name}" unregistered successfully` });
+        res.json({ message: `MCP server "${name}" unregistered successfully` });
       } else {
-        res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+        res.status(404).json({ error: `MCP server "${name}" not found` });
       }
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

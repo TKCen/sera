@@ -14,13 +14,14 @@ export interface MCPServerInfo {
   name: string;
   status: 'connected' | 'disconnected' | 'error';
   toolCount: number;
+  protected?: boolean | undefined;
 }
 
 export class MCPRegistry {
   private static instance: MCPRegistry;
   private clients: Map<
     string,
-    { client: MCPClient; instanceId?: string; manifest?: MCPServerManifest }
+    { client: MCPClient; instanceId?: string; manifest?: MCPServerManifest; protected?: boolean }
   > = new Map();
   private manager?: MCPServerManager;
   private intercom?: IntercomService;
@@ -252,6 +253,10 @@ export class MCPRegistry {
     return this.clients.get(name)?.client;
   }
 
+  isProtected(name: string): boolean {
+    return !!this.clients.get(name)?.protected;
+  }
+
   /** Expose all registered clients for iteration. */
   getClients(): Map<string, MCPClient> {
     const map = new Map<string, MCPClient>();
@@ -270,12 +275,14 @@ export class MCPRegistry {
           name,
           status: 'connected',
           toolCount: tools.tools.length,
+          protected: entry.protected,
         });
       } catch {
         infos.push({
           name,
           status: 'error',
           toolCount: 0,
+          protected: entry.protected,
         });
       }
     }
@@ -329,6 +336,7 @@ export class MCPRegistry {
     this.clients.set(name, {
       client: mockClient as MCPClient,
       instanceId: 'local',
+      protected: true,
     });
 
     logger.info(`Registered embedded sera-core MCP tools`);

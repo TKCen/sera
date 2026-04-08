@@ -1,0 +1,289 @@
+sera-web dev:
+sera-web dev:   VITE v6.4.1  ready in 301 ms
+sera-web dev:
+sera-web dev:   ➜  Local:   http://localhost:5173/
+sera-web dev:   ➜  Network: use --host to expose
+sera-web dev: 8:34:50 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:50 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:51 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:52 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:53 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:53 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:54 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:55 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:34:57 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:00 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:01 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:13 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:48 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:48 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:49 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:35:50 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:19 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:19 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/health
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/health/detail
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/health
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/providers/list
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/providers/dynamic
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/system/circuit-breakers
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:20 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:21 AM [vite] http proxy error: /api/health/detail
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:21 AM [vite] http proxy error: /api/providers/list
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:21 AM [vite] http proxy error: /api/providers/dynamic
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:21 AM [vite] http proxy error: /api/system/circuit-breakers
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:21 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:21 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:23 AM [vite] http proxy error: /api/health/detail
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:23 AM [vite] http proxy error: /api/providers/list
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:23 AM [vite] http proxy error: /api/providers/dynamic
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:23 AM [vite] http proxy error: /api/system/circuit-breakers
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:23 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:23 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:27 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:33 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:38 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:39 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:40 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:41 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:36:50 AM [vite] http proxy error: /api/health
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:17 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:17 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/health
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/health/detail
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/health
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/providers/list
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/providers/dynamic
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/system/circuit-breakers
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:18 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:19 AM [vite] http proxy error: /api/health/detail
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:19 AM [vite] http proxy error: /api/providers/list
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:19 AM [vite] http proxy error: /api/providers/dynamic
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:19 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:19 AM [vite] http proxy error: /api/system/circuit-breakers
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:20 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:21 AM [vite] http proxy error: /api/health/detail
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:21 AM [vite] http proxy error: /api/providers/list
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:21 AM [vite] http proxy error: /api/providers/dynamic
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:21 AM [vite] http proxy error: /api/providers/dynamic/statuses
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:21 AM [vite] http proxy error: /api/system/circuit-breakers
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)
+sera-web dev: 8:37:22 AM [vite] http proxy error: /api/rt/token
+sera-web dev: AggregateError [ECONNREFUSED]:
+sera-web dev:     at internalConnectMultiple (node:net:1134:18)
+sera-web dev:     at afterConnectMultiple (node:net:1715:7)

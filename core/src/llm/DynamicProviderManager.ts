@@ -6,6 +6,7 @@ import type {
   ProviderConfig,
   ProviderRegistry,
 } from './ProviderRegistry.js';
+import { validateProviderBaseUrlAsync } from './url-validation.js';
 
 const logger = new Logger('DynamicProviderManager');
 
@@ -133,6 +134,12 @@ export class DynamicProviderManager {
     apiKey?: string
   ): Promise<{ success: boolean; models: string[]; error?: string }> {
     try {
+      // SSRF protection
+      const check = await validateProviderBaseUrlAsync(baseUrl, 'lmstudio');
+      if (!check.valid) {
+        throw new Error(`Connection rejected: ${check.reason}`);
+      }
+
       // LM Studio / OpenAI compatible /v1/models
       const url = baseUrl.endsWith('/') ? `${baseUrl}models` : `${baseUrl}/models`;
       const headers: Record<string, string> = {};
@@ -201,6 +208,12 @@ export class DynamicProviderManager {
   // ── Public API ─────────────────────────────────────────────────────────────
 
   async addProvider(config: DynamicProviderConfig): Promise<void> {
+    // SSRF protection
+    const check = await validateProviderBaseUrlAsync(config.baseUrl, 'lmstudio');
+    if (!check.valid) {
+      throw new Error(`Dynamic provider baseUrl rejected: ${check.reason}`);
+    }
+
     this.providers.set(config.id, config);
     await this.save();
     if (config.enabled) {

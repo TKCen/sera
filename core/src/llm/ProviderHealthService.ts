@@ -12,6 +12,7 @@
 
 import type { ProviderConfig } from './ProviderRegistry.js';
 import { Logger } from '../lib/logger.js';
+import { validateProviderBaseUrlAsync } from './url-validation.js';
 
 const logger = new Logger('ProviderHealth');
 
@@ -53,6 +54,13 @@ export class ProviderHealthService {
    */
   async discoverModels(config: ProviderConfig): Promise<string[]> {
     try {
+      if (config.baseUrl) {
+        const check = await validateProviderBaseUrlAsync(config.baseUrl, config.provider);
+        if (!check.valid) {
+          throw new Error(`Model discovery rejected: ${check.reason}`);
+        }
+      }
+
       // Google AI Studio native models API
       if (config.provider === 'google') {
         return await this.discoverGoogleModels(config);
@@ -82,6 +90,17 @@ export class ProviderHealthService {
     const start = Date.now();
 
     try {
+      if (config.baseUrl) {
+        const check = await validateProviderBaseUrlAsync(config.baseUrl, config.provider);
+        if (!check.valid) {
+          return {
+            reachable: false,
+            latencyMs: Date.now() - start,
+            error: `Health probe rejected: ${check.reason}`,
+          };
+        }
+      }
+
       if (config.provider === 'google') {
         const models = await this.discoverGoogleModels(config);
         return {

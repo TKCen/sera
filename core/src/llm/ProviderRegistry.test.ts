@@ -74,7 +74,7 @@ describe('ProviderRegistry', () => {
     it('should register default from env if not in config', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
 
-      process.env.LLM_BASE_URL = 'http://test-url';
+      process.env.LLM_BASE_URL = 'https://api.openai.com';
       process.env.LLM_MODEL = 'env-model';
       process.env.LLM_API_KEY = 'env-key';
 
@@ -82,7 +82,7 @@ describe('ProviderRegistry', () => {
 
       const config = registry.resolve('env-model');
       expect(config.modelName).toBe('env-model');
-      expect(config.baseUrl).toBe('http://test-url');
+      expect(config.baseUrl).toBe('https://api.openai.com');
       expect(config.apiKey).toBe('env-key');
     });
 
@@ -93,20 +93,20 @@ describe('ProviderRegistry', () => {
             modelName: 'env-model',
             api: 'openai-completions',
             provider: 'openai',
-            baseUrl: 'http://existing',
+            baseUrl: 'https://api.openai.com',
           },
         ],
       };
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockData));
 
-      process.env.LLM_BASE_URL = 'http://test-url';
+      process.env.LLM_BASE_URL = 'https://api.anthropic.com';
       process.env.LLM_MODEL = 'env-model';
 
       const registry = new ProviderRegistry('/mock/path.json');
 
       const config = registry.resolve('env-model');
-      expect(config.baseUrl).toBe('http://existing'); // Kept existing
+      expect(config.baseUrl).toBe('https://api.openai.com'); // Kept existing
     });
 
     it('should do nothing if env vars missing', () => {
@@ -262,11 +262,11 @@ describe('ProviderRegistry', () => {
   });
 
   describe('register / unregister', () => {
-    it('should register and unregister successfully', () => {
+    it('should register and unregister successfully', async () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const registry = new ProviderRegistry('/mock/path.json');
 
-      registry.register({ modelName: 'new-model', api: 'openai-completions' });
+      await registry.register({ modelName: 'new-model', api: 'openai-completions' });
       expect(registry.list()).toHaveLength(1);
 
       const removed = registry.unregister('new-model');
@@ -328,7 +328,7 @@ describe('ProviderRegistry', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const registry = new ProviderRegistry('/mock/path.json');
 
-      registry.register({ modelName: 'save-model', api: 'openai-completions' });
+      await registry.register({ modelName: 'save-model', api: 'openai-completions' });
 
       await registry.save();
 

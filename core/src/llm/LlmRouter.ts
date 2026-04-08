@@ -43,7 +43,7 @@ import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { Logger } from '../lib/logger.js';
 import type { ProviderConfig, ProviderRegistry } from './ProviderRegistry.js';
 import type { ChatMessage } from '../agents/types.js';
-import { validateProviderBaseUrl } from './url-validation.js';
+import { validateProviderBaseUrlAsync } from './url-validation.js';
 
 const logger = new Logger('LlmRouter');
 
@@ -552,14 +552,14 @@ export class LlmRouter {
   }
 
   /** Dispatch to the appropriate pi-mono provider function. */
-  private dispatch(
+  private async dispatch(
     config: ProviderConfig,
     context: Context,
     extraOptions?: StreamOptions
-  ): AssistantMessageEventStream {
+  ): Promise<AssistantMessageEventStream> {
     // SSRF protection: validate baseUrl before sending any API-key-bearing request.
     if (config.baseUrl) {
-      const check = validateProviderBaseUrl(config.baseUrl, config.provider);
+      const check = await validateProviderBaseUrlAsync(config.baseUrl, config.provider);
       if (!check.valid) {
         throw new Error(`Provider baseUrl rejected: ${check.reason}`);
       }
@@ -617,7 +617,7 @@ export class LlmRouter {
             : {}),
         };
 
-        const eventStream = this.dispatch(modelConfig, context, opts);
+        const eventStream = await this.dispatch(modelConfig, context, opts);
         const msg = await eventStream.result();
 
         const latencyMs = Date.now() - latencyStart;
@@ -684,7 +684,7 @@ export class LlmRouter {
             : {}),
         };
 
-        const eventStream = this.dispatch(modelConfig, context, opts);
+        const eventStream = await this.dispatch(modelConfig, context, opts);
         if (modelName !== request.model) {
           logger.warn(`Failover: ${request.model} → ${modelName} | agent=${agentId}`);
         }
@@ -744,7 +744,7 @@ export class LlmRouter {
 
   /** Register a new provider and persist to config file. */
   async addModel(config: ProviderConfig): Promise<{ modelName: string; api: string }> {
-    this.registry.register(config);
+    await this.registry.register(config);
     await this.registry.save();
     logger.info(`Provider registered | model=${config.modelName} api=${config.api}`);
     return { modelName: config.modelName, api: config.api };
@@ -764,7 +764,7 @@ export class LlmRouter {
    * Return the raw pi-mono AssistantMessageEventStream for a request.
    * Used by LlmRouterProvider to implement the LLMProvider interface.
    */
-  getEventStream(request: ChatCompletionRequest): AssistantMessageEventStream {
+  async getEventStream(request: ChatCompletionRequest): Promise<AssistantMessageEventStream> {
     const cfg = this.registry.resolve(request.model);
     const context = toContext(request);
     const opts: StreamOptions = {
@@ -781,7 +781,7 @@ export class LlmRouter {
       const context: Context = {
         messages: [{ role: 'user', content: 'ping', timestamp: Date.now() } as UserMessage],
       };
-      const eventStream = this.dispatch(config, context, { maxTokens: 1 });
+      const eventStream = await this.dispatch(config, context, { maxTokens: 1 });
       await eventStream.result();
       return { ok: true, latencyMs: Date.now() - start };
     } catch (err: unknown) {

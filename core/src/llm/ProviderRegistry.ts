@@ -20,7 +20,7 @@
 
 import fs from 'fs';
 import { Logger } from '../lib/logger.js';
-import { validateProviderBaseUrl } from './url-validation.js';
+import { validateProviderBaseUrl, validateProviderBaseUrlAsync } from './url-validation.js';
 
 const logger = new Logger('ProviderRegistry');
 
@@ -154,6 +154,14 @@ export class ProviderRegistry {
       const raw = fs.readFileSync(this.configPath, 'utf-8');
       const data = JSON.parse(raw) as ConfigFile;
       for (const cfg of data.providers ?? []) {
+        // SSRF protection (sync only during loadSync)
+        if (cfg.baseUrl) {
+          const check = validateProviderBaseUrl(cfg.baseUrl, cfg.provider);
+          if (!check.valid) {
+            logger.error(`Skipping insecure provider config for ${cfg.modelName}: ${check.reason}`);
+            continue;
+          }
+        }
         this.configs.set(cfg.modelName, cfg);
       }
       logger.info(`Loaded ${this.configs.size} provider(s) from ${this.configPath}`);
@@ -174,6 +182,13 @@ export class ProviderRegistry {
     const modelName = process.env.LLM_MODEL ?? 'default';
 
     if (baseUrl && !this.configs.has(modelName)) {
+      // SSRF protection
+      const check = validateProviderBaseUrl(baseUrl, 'default');
+      if (!check.valid) {
+        logger.error(`Rejected insecure LLM_BASE_URL bootstrap: ${check.reason}`);
+        return;
+      }
+
       const cfg: ProviderConfig = {
         modelName,
         api: 'openai-completions',
@@ -297,9 +312,9 @@ export class ProviderRegistry {
     );
   }
 
-  register(config: ProviderConfig): void {
+  async register(config: ProviderConfig): Promise<void> {
     if (config.baseUrl) {
-      const check = validateProviderBaseUrl(config.baseUrl, config.provider);
+      const check = await validateProviderBaseUrlAsync(config.baseUrl, config.provider);
       if (!check.valid) {
         throw new Error(`Provider baseUrl rejected: ${check.reason}`);
       }

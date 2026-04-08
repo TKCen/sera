@@ -58,6 +58,7 @@ tempfile = "3"
 
 # Crypto
 sha2 = "0.10"
+argon2 = "0.5"
 aes-gcm = "0.10"
 hex = "0.4"
 base64 = "0.22"

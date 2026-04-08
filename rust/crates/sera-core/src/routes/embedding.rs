@@ -92,14 +92,8 @@ fn get_known_models() -> HashMap<String, KnownEmbeddingModel> {
 
 /// GET /api/embedding/config — return embedding configuration
 pub async fn get_config(State(state): State<AppState>) -> Json<EmbeddingConfig> {
-    let base_url = state.config.ollama.url.clone();
-    Json(EmbeddingConfig {
-        provider: "ollama".to_string(),
-        model: "nomic-embed-text".to_string(),
-        dimensions: 768,
-        base_url,
-        status: "configured".to_string(),
-    })
+    let config = state.embedding_config.read().await;
+    Json(config.clone())
 }
 
 #[derive(Debug, Serialize)]
@@ -144,7 +138,8 @@ pub struct BatchEmbedResponse {
 
 /// GET /api/embedding/status — check Ollama connectivity
 pub async fn get_status(State(state): State<AppState>) -> Json<EmbeddingStatus> {
-    let base_url = state.config.ollama.url.clone();
+    let config = state.embedding_config.read().await;
+    let base_url = config.base_url.clone();
     let client = reqwest::Client::new();
 
     let start = std::time::Instant::now();
@@ -182,7 +177,8 @@ pub struct EmbeddingModel {
 pub async fn list_models(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<EmbeddingModel>>, AppError> {
-    let base_url = state.config.ollama.url.clone();
+    let config = state.embedding_config.read().await;
+    let base_url = config.base_url.clone();
     let client = reqwest::Client::new();
 
     let resp = client
@@ -291,7 +287,7 @@ fn validate_config(req: &UpdateConfigRequest) -> Result<(), Vec<ValidationError>
 
 /// PUT /api/embedding/config — update embedding configuration
 pub async fn update_config(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<UpdateConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Validate request
@@ -302,29 +298,17 @@ pub async fn update_config(
         })));
     }
 
-    // In production this would:
-    // 1. Get old config to detect dimension changes
-    // 2. Save to persistent storage
-    // 3. Hot-swap in the service
-    // For now, return success response with warning if dimensions would change
+    let mut config = state.embedding_config.write().await;
+    let old_dimensions = config.dimensions;
+    let dimension_changed = old_dimensions != body.dimension;
 
-    let old_config = EmbeddingConfig {
-        provider: "ollama".to_string(),
-        model: "nomic-embed-text".to_string(),
-        dimensions: 768,
-        base_url: "http://ollama:11434".to_string(),
-        status: "configured".to_string(),
-    };
+    config.provider = body.provider.clone();
+    config.model = body.model.clone();
+    config.dimensions = body.dimension;
+    config.base_url = body.base_url.clone();
+    config.status = "configured".to_string();
 
-    let dimension_changed = old_config.dimensions != body.dimension;
-
-    let new_config = EmbeddingConfig {
-        provider: body.provider.clone(),
-        model: body.model.clone(),
-        dimensions: body.dimension,
-        base_url: body.base_url.clone(),
-        status: "configured".to_string(),
-    };
+    let new_config = config.clone();
 
     let mut response = serde_json::json!({
         "config": new_config,
@@ -339,7 +323,7 @@ pub async fn update_config(
         response["warning"] = serde_json::json!(
             format!(
                 "Vector dimension changed from {} to {}. Existing vectors are incompatible and will need to be re-indexed.",
-                old_config.dimensions, body.dimension
+                old_dimensions, body.dimension
             )
         );
     }
@@ -494,49 +478,104 @@ pub async fn embed_batch(
     Json(BatchEmbedResponse { embeddings })
 }
 
-/// GET /api/knowledge/{agent_id} — get agent knowledge (stub: empty)
+/// GET /api/knowledge/{agent_id} — get agent knowledge
 pub async fn get_knowledge(
-    Path(agent_id): axum::extract::Path<String>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let store = state
+        .knowledge_store
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Knowledge store not configured")))?;
+
+    // Try to get latest version content
+    let versions = store
+        .list_versions(&agent_id, 1)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to list knowledge versions: {e}")))?;
+
+    let (content, updated_at) = if let Some(v) = versions.first() {
+        let content = store
+            .get_version(&agent_id, &v.commit_hash)
+            .await
+            .unwrap_or_default();
+        (content, serde_json::Value::String(v.timestamp.clone()))
+    } else {
+        (String::new(), serde_json::Value::Null)
+    };
+
+    Ok(Json(serde_json::json!({
         "agent_id": agent_id,
-        "content": "",
-        "updated_at": serde_json::Value::Null,
-    }))
+        "content": content,
+        "updated_at": updated_at,
+    })))
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateKnowledgeRequest {
     pub content: String,
+    pub message: Option<String>,
 }
 
-/// POST /api/knowledge/{agent_id} — update agent knowledge (stub)
+/// POST /api/knowledge/{agent_id} — update agent knowledge
 pub async fn update_knowledge(
+    State(state): State<AppState>,
     Path(agent_id): Path<String>,
     Json(body): Json<UpdateKnowledgeRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<Json<serde_json::Value>, AppError> {
+    let store = state
+        .knowledge_store
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Knowledge store not configured")))?;
+
+    let message = body.message.unwrap_or_else(|| "Update knowledge".to_string());
+    let hash = store
+        .commit_version(&agent_id, &body.content, &message)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to commit knowledge version: {e}")))?;
+
     let now = OffsetDateTime::now_utc();
     let timestamp = super::iso8601(now);
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "agent_id": agent_id,
-            "content": body.content,
-            "updated_at": timestamp,
-        })),
-    )
+    Ok(Json(serde_json::json!({
+        "agent_id": agent_id,
+        "content": body.content,
+        "commit_hash": hash,
+        "updated_at": timestamp,
+    })))
 }
 
-/// GET /api/knowledge/{agent_id}/history — get knowledge history (stub: empty)
+/// GET /api/knowledge/{agent_id}/history — get knowledge history
 pub async fn get_knowledge_history(
-    Path(agent_id): axum::extract::Path<String>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let store = state
+        .knowledge_store
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Knowledge store not configured")))?;
+
+    let versions = store
+        .list_versions(&agent_id, 50)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to list knowledge versions: {e}")))?;
+
+    let history: Vec<serde_json::Value> = versions
+        .into_iter()
+        .map(|v| {
+            serde_json::json!({
+                "commit_hash": v.commit_hash,
+                "message": v.message,
+                "timestamp": v.timestamp,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
         "agent_id": agent_id,
-        "versions": [],
-    }))
+        "versions": history,
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -545,15 +584,29 @@ pub struct DiffQuery {
     pub v2: Option<String>,
 }
 
-/// GET /api/knowledge/{agent_id}/diff — get knowledge diff (stub: empty)
+/// GET /api/knowledge/{agent_id}/diff — get knowledge diff
 pub async fn get_knowledge_diff(
-    Path(agent_id): axum::extract::Path<String>,
-    Query(_query): axum::extract::Query<DiffQuery>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(query): Query<DiffQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let store = state
+        .knowledge_store
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Knowledge store not configured")))?;
+
+    let v1 = query.v1.ok_or_else(|| AppError::Internal(anyhow::anyhow!("v1 query param is required")))?;
+    let v2 = query.v2.ok_or_else(|| AppError::Internal(anyhow::anyhow!("v2 query param is required")))?;
+
+    let diff = store
+        .diff_versions(&agent_id, &v1, &v2)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to generate knowledge diff: {e}")))?;
+
+    Ok(Json(serde_json::json!({
         "agent_id": agent_id,
-        "diff": "",
-    }))
+        "diff": diff,
+    })))
 }
 
 /// POST /api/embedding/test — test embedding generation
@@ -561,8 +614,9 @@ pub async fn test_embedding(
     State(state): State<AppState>,
     Json(body): Json<TestEmbeddingRequest>,
 ) -> Result<Json<TestEmbeddingResponse>, AppError> {
-    let base_url = state.config.ollama.url.clone();
-    let model = body.model.unwrap_or_else(|| "nomic-embed-text".to_string());
+    let config = state.embedding_config.read().await;
+    let base_url = config.base_url.clone();
+    let model = body.model.unwrap_or_else(|| config.model.clone());
     let client = reqwest::Client::new();
 
     let start = std::time::Instant::now();

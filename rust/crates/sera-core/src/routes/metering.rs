@@ -22,7 +22,7 @@ pub struct BudgetResponse {
     pub current_day_tokens: u64,
 }
 
-/// GET /api/budget/agents/:id
+/// GET /api/budget/agents/:id/budget
 pub async fn get_agent_budget(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -34,6 +34,27 @@ pub async fn get_agent_budget(
         current_hour_tokens: status.hourly_used,
         current_day_tokens: status.daily_used,
     }))
+}
+
+/// GET /api/budget/agents/:id — 7-day usage history.
+pub async fn get_agent_usage_history(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = MeteringRepository::agent_daily_usage(state.db.inner(), &agent_id).await?;
+    let usage: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "date": r.date.to_string(),
+                "totalTokens": r.total_tokens
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "agentId": agent_id,
+        "usage": usage
+    })))
 }
 
 /// Request body for updating budget quotas.

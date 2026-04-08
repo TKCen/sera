@@ -203,18 +203,20 @@ pub async fn get_connection_token(
         )));
     }
 
+    let centrifugo = state
+        .centrifugo
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Centrifugo not configured")))?;
+
     // Generate JWT token for Centrifugo connection
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let token = state.jwt.issue(sera_auth::JwtClaims {
-        sub: params.agent_id.clone(),
-        iss: "sera".to_string(),
-        exp: now_secs + 3600, // 1 hour
-        agent_id: Some(params.agent_id.clone()),
-        instance_id: None,
-    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue Centrifugo token: {e}")))?;
+
+    let token = centrifugo
+        .generate_connection_token(&params.agent_id, now_secs + 3600)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue Centrifugo token: {e}")))?;
 
     Ok(Json(TokenResponse { token }))
 }
@@ -227,7 +229,7 @@ pub struct SubscriptionQuery {
 
 /// GET /api/intercom/centrifugo/subscription — get subscription token for channel
 pub async fn get_subscription_token(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<SubscriptionQuery>,
 ) -> Result<Json<TokenResponse>, AppError> {
     if params.channel.is_empty() {
@@ -236,10 +238,23 @@ pub async fn get_subscription_token(
         )));
     }
 
-    // TODO: Generate JWT token for Centrifugo subscription (role-based)
-    Ok(Json(TokenResponse {
-        token: format!("sub-token-{}", params.channel),
-    }))
+    let centrifugo = state
+        .centrifugo
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Centrifugo not configured")))?;
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // In a real scenario, we'd get the current user/agent from the auth context.
+    // For now, use a generic "operator" subject for subscription tokens.
+    let token = centrifugo
+        .generate_subscription_token("operator", &params.channel, now_secs + 3600)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue subscription token: {e}")))?;
+
+    Ok(Json(TokenResponse { token }))
 }
 
 #[cfg(test)]

@@ -203,44 +203,6 @@ pub async fn list_templates(
     Ok(Json(templates))
 }
 
-/// GET /api/schedules/:id — get single schedule
-pub async fn get_schedule(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let row = sqlx::query_as::<_, sera_db::schedules::ScheduleRow>(
-        "SELECT s.id, ai.name as agent_name, s.name, s.cron, s.expression, s.type, s.source,
-                s.status, s.last_run_at, s.last_run_status, s.next_run_at, s.category, s.description
-         FROM schedules s
-         LEFT JOIN agent_instances ai ON s.agent_instance_id = ai.id
-         WHERE s.id = $1::uuid",
-    )
-    .bind(&id)
-    .fetch_optional(state.db.inner())
-    .await
-    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
-
-    match row {
-        Some(r) => Ok(Json(serde_json::json!({
-            "id": r.id.to_string(),
-            "agentName": r.agent_name,
-            "name": r.name,
-            "cron": r.cron,
-            "expression": r.expression,
-            "type": r.r#type,
-            "source": r.source,
-            "status": r.status,
-            "category": r.category,
-            "description": r.description,
-        }))),
-        None => Err(AppError::Db(sera_db::DbError::NotFound {
-            entity: "schedule",
-            key: "id",
-            value: id,
-        })),
-    }
-}
-
 /// Query params for schedule runs.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

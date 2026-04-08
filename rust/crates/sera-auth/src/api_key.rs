@@ -1,5 +1,9 @@
 //! API key validation.
 
+use argon2::{
+    password_hash::{PasswordHash, PasswordVerifier},
+    Argon2,
+};
 use crate::error::AuthError;
 use crate::types::ActingContext;
 
@@ -29,10 +33,19 @@ impl ApiKeyValidator {
     ///
     /// An `ActingContext` if the key matches, or an error if invalid.
     pub fn validate(token: &str, stored_keys: &[StoredApiKey]) -> Result<ActingContext, AuthError> {
-        // Find a matching key
+        // Find a matching key using Argon2 verification
         let key = stored_keys
             .iter()
-            .find(|k| k.key_hash == token)
+            .find(|k| {
+                if let Ok(parsed_hash) = PasswordHash::new(&k.key_hash) {
+                    Argon2::default()
+                        .verify_password(token.as_bytes(), &parsed_hash)
+                        .is_ok()
+                } else {
+                    // Fallback to plaintext for bootstrap/legacy keys (as requested in issue for alpha)
+                    k.key_hash == token
+                }
+            })
             .ok_or(AuthError::Unauthorized)?;
 
         // Return acting context with the operator ID and key ID
@@ -49,9 +62,37 @@ impl ApiKeyValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use argon2::{
+        password_hash::{PasswordHasher, SaltString},
+        Argon2,
+    };
+    use rand::rngs::OsRng;
 
     #[test]
-    fn test_valid_key_matches() {
+    fn test_valid_hashed_key_matches() {
+        let password = "correct-password";
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            .unwrap()
+            .to_string();
+
+        let stored_keys = vec![StoredApiKey {
+            key_hash: password_hash,
+            operator_id: "op-456".to_string(),
+            key_id: "api-key-id-1".to_string(),
+        }];
+
+        let result = ApiKeyValidator::validate(password, &stored_keys);
+        assert!(result.is_ok());
+
+        let ctx = result.unwrap();
+        assert_eq!(ctx.operator_id, Some("op-456".to_string()));
+    }
+
+    #[test]
+    fn test_valid_plaintext_key_matches() {
         let stored_keys = vec![
             StoredApiKey {
                 key_hash: "key123".to_string(),

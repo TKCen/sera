@@ -32,6 +32,7 @@ pub struct TemplateResponse {
     pub builtin: bool,
     pub category: Option<String>,
     pub spec: Value,
+    pub description: Option<String>,
 }
 
 /// Instance response — snake_case to match the TypeScript core's response shape.
@@ -69,6 +70,7 @@ pub async fn list_templates(
             builtin: r.builtin,
             category: r.category,
             spec: r.spec,
+            description: None, // Will be filled from spec if needed
         })
         .collect();
     Ok(Json(templates))

@@ -14,6 +14,17 @@ struct ConnectionClaims {
     exp: u64,
 }
 
+/// Claims for Centrifugo subscription token (HS256 JWT).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SubscriptionClaims {
+    /// Subject (user ID).
+    sub: String,
+    /// Channel to subscribe to.
+    channel: String,
+    /// Expiration time (Unix timestamp).
+    exp: u64,
+}
+
 /// Centrifugo real-time pub/sub client.
 pub struct CentrifugoClient {
     api_url: String,
@@ -66,6 +77,20 @@ impl CentrifugoClient {
     pub fn generate_connection_token(&self, user_id: &str, expire_at: u64) -> Result<String, CentrifugoError> {
         let claims = ConnectionClaims {
             sub: user_id.to_string(),
+            exp: expire_at,
+        };
+
+        let key = EncodingKey::from_secret(self.token_secret.as_bytes());
+        encode(&Header::default(), &claims, &key).map_err(|e| {
+            CentrifugoError::TokenError(format!("Failed to encode JWT: {}", e))
+        })
+    }
+
+    /// Generate a subscription token (HS256 JWT).
+    pub fn generate_subscription_token(&self, user_id: &str, channel: &str, expire_at: u64) -> Result<String, CentrifugoError> {
+        let claims = SubscriptionClaims {
+            sub: user_id.to_string(),
+            channel: channel.to_string(),
             exp: expire_at,
         };
 

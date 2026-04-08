@@ -85,6 +85,28 @@ async fn main() -> anyhow::Result<()> {
 
     let schedule_svc = Arc::new(ScheduleService::new(db.clone()));
 
+    // Initialize Knowledge Store
+    let knowledge_store = {
+        let host_workspaces = std::env::var("HOST_WORKSPACES_DIR")
+            .unwrap_or_else(|_| "/workspaces".to_string());
+        // Use path within container
+        let base_dir = std::path::PathBuf::from("/workspaces/knowledge/agents");
+        if base_dir.exists() || std::fs::create_dir_all(&base_dir).is_ok() {
+            Some(Arc::new(services::knowledge_git::GitCliKnowledgeStore::new(base_dir)))
+        } else {
+            tracing::warn!("Failed to initialize knowledge store directory: {:?}", base_dir);
+            None
+        }
+    };
+
+    let embedding_config = Arc::new(RwLock::new(routes::embedding::EmbeddingConfig {
+        provider: "ollama".to_string(),
+        model: "nomic-embed-text".to_string(),
+        dimensions: 768,
+        base_url: config.ollama.url.clone(),
+        status: "configured".to_string(),
+    }));
+
     let app_state = AppState {
         db,
         config: config.clone(),
@@ -95,6 +117,8 @@ async fn main() -> anyhow::Result<()> {
         centrifugo,
         mcp_registry: Arc::new(RwLock::new(routes::mcp::McpRegistry::new())),
         schedule_svc: schedule_svc.clone(),
+        embedding_config,
+        knowledge_store,
     };
 
     // Build router
@@ -150,7 +174,7 @@ fn build_router(
         .route("/api/providers/list", get(routes::providers::list_providers))
         .route(
             "/api/budget/agents/{agent_id}",
-            get(routes::metering::get_agent_budget),
+            get(routes::metering::get_agent_usage_history),
         )
         // Skills — GET list + POST create
         .route(
@@ -330,6 +354,7 @@ fn build_router(
         .route("/api/intercom/publish", post(routes::intercom::publish))
         .route("/api/intercom/dm", post(routes::intercom::dm))
         .route("/api/intercom/centrifugo/token", get(routes::intercom::get_connection_token))
+        .route("/api/intercom/centrifugo/subscription", get(routes::intercom::get_subscription_token))
         // Pipelines — workflow engine
         .route("/api/pipelines", post(routes::pipelines::create_pipeline))
         .route("/api/pipelines/{id}", get(routes::pipelines::get_pipeline))
@@ -380,7 +405,7 @@ fn build_router(
         .route("/v1/tools/catalog", get(routes::stubs::tools_catalog))
         .route("/api/templates", get(routes::stubs::list_templates))
         // Schedule detail + runs
-        .route("/api/schedules/{id}", get(routes::stubs::get_schedule).patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule))
+        .route("/api/schedules/{id}", get(routes::schedules::get_schedule).patch(routes::schedules::update_schedule).delete(routes::schedules::delete_schedule))
         .route("/api/schedules/runs", get(routes::stubs::schedule_runs))
         // Provider dynamic/template stubs
         .route("/api/providers/dynamic", get(routes::stubs::providers_dynamic))

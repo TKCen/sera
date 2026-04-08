@@ -79,6 +79,51 @@ pub async fn list_schedules(
     Ok(Json(schedules))
 }
 
+/// GET /api/schedules/:id
+pub async fn get_schedule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ScheduleResponse>, AppError> {
+    let row = sqlx::query_as::<_, sera_db::schedules::ScheduleRow>(
+        "SELECT s.id, s.agent_id, s.agent_instance_id,
+                COALESCE(s.agent_name, ai.name) as agent_name,
+                s.name, s.cron, s.expression, s.type, s.task, s.source, s.status,
+                s.last_run_at, s.last_run_status, s.next_run_at,
+                s.category, s.description, s.created_at, s.updated_at
+         FROM schedules s
+         LEFT JOIN agent_instances ai ON ai.id = s.agent_instance_id
+         WHERE s.id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_optional(state.db.inner())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    match row {
+        Some(r) => Ok(Json(ScheduleResponse {
+            id: r.id.to_string(),
+            agent_name: r.agent_name,
+            name: r.name,
+            cron: r.cron,
+            expression: r.expression,
+            r#type: r.r#type,
+            source: r.source,
+            status: r.status,
+            last_run_at: super::iso8601_opt(r.last_run_at),
+            last_run_status: r.last_run_status,
+            next_run_at: super::iso8601_opt(r.next_run_at),
+            category: r.category,
+            description: r.description,
+            task_prompt: extract_task_prompt(&r.task),
+        })),
+        None => Err(AppError::Db(sera_db::DbError::NotFound {
+            entity: "schedule",
+            key: "id",
+            value: id,
+        })),
+    }
+}
+
 /// Request body for creating a schedule.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

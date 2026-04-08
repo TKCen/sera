@@ -25,4 +25,6 @@ pub struct AppState {
     pub centrifugo: Option<Arc<CentrifugoClient>>,
     pub mcp_registry: Arc<RwLock<crate::routes::mcp::McpRegistry>>,
     pub schedule_svc: Arc<ScheduleService>,
+    pub embedding_config: Arc<RwLock<crate::routes::embedding::EmbeddingConfig>>,
+    pub knowledge_store: Option<Arc<crate::services::knowledge_git::GitCliKnowledgeStore>>,
 }

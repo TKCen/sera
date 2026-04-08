@@ -1,12 +1,16 @@
 //! Auth endpoints — API key management and session info.
 
+use argon2::{
+    password_hash::{PasswordHasher, SaltString},
+    Argon2,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Json,
 };
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use sera_db::api_keys::ApiKeyRepository;
 
@@ -68,7 +72,15 @@ pub async fn create_api_key(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // Generate a random key
     let raw_key = format!("sera_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
-    let key_hash = format!("{:x}", Sha256::digest(raw_key.as_bytes()));
+
+    // Hash with Argon2 instead of Sha256 for hardening
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let key_hash = argon2
+        .hash_password(raw_key.as_bytes(), &salt)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Hashing failed: {e}")))?
+        .to_string();
+
     let roles = body.roles.unwrap_or_else(|| vec!["operator".to_string()]);
 
     let row = ApiKeyRepository::create(

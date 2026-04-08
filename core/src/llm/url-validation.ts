@@ -176,19 +176,21 @@ export function validateProviderBaseUrl(
   }
 
   // ── Cloud provider origin enforcement ────────────────────────────────────────
-  if (provider && CLOUD_PROVIDER_ORIGINS[provider.toLowerCase()]) {
+  if (provider) {
     const allowedOrigins = CLOUD_PROVIDER_ORIGINS[provider.toLowerCase()];
-    const isAllowed = allowedOrigins.some(
-      (origin) => host === origin || host.endsWith(`.${origin}`)
-    );
-    if (!isAllowed) {
-      return {
-        valid: false,
-        reason:
-          `Provider "${provider}" is restricted to official origins (${allowedOrigins.join(', ')}). ` +
-          `The provided baseUrl host "${host}" is not permitted. ` +
-          `Add the domain to SERA_PROVIDER_URL_ALLOWLIST to bypass this restriction.`,
-      };
+    if (allowedOrigins) {
+      const isAllowed = allowedOrigins.some(
+        (origin) => host === origin || host.endsWith(`.${origin}`)
+      );
+      if (!isAllowed) {
+        return {
+          valid: false,
+          reason:
+            `Provider "${provider}" is restricted to official origins (${allowedOrigins.join(', ')}). ` +
+            `The provided baseUrl host "${host}" is not permitted. ` +
+            `Add the domain to SERA_PROVIDER_URL_ALLOWLIST to bypass this restriction.`,
+        };
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { MCPRegistry } from '../mcp/registry.js';
 import { SkillRegistry } from '../skills/SkillRegistry.js';
+import { requireRole } from '../auth/authMiddleware.js';
 
 export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillRegistry): Router {
   const router = Router();
@@ -9,7 +10,7 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    * GET /api/mcp-servers
    * List all registered MCP servers with status and tool counts.
    */
-  router.get('/', async (_req, res) => {
+  router.get('/', requireRole(['admin', 'operator']), async (_req, res) => {
     try {
       const servers = await mcpRegistry.listServers();
       res.json(servers);
@@ -22,7 +23,7 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    * GET /api/mcp-servers/:name
    * Get details of a specific MCP server including its tools.
    */
-  router.get('/:name', async (req, res) => {
+  router.get('/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const client = mcpRegistry.getClient(req.params.name);
       if (!client) {
@@ -46,7 +47,7 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    * GET /api/mcp-servers/:name/health
    * Health check for a specific MCP server.
    */
-  router.get('/:name/health', async (req, res) => {
+  router.get('/:name/health', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const client = mcpRegistry.getClient(req.params.name);
       if (!client) {
@@ -73,7 +74,7 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    * POST /api/mcp-servers/:name/reload
    * Reconnect to an MCP server and refresh its tool list.
    */
-  router.post('/:name/reload', async (req, res) => {
+  router.post('/:name/reload', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const client = mcpRegistry.getClient(req.params.name);
       if (!client) {
@@ -95,7 +96,7 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    * POST /api/mcp-servers
    * Register a new containerized MCP server from manifest.
    */
-  router.post('/', async (req, res) => {
+  router.post('/', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const manifest = req.body;
       if (!manifest || !manifest.metadata || !manifest.metadata.name) {
@@ -112,7 +113,7 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    * DELETE /api/mcp-servers/:name
    * Unregister an MCP server.
    */
-  router.delete('/:name', async (req, res) => {
+  router.delete('/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const success = await mcpRegistry.unregisterClient(req.params.name);
       if (success) {

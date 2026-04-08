@@ -57,6 +57,10 @@ const AddDynamicProviderSchema = z.object({
   description: z.string().optional(),
 });
 
+const SetDefaultModelSchema = z.object({
+  modelName: z.string().min(1),
+});
+
 // ── Router factory ────────────────────────────────────────────────────────────
 
 export function createProvidersRouter(
@@ -71,7 +75,7 @@ export function createProvidersRouter(
    * GET /api/providers/templates
    * Returns available cloud provider templates that can be activated.
    */
-  router.get('/templates', (_req: Request, res: Response) => {
+  router.get('/templates', requireRole(['admin', 'operator']), (_req: Request, res: Response) => {
     res.json({
       templates: [
         {
@@ -127,7 +131,7 @@ export function createProvidersRouter(
    * Lists all models/providers currently configured.
    * Express 5: use empty string for the mount-point route instead of '/'.
    */
-  router.get('', async (_req: Request, res: Response) => {
+  router.get('', requireRole(['admin', 'operator']), async (_req: Request, res: Response) => {
     try {
       const models = await llmRouter.listModels();
       res.json({ providers: models });
@@ -143,7 +147,7 @@ export function createProvidersRouter(
    * Note: Express 5 doesn't match router.get('/') for mounted sub-routers.
    * Kept as alias for backwards compatibility.
    */
-  router.get('/list', async (_req: Request, res: Response) => {
+  router.get('/list', requireRole(['admin', 'operator']), async (_req: Request, res: Response) => {
     try {
       const models = await llmRouter.listModels();
       res.json({ providers: models });
@@ -309,7 +313,7 @@ export function createProvidersRouter(
    * Returns discovered models from all supported cloud providers (openrouter, google, kilocode).
    * Results are cached for 1 hour. Add ?force=true to bypass the cache.
    */
-  router.get('/models', async (req: Request, res: Response) => {
+  router.get('/models', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
     try {
       const force = req.query['force'] === 'true';
       const discovery = ModelDiscoveryService.getInstance();
@@ -326,7 +330,10 @@ export function createProvidersRouter(
    * Returns discovered models for a specific provider (openrouter, google, kilocode).
    * Results are cached for 1 hour. Add ?force=true to bypass the cache.
    */
-  router.get('/models/:provider', async (req: Request, res: Response) => {
+  router.get(
+    '/models/:provider',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
     const provider = String(req.params['provider']);
     try {
       const force = req.query['force'] === 'true';
@@ -421,7 +428,7 @@ export function createProvidersRouter(
    * POST /api/providers/:modelName/test
    * Sends a minimal test completion to verify the provider is reachable.
    */
-  router.post('/:modelName/test', async (req: Request, res: Response) => {
+  router.post('/:modelName/test', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
     const modelName = String(req.params['modelName']);
     try {
       const result = await llmRouter.testModel(modelName);
@@ -439,7 +446,7 @@ export function createProvidersRouter(
    * GET /api/providers/:modelName/health
    * Returns the circuit breaker state for the provider associated with this model.
    */
-  router.get('/:modelName/health', (req: Request, res: Response) => {
+  router.get('/:modelName/health', requireRole(['admin', 'operator']), (req: Request, res: Response) => {
     const modelName = String(req.params['modelName']);
     const provider = providerFromModel(modelName);
     const state = circuitBreakerService.getProviderState(provider);
@@ -460,18 +467,20 @@ export function createProvidersRouter(
   // ── Default Model ──────────────────────────────────────────────────────────
 
   /** GET /api/providers/default-model — get the current default model name. */
-  router.get('/default-model', (_req: Request, res: Response) => {
+  router.get('/default-model', requireRole(['admin', 'operator']), (_req: Request, res: Response) => {
     const registry = llmRouter.getRegistry();
     res.json({ defaultModel: registry.getDefaultModel() });
   });
 
   /** PUT /api/providers/default-model — set the default model name. */
-  router.put('/default-model', (req: Request, res: Response) => {
+  router.put('/default-model', requireRole(['admin', 'operator']), (req: Request, res: Response) => {
+    const parsed = SetDefaultModelSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });
+    }
+
     try {
-      const { modelName } = req.body as { modelName: string };
-      if (!modelName) {
-        return res.status(400).json({ error: 'modelName is required' });
-      }
+      const { modelName } = parsed.data;
       const registry = llmRouter.getRegistry();
       registry.setDefaultModel(modelName);
       res.json({ success: true, defaultModel: modelName });
@@ -484,7 +493,7 @@ export function createProvidersRouter(
    * GET /api/providers/health-all
    * Batch health check all providers (cached 60s).
    */
-  router.get('/health-all', async (_req: Request, res: Response) => {
+  router.get('/health-all', requireRole(['admin', 'operator']), async (_req, res: Response) => {
     try {
       const registry = llmRouter.getRegistry();
       const configs = registry.list();
@@ -515,7 +524,7 @@ export function createProvidersRouter(
    * GET /api/providers/:modelName/discover
    * Discover models available at the provider's endpoint.
    */
-  router.get('/:modelName/discover', async (req: Request, res: Response) => {
+  router.get('/:modelName/discover', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
     try {
       const registry = llmRouter.getRegistry();
       const config = registry.list().find((c) => c.modelName === req.params.modelName);
@@ -541,7 +550,7 @@ export function createProvidersRouter(
 export function createSystemRouter(circuitBreakerService: CircuitBreakerService): Router {
   const router = Router();
 
-  router.get('/circuit-breakers', (_req: Request, res: Response) => {
+  router.get('/circuit-breakers', requireRole(['admin', 'operator']), (_req: Request, res: Response) => {
     res.json({ circuitBreakers: circuitBreakerService.getState() });
   });
 

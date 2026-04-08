@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { pool } from '../lib/database.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
+import { requireRole } from '../auth/authMiddleware.js';
 
 export function createOperatorRequestsRouter(intercom?: IntercomService): Router {
   const router = Router();
@@ -16,7 +17,7 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * GET /api/operator-requests/pending/count — Count pending requests (for badges)
    * NOTE: Registered before parameterised routes to avoid Express 5 shadowing.
    */
-  router.get('/pending/count', async (_req, res) => {
+  router.get('/pending/count', requireRole(['admin', 'operator']), async (_req, res) => {
     try {
       const { rows } = await pool.query(
         "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
@@ -31,7 +32,7 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * GET /api/operator-requests — List operator requests
    * Query params: status, agentId, limit
    */
-  router.get('/', async (req, res) => {
+  router.get('/', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const { status, agentId, limit: limitStr } = req.query;
       const limit = Math.min(Math.max(parseInt(String(limitStr || '50'), 10) || 50, 1), 200);
@@ -81,7 +82,7 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * POST /api/operator-requests/:id/respond — Respond to a request
    * Body: { action: 'approved' | 'rejected' | 'resolved', response?: string | object }
    */
-  router.post('/:id/respond', async (req, res) => {
+  router.post('/:id/respond', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const { id } = req.params;
       const { action, response } = req.body as {

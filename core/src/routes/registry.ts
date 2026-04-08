@@ -3,6 +3,7 @@ import { AgentRegistry } from '../agents/registry.service.js';
 import { ResourceImporter } from '../agents/importer.service.js';
 import { AgentInstanceSchema } from '../agents/schemas.js';
 import type { Orchestrator } from '../agents/Orchestrator.js';
+import { requireRole } from '../auth/authMiddleware.js';
 
 export function createRegistryRouter(
   registry: AgentRegistry,
@@ -12,7 +13,7 @@ export function createRegistryRouter(
   const router = Router();
 
   // Templates
-  router.get('/templates', async (req, res) => {
+  router.get('/templates', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const templates = await registry.listTemplates();
       res.json(templates);
@@ -21,7 +22,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.post('/templates', async (req, res) => {
+  router.post('/templates', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const template = await registry.upsertTemplate(
         req.body as import('../agents/schemas.js').AgentTemplate
@@ -32,7 +33,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.get('/templates/:name', async (req, res) => {
+  router.get('/templates/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const template = await registry.getTemplate(req.params.name);
       if (!template) return res.status(404).json({ error: 'Template not found' });
@@ -42,7 +43,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.put('/templates/:name', async (req, res) => {
+  router.put('/templates/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const template = await registry.updateTemplate(
         req.params.name,
@@ -60,7 +61,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.delete('/templates/:name', async (req, res) => {
+  router.delete('/templates/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const template = await registry.deleteTemplate(req.params.name);
       res.json({ message: 'Template deleted', template });
@@ -77,7 +78,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.get('/templates/:name/instances', async (req, res) => {
+  router.get('/templates/:name/instances', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const instances = await registry.listInstances();
       const filtered = instances.filter((i) => i.template_ref === req.params.name);
@@ -88,7 +89,7 @@ export function createRegistryRouter(
   });
 
   // Instances
-  router.get('/instances', async (req, res) => {
+  router.get('/instances', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const instances = await registry.listInstances();
       res.json(instances);
@@ -97,7 +98,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.post('/instances', async (req, res) => {
+  router.post('/instances', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const result = AgentInstanceSchema.safeParse(req.body);
       if (!result.success) {
@@ -118,7 +119,7 @@ export function createRegistryRouter(
     }
   });
 
-  router.get('/instances/:id', async (req, res) => {
+  router.get('/instances/:id', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const instance = await registry.getInstance(req.params.id);
       if (!instance) return res.status(404).json({ error: 'Instance not found' });
@@ -129,7 +130,7 @@ export function createRegistryRouter(
   });
 
   // Reload
-  router.post('/reload', async (req, res) => {
+  router.post('/reload', requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const importerResults = await importer.importAll();
       const orchestratorResults = orchestrator.reloadTemplates();

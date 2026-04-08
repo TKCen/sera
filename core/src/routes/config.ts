@@ -4,6 +4,7 @@ import { config } from '../lib/config.js';
 import { ProviderFactory } from '../lib/llm/ProviderFactory.js';
 import { Logger } from '../lib/logger.js';
 import { sanitizeErrorMessage } from '../middleware/errorSanitizer.js';
+import { requireRole } from '../auth/authMiddleware.js';
 
 const logger = new Logger('ConfigRouter');
 
@@ -25,12 +26,12 @@ export function createConfigRouter(): Router {
   // ─── Legacy LLM Config ──────────────────────────────────────────────────────
 
   /** GET /api/config/llm — Returns current legacy LLM configuration. */
-  router.get('/config/llm', (req: Request, res: Response) => {
+  router.get('/config/llm', requireRole(['admin', 'operator']), (req: Request, res: Response) => {
     res.json(config.llm);
   });
 
   /** POST /api/config/llm — Updates the legacy LLM configuration. */
-  router.post('/config/llm', (req: Request, res: Response) => {
+  router.post('/config/llm', requireRole(['admin', 'operator']), (req: Request, res: Response) => {
     try {
       config.saveLlmConfig(req.body);
       logger.info('Legacy LLM configuration updated');
@@ -44,7 +45,7 @@ export function createConfigRouter(): Router {
   });
 
   /** POST /api/config/llm/test — Tests the current LLM connection. */
-  router.post('/config/llm/test', async (req: Request, res: Response) => {
+  router.post('/config/llm/test', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
     try {
       const provider = ProviderFactory.createDefault();
       const response = await provider.chat([{ role: 'user', content: 'Hello' }]);

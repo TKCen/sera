@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createMCPRouter } from './mcp.js';
+
+vi.mock('../auth/authMiddleware.js', () => ({
+  requireRole: vi.fn(() => (req: any, res: any, next: any) => next()),
+}));
+
 import type { MCPRegistry } from '../mcp/registry.js';
 import type { SkillRegistry } from '../skills/SkillRegistry.js';
 

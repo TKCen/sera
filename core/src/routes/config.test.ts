@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
+vi.mock('../auth/authMiddleware.js', () => ({
+  requireRole: vi.fn(() => (req: any, res: any, next: any) => next()),
+}));
+
 // Mock config
 vi.mock('../lib/config.js', () => ({
   config: {

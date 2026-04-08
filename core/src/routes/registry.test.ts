@@ -3,6 +3,10 @@ import request from 'supertest';
 import express from 'express';
 import { createRegistryRouter } from './registry.js';
 
+vi.mock('../auth/authMiddleware.js', () => ({
+  requireRole: vi.fn(() => (req: any, res: any, next: any) => next()),
+}));
+
 describe('Registry Routes', () => {
   let app!: express.Express;
   let registryMock!: {

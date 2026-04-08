@@ -40,6 +40,7 @@ spec:
       - file-write
       - shell-exec
       - knowledge-query
+      - sera-core/*
     denied:
       - docker-exec
 

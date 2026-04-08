@@ -207,6 +207,8 @@ spec:
       - schedule-task
       # Delegation & agent management (native built-in skills)
       - delegate-task
+      # MCP tools (sera-core builtin tools)
+      - sera-core/*
     denied:
       - file-write   # requires explicit permission request per session
 

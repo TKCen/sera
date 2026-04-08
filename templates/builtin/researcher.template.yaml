@@ -42,6 +42,7 @@ spec:
       - knowledge-query
       - file-read
       - file-write
+      - sera-core/*
     denied:
       - shell-exec
       - docker-exec

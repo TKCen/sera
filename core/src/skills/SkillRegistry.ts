@@ -85,14 +85,24 @@ export class SkillRegistry {
    * 5. Otherwise, if not in `skills[]`, it's REJECTED.
    */
   isToolAllowedForAgent(manifest: AgentManifest, toolId: string): boolean {
-    const denied = manifest.tools?.denied || [];
+    const tools = manifest.spec?.tools ?? manifest.tools;
+    const denied = tools?.denied || [];
     if (denied.some((p) => SkillRegistry.matches(p, toolId))) {
       return false;
     }
 
+    // Auto-allow sera-core tools if seraManagement capability is present
+    const capabilities =
+      manifest.capabilities ??
+      (manifest.spec?.capabilities ? Object.keys(manifest.spec.capabilities) : []);
+    if (capabilities.includes('seraManagement') && SkillRegistry.matches('sera-core/*', toolId)) {
+      return true;
+    }
+
     // Explicitly allowed via skills array
-    if (manifest.skills) {
-      const isExplicitSkill = manifest.skills.some((s) => {
+    const skills = manifest.spec?.skills ?? manifest.skills;
+    if (skills) {
+      const isExplicitSkill = skills.some((s) => {
         const id = typeof s === 'string' ? s : s.name;
         return id === toolId;
       });
@@ -100,22 +110,22 @@ export class SkillRegistry {
     }
 
     // Allowed via tools.allowed patterns
-    if (manifest.tools?.allowed) {
+    if (tools?.allowed) {
       // If any pattern explicitly matches, allow it
-      if (manifest.tools.allowed.some((p) => SkillRegistry.matches(p, toolId))) {
+      if (tools.allowed.some((p) => SkillRegistry.matches(p, toolId))) {
         return true;
       }
-      // MCP tools (source: 'mcp') pass through unless explicitly denied above.
-      // tools.allowed governs builtin tools only — MCP tools are additive.
-      const skill = this.skills.get(toolId);
-      if (skill?.source === 'mcp') {
-        return true;
-      }
-      return false;
+    }
+
+    // MCP tools (source: 'mcp') pass through unless explicitly denied above.
+    // MCP tools are additive to any explicit skills or tools.allowed lists.
+    const skill = this.skills.get(toolId);
+    if (skill?.source === 'mcp') {
+      return true;
     }
 
     // Open access if neither is specified
-    if (!manifest.skills && !manifest.tools?.allowed) {
+    if (!skills && !tools?.allowed) {
       return true;
     }
 

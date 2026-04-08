@@ -42,6 +42,7 @@ spec:
       - knowledge-store
       - knowledge-query
       - web-search
+      - sera-core/*
     denied:
       - shell-exec
       - docker-exec

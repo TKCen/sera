@@ -276,7 +276,7 @@ function toCompletionResponse(msg: AssistantMessage, modelName: string): ChatCom
 
 /** Inactivity timeout for streaming responses (ms). Configurable via env var. */
 const STREAM_INACTIVITY_TIMEOUT_MS = parseInt(
-  process.env['STREAM_INACTIVITY_TIMEOUT_MS'] ?? '30000',
+  process.env['STREAM_INACTIVITY_TIMEOUT_MS'] ?? '60000',
   10
 );
 
@@ -293,10 +293,15 @@ const STREAM_INACTIVITY_TIMEOUT_MS = parseInt(
  * An inactivity watchdog fires if no chunk is received for
  * STREAM_INACTIVITY_TIMEOUT_MS milliseconds, sending an error SSE and
  * destroying the stream.
+ *
+ * @param eventStream The upstream pi-mono stream
+ * @param modelName   Name of the model for SSE metadata
+ * @param abortController Optional controller to signal upstream cancellation on timeout
  */
 function eventStreamToReadable(
   eventStream: AssistantMessageEventStream,
-  modelName: string
+  modelName: string,
+  abortController?: AbortController
 ): Readable {
   const passThrough = new PassThrough();
   const id = `chatcmpl-${Date.now()}`;
@@ -330,6 +335,9 @@ function eventStreamToReadable(
           error: { message: 'Stream inactivity timeout', type: 'timeout' },
         })}\n\n`;
         passThrough.push(errorEvent);
+        if (abortController) {
+          abortController.abort(new Error('Stream inactivity timeout'));
+        }
         passThrough.destroy(new Error('Stream inactivity timeout'));
       }
     }, STREAM_INACTIVITY_TIMEOUT_MS);
@@ -665,8 +673,16 @@ export class LlmRouter {
    * Start a streaming completion and return a Readable that emits OpenAI SSE.
    * The caller is responsible for piping the stream to the HTTP response.
    * Iterates the failoverModels chain on dispatch errors.
+   *
+   * @param request The chat completion request
+   * @param agentId The ID of the agent making the request
+   * @param signal  Optional AbortSignal for upstream cancellation
    */
-  async chatCompletionStream(request: ChatCompletionRequest, agentId: string): Promise<Readable> {
+  async chatCompletionStream(
+    request: ChatCompletionRequest,
+    agentId: string,
+    signal?: AbortSignal
+  ): Promise<Readable> {
     logger.debug(`LlmRouter stream | agent=${agentId} model=${request.model}`);
 
     const config = this.registry.resolve(request.model);
@@ -674,21 +690,33 @@ export class LlmRouter {
     let lastError: Error | null = null;
 
     for (const modelName of failoverChain) {
+      if (signal?.aborted) break;
+
       try {
         const modelConfig = this.registry.resolve(modelName);
         const context = toContext(request);
+        const abortController = new AbortController();
+
+        // Chain the external signal to our internal abort controller
+        if (signal) {
+          signal.addEventListener('abort', () => abortController.abort(signal.reason), {
+            once: true,
+          });
+        }
+
         const opts: StreamOptions = {
           ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
           ...(request.thinkingLevel
             ? { reasoning: LlmRouter.mapThinkingLevel(request.thinkingLevel) }
             : {}),
+          signal: abortController.signal,
         };
 
         const eventStream = this.dispatch(modelConfig, context, opts);
         if (modelName !== request.model) {
           logger.warn(`Failover: ${request.model} → ${modelName} | agent=${agentId}`);
         }
-        return eventStreamToReadable(eventStream, modelName);
+        return eventStreamToReadable(eventStream, modelName, abortController);
       } catch (err) {
         lastError = err as Error;
         const is429 =

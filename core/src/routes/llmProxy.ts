@@ -81,6 +81,9 @@ export function createLlmProxyRouter(
   const authMiddleware = createAuthMiddleware(identityService, authService);
   const contextAssembler = new ContextAssembler(pool, orchestrator);
 
+  // Track consecutive metering service failures to implement a fail-closed circuit breaker
+  let consecutiveMeteringFailures = 0;
+
   // ── POST /chat/completions ─────────────────────────────────────────────────
 
   router.post(
@@ -100,9 +103,22 @@ export function createLlmProxyRouter(
       let budget;
       try {
         budget = await meteringService.checkBudget(agentId);
+        consecutiveMeteringFailures = 0; // Reset on success
       } catch (err: unknown) {
-        logger.error('Budget check failed (allowing request):', err);
-        // Fail-open: if metering DB is down, allow the request but log it
+        consecutiveMeteringFailures++;
+        logger.error(`Budget check failed (${consecutiveMeteringFailures}/3):`, err);
+
+        // Fail-closed after 3 consecutive failures
+        if (consecutiveMeteringFailures >= 3) {
+          res.status(503).json({
+            error: 'metering_unavailable',
+            message:
+              'Service temporarily unavailable due to metering system failure. Please try again later.',
+          });
+          return;
+        }
+
+        // Fail-open for the first 2 failures: if metering DB is down, allow the request but log it
         budget = null;
       }
 
@@ -231,17 +247,23 @@ export function createLlmProxyRouter(
           return;
         }
 
+        const streamAbortController = new AbortController();
+
         try {
           logger.info(`Proxy stream | agent=${agentId} model=${modelName}`);
           const streamRes = await llmRouter.chatCompletionStream(
             { ...chatRequest, stream: true },
-            agentId
+            agentId,
+            streamAbortController.signal
           );
 
           res.setHeader('Content-Type', 'text/event-stream');
           res.setHeader('Cache-Control', 'no-cache');
           res.setHeader('Connection', 'keep-alive');
           res.setHeader('X-Accel-Buffering', 'no');
+
+          // Prevent dead client connections from wasting upstream resources (5m timeout)
+          res.socket?.setTimeout(300000);
 
           // ── Metering: intercept SSE chunks to count tokens ──────────────
           let streamedTokens = 0;
@@ -303,49 +325,68 @@ export function createLlmProxyRouter(
               .catch((err) => logger.error('Failed to record streaming metering:', err));
           });
 
-          streamRes.on('error', (err: Error) => {
-            logger.error(`LLM stream error | agent=${agentId}:`, err.message);
-            meteringService
-              .recordUsage({
-                agentId,
-                circleId,
-                model: modelName,
-                promptTokens: 0,
-                completionTokens: streamedTokens,
-                totalTokens: streamedTokens,
-                latencyMs: Date.now() - streamStart,
-                status: 'error',
-              })
-              .catch((merr) => logger.error('Failed to record streaming error metering:', merr));
+          const cleanup = (err?: Error) => {
+            if (err) {
+              logger.error(`LLM stream error | agent=${agentId}:`, err.message);
+              meteringService
+                .recordUsage({
+                  agentId,
+                  circleId,
+                  model: modelName,
+                  promptTokens: 0,
+                  completionTokens: streamedTokens,
+                  totalTokens: streamedTokens,
+                  latencyMs: Date.now() - streamStart,
+                  status: 'error',
+                })
+                .catch((merr) => logger.error('Failed to record streaming error metering:', merr));
 
-            if (!res.headersSent) {
-              const is429 =
-                err instanceof RateLimitedError ||
-                err.message?.includes('429') ||
-                err.message?.toLowerCase().includes('rate limit') ||
-                err.message?.toLowerCase().includes('rate_limit');
-              if (is429) {
-                const retryAfterSec =
-                  err instanceof RateLimitedError ? err.retryAfterSec : undefined;
-                const retryAfterMs = retryAfterSec !== undefined ? retryAfterSec * 1000 : 30000;
-                res.status(429).json({
-                  error: 'rate_limited',
-                  message:
-                    'Upstream provider is rate-limited. Retry shortly or configure failover models.',
-                  retryAfterMs,
-                  ...(retryAfterSec !== undefined ? { retryAfter: retryAfterSec } : {}),
-                });
+              if (!res.headersSent) {
+                const is429 =
+                  err instanceof RateLimitedError ||
+                  err.message?.includes('429') ||
+                  err.message?.toLowerCase().includes('rate limit') ||
+                  err.message?.toLowerCase().includes('rate_limit');
+                if (is429) {
+                  const retryAfterSec =
+                    err instanceof RateLimitedError ? err.retryAfterSec : undefined;
+                  const retryAfterMs = retryAfterSec !== undefined ? retryAfterSec * 1000 : 30000;
+                  res.status(429).json({
+                    error: 'rate_limited',
+                    message:
+                      'Upstream provider is rate-limited. Retry shortly or configure failover models.',
+                    retryAfterMs,
+                    ...(retryAfterSec !== undefined ? { retryAfter: retryAfterSec } : {}),
+                  });
+                } else {
+                  res.status(502).json({
+                    error: {
+                      message: `Upstream LLM error: ${err.message}`,
+                      type: 'upstream_error',
+                    },
+                  });
+                }
               } else {
-                res.status(502).json({
-                  error: {
-                    message: `Upstream LLM error: ${err.message}`,
-                    type: 'upstream_error',
-                  },
-                });
+                res.end();
               }
-            } else {
-              // Headers already sent (partial stream) — just end the response
-              res.end();
+            }
+            streamAbortController.abort();
+            if (!streamRes.destroyed) streamRes.destroy();
+            if (!meter.destroyed) meter.destroy();
+          };
+
+          streamRes.on('error', cleanup);
+          meter.on('error', cleanup);
+
+          streamRes.on('close', () => {
+            logger.debug(`Upstream stream closed | agent=${agentId}`);
+          });
+
+          // If client disconnects, destroy the upstream stream to save resources
+          res.on('close', () => {
+            if (!streamRes.destroyed) {
+              logger.debug(`Client disconnected, destroying upstream stream | agent=${agentId}`);
+              cleanup();
             }
           });
 

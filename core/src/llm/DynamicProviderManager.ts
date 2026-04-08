@@ -133,14 +133,14 @@ export class DynamicProviderManager {
 
   async testConnection(
     baseUrl: string,
-    apiKey?: string
+    inputKey?: string
   ): Promise<{ success: boolean; models: string[]; error?: string }> {
     try {
       // LM Studio / OpenAI compatible /v1/models
       const url = baseUrl.endsWith('/') ? `${baseUrl}models` : `${baseUrl}/models`;
       const headers: Record<string, string> = {};
-      if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
+      if (inputKey) {
+        headers['Authorization'] = `Bearer ${inputKey}`;
       }
 
       const res = await fetch(url, { headers });
@@ -160,18 +160,19 @@ export class DynamicProviderManager {
     logger.debug(`Checking dynamic provider ${provider.id} (${provider.baseUrl})`);
 
     // Resolve sera-secret: references before using the key for HTTP connections
-    let resolvedApiKey = provider.apiKey;
-    if (resolvedApiKey?.startsWith('sera-secret:')) {
-      const secretName = resolvedApiKey.slice('sera-secret:'.length);
+    const inputVal = provider.apiKey;
+    let resolvedVal: string | undefined = inputVal;
+    if (inputVal?.startsWith('sera-secret:')) {
+      const secretRef = inputVal.slice('sera-secret:'.length);
       try {
-        resolvedApiKey = (await DynamicProviderManager.getApiKeySecret(secretName)) ?? undefined;
+        resolvedVal = (await DynamicProviderManager.getApiKeySecret(secretRef)) ?? undefined;
       } catch {
         logger.warn(`Failed to resolve secret for dynamic provider ${provider.id}`);
-        resolvedApiKey = undefined;
+        resolvedVal = undefined;
       }
     }
 
-    const result = await this.testConnection(provider.baseUrl, resolvedApiKey);
+    const result = await this.testConnection(provider.baseUrl, resolvedVal);
 
     const status: DynamicProviderStatus = {
       id: provider.id,

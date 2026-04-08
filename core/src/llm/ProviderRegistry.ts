@@ -453,23 +453,25 @@ export class ProviderRegistry {
    */
   async resolveApiKey(config: ProviderConfig): Promise<string | undefined> {
     // 1. Literal key or sera-secret reference in apiKey field
-    if (config.apiKey) {
-      if (config.apiKey.startsWith('sera-secret:')) {
-        const secretName = config.apiKey.slice('sera-secret:'.length);
-        const val = await ProviderRegistry.getApiKeySecret(secretName);
-        if (val) return val;
+    const inputVal = config.apiKey;
+    if (inputVal) {
+      if (inputVal.startsWith('sera-secret:')) {
+        const secretRef = inputVal.slice('sera-secret:'.length);
+        const resolved = await ProviderRegistry.getApiKeySecret(secretRef);
+        if (resolved) return resolved;
       }
-      return config.apiKey;
+      return inputVal;
     }
 
     // 2. Env var or sera-secret reference
-    if (config.apiKeyEnvVar) {
-      if (config.apiKeyEnvVar.startsWith('sera-secret:')) {
-        const secretName = config.apiKeyEnvVar.slice('sera-secret:'.length);
-        const val = await ProviderRegistry.getApiKeySecret(secretName);
-        if (val) return val;
+    const envRef = config.apiKeyEnvVar;
+    if (envRef) {
+      if (envRef.startsWith('sera-secret:')) {
+        const secretRef = envRef.slice('sera-secret:'.length);
+        const resolved = await ProviderRegistry.getApiKeySecret(secretRef);
+        if (resolved) return resolved;
       }
-      const envVal = process.env[config.apiKeyEnvVar];
+      const envVal = process.env[envRef];
       if (envVal) return envVal;
     }
 
@@ -508,12 +510,13 @@ export class ProviderRegistry {
   async hydrateSecrets(): Promise<void> {
     let hydrated = 0;
     for (const [name, cfg] of this.configs.entries()) {
-      if (cfg.apiKeyEnvVar?.startsWith('sera-secret:')) {
-        const secretName = cfg.apiKeyEnvVar.slice('sera-secret:'.length);
+      const envRef = cfg.apiKeyEnvVar;
+      if (envRef?.startsWith('sera-secret:')) {
+        const secretRef = envRef.slice('sera-secret:'.length);
         try {
-          const val = await ProviderRegistry.getApiKeySecret(secretName);
-          if (val) {
-            cfg.apiKey = val;
+          const resolved = await ProviderRegistry.getApiKeySecret(secretRef);
+          if (resolved) {
+            cfg.apiKey = resolved;
             hydrated++;
           }
         } catch {

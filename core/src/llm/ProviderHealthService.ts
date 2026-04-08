@@ -69,10 +69,10 @@ export class ProviderHealthService {
 
       // OpenAI-compatible /models endpoint
       if (config.baseUrl) {
-        const apiKey = registry
+        const resolvedVal = registry
           ? await registry.resolveApiKey(config)
           : this.resolveApiKeyLegacy(config);
-        return await this.discoverOpenAIModels(config.baseUrl, apiKey);
+        return await this.discoverOpenAIModels(config.baseUrl, resolvedVal);
       }
 
       return [];
@@ -98,11 +98,11 @@ export class ProviderHealthService {
       }
 
       if (config.baseUrl) {
-        const apiKey = this.resolveApiKeyLegacy(config);
+        const resolvedVal = this.resolveApiKeyLegacy(config);
 
         // Try /models endpoint first (OpenAI-compatible)
         try {
-          const models = await this.discoverOpenAIModels(config.baseUrl, apiKey);
+          const models = await this.discoverOpenAIModels(config.baseUrl, resolvedVal);
           return {
             reachable: true,
             latencyMs: Date.now() - start,
@@ -178,9 +178,9 @@ export class ProviderHealthService {
     }
   }
 
-  private async discoverOpenAIModels(baseUrl: string, apiKey?: string): Promise<string[]> {
+  private async discoverOpenAIModels(baseUrl: string, inputKey?: string): Promise<string[]> {
     const headers: Record<string, string> = {};
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (inputKey) headers['Authorization'] = `Bearer ${inputKey}`;
 
     const res = await fetchWithTimeout(`${baseUrl}/models`, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -201,13 +201,13 @@ export class ProviderHealthService {
     config: ProviderConfig,
     registry?: { resolveApiKey: (c: ProviderConfig) => Promise<string | undefined> }
   ): Promise<string[]> {
-    const apiKey = registry
+    const resolvedVal = registry
       ? await registry.resolveApiKey(config)
       : this.resolveApiKeyLegacy(config);
-    if (!apiKey) throw new Error('GOOGLE_API_KEY not configured');
+    if (!resolvedVal) throw new Error('GOOGLE_API_KEY not configured');
 
     const res = await fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${resolvedVal}`
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 

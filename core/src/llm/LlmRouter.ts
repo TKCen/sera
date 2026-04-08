@@ -566,9 +566,9 @@ export class LlmRouter {
     }
 
     const model = this.buildModel(config);
-    const apiKey = await this.registry.resolveApiKey(config);
+    const resolvedVal = await this.registry.resolveApiKey(config);
     const opts: StreamOptions = {
-      ...(apiKey ? { apiKey } : {}),
+      ...(resolvedVal ? { apiKey: resolvedVal } : {}),
       ...extraOptions,
     };
 

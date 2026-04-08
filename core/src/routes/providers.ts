@@ -169,19 +169,27 @@ export function createProvidersRouter(
       return;
     }
 
-    const { modelName, api, provider, baseUrl, apiKey, apiKeyEnvVar, description } = parsed.data;
+    const {
+      modelName,
+      api,
+      provider,
+      baseUrl,
+      apiKey: inputKey,
+      apiKeyEnvVar: envRef,
+      description,
+    } = parsed.data;
 
     try {
       // If no API key provided, try to inherit from an existing model of the same provider
-      let resolvedApiKey = apiKey;
+      let activeKey = inputKey;
       let resolvedBaseUrl = baseUrl;
-      if (!resolvedApiKey && provider) {
+      if (!activeKey && provider) {
         const existing = llmRouter
           .getRegistry()
           .list()
           .find((c) => c.provider === provider && c.apiKey);
         if (existing) {
-          resolvedApiKey = existing.apiKey;
+          activeKey = existing.apiKey;
           if (!resolvedBaseUrl && existing.baseUrl) resolvedBaseUrl = existing.baseUrl;
         }
       }
@@ -191,8 +199,8 @@ export function createProvidersRouter(
         api,
         ...(provider ? { provider } : {}),
         ...(resolvedBaseUrl ? { baseUrl: resolvedBaseUrl } : {}),
-        ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
-        ...(apiKeyEnvVar ? { apiKeyEnvVar } : {}),
+        ...(activeKey ? { apiKey: activeKey } : {}),
+        ...(envRef ? { apiKeyEnvVar: envRef } : {}),
         ...(description ? { description } : {}),
       });
       logger.info(
@@ -284,14 +292,14 @@ export function createProvidersRouter(
     '/dynamic/test',
     requireRole(['admin', 'operator']),
     async (req: Request, res: Response) => {
-      const { baseUrl, apiKey } = req.body;
+      const { baseUrl, apiKey: inputKey } = req.body;
       if (!baseUrl) {
         res.status(400).json({ error: 'baseUrl is required' });
         return;
       }
 
       try {
-        const result = await dynamicProviderManager.testConnection(baseUrl, apiKey);
+        const result = await dynamicProviderManager.testConnection(baseUrl, inputKey);
         res.json(result);
       } catch (err: unknown) {
         res.status(502).json({ success: false, error: (err as Error).message });

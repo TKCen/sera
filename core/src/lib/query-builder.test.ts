@@ -37,13 +37,9 @@ describe('QueryBuilder', () => {
     expect(qb.getParams()).toEqual(['pending', 50, 0]);
   });
 
-  it('handles conditions with multiple placeholders (if needed in future, but currently replaced one by one)', () => {
-    // Current implementation only replaces first '?'
-    // If we wanted to support multiple, we'd need a different regex.
-    // Let's test current behavior.
+  it('handles conditions with multiple placeholders using the same value', () => {
     qb.addCondition('col1 = ? OR col2 = ?', 'val');
-    // It only replaces the first one with $1. The second '?' remains.
-    // Actually, string.replace(string, string) only replaces the first occurrence.
-    expect(qb.buildWhere()).toBe(' WHERE col1 = $1 OR col2 = ?');
+    expect(qb.buildWhere()).toBe(' WHERE col1 = $1 OR col2 = $1');
+    expect(qb.getParams()).toEqual(['val']);
   });
 });

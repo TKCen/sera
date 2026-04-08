@@ -29,16 +29,8 @@ export const createAuditRouter = (): Router => {
    */
   router.get('/', requireRole(['admin']), async (req, res) => {
     try {
-      const {
-        actorId,
-        eventType,
-        from,
-        to,
-        limit,
-        offset,
-        principalId,
-        delegationId,
-      } = AuditQuerySchema.parse(req.query);
+      const { actorId, eventType, from, to, limit, offset, principalId, delegationId } =
+        AuditQuerySchema.parse(req.query);
 
       // Delegation-specific filters use raw SQL via pool; otherwise use AuditService
       if (principalId || delegationId) {
@@ -55,10 +47,7 @@ export const createAuditRouter = (): Router => {
         const whereClause = qb.buildWhere();
         const params = qb.getParams();
 
-        const countRes = await pool.query(
-          `SELECT COUNT(*) FROM audit_trail${whereClause}`,
-          params
-        );
+        const countRes = await pool.query(`SELECT COUNT(*) FROM audit_trail${whereClause}`, params);
         const total = parseInt(countRes.rows[0].count, 10);
 
         const limitPlaceholder = qb.addParam(limit);

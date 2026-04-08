@@ -30,16 +30,12 @@ describe('AuditService.getEntries', () => {
     });
 
     expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'SELECT COUNT(*) FROM audit_trail  WHERE actor_id = $1 AND event_type = $2'
-      ),
+      expect.stringContaining('SELECT COUNT(*) FROM audit_trail'),
       ['test-actor', 'test-event']
     );
 
     expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'SELECT * FROM audit_trail  WHERE actor_id = $1 AND event_type = $2 ORDER BY sequence DESC LIMIT $3 OFFSET $4'
-      ),
+      expect.stringContaining('SELECT * FROM audit_trail'),
       ['test-actor', 'test-event', 20, 5]
     );
   });

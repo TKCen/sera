@@ -14,7 +14,8 @@ export class QueryBuilder {
   addCondition(condition: string, value: unknown): this {
     this.params.push(value);
     const placeholder = `$${this.params.length}`;
-    this.conditions.push(condition.replace('?', placeholder));
+    // Use split/join to replace all occurrences of '?'
+    this.conditions.push(condition.split('?').join(placeholder));
     return this;
   }
 

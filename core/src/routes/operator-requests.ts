@@ -11,9 +11,10 @@ import type { IntercomService } from '../intercom/IntercomService.js';
 import { requireRole } from '../auth/authMiddleware.js';
 import { z } from 'zod';
 import { QueryBuilder } from '../lib/query-builder.js';
+import { rateLimitStub } from '../middleware/rateLimitStub.js';
 
 const OperatorRequestQuerySchema = z.object({
-  status: z.string().optional(),
+  status: z.enum(['pending', 'approved', 'rejected', 'resolved']).optional(),
   agentId: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -25,22 +26,27 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * GET /api/operator-requests/pending/count — Count pending requests (for badges)
    * NOTE: Registered before parameterised routes to avoid Express 5 shadowing.
    */
-  router.get('/pending/count', requireRole(['admin', 'operator']), async (_req, res) => {
-    try {
-      const { rows } = await pool.query(
-        "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
-      );
-      res.json({ count: rows[0]!.count });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
+  router.get(
+    '/pending/count',
+    rateLimitStub,
+    requireRole(['admin', 'operator']),
+    async (_req, res) => {
+      try {
+        const { rows } = await pool.query(
+          "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
+        );
+        res.json({ count: rows[0]!.count });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
     }
-  });
+  );
 
   /**
    * GET /api/operator-requests — List operator requests
    * Query params: status, agentId, limit
    */
-  router.get('/', requireRole(['admin', 'operator']), async (req, res) => {
+  router.get('/', rateLimitStub, requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const { status, agentId, limit } = OperatorRequestQuerySchema.parse(req.query);
 

@@ -390,13 +390,16 @@ export class ProviderRegistry {
   }
 
   /** List providers with auth status enrichment (for the UI). */
-  listWithStatus(): (ProviderConfig & { authStatus: 'configured' | 'missing' | 'not-required' })[] {
-    return this.list().map((cfg) => ({
-      ...cfg,
-      // Strip literal API keys from the response
-      apiKey: cfg.apiKey ? '***' : undefined,
-      authStatus: this.getAuthStatus(cfg),
-    }));
+  listWithStatus(): (Omit<ProviderConfig, 'apiKey'> & {
+    authStatus: 'configured' | 'missing' | 'not-required';
+  })[] {
+    return this.list().map((cfg) => {
+      const { apiKey: _apiKey, ...rest } = cfg;
+      return {
+        ...rest,
+        authStatus: this.getAuthStatus(cfg),
+      };
+    });
   }
 
   /**
@@ -413,12 +416,20 @@ export class ProviderRegistry {
       const clone = { ...cfg };
 
       // Move real API keys to secrets store, keep only the reference in the config file
-      if (clone.apiKey && !LOCAL_PLACEHOLDERS.has(clone.apiKey)) {
+      if (
+        clone.apiKey &&
+        !LOCAL_PLACEHOLDERS.has(clone.apiKey) &&
+        !clone.apiKey.startsWith('sera-secret:')
+      ) {
         const secretName = `provider-key:${clone.provider ?? clone.modelName}`;
         try {
           await ProviderRegistry.storeApiKeySecret(secretName, clone.apiKey);
           clone.apiKeyEnvVar = `sera-secret:${secretName}`;
           delete clone.apiKey;
+
+          // Update in-memory map
+          cfg.apiKeyEnvVar = clone.apiKeyEnvVar;
+          delete cfg.apiKey;
         } catch {
           // Secrets store not available (no SECRETS_MASTER_KEY) — keep literal key
           // but log a warning
@@ -438,11 +449,18 @@ export class ProviderRegistry {
 
   /**
    * Resolve the effective API key for a provider config.
-   * Resolution order: literal apiKey → apiKeyEnvVar (env or secrets) → standard env var.
+   * Resolution order: literal apiKey → apiKeyEnvVar (env or secrets) → local placeholder → standard env var.
    */
   async resolveApiKey(config: ProviderConfig): Promise<string | undefined> {
-    // 1. Literal key
-    if (config.apiKey) return config.apiKey;
+    // 1. Literal key or sera-secret reference in apiKey field
+    if (config.apiKey) {
+      if (config.apiKey.startsWith('sera-secret:')) {
+        const secretName = config.apiKey.slice('sera-secret:'.length);
+        const val = await ProviderRegistry.getApiKeySecret(secretName);
+        if (val) return val;
+      }
+      return config.apiKey;
+    }
 
     // 2. Env var or sera-secret reference
     if (config.apiKeyEnvVar) {
@@ -455,7 +473,13 @@ export class ProviderRegistry {
       if (envVal) return envVal;
     }
 
-    // 3. Standard provider env vars
+    // 3. Local providers don't require auth — return placeholder so pi-mono
+    // includes an Authorization header (LM Studio accepts any value).
+    if (config.provider === 'lmstudio' || config.provider === 'ollama') {
+      return 'lm-studio';
+    }
+
+    // 4. Standard provider env vars
     if (config.provider) {
       const standardEnvVars: Record<string, string[]> = {
         openai: ['OPENAI_API_KEY'],
@@ -601,7 +625,12 @@ export class ProviderRegistry {
       name,
       value,
       { operator: { sub: 'system', roles: ['admin'] } },
-      { description: `Provider API key: ${name}`, allowedAgents: ['*'], tags: ['provider-key'] }
+      {
+        description: `Provider API key: ${name}`,
+        allowedAgents: ['*'],
+        tags: ['provider-key'],
+        exposure: 'per-call',
+      }
     );
   }
 

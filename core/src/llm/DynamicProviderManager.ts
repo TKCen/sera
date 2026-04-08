@@ -61,6 +61,8 @@ export class DynamicProviderManager {
         try {
           await DynamicProviderManager.storeApiKeySecret(secretName, clone.apiKey);
           clone.apiKey = `sera-secret:${secretName}`;
+          // Update in-memory map to use the secret reference
+          cfg.apiKey = clone.apiKey;
         } catch {
           // Secrets store not available (no SECRETS_MASTER_KEY) — keep literal key
           logger.warn(
@@ -87,6 +89,7 @@ export class DynamicProviderManager {
         description: `Dynamic provider API key: ${name}`,
         allowedAgents: ['*'],
         tags: ['provider-key'],
+        exposure: 'per-call',
       }
     );
   }
@@ -180,18 +183,22 @@ export class DynamicProviderManager {
     this.statuses.set(provider.id, status);
 
     if (result.success) {
-      const modelConfigs: ProviderConfig[] = result.models.map((modelId) => ({
-        // We use a prefix to identify models from this provider
-        modelName: `dp-${provider.id}-${modelId}`,
-        api: 'openai-completions',
-        provider: 'lmstudio', // Default for now
-        baseUrl: provider.baseUrl,
-        // Use the in-memory provider config's apiKey (may be a sera-secret: ref).
-        // LlmRouter.resolveApiKey handles sera-secret: resolution via hydrateSecrets().
-        // Fall back to the placeholder so LM Studio's auth header is always sent.
-        apiKey: provider.apiKey || 'lm-studio',
-        description: `Discovered from ${provider.name} (${modelId})`,
-      }));
+      const modelConfigs: ProviderConfig[] = result.models.map((modelId) => {
+        const isSecret = provider.apiKey?.startsWith('sera-secret:');
+        return {
+          // We use a prefix to identify models from this provider
+          modelName: `dp-${provider.id}-${modelId}`,
+          api: 'openai-completions',
+          provider: 'lmstudio', // Default for now
+          baseUrl: provider.baseUrl,
+          // Use the in-memory provider config's apiKey (may be a sera-secret: ref).
+          // Fall back to the placeholder so LM Studio's auth header is always sent.
+          ...(isSecret
+            ? { apiKeyEnvVar: provider.apiKey }
+            : { apiKey: provider.apiKey || 'lm-studio' }),
+          description: `Discovered from ${provider.name} (${modelId})`,
+        };
+      });
       this.registry.registerDynamicModels(provider.id, modelConfigs);
     } else {
       logger.warn(`Failed to discover models from ${provider.id}: ${result.error}`);
@@ -220,12 +227,11 @@ export class DynamicProviderManager {
     await this.save();
   }
 
-  /** Returns dynamic provider configs with API keys redacted for API responses. */
-  listProviders(): (Omit<DynamicProviderConfig, 'apiKey'> & { apiKey?: string })[] {
+  /** Returns dynamic provider configs with API keys omitted for API responses. */
+  listProviders(): Omit<DynamicProviderConfig, 'apiKey'>[] {
     return [...this.providers.values()].map((cfg) => {
       const { apiKey: _apiKey, ...rest } = cfg;
-      // Redact literal keys; show whether a key is configured without revealing the value
-      return cfg.apiKey ? { ...rest, apiKey: '***' } : { ...rest };
+      return rest;
     });
   }
 

@@ -28,7 +28,7 @@ export class LlmRouterProvider implements LLMProvider {
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
 
-    const eventStream = this.router.getEventStream(request);
+    const eventStream = await this.router.getEventStream(request);
     const msg = await eventStream.result();
 
     let textContent = '';
@@ -87,7 +87,7 @@ export class LlmRouterProvider implements LLMProvider {
       ...(this.temperature !== undefined ? { temperature: this.temperature } : {}),
     };
 
-    const eventStream = this.router.getEventStream(request);
+    const eventStream = await this.router.getEventStream(request);
 
     for await (const event of eventStream) {
       if (event.type === 'text_delta') {

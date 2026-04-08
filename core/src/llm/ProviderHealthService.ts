@@ -51,11 +51,14 @@ export class ProviderHealthService {
    * Discover models available at a provider's endpoint.
    * Works for OpenAI-compatible, Ollama, and Google AI Studio.
    */
-  async discoverModels(config: ProviderConfig): Promise<string[]> {
+  async discoverModels(
+    config: ProviderConfig,
+    registry?: { resolveApiKey: (c: ProviderConfig) => Promise<string | undefined> }
+  ): Promise<string[]> {
     try {
       // Google AI Studio native models API
       if (config.provider === 'google') {
-        return await this.discoverGoogleModels(config);
+        return await this.discoverGoogleModels(config, registry);
       }
 
       // Ollama native API
@@ -66,7 +69,10 @@ export class ProviderHealthService {
 
       // OpenAI-compatible /models endpoint
       if (config.baseUrl) {
-        return await this.discoverOpenAIModels(config.baseUrl, this.resolveApiKey(config));
+        const apiKey = registry
+          ? await registry.resolveApiKey(config)
+          : this.resolveApiKeyLegacy(config);
+        return await this.discoverOpenAIModels(config.baseUrl, apiKey);
       }
 
       return [];
@@ -92,7 +98,7 @@ export class ProviderHealthService {
       }
 
       if (config.baseUrl) {
-        const apiKey = this.resolveApiKey(config);
+        const apiKey = this.resolveApiKeyLegacy(config);
 
         // Try /models endpoint first (OpenAI-compatible)
         try {
@@ -191,8 +197,13 @@ export class ProviderHealthService {
     return (data.models ?? []).map((m) => m.name);
   }
 
-  private async discoverGoogleModels(config: ProviderConfig): Promise<string[]> {
-    const apiKey = this.resolveApiKey(config);
+  private async discoverGoogleModels(
+    config: ProviderConfig,
+    registry?: { resolveApiKey: (c: ProviderConfig) => Promise<string | undefined> }
+  ): Promise<string[]> {
+    const apiKey = registry
+      ? await registry.resolveApiKey(config)
+      : this.resolveApiKeyLegacy(config);
     if (!apiKey) throw new Error('GOOGLE_API_KEY not configured');
 
     const res = await fetchWithTimeout(
@@ -209,7 +220,8 @@ export class ProviderHealthService {
       .map((m) => m.name.replace('models/', ''));
   }
 
-  private resolveApiKey(config: ProviderConfig): string | undefined {
+  /** @deprecated use registry.resolveApiKey for secret support */
+  private resolveApiKeyLegacy(config: ProviderConfig): string | undefined {
     if (config.apiKey) return config.apiKey;
     if (config.apiKeyEnvVar) return process.env[config.apiKeyEnvVar];
 

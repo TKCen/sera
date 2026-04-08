@@ -247,12 +247,9 @@ export function createProvidersRouter(
 
       try {
         await dynamicProviderManager.addProvider(parsed.data);
-        // Return the config without the literal API key — it has been moved to the secrets store
+        // Return the config without the API key — it has been moved to the secrets store
         const { apiKey: _apiKey, ...safeConfig } = parsed.data;
-        res.status(201).json({
-          ...safeConfig,
-          ...(parsed.data.apiKey ? { apiKey: '***' } : {}),
-        });
+        res.status(201).json(safeConfig);
       } catch (err: unknown) {
         logger.error('Failed to add dynamic provider:', err);
         res.status(502).json({ error: (err as Error).message });
@@ -523,7 +520,7 @@ export function createProvidersRouter(
         return res.status(404).json({ error: `Provider '${req.params.modelName}' not found` });
       }
 
-      const models = await healthService.discoverModels(config);
+      const models = await healthService.discoverModels(config, registry);
       res.json({ provider: config.modelName, models });
     } catch (err: unknown) {
       logger.error('Model discovery failed:', err);

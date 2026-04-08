@@ -262,6 +262,27 @@ describe('DynamicProviderManager', () => {
     });
   });
 
+  describe('listProviders', () => {
+    it('should omit apiKey from the returned list', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      const manager = new DynamicProviderManager(mockRegistry, configPath);
+
+      await manager.addProvider({
+        id: 't1',
+        name: 'T1',
+        type: 'lm-studio',
+        baseUrl: 'http://t1',
+        apiKey: 'secret-key',
+        enabled: true,
+        intervalMs: 1000,
+      });
+
+      const providers = manager.listProviders();
+      expect(providers[0]).not.toHaveProperty('apiKey');
+      expect(providers[0]?.id).toBe('t1');
+    });
+  });
+
   describe('removeProvider', () => {
     it('should remove provider, clear timer, call unregister, and save', async () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);

@@ -95,9 +95,9 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const result = await manager.testConnection('http://test-url', 'test-key');
+      const result = await manager.testConnection('https://test-url', 'test-key');
 
-      expect(global.fetch).toHaveBeenCalledWith('http://test-url/models', {
+      expect(global.fetch).toHaveBeenCalledWith('https://test-url/models', {
         headers: { Authorization: 'Bearer test-key' },
       });
       expect(result.success).toBe(true);
@@ -114,9 +114,9 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      await manager.testConnection('http://test-url/', 'test-key');
+      await manager.testConnection('https://test-url/', 'test-key');
 
-      expect(global.fetch).toHaveBeenCalledWith('http://test-url/models', {
+      expect(global.fetch).toHaveBeenCalledWith('https://test-url/models', {
         headers: { Authorization: 'Bearer test-key' },
       });
     });
@@ -131,7 +131,7 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const result = await manager.testConnection('http://test-url');
+      const result = await manager.testConnection('https://test-url');
 
       expect(result.success).toBe(false);
       expect(result.models).toEqual([]);
@@ -144,7 +144,7 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const result = await manager.testConnection('http://test-url');
+      const result = await manager.testConnection('https://test-url');
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Network error');
@@ -164,7 +164,7 @@ describe('DynamicProviderManager', () => {
         id: 'new-id',
         name: 'New',
         type: 'lm-studio',
-        baseUrl: 'http://new',
+        baseUrl: 'https://new-provider.com',
         enabled: true,
         intervalMs: 5000,
       };
@@ -224,7 +224,7 @@ describe('DynamicProviderManager', () => {
             id: 't1',
             name: 'T1',
             type: 'lm-studio',
-            baseUrl: 'http://t1',
+            baseUrl: 'https://t1.com',
             enabled: true,
             intervalMs: 1000,
           },
@@ -232,7 +232,7 @@ describe('DynamicProviderManager', () => {
             id: 't2',
             name: 'T2',
             type: 'lm-studio',
-            baseUrl: 'http://t2',
+            baseUrl: 'https://t2.com',
             enabled: false,
             intervalMs: 1000,
           },
@@ -250,7 +250,7 @@ describe('DynamicProviderManager', () => {
 
       // Should check only t1 immediately
       expect(testConnectionSpy).toHaveBeenCalledTimes(1);
-      expect(testConnectionSpy).toHaveBeenCalledWith('http://t1', undefined);
+      expect(testConnectionSpy).toHaveBeenCalledWith('https://t1.com', undefined);
 
       testConnectionSpy.mockClear();
 
@@ -292,7 +292,7 @@ describe('DynamicProviderManager', () => {
         id: 't1',
         name: 'T1',
         type: 'lm-studio',
-        baseUrl: 'http://t1',
+        baseUrl: 'https://t1.com',
         enabled: true,
         intervalMs: 1000,
       });
@@ -320,7 +320,7 @@ describe('DynamicProviderManager', () => {
         id: 't1',
         name: 'T1',
         type: 'lm-studio',
-        baseUrl: 'http://t1',
+        baseUrl: 'https://t1.com',
         enabled: true,
         intervalMs: 1000,
       });
@@ -358,7 +358,7 @@ describe('DynamicProviderManager', () => {
         id: 't2',
         name: 'T2',
         type: 'lm-studio',
-        baseUrl: 'http://t2',
+        baseUrl: 'https://t2.com',
         enabled: true,
         intervalMs: 1000,
       });

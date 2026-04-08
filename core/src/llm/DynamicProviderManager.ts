@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { validateProviderBaseUrl } from './url-validation.js';
 import { Logger } from '../lib/logger.js';
 import type {
   DynamicProviderConfig,
@@ -135,6 +136,10 @@ export class DynamicProviderManager {
     baseUrl: string,
     inputKey?: string
   ): Promise<{ success: boolean; models: string[]; error?: string }> {
+    const validation = validateProviderBaseUrl(baseUrl);
+    if (!validation.valid) {
+      return { success: false, models: [], error: validation.reason };
+    }
     try {
       // LM Studio / OpenAI compatible /v1/models
       const url = baseUrl.endsWith('/') ? `${baseUrl}models` : `${baseUrl}/models`;
@@ -170,6 +175,19 @@ export class DynamicProviderManager {
         logger.warn(`Failed to resolve secret for dynamic provider ${provider.id}`);
         resolvedVal = undefined;
       }
+    }
+
+    const validation = validateProviderBaseUrl(provider.baseUrl, provider.id);
+    if (!validation.valid) {
+      logger.warn(`Skipping check for dynamic provider ${provider.id}: ${validation.reason}`);
+      this.statuses.set(provider.id, {
+        id: provider.id,
+        lastCheck: new Date().toISOString(),
+        status: 'error',
+        error: validation.reason,
+        discoveredModels: [],
+      });
+      return;
     }
 
     const result = await this.testConnection(provider.baseUrl, resolvedVal);

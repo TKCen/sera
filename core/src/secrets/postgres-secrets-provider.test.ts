@@ -128,6 +128,61 @@ describe('PostgresSecretsProvider', () => {
       expect(value).toBeNull();
     });
 
+    it('should allow access if circle is allowed', async () => {
+      const provider = new PostgresSecretsProvider();
+      const secretName = 'circle-secret';
+      const secretValue = 'circle-data';
+      const agentContext = {
+        agentId: 'agent-1',
+        agentName: 'some-agent',
+        agentCircle: 'circle-1',
+      };
+
+      const { encryptedValue, iv } = (
+        provider as unknown as { encrypt: (v: string) => { encryptedValue: Buffer; iv: Buffer } }
+      ).encrypt(secretValue);
+
+      vi.mocked(db.query).mockResolvedValue({
+        rowCount: 1,
+        rows: [
+          {
+            encrypted_value: encryptedValue,
+            iv: iv,
+            allowed_agents: [],
+            allowed_circles: ['circle-1'],
+          },
+        ],
+      } as unknown as import('pg').QueryResult<Record<string, unknown>>);
+
+      const value = await provider.get(secretName, agentContext);
+      expect(value).toBe(secretValue);
+    });
+
+    it('should deny access if agent and circle are not allowed', async () => {
+      const provider = new PostgresSecretsProvider();
+      const secretName = 'restricted-secret';
+      const agentContext = {
+        agentId: 'agent-1',
+        agentName: 'some-agent',
+        agentCircle: 'circle-2',
+      };
+
+      vi.mocked(db.query).mockResolvedValue({
+        rowCount: 1,
+        rows: [
+          {
+            encrypted_value: Buffer.from('...'),
+            iv: Buffer.alloc(12),
+            allowed_agents: ['authorized-agent'],
+            allowed_circles: ['circle-1'],
+          },
+        ],
+      } as unknown as import('pg').QueryResult<Record<string, unknown>>);
+
+      const value = await provider.get(secretName, agentContext);
+      expect(value).toBeNull();
+    });
+
     it('should allow access if "*" is in allowed_agents', async () => {
       const provider = new PostgresSecretsProvider();
 

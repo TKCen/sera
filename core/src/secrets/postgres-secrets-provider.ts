@@ -60,7 +60,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
 
   async get(name: string, context: SecretAccessContext): Promise<string | null> {
     const result = await query(
-      'SELECT encrypted_value, iv, allowed_agents FROM secrets WHERE name = $1 AND deleted_at IS NULL',
+      'SELECT encrypted_value, iv, allowed_agents, allowed_circles FROM secrets WHERE name = $1 AND deleted_at IS NULL',
       [name]
     );
 
@@ -68,13 +68,18 @@ export class PostgresSecretsProvider implements SecretsProvider {
       return null;
     }
 
-    const { encrypted_value, iv, allowed_agents } = result.rows[0];
+    const { encrypted_value, iv, allowed_agents, allowed_circles } = result.rows[0];
 
-    // Access control: operator has full access, agent must be in allowed_agents
+    // Access control: operator has full access, agent must be in allowed_agents or its circle in allowed_circles
     if (!context.operator) {
-      if (!allowed_agents.includes(context.agentName) && !allowed_agents.includes('*')) {
+      const isAgentAllowed =
+        allowed_agents.includes(context.agentName) || allowed_agents.includes('*');
+      const isCircleAllowed =
+        context.agentCircle && (allowed_circles ?? []).includes(context.agentCircle);
+
+      if (!isAgentAllowed && !isCircleAllowed) {
         logger.warn(
-          `Access denied to secret "${redactSecretName(name)}" for agent "${context.agentName}"`
+          `Access denied to secret "${redactSecretName(name)}" for agent "${context.agentName}" (circle: ${context.agentCircle})`
         );
         return null;
       }
@@ -93,13 +98,14 @@ export class PostgresSecretsProvider implements SecretsProvider {
 
     await query(
       `INSERT INTO secrets (
-        name, encrypted_value, iv, description, allowed_agents, tags, exposure, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        name, encrypted_value, iv, description, allowed_agents, allowed_circles, tags, exposure, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
       ON CONFLICT (name) DO UPDATE SET
         encrypted_value = EXCLUDED.encrypted_value,
         iv = EXCLUDED.iv,
         description = COALESCE(EXCLUDED.description, secrets.description),
         allowed_agents = COALESCE(EXCLUDED.allowed_agents, secrets.allowed_agents),
+        allowed_circles = COALESCE(EXCLUDED.allowed_circles, secrets.allowed_circles),
         tags = COALESCE(EXCLUDED.tags, secrets.tags),
         exposure = COALESCE(EXCLUDED.exposure, secrets.exposure),
         updated_at = NOW()`,
@@ -109,6 +115,7 @@ export class PostgresSecretsProvider implements SecretsProvider {
         iv,
         metadata?.description ?? null,
         metadata?.allowedAgents ?? [],
+        metadata?.allowedCircles ?? [],
         metadata?.tags ?? [],
         metadata?.exposure ?? 'per-call',
       ]

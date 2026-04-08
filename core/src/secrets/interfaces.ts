@@ -1,6 +1,7 @@
 export interface SecretAccessContext {
   agentId?: string;
   agentName?: string;
+  agentCircle?: string;
   operator?: {
     sub: string;
     roles: string[];

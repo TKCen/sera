@@ -416,6 +416,7 @@ export class Orchestrator {
                 const secretValue = await SecretsManager.getInstance().get(secretName, {
                   agentId: instance.id,
                   agentName: instance.name,
+                  agentCircle: resolvedCircleId as string | undefined,
                 });
                 if (secretValue !== null) {
                   // Fetch exposure metadata to determine injection mode

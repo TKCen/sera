@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Knowledge Store
     let knowledge_store = {
-        let host_workspaces = std::env::var("HOST_WORKSPACES_DIR")
+        let _host_workspaces = std::env::var("HOST_WORKSPACES_DIR")
             .unwrap_or_else(|_| "/workspaces".to_string());
         // Use path within container
         let base_dir = std::path::PathBuf::from("/workspaces/knowledge/agents");

@@ -27,6 +27,7 @@ pub async fn list_templates(
             builtin: r.builtin,
             category: r.category,
             spec: r.spec,
+            description: None,
         })
         .collect();
     Ok(Json(templates))
@@ -44,6 +45,7 @@ pub async fn get_template(
         builtin: row.builtin,
         category: row.category,
         spec: row.spec,
+        description: None,
     }))
 }
 
@@ -88,6 +90,7 @@ pub async fn upsert_template(
             builtin: row.builtin,
             category: row.category,
             spec: row.spec,
+            description: None,
         }),
     ))
 }
@@ -121,6 +124,7 @@ pub async fn update_template(
         builtin: row.builtin,
         category: row.category,
         spec: row.spec,
+        description: None,
     }))
 }
 

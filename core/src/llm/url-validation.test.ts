@@ -44,7 +44,9 @@ describe('url-validation', () => {
     it('rejects localhost for non-local providers', () => {
       expect(validateProviderBaseUrl('https://localhost', 'openai')).toMatchObject({
         valid: false,
-        reason: expect.stringContaining('Localhost endpoints are only permitted for local providers'),
+        reason: expect.stringContaining(
+          'Localhost endpoints are only permitted for local providers'
+        ),
       });
     });
 
@@ -57,7 +59,9 @@ describe('url-validation', () => {
 
     it('accepts official origins for cloud providers', () => {
       expect(validateProviderBaseUrl('https://api.openai.com', 'openai')).toEqual({ valid: true });
-      expect(validateProviderBaseUrl('https://api.anthropic.com', 'anthropic')).toEqual({ valid: true });
+      expect(validateProviderBaseUrl('https://api.anthropic.com', 'anthropic')).toEqual({
+        valid: true,
+      });
     });
 
     it('respects SERA_PROVIDER_URL_ALLOWLIST', () => {

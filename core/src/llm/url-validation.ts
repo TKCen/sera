@@ -62,7 +62,7 @@ function isPrivateIPv4(host: string): boolean {
   const ip = ipv4ToInt(host);
   if (ip === null) return false;
   for (const [network, mask] of PRIVATE_IPV4_RANGES) {
-    if (((ip & mask) >>> 0) === (network >>> 0)) return true;
+    if ((ip & mask) >>> 0 === network >>> 0) return true;
   }
   return false;
 }

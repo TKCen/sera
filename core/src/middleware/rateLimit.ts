@@ -18,6 +18,7 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
+import { createHash } from 'node:crypto';
 
 const AGENT_RPM_LIMIT = parseInt(process.env['RATE_LIMIT_AGENT_RPM'] ?? '60', 10);
 const OPERATOR_RPM_LIMIT = parseInt(process.env['RATE_LIMIT_OPERATOR_RPM'] ?? '120', 10);
@@ -50,13 +51,27 @@ setInterval(
  * Sets standard X-RateLimit-* headers and enforces limits.
  * Responds with 429 if the limit is exceeded.
  */
-export function rateLimiter(req: Request, res: Response, next: NextFunction): void {
+export function rateLimit(req: Request, res: Response, next: NextFunction): void {
   const isOperator = !!req.operator;
-  const agentId = req.agentIdentity?.agentId ?? req.operator?.sub ?? 'unknown';
+  const identity = req.operator?.sub ?? req.agentIdentity?.agentId;
+
+  // Identification strategy for the bucket key:
+  // 1. Authenticated identity (best)
+  // 2. Authorization header (good for pre-auth identification)
+  // 3. Client IP (fallback)
+  let clientId: string;
+  if (identity) {
+    clientId = identity;
+  } else {
+    const rawId = req.headers.authorization ?? req.ip ?? 'anonymous';
+    // Hash to avoid exposing tokens/IPs in keys and keep them a fixed size
+    clientId = createHash('sha256').update(rawId).digest('hex');
+  }
+
   const limit = isOperator ? OPERATOR_RPM_LIMIT : AGENT_RPM_LIMIT;
 
   const now = Date.now();
-  let bucket = buckets.get(agentId);
+  let bucket = buckets.get(clientId);
 
   if (!bucket) {
     bucket = {
@@ -64,7 +79,7 @@ export function rateLimiter(req: Request, res: Response, next: NextFunction): vo
       lastRefill: now,
       limit: limit,
     };
-    buckets.set(agentId, bucket);
+    buckets.set(clientId, bucket);
   } else {
     // Refill tokens: (time elapsed in ms / 60000 ms per minute) * limit
     const elapsed = now - bucket.lastRefill;

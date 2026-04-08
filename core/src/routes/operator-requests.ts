@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { pool } from '../lib/database.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { requireRole } from '../auth/authMiddleware.js';
-import { rateLimiter } from '../middleware/rateLimiter.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 export function createOperatorRequestsRouter(intercom?: IntercomService): Router {
   const router = Router();
@@ -18,27 +18,22 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * GET /api/operator-requests/pending/count — Count pending requests (for badges)
    * NOTE: Registered before parameterised routes to avoid Express 5 shadowing.
    */
-  router.get(
-    '/pending/count',
-    rateLimiter,
-    requireRole(['admin', 'operator']),
-    async (_req, res) => {
-      try {
-        const { rows } = await pool.query(
-          "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
-        );
-        res.json({ count: rows[0]!.count });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
+  router.get('/pending/count', rateLimit, requireRole(['admin', 'operator']), async (_req, res) => {
+    try {
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
+      );
+      res.json({ count: rows[0]!.count });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
-  );
+  });
 
   /**
    * GET /api/operator-requests — List operator requests
    * Query params: status, agentId, limit
    */
-  router.get('/', rateLimiter, requireRole(['admin', 'operator']), async (req, res) => {
+  router.get('/', rateLimit, requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const { status, agentId, limit: limitStr } = req.query;
       const limit = Math.min(Math.max(parseInt(String(limitStr || '50'), 10) || 50, 1), 200);
@@ -88,11 +83,7 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * POST /api/operator-requests/:id/respond — Respond to a request
    * Body: { action: 'approved' | 'rejected' | 'resolved', response?: string | object }
    */
-  router.post(
-    '/:id/respond',
-    rateLimiter,
-    requireRole(['admin', 'operator']),
-    async (req, res) => {
+  router.post('/:id/respond', rateLimit, requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const { id } = req.params;
       const { action, response } = req.body as {

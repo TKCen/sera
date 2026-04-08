@@ -92,10 +92,8 @@ vi.mock('../llm/CircuitBreakerService.js', () => {
   };
 });
 
-vi.mock('../middleware/rateLimiter.js', () => ({
-  rateLimiter: vi
-    .fn()
-    .mockImplementation((_req: unknown, _res: unknown, next: () => void) => next()),
+vi.mock('../middleware/rateLimit.js', () => ({
+  rateLimit: vi.fn().mockImplementation((_req: unknown, _res: unknown, next: () => void) => next()),
 }));
 
 import { ContextAssembler } from '../llm/ContextAssembler.js';

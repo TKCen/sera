@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { rateLimiter, clearRateLimitBuckets } from './rateLimiter.js';
+import { rateLimit, clearRateLimitBuckets } from './rateLimit.js';
 import type { Request, Response, NextFunction } from 'express';
 import type { AgentTokenClaims } from '../auth/types.js';
 import type { OperatorIdentity } from '../auth/interfaces.js';
 
-describe('rateLimiter', () => {
+describe('rateLimit', () => {
   let req: Partial<Request> & { agentIdentity?: AgentTokenClaims; operator?: OperatorIdentity };
   let res: Partial<Response>;
   let next: NextFunction;
 
   beforeEach(() => {
     clearRateLimitBuckets();
-    req = {};
+    req = {
+      headers: {},
+    };
     res = {
       setHeader: vi.fn(),
       status: vi.fn().mockReturnThis(),
@@ -29,7 +31,7 @@ describe('rateLimiter', () => {
     const now = 1600000000000;
     vi.setSystemTime(new Date(now));
 
-    rateLimiter(req as Request, res as Response, next);
+    rateLimit(req as Request, res as Response, next);
 
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', 60);
     // After one request, 60 - 1 = 59
@@ -44,13 +46,13 @@ describe('rateLimiter', () => {
 
     // Consume all 60 tokens
     for (let i = 0; i < 60; i++) {
-      rateLimiter(req as Request, res as Response, next);
+      rateLimit(req as Request, res as Response, next);
     }
     expect(next).toHaveBeenCalledTimes(60);
     vi.clearAllMocks();
 
     // 61st request should be blocked
-    rateLimiter(req as Request, res as Response, next);
+    rateLimit(req as Request, res as Response, next);
 
     expect(res.status).toHaveBeenCalledWith(429);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ reason: 'rate_limit' }));
@@ -64,14 +66,14 @@ describe('rateLimiter', () => {
 
     // Consume all 60 tokens
     for (let i = 0; i < 60; i++) {
-      rateLimiter(req as Request, res as Response, next);
+      rateLimit(req as Request, res as Response, next);
     }
     vi.clearAllMocks();
 
     // Advance time by 30 seconds (should refill 30 tokens)
     vi.setSystemTime(new Date(now + 30000));
 
-    rateLimiter(req as Request, res as Response, next);
+    rateLimit(req as Request, res as Response, next);
 
     expect(next).toHaveBeenCalledOnce();
     // 30 refill - 1 consumed = 29 remaining
@@ -84,7 +86,7 @@ describe('rateLimiter', () => {
 
     req.operator = { sub: 'operator-123', roles: [], authMethod: 'api-key' };
 
-    rateLimiter(req as Request, res as Response, next);
+    rateLimit(req as Request, res as Response, next);
 
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', 120);
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', 119);
@@ -102,7 +104,7 @@ describe('rateLimiter', () => {
       exp: 1234567890,
     };
 
-    rateLimiter(req as Request, res as Response, next);
+    rateLimit(req as Request, res as Response, next);
 
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', 60);
     expect(next).toHaveBeenCalledOnce();

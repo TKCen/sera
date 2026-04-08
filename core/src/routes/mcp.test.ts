@@ -7,8 +7,8 @@ vi.mock('../auth/authMiddleware.js', () => ({
   requireRole: vi.fn(() => (req: any, res: any, next: any) => next()),
 }));
 
-vi.mock('../middleware/rateLimiter.js', () => ({
-  rateLimiter: vi.fn((req: any, res: any, next: any) => next()),
+vi.mock('../middleware/rateLimit.js', () => ({
+  rateLimit: vi.fn((req: any, res: any, next: any) => next()),
 }));
 
 import type { MCPRegistry } from '../mcp/registry.js';

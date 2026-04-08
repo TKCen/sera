@@ -89,7 +89,7 @@ import { createDelegationRouter, expireOldDelegationTokens } from './routes/dele
 import { createNotificationsRouter } from './routes/notifications.js';
 import { createOrchestrationMetricsRouter } from './routes/orchestration-metrics.js';
 import { createTracesRouter } from './routes/traces.js';
-import { rateLimiter } from './middleware/rateLimiter.js';
+import { rateLimit } from './middleware/rateLimit.js';
 import { NotificationService } from './channels/NotificationService.js';
 import { PgBossService } from './lib/PgBossService.js';
 import { errorSanitizerMiddleware } from './middleware/errorSanitizer.js';
@@ -351,7 +351,7 @@ app.get('/api/health/detail', async (_req, res) => {
 const { publicAuthRouter, protectedAuthRouter } = createAuthRouter(webSessionStore);
 app.use('/api/auth', publicAuthRouter);
 app.use('/api/auth', authMiddleware, protectedAuthRouter);
-app.use('/api/secrets', authMiddleware, rateLimiter, createSecretsRouter());
+app.use('/api/secrets', authMiddleware, rateLimit, createSecretsRouter());
 
 // Unified manifest resolver: checks YAML manifests first, then DB instances + templates.
 async function resolveManifest(name: string): Promise<AgentManifest | undefined> {
@@ -489,12 +489,12 @@ app.get('/api/rt/token', authMiddleware, async (_req, res) => {
 });
 
 // DB-backed circle router first (handles CRUD without filesystem writes)
-app.use('/api/circles', authMiddleware, rateLimiter, createCirclesDbRouter(orchestrator));
+app.use('/api/circles', authMiddleware, rateLimit, createCirclesDbRouter(orchestrator));
 // Legacy filesystem-based circle router (read-only fallback for YAML circles)
 app.use(
   '/api/circles',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createCircleRouter(
     circleRegistry,
     circlesDir,
@@ -502,72 +502,62 @@ app.use(
     orchestrator
   )
 );
-app.use('/api/pipelines', authMiddleware, rateLimiter, createPipelinesRouter(orchestrator));
+app.use('/api/pipelines', authMiddleware, rateLimit, createPipelinesRouter(orchestrator));
 app.use(
   '/api/skills',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createSkillsRouter(skillRegistry, orchestrator, pool)
 );
-app.use('/api/memory', authMiddleware, rateLimiter, createMemoryRouter(memoryManager));
-app.use('/api/sessions', authMiddleware, rateLimiter, createSessionRouter(sessionStore));
-app.use('/api/budget', authMiddleware, rateLimiter, createBudgetRouter(meteringService));
+app.use('/api/memory', authMiddleware, rateLimit, createMemoryRouter(memoryManager));
+app.use('/api/sessions', authMiddleware, rateLimit, createSessionRouter(sessionStore));
+app.use('/api/budget', authMiddleware, rateLimit, createBudgetRouter(meteringService));
 app.use(
   '/api/providers',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createProvidersRouter(llmRouter, circuitBreakerService, dynamicProviderManager)
 );
-app.use('/api/system', authMiddleware, rateLimiter, createSystemRouter(circuitBreakerService));
+app.use('/api/system', authMiddleware, rateLimit, createSystemRouter(circuitBreakerService));
 app.use(
   '/api/embedding',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createEmbeddingRouter(EmbeddingService.getInstance())
 );
-app.use('/api/audit', authMiddleware, rateLimiter, createAuditRouter());
+app.use('/api/audit', authMiddleware, rateLimit, createAuditRouter());
 app.use(
   '/api/permission-requests',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createPermissionRouter(permissionService)
 );
-app.use('/api/schedules', authMiddleware, rateLimiter, createSchedulesRouter());
-app.use('/api/lsp', authMiddleware, rateLimiter, lspRouter);
-app.use('/api/federation', authMiddleware, rateLimiter, createFederationRouter());
+app.use('/api/schedules', authMiddleware, rateLimit, createSchedulesRouter());
+app.use('/api/lsp', authMiddleware, rateLimit, lspRouter);
+app.use('/api/federation', authMiddleware, rateLimit, createFederationRouter());
 app.use(
   '/api/registry',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createRegistryRouter(agentRegistry, resourceImporter, orchestrator)
 );
-app.use(
-  '/api/mcp-servers',
-  authMiddleware,
-  rateLimiter,
-  createMCPRouter(mcpRegistry, skillRegistry)
-);
+app.use('/api/mcp-servers', authMiddleware, rateLimit, createMCPRouter(mcpRegistry, skillRegistry));
 app.use(
   '/api/operator-requests',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createOperatorRequestsRouter(intercomService)
 );
-app.use(
-  '/api/agents/:id/tasks',
-  authMiddleware,
-  rateLimiter,
-  createTasksRouter(intercomService)
-);
-app.use('/api/knowledge', authMiddleware, rateLimiter, createKnowledgeRouter(llmRouter));
+app.use('/api/agents/:id/tasks', authMiddleware, rateLimit, createTasksRouter(intercomService));
+app.use('/api/knowledge', authMiddleware, rateLimit, createKnowledgeRouter(llmRouter));
 
 app.use(
   '/api',
   authMiddleware,
-  rateLimiter,
+  rateLimit,
   createChatRouter(sessionStore, orchestrator, agentRegistry)
 );
-app.use('/api', authMiddleware, rateLimiter, createConfigRouter());
+app.use('/api', authMiddleware, rateLimit, createConfigRouter());
 
 app.use(
   '/v1/llm',
@@ -587,23 +577,18 @@ app.use('/api/webhooks', createWebhooksRouter(webhooksService, authMiddleware));
 
 // Epic 17 — Delegation & Service Identity
 const delegationRouter = createDelegationRouter(intercomService);
-app.use('/api/delegation', authMiddleware, rateLimiter, delegationRouter);
-app.use('/api', authMiddleware, rateLimiter, delegationRouter);
+app.use('/api/delegation', authMiddleware, rateLimit, delegationRouter);
+app.use('/api', authMiddleware, rateLimit, delegationRouter);
 
 // Epic 18 — Integration Channels
 const { publicRouter: notifPublicRouter, protectedRouter: notifProtectedRouter } =
   createNotificationsRouter();
 app.use('/api/notifications', notifPublicRouter);
-app.use('/api/notifications', authMiddleware, rateLimiter, notifProtectedRouter);
-app.use('/api/channels', authMiddleware, rateLimiter, notifProtectedRouter);
+app.use('/api/notifications', authMiddleware, rateLimit, notifProtectedRouter);
+app.use('/api/channels', authMiddleware, rateLimit, notifProtectedRouter);
 
 // Orchestration Metrics
-app.use(
-  '/api/orchestration',
-  authMiddleware,
-  rateLimiter,
-  createOrchestrationMetricsRouter()
-);
+app.use('/api/orchestration', authMiddleware, rateLimit, createOrchestrationMetricsRouter());
 
 // Epic 30 — Interaction Traces
 app.use('/api/traces', authMiddleware, createTracesRouter());

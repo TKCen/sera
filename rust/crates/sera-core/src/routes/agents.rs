@@ -802,6 +802,7 @@ mod tests {
             builtin: true,
             category: Some("llm".to_string()),
             spec: serde_json::json!({ "model": "claude-opus" }),
+            description: Some("Test description".to_string()),
         };
 
         let json = serde_json::to_value(&response).unwrap();

@@ -1,11 +1,13 @@
 export interface SecretAccessContext {
-  agentId?: string;
-  agentName?: string;
-  agentCircle?: string;
-  operator?: {
-    sub: string;
-    roles: string[];
-  };
+  agentId?: string | undefined;
+  agentName?: string | undefined;
+  agentCircle?: string | undefined;
+  operator?:
+    | {
+        sub: string;
+        roles: string[];
+      }
+    | undefined;
 }
 
 export interface SecretMetadata {

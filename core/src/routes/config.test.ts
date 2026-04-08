@@ -6,6 +6,10 @@ vi.mock('../auth/authMiddleware.js', () => ({
   requireRole: vi.fn(() => (req: any, res: any, next: any) => next()),
 }));
 
+vi.mock('../middleware/rateLimiter.js', () => ({
+  rateLimiter: vi.fn((req: any, res: any, next: any) => next()),
+}));
+
 // Mock config
 vi.mock('../lib/config.js', () => ({
   config: {

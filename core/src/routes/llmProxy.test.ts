@@ -92,8 +92,8 @@ vi.mock('../llm/CircuitBreakerService.js', () => {
   };
 });
 
-vi.mock('../middleware/rateLimitStub.js', () => ({
-  rateLimitStub: vi
+vi.mock('../middleware/rateLimiter.js', () => ({
+  rateLimiter: vi
     .fn()
     .mockImplementation((_req: unknown, _res: unknown, next: () => void) => next()),
 }));

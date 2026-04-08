@@ -22,7 +22,7 @@ import type { IdentityService } from '../auth/IdentityService.js';
 import { createAuthMiddleware } from '../auth/authMiddleware.js';
 import type { AuthService } from '../auth/auth-service.js';
 import type { MeteringService } from '../metering/MeteringService.js';
-import { rateLimitStub } from '../middleware/rateLimitStub.js';
+import { rateLimiter } from '../middleware/rateLimiter.js';
 import type { LlmRouter } from '../llm/LlmRouter.js';
 import { RateLimitedError } from '../llm/LlmRouter.js';
 import type { CircuitBreakerService } from '../llm/CircuitBreakerService.js';
@@ -87,7 +87,7 @@ export function createLlmProxyRouter(
     '/chat/completions',
     authMiddleware,
     requireAgentScope,
-    rateLimitStub,
+    rateLimiter,
     async (req: Request, res: Response) => {
       const latencyStart = Date.now();
       const identity = req.agentIdentity!;

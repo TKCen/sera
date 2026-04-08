@@ -19,8 +19,8 @@
 
 import type { Request, Response, NextFunction } from 'express';
 
-const AGENT_RPM_LIMIT = parseInt(process.env.RATE_LIMIT_AGENT_RPM ?? '60', 10);
-const OPERATOR_RPM_LIMIT = parseInt(process.env.RATE_LIMIT_OPERATOR_RPM ?? '120', 10);
+const AGENT_RPM_LIMIT = parseInt(process.env['RATE_LIMIT_AGENT_RPM'] ?? '60', 10);
+const OPERATOR_RPM_LIMIT = parseInt(process.env['RATE_LIMIT_OPERATOR_RPM'] ?? '120', 10);
 
 interface TokenBucket {
   tokens: number;
@@ -50,7 +50,7 @@ setInterval(
  * Sets standard X-RateLimit-* headers and enforces limits.
  * Responds with 429 if the limit is exceeded.
  */
-export function rateLimitStub(req: Request, res: Response, next: NextFunction): void {
+export function rateLimiter(req: Request, res: Response, next: NextFunction): void {
   const isOperator = !!req.operator;
   const agentId = req.agentIdentity?.agentId ?? req.operator?.sub ?? 'unknown';
   const limit = isOperator ? OPERATOR_RPM_LIMIT : AGENT_RPM_LIMIT;

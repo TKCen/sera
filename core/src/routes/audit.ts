@@ -3,6 +3,7 @@ import { AuditService } from '../audit/AuditService.js';
 import { requireRole } from '../auth/authMiddleware.js';
 import { z } from 'zod';
 import { QueryBuilder } from '../lib/query-builder.js';
+import { rateLimitStub } from '../middleware/rateLimitStub.js';
 
 const AuditQuerySchema = z.object({
   actorId: z.string().optional(),
@@ -27,7 +28,7 @@ export const createAuditRouter = (): Router => {
    * Supports: actorId, eventType, from, to, principalId, delegationId filters.
    * Requires admin role.
    */
-  router.get('/', requireRole(['admin']), async (req, res) => {
+  router.get('/', rateLimitStub, requireRole(['admin']), async (req, res) => {
     try {
       const { actorId, eventType, from, to, limit, offset, principalId, delegationId } =
         AuditQuerySchema.parse(req.query);

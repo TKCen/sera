@@ -34,10 +34,12 @@ describe('AuditService.getEntries', () => {
       ['test-actor', 'test-event']
     );
 
-    expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT * FROM audit_trail'),
-      ['test-actor', 'test-event', 20, 5]
-    );
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('SELECT * FROM audit_trail'), [
+      'test-actor',
+      'test-event',
+      20,
+      5,
+    ]);
   });
 
   it('handles empty filters', async () => {

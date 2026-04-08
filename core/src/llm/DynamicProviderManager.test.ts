@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Mocked } from 'vitest';
 import fs from 'fs';
+
+// Mock DNS for async URL validation
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn().mockResolvedValue({ address: '93.184.216.34' }), // example.com
+}));
 import { DynamicProviderManager } from './DynamicProviderManager.js';
 import type { ProviderRegistry, DynamicProviderConfig } from './ProviderRegistry.js';
 
@@ -95,9 +100,9 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const result = await manager.testConnection('https://test-url', 'test-key');
+      const result = await manager.testConnection('http://localhost:1234/v1', 'test-key');
 
-      expect(global.fetch).toHaveBeenCalledWith('https://test-url/models', {
+      expect(global.fetch).toHaveBeenCalledWith('http://localhost:1234/v1/models', {
         headers: { Authorization: 'Bearer test-key' },
       });
       expect(result.success).toBe(true);
@@ -114,9 +119,9 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      await manager.testConnection('https://test-url/', 'test-key');
+      await manager.testConnection('http://localhost:1234/v1/', 'test-key');
 
-      expect(global.fetch).toHaveBeenCalledWith('https://test-url/models', {
+      expect(global.fetch).toHaveBeenCalledWith('http://localhost:1234/v1/models', {
         headers: { Authorization: 'Bearer test-key' },
       });
     });
@@ -131,7 +136,7 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const result = await manager.testConnection('https://test-url');
+      const result = await manager.testConnection('http://localhost:1234/v1');
 
       expect(result.success).toBe(false);
       expect(result.models).toEqual([]);
@@ -144,7 +149,7 @@ describe('DynamicProviderManager', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       const manager = new DynamicProviderManager(mockRegistry, configPath);
 
-      const result = await manager.testConnection('https://test-url');
+      const result = await manager.testConnection('http://localhost:1234/v1');
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Network error');
@@ -164,7 +169,7 @@ describe('DynamicProviderManager', () => {
         id: 'new-id',
         name: 'New',
         type: 'lm-studio',
-        baseUrl: 'https://new-provider.com',
+        baseUrl: 'http://localhost:1234/v1',
         enabled: true,
         intervalMs: 5000,
       };
@@ -174,12 +179,15 @@ describe('DynamicProviderManager', () => {
       expect(manager.listProviders()).toHaveLength(1);
       expect(fs.promises.writeFile).toHaveBeenCalled();
 
+      // Wait for async checkProvider to finish (including async URL validation)
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
       // Should call testConnection immediately
       expect(testConnectionSpy).toHaveBeenCalled();
-
-      // Wait for async checkProvider to finish (without running all timers which loops)
-      // Advance by 1 tick
-      await Promise.resolve();
 
       // Timer should be active and trigger after interval
       testConnectionSpy.mockClear();
@@ -224,7 +232,7 @@ describe('DynamicProviderManager', () => {
             id: 't1',
             name: 'T1',
             type: 'lm-studio',
-            baseUrl: 'https://t1.com',
+            baseUrl: 'http://localhost:1234/v1',
             enabled: true,
             intervalMs: 1000,
           },
@@ -232,7 +240,7 @@ describe('DynamicProviderManager', () => {
             id: 't2',
             name: 'T2',
             type: 'lm-studio',
-            baseUrl: 'https://t2.com',
+            baseUrl: 'http://localhost:5678/v1',
             enabled: false,
             intervalMs: 1000,
           },
@@ -248,9 +256,16 @@ describe('DynamicProviderManager', () => {
 
       await manager.start();
 
+      // Wait for async checks (including async URL validation)
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
       // Should check only t1 immediately
       expect(testConnectionSpy).toHaveBeenCalledTimes(1);
-      expect(testConnectionSpy).toHaveBeenCalledWith('https://t1.com', undefined);
+      expect(testConnectionSpy).toHaveBeenCalledWith('http://localhost:1234/v1', undefined);
 
       testConnectionSpy.mockClear();
 
@@ -292,7 +307,7 @@ describe('DynamicProviderManager', () => {
         id: 't1',
         name: 'T1',
         type: 'lm-studio',
-        baseUrl: 'https://t1.com',
+        baseUrl: 'http://localhost:1234/v1',
         enabled: true,
         intervalMs: 1000,
       });
@@ -320,13 +335,17 @@ describe('DynamicProviderManager', () => {
         id: 't1',
         name: 'T1',
         type: 'lm-studio',
-        baseUrl: 'https://t1.com',
+        baseUrl: 'http://localhost:1234/v1',
         enabled: true,
         intervalMs: 1000,
       });
 
-      // Let initial microtask finish
+      // Let initial microtasks finish (including async URL validation)
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
       const statuses = manager.getStatuses();
       expect(statuses).toHaveLength(1);
@@ -358,13 +377,17 @@ describe('DynamicProviderManager', () => {
         id: 't2',
         name: 'T2',
         type: 'lm-studio',
-        baseUrl: 'https://t2.com',
+        baseUrl: 'http://localhost:1234/v1',
         enabled: true,
         intervalMs: 1000,
       });
 
-      // Let initial microtask finish
+      // Let initial microtasks finish (including async URL validation)
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
       const statuses = manager.getStatuses();
       expect(statuses).toHaveLength(1);

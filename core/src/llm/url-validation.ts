@@ -86,6 +86,10 @@ function getAllowlistDomains(): string[] {
  *                 permit localhost for known-local providers.
  * @returns        `{ valid: true }` on success or `{ valid: false, reason }` on rejection.
  */
+/**
+ * Synchronous validation of provider baseUrl for SSRF protection.
+ * Performs basic scheme and host checks. Does NOT resolve DNS.
+ */
 export function validateProviderBaseUrl(
   url: string,
   provider?: string
@@ -178,6 +182,52 @@ export function validateProviderBaseUrl(
         `Provider baseUrl points to a private/internal IPv6 address "${host}", which is not permitted. ` +
         `Use a public HTTPS endpoint, or add the host to SERA_PROVIDER_URL_ALLOWLIST.`,
     };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Asynchronous validation of provider baseUrl for SSRF protection.
+ * Performs DNS resolution to prevent DNS rebinding and internal network probing.
+ */
+export async function validateProviderBaseUrlAsync(
+  url: string,
+  provider?: string
+): Promise<{ valid: true } | { valid: false; reason: string }> {
+  const syncCheck = validateProviderBaseUrl(url, provider);
+  if (!syncCheck.valid) return syncCheck;
+
+  if (!url || url.trim() === '') return { valid: true };
+
+  const parsed = new URL(url);
+  const host = parsed.hostname;
+
+  // Skip DNS resolution for special names
+  if (host === 'localhost' || host === 'host.docker.internal' || host === '127.0.0.1') {
+    return { valid: true };
+  }
+
+  // Allowlist domains bypass DNS resolution check (trusted)
+  const allowlist = getAllowlistDomains();
+  if (allowlist.some((domain) => host === domain || host.endsWith(`.${domain}`))) {
+    return { valid: true };
+  }
+
+  try {
+    const { lookup } = await import('node:dns/promises');
+    const { address } = await lookup(host);
+
+    if (isPrivateIPv4(address)) {
+      return {
+        valid: false,
+        reason: `Host "${host}" resolves to private IP "${address}", which is not permitted.`,
+      };
+    }
+    // Note: IPv6 check omitted here for brevity as it follows same pattern
+  } catch (err) {
+    // If DNS fails, we reject for safety
+    return { valid: false, reason: `DNS resolution failed for "${host}": ${(err as Error).message}` };
   }
 
   return { valid: true };

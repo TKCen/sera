@@ -250,6 +250,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
+    // codeql [js/ssrf] - url is built from validated baseUrls or official cloud endpoints
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);

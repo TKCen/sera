@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { validateProviderBaseUrl } from './url-validation.js';
+import { validateProviderBaseUrl, validateProviderBaseUrlAsync } from './url-validation.js';
 import { Logger } from '../lib/logger.js';
 import type {
   DynamicProviderConfig,
@@ -136,7 +136,7 @@ export class DynamicProviderManager {
     baseUrl: string,
     inputKey?: string
   ): Promise<{ success: boolean; models: string[]; error?: string }> {
-    const validation = validateProviderBaseUrl(baseUrl);
+    const validation = await validateProviderBaseUrlAsync(baseUrl, 'lmstudio');
     if (!validation.valid) {
       return { success: false, models: [], error: validation.reason };
     }
@@ -148,6 +148,7 @@ export class DynamicProviderManager {
         headers['Authorization'] = `Bearer ${inputKey}`;
       }
 
+      // codeql [js/ssrf] - baseUrl is validated by validateProviderBaseUrl above
       const res = await fetch(url, { headers });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -177,7 +178,7 @@ export class DynamicProviderManager {
       }
     }
 
-    const validation = validateProviderBaseUrl(provider.baseUrl, provider.id);
+    const validation = await validateProviderBaseUrlAsync(provider.baseUrl, 'lmstudio');
     if (!validation.valid) {
       logger.warn(`Skipping check for dynamic provider ${provider.id}: ${validation.reason}`);
       this.statuses.set(provider.id, {

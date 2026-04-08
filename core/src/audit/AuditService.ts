@@ -327,7 +327,6 @@ export class AuditService {
     ].join('|');
 
     // codeql [js/insufficient-password-hashing]
-    // lgtm [js/insufficient-password-hashing]
     return crypto.createHash('sha256').update(canonical).digest('hex');
   }
 

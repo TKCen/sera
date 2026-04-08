@@ -25,15 +25,16 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    */
   router.get('/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const client = mcpRegistry.getClient(req.params.name);
+      const name = String(req.params['name']);
+      const client = mcpRegistry.getClient(name);
       if (!client) {
-        return res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+        return res.status(404).json({ error: `MCP server "${name}" not found` });
       }
       const tools = await client.listTools();
       const servers = await mcpRegistry.listServers();
-      const serverInfo = servers.find((s) => s.name === req.params.name);
+      const serverInfo = servers.find((s) => s.name === name);
       res.json({
-        name: req.params.name,
+        name,
         status: serverInfo?.status ?? 'unknown',
         toolCount: serverInfo?.toolCount ?? 0,
         tools: tools.tools,
@@ -49,20 +50,21 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    */
   router.get('/:name/health', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const client = mcpRegistry.getClient(req.params.name);
+      const name = String(req.params['name']);
+      const client = mcpRegistry.getClient(name);
       if (!client) {
-        return res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+        return res.status(404).json({ error: `MCP server "${name}" not found` });
       }
       const tools = await client.listTools();
       res.json({
-        name: req.params.name,
+        name,
         healthy: true,
         toolCount: tools.tools.length,
         checkedAt: new Date().toISOString(),
       });
     } catch (err: unknown) {
       res.json({
-        name: req.params.name,
+        name: String(req.params['name']),
         healthy: false,
         error: (err as Error).message,
         checkedAt: new Date().toISOString(),
@@ -76,9 +78,10 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    */
   router.post('/:name/reload', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const client = mcpRegistry.getClient(req.params.name);
+      const name = String(req.params['name']);
+      const client = mcpRegistry.getClient(name);
       if (!client) {
-        return res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+        return res.status(404).json({ error: `MCP server "${name}" not found` });
       }
       await client.disconnect();
       await client.connect();
@@ -115,11 +118,12 @@ export function createMCPRouter(mcpRegistry: MCPRegistry, _skillRegistry: SkillR
    */
   router.delete('/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const success = await mcpRegistry.unregisterClient(req.params.name);
+      const name = String(req.params['name']);
+      const success = await mcpRegistry.unregisterClient(name);
       if (success) {
-        res.json({ message: `MCP server "${req.params.name}" unregistered successfully` });
+        res.json({ message: `MCP server "${name}" unregistered successfully` });
       } else {
-        res.status(404).json({ error: `MCP server "${req.params.name}" not found` });
+        res.status(404).json({ error: `MCP server "${name}" not found` });
       }
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

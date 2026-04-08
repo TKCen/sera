@@ -334,17 +334,18 @@ export function createProvidersRouter(
     '/models/:provider',
     requireRole(['admin', 'operator']),
     async (req: Request, res: Response) => {
-    const provider = String(req.params['provider']);
-    try {
-      const force = req.query['force'] === 'true';
-      const discovery = ModelDiscoveryService.getInstance();
-      const models = await discovery.discoverModels(provider, force);
-      res.json({ provider, models });
-    } catch (err: unknown) {
-      logger.error(`Model discovery for provider ${provider} failed:`, err);
-      res.status(500).json({ error: (err as Error).message });
+      const provider = String(req.params['provider']);
+      try {
+        const force = req.query['force'] === 'true';
+        const discovery = ModelDiscoveryService.getInstance();
+        const models = await discovery.discoverModels(provider, force);
+        res.json({ provider, models });
+      } catch (err: unknown) {
+        logger.error(`Model discovery for provider ${provider} failed:`, err);
+        res.status(500).json({ error: (err as Error).message });
+      }
     }
-  });
+  );
 
   // ── Static Providers ────────────────────────────────────────────────────────
 
@@ -428,66 +429,84 @@ export function createProvidersRouter(
    * POST /api/providers/:modelName/test
    * Sends a minimal test completion to verify the provider is reachable.
    */
-  router.post('/:modelName/test', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
-    const modelName = String(req.params['modelName']);
-    try {
-      const result = await llmRouter.testModel(modelName);
-      res.status(result.ok ? 200 : 502).json({
-        success: result.ok,
-        latencyMs: result.latencyMs,
-        ...(result.error !== undefined ? { error: result.error } : {}),
-      });
-    } catch (err: unknown) {
-      res.status(502).json({ success: false, error: (err as Error).message });
+  router.post(
+    '/:modelName/test',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      const modelName = String(req.params['modelName']);
+      try {
+        const result = await llmRouter.testModel(modelName);
+        res.status(result.ok ? 200 : 502).json({
+          success: result.ok,
+          latencyMs: result.latencyMs,
+          ...(result.error !== undefined ? { error: result.error } : {}),
+        });
+      } catch (err: unknown) {
+        res.status(502).json({ success: false, error: (err as Error).message });
+      }
     }
-  });
+  );
 
   /**
    * GET /api/providers/:modelName/health
    * Returns the circuit breaker state for the provider associated with this model.
    */
-  router.get('/:modelName/health', requireRole(['admin', 'operator']), (req: Request, res: Response) => {
-    const modelName = String(req.params['modelName']);
-    const provider = providerFromModel(modelName);
-    const state = circuitBreakerService.getProviderState(provider);
+  router.get(
+    '/:modelName/health',
+    requireRole(['admin', 'operator']),
+    (req: Request, res: Response) => {
+      const modelName = String(req.params['modelName']);
+      const provider = providerFromModel(modelName);
+      const state = circuitBreakerService.getProviderState(provider);
 
-    if (!state) {
-      // No breaker exists yet — provider has never been called through Core
-      res.json({
-        provider,
-        state: 'closed',
-        message: 'No circuit breaker instantiated (no calls made yet)',
-      });
-      return;
+      if (!state) {
+        // No breaker exists yet — provider has never been called through Core
+        res.json({
+          provider,
+          state: 'closed',
+          message: 'No circuit breaker instantiated (no calls made yet)',
+        });
+        return;
+      }
+
+      res.json(state);
     }
-
-    res.json(state);
-  });
+  );
 
   // ── Default Model ──────────────────────────────────────────────────────────
 
   /** GET /api/providers/default-model — get the current default model name. */
-  router.get('/default-model', requireRole(['admin', 'operator']), (_req: Request, res: Response) => {
-    const registry = llmRouter.getRegistry();
-    res.json({ defaultModel: registry.getDefaultModel() });
-  });
+  router.get(
+    '/default-model',
+    requireRole(['admin', 'operator']),
+    (_req: Request, res: Response) => {
+      const registry = llmRouter.getRegistry();
+      res.json({ defaultModel: registry.getDefaultModel() });
+    }
+  );
 
   /** PUT /api/providers/default-model — set the default model name. */
-  router.put('/default-model', requireRole(['admin', 'operator']), (req: Request, res: Response) => {
-    const parsed = SetDefaultModelSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });
-    }
+  router.put(
+    '/default-model',
+    requireRole(['admin', 'operator']),
+    (req: Request, res: Response) => {
+      const parsed = SetDefaultModelSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ error: 'Invalid request body', details: parsed.error.flatten() });
+      }
 
-    try {
-      const { modelName } = parsed.data;
-      const registry = llmRouter.getRegistry();
-      registry.setDefaultModel(modelName);
-      res.json({ success: true, defaultModel: modelName });
-    } catch (err: unknown) {
-      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      try {
+        const { modelName } = parsed.data;
+        const registry = llmRouter.getRegistry();
+        registry.setDefaultModel(modelName);
+        res.json({ success: true, defaultModel: modelName });
+      } catch (err: unknown) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      }
     }
-  });
+  );
 
   /**
    * GET /api/providers/health-all
@@ -524,21 +543,25 @@ export function createProvidersRouter(
    * GET /api/providers/:modelName/discover
    * Discover models available at the provider's endpoint.
    */
-  router.get('/:modelName/discover', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
-    try {
-      const registry = llmRouter.getRegistry();
-      const config = registry.list().find((c) => c.modelName === req.params.modelName);
-      if (!config) {
-        return res.status(404).json({ error: `Provider '${req.params.modelName}' not found` });
-      }
+  router.get(
+    '/:modelName/discover',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const registry = llmRouter.getRegistry();
+        const config = registry.list().find((c) => c.modelName === req.params.modelName);
+        if (!config) {
+          return res.status(404).json({ error: `Provider '${req.params.modelName}' not found` });
+        }
 
-      const models = await healthService.discoverModels(config);
-      res.json({ provider: config.modelName, models });
-    } catch (err: unknown) {
-      logger.error('Model discovery failed:', err);
-      res.status(500).json({ error: (err as Error).message });
+        const models = await healthService.discoverModels(config);
+        res.json({ provider: config.modelName, models });
+      } catch (err: unknown) {
+        logger.error('Model discovery failed:', err);
+        res.status(500).json({ error: (err as Error).message });
+      }
     }
-  });
+  );
 
   return router;
 }
@@ -550,9 +573,13 @@ export function createProvidersRouter(
 export function createSystemRouter(circuitBreakerService: CircuitBreakerService): Router {
   const router = Router();
 
-  router.get('/circuit-breakers', requireRole(['admin', 'operator']), (_req: Request, res: Response) => {
-    res.json({ circuitBreakers: circuitBreakerService.getState() });
-  });
+  router.get(
+    '/circuit-breakers',
+    requireRole(['admin', 'operator']),
+    (_req: Request, res: Response) => {
+      res.json({ circuitBreakers: circuitBreakerService.getState() });
+    }
+  );
 
   return router;
 }

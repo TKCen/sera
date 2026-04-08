@@ -35,7 +35,8 @@ export function createRegistryRouter(
 
   router.get('/templates/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const template = await registry.getTemplate(req.params.name);
+      const name = String(req.params['name']);
+      const template = await registry.getTemplate(name);
       if (!template) return res.status(404).json({ error: 'Template not found' });
       res.json(template);
     } catch (err: unknown) {
@@ -45,8 +46,9 @@ export function createRegistryRouter(
 
   router.put('/templates/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
+      const name = String(req.params['name']);
       const template = await registry.updateTemplate(
-        req.params.name,
+        name,
         req.body as import('../agents/schemas.js').AgentTemplate
       );
       res.json(template);
@@ -63,7 +65,8 @@ export function createRegistryRouter(
 
   router.delete('/templates/:name', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const template = await registry.deleteTemplate(req.params.name);
+      const name = String(req.params['name']);
+      const template = await registry.deleteTemplate(name);
       res.json({ message: 'Template deleted', template });
     } catch (err: unknown) {
       const error = err as Error;
@@ -121,7 +124,8 @@ export function createRegistryRouter(
 
   router.get('/instances/:id', requireRole(['admin', 'operator']), async (req, res) => {
     try {
-      const instance = await registry.getInstance(req.params.id);
+      const id = String(req.params['id']);
+      const instance = await registry.getInstance(id);
       if (!instance) return res.status(404).json({ error: 'Instance not found' });
       res.json(instance);
     } catch (err: unknown) {

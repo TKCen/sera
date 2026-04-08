@@ -45,23 +45,27 @@ export function createConfigRouter(): Router {
   });
 
   /** POST /api/config/llm/test — Tests the current LLM connection. */
-  router.post('/config/llm/test', requireRole(['admin', 'operator']), async (req: Request, res: Response) => {
-    try {
-      const provider = ProviderFactory.createDefault();
-      const response = await provider.chat([{ role: 'user', content: 'Hello' }]);
-      res.json({
-        success: true,
-        model: config.llm.model,
-        response: response.content,
-      });
-    } catch (err: unknown) {
-      logger.error('LLM test failed:', err);
-      res.json({
-        success: false,
-        error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
-      });
+  router.post(
+    '/config/llm/test',
+    requireRole(['admin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const provider = ProviderFactory.createDefault();
+        const response = await provider.chat([{ role: 'user', content: 'Hello' }]);
+        res.json({
+          success: true,
+          model: config.llm.model,
+          response: response.content,
+        });
+      } catch (err: unknown) {
+        logger.error('LLM test failed:', err);
+        res.json({
+          success: false,
+          error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+        });
+      }
     }
-  });
+  );
 
   // ─── Provider Management ────────────────────────────────────────────────────
   // NOTE: Provider CRUD routes (GET/POST/DELETE /api/providers, templates, health,

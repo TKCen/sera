@@ -9,6 +9,7 @@ import { Router } from 'express';
 import { pool } from '../lib/database.js';
 import type { IntercomService } from '../intercom/IntercomService.js';
 import { requireRole } from '../auth/authMiddleware.js';
+import { rateLimitStub } from '../middleware/rateLimitStub.js';
 
 export function createOperatorRequestsRouter(intercom?: IntercomService): Router {
   const router = Router();
@@ -17,22 +18,27 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * GET /api/operator-requests/pending/count — Count pending requests (for badges)
    * NOTE: Registered before parameterised routes to avoid Express 5 shadowing.
    */
-  router.get('/pending/count', requireRole(['admin', 'operator']), async (_req, res) => {
-    try {
-      const { rows } = await pool.query(
-        "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
-      );
-      res.json({ count: rows[0]!.count });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
+  router.get(
+    '/pending/count',
+    rateLimitStub,
+    requireRole(['admin', 'operator']),
+    async (_req, res) => {
+      try {
+        const { rows } = await pool.query(
+          "SELECT COUNT(*)::int AS count FROM operator_requests WHERE status = 'pending'"
+        );
+        res.json({ count: rows[0]!.count });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
     }
-  });
+  );
 
   /**
    * GET /api/operator-requests — List operator requests
    * Query params: status, agentId, limit
    */
-  router.get('/', requireRole(['admin', 'operator']), async (req, res) => {
+  router.get('/', rateLimitStub, requireRole(['admin', 'operator']), async (req, res) => {
     try {
       const { status, agentId, limit: limitStr } = req.query;
       const limit = Math.min(Math.max(parseInt(String(limitStr || '50'), 10) || 50, 1), 200);
@@ -82,65 +88,70 @@ export function createOperatorRequestsRouter(intercom?: IntercomService): Router
    * POST /api/operator-requests/:id/respond — Respond to a request
    * Body: { action: 'approved' | 'rejected' | 'resolved', response?: string | object }
    */
-  router.post('/:id/respond', requireRole(['admin', 'operator']), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { action, response } = req.body as {
-        action?: string;
-        response?: unknown;
-      };
+  router.post(
+    '/:id/respond',
+    rateLimitStub,
+    requireRole(['admin', 'operator']),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { action, response } = req.body as {
+          action?: string;
+          response?: unknown;
+        };
 
-      if (!action || !['approved', 'rejected', 'resolved'].includes(action)) {
-        return res
-          .status(400)
-          .json({ error: 'action must be one of: approved, rejected, resolved' });
-      }
+        if (!action || !['approved', 'rejected', 'resolved'].includes(action)) {
+          return res
+            .status(400)
+            .json({ error: 'action must be one of: approved, rejected, resolved' });
+        }
 
-      const responseJson =
-        response != null
-          ? typeof response === 'string'
-            ? JSON.stringify({ message: response })
-            : JSON.stringify(response)
-          : null;
+        const responseJson =
+          response != null
+            ? typeof response === 'string'
+              ? JSON.stringify({ message: response })
+              : JSON.stringify(response)
+            : null;
 
-      const { rows, rowCount } = await pool.query(
-        `UPDATE operator_requests
+        const { rows, rowCount } = await pool.query(
+          `UPDATE operator_requests
          SET status = $1, response = $2, resolved_at = NOW()
          WHERE id = $3 AND status = 'pending'
          RETURNING *`,
-        [action, responseJson, id]
-      );
+          [action, responseJson, id]
+        );
 
-      if (rowCount === 0) {
-        return res.status(404).json({ error: 'Request not found or already resolved' });
+        if (rowCount === 0) {
+          return res.status(404).json({ error: 'Request not found or already resolved' });
+        }
+
+        const row = rows[0] as Record<string, unknown>;
+
+        // Notify via Centrifugo so agents see the response in real-time
+        if (intercom) {
+          intercom
+            .publishSystem('operator_request_response', {
+              requestId: id,
+              agentId: row.agent_id,
+              action,
+              response: responseJson ? JSON.parse(responseJson) : null,
+              timestamp: new Date().toISOString(),
+            })
+            .catch(() => {});
+        }
+
+        res.json({
+          id: row.id,
+          agentId: row.agent_id,
+          status: action,
+          response: row.response,
+          resolvedAt: row.resolved_at,
+        });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
       }
-
-      const row = rows[0] as Record<string, unknown>;
-
-      // Notify via Centrifugo so agents see the response in real-time
-      if (intercom) {
-        intercom
-          .publishSystem('operator_request_response', {
-            requestId: id,
-            agentId: row.agent_id,
-            action,
-            response: responseJson ? JSON.parse(responseJson) : null,
-            timestamp: new Date().toISOString(),
-          })
-          .catch(() => {});
-      }
-
-      res.json({
-        id: row.id,
-        agentId: row.agent_id,
-        status: action,
-        response: row.response,
-        resolvedAt: row.resolved_at,
-      });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
     }
-  });
+  );
 
   return router;
 }

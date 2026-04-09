@@ -138,6 +138,152 @@ impl SessionScope {
     }
 }
 
+// ── Session State Machine ─────────────────────────────────────────────────────
+
+/// Error type for session state machine operations.
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum SessionError {
+    /// Attempted a transition not allowed from the current state.
+    #[error("invalid transition from {from:?} to {to:?}")]
+    InvalidTransition {
+        from: SessionState,
+        to: SessionState,
+    },
+    /// Already in the requested target state.
+    #[error("already in state {0:?}")]
+    AlreadyInState(SessionState),
+}
+
+/// Condition that must be satisfied for a transition to be allowed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionCondition {
+    /// Transition is always valid.
+    Always,
+    /// Transition requires HITL approval before it can proceed.
+    RequiresApproval,
+    /// Custom condition evaluated by hook — the string is the hook name.
+    Custom(String),
+}
+
+/// A single allowed state transition with optional hook chain and condition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTransition {
+    /// The state being transitioned from.
+    pub from: SessionState,
+    /// The state being transitioned to.
+    pub to: SessionState,
+    /// Name of the hook chain to fire on this transition (SPEC-gateway §6,
+    /// HookPoint::OnSessionTransition).
+    pub hook_chain: Option<String>,
+    /// Condition that must be satisfied for the transition to be valid.
+    pub condition: Option<TransitionCondition>,
+}
+
+impl SessionTransition {
+    fn new(from: SessionState, to: SessionState) -> Self {
+        Self {
+            from,
+            to,
+            hook_chain: None,
+            condition: None,
+        }
+    }
+}
+
+/// State machine that manages session lifecycle transitions.
+///
+/// Wraps a `SessionState` with a validated transition table and history log.
+/// Callers should prefer this over manipulating `Session::state` directly when
+/// they need hook-chain integration.
+#[derive(Debug, Clone)]
+pub struct SessionStateMachine {
+    current_state: SessionState,
+    transitions: Vec<SessionTransition>,
+    history: Vec<(SessionState, SessionState, chrono::DateTime<chrono::Utc>)>,
+}
+
+impl SessionStateMachine {
+    /// Create a new state machine starting in `Created` state with the
+    /// standard SERA session lifecycle transitions.
+    pub fn new() -> Self {
+        Self {
+            current_state: SessionState::Created,
+            transitions: Self::default_transitions(),
+            history: Vec::new(),
+        }
+    }
+
+    /// Build the default transition table for the standard session lifecycle.
+    fn default_transitions() -> Vec<SessionTransition> {
+        vec![
+            SessionTransition::new(SessionState::Created, SessionState::Active),
+            SessionTransition::new(SessionState::Active, SessionState::WaitingForApproval),
+            SessionTransition::new(SessionState::Active, SessionState::Compacting),
+            SessionTransition::new(SessionState::Active, SessionState::Suspended),
+            SessionTransition::new(SessionState::WaitingForApproval, SessionState::Active),
+            SessionTransition::new(SessionState::WaitingForApproval, SessionState::Suspended),
+            SessionTransition::new(SessionState::Compacting, SessionState::Active),
+            SessionTransition::new(SessionState::Compacting, SessionState::Archived),
+            SessionTransition::new(SessionState::Suspended, SessionState::Active),
+            SessionTransition::new(SessionState::Archived, SessionState::Destroyed),
+        ]
+    }
+
+    /// Return the current state.
+    pub fn current(&self) -> SessionState {
+        self.current_state
+    }
+
+    /// Return true if transitioning to `to` is allowed from the current state.
+    pub fn can_transition(&self, to: &SessionState) -> bool {
+        self.transitions
+            .iter()
+            .any(|t| t.from == self.current_state && t.to == *to)
+    }
+
+    /// Attempt to transition to `to`.
+    ///
+    /// On success, records the transition in history and returns the hook chain
+    /// name if one is configured for this transition. Returns an error if the
+    /// transition is not in the allowed table or the machine is already in `to`.
+    pub fn transition(
+        &mut self,
+        to: SessionState,
+    ) -> Result<Option<String>, SessionError> {
+        if self.current_state == to {
+            return Err(SessionError::AlreadyInState(to));
+        }
+
+        let hook_chain = self
+            .transitions
+            .iter()
+            .find(|t| t.from == self.current_state && t.to == to)
+            .ok_or(SessionError::InvalidTransition {
+                from: self.current_state,
+                to,
+            })?
+            .hook_chain
+            .clone();
+
+        let from = self.current_state;
+        self.history.push((from, to, chrono::Utc::now()));
+        self.current_state = to;
+        Ok(hook_chain)
+    }
+
+    /// Return the full transition history as a slice.
+    pub fn history(&self) -> &[(SessionState, SessionState, chrono::DateTime<chrono::Utc>)] {
+        &self.history
+    }
+}
+
+impl Default for SessionStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An agent chat session with transcript persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -496,6 +642,131 @@ mod tests {
         let session = Session::with_scope("sera", &SessionScope::PerChannelPeer, &params);
         assert_eq!(session.session_key, "agent:sera:channel:discord:peer:user1");
         assert_eq!(session.state, SessionState::Created);
+    }
+
+    // ── SessionStateMachine tests ────────────────────────────────────────────
+
+    #[test]
+    fn state_machine_new_starts_created() {
+        let sm = SessionStateMachine::new();
+        assert_eq!(sm.current(), SessionState::Created);
+        assert!(sm.history().is_empty());
+    }
+
+    #[test]
+    fn state_machine_default_transitions_work() {
+        let mut sm = SessionStateMachine::new();
+        // Created → Active
+        let result = sm.transition(SessionState::Active);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+        assert_eq!(sm.current(), SessionState::Active);
+
+        // Active → WaitingForApproval
+        sm.transition(SessionState::WaitingForApproval).unwrap();
+        assert_eq!(sm.current(), SessionState::WaitingForApproval);
+
+        // WaitingForApproval → Active (approval granted)
+        sm.transition(SessionState::Active).unwrap();
+        assert_eq!(sm.current(), SessionState::Active);
+
+        // Active → Compacting
+        sm.transition(SessionState::Compacting).unwrap();
+        assert_eq!(sm.current(), SessionState::Compacting);
+
+        // Compacting → Active
+        sm.transition(SessionState::Active).unwrap();
+        assert_eq!(sm.current(), SessionState::Active);
+
+        // Active → Suspended
+        sm.transition(SessionState::Suspended).unwrap();
+        assert_eq!(sm.current(), SessionState::Suspended);
+
+        // Suspended → Active (resumed)
+        sm.transition(SessionState::Active).unwrap();
+        assert_eq!(sm.current(), SessionState::Active);
+    }
+
+    #[test]
+    fn state_machine_compacting_to_archived() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionState::Active).unwrap();
+        sm.transition(SessionState::Compacting).unwrap();
+        sm.transition(SessionState::Archived).unwrap();
+        assert_eq!(sm.current(), SessionState::Archived);
+        // Archived → Destroyed
+        sm.transition(SessionState::Destroyed).unwrap();
+        assert_eq!(sm.current(), SessionState::Destroyed);
+    }
+
+    #[test]
+    fn state_machine_waiting_for_approval_to_suspended() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionState::Active).unwrap();
+        sm.transition(SessionState::WaitingForApproval).unwrap();
+        // denial/timeout → Suspended
+        sm.transition(SessionState::Suspended).unwrap();
+        assert_eq!(sm.current(), SessionState::Suspended);
+    }
+
+    #[test]
+    fn state_machine_invalid_transition_rejected() {
+        let mut sm = SessionStateMachine::new();
+        // Created → Suspended is not in default table
+        let err = sm.transition(SessionState::Suspended).unwrap_err();
+        assert_eq!(
+            err,
+            SessionError::InvalidTransition {
+                from: SessionState::Created,
+                to: SessionState::Suspended,
+            }
+        );
+        // State should be unchanged
+        assert_eq!(sm.current(), SessionState::Created);
+    }
+
+    #[test]
+    fn state_machine_already_in_state_error() {
+        let mut sm = SessionStateMachine::new();
+        let err = sm.transition(SessionState::Created).unwrap_err();
+        assert_eq!(err, SessionError::AlreadyInState(SessionState::Created));
+    }
+
+    #[test]
+    fn state_machine_history_tracking() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionState::Active).unwrap();
+        sm.transition(SessionState::Suspended).unwrap();
+        sm.transition(SessionState::Active).unwrap();
+
+        let history = sm.history();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].0, SessionState::Created);
+        assert_eq!(history[0].1, SessionState::Active);
+        assert_eq!(history[1].0, SessionState::Active);
+        assert_eq!(history[1].1, SessionState::Suspended);
+        assert_eq!(history[2].0, SessionState::Suspended);
+        assert_eq!(history[2].1, SessionState::Active);
+    }
+
+    #[test]
+    fn state_machine_can_transition_checks() {
+        let sm = SessionStateMachine::new();
+        // Created can go to Active
+        assert!(sm.can_transition(&SessionState::Active));
+        // Created cannot go to Destroyed (not in default table)
+        assert!(!sm.can_transition(&SessionState::Destroyed));
+        // Created cannot go to Suspended
+        assert!(!sm.can_transition(&SessionState::Suspended));
+    }
+
+    #[test]
+    fn state_machine_hook_chain_returned_on_transition() {
+        let mut sm = SessionStateMachine::new();
+        // Inject a hook chain on Created → Active
+        sm.transitions[0].hook_chain = Some("on-activate-chain".to_string());
+        let hook = sm.transition(SessionState::Active).unwrap();
+        assert_eq!(hook, Some("on-activate-chain".to_string()));
     }
 
     #[test]

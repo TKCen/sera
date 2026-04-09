@@ -6,6 +6,10 @@
 #[allow(dead_code)]
 pub mod audit;
 #[allow(dead_code)]
+pub mod debounce;
+#[allow(dead_code)]
+pub mod dedupe;
+#[allow(dead_code)]
 pub mod cleanup;
 #[allow(dead_code)]
 pub mod circle_registry;

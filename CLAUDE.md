@@ -16,6 +16,8 @@ Load selectively based on your task — do not load everything upfront:
 | `docs/epics/{n}-{name}.md`     | Implementing stories — acceptance criteria and DB schema for that epic            |
 | `docs/openapi.yaml`            | Adding or modifying API endpoints — path-level spec for all ~190 endpoints        |
 | `docs/AGENT-WORKFLOW.md`       | Multi-agent coordination — agent roles, issue flow, validation loops              |
+| `docs/plan/`                   | SERA 2.0 MVS specs — Rust migration plans and phase specs                         |
+| `rust/CLAUDE.md`               | Rust workspace — crate map, toolchain, dev workflow                               |
 
 ## Environment
 
@@ -28,10 +30,14 @@ Load selectively based on your task — do not load everything upfront:
 
 ```
 sera/
-  core/                  # sera-core API server        → see core/CLAUDE.md
-  core/agent-runtime/    # Agent worker process         → see core/agent-runtime/CLAUDE.md
+  core/                  # sera-core API server (TS)    → see core/CLAUDE.md
+  core/agent-runtime/    # Agent worker process (TS)    → see core/agent-runtime/CLAUDE.md
+  rust/                  # Rust workspace (SERA 2.0)    → see rust/CLAUDE.md
   web/                   # sera-web dashboard           → see web/CLAUDE.md
-  tui/                   # Go terminal UI               → see tui/CLAUDE.md
+  tui/                   # Rust terminal UI (ratatui)   → see tui/CLAUDE.md
+  cli/                   # Go CLI (auth flows)          → see cli/CLAUDE.md
+  tools/discord-bridge/  # Discord sidecar              → see tools/discord-bridge/CLAUDE.md
+  e2e/                   # Playwright E2E tests         → see e2e/CLAUDE.md
   docs/                  # Architecture and epic specs  (load on demand — see table above)
   agents/                # Agent YAML manifests (instances)
   templates/             # AgentTemplate definitions

@@ -76,6 +76,9 @@ enum AgentCommands {
 struct AppState {
     db: Mutex<SqliteDb>,
     manifests: ManifestSet,
+    /// Shared Discord connector for sending replies. `None` when no Discord
+    /// connector is configured.
+    discord: Option<Arc<DiscordConnector>>,
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -93,10 +96,24 @@ struct ChatRequest {
 }
 
 #[derive(Serialize)]
+struct UsageInfo {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+}
+
+#[derive(Serialize)]
 struct ChatResponse {
-    reply: String,
-    agent: String,
+    response: String,
     session_id: String,
+    usage: UsageInfo,
+}
+
+/// Internal result from a turn execution, carrying the reply text and usage
+/// info extracted from the LLM response.
+struct TurnResult {
+    reply: String,
+    usage: UsageInfo,
 }
 
 // ── HTTP handlers ───────────────────────────────────────────────────────────
@@ -117,10 +134,7 @@ async fn chat_handler(
         .unwrap_or("sera")
         .to_owned();
 
-    let agent_spec: AgentSpec = match state
-        .manifests
-        .agent_spec(&agent_name)
-    {
+    let agent_spec: AgentSpec = match state.manifests.agent_spec(&agent_name) {
         Ok(Some(s)) => s,
         Ok(None) => return Err(StatusCode::NOT_FOUND),
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -141,29 +155,86 @@ async fn chat_handler(
     let session_id = session.id.clone();
     drop(db); // Release lock before making HTTP call.
 
-    // Execute a simple turn: call the LLM via the configured provider.
-    let reply = execute_turn(&state.manifests, &agent_spec, &transcript, &req.message).await;
+    // Execute a full turn with tool-call loop.
+    let result =
+        execute_turn(&state.manifests, &agent_spec, &transcript, &req.message).await;
 
     // Save assistant response.
     let db = state.db.lock().await;
-    db.append_transcript(&session_id, "assistant", Some(&reply), None, None)
+    db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ChatResponse {
-        reply,
-        agent: agent_name,
+        response: result.reply,
         session_id,
+        usage: result.usage,
     }))
 }
 
 // ── Turn execution (inlined from sera-runtime reasoning loop) ───────────────
+
+/// Maximum number of tool-call iterations before forcing a text reply.
+const MAX_TOOL_ITERATIONS: usize = 10;
+
+/// Build the tool definitions array from the agent's allowed tool patterns.
+/// For MVS, tools are simple function stubs advertised to the model.
+fn build_tool_definitions(agent_spec: &AgentSpec) -> Vec<serde_json::Value> {
+    let patterns = match &agent_spec.tools {
+        Some(t) => &t.allow,
+        None => return Vec::new(),
+    };
+
+    // MVS advertises the allowed tool names as simple functions so the model
+    // knows which names are legal.  Glob patterns (e.g. "memory_*") are
+    // expanded into a single representative entry; a real runtime would
+    // register full schemas.
+    patterns
+        .iter()
+        .map(|pat| {
+            let name = pat.replace('*', "action");
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": format!("Tool matching pattern '{pat}'"),
+                    "parameters": { "type": "object", "properties": {} }
+                }
+            })
+        })
+        .collect()
+}
+
+/// Execute a single tool call (stub for MVS — always returns a placeholder).
+fn execute_tool_call(name: &str, arguments: &str) -> String {
+    tracing::info!(tool = %name, "Executing tool call (MVS stub)");
+    format!("[tool:{name}] OK — args: {arguments}")
+}
+
+/// Extract usage info from an OpenAI-compatible response body.
+fn extract_usage(body: &serde_json::Value) -> UsageInfo {
+    let usage = body.get("usage");
+    UsageInfo {
+        prompt_tokens: usage
+            .and_then(|u| u.get("prompt_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        completion_tokens: usage
+            .and_then(|u| u.get("completion_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        total_tokens: usage
+            .and_then(|u| u.get("total_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+    }
+}
 
 async fn execute_turn(
     manifests: &ManifestSet,
     agent_spec: &AgentSpec,
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
-) -> String {
+) -> TurnResult {
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
     // Add system message from persona if configured.
@@ -176,9 +247,29 @@ async fn execute_turn(
         }
     }
 
-    // Add transcript history.
+    // Add transcript history (including tool_calls and tool results).
     for row in transcript {
-        if let Some(content) = &row.content {
+        if row.role == "tool" {
+            // Tool result message.
+            let mut msg = serde_json::json!({
+                "role": "tool",
+                "content": row.content.as_deref().unwrap_or(""),
+            });
+            if let Some(tc_id) = &row.tool_call_id {
+                msg["tool_call_id"] = serde_json::json!(tc_id);
+            }
+            messages.push(msg);
+        } else if let Some(tc_json) = &row.tool_calls {
+            // Assistant message with tool_calls (no text content).
+            let mut msg = serde_json::json!({ "role": "assistant" });
+            if let Ok(tc) = serde_json::from_str::<serde_json::Value>(tc_json) {
+                msg["tool_calls"] = tc;
+            }
+            if let Some(content) = &row.content {
+                msg["content"] = serde_json::json!(content);
+            }
+            messages.push(msg);
+        } else if let Some(content) = &row.content {
             messages.push(serde_json::json!({
                 "role": row.role,
                 "content": content,
@@ -198,10 +289,8 @@ async fn execute_turn(
     }
 
     // Resolve provider details.
-    let provider_spec: Option<ProviderSpec> = manifests
-        .provider_spec(&agent_spec.provider)
-        .ok()
-        .flatten();
+    let provider_spec: Option<ProviderSpec> =
+        manifests.provider_spec(&agent_spec.provider).ok().flatten();
 
     let (base_url, model, api_key) = match provider_spec {
         Some(ref p) => {
@@ -215,59 +304,181 @@ async fn execute_turn(
             (p.base_url.clone(), model, key)
         }
         None => {
-            return format!(
-                "[sera] Provider '{}' not found in config.",
-                agent_spec.provider
-            );
+            return TurnResult {
+                reply: format!(
+                    "[sera] Provider '{}' not found in config.",
+                    agent_spec.provider
+                ),
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            };
         }
     };
 
-    // Call the LLM.
+    // Build tool definitions from agent config.
+    let tools = build_tool_definitions(agent_spec);
+
     let client = reqwest::Client::new();
-    let mut request_body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-    });
-
-    // Add API key header only if non-empty.
-    let mut req_builder = client
-        .post(format!("{}/chat/completions", base_url))
-        .header("Content-Type", "application/json");
-    if !api_key.is_empty() {
-        req_builder = req_builder.header("Authorization", format!("Bearer {api_key}"));
-    }
-
-    // Limit max_tokens for safety.
-    request_body["max_tokens"] = serde_json::json!(4096);
-
-    let response = match req_builder.json(&request_body).send().await {
-        Ok(resp) => resp,
-        Err(e) => {
-            return format!("[sera] LLM request failed: {e}");
-        }
+    let mut cumulative_usage = UsageInfo {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
     };
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return format!("[sera] LLM error {status}: {body}");
+    // Tool-call loop: call LLM, execute tool calls, repeat until text reply
+    // or MAX_TOOL_ITERATIONS is reached.
+    for iteration in 0..=MAX_TOOL_ITERATIONS {
+        let mut request_body = serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "max_tokens": 4096,
+        });
+
+        // Include tools if defined.
+        if !tools.is_empty() {
+            request_body["tools"] = serde_json::json!(tools);
+        }
+
+        let mut req_builder = client
+            .post(format!("{}/chat/completions", base_url))
+            .header("Content-Type", "application/json");
+        if !api_key.is_empty() {
+            req_builder = req_builder.header("Authorization", format!("Bearer {api_key}"));
+        }
+
+        let response = match req_builder.json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                return TurnResult {
+                    reply: format!("[sera] LLM request failed: {e}"),
+                    usage: cumulative_usage,
+                };
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return TurnResult {
+                reply: format!("[sera] LLM error {status}: {body}"),
+                usage: cumulative_usage,
+            };
+        }
+
+        let body: serde_json::Value = match response.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                return TurnResult {
+                    reply: format!("[sera] Failed to parse LLM response: {e}"),
+                    usage: cumulative_usage,
+                };
+            }
+        };
+
+        // Accumulate usage.
+        let step_usage = extract_usage(&body);
+        cumulative_usage.prompt_tokens += step_usage.prompt_tokens;
+        cumulative_usage.completion_tokens += step_usage.completion_tokens;
+        cumulative_usage.total_tokens += step_usage.total_tokens;
+
+        // Extract the first choice.
+        let choice = match body.get("choices").and_then(|c| c.get(0)) {
+            Some(c) => c,
+            None => {
+                return TurnResult {
+                    reply: "[sera] No choices in LLM response".to_owned(),
+                    usage: cumulative_usage,
+                };
+            }
+        };
+
+        let message = match choice.get("message") {
+            Some(m) => m,
+            None => {
+                return TurnResult {
+                    reply: "[sera] No message in LLM choice".to_owned(),
+                    usage: cumulative_usage,
+                };
+            }
+        };
+
+        let finish_reason = choice
+            .get("finish_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stop");
+
+        // Check for tool calls.
+        let tool_calls = message
+            .get("tool_calls")
+            .and_then(|tc| tc.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        if finish_reason == "tool_calls" || !tool_calls.is_empty() {
+            if iteration == MAX_TOOL_ITERATIONS {
+                tracing::warn!("Max tool iterations ({MAX_TOOL_ITERATIONS}) reached, returning last content");
+                let content = message
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("[sera] Max tool iterations reached");
+                return TurnResult {
+                    reply: content.to_owned(),
+                    usage: cumulative_usage,
+                };
+            }
+
+            // Append the assistant message with tool_calls to the conversation.
+            messages.push(message.clone());
+
+            // Execute each tool call and append tool results.
+            for tc in &tool_calls {
+                let tc_id = tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let fn_obj = tc.get("function");
+                let fn_name = fn_obj
+                    .and_then(|f| f.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let fn_args = fn_obj
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
+
+                let result = execute_tool_call(fn_name, fn_args);
+
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result,
+                }));
+            }
+            // Continue the loop — call LLM again with tool results.
+            continue;
+        }
+
+        // No tool calls — extract the text reply.
+        let reply = message
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("[sera] No response from LLM")
+            .to_owned();
+
+        return TurnResult {
+            reply,
+            usage: cumulative_usage,
+        };
     }
 
-    let body: serde_json::Value = match response.json().await {
-        Ok(v) => v,
-        Err(e) => {
-            return format!("[sera] Failed to parse LLM response: {e}");
-        }
-    };
-
-    // Extract the assistant's reply.
-    body.get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("[sera] No response from LLM")
-        .to_owned()
+    // Should not reach here, but just in case.
+    TurnResult {
+        reply: "[sera] Turn loop exited unexpectedly".to_owned(),
+        usage: cumulative_usage,
+    }
 }
 
 // ── Event processing loop ───────────────────────────────────────────────────
@@ -348,36 +559,22 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
             (session, transcript)
         }; // db lock released
 
-        let reply = execute_turn(&state.manifests, &agent_spec, &transcript, &msg.content).await;
+        let result = execute_turn(&state.manifests, &agent_spec, &transcript, &msg.content).await;
 
         {
             let db = state.db.lock().await;
-            let _ = db.append_transcript(&session.id, "assistant", Some(&reply), None, None);
+            let _ = db.append_transcript(&session.id, "assistant", Some(&result.reply), None, None);
         }
 
-        // Send the reply back to Discord.
-        let connector_spec = state
-            .manifests
-            .connectors
-            .first()
-            .and_then(|c| serde_json::from_value::<ConnectorSpec>(c.spec.clone()).ok());
-
-        if let Some(spec) = connector_spec {
-            if let Some(token) = resolve_connector_token(&spec) {
-                let dc = DiscordConnector::new(&token, &agent_name, state_noop_sender());
-                if let Err(e) = dc.send_message(&msg.channel_id, &reply).await {
-                    tracing::error!("Failed to send Discord reply: {e}");
-                }
+        // Send the reply back to Discord via the shared connector.
+        if let Some(ref dc) = state.discord {
+            if let Err(e) = dc.send_message(&msg.channel_id, &result.reply).await {
+                tracing::error!("Failed to send Discord reply: {e}");
             }
+        } else {
+            tracing::warn!("No Discord connector available to send reply");
         }
     }
-}
-
-/// Create a no-op sender for DiscordConnector::send_message (we only need
-/// the REST client, not the gateway receiver).
-fn state_noop_sender() -> mpsc::Sender<DiscordMessage> {
-    let (tx, _rx) = mpsc::channel(1);
-    tx
 }
 
 // ── sera init ───────────────────────────────────────────────────────────────
@@ -559,15 +756,13 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     tracing::info!(path = %db_path.display(), "Opening SQLite database");
     let db = SqliteDb::open(&db_path)?;
 
-    let state = Arc::new(AppState {
-        db: Mutex::new(db),
-        manifests,
-    });
-
-    // 3. Start Discord connector if configured.
+    // 3. Resolve Discord connector if configured.  We create a shared Arc so
+    //    the gateway listener and the event-loop response sender use the same
+    //    REST client / token.
     let (discord_tx, discord_rx) = mpsc::channel::<DiscordMessage>(256);
+    let mut shared_discord: Option<Arc<DiscordConnector>> = None;
 
-    for cm in &state.manifests.connectors {
+    for cm in &manifests.connectors {
         let spec: ConnectorSpec = match serde_json::from_value(cm.spec.clone()) {
             Ok(s) => s,
             Err(e) => {
@@ -599,13 +794,26 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             "Starting Discord connector"
         );
 
-        let connector = DiscordConnector::new(&token, &agent_name, discord_tx.clone());
+        let connector = Arc::new(DiscordConnector::new(
+            &token,
+            &agent_name,
+            discord_tx.clone(),
+        ));
+        shared_discord = Some(Arc::clone(&connector));
+
+        // Spawn the gateway listener.
         tokio::spawn(async move {
             if let Err(e) = connector.run().await {
                 tracing::error!("Discord connector exited with error: {e}");
             }
         });
     }
+
+    let state = Arc::new(AppState {
+        db: Mutex::new(db),
+        manifests,
+        discord: shared_discord,
+    });
 
     // 4. Start event processing loop.
     let event_state = Arc::clone(&state);
@@ -672,6 +880,7 @@ mod tests {
         Arc::new(AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
+            discord: None,
         })
     }
 
@@ -881,11 +1090,15 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["agent"], "sera");
         assert!(json["session_id"].as_str().is_some());
-        // Reply will contain an error message since LLM is not reachable,
+        // Response will contain an error message since LLM is not reachable,
         // but the structure is correct.
-        assert!(json["reply"].as_str().is_some());
+        assert!(json["response"].as_str().is_some());
+        // Usage info is always present (may be zeros if LLM unreachable).
+        assert!(json["usage"].is_object());
+        assert!(json["usage"]["prompt_tokens"].is_number());
+        assert!(json["usage"]["completion_tokens"].is_number());
+        assert!(json["usage"]["total_tokens"].is_number());
     }
 
     // -- Router structure --
@@ -906,5 +1119,177 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // -- Chat request/response parsing --
+
+    #[test]
+    fn chat_request_deserialize_full() {
+        let json = r#"{"message":"Hello","agent":"sera"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Hello");
+        assert_eq!(req.agent.as_deref(), Some("sera"));
+    }
+
+    #[test]
+    fn chat_request_deserialize_minimal() {
+        let json = r#"{"message":"Hi"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Hi");
+        assert!(req.agent.is_none());
+    }
+
+    #[test]
+    fn chat_response_serialize() {
+        let resp = ChatResponse {
+            response: "Hello there".to_owned(),
+            session_id: "ses_123".to_owned(),
+            usage: UsageInfo {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+            },
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["response"], "Hello there");
+        assert_eq!(json["session_id"], "ses_123");
+        assert_eq!(json["usage"]["prompt_tokens"], 100);
+        assert_eq!(json["usage"]["completion_tokens"], 50);
+        assert_eq!(json["usage"]["total_tokens"], 150);
+    }
+
+    // -- Turn execution helpers --
+
+    #[test]
+    fn build_tool_definitions_from_agent_spec() {
+        let manifests = test_manifests();
+        let spec = manifests.agent_spec("sera").unwrap().unwrap();
+        let tools = build_tool_definitions(&spec);
+        // Agent has 4 tool patterns: memory_*, file_*, shell, session_*
+        assert_eq!(tools.len(), 4);
+        // Each tool should be a function type.
+        for tool in &tools {
+            assert_eq!(tool["type"], "function");
+            assert!(tool["function"]["name"].as_str().is_some());
+        }
+    }
+
+    #[test]
+    fn build_tool_definitions_empty_when_no_tools() {
+        let spec = AgentSpec {
+            provider: "test".to_owned(),
+            model: None,
+            persona: None,
+            tools: None,
+        };
+        let tools = build_tool_definitions(&spec);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn execute_tool_call_returns_stub() {
+        let result = execute_tool_call("memory_store", r#"{"key":"test"}"#);
+        assert!(result.contains("memory_store"));
+        assert!(result.contains("OK"));
+    }
+
+    #[test]
+    fn extract_usage_from_llm_body() {
+        let body = serde_json::json!({
+            "choices": [{ "message": { "content": "hi" } }],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 10,
+                "total_tokens": 52
+            }
+        });
+        let usage = extract_usage(&body);
+        assert_eq!(usage.prompt_tokens, 42);
+        assert_eq!(usage.completion_tokens, 10);
+        assert_eq!(usage.total_tokens, 52);
+    }
+
+    #[test]
+    fn extract_usage_missing_defaults_to_zero() {
+        let body = serde_json::json!({ "choices": [] });
+        let usage = extract_usage(&body);
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+    }
+
+    // -- Event processing (mock LLM) --
+
+    #[tokio::test]
+    async fn event_loop_processes_discord_message() {
+        let state = test_state();
+        let (tx, rx) = mpsc::channel::<DiscordMessage>(16);
+
+        // Spawn the event loop.
+        let event_state = Arc::clone(&state);
+        let handle = tokio::spawn(async move {
+            event_loop(event_state, rx).await;
+        });
+
+        // Send a Discord message.
+        tx.send(DiscordMessage {
+            channel_id: "ch_001".into(),
+            user_id: "user_001".into(),
+            username: "tester".into(),
+            content: "ping".into(),
+            message_id: "msg_001".into(),
+        })
+        .await
+        .unwrap();
+
+        // Drop sender to close the channel, which stops the event loop.
+        drop(tx);
+        handle.await.unwrap();
+
+        // Verify the message and response were saved to transcript.
+        let db = state.db.lock().await;
+        // Find the session that was created for the Discord channel.
+        let session = db
+            .get_session_by_key("discord:ch_001")
+            .unwrap()
+            .expect("session should exist");
+        let transcript = db.get_transcript(&session.id).unwrap();
+        // Should have at least 2 entries: user message + assistant reply.
+        assert!(transcript.len() >= 2);
+        assert_eq!(transcript[0].role, "user");
+        assert_eq!(transcript[0].content.as_deref(), Some("ping"));
+        assert_eq!(transcript[1].role, "assistant");
+        // The reply will be an error (no real LLM), but it should be recorded.
+        assert!(transcript[1].content.is_some());
+    }
+
+    #[tokio::test]
+    async fn chat_endpoint_saves_transcript_to_db() {
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+
+        // First request creates a session.
+        let _response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "test message" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Verify transcript was written.
+        let db = state.db.lock().await;
+        let session = db.get_or_create_session("sera").unwrap();
+        let transcript = db.get_transcript(&session.id).unwrap();
+        assert!(transcript.len() >= 2, "expected user + assistant messages");
+        assert_eq!(transcript[0].role, "user");
+        assert_eq!(transcript[0].content.as_deref(), Some("test message"));
+        assert_eq!(transcript[1].role, "assistant");
     }
 }

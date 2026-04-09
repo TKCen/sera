@@ -201,7 +201,7 @@ impl SqliteDb {
         })?;
 
         if let Some(row) = rows.next() {
-            return Ok(row?);
+            return row;
         }
         // Drop the borrow on `stmt` / `rows` before mutating via insert.
         drop(rows);

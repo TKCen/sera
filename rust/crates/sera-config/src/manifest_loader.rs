@@ -147,7 +147,7 @@ pub fn load_manifest_file(path: &Path) -> Result<ManifestSet, ManifestLoadError>
 pub fn resolve_secret(secret_path: &str) -> Option<String> {
     let env_key = format!(
         "SERA_SECRET_{}",
-        secret_path.to_uppercase().replace('/', "_").replace('-', "_")
+        secret_path.to_uppercase().replace(['/', '-'], "_")
     );
     std::env::var(&env_key).ok()
 }

@@ -515,13 +515,13 @@ async fn execute_turn(
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
     // Add system message from persona if configured.
-    if let Some(persona) = &agent_spec.persona {
-        if let Some(anchor) = &persona.immutable_anchor {
-            messages.push(serde_json::json!({
-                "role": "system",
-                "content": anchor,
-            }));
-        }
+    if let Some(persona) = &agent_spec.persona
+        && let Some(anchor) = &persona.immutable_anchor
+    {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": anchor,
+        }));
     }
 
     // Add transcript history (including tool_calls and tool results).
@@ -1010,7 +1010,7 @@ fn run_init() -> anyhow::Result<()> {
 
 // ── sera agent create / list ────────────────────────────────────────────────
 
-fn run_agent_list(config: &PathBuf) -> anyhow::Result<()> {
+fn run_agent_list(config: &std::path::Path) -> anyhow::Result<()> {
     let manifests = load_manifest_file(config)?;
     let names = manifests.agent_names();
     if names.is_empty() {

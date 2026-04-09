@@ -127,12 +127,11 @@ impl FileMemory {
             let path = entry.path();
             if path.is_dir() {
                 self.collect_md_files(&path, out)?;
-            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Ok(rel) = path.strip_prefix(&self.workspace) {
-                    // Normalise to forward slashes for cross-platform consistency.
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    out.push(rel_str);
-                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md")
+                && let Ok(rel) = path.strip_prefix(&self.workspace) {
+                // Normalise to forward slashes for cross-platform consistency.
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                out.push(rel_str);
             }
         }
         Ok(())

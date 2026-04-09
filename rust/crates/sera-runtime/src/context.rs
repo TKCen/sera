@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Context manager — tracks message token usage and compacts when needed.
 //!
 //! Ported from the TypeScript implementation in `core/agent-runtime/src/contextManager.ts`.
@@ -91,7 +92,7 @@ impl ContextManager {
     /// Estimate token count for a string using the chars/4 heuristic.
     pub fn estimate_tokens(text: &str) -> usize {
         // Ceiling division to avoid undercount on short strings.
-        (text.len() + 3) / 4
+        text.len().div_ceil(4)
     }
 
     /// Estimate tokens for a single `ChatMessage`.
@@ -117,7 +118,7 @@ impl ContextManager {
 
     /// Count tokens in a slice of `serde_json::Value` messages.
     pub fn count_json_message_tokens(messages: &[serde_json::Value]) -> usize {
-        messages.iter().map(|v| Self::estimate_json_msg_tokens(v)).sum()
+        messages.iter().map(Self::estimate_json_msg_tokens).sum()
     }
 
     /// Estimate tokens for a JSON-encoded message.

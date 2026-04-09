@@ -1,23 +1,41 @@
-//! SERA Hook Runtime — executes chainable hook pipelines.
+//! `sera-hooks` — in-process hook registry and chain executor for SERA.
 //!
-//! Hook types (HookChain, HookInstance, HookResult, HookContext, etc.) live in
-//! `sera-domain::hook` so any crate can reference them without pulling in the
-//! runtime. This crate provides:
+//! # Overview
 //!
-//! - `HookExecutor` trait — the interface for executing individual hooks
-//! - `ChainExecutor` — runs a HookChain by invoking each enabled hook in order
-//! - `InProcessHookRegistry` — registers and manages in-process hook functions
+//! Provides the plumbing for SERA's hook system (SPEC-hooks):
 //!
-//! WASM-based execution (wasmtime) will be added when the wasmtime dependency
-//! is wired in. For now, in-process hooks provide the full chain execution
-//! semantics that the spec requires.
+//! - [`hook_trait::Hook`] — implement this to create an in-process hook.
+//! - [`registry::HookRegistry`] — register / look up hooks by name.
+//! - [`executor::ChainExecutor`] — execute chains of hooks at a given point.
+//! - [`error::HookError`] — all failure modes.
 //!
-//! See SPEC-hooks for the full design.
+//! WASM hook execution is a future concern; this crate handles native Rust hooks only.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use std::sync::Arc;
+//! use sera_hooks::{ChainExecutor, HookRegistry};
+//! use sera_domain::hook::{HookChain, HookContext, HookPoint};
+//!
+//! let mut registry = HookRegistry::new();
+//! registry.register(Box::new(MyHook::new()));
+//!
+//! let executor = ChainExecutor::new(Arc::new(registry));
+//! let ctx = HookContext::new(HookPoint::PreRoute);
+//! let result = executor.execute_at_point(HookPoint::PreRoute, &chains, ctx).await?;
+//! ```
 
-pub mod chain;
 pub mod error;
+pub mod executor;
+pub mod hook_trait;
 pub mod registry;
 
-pub use chain::ChainExecutor;
+// Convenient re-exports.
 pub use error::HookError;
-pub use registry::InProcessHookRegistry;
+pub use executor::ChainExecutor;
+pub use hook_trait::Hook;
+pub use registry::HookRegistry;
+
+#[cfg(test)]
+mod tests;

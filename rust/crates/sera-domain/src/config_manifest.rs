@@ -49,20 +49,22 @@ pub enum ResourceKind {
     InteropConfig,
 }
 
-impl ResourceKind {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for ResourceKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Instance" => Some(Self::Instance),
-            "Provider" => Some(Self::Provider),
-            "Agent" => Some(Self::Agent),
-            "Connector" => Some(Self::Connector),
-            "HookChain" => Some(Self::HookChain),
-            "ToolProfile" => Some(Self::ToolProfile),
-            "WorkflowDef" => Some(Self::WorkflowDef),
-            "ApprovalPolicy" => Some(Self::ApprovalPolicy),
-            "SecretProvider" => Some(Self::SecretProvider),
-            "InteropConfig" => Some(Self::InteropConfig),
-            _ => None,
+            "Instance" => Ok(Self::Instance),
+            "Provider" => Ok(Self::Provider),
+            "Agent" => Ok(Self::Agent),
+            "Connector" => Ok(Self::Connector),
+            "HookChain" => Ok(Self::HookChain),
+            "ToolProfile" => Ok(Self::ToolProfile),
+            "WorkflowDef" => Ok(Self::WorkflowDef),
+            "ApprovalPolicy" => Ok(Self::ApprovalPolicy),
+            "SecretProvider" => Ok(Self::SecretProvider),
+            "InteropConfig" => Ok(Self::InteropConfig),
+            _ => Err(format!("unknown resource kind: {}", s)),
         }
     }
 }
@@ -124,8 +126,8 @@ impl ConfigManifest {
             ConfigManifestError::InvalidApiVersion(raw.api_version.clone())
         })?;
 
-        let kind = ResourceKind::from_str(&raw.kind)
-            .ok_or_else(|| ConfigManifestError::UnknownKind(raw.kind.clone()))?;
+        let kind = raw.kind.parse::<ResourceKind>()
+            .map_err(|_| ConfigManifestError::UnknownKind(raw.kind.clone()))?;
 
         Ok(Self {
             api_version,
@@ -250,7 +252,7 @@ mod tests {
             ResourceKind::Connector,
         ] {
             let s = kind.to_string();
-            let parsed = ResourceKind::from_str(&s).unwrap();
+            let parsed = s.parse::<ResourceKind>().unwrap();
             assert_eq!(kind, parsed);
         }
     }

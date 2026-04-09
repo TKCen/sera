@@ -12,6 +12,9 @@ members = [
   "crates/sera-runtime",
   "crates/sera-tui",
   "crates/sera-byoh-agent",
+  "crates/sera-hitl",
+  "crates/sera-hooks",
+  "crates/sera-workflow",
 ]
 
 [workspace.package]
@@ -96,10 +99,13 @@ notify-debouncer-mini = "0.5"
 
 # Scheduling
 cron = "0.13"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+
+# Async trait support
+async-trait = "0.1"
 
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }
@@ -110,6 +116,9 @@ sera-events = { path = "crates/sera-events" }
 sera-docker = { path = "crates/sera-docker" }
 sera-runtime = { path = "crates/sera-runtime" }
 sera-testing = { path = "crates/sera-testing" }
+sera-hitl = { path = "crates/sera-hitl" }
+sera-hooks = { path = "crates/sera-hooks" }
+sera-workflow = { path = "crates/sera-workflow" }
 
 [profile.release]
 lto = true

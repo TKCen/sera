@@ -273,10 +273,10 @@ impl MvsToolRegistry {
                     if let Some(fname) = file_line.strip_prefix("File: ") {
                         // Strip the .md extension to match crossref targets
                         let stem = fname.trim_end_matches(".md");
-                        if let Some(refs) = incoming_refs.get(stem) {
-                            if !refs.is_empty() {
-                                return format!("{result}\nReferenced by: {}", refs.join(", "));
-                            }
+                        if let Some(refs) = incoming_refs.get(stem)
+                            && !refs.is_empty()
+                        {
+                            return format!("{result}\nReferenced by: {}", refs.join(", "));
                         }
                     }
                 }

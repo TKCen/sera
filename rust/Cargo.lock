@@ -2531,6 +2531,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-hitl"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "sera-domain",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sera-hooks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "sera-domain",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "sera-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2539,6 +2566,7 @@ dependencies = [
  "async-trait",
  "axum",
  "futures-util",
+ "regex",
  "reqwest",
  "rusqlite",
  "sera-config",
@@ -2584,6 +2612,20 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "sera-workflow"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "cron",
+ "sera-domain",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
  "uuid",
 ]
 

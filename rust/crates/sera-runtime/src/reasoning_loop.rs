@@ -152,15 +152,15 @@ pub async fn run_enhanced(loop_config: LoopConfig<'_>, input: TaskInput) -> anyh
     }
 
     // Persist the user prompt message to transcript.
-    if !session_id.is_empty() {
-        if let Some(sm) = loop_config.session_manager {
-            let user_msg = ChatMessage {
-                role: "user".to_string(),
-                content: Some(input.prompt.clone()),
-                ..Default::default()
-            };
-            let _ = sm.append_message(&session_id, &user_msg);
-        }
+    if !session_id.is_empty()
+        && let Some(sm) = loop_config.session_manager
+    {
+        let user_msg = ChatMessage {
+            role: "user".to_string(),
+            content: Some(input.prompt.clone()),
+            ..Default::default()
+        };
+        let _ = sm.append_message(&session_id, &user_msg);
     }
 
     let mut state = State::Init;
@@ -250,10 +250,10 @@ pub async fn run_enhanced(loop_config: LoopConfig<'_>, input: TaskInput) -> anyh
                             let assistant_msg = resp.message.clone();
 
                             // Persist assistant message to transcript.
-                            if !session_id.is_empty() {
-                                if let Some(sm) = loop_config.session_manager {
-                                    let _ = sm.append_message(&session_id, &assistant_msg);
-                                }
+                            if !session_id.is_empty()
+                                && let Some(sm) = loop_config.session_manager
+                            {
+                                let _ = sm.append_message(&session_id, &assistant_msg);
                             }
 
                             messages.push(assistant_msg);
@@ -331,10 +331,10 @@ pub async fn run_enhanced(loop_config: LoopConfig<'_>, input: TaskInput) -> anyh
                     };
 
                     // Persist tool result to transcript.
-                    if !session_id.is_empty() {
-                        if let Some(sm) = loop_config.session_manager {
-                            let _ = sm.append_message(&session_id, &tool_msg);
-                        }
+                    if !session_id.is_empty()
+                        && let Some(sm) = loop_config.session_manager
+                    {
+                        let _ = sm.append_message(&session_id, &tool_msg);
                     }
 
                     messages.push(tool_msg);

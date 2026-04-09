@@ -23,6 +23,7 @@ pub mod secrets;
 pub mod tasks;
 pub mod webhooks;
 pub mod job_queue;
+pub mod lane_queue;
 pub mod error;
 
 pub use pool::DbPool;

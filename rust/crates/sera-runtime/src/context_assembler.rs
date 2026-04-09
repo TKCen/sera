@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Context assembler — builds the LLM message list in KV-cache-optimized order.
 //!
 //! The ordering places stable content first so the KV cache can be reused
@@ -141,13 +142,13 @@ impl ContextAssembler {
         }
 
         // 3. Memory excerpts — semi-stable (changes less often than conversation).
-        if let Some(memory) = memory_context {
-            if !memory.is_empty() {
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!("Relevant memory:\n{memory}"),
-                }));
-            }
+        if let Some(memory) = memory_context
+            && !memory.is_empty()
+        {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": format!("Relevant memory:\n{memory}"),
+            }));
         }
 
         // 4. Conversation history — volatile, appended in order.

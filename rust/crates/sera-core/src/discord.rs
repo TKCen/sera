@@ -326,10 +326,10 @@ impl DiscordConnector {
                             tracing::info!("Discord adapter ready as {username}");
                         }
                         "MESSAGE_CREATE" => {
-                            if let Some(msg) = parse_message_create(payload) {
-                                if let Err(e) = self.tx.send(msg).await {
-                                    tracing::error!("Failed to dispatch Discord message: {e}");
-                                }
+                            if let Some(msg) = parse_message_create(payload)
+                                && let Err(e) = self.tx.send(msg).await
+                            {
+                                tracing::error!("Failed to dispatch Discord message: {e}");
                             }
                         }
                         _ => {

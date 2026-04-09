@@ -1,4 +1,5 @@
 //! Runtime configuration from environment variables.
+#![allow(dead_code)]
 
 /// Runtime configuration — read from env vars set by sera-core when spawning the container.
 #[derive(Debug, Clone)]

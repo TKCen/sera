@@ -74,3 +74,9 @@ impl ToolRegistry {
         tool.execute(args).await
     }
 }
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}

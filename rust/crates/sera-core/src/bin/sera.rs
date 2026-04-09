@@ -941,7 +941,7 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
             let session = match db.get_session_by_key(&session_key) {
                 Ok(Some(s)) => s,
                 Ok(None) => {
-                    let id = format!("ses_discord_{}", msg.channel_id);
+                    let id = format!("ses_{}_{}", agent_name, msg.channel_id);
                     if let Err(e) = db.create_session(
                         &id,
                         &agent_name,

@@ -5,6 +5,7 @@
 //! - SQL rows and query code live here in `sera-db`
 //! - No leaking `sqlx::Row` or SQL types into handler/business layers
 
+pub mod sqlite;
 pub mod pool;
 pub mod agents;
 pub mod audit;

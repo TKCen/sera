@@ -10,6 +10,7 @@ pub mod grep;
 pub mod spawn;
 pub mod tool_search;
 pub mod centrifugo;
+pub mod mvs_tools;
 
 use crate::types::{FunctionDefinition, ToolDefinition};
 

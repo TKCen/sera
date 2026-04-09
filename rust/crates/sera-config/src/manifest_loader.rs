@@ -12,7 +12,6 @@ use sera_domain::config_manifest::{
     AgentSpec, ConfigManifest, ConfigManifestError, ConnectorSpec, InstanceSpec, ProviderSpec,
     RawManifest, ResourceKind,
 };
-use std::collections::HashMap;
 use std::path::Path;
 
 /// All parsed and validated manifests from a SERA config file, organized by kind.

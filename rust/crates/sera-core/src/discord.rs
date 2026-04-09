@@ -21,6 +21,7 @@ pub struct DiscordMessage {
     pub user_id: String,
     pub username: String,
     pub content: String,
+    #[allow(dead_code)]
     pub message_id: String,
 }
 

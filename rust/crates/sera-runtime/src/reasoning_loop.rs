@@ -68,7 +68,6 @@ pub async fn run_enhanced(loop_config: LoopConfig<'_>, input: TaskInput) -> anyh
     let llm_client = LlmClient::new(loop_config.runtime_config);
     let context_manager = ContextManager::new(
         loop_config.runtime_config.context_window,
-        loop_config.runtime_config.compaction_strategy.clone(),
     );
 
     // Set up MVS tool registry if workspace is provided, otherwise use the
@@ -177,7 +176,18 @@ pub async fn run_enhanced(loop_config: LoopConfig<'_>, input: TaskInput) -> anyh
                     tracing::warn!("Max iterations ({max_iterations}) reached, stopping");
                     State::Done(ExitReason::MaxIterations)
                 } else {
-                    // Compact context if needed.
+                    // Compact context if approaching the context window limit.
+                    if context_manager.is_near_limit(&messages) {
+                        let result = context_manager.compact(&mut messages);
+                        if result.dropped_count > 0 {
+                            tracing::info!(
+                                dropped = result.dropped_count,
+                                tokens_before = result.tokens_before,
+                                tokens_after = result.tokens_after,
+                                "Context compacted"
+                            );
+                        }
+                    }
                     let ctx_messages = context_manager.prepare(&messages);
 
                     // Call LLM with timeout retry.
@@ -309,9 +319,12 @@ pub async fn run_enhanced(loop_config: LoopConfig<'_>, input: TaskInput) -> anyh
                         duration_ms: start.elapsed().as_millis() as u64,
                     });
 
+                    // Truncate large tool outputs to stay within context budget.
+                    let truncated_result = context_manager.truncate_tool_output(&result);
+
                     let tool_msg = ChatMessage {
                         role: "tool".to_string(),
-                        content: Some(result),
+                        content: Some(truncated_result),
                         tool_call_id: Some(tc.id.clone()),
                         name: Some(tc.function.name.clone()),
                         ..Default::default()

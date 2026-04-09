@@ -84,6 +84,7 @@ pub struct UsageStats {
 
 /// LLM response from the chat completions endpoint.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LlmResponse {
     pub choices: Vec<LlmChoice>,
     #[serde(default)]
@@ -91,12 +92,14 @@ pub struct LlmResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LlmChoice {
     pub message: ChatMessage,
     pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct LlmUsage {
     #[serde(default)]
     pub prompt_tokens: u32,

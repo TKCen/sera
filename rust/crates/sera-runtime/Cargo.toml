@@ -3,6 +3,10 @@ name = "sera-runtime"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "sera_runtime"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sera-runtime"
 path = "src/main.rs"

@@ -7,7 +7,13 @@ edition.workspace = true
 name = "sera-core"
 path = "src/main.rs"
 
+[[bin]]
+name = "sera"
+path = "src/bin/sera.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+rusqlite.workspace = true
 sera-domain.workspace = true
 sera-db.workspace = true
 sera-auth.workspace = true

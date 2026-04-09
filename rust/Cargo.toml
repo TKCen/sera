@@ -97,6 +97,9 @@ notify-debouncer-mini = "0.5"
 cron = "0.13"
 chrono = "0.4"
 
+# CLI
+clap = { version = "4", features = ["derive"] }
+
 # Workspace crates
 sera-domain = { path = "crates/sera-domain" }
 sera-config = { path = "crates/sera-config" }

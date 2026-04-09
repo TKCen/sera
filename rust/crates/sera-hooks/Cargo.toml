@@ -1,0 +1,16 @@
+[package]
+name = "sera-hooks"
+version.workspace = true
+edition.workspace = true
+description = "WASM hook runtime — chainable pipelines at 16 hook points across SERA"
+
+[dependencies]
+sera-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

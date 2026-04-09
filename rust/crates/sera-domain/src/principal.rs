@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The kind of principal acting in the system.
+/// SPEC-identity-authz: any acting entity is a first-class Principal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalKind {
@@ -14,6 +15,10 @@ pub enum PrincipalKind {
     Human,
     /// An agent instance running in a container or in-process.
     Agent,
+    /// An external agent connecting via A2A or ACP protocol.
+    ExternalAgent,
+    /// A service identity (API integrations, webhooks, connectors).
+    Service,
     /// The SERA system itself (for automated actions).
     System,
 }
@@ -98,6 +103,28 @@ impl Principal {
         }
     }
 
+    /// Create a principal for an external agent (A2A/ACP protocol).
+    pub fn external_agent(protocol: &str, agent_name: &str) -> Self {
+        Self {
+            id: PrincipalId::new(format!("ext:{protocol}:{agent_name}")),
+            kind: PrincipalKind::ExternalAgent,
+            name: agent_name.to_string(),
+            external_id: None,
+            platform: Some(protocol.to_string()),
+        }
+    }
+
+    /// Create a principal for a service identity.
+    pub fn service(service_name: &str) -> Self {
+        Self {
+            id: PrincipalId::new(format!("svc:{service_name}")),
+            kind: PrincipalKind::Service,
+            name: service_name.to_string(),
+            external_id: None,
+            platform: None,
+        }
+    }
+
     /// A reference to this principal for embedding in events and audit entries.
     pub fn as_ref(&self) -> PrincipalRef {
         PrincipalRef {
@@ -163,6 +190,38 @@ mod tests {
 
         let parsed: PrincipalKind = serde_json::from_str("\"agent\"").unwrap();
         assert_eq!(parsed, PrincipalKind::Agent);
+    }
+
+    #[test]
+    fn principal_kind_all_variants_serde() {
+        let variants = vec![
+            (PrincipalKind::Human, "human"),
+            (PrincipalKind::Agent, "agent"),
+            (PrincipalKind::ExternalAgent, "external_agent"),
+            (PrincipalKind::Service, "service"),
+            (PrincipalKind::System, "system"),
+        ];
+        for (kind, expected) in variants {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!("\"{expected}\""));
+            let parsed: PrincipalKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, kind);
+        }
+    }
+
+    #[test]
+    fn external_agent_principal() {
+        let p = Principal::external_agent("a2a", "reviewer-bot");
+        assert_eq!(p.id.0, "ext:a2a:reviewer-bot");
+        assert_eq!(p.kind, PrincipalKind::ExternalAgent);
+        assert_eq!(p.platform.as_deref(), Some("a2a"));
+    }
+
+    #[test]
+    fn service_principal() {
+        let p = Principal::service("discord-connector");
+        assert_eq!(p.id.0, "svc:discord-connector");
+        assert_eq!(p.kind, PrincipalKind::Service);
     }
 
     #[test]

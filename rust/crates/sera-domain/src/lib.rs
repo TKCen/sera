@@ -2,6 +2,7 @@
 //! and the full sera-core domain model.
 
 pub mod agent;
+pub mod runtime;
 pub mod audit;
 pub mod capability;
 pub mod chat;

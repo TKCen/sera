@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod context;
+pub mod context_pipeline;
 pub mod context_assembler;
 pub mod error;
 pub mod health;

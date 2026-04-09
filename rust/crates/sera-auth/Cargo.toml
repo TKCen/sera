@@ -13,3 +13,4 @@ tracing.workspace = true
 thiserror.workspace = true
 jsonwebtoken.workspace = true
 axum.workspace = true
+async-trait = { workspace = true }

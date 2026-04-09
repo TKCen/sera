@@ -5,6 +5,7 @@
 //! - External operator auth (OIDC via `openidconnect`, future)
 
 pub mod api_key;
+pub mod authz;
 pub mod error;
 pub mod jwt;
 pub mod middleware;

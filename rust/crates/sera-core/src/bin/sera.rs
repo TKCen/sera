@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing_subscriber::EnvFilter;
 
 use sera_config::manifest_loader::{
-    load_manifest_file, parse_manifests, resolve_connector_token, resolve_provider_api_key,
+    load_manifest_file, parse_manifests, resolve_provider_api_key,
     ManifestSet,
 };
 use sera_config::secrets::SecretResolver;

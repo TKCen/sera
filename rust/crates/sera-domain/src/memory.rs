@@ -329,11 +329,13 @@ impl RecallTracker {
 /// Compaction scope — what to compact and how.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionScope {
-    pub tier: MemoryTier,
+    pub agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<MemoryTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_age_days: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_entries: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub older_than: Option<String>,
 }
 
 /// Result of a compaction operation.
@@ -341,16 +343,170 @@ pub struct CompactionScope {
 pub struct CompactionResult {
     pub entries_before: u32,
     pub entries_after: u32,
-    pub entries_merged: u32,
     pub entries_removed: u32,
+    pub entries_merged: u32,
+}
+
+/// Index status for a memory backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IndexStatus {
+    NotConfigured,
+    Building,
+    Ready {
+        entry_count: u64,
+        last_updated: String,
+    },
+    Stale {
+        entry_count: u64,
+        last_updated: String,
+    },
 }
 
 /// Statistics about a memory backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryStats {
-    pub total_entries: u32,
-    pub entries_by_tier: HashMap<String, u32>,
+    pub total_entries: u64,
+    pub entries_by_tier: HashMap<MemoryTier, u64>,
     pub total_size_bytes: u64,
+    pub index_status: IndexStatus,
+}
+
+// ── MemoryError ──────────────────────────────────────────────────────────────
+
+/// Errors from memory backend operations.
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryError {
+    #[error("memory not found: {id}")]
+    NotFound { id: String },
+    #[error("memory I/O error: {reason}")]
+    IoError { reason: String },
+    #[error("search failed: {reason}")]
+    SearchFailed { reason: String },
+    #[error("compaction failed: {reason}")]
+    CompactionFailed { reason: String },
+    #[error("memory backend unavailable: {reason}")]
+    Unavailable { reason: String },
+}
+
+impl From<std::io::Error> for MemoryError {
+    fn from(e: std::io::Error) -> Self {
+        MemoryError::IoError { reason: e.to_string() }
+    }
+}
+
+// ── MemoryContext ────────────────────────────────────────────────────────────
+
+/// Scoping context passed to write/search operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryContext {
+    pub agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_id: Option<String>,
+}
+
+// ── MemoryBackend trait ──────────────────────────────────────────────────────
+
+/// Async trait for memory storage backends.
+/// SPEC-memory: all backend implementations must be Send + Sync.
+#[async_trait::async_trait]
+pub trait MemoryBackend: Send + Sync {
+    async fn write(&self, entry: MemoryEntry, ctx: &MemoryContext) -> Result<MemoryId, MemoryError>;
+    async fn search(&self, query: &MemoryQuery, ctx: &MemoryContext) -> Result<Vec<MemorySearchResult>, MemoryError>;
+    async fn get(&self, id: &MemoryId) -> Result<MemoryEntry, MemoryError>;
+    async fn delete(&self, id: &MemoryId) -> Result<(), MemoryError>;
+    async fn compact(&self, scope: &CompactionScope) -> Result<CompactionResult, MemoryError>;
+    async fn stats(&self) -> MemoryStats;
+}
+
+// ── FileMemoryBackend ────────────────────────────────────────────────────────
+
+/// Async wrapper around the sync `FileMemory` file-based backend.
+pub struct FileMemoryBackend {
+    inner: FileMemory,
+}
+
+impl FileMemoryBackend {
+    pub fn new(workspace: &std::path::Path) -> Self {
+        Self {
+            inner: FileMemory::new(workspace),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MemoryBackend for FileMemoryBackend {
+    async fn write(&self, entry: MemoryEntry, _ctx: &MemoryContext) -> Result<MemoryId, MemoryError> {
+        let id = MemoryId::generate();
+        let path = format!("{}.md", id.0);
+        self.inner.write(&path, &entry.content)?;
+        Ok(id)
+    }
+
+    async fn search(&self, query: &MemoryQuery, _ctx: &MemoryContext) -> Result<Vec<MemorySearchResult>, MemoryError> {
+        let results = self.inner.search(&query.text)?;
+        let out = results
+            .into_iter()
+            .flat_map(|sr| {
+                let path = sr.path.clone();
+                sr.matches.into_iter().map(move |m| MemorySearchResult {
+                    id: MemoryId::new(path.trim_end_matches(".md")),
+                    content: m.line,
+                    score: 1.0,
+                    tier: MemoryTier::LongTerm,
+                    source: Some(path.clone()),
+                })
+            })
+            .take(query.top_k as usize)
+            .collect();
+        Ok(out)
+    }
+
+    async fn get(&self, id: &MemoryId) -> Result<MemoryEntry, MemoryError> {
+        let path = format!("{}.md", id.0);
+        let content = self.inner.read(&path).map_err(|_| MemoryError::NotFound { id: id.0.clone() })?;
+        Ok(MemoryEntry {
+            id: id.clone(),
+            content,
+            tier: MemoryTier::LongTerm,
+            heading: None,
+            tags: vec![],
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: None,
+        })
+    }
+
+    async fn delete(&self, id: &MemoryId) -> Result<(), MemoryError> {
+        let path = format!("{}.md", id.0);
+        self.inner.delete(&path)?;
+        Ok(())
+    }
+
+    async fn compact(&self, _scope: &CompactionScope) -> Result<CompactionResult, MemoryError> {
+        // Compaction not implemented for file backend; return a no-op result.
+        let count = self.inner.list().map(|v| v.len() as u32).unwrap_or(0);
+        Ok(CompactionResult {
+            entries_before: count,
+            entries_after: count,
+            entries_removed: 0,
+            entries_merged: 0,
+        })
+    }
+
+    async fn stats(&self) -> MemoryStats {
+        let files = self.inner.list().unwrap_or_default();
+        let count = files.len() as u64;
+        let mut by_tier = HashMap::new();
+        by_tier.insert(MemoryTier::LongTerm, count);
+        MemoryStats {
+            total_entries: count,
+            entries_by_tier: by_tier,
+            total_size_bytes: 0,
+            index_status: IndexStatus::NotConfigured,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -802,13 +958,14 @@ Final keyword mention.";
     #[test]
     fn compaction_scope_serde() {
         let scope = CompactionScope {
-            tier: MemoryTier::ShortTerm,
+            agent_id: "agent-1".to_string(),
+            tier: Some(MemoryTier::ShortTerm),
+            max_age_days: Some(30),
             max_entries: Some(100),
-            older_than: Some("2026-04-01T00:00:00Z".to_string()),
         };
         let json = serde_json::to_string(&scope).unwrap();
         let parsed: CompactionScope = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.tier, MemoryTier::ShortTerm);
+        assert_eq!(parsed.tier, Some(MemoryTier::ShortTerm));
         assert_eq!(parsed.max_entries, Some(100));
     }
 
@@ -831,14 +988,169 @@ Final keyword mention.";
             total_entries: 42,
             entries_by_tier: {
                 let mut m = HashMap::new();
-                m.insert("long_term".to_string(), 30);
-                m.insert("short_term".to_string(), 12);
+                m.insert(MemoryTier::LongTerm, 30u64);
+                m.insert(MemoryTier::ShortTerm, 12u64);
                 m
             },
             total_size_bytes: 1024 * 1024,
+            index_status: IndexStatus::NotConfigured,
         };
         let json = serde_json::to_string(&stats).unwrap();
         let parsed: MemoryStats = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.total_entries, 42);
+    }
+
+    // ── MemoryError tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn memory_error_display() {
+        let e = MemoryError::NotFound { id: "mem-1".to_string() };
+        assert_eq!(e.to_string(), "memory not found: mem-1");
+
+        let e = MemoryError::IoError { reason: "disk full".to_string() };
+        assert_eq!(e.to_string(), "memory I/O error: disk full");
+
+        let e = MemoryError::SearchFailed { reason: "index offline".to_string() };
+        assert_eq!(e.to_string(), "search failed: index offline");
+
+        let e = MemoryError::CompactionFailed { reason: "timeout".to_string() };
+        assert_eq!(e.to_string(), "compaction failed: timeout");
+
+        let e = MemoryError::Unavailable { reason: "backend down".to_string() };
+        assert_eq!(e.to_string(), "memory backend unavailable: backend down");
+    }
+
+    #[test]
+    fn memory_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
+        let e = MemoryError::from(io_err);
+        assert!(matches!(e, MemoryError::IoError { .. }));
+        assert!(e.to_string().contains("memory I/O error"));
+    }
+
+    // ── MemoryContext tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn memory_context_construction() {
+        let ctx = MemoryContext {
+            agent_id: "agent-1".to_string(),
+            session_id: Some("sess-abc".to_string()),
+            principal_id: None,
+        };
+        assert_eq!(ctx.agent_id, "agent-1");
+        assert_eq!(ctx.session_id.as_deref(), Some("sess-abc"));
+        assert!(ctx.principal_id.is_none());
+    }
+
+    // ── CompactionResult arithmetic ─────────────────────────────────────────
+
+    #[test]
+    fn compaction_result_arithmetic() {
+        let r = CompactionResult {
+            entries_before: 100,
+            entries_after: 30,
+            entries_removed: 20,
+            entries_merged: 50,
+        };
+        assert_eq!(r.entries_before - r.entries_after, r.entries_removed + r.entries_merged);
+    }
+
+    // ── IndexStatus serde roundtrip ─────────────────────────────────────────
+
+    #[test]
+    fn index_status_serde_roundtrip() {
+        let variants: Vec<IndexStatus> = vec![
+            IndexStatus::NotConfigured,
+            IndexStatus::Building,
+            IndexStatus::Ready {
+                entry_count: 42,
+                last_updated: "2026-04-09T10:00:00Z".to_string(),
+            },
+            IndexStatus::Stale {
+                entry_count: 10,
+                last_updated: "2026-04-08T10:00:00Z".to_string(),
+            },
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).unwrap();
+            let _parsed: IndexStatus = serde_json::from_str(&json).unwrap();
+        }
+    }
+
+    // ── FileMemoryBackend async tests ────────────────────────────────────────
+
+    fn make_entry(id: &str, content: &str, tier: MemoryTier) -> MemoryEntry {
+        MemoryEntry {
+            id: MemoryId::new(id),
+            content: content.to_string(),
+            tier,
+            heading: None,
+            tags: vec![],
+            created_at: "2026-04-09T10:00:00Z".to_string(),
+            updated_at: None,
+        }
+    }
+
+    fn make_ctx(agent_id: &str) -> MemoryContext {
+        MemoryContext {
+            agent_id: agent_id.to_string(),
+            session_id: None,
+            principal_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn file_backend_write_get_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let backend = FileMemoryBackend::new(dir.path());
+        let ctx = make_ctx("agent-1");
+        let entry = make_entry("mem-1", "hello world", MemoryTier::LongTerm);
+        let id = backend.write(entry.clone(), &ctx).await.unwrap();
+        let fetched = backend.get(&id).await.unwrap();
+        assert_eq!(fetched.content, "hello world");
+        assert_eq!(fetched.tier, MemoryTier::LongTerm);
+    }
+
+    #[tokio::test]
+    async fn file_backend_write_search_finds_it() {
+        let dir = TempDir::new().unwrap();
+        let backend = FileMemoryBackend::new(dir.path());
+        let ctx = make_ctx("agent-1");
+        let entry = make_entry("mem-2", "rust async trait architecture", MemoryTier::LongTerm);
+        backend.write(entry, &ctx).await.unwrap();
+        let query = MemoryQuery {
+            text: "async trait".to_string(),
+            strategy: SearchStrategy::Keyword,
+            top_k: 10,
+            similarity_threshold: None,
+            tier_filter: None,
+        };
+        let results = backend.search(&query, &ctx).await.unwrap();
+        assert!(!results.is_empty());
+        assert!(results[0].content.contains("async trait"));
+    }
+
+    #[tokio::test]
+    async fn file_backend_delete_removes_entry() {
+        let dir = TempDir::new().unwrap();
+        let backend = FileMemoryBackend::new(dir.path());
+        let ctx = make_ctx("agent-1");
+        let entry = make_entry("mem-3", "to be deleted", MemoryTier::ShortTerm);
+        let id = backend.write(entry, &ctx).await.unwrap();
+        backend.delete(&id).await.unwrap();
+        let result = backend.get(&id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn file_backend_stats_counts_entries() {
+        let dir = TempDir::new().unwrap();
+        let backend = FileMemoryBackend::new(dir.path());
+        let ctx = make_ctx("agent-1");
+        backend.write(make_entry("m1", "one", MemoryTier::LongTerm), &ctx).await.unwrap();
+        backend.write(make_entry("m2", "two", MemoryTier::LongTerm), &ctx).await.unwrap();
+        backend.write(make_entry("m3", "three", MemoryTier::ShortTerm), &ctx).await.unwrap();
+        let stats = backend.stats().await;
+        assert_eq!(stats.total_entries, 3);
     }
 }

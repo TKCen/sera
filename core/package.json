@@ -66,7 +66,7 @@
     "jose": "^6.2.2",
     "js-yaml": "^4.1",
     "node-pg-migrate": "^8.0.4",
-    "nodemailer": "^8.0.4",
+    "nodemailer": "^8.0.5",
     "openai": "^4.0",
     "opossum": "^9.0.0",
     "pdf-parse": "^1.1.1",

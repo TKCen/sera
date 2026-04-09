@@ -5,11 +5,13 @@
 
 mod config;
 mod context;
+mod context_assembler;
 mod error;
 mod health;
 mod llm_client;
 mod manifest;
 mod reasoning_loop;
+mod session_manager;
 mod tool_loop_detector;
 mod tools;
 mod types;

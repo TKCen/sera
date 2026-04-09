@@ -64,6 +64,9 @@ base64 = "0.22"
 urlencoding = "2"
 zeroize = { version = "1", features = ["derive"] }
 
+# WebSocket
+tokio-tungstenite = { version = "0.26", features = ["connect", "rustls-tls-webpki-roots"] }
+
 # Streaming
 tokio-stream = "0.1"
 async-stream = "0.3"

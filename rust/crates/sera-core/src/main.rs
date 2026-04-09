@@ -3,6 +3,7 @@
 //! This binary replaces the TypeScript sera-core Express server.
 //! Built on axum + tokio + sqlx.
 
+pub mod discord;
 mod error;
 mod middleware;
 mod routes;

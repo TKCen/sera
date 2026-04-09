@@ -45,6 +45,9 @@ cargo check -p sera-core
 | `sera-auth`       | lib  | API keys, JWT, OIDC, axum middleware                    |
 | `sera-events`     | lib  | Audit trail, Centrifugo pub/sub, lifecycle events       |
 | `sera-docker`     | lib  | Container lifecycle via bollard                         |
+| `sera-hooks`      | lib  | In-process hook registry + chain executor               |
+| `sera-hitl`       | lib  | HITL approval routing, escalation chains                |
+| `sera-workflow`   | lib  | Workflow engine, dreaming config, cron scheduling       |
 | `sera-core`       | bin  | Main API server (axum) — replaces TypeScript core       |
 | `sera-runtime`    | bin  | Agent worker binary — runs inside containers            |
 | `sera-tui`        | bin  | Terminal UI (ratatui) — replaces Go TUI                 |
@@ -108,3 +111,6 @@ DATABASE_URL=postgres://sera:sera@localhost:5432/sera cargo test --workspace --f
 - **Workspace Cargo.toml had duplicate sera-runtime member**: Fixed — was listed twice causing no error but was incorrect.
 - **sera-runtime is bin-only**: To reuse reasoning loop and tools from sera-core's MVS binary, sera-runtime needs a `[lib]` section or the logic must be inlined. Currently bin-only.
 - **K8s-style config lives in sera-config::manifest_loader**: Single-file YAML with --- separators. Secret resolution via SERA_SECRET_* env vars. Types in sera-domain::config_manifest.
+- **thiserror v2 auto-detects `source` fields**: Any field named `source` in a thiserror enum is treated as `#[source]`, requiring `std::error::Error`. Use `reason` instead for plain String error context.
+- **Edition 2024 let-chains**: Collapsible if statements should use `if cond && let Ok(x) = expr { ... }` syntax. Clippy enforces this with `-D warnings`.
+- **async-trait for Hook trait**: The in-process Hook trait uses `async_trait` crate. When WASM lands, the WasmHookAdapter will implement the same trait.

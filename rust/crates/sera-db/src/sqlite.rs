@@ -154,6 +154,25 @@ impl SqliteDb {
         }
     }
 
+    pub fn list_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent_id, session_key, state, principal_id, created_at, updated_at
+             FROM sessions ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SessionRow {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                session_key: row.get(2)?,
+                state: row.get(3)?,
+                principal_id: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn update_session_state(&self, id: &str, state: &str) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE sessions SET state = ?1, updated_at = datetime('now') WHERE id = ?2",

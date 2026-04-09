@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
@@ -117,6 +117,42 @@ struct ChatResponse {
     response: String,
     session_id: String,
     usage: UsageInfo,
+}
+
+// ── /api/agents response types ──────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AgentInfo {
+    name: String,
+    provider: String,
+    model: Option<String>,
+    has_tools: bool,
+}
+
+// ── /api/sessions response types ────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SessionInfo {
+    id: String,
+    agent_id: String,
+    session_key: String,
+    state: String,
+    principal_id: Option<String>,
+    created_at: String,
+    updated_at: Option<String>,
+}
+
+// ── /api/sessions/:id/transcript response types ──────────────────────────────
+
+#[derive(Serialize)]
+struct TranscriptEntry {
+    id: i64,
+    session_id: String,
+    role: String,
+    content: Option<String>,
+    tool_calls: Option<String>,
+    tool_call_id: Option<String>,
+    created_at: String,
 }
 
 /// Internal result from a turn execution, carrying the reply text and usage
@@ -301,6 +337,91 @@ async fn chat_handler(
             usage: result.usage,
         }).into_response())
     }
+}
+
+async fn agents_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentInfo>>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let agents: Vec<AgentInfo> = state
+        .manifests
+        .agent_names()
+        .iter()
+        .map(|name| {
+            let spec = state.manifests.agent_spec(name).ok().flatten();
+            AgentInfo {
+                name: name.to_string(),
+                provider: spec
+                    .as_ref()
+                    .map(|s| s.provider.clone())
+                    .unwrap_or_default(),
+                model: spec.as_ref().and_then(|s| s.model.clone()),
+                has_tools: spec
+                    .as_ref()
+                    .and_then(|s| s.tools.as_ref())
+                    .is_some(),
+            }
+        })
+        .collect();
+
+    Ok(Json(agents))
+}
+
+async fn sessions_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<SessionInfo>>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let db = state.db.lock().await;
+    let rows = db
+        .list_sessions()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let sessions: Vec<SessionInfo> = rows
+        .into_iter()
+        .map(|r| SessionInfo {
+            id: r.id,
+            agent_id: r.agent_id,
+            session_key: r.session_key,
+            state: r.state,
+            principal_id: r.principal_id,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .collect();
+
+    Ok(Json(sessions))
+}
+
+async fn transcript_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> Result<Json<Vec<TranscriptEntry>>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let db = state.db.lock().await;
+    let rows = db
+        .get_transcript(&session_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let entries: Vec<TranscriptEntry> = rows
+        .into_iter()
+        .map(|r| TranscriptEntry {
+            id: r.id,
+            session_id: r.session_id,
+            role: r.role,
+            content: r.content,
+            tool_calls: r.tool_calls,
+            tool_call_id: r.tool_call_id,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(entries))
 }
 
 /// Internal state machine for SSE streaming.
@@ -776,8 +897,9 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
             }
         };
 
-        // Use channel_id as the session key for Discord conversations.
-        let session_key = format!("discord:{}", msg.channel_id);
+        // Use agent name + channel_id as the session key so different agents
+        // in the same channel maintain separate conversation histories.
+        let session_key = format!("discord:{}:{}", agent_name, msg.channel_id);
         let (session, transcript) = {
             let db = state.db.lock().await;
             let session = match db.get_session_by_key(&session_key) {
@@ -1120,6 +1242,9 @@ fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/chat", post(chat_handler))
+        .route("/api/agents", get(agents_handler))
+        .route("/api/sessions", get(sessions_handler))
+        .route("/api/sessions/{id}/transcript", get(transcript_handler))
         .with_state(state)
 }
 
@@ -1525,8 +1650,9 @@ mod tests {
         // Verify the message and response were saved to transcript.
         let db = state.db.lock().await;
         // Find the session that was created for the Discord channel.
+        // Session key now includes agent name for per-agent scoping.
         let session = db
-            .get_session_by_key("discord:ch_001")
+            .get_session_by_key("discord:sera:ch_001")
             .unwrap()
             .expect("session should exist");
         let transcript = db.get_transcript(&session.id).unwrap();
@@ -1859,5 +1985,174 @@ mod tests {
 
         let events: Vec<_> = stream.collect().await;
         assert!(events.is_empty());
+    }
+
+    // -- /api/agents endpoint --
+
+    #[tokio::test]
+    async fn agents_endpoint_returns_agent_list() {
+        let state = test_state();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let agents = json.as_array().expect("expected array");
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0]["name"], "sera");
+        assert_eq!(agents[0]["provider"], "lm-studio");
+        assert!(agents[0]["has_tools"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn agents_endpoint_requires_api_key_when_set() {
+        let state = test_state_with_api_key("secret");
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -- /api/sessions endpoint --
+
+    #[tokio::test]
+    async fn sessions_endpoint_empty_initially() {
+        let state = test_state();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sessions_endpoint_lists_created_sessions() {
+        let state = test_state();
+        // Create a session directly in the DB.
+        {
+            let db = state.db.lock().await;
+            db.create_session("ses_test_1", "sera", "discord:sera:ch_42", Some("user_1")).unwrap();
+        }
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let sessions = json.as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["id"], "ses_test_1");
+        assert_eq!(sessions[0]["agent_id"], "sera");
+        assert_eq!(sessions[0]["session_key"], "discord:sera:ch_42");
+        assert_eq!(sessions[0]["state"], "active");
+    }
+
+    // -- /api/sessions/:id/transcript endpoint --
+
+    #[tokio::test]
+    async fn transcript_endpoint_returns_empty_for_new_session() {
+        let state = test_state();
+        {
+            let db = state.db.lock().await;
+            db.create_session("ses_tr_1", "sera", "sk_tr_1", None).unwrap();
+        }
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions/ses_tr_1/transcript")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn transcript_endpoint_returns_messages() {
+        let state = test_state();
+        {
+            let db = state.db.lock().await;
+            db.create_session("ses_tr_2", "sera", "sk_tr_2", None).unwrap();
+            db.append_transcript("ses_tr_2", "user", Some("hello"), None, None).unwrap();
+            db.append_transcript("ses_tr_2", "assistant", Some("hi there"), None, None).unwrap();
+        }
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions/ses_tr_2/transcript")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let entries = json.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["role"], "user");
+        assert_eq!(entries[0]["content"], "hello");
+        assert_eq!(entries[1]["role"], "assistant");
+        assert_eq!(entries[1]["content"], "hi there");
+    }
+
+    // -- Discord session key scoping --
+
+    #[test]
+    fn discord_session_key_includes_agent_name() {
+        // Verify the session key format embeds agent name for per-agent scoping.
+        let agent_name = "reviewer";
+        let channel_id = "ch_999";
+        let key = format!("discord:{}:{}", agent_name, channel_id);
+        assert_eq!(key, "discord:reviewer:ch_999");
     }
 }

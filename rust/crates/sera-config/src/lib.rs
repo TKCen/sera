@@ -7,6 +7,7 @@
 pub mod core_config;
 pub mod manifest_loader;
 pub mod providers;
+pub mod secrets;
 pub mod watchers;
 
 pub use watchers::{FileWatcher, FileWatcherError, ResourceType, WatchAction, WatchEvent};

@@ -141,15 +141,18 @@ pub fn load_manifest_file(path: &Path) -> Result<ManifestSet, ManifestLoadError>
     parse_manifests(&content)
 }
 
-/// Resolve a secret reference path to its environment variable value.
-///
-/// Path `"connectors/discord-main/token"` → env var `SERA_SECRET_CONNECTORS_DISCORD_MAIN_TOKEN`.
+/// Resolve a secret reference path. Checks env vars only (legacy API).
+/// Prefer `resolve_secret_with` when a `SecretResolver` is available.
 pub fn resolve_secret(secret_path: &str) -> Option<String> {
-    let env_key = format!(
-        "SERA_SECRET_{}",
-        secret_path.to_uppercase().replace(['/', '-'], "_")
-    );
-    std::env::var(&env_key).ok()
+    crate::secrets::resolve_from_env(secret_path)
+}
+
+/// Resolve a secret using the file-based resolver (with env var fallback).
+pub fn resolve_secret_with(
+    secret_path: &str,
+    resolver: &crate::secrets::SecretResolver,
+) -> Option<String> {
+    resolver.resolve(secret_path)
 }
 
 /// Resolve all secret references in a ConnectorSpec, returning the resolved token value.
@@ -157,9 +160,29 @@ pub fn resolve_connector_token(spec: &ConnectorSpec) -> Option<String> {
     spec.token.as_ref().and_then(|r| resolve_secret(&r.secret))
 }
 
+/// Resolve connector token using a SecretResolver (file + env fallback).
+pub fn resolve_connector_token_with(
+    spec: &ConnectorSpec,
+    resolver: &crate::secrets::SecretResolver,
+) -> Option<String> {
+    spec.token
+        .as_ref()
+        .and_then(|r| resolve_secret_with(&r.secret, resolver))
+}
+
 /// Resolve the API key for a ProviderSpec.
 pub fn resolve_provider_api_key(spec: &ProviderSpec) -> Option<String> {
     spec.api_key.as_ref().and_then(|r| resolve_secret(&r.secret))
+}
+
+/// Resolve provider API key using a SecretResolver (file + env fallback).
+pub fn resolve_provider_api_key_with(
+    spec: &ProviderSpec,
+    resolver: &crate::secrets::SecretResolver,
+) -> Option<String> {
+    spec.api_key
+        .as_ref()
+        .and_then(|r| resolve_secret_with(&r.secret, resolver))
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

@@ -29,7 +29,12 @@ use sera_config::manifest_loader::{
     load_manifest_file, parse_manifests, resolve_connector_token, resolve_provider_api_key,
     ManifestSet,
 };
+use sera_config::secrets::SecretResolver;
+use sera_db::lane_queue::{LaneQueue, QueueMode};
 use sera_db::sqlite::SqliteDb;
+use sera_domain::event::Event as DomainEvent;
+use sera_domain::principal::{PrincipalId, PrincipalKind, PrincipalRef};
+use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_domain::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 use sera_runtime::context::ContextManager;
 use sera_runtime::tools::mvs_tools::MvsToolRegistry;
@@ -66,6 +71,11 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommands,
     },
+    /// Secret management
+    Secrets {
+        #[command(subcommand)]
+        command: SecretCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -74,6 +84,23 @@ enum AgentCommands {
     Create { name: String },
     /// List agents
     List,
+}
+
+#[derive(Subcommand)]
+enum SecretCommands {
+    /// Store a secret
+    Set {
+        /// Secret path (e.g., "connectors/discord-main/token")
+        path: String,
+        /// Secret value
+        value: String,
+    },
+    /// Get a secret (shows masked value)
+    Get { path: String },
+    /// List all stored secrets (paths only)
+    List,
+    /// Delete a secret
+    Delete { path: String },
 }
 
 // ── Shared state ────────────────────────────────────────────────────────────
@@ -87,6 +114,15 @@ struct AppState {
     /// API key for authenticating requests. `None` means auth is disabled
     /// (autonomous mode — all access allowed per MVS §6.5).
     api_key: Option<String>,
+    /// Lane-aware message queue for managing concurrent agent runs.
+    #[allow(dead_code)]
+    lane_queue: Mutex<LaneQueue>,
+    /// Hook registry for lifecycle event hooks.
+    #[allow(dead_code)]
+    hook_registry: Arc<HookRegistry>,
+    /// Chain executor for running hook pipelines.
+    #[allow(dead_code)]
+    chain_executor: Arc<ChainExecutor>,
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -932,6 +968,15 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
             (session, transcript)
         }; // db lock released
 
+        // Create a domain Event for the incoming Discord message (informational —
+        // the existing processing pipeline is unchanged).
+        let principal = PrincipalRef {
+            id: PrincipalId::new(&msg.user_id),
+            kind: PrincipalKind::Human,
+        };
+        let domain_event = DomainEvent::message(&agent_name, &session_key, principal, &msg.content);
+        tracing::debug!(event_id = %domain_event.id.0, "Created domain event for Discord message");
+
         let result = execute_turn(&state.manifests, &agent_spec, &transcript, &msg.content).await;
 
         {
@@ -992,6 +1037,64 @@ spec:
     secret: connectors/discord-main/token
   agent: sera
 "#;
+
+// ── sera secrets set / get / list / delete ──────────────────────────────────
+
+fn secrets_dir_from_config(config: &std::path::Path) -> PathBuf {
+    config
+        .parent()
+        .map(|p| p.join("secrets"))
+        .unwrap_or_else(|| PathBuf::from("secrets"))
+}
+
+fn run_secrets(config: &std::path::Path, command: SecretCommands) -> anyhow::Result<()> {
+    let secrets_dir = secrets_dir_from_config(config);
+    let resolver = SecretResolver::new(&secrets_dir);
+
+    match command {
+        SecretCommands::Set { path, value } => {
+            resolver.store(&path, &value)?;
+            println!("Secret stored: {path}");
+        }
+        SecretCommands::Get { path } => {
+            match resolver.resolve(&path) {
+                Some(v) => {
+                    let masked = mask_secret(&v);
+                    println!("{path}: {masked}");
+                }
+                None => {
+                    anyhow::bail!("Secret not found: {path}");
+                }
+            }
+        }
+        SecretCommands::List => {
+            let mut paths = resolver.list();
+            paths.sort();
+            if paths.is_empty() {
+                println!("No secrets stored in {}", secrets_dir.display());
+            } else {
+                for p in paths {
+                    println!("{p}");
+                }
+            }
+        }
+        SecretCommands::Delete { path } => {
+            resolver.delete(&path)?;
+            println!("Secret deleted: {path}");
+        }
+    }
+    Ok(())
+}
+
+/// Mask all but the last 4 characters of a secret value.
+fn mask_secret(value: &str) -> String {
+    let len = value.len();
+    if len <= 4 {
+        "*".repeat(len)
+    } else {
+        format!("{}{}", "*".repeat(len - 4), &value[len - 4..])
+    }
+}
 
 fn run_init() -> anyhow::Result<()> {
     let path = PathBuf::from("sera.yaml");
@@ -1106,6 +1209,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
+        Commands::Secrets { command } => {
+            let config = PathBuf::from("sera.yaml");
+            run_secrets(config.as_path(), command)
+        }
+
         Commands::Start { config, port } => run_start(config, port).await,
     }
 }
@@ -1114,6 +1222,13 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     // 1. Load config.
     tracing::info!(config = %config.display(), "Loading SERA configuration");
     let manifests = load_manifest_file(&config)?;
+
+    // Set up file-based secret resolver (secrets/ dir next to sera.yaml).
+    let secrets_dir = config
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("secrets");
+    let secret_resolver = sera_config::secrets::SecretResolver::new(&secrets_dir);
 
     // Log what we found.
     tracing::info!(
@@ -1149,12 +1264,12 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             continue;
         }
 
-        let token = match resolve_connector_token(&spec) {
+        let token = match sera_config::manifest_loader::resolve_connector_token_with(&spec, &secret_resolver) {
             Some(t) => t,
             None => {
                 tracing::warn!(
                     name = %cm.metadata.name,
-                    "Discord token not resolved (set SERA_SECRET_* env var). Skipping connector."
+                    "Discord token not resolved. Store with `sera secrets set` or set SERA_SECRET_* env var."
                 );
                 continue;
             }
@@ -1190,11 +1305,17 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         tracing::info!("API key authentication disabled (autonomous mode)");
     }
 
+    let hook_registry = Arc::new(HookRegistry::new());
+    let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+
     let state = Arc::new(AppState {
         db: Mutex::new(db),
         manifests,
         discord: shared_discord,
         api_key,
+        lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+        hook_registry,
+        chain_executor,
     });
 
     // 4. Start event processing loop.
@@ -1262,20 +1383,30 @@ mod tests {
     }
 
     fn test_state() -> Arc<AppState> {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
             api_key: None,
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
         })
     }
 
     fn test_state_with_api_key(key: &str) -> Arc<AppState> {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
             api_key: Some(key.to_owned()),
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
         })
     }
 
@@ -1792,11 +1923,16 @@ mod tests {
 
     #[test]
     fn validate_api_key_unit_no_key_configured() {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
             api_key: None,
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -1804,11 +1940,16 @@ mod tests {
 
     #[test]
     fn validate_api_key_unit_correct_key() {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
             api_key: Some("my-key".to_owned()),
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -1817,11 +1958,16 @@ mod tests {
 
     #[test]
     fn validate_api_key_unit_wrong_key() {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
             api_key: Some("my-key".to_owned()),
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -1830,11 +1976,16 @@ mod tests {
 
     #[test]
     fn validate_api_key_unit_missing_header() {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
             api_key: Some("my-key".to_owned()),
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));

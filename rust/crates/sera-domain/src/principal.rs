@@ -135,7 +135,7 @@ impl Principal {
 }
 
 /// Lightweight reference to a principal, embedded in events and audit records.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrincipalRef {
     pub id: PrincipalId,
     pub kind: PrincipalKind,

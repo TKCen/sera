@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -28,6 +28,7 @@ use sera_config::manifest_loader::{
 };
 use sera_db::sqlite::SqliteDb;
 use sera_domain::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
+use sera_runtime::context::ContextManager;
 
 // Re-use sera-core's Discord connector.
 #[path = "../discord.rs"]
@@ -79,6 +80,9 @@ struct AppState {
     /// Shared Discord connector for sending replies. `None` when no Discord
     /// connector is configured.
     discord: Option<Arc<DiscordConnector>>,
+    /// API key for authenticating requests. `None` means auth is disabled
+    /// (autonomous mode — all access allowed per MVS §6.5).
+    api_key: Option<String>,
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -116,6 +120,28 @@ struct TurnResult {
     usage: UsageInfo,
 }
 
+// ── Authentication ──────────────────────────────────────────────────────────
+
+/// Validate the `Authorization: Bearer <key>` header against the configured
+/// API key. Returns `Ok(())` if auth passes (or is disabled), `Err(401)` if
+/// the key is missing/invalid.
+fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let expected = match &state.api_key {
+        Some(k) => k,
+        None => return Ok(()), // No key configured — autonomous mode, all access allowed.
+    };
+
+    let header_val = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    match header_val {
+        Some(token) if token == expected => Ok(()),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
 // ── HTTP handlers ───────────────────────────────────────────────────────────
 
 async fn health_handler() -> Json<HealthResponse> {
@@ -124,8 +150,12 @@ async fn health_handler() -> Json<HealthResponse> {
 
 async fn chat_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> impl IntoResponse {
+    // Authenticate.
+    validate_api_key(&state, &headers)?;
+
     // Determine which agent to use.
     let agent_name = req
         .agent
@@ -150,6 +180,14 @@ async fn chat_handler(
     db.append_transcript(&session.id, "user", Some(&req.message), None, None)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Audit: message received.
+    let _ = db.append_audit(
+        "message_received",
+        "human",
+        "human",
+        Some(&serde_json::json!({ "agent": agent_name, "message_len": req.message.len() }).to_string()),
+    );
+
     // Get recent transcript for context.
     let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
     let session_id = session.id.clone();
@@ -159,10 +197,26 @@ async fn chat_handler(
     let result =
         execute_turn(&state.manifests, &agent_spec, &transcript, &req.message).await;
 
-    // Save assistant response.
+    // Save assistant response and audit.
     let db = state.db.lock().await;
     db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Audit: response sent.
+    let _ = db.append_audit(
+        "response_sent",
+        "agent:sera",
+        "agent",
+        Some(&serde_json::json!({
+            "session_id": session_id,
+            "response_len": result.reply.len(),
+            "usage": {
+                "prompt_tokens": result.usage.prompt_tokens,
+                "completion_tokens": result.usage.completion_tokens,
+                "total_tokens": result.usage.total_tokens,
+            }
+        }).to_string()),
+    );
 
     Ok(Json(ChatResponse {
         response: result.reply,
@@ -235,6 +289,7 @@ async fn execute_turn(
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
 ) -> TurnResult {
+    let ctx_mgr = ContextManager::new(128_000);
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
     // Add system message from persona if configured.
@@ -331,6 +386,33 @@ async fn execute_turn(
     // Tool-call loop: call LLM, execute tool calls, repeat until text reply
     // or MAX_TOOL_ITERATIONS is reached.
     for iteration in 0..=MAX_TOOL_ITERATIONS {
+        // Context management: check if near limit and compact if needed.
+        if ctx_mgr.is_near_limit_json(&messages) {
+            tracing::warn!(
+                tokens = ContextManager::count_json_message_tokens(&messages),
+                "Context near limit, compacting messages"
+            );
+            // Simple compaction: remove oldest non-system messages.
+            let system_msgs: Vec<_> = messages.iter().filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system")).cloned().collect();
+            let non_system: Vec<_> = messages.iter().filter(|m| m.get("role").and_then(|r| r.as_str()) != Some("system")).cloned().collect();
+            let keep = non_system.len().min(4); // preserve recent
+            let to_keep = &non_system[non_system.len().saturating_sub(keep)..];
+            messages.clear();
+            messages.extend(system_msgs);
+            if non_system.len() > keep {
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!("[Context compacted: {} earlier messages removed to fit within context window.]", non_system.len() - keep),
+                }));
+            }
+            messages.extend(to_keep.iter().cloned());
+        }
+
+        // Log remaining context budget.
+        let current_tokens = ContextManager::count_json_message_tokens(&messages);
+        let budget = ctx_mgr.high_water_mark().saturating_sub(current_tokens);
+        tracing::debug!(current_tokens, budget, "Context budget before LLM call");
+
         let mut request_body = serde_json::json!({
             "model": model,
             "messages": messages,
@@ -433,7 +515,7 @@ async fn execute_turn(
             // Append the assistant message with tool_calls to the conversation.
             messages.push(message.clone());
 
-            // Execute each tool call and append tool results.
+            // Execute each tool call, truncate output, and append tool results.
             for tc in &tool_calls {
                 let tc_id = tc
                     .get("id")
@@ -449,7 +531,9 @@ async fn execute_turn(
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
 
-                let result = execute_tool_call(fn_name, fn_args);
+                let raw_result = execute_tool_call(fn_name, fn_args);
+                // Truncate tool output to stay within context budget.
+                let result = ctx_mgr.truncate_tool_output(&raw_result);
 
                 messages.push(serde_json::json!({
                     "role": "tool",
@@ -492,6 +576,21 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
             channel = %msg.channel_id,
             "Received Discord message"
         );
+
+        // Audit: Discord message received.
+        {
+            let db = state.db.lock().await;
+            let _ = db.append_audit(
+                "discord_message",
+                &msg.user_id,
+                "human",
+                Some(&serde_json::json!({
+                    "username": msg.username,
+                    "channel_id": msg.channel_id,
+                    "message_len": msg.content.len(),
+                }).to_string()),
+            );
+        }
 
         // Find the agent assigned to the Discord connector.
         let agent_name = state
@@ -809,10 +908,19 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         });
     }
 
+    // Load API key from environment (if set).
+    let api_key = std::env::var("SERA_API_KEY").ok().filter(|k| !k.is_empty());
+    if api_key.is_some() {
+        tracing::info!("API key authentication enabled (SERA_API_KEY is set)");
+    } else {
+        tracing::info!("API key authentication disabled (autonomous mode)");
+    }
+
     let state = Arc::new(AppState {
         db: Mutex::new(db),
         manifests,
         discord: shared_discord,
+        api_key,
     });
 
     // 4. Start event processing loop.
@@ -881,6 +989,16 @@ mod tests {
             db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
             manifests: test_manifests(),
             discord: None,
+            api_key: None,
+        })
+    }
+
+    fn test_state_with_api_key(key: &str) -> Arc<AppState> {
+        Arc::new(AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: Some(key.to_owned()),
         })
     }
 
@@ -1291,5 +1409,150 @@ mod tests {
         assert_eq!(transcript[0].role, "user");
         assert_eq!(transcript[0].content.as_deref(), Some("test message"));
         assert_eq!(transcript[1].role, "assistant");
+    }
+
+    // -- API key authentication --
+
+    #[tokio::test]
+    async fn api_key_accepted_with_valid_bearer() {
+        let state = test_state_with_api_key("test-secret-key");
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer test-secret-key")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should succeed (200 OK) — the LLM call will fail but auth passes.
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn api_key_rejected_with_wrong_bearer() {
+        let state = test_state_with_api_key("test-secret-key");
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer wrong-key")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_key_rejected_with_no_header() {
+        let state = test_state_with_api_key("test-secret-key");
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn no_api_key_configured_allows_all_access() {
+        // When no API key is set, all requests should be allowed (autonomous mode).
+        let state = test_state(); // api_key: None
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should succeed even without Authorization header.
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn validate_api_key_unit_no_key_configured() {
+        let state = AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: None,
+        };
+        let headers = HeaderMap::new();
+        assert!(validate_api_key(&state, &headers).is_ok());
+    }
+
+    #[test]
+    fn validate_api_key_unit_correct_key() {
+        let state = AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: Some("my-key".to_owned()),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer my-key".parse().unwrap());
+        assert!(validate_api_key(&state, &headers).is_ok());
+    }
+
+    #[test]
+    fn validate_api_key_unit_wrong_key() {
+        let state = AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: Some("my-key".to_owned()),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer wrong".parse().unwrap());
+        assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn validate_api_key_unit_missing_header() {
+        let state = AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: Some("my-key".to_owned()),
+        };
+        let headers = HeaderMap::new();
+        assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
     }
 }

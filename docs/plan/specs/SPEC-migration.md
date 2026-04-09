@@ -181,7 +181,65 @@ Decisions already made (from PRD §18) that affect migration scope:
 
 ---
 
-## 9. Open Questions
+## 9. MVS Implementation Status
+
+The Rust workspace at `rust/` has reached the **Minimal Viable SERA (MVS) checkpoint** with all deliverables complete and tested.
+
+### Workspace Structure
+
+The implementation comprises **11 crates**, all compiling and tested:
+
+- `sera-domain` — Core types (Principal, Event, Session, ConfigManifest, Tool, Memory)
+- `sera-config` — Configuration loading with K8s YAML support and secret resolution
+- `sera-db` — SQLite backend for sessions, transcript, queue, and audit logs
+- `sera-runtime` — Turn loop, context pipeline, and tool execution
+- `sera-core` — HTTP/gRPC gateway and main CLI binary (`sera`)
+- `sera-tools` — 7 MVS tools with sandboxed path safety
+- Plus 6 supporting crates: `sera-telemetry`, `sera-auth`, `sera-memory`, `sera-mcp`, `sera-discord`, `sera-observe`
+
+### MVS Crate Mapping
+
+The original 8-crate plan maps directly to the built workspace:
+
+| Plan | Implementation | Scope |
+|---|---|---|
+| `sera-types` | `sera-domain` | Principal, Event, Session, ConfigManifest, Tool, Memory models |
+| `sera-config` | `sera-config::manifest_loader` | K8s YAML loading, secret resolution, validation |
+| `sera-errors` | Distributed via `thiserror` | Error types available across all crates |
+| `sera-db` | `sera-db::sqlite` | Session storage, transcript compaction, queue, audit trail |
+| `sera-memory` | `sera-domain::memory` | File-based markdown with keyword search |
+| `sera-tools` | `sera-runtime::tools::mvs_tools` | 7 tools (memory r/w, shell, session mgmt, file ops, http, context) |
+| `sera-models` | `sera-runtime::llm_client` | OpenAI-compatible SSE streaming |
+| `sera-gateway` | `sera-core` (bin) | HTTP/gRPC server, Discord module, agent lifecycle |
+
+### MVP Capabilities
+
+- **Binary**: `sera` CLI supports `init`, `agent create`, `agent list`, `start` commands
+- **Agent execution**: Full loop from gateway → queue → runtime → tool → memory → response
+- **Context management**: KV-cache-optimized context pipeline with configurable token limits
+- **Persistence**: SQLite for sessions, transcript, and audit logs
+- **Discord integration**: gRPC-based connector with full message round-trip
+- **Tool system**: 7 sandboxed tools with path safety and resource limits
+- **Test coverage**: 645+ tests passing across all crates
+- **Release binary**: 6.9MB statically linked single binary
+
+### Development Reference
+
+- **Workspace commands**: See `rust/CLAUDE.md` for build, test, and debug workflows
+- **Architecture knowledge**: See `docs/wiki/` for detailed design rationale and implementation notes
+- **Configuration**: K8s-style YAML manifests with env-var secret resolution
+
+### Next Phase Targets (Phase 3+)
+
+Once Phase 3 begins:
+- MCP server and A2A/ACP adapters
+- CLI and SDK clients
+- Multi-agent orchestration (circles)
+- Enterprise auth (OIDC, Vault providers)
+
+---
+
+## 10. Open Questions
 
 1. **TS → Rust data migration** — Is there any data (memory, sessions, config) to migrate from the TS system? Or is it a clean start?
 2. **Parallel operation period** — How long will the TS and Rust systems run side-by-side? Is there a cutover date?

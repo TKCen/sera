@@ -12,6 +12,7 @@ use sera_domain::config_manifest::{
     AgentSpec, ConfigManifest, ConfigManifestError, ConnectorSpec, InstanceSpec, ProviderSpec,
     RawManifest, ResourceKind,
 };
+use sera_domain::hook::HookChain;
 use std::path::Path;
 
 /// All parsed and validated manifests from a SERA config file, organized by kind.
@@ -21,6 +22,7 @@ pub struct ManifestSet {
     pub providers: Vec<ConfigManifest>,
     pub agents: Vec<ConfigManifest>,
     pub connectors: Vec<ConfigManifest>,
+    pub hook_chains: Vec<ConfigManifest>,
 }
 
 impl ManifestSet {
@@ -85,6 +87,24 @@ impl ManifestSet {
     pub fn connector_names(&self) -> Vec<&str> {
         self.connectors.iter().map(|m| m.metadata.name.as_str()).collect()
     }
+
+    /// Find a hook chain by name.
+    pub fn hook_chain(&self, name: &str) -> Option<&ConfigManifest> {
+        self.hook_chains.iter().find(|m| m.metadata.name == name)
+    }
+
+    /// Get all typed HookChain specs.
+    pub fn hook_chain_specs(&self) -> Vec<HookChain> {
+        self.hook_chains
+            .iter()
+            .filter_map(|m| serde_json::from_value(m.spec.clone()).ok())
+            .collect()
+    }
+
+    /// List all hook chain names.
+    pub fn hook_chain_names(&self) -> Vec<&str> {
+        self.hook_chains.iter().map(|m| m.metadata.name.as_str()).collect()
+    }
 }
 
 /// Parse a YAML string containing one or more `---`-separated manifests.
@@ -120,6 +140,7 @@ pub fn parse_manifests(yaml_content: &str) -> Result<ManifestSet, ManifestLoadEr
             ResourceKind::Provider => set.providers.push(manifest),
             ResourceKind::Agent => set.agents.push(manifest),
             ResourceKind::Connector => set.connectors.push(manifest),
+            ResourceKind::HookChain => set.hook_chains.push(manifest),
             other => {
                 return Err(ManifestLoadError::UnsupportedKind {
                     kind: other.to_string(),
@@ -489,6 +510,35 @@ spec:
         let set = load_manifest_file(&path).unwrap();
         assert_eq!(set.instances.len(), 1);
         assert_eq!(set.agents.len(), 1);
+    }
+
+    #[test]
+    fn parse_hook_chain_manifest() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: content-filter-chain
+spec:
+  name: content-filter-chain
+  point: pre_route
+  hooks:
+    - hook_ref: rate-limiter
+      config:
+        requests_per_minute: 60
+      enabled: true
+  timeout_ms: 5000
+  fail_open: true
+"#;
+        let set = parse_manifests(yaml).unwrap();
+        assert_eq!(set.hook_chains.len(), 1);
+        assert_eq!(set.hook_chain_names(), vec!["content-filter-chain"]);
+        let specs = set.hook_chain_specs();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "content-filter-chain");
+        assert_eq!(specs[0].point, sera_domain::hook::HookPoint::PreRoute);
+        assert_eq!(specs[0].hooks.len(), 1);
+        assert!(specs[0].fail_open);
     }
 
     #[test]

@@ -33,6 +33,7 @@ use sera_config::secrets::SecretResolver;
 use sera_db::lane_queue::{LaneQueue, QueueMode};
 use sera_db::sqlite::SqliteDb;
 use sera_domain::event::Event as DomainEvent;
+use sera_domain::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_domain::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_domain::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
@@ -121,7 +122,6 @@ struct AppState {
     #[allow(dead_code)]
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
-    #[allow(dead_code)]
     chain_executor: Arc<ChainExecutor>,
 }
 
@@ -461,6 +461,7 @@ async fn transcript_handler(
 }
 
 /// Internal state machine for SSE streaming.
+#[allow(clippy::large_enum_variant)]
 enum StreamState {
     Pending {
         manifests: ManifestSet,
@@ -882,123 +883,277 @@ async fn execute_turn(
 
 // ── Event processing loop ───────────────────────────────────────────────────
 
+/// Send a user-visible error message to a Discord channel.
+async fn send_error_to_discord(state: &AppState, channel_id: &str, error: &str) {
+    let formatted = format!("[sera] Error: {error}");
+    if let Some(ref dc) = state.discord
+        && let Err(e) = dc.send_message(channel_id, &formatted).await
+    {
+        tracing::error!("Failed to send error to Discord: {e}");
+    }
+}
+
+/// Execute all hook chains for a given point. Returns the chain result.
+/// On HookError, logs and returns a pass-through result (fail-open in Phase A).
+async fn run_hook_point(
+    state: &AppState,
+    point: HookPoint,
+    chains: &[HookChain],
+    ctx: HookContext,
+) -> sera_domain::hook::ChainResult {
+    match state.chain_executor.execute_at_point(point, chains, ctx).await {
+        Ok(result) => {
+            if result.hooks_executed > 0 {
+                tracing::debug!(
+                    point = ?point,
+                    hooks = result.hooks_executed,
+                    duration_ms = result.duration_ms,
+                    "Hook chain completed"
+                );
+            }
+            result
+        }
+        Err(e) => {
+            tracing::warn!(point = ?point, error = %e, "Hook chain error (fail-open, continuing)");
+            sera_domain::hook::ChainResult {
+                context: HookContext::new(point),
+                outcome: HookResult::pass(),
+                hooks_executed: 0,
+                duration_ms: 0,
+            }
+        }
+    }
+}
+
 async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>) {
     tracing::info!("Event processing loop started");
 
     while let Some(msg) = rx.recv().await {
-        tracing::info!(
-            user = %msg.username,
-            channel = %msg.channel_id,
-            "Received Discord message"
-        );
-
-        // Audit: Discord message received.
-        {
-            let db = state.db.lock().await;
-            let _ = db.append_audit(
-                "discord_message",
-                &msg.user_id,
-                "human",
-                Some(&serde_json::json!({
-                    "username": msg.username,
-                    "channel_id": msg.channel_id,
-                    "message_len": msg.content.len(),
-                }).to_string()),
-            );
-        }
-
-        // Find the agent assigned to the Discord connector.
-        let agent_name = state
-            .manifests
-            .connectors
-            .iter()
-            .find_map(|c| {
-                let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
-                spec.agent
-            })
-            .unwrap_or_else(|| {
-                state
-                    .manifests
-                    .agent_names()
-                    .into_iter()
-                    .next()
-                    .unwrap_or("sera")
-                    .to_owned()
-            });
-
-        let agent_spec: AgentSpec = match state
-            .manifests
-            .agent_spec(&agent_name)
-            .ok()
-            .flatten()
-        {
-            Some(s) => s,
-            None => {
-                tracing::error!("Agent '{agent_name}' not found in manifests");
-                continue;
-            }
-        };
-
-        // Use agent name + channel_id as the session key so different agents
-        // in the same channel maintain separate conversation histories.
-        let session_key = format!("discord:{}:{}", agent_name, msg.channel_id);
-        let (session, transcript) = {
-            let db = state.db.lock().await;
-            let session = match db.get_session_by_key(&session_key) {
-                Ok(Some(s)) => s,
-                Ok(None) => {
-                    let id = format!("ses_{}_{}", agent_name, msg.channel_id);
-                    if let Err(e) = db.create_session(
-                        &id,
-                        &agent_name,
-                        &session_key,
-                        Some(&msg.user_id),
-                    ) {
-                        tracing::error!("Failed to create session: {e}");
-                        continue;
-                    }
-                    match db.get_session_by_key(&session_key) {
-                        Ok(Some(s)) => s,
-                        _ => continue,
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("DB error: {e}");
-                    continue;
-                }
-            };
-
-            // Save the incoming message.
-            let _ = db.append_transcript(&session.id, "user", Some(&msg.content), None, None);
-            let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
-            (session, transcript)
-        }; // db lock released
-
-        // Create a domain Event for the incoming Discord message (informational —
-        // the existing processing pipeline is unchanged).
-        let principal = PrincipalRef {
-            id: PrincipalId::new(&msg.user_id),
-            kind: PrincipalKind::Human,
-        };
-        let domain_event = DomainEvent::message(&agent_name, &session_key, principal, &msg.content);
-        tracing::debug!(event_id = %domain_event.id.0, "Created domain event for Discord message");
-
-        let result = execute_turn(&state.manifests, &agent_spec, &transcript, &msg.content).await;
-
-        {
-            let db = state.db.lock().await;
-            let _ = db.append_transcript(&session.id, "assistant", Some(&result.reply), None, None);
-        }
-
-        // Send the reply back to Discord via the shared connector.
-        if let Some(ref dc) = state.discord {
-            if let Err(e) = dc.send_message(&msg.channel_id, &result.reply).await {
-                tracing::error!("Failed to send Discord reply: {e}");
-            }
-        } else {
-            tracing::warn!("No Discord connector available to send reply");
+        if let Err(e) = process_message(&state, &msg).await {
+            tracing::error!(error = %e, "Message processing failed");
+            send_error_to_discord(&state, &msg.channel_id, &e.to_string()).await;
         }
     }
+}
+
+async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Result<()> {
+    tracing::info!(
+        user = %msg.username,
+        channel = %msg.channel_id,
+        "Received Discord message"
+    );
+
+    // Audit: Discord message received.
+    {
+        let db = state.db.lock().await;
+        let _ = db.append_audit(
+            "discord_message",
+            &msg.user_id,
+            "human",
+            Some(&serde_json::json!({
+                "username": msg.username,
+                "channel_id": msg.channel_id,
+                "message_len": msg.content.len(),
+            }).to_string()),
+        );
+    }
+
+    // Load hook chains from manifests.
+    let chains = state.manifests.hook_chain_specs();
+
+    // Build principal for hook context.
+    let principal = PrincipalRef {
+        id: PrincipalId::new(&msg.user_id),
+        kind: PrincipalKind::Human,
+    };
+    let principal_json = serde_json::json!({"id": msg.user_id, "kind": "human"});
+
+    // ── pre_route: after ingress, before agent resolution ──
+    let pre_route_ctx = HookContext {
+        point: HookPoint::PreRoute,
+        event: Some(serde_json::json!({
+            "content": msg.content,
+            "channel_id": msg.channel_id,
+            "username": msg.username,
+        })),
+        session: None,
+        tool_call: None,
+        tool_result: None,
+        principal: Some(principal_json.clone()),
+        metadata: std::collections::HashMap::new(),
+    };
+    let pre_route_result = run_hook_point(state, HookPoint::PreRoute, &chains, pre_route_ctx).await;
+    match &pre_route_result.outcome {
+        HookResult::Reject { reason, .. } => {
+            tracing::info!(reason = %reason, "pre_route hook rejected message");
+            send_error_to_discord(state, &msg.channel_id, reason).await;
+            return Ok(());
+        }
+        HookResult::Redirect { target, .. } => {
+            tracing::warn!(target = %target, "pre_route Redirect not yet supported, treating as Continue");
+        }
+        HookResult::Continue { .. } => {}
+    }
+
+    // Find the agent assigned to the Discord connector.
+    let agent_name = state
+        .manifests
+        .connectors
+        .iter()
+        .find_map(|c| {
+            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+            spec.agent
+        })
+        .unwrap_or_else(|| {
+            state
+                .manifests
+                .agent_names()
+                .into_iter()
+                .next()
+                .unwrap_or("sera")
+                .to_owned()
+        });
+
+    let agent_spec: AgentSpec = match state
+        .manifests
+        .agent_spec(&agent_name)
+        .ok()
+        .flatten()
+    {
+        Some(s) => s,
+        None => {
+            let err_msg = format!("Agent '{agent_name}' not found in manifests");
+            tracing::error!("{err_msg}");
+            send_error_to_discord(state, &msg.channel_id, &err_msg).await;
+            return Ok(());
+        }
+    };
+
+    // Use agent name + channel_id as the session key so different agents
+    // in the same channel maintain separate conversation histories.
+    let session_key = format!("discord:{}:{}", agent_name, msg.channel_id);
+    let (session, transcript) = {
+        let db = state.db.lock().await;
+        let session = match db.get_session_by_key(&session_key) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                let id = format!("ses_{}_{}", agent_name, msg.channel_id);
+                if let Err(e) = db.create_session(
+                    &id,
+                    &agent_name,
+                    &session_key,
+                    Some(&msg.user_id),
+                ) {
+                    anyhow::bail!("Failed to create session: {e}");
+                }
+                match db.get_session_by_key(&session_key) {
+                    Ok(Some(s)) => s,
+                    _ => anyhow::bail!("Session not found after creation"),
+                }
+            }
+            Err(e) => anyhow::bail!("DB error: {e}"),
+        };
+
+        let _ = db.append_transcript(&session.id, "user", Some(&msg.content), None, None);
+        let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
+        (session, transcript)
+    };
+
+    let domain_event = DomainEvent::message(&agent_name, &session_key, principal, &msg.content);
+    tracing::debug!(event_id = %domain_event.id.0, "Created domain event for Discord message");
+
+    let session_json = serde_json::json!({"id": session.id, "key": session_key});
+
+    // ── post_route: after routing + session resolution, before turn ──
+    let post_route_ctx = HookContext {
+        point: HookPoint::PostRoute,
+        event: Some(serde_json::to_value(&domain_event)?),
+        session: Some(session_json.clone()),
+        tool_call: None,
+        tool_result: None,
+        principal: Some(principal_json.clone()),
+        metadata: std::collections::HashMap::new(),
+    };
+    let post_route_result = run_hook_point(state, HookPoint::PostRoute, &chains, post_route_ctx).await;
+    match &post_route_result.outcome {
+        HookResult::Reject { reason, .. } => {
+            tracing::info!(reason = %reason, "post_route hook rejected message");
+            send_error_to_discord(state, &msg.channel_id, reason).await;
+            return Ok(());
+        }
+        HookResult::Redirect { target, .. } => {
+            tracing::warn!(target = %target, "post_route Redirect not yet supported, treating as Continue");
+        }
+        HookResult::Continue { .. } => {}
+    }
+
+    // ── pre_turn: before execute_turn ──
+    let pre_turn_ctx = HookContext {
+        point: HookPoint::PreTurn,
+        event: Some(serde_json::to_value(&domain_event)?),
+        session: Some(session_json.clone()),
+        tool_call: None,
+        tool_result: None,
+        principal: Some(principal_json.clone()),
+        metadata: std::collections::HashMap::new(),
+    };
+    let pre_turn_result = run_hook_point(state, HookPoint::PreTurn, &chains, pre_turn_ctx).await;
+    match &pre_turn_result.outcome {
+        HookResult::Reject { reason, .. } => {
+            tracing::info!(reason = %reason, "pre_turn hook rejected message");
+            send_error_to_discord(state, &msg.channel_id, reason).await;
+            return Ok(());
+        }
+        HookResult::Redirect { target, .. } => {
+            tracing::warn!(target = %target, "pre_turn Redirect not yet supported, treating as Continue");
+        }
+        HookResult::Continue { .. } => {}
+    }
+
+    // Execute the agent turn.
+    let result = execute_turn(&state.manifests, &agent_spec, &transcript, &msg.content).await;
+
+    {
+        let db = state.db.lock().await;
+        let _ = db.append_transcript(&session.id, "assistant", Some(&result.reply), None, None);
+    }
+
+    // ── post_turn: after execute_turn, before delivery ──
+    let post_turn_ctx = HookContext {
+        point: HookPoint::PostTurn,
+        event: Some(serde_json::to_value(&domain_event)?),
+        session: Some(session_json),
+        tool_call: None,
+        tool_result: None,
+        principal: Some(principal_json),
+        metadata: std::collections::HashMap::from([(
+            "reply".to_string(),
+            serde_json::json!(result.reply),
+        )]),
+    };
+    let post_turn_result = run_hook_point(state, HookPoint::PostTurn, &chains, post_turn_ctx).await;
+    match &post_turn_result.outcome {
+        HookResult::Reject { reason, .. } => {
+            tracing::info!(reason = %reason, "post_turn hook rejected reply");
+            send_error_to_discord(state, &msg.channel_id, reason).await;
+            return Ok(());
+        }
+        HookResult::Redirect { target, .. } => {
+            tracing::warn!(target = %target, "post_turn Redirect not yet supported, treating as Continue");
+        }
+        HookResult::Continue { .. } => {}
+    }
+
+    // Send the reply back to Discord via the shared connector.
+    if let Some(ref dc) = state.discord {
+        if let Err(e) = dc.send_message(&msg.channel_id, &result.reply).await {
+            tracing::error!("Failed to send Discord reply: {e}");
+        }
+    } else {
+        tracing::warn!("No Discord connector available to send reply");
+    }
+
+    Ok(())
 }
 
 // ── sera init ───────────────────────────────────────────────────────────────
@@ -1715,6 +1870,7 @@ mod tests {
             model: None,
             persona: None,
             tools: None,
+            workspace: None,
         };
         let workspace = std::path::PathBuf::from("./data/agents/test");
         let registry = MvsToolRegistry::new(&workspace);

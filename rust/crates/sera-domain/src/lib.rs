@@ -2,6 +2,7 @@
 //! and the full sera-core domain model.
 
 pub mod agent;
+pub mod connector;
 pub mod runtime;
 pub mod audit;
 pub mod capability;
@@ -12,9 +13,11 @@ pub mod hook;
 pub mod intercom;
 pub mod manifest;
 pub mod memory;
+pub mod model;
 pub mod metering;
 pub mod policy;
 pub mod principal;
+pub mod queue;
 pub mod sandbox;
 pub mod secrets;
 pub mod session;

@@ -509,6 +509,133 @@ impl MemoryBackend for FileMemoryBackend {
     }
 }
 
+// ── §2b Recall Signal Tracking — dreaming support ───────────────────────────
+
+/// Aggregate recall statistics for a single memory entry.
+/// Computed from a `RecallStore` for use in dreaming promotion scoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallStats {
+    pub memory_id: MemoryId,
+    /// Total number of times this entry has been recalled.
+    pub recall_count: u32,
+    /// Number of distinct queries that recalled this entry.
+    pub unique_queries: u32,
+    /// Most recent recall timestamp, or `None` if never recalled.
+    pub last_recalled: Option<chrono::DateTime<chrono::Utc>>,
+    /// Mean relevance score across all recalls.
+    pub average_score: f64,
+}
+
+/// Dreaming promotion score for a memory entry.
+/// Weights from SPEC-memory §2b / OpenClaw Dreaming Guide.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DreamingScore {
+    pub memory_id: MemoryId,
+    /// Relevance signal — weight 0.30
+    pub relevance: f64,
+    /// Recall frequency signal — weight 0.24
+    pub frequency: f64,
+    /// Query diversity signal — weight 0.15
+    pub query_diversity: f64,
+    /// Recency signal — weight 0.15
+    pub recency: f64,
+    /// Consolidation signal — weight 0.10
+    pub consolidation: f64,
+    /// Conceptual richness signal — weight 0.06
+    pub conceptual_richness: f64,
+}
+
+impl DreamingScore {
+    /// Weighted sum of all six dreaming signals.
+    pub fn total_score(&self) -> f64 {
+        self.relevance * 0.30
+            + self.frequency * 0.24
+            + self.query_diversity * 0.15
+            + self.recency * 0.15
+            + self.consolidation * 0.10
+            + self.conceptual_richness * 0.06
+    }
+
+    /// Returns `true` if this entry passes all three promotion gates.
+    pub fn passes_promotion_gates(
+        &self,
+        min_score: f64,
+        min_recall_count: u32,
+        min_unique_queries: u32,
+        stats: &RecallStats,
+    ) -> bool {
+        self.total_score() >= min_score
+            && stats.recall_count >= min_recall_count
+            && stats.unique_queries >= min_unique_queries
+    }
+}
+
+/// Ephemeral accumulator for raw `RecallSignal` events.
+/// Consumed by the dreaming workflow during its deep-scoring phase.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RecallStore {
+    pub signals: Vec<RecallSignal>,
+}
+
+impl RecallStore {
+    /// Create an empty store.
+    pub fn new() -> Self {
+        Self { signals: Vec::new() }
+    }
+
+    /// Record a new recall signal.
+    pub fn record(&mut self, signal: RecallSignal) {
+        self.signals.push(signal);
+    }
+
+    /// Compute aggregate `RecallStats` for a single memory entry.
+    pub fn stats_for(&self, memory_id: &MemoryId) -> RecallStats {
+        let relevant: Vec<&RecallSignal> =
+            self.signals.iter().filter(|s| &s.memory_id == memory_id).collect();
+
+        let recall_count = relevant.len() as u32;
+
+        // Unique queries by query_hash.
+        let unique_queries = relevant
+            .iter()
+            .map(|s| s.query_hash)
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u32;
+
+        let last_recalled = relevant
+            .iter()
+            .filter_map(|s| chrono::DateTime::parse_from_rfc3339(&s.timestamp).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .max();
+
+        let average_score = if recall_count == 0 {
+            0.0
+        } else {
+            relevant.iter().map(|s| s.score).sum::<f64>() / recall_count as f64
+        };
+
+        RecallStats { memory_id: memory_id.clone(), recall_count, unique_queries, last_recalled, average_score }
+    }
+
+    /// Compute `RecallStats` for every memory entry that has at least one signal.
+    pub fn all_stats(&self) -> Vec<RecallStats> {
+        let ids: std::collections::HashSet<&MemoryId> =
+            self.signals.iter().map(|s| &s.memory_id).collect();
+        let mut stats: Vec<RecallStats> = ids.iter().map(|id| self.stats_for(id)).collect();
+        stats.sort_by(|a, b| a.memory_id.0.cmp(&b.memory_id.0));
+        stats
+    }
+
+    /// Remove all signals with a timestamp strictly before `cutoff`.
+    pub fn clear_before(&mut self, cutoff: chrono::DateTime<chrono::Utc>) {
+        self.signals.retain(|s| {
+            chrono::DateTime::parse_from_rfc3339(&s.timestamp)
+                .map(|dt| dt.with_timezone(&chrono::Utc) >= cutoff)
+                .unwrap_or(true) // keep signals with unparseable timestamps
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,5 +1279,190 @@ Final keyword mention.";
         backend.write(make_entry("m3", "three", MemoryTier::ShortTerm), &ctx).await.unwrap();
         let stats = backend.stats().await;
         assert_eq!(stats.total_entries, 3);
+    }
+
+    // ── RecallStore tests ────────────────────────────────────────────────────
+
+    fn make_signal(memory_id: &str, query_hash: u64, score: f64, timestamp: &str) -> RecallSignal {
+        RecallSignal {
+            memory_id: MemoryId::new(memory_id),
+            query_text: format!("query-{query_hash}"),
+            query_hash,
+            score,
+            timestamp: timestamp.to_string(),
+        }
+    }
+
+    #[test]
+    fn recall_store_record_and_stats() {
+        let mut store = RecallStore::new();
+        store.record(make_signal("mem-1", 1, 0.9, "2026-04-09T10:00:00Z"));
+        store.record(make_signal("mem-1", 2, 0.8, "2026-04-09T11:00:00Z"));
+        store.record(make_signal("mem-1", 3, 0.7, "2026-04-09T12:00:00Z"));
+
+        let stats = store.stats_for(&MemoryId::new("mem-1"));
+        assert_eq!(stats.recall_count, 3);
+        assert_eq!(stats.unique_queries, 3);
+        assert!((stats.average_score - 0.8).abs() < f64::EPSILON);
+        assert!(stats.last_recalled.is_some());
+    }
+
+    #[test]
+    fn recall_stats_unique_query_counting() {
+        let mut store = RecallStore::new();
+        // Same query_hash repeated — counts as one unique query.
+        store.record(make_signal("mem-2", 42, 0.9, "2026-04-09T10:00:00Z"));
+        store.record(make_signal("mem-2", 42, 0.85, "2026-04-09T11:00:00Z"));
+        store.record(make_signal("mem-2", 99, 0.8, "2026-04-09T12:00:00Z"));
+
+        let stats = store.stats_for(&MemoryId::new("mem-2"));
+        assert_eq!(stats.recall_count, 3);
+        assert_eq!(stats.unique_queries, 2); // hashes 42 and 99
+    }
+
+    #[test]
+    fn dreaming_score_total_score_weighted_sum() {
+        let score = DreamingScore {
+            memory_id: MemoryId::new("mem-1"),
+            relevance: 1.0,
+            frequency: 1.0,
+            query_diversity: 1.0,
+            recency: 1.0,
+            consolidation: 1.0,
+            conceptual_richness: 1.0,
+        };
+        // All components 1.0 → weights sum to 1.0.
+        let total = score.total_score();
+        assert!((total - 1.0).abs() < 1e-10, "weights must sum to 1.0, got {total}");
+
+        // Verify individual weights.
+        let only_relevance = DreamingScore {
+            relevance: 1.0,
+            frequency: 0.0,
+            query_diversity: 0.0,
+            recency: 0.0,
+            consolidation: 0.0,
+            conceptual_richness: 0.0,
+            ..score.clone()
+        };
+        assert!((only_relevance.total_score() - 0.30).abs() < f64::EPSILON);
+
+        let only_frequency = DreamingScore { relevance: 0.0, frequency: 1.0, ..only_relevance.clone() };
+        assert!((only_frequency.total_score() - 0.24).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dreaming_score_promotion_gates_pass() {
+        let score = DreamingScore {
+            memory_id: MemoryId::new("mem-1"),
+            relevance: 1.0,
+            frequency: 1.0,
+            query_diversity: 1.0,
+            recency: 1.0,
+            consolidation: 1.0,
+            conceptual_richness: 1.0,
+        };
+        let stats = RecallStats {
+            memory_id: MemoryId::new("mem-1"),
+            recall_count: 5,
+            unique_queries: 4,
+            last_recalled: None,
+            average_score: 0.9,
+        };
+        assert!(score.passes_promotion_gates(0.8, 3, 3, &stats));
+    }
+
+    #[test]
+    fn dreaming_score_promotion_gates_fail_low_score() {
+        let score = DreamingScore {
+            memory_id: MemoryId::new("mem-1"),
+            relevance: 0.1,
+            frequency: 0.1,
+            query_diversity: 0.1,
+            recency: 0.1,
+            consolidation: 0.1,
+            conceptual_richness: 0.1,
+        };
+        let stats = RecallStats {
+            memory_id: MemoryId::new("mem-1"),
+            recall_count: 5,
+            unique_queries: 4,
+            last_recalled: None,
+            average_score: 0.9,
+        };
+        assert!(!score.passes_promotion_gates(0.8, 3, 3, &stats));
+    }
+
+    #[test]
+    fn dreaming_score_promotion_gates_fail_low_recall() {
+        let score = DreamingScore {
+            memory_id: MemoryId::new("mem-1"),
+            relevance: 1.0,
+            frequency: 1.0,
+            query_diversity: 1.0,
+            recency: 1.0,
+            consolidation: 1.0,
+            conceptual_richness: 1.0,
+        };
+        let stats = RecallStats {
+            memory_id: MemoryId::new("mem-1"),
+            recall_count: 1, // below min_recall_count=3
+            unique_queries: 4,
+            last_recalled: None,
+            average_score: 0.9,
+        };
+        assert!(!score.passes_promotion_gates(0.8, 3, 3, &stats));
+    }
+
+    #[test]
+    fn dreaming_score_promotion_gates_fail_low_unique_queries() {
+        let score = DreamingScore {
+            memory_id: MemoryId::new("mem-1"),
+            relevance: 1.0,
+            frequency: 1.0,
+            query_diversity: 1.0,
+            recency: 1.0,
+            consolidation: 1.0,
+            conceptual_richness: 1.0,
+        };
+        let stats = RecallStats {
+            memory_id: MemoryId::new("mem-1"),
+            recall_count: 5,
+            unique_queries: 1, // below min_unique_queries=3
+            last_recalled: None,
+            average_score: 0.9,
+        };
+        assert!(!score.passes_promotion_gates(0.8, 3, 3, &stats));
+    }
+
+    #[test]
+    fn recall_store_clear_before_removes_old_entries() {
+        let mut store = RecallStore::new();
+        store.record(make_signal("mem-1", 1, 0.9, "2026-01-01T00:00:00Z")); // old
+        store.record(make_signal("mem-1", 2, 0.8, "2026-03-01T00:00:00Z")); // old
+        store.record(make_signal("mem-1", 3, 0.7, "2026-04-09T10:00:00Z")); // recent
+
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-04-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        store.clear_before(cutoff);
+
+        assert_eq!(store.signals.len(), 1);
+        assert_eq!(store.signals[0].query_hash, 3);
+    }
+
+    #[test]
+    fn recall_store_all_stats_covers_all_entries() {
+        let mut store = RecallStore::new();
+        store.record(make_signal("mem-a", 1, 0.9, "2026-04-09T10:00:00Z"));
+        store.record(make_signal("mem-b", 1, 0.8, "2026-04-09T10:00:00Z"));
+        store.record(make_signal("mem-a", 2, 0.85, "2026-04-09T11:00:00Z"));
+
+        let all = store.all_stats();
+        assert_eq!(all.len(), 2);
+        let mem_a = all.iter().find(|s| s.memory_id.0 == "mem-a").unwrap();
+        assert_eq!(mem_a.recall_count, 2);
+        let mem_b = all.iter().find(|s| s.memory_id.0 == "mem-b").unwrap();
+        assert_eq!(mem_b.recall_count, 1);
     }
 }

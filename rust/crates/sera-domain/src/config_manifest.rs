@@ -189,6 +189,10 @@ pub struct AgentSpec {
     pub persona: Option<PersonaSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<AgentToolsSpec>,
+    /// Agent workspace directory for file/memory operations.
+    /// Defaults to `./data/agents/{agent_name}` if not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 /// Persona configuration within an agent spec.

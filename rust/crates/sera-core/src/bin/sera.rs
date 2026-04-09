@@ -632,13 +632,19 @@ async fn execute_turn(
     };
 
     // Create the MVS tool registry scoped to this agent's workspace.
-    let workspace = PathBuf::from(format!("./data/agents/{}", agent_spec.provider));
+    let workspace = match &agent_spec.workspace {
+        Some(w) => PathBuf::from(w),
+        None => PathBuf::from(format!("./data/agents/{}", agent_spec.provider)),
+    };
     let tool_registry = MvsToolRegistry::new(&workspace);
 
     // Build tool definitions from the registry.
     let tools = build_tool_definitions(agent_spec, &tool_registry);
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let mut cumulative_usage = UsageInfo {
         prompt_tokens: 0,
         completion_tokens: 0,

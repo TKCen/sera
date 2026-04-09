@@ -104,6 +104,20 @@ pub fn parse_heartbeat_interval(payload: &Value) -> Option<u64> {
         .as_u64()
 }
 
+/// Strip Discord mention tags (`<@123>` and `<@!123>`) from a message string,
+/// then trim leading/trailing whitespace and collapse internal runs of spaces.
+pub fn strip_mentions(content: &str) -> String {
+    use std::sync::LazyLock;
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"<@!?\d+>").expect("valid regex"));
+    let stripped = RE.replace_all(content, "");
+    // Collapse multiple spaces and trim edges
+    stripped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Try to extract a `DiscordMessage` from a Dispatch (opcode 0) payload
 /// with `t == "MESSAGE_CREATE"`.
 ///
@@ -128,7 +142,7 @@ pub fn parse_message_create(payload: &Value) -> Option<DiscordMessage> {
         channel_id: d.get("channel_id")?.as_str()?.to_owned(),
         user_id: author.get("id")?.as_str()?.to_owned(),
         username: author.get("username")?.as_str()?.to_owned(),
-        content: d.get("content")?.as_str()?.to_owned(),
+        content: strip_mentions(d.get("content")?.as_str()?),
         message_id: d.get("id")?.as_str()?.to_owned(),
     })
 }
@@ -544,5 +558,57 @@ mod tests {
         let connector = DiscordConnector::new("token123", "my-agent", tx);
         assert_eq!(connector.token, "token123");
         assert_eq!(connector.agent_name, "my-agent");
+    }
+
+    // --- strip_mentions tests ---
+
+    #[test]
+    fn test_strip_mentions_basic() {
+        assert_eq!(strip_mentions("<@123456> hello"), "hello");
+    }
+
+    #[test]
+    fn test_strip_mentions_nickname() {
+        assert_eq!(strip_mentions("<@!123456> hello"), "hello");
+    }
+
+    #[test]
+    fn test_strip_mentions_multiple() {
+        assert_eq!(strip_mentions("<@111> <@222> hi"), "hi");
+    }
+
+    #[test]
+    fn test_strip_mentions_none() {
+        assert_eq!(strip_mentions("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_mentions_only_mention() {
+        assert_eq!(strip_mentions("<@123>"), "");
+    }
+
+    #[test]
+    fn test_strip_mentions_middle() {
+        assert_eq!(strip_mentions("hey <@123> what's up"), "hey what's up");
+    }
+
+    #[test]
+    fn test_parse_message_create_strips_mention() {
+        let payload = serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_CREATE",
+            "s": 50,
+            "d": {
+                "id": "msg200",
+                "channel_id": "ch100",
+                "content": "<@987654321012345678> help me",
+                "author": {
+                    "id": "user001",
+                    "username": "carol"
+                }
+            }
+        });
+        let msg = parse_message_create(&payload).expect("should parse");
+        assert_eq!(msg.content, "help me");
     }
 }

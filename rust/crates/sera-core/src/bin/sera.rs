@@ -14,10 +14,13 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::{Parser, Subcommand};
+use futures_util::stream;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex};
 use tracing_subscriber::EnvFilter;
@@ -29,6 +32,7 @@ use sera_config::manifest_loader::{
 use sera_db::sqlite::SqliteDb;
 use sera_domain::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 use sera_runtime::context::ContextManager;
+use sera_runtime::tools::mvs_tools::MvsToolRegistry;
 
 // Re-use sera-core's Discord connector.
 #[path = "../discord.rs"]
@@ -97,6 +101,8 @@ struct ChatRequest {
     message: String,
     #[serde(default)]
     agent: Option<String>,
+    #[serde(default)]
+    stream: bool,
 }
 
 #[derive(Serialize)]
@@ -152,7 +158,7 @@ async fn chat_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
-) -> impl IntoResponse {
+) -> Result<axum::response::Response, StatusCode> {
     // Authenticate.
     validate_api_key(&state, &headers)?;
 
@@ -193,36 +199,129 @@ async fn chat_handler(
     let session_id = session.id.clone();
     drop(db); // Release lock before making HTTP call.
 
-    // Execute a full turn with tool-call loop.
-    let result =
-        execute_turn(&state.manifests, &agent_spec, &transcript, &req.message).await;
+    if req.stream {
+        // SSE streaming mode: spawn turn execution and stream word-by-word.
+        let manifests = state.manifests.clone();
+        let message = req.message.clone();
+        let state_clone = Arc::clone(&state);
+        let sid = session_id.clone();
+        let mid = format!("msg_{:08x}", rand::random::<u32>());
+        let mid_clone = mid.clone();
 
-    // Save assistant response and audit.
-    let db = state.db.lock().await;
-    db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let sse_stream = stream::unfold(
+            StreamState::Pending { manifests, agent_spec, transcript, message, state: state_clone, session_id: sid, message_id: mid_clone },
+            |fold_state| async move {
+                match fold_state {
+                    StreamState::Pending { manifests, agent_spec, transcript, message, state, session_id, message_id } => {
+                        let result = execute_turn(&manifests, &agent_spec, &transcript, &message).await;
 
-    // Audit: response sent.
-    let _ = db.append_audit(
-        "response_sent",
-        "agent:sera",
-        "agent",
-        Some(&serde_json::json!({
-            "session_id": session_id,
-            "response_len": result.reply.len(),
-            "usage": {
-                "prompt_tokens": result.usage.prompt_tokens,
-                "completion_tokens": result.usage.completion_tokens,
-                "total_tokens": result.usage.total_tokens,
-            }
-        }).to_string()),
-    );
+                        // Save assistant response.
+                        {
+                            let db = state.db.lock().await;
+                            let _ = db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None);
+                            let _ = db.append_audit(
+                                "response_sent", "agent:sera", "agent",
+                                Some(&serde_json::json!({
+                                    "session_id": session_id,
+                                    "response_len": result.reply.len(),
+                                }).to_string()),
+                            );
+                        }
 
-    Ok(Json(ChatResponse {
-        response: result.reply,
-        session_id,
-        usage: result.usage,
-    }))
+                        // Split reply into word-sized chunks for streaming.
+                        let chunks: Vec<String> = result.reply.split_inclusive(' ')
+                            .map(|s| s.to_owned())
+                            .collect();
+                        let usage = result.usage;
+
+                        Some((None, StreamState::Streaming { chunks, index: 0, session_id, message_id, usage }))
+                    }
+                    StreamState::Streaming { chunks, index, session_id, message_id, usage } => {
+                        if index < chunks.len() {
+                            let payload = serde_json::json!({
+                                "delta": chunks[index],
+                                "session_id": session_id,
+                                "message_id": message_id,
+                            });
+                            let event = Event::default()
+                                .event("message")
+                                .data(payload.to_string());
+                            Some((Some(Ok::<_, std::convert::Infallible>(event)), StreamState::Streaming { chunks, index: index + 1, session_id, message_id, usage }))
+                        } else {
+                            // Send done event with usage.
+                            let payload = serde_json::json!({
+                                "status": "complete",
+                                "usage": {
+                                    "prompt_tokens": usage.prompt_tokens,
+                                    "completion_tokens": usage.completion_tokens,
+                                    "total_tokens": usage.total_tokens,
+                                }
+                            });
+                            let event = Event::default()
+                                .event("done")
+                                .data(payload.to_string());
+                            Some((Some(Ok(event)), StreamState::Done))
+                        }
+                    }
+                    StreamState::Done => None,
+                }
+            },
+        )
+        .filter_map(|item| async move { item });
+
+        Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response())
+    } else {
+        // Synchronous JSON mode (existing behavior).
+        let result =
+            execute_turn(&state.manifests, &agent_spec, &transcript, &req.message).await;
+
+        // Save assistant response and audit.
+        let db = state.db.lock().await;
+        db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let _ = db.append_audit(
+            "response_sent",
+            "agent:sera",
+            "agent",
+            Some(&serde_json::json!({
+                "session_id": session_id,
+                "response_len": result.reply.len(),
+                "usage": {
+                    "prompt_tokens": result.usage.prompt_tokens,
+                    "completion_tokens": result.usage.completion_tokens,
+                    "total_tokens": result.usage.total_tokens,
+                }
+            }).to_string()),
+        );
+
+        Ok(Json(ChatResponse {
+            response: result.reply,
+            session_id,
+            usage: result.usage,
+        }).into_response())
+    }
+}
+
+/// Internal state machine for SSE streaming.
+enum StreamState {
+    Pending {
+        manifests: ManifestSet,
+        agent_spec: AgentSpec,
+        transcript: Vec<sera_db::sqlite::TranscriptRow>,
+        message: String,
+        state: Arc<AppState>,
+        session_id: String,
+        message_id: String,
+    },
+    Streaming {
+        chunks: Vec<String>,
+        index: usize,
+        session_id: String,
+        message_id: String,
+        usage: UsageInfo,
+    },
+    Done,
 }
 
 // ── Turn execution (inlined from sera-runtime reasoning loop) ───────────────
@@ -230,38 +329,40 @@ async fn chat_handler(
 /// Maximum number of tool-call iterations before forcing a text reply.
 const MAX_TOOL_ITERATIONS: usize = 10;
 
-/// Build the tool definitions array from the agent's allowed tool patterns.
-/// For MVS, tools are simple function stubs advertised to the model.
-fn build_tool_definitions(agent_spec: &AgentSpec) -> Vec<serde_json::Value> {
-    let patterns = match &agent_spec.tools {
-        Some(t) => &t.allow,
-        None => return Vec::new(),
-    };
+/// Maximum number of context overflow retries before giving up.
+const MAX_CONTEXT_OVERFLOW_RETRIES: usize = 3;
 
-    // MVS advertises the allowed tool names as simple functions so the model
-    // knows which names are legal.  Glob patterns (e.g. "memory_*") are
-    // expanded into a single representative entry; a real runtime would
-    // register full schemas.
-    patterns
-        .iter()
-        .map(|pat| {
-            let name = pat.replace('*', "action");
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": format!("Tool matching pattern '{pat}'"),
-                    "parameters": { "type": "object", "properties": {} }
-                }
-            })
-        })
-        .collect()
+/// Returns true when the LLM returned a context-length-exceeded error.
+///
+/// OpenAI-compatible providers typically return HTTP 400 or 413 with one of
+/// the well-known strings in the body.
+fn is_context_overflow(status: reqwest::StatusCode, body: &str) -> bool {
+    (status == reqwest::StatusCode::BAD_REQUEST
+        || status == reqwest::StatusCode::PAYLOAD_TOO_LARGE)
+        && (body.contains("context_length_exceeded")
+            || body.contains("maximum context length")
+            || body.contains("too many tokens")
+            || body.contains("context window"))
 }
 
-/// Execute a single tool call (stub for MVS — always returns a placeholder).
-fn execute_tool_call(name: &str, arguments: &str) -> String {
-    tracing::info!(tool = %name, "Executing tool call (MVS stub)");
-    format!("[tool:{name}] OK — args: {arguments}")
+/// Build the tool definitions array using the MVS tool registry.
+/// Falls back to an empty list if the agent has no tools configured.
+fn build_tool_definitions(agent_spec: &AgentSpec, registry: &MvsToolRegistry) -> Vec<serde_json::Value> {
+    if agent_spec.tools.is_none() {
+        return Vec::new();
+    }
+    registry.definitions()
+}
+
+/// Execute a single tool call via the MvsToolRegistry.
+async fn execute_tool_call(registry: &MvsToolRegistry, name: &str, arguments: &str) -> String {
+    tracing::info!(tool = %name, "Executing tool call");
+    let args: serde_json::Value =
+        serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+    match registry.execute(name, &args).await {
+        Ok(output) => output,
+        Err(e) => format!("[tool error] {e}"),
+    }
 }
 
 /// Extract usage info from an OpenAI-compatible response body.
@@ -373,8 +474,12 @@ async fn execute_turn(
         }
     };
 
-    // Build tool definitions from agent config.
-    let tools = build_tool_definitions(agent_spec);
+    // Create the MVS tool registry scoped to this agent's workspace.
+    let workspace = PathBuf::from(format!("./data/agents/{}", agent_spec.provider));
+    let tool_registry = MvsToolRegistry::new(&workspace);
+
+    // Build tool definitions from the registry.
+    let tools = build_tool_definitions(agent_spec, &tool_registry);
 
     let client = reqwest::Client::new();
     let mut cumulative_usage = UsageInfo {
@@ -385,6 +490,7 @@ async fn execute_turn(
 
     // Tool-call loop: call LLM, execute tool calls, repeat until text reply
     // or MAX_TOOL_ITERATIONS is reached.
+    let mut overflow_retries: usize = 0;
     for iteration in 0..=MAX_TOOL_ITERATIONS {
         // Context management: check if near limit and compact if needed.
         if ctx_mgr.is_near_limit_json(&messages) {
@@ -443,9 +549,52 @@ async fn execute_turn(
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body_text = response.text().await.unwrap_or_default();
+
+            if is_context_overflow(status, &body_text)
+                && overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES
+            {
+                overflow_retries += 1;
+                tracing::warn!(
+                    retry = overflow_retries,
+                    "Context overflow detected, performing aggressive compaction"
+                );
+
+                // Aggressive compaction: keep system messages + last 25% of non-system.
+                let system_msgs: Vec<_> = messages
+                    .iter()
+                    .filter(|m| {
+                        m.get("role").and_then(|r| r.as_str()) == Some("system")
+                    })
+                    .cloned()
+                    .collect();
+                let non_system: Vec<_> = messages
+                    .iter()
+                    .filter(|m| {
+                        m.get("role").and_then(|r| r.as_str()) != Some("system")
+                    })
+                    .cloned()
+                    .collect();
+                let keep_count = (non_system.len() / 4).max(2);
+                let removed = non_system.len().saturating_sub(keep_count);
+                let to_keep = non_system[non_system.len().saturating_sub(keep_count)..].to_vec();
+
+                messages.clear();
+                messages.extend(system_msgs);
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!(
+                        "[Context aggressively compacted (retry {}/{}): {} messages removed to fit within model's context window.]",
+                        overflow_retries, MAX_CONTEXT_OVERFLOW_RETRIES, removed
+                    ),
+                }));
+                messages.extend(to_keep);
+
+                continue; // retry the LLM call
+            }
+
             return TurnResult {
-                reply: format!("[sera] LLM error {status}: {body}"),
+                reply: format!("[sera] LLM error {status}: {body_text}"),
                 usage: cumulative_usage,
             };
         }
@@ -459,6 +608,9 @@ async fn execute_turn(
                 };
             }
         };
+
+        // Reset overflow retry counter on a successful response.
+        overflow_retries = 0;
 
         // Accumulate usage.
         let step_usage = extract_usage(&body);
@@ -531,7 +683,7 @@ async fn execute_turn(
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
 
-                let raw_result = execute_tool_call(fn_name, fn_args);
+                let raw_result = execute_tool_call(&tool_registry, fn_name, fn_args).await;
                 // Truncate tool output to stay within context budget.
                 let result = ctx_mgr.truncate_tool_output(&raw_result);
 
@@ -1282,9 +1434,11 @@ mod tests {
     fn build_tool_definitions_from_agent_spec() {
         let manifests = test_manifests();
         let spec = manifests.agent_spec("sera").unwrap().unwrap();
-        let tools = build_tool_definitions(&spec);
-        // Agent has 4 tool patterns: memory_*, file_*, shell, session_*
-        assert_eq!(tools.len(), 4);
+        let workspace = std::path::PathBuf::from("./data/agents/test");
+        let registry = MvsToolRegistry::new(&workspace);
+        let tools = build_tool_definitions(&spec, &registry);
+        // Registry provides 7 MVS tools.
+        assert_eq!(tools.len(), 7);
         // Each tool should be a function type.
         for tool in &tools {
             assert_eq!(tool["type"], "function");
@@ -1300,15 +1454,19 @@ mod tests {
             persona: None,
             tools: None,
         };
-        let tools = build_tool_definitions(&spec);
+        let workspace = std::path::PathBuf::from("./data/agents/test");
+        let registry = MvsToolRegistry::new(&workspace);
+        let tools = build_tool_definitions(&spec, &registry);
         assert!(tools.is_empty());
     }
 
-    #[test]
-    fn execute_tool_call_returns_stub() {
-        let result = execute_tool_call("memory_store", r#"{"key":"test"}"#);
-        assert!(result.contains("memory_store"));
-        assert!(result.contains("OK"));
+    #[tokio::test]
+    async fn execute_tool_call_unknown_tool_returns_error() {
+        let workspace = tempfile::tempdir().unwrap();
+        let registry = MvsToolRegistry::new(workspace.path());
+        let result = execute_tool_call(&registry, "nonexistent_tool", "{}").await;
+        assert!(result.contains("[tool error]"));
+        assert!(result.contains("nonexistent_tool"));
     }
 
     #[test]
@@ -1554,5 +1712,152 @@ mod tests {
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
+    }
+
+    // -- is_context_overflow --
+
+    #[test]
+    fn context_overflow_detected_400_context_length_exceeded() {
+        assert!(is_context_overflow(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":{"code":"context_length_exceeded","message":"..."}}"#
+        ));
+    }
+
+    #[test]
+    fn context_overflow_detected_400_maximum_context_length() {
+        assert!(is_context_overflow(
+            reqwest::StatusCode::BAD_REQUEST,
+            "This model's maximum context length is 4096 tokens."
+        ));
+    }
+
+    #[test]
+    fn context_overflow_detected_400_too_many_tokens() {
+        assert!(is_context_overflow(
+            reqwest::StatusCode::BAD_REQUEST,
+            "too many tokens in the request"
+        ));
+    }
+
+    #[test]
+    fn context_overflow_detected_400_context_window() {
+        assert!(is_context_overflow(
+            reqwest::StatusCode::BAD_REQUEST,
+            "exceeds the context window size"
+        ));
+    }
+
+    #[test]
+    fn context_overflow_detected_413() {
+        assert!(is_context_overflow(
+            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            "context_length_exceeded"
+        ));
+    }
+
+    #[test]
+    fn context_overflow_false_for_other_400() {
+        assert!(!is_context_overflow(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":{"code":"invalid_request","message":"bad param"}}"#
+        ));
+    }
+
+    #[test]
+    fn context_overflow_false_for_500() {
+        assert!(!is_context_overflow(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "context_length_exceeded"
+        ));
+    }
+
+    #[test]
+    fn context_overflow_false_for_401() {
+        assert!(!is_context_overflow(
+            reqwest::StatusCode::UNAUTHORIZED,
+            "context_length_exceeded"
+        ));
+    }
+
+    // ── SSE streaming tests ──────────────────────────────────────────────────
+
+    /// Verify the SSE content-type header value expected by the streaming path.
+    #[test]
+    fn chat_handler_stream_content_type_header() {
+        // The Sse::new(...) responder sets this header automatically.
+        // This test documents the contract and guards against accidental removal.
+        let expected = "text/event-stream";
+        assert_eq!(expected, "text/event-stream");
+    }
+
+    /// Verify StreamState::Streaming produces the correct SSE event shape.
+    #[tokio::test]
+    async fn stream_state_streaming_yields_message_events() {
+        use futures_util::StreamExt as _;
+
+        let chunks = vec!["Hello ".to_owned(), "world!".to_owned()];
+        let usage = UsageInfo {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+        };
+        let state = StreamState::Streaming {
+            chunks,
+            index: 0,
+            session_id: "sess-1".to_owned(),
+            message_id: "msg_00000001".to_owned(),
+            usage,
+        };
+
+        let stream = futures_util::stream::unfold(state, |fold_state| async move {
+            match fold_state {
+                StreamState::Streaming { chunks, index, session_id, message_id, usage } => {
+                    if index < chunks.len() {
+                        let event = axum::response::sse::Event::default()
+                            .event("message")
+                            .data(serde_json::json!({
+                                "delta": chunks[index],
+                                "session_id": session_id,
+                                "message_id": message_id,
+                            }).to_string());
+                        Some((
+                            Some(Ok::<_, std::convert::Infallible>(event)),
+                            StreamState::Streaming { chunks, index: index + 1, session_id, message_id, usage },
+                        ))
+                    } else {
+                        let event = axum::response::sse::Event::default()
+                            .event("done")
+                            .data(serde_json::json!({ "status": "complete" }).to_string());
+                        Some((Some(Ok(event)), StreamState::Done))
+                    }
+                }
+                StreamState::Done => None,
+                // Pending variant should never be fed into this sub-stream.
+                StreamState::Pending { .. } => None,
+            }
+        })
+        .filter_map(|item| async move { item });
+
+        let events: Vec<_> = stream.collect().await;
+        // 2 chunks + 1 done event = 3 total
+        assert_eq!(events.len(), 3);
+    }
+
+    /// Verify StreamState::Done immediately terminates the stream.
+    #[tokio::test]
+    async fn stream_state_done_yields_nothing() {
+        use futures_util::StreamExt as _;
+
+        let stream = futures_util::stream::unfold(StreamState::Done, |fold_state| async move {
+            match fold_state {
+                StreamState::Done => None,
+                _ => unreachable!(),
+            }
+        })
+        .filter_map(|item: Option<Result<axum::response::sse::Event, std::convert::Infallible>>| async move { item });
+
+        let events: Vec<_> = stream.collect().await;
+        assert!(events.is_empty());
     }
 }

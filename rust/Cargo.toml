@@ -88,6 +88,7 @@ crossterm = "0.28"
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }
 rand = "0.8"
+regex = "1"
 
 # File watching
 notify = "7"
@@ -107,6 +108,7 @@ sera-db = { path = "crates/sera-db" }
 sera-auth = { path = "crates/sera-auth" }
 sera-events = { path = "crates/sera-events" }
 sera-docker = { path = "crates/sera-docker" }
+sera-runtime = { path = "crates/sera-runtime" }
 sera-testing = { path = "crates/sera-testing" }
 
 [profile.release]

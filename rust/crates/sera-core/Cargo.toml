@@ -20,6 +20,7 @@ sera-auth.workspace = true
 sera-events.workspace = true
 sera-docker.workspace = true
 sera-config.workspace = true
+sera-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -51,6 +52,7 @@ futures-util.workspace = true
 rand.workspace = true
 cron.workspace = true
 chrono.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 sera-testing.workspace = true

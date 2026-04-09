@@ -5,6 +5,7 @@
 //! - `CoreConfig`: sera-core server config (env vars + providers.json)
 
 pub mod core_config;
+pub mod manifest_loader;
 pub mod providers;
 pub mod watchers;
 

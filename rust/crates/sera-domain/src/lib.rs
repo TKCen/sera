@@ -5,14 +5,19 @@ pub mod agent;
 pub mod audit;
 pub mod capability;
 pub mod chat;
+pub mod config_manifest;
+pub mod event;
 pub mod intercom;
 pub mod manifest;
+pub mod memory;
 pub mod metering;
 pub mod policy;
+pub mod principal;
 pub mod sandbox;
 pub mod secrets;
 pub mod session;
 pub mod skill;
+pub mod tool;
 
 use serde::{Deserialize, Serialize};
 

@@ -12,6 +12,7 @@ tokio.workspace = true
 notify.workspace = true
 notify-debouncer-mini.workspace = true
 tracing.workspace = true
+sera-domain.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

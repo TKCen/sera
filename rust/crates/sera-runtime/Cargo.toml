@@ -31,6 +31,7 @@ uuid.workspace = true
 futures-util.workspace = true
 tokio-stream.workspace = true
 async-stream.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -475,9 +475,9 @@ async fn test_mvs_tool_registry_integration() {
     let tmp = TempDir::new().unwrap();
     let registry = MvsToolRegistry::new(tmp.path());
 
-    // Verify all 7 tools are registered
+    // Verify all 8 tools are registered
     let defs = registry.definitions();
-    assert_eq!(defs.len(), 7);
+    assert_eq!(defs.len(), 8);
 
     let names: Vec<&str> = defs
         .iter()
@@ -488,6 +488,7 @@ async fn test_mvs_tool_registry_integration() {
     assert!(names.contains(&"memory_read"));
     assert!(names.contains(&"memory_write"));
     assert!(names.contains(&"memory_search"));
+    assert!(names.contains(&"memory_synthesize"));
     assert!(names.contains(&"shell"));
     assert!(names.contains(&"session_reset"));
 

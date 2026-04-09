@@ -9,7 +9,77 @@
 //! 4. Conversation history — volatile
 //! 5. Current user message — volatile
 
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
 use serde_json::Value;
+
+/// Simple TTL-based cache for memory query results.
+pub struct QueryCache {
+    entries: HashMap<String, CacheEntry>,
+    ttl: Duration,
+}
+
+struct CacheEntry {
+    result: String,
+    inserted_at: Instant,
+}
+
+impl QueryCache {
+    /// Create a new cache with the given TTL.
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            entries: HashMap::new(),
+            ttl,
+        }
+    }
+
+    /// Create a cache with the default 60-second TTL.
+    pub fn default_ttl() -> Self {
+        Self::new(Duration::from_secs(60))
+    }
+
+    /// Look up a cached result. Returns None if missing or expired.
+    pub fn get(&self, query: &str) -> Option<&str> {
+        let entry = self.entries.get(query)?;
+        if entry.inserted_at.elapsed() < self.ttl {
+            Some(&entry.result)
+        } else {
+            None
+        }
+    }
+
+    /// Insert a result into the cache.
+    pub fn insert(&mut self, query: String, result: String) {
+        self.entries.insert(
+            query,
+            CacheEntry {
+                result,
+                inserted_at: Instant::now(),
+            },
+        );
+    }
+
+    /// Remove expired entries.
+    pub fn evict_expired(&mut self) {
+        self.entries.retain(|_, e| e.inserted_at.elapsed() < self.ttl);
+    }
+
+    /// Clear all entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Number of entries (including potentially expired).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 
 /// Assembles the LLM context in KV-cache-optimized order.
 pub struct ContextAssembler;
@@ -99,6 +169,60 @@ impl ContextAssembler {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // --- QueryCache tests ---
+
+    #[test]
+    fn cache_stores_and_retrieves() {
+        let mut cache = QueryCache::default_ttl();
+        cache.insert("test query".into(), "result data".into());
+        assert_eq!(cache.get("test query"), Some("result data"));
+    }
+
+    #[test]
+    fn cache_returns_none_for_missing() {
+        let cache = QueryCache::default_ttl();
+        assert_eq!(cache.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn cache_expires_entries() {
+        let mut cache = QueryCache::new(Duration::from_millis(10));
+        cache.insert("q".into(), "r".into());
+        assert!(cache.get("q").is_some());
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(cache.get("q").is_none());
+    }
+
+    #[test]
+    fn cache_evict_removes_expired() {
+        let mut cache = QueryCache::new(Duration::from_millis(10));
+        cache.insert("a".into(), "1".into());
+        cache.insert("b".into(), "2".into());
+        assert_eq!(cache.len(), 2);
+        std::thread::sleep(Duration::from_millis(20));
+        cache.evict_expired();
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn cache_clear_removes_all() {
+        let mut cache = QueryCache::default_ttl();
+        cache.insert("a".into(), "1".into());
+        cache.insert("b".into(), "2".into());
+        assert_eq!(cache.len(), 2);
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn cache_overwrites_existing() {
+        let mut cache = QueryCache::default_ttl();
+        cache.insert("q".into(), "old".into());
+        cache.insert("q".into(), "new".into());
+        assert_eq!(cache.get("q"), Some("new"));
+        assert_eq!(cache.len(), 1);
+    }
 
     #[test]
     fn basic_assembly_ordering() {

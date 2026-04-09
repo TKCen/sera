@@ -1562,8 +1562,8 @@ mod tests {
         let workspace = std::path::PathBuf::from("./data/agents/test");
         let registry = MvsToolRegistry::new(&workspace);
         let tools = build_tool_definitions(&spec, &registry);
-        // Registry provides 7 MVS tools.
-        assert_eq!(tools.len(), 7);
+        // Registry provides 8 MVS tools.
+        assert_eq!(tools.len(), 8);
         // Each tool should be a function type.
         for tool in &tools {
             assert_eq!(tool["type"], "function");

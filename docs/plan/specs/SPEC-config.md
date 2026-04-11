@@ -1,9 +1,9 @@
 # SPEC: Configuration Layer (`sera-config`)
 
-> **Status:** DRAFT  
-> **Source:** PRD §10.1, §10.2  
-> **Crate:** `sera-config`  
-> **Priority:** Phase 0  
+> **Status:** DRAFT
+> **Source:** PRD §10.1, §10.2, plus deltas from [SPEC-dependencies](SPEC-dependencies.md) §8.5 (`figment` 0.10 for composable K8s-style YAML, `schemars` 0.8 + `jsonschema` 0.38, `notify` 8.2 for hot-reload), §10.9 (spec-kit frontmatter discipline), §10.18 (NVIDIA OpenShell 5 published JSON schemas for editor validation, AI-assisted policy advisor chunk approval workflow), [SPEC-self-evolution](SPEC-self-evolution.md) §5.4 (`change_artifact` provenance on every manifest, append-only `config_version_log`, shadow config store)
+> **Crate:** `sera-config`
+> **Priority:** Phase 0
 
 ---
 
@@ -62,6 +62,11 @@ pub struct ResourceMetadata {
     pub name: String,
     pub labels: HashMap<String, String>,
     pub annotations: HashMap<String, String>,
+    /// Provenance: which Change Artifact produced this manifest revision.
+    /// Source: SPEC-self-evolution §5.4.
+    pub change_artifact: Option<ChangeArtifactId>,
+    /// Whether the manifest is live or a shadow (dry-run replay target).
+    pub shadow: bool,
 }
 
 pub struct ApiVersion {
@@ -83,7 +88,10 @@ pub struct ApiVersion {
 | `WorkflowDef` | Workflow definition (dreaming, knowledge-audit, etc.) | `workflows/dreaming.yaml` |
 | `ApprovalPolicy` | Approval mode and escalation configuration | `policies/approval.yaml` |
 | `SecretProvider` | Secret provider configuration | `secrets/vault.yaml` |
-| `InteropConfig` | Protocol adapter config (MCP, A2A, ACP, AG-UI) | `interop/mcp.yaml` |
+| `InteropConfig` | Protocol adapter config (MCP, A2A, AG-UI — ACP merged into A2A, see SPEC-interop §5) | `interop/mcp.yaml` |
+| `SandboxPolicy` | Sandbox filesystem / network policy (see SPEC-tools §6a.0) | `sandbox-policies/openclaw-sandbox.yaml` |
+| `Circle` | Multi-agent Circle definition (see SPEC-circles §2) | `circles/engineering.yaml` |
+| `ChangeArtifact` | Self-evolution proposal envelope (Tier-2/3, see SPEC-self-evolution §8) | `changes/2026-04-11-add-slack-connector.yaml` |
 
 ### 2.3 Directory-Based Discovery
 
@@ -234,6 +242,8 @@ When multiple manifests target the same resource (same `kind` + `metadata.name`)
 
 Each resource kind has a registered JSON Schema. Config is validated at load time.
 
+**Implementation** ([SPEC-dependencies](SPEC-dependencies.md) §8.5): schema **generation** via `schemars` 0.8 (derived from Rust types), schema **validation** via `jsonschema` 0.38. Manifest loading uses [`figment` 0.10](https://crates.io/crates/figment) for composable layer resolution (YAML files → environment → runtime overrides). Hot-reload file watching uses [`notify` 8.2](https://crates.io/crates/notify) — **not** 9.x (RC only as of this spec).
+
 ```rust
 pub struct SchemaRegistry {
     schemas: HashMap<(ResourceKind, ApiVersion), schemars::Schema>,
@@ -242,14 +252,45 @@ pub struct SchemaRegistry {
 impl SchemaRegistry {
     /// Validate a manifest against its registered schema.
     pub fn validate(&self, manifest: &ConfigManifest) -> Result<(), Vec<ValidationError>>;
-    
+
     /// Get the schema for a resource kind at a specific API version.
     pub fn get_schema(&self, kind: &ResourceKind, version: &ApiVersion) -> Option<&schemars::Schema>;
-    
+
     /// List all registered resource kinds with their supported versions.
     pub fn list_kinds(&self) -> Vec<(ResourceKind, Vec<ApiVersion>)>;
 }
 ```
+
+### 4.1 Published JSON Schemas Per Kind
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.18 NVIDIA OpenShell (which ships 5 canonical JSON schemas: `blueprint.schema.json`, `onboard-config.schema.json`, `openclaw-plugin.schema.json`, `policy-preset.schema.json`, `sandbox-policy.schema.json`).
+
+SERA **must** ship a published JSON Schema per resource kind alongside the compiled binary. These enable:
+
+1. **Editor integration** — VS Code, IntelliJ, and other YAML editors auto-complete, validate, and surface inline errors against the schemas
+2. **Agent-authored config** — agents reading `config_schema(Connector)` get the canonical schema structure, enabling them to compose correct manifests without trial-and-error
+3. **CI-time validation** — config repositories can lint manifests against the schemas before committing
+
+Schemas are published to:
+
+```
+docs/schemas/
+├── instance.schema.json
+├── agent.schema.json
+├── provider.schema.json
+├── connector.schema.json
+├── hook-chain.schema.json
+├── tool-profile.schema.json
+├── workflow-def.schema.json
+├── approval-policy.schema.json
+├── secret-provider.schema.json
+├── interop-config.schema.json
+├── sandbox-policy.schema.json
+├── circle.schema.json
+└── change-artifact.schema.json
+```
+
+Each schema is derived from the corresponding Rust type via `schemars::schema_for!(T)` and checked into git. CI enforces that generated schemas match the Rust types (breaks build on drift).
 
 **Validation behavior:**
 - Invalid manifests prevent startup with clear, actionable error messages
@@ -365,9 +406,67 @@ The docs are accessible via the `docs_read` tool. An agent can read documentatio
 
 ---
 
+## 7a. Shadow Config Store (new)
+
+> **Source:** [SPEC-self-evolution](SPEC-self-evolution.md) §5.4, §11.
+
+The config system supports **shadow manifest loading** — apply a proposed config to an isolated shadow store without mutating the live store. This is the foundation for the shadow-session dry-run gate required on every Tier-2 Change Artifact.
+
+```rust
+#[async_trait]
+pub trait ConfigStore: Send + Sync {
+    async fn load(&self, manifest: ConfigManifest) -> Result<(), ConfigError>;
+    async fn get(&self, kind: &ResourceKind, name: &str) -> Option<ConfigManifest>;
+    async fn list(&self, kind: &ResourceKind) -> Vec<ConfigManifest>;
+    /// Version tracking: monotonically increasing, signed on promotion to live.
+    async fn version(&self) -> ConfigStoreVersion;
+}
+
+pub struct ShadowConfigStore {
+    base: Arc<LiveConfigStore>,           // Points at current live state
+    overlay: RwLock<HashMap<ManifestKey, ConfigManifest>>, // Shadow overrides
+}
+```
+
+A `ShadowConfigStore` reads through to the live store by default but returns shadow overrides when present. Writes go only to the shadow overlay — the live store is never touched. When the dry-run completes successfully and the Change Artifact is promoted, the shadow overlay is **atomically merged** into the live store in one transaction.
+
+**Usage flow:**
+
+1. Change Artifact proposed with a `ConfigDelta`
+2. Gateway creates a new `ShadowConfigStore` containing the delta
+3. Gateway replays selected shadow sessions (see SPEC-runtime §3.3) against the shadow store
+4. On successful replay, promote shadow → live via atomic merge
+5. Emit `ConfigChangeApplied` event with the originating `ChangeArtifactId`
+6. Rollback pointer retained for the change's rollback window
+
+### 7b. Append-Only Config Version Log
+
+> **Source:** [SPEC-self-evolution](SPEC-self-evolution.md) §5.4.
+
+The config version history is maintained in a **separate append-only log** from the config store itself:
+
+```rust
+pub struct ConfigVersionLog {
+    entries: Vec<ConfigVersionEntry>,     // Append-only
+}
+
+pub struct ConfigVersionEntry {
+    pub version: u64,                      // Monotonic
+    pub timestamp: DateTime<Utc>,
+    pub change_artifact: ChangeArtifactId, // Back-reference to the Change Artifact
+    pub signature: ConfigVersionSignature, // Signed by the gateway's config signing key
+    pub prev_hash: [u8; 32],               // Cryptographic chain link
+    pub this_hash: [u8; 32],               // Hash of entry content + prev_hash
+}
+```
+
+The log is cryptographically chained (each entry's `prev_hash` is the previous entry's `this_hash`), append-only at the storage layer, and verified at boot. An attacker cannot silently rewrite history without breaking the chain.
+
+---
+
 ## 8. Config Version History
 
-Every config change produces a versioned snapshot. This enables rollback, diff, and audit.
+Every config change produces a versioned snapshot. This enables rollback, diff, and audit. The canonical source of truth is the append-only `ConfigVersionLog` in §7b.
 
 ```rust
 pub struct ConfigVersion {
@@ -376,6 +475,7 @@ pub struct ConfigVersion {
     pub changes: Vec<ConfigDelta>,        // What changed
     pub proposed_by: PrincipalRef,        // Who proposed
     pub approved_by: Option<PrincipalRef>, // Who approved (if HITL)
+    pub change_artifact: ChangeArtifactId, // Back-reference to the SPEC-self-evolution §8 envelope
 }
 
 pub struct ConfigDelta {
@@ -404,11 +504,13 @@ pub enum DeltaOp {
 | Dependency | Spec | Relationship |
 |---|---|---|
 | `sera-secrets` | [SPEC-secrets](SPEC-secrets.md) | Secret references in config resolved by secret provider |
-| `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | Config visibility scoped by authorization |
-| `sera-hitl` | [SPEC-hitl-approval](SPEC-hitl-approval.md) | Config changes may require approval |
-| `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Hook chain config as HookChain manifests |
-| `sera-gateway` | [SPEC-gateway](SPEC-gateway.md) | Instance config (ports, connectors) |
+| `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | Config visibility scoped by authorization; `MetaChange` capability gates `config_propose` |
+| `sera-hitl` | [SPEC-hitl-approval](SPEC-hitl-approval.md) | Config changes may require approval; `ChangeArtifact` scope routing |
+| `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Hook chain config as HookChain manifests; `constitutional_gate` fires on `ChangeArtifact` proposals |
+| `sera-gateway` | [SPEC-gateway](SPEC-gateway.md) | Instance config (ports, connectors); emits `ConfigChangeApplied` events on promotion |
 | `sera-types` | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) | ApiVersion, ResourceKind types defined in sera-types |
+| `sera-meta` | [SPEC-self-evolution](SPEC-self-evolution.md) | `change_artifact` provenance (§2.1), shadow config store (§7a), append-only version log (§7b); SPEC-self-evolution §5.4 design obligations land in this spec |
+| Dependencies | [SPEC-dependencies](SPEC-dependencies.md) | §8.5 `figment`/`schemars`/`jsonschema`/`notify` crate choices; §10.9 spec-kit frontmatter discipline; §10.18 OpenShell per-kind published JSON schemas |
 
 ---
 

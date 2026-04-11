@@ -1,9 +1,9 @@
 # SPEC: Observability (`sera-telemetry`)
 
-> **Status:** DRAFT  
-> **Source:** PRD §4.1 (diagnostics), §14 (invariant 10)  
-> **Crate:** `sera-telemetry`  
-> **Priority:** Phase 0  
+> **Status:** DRAFT
+> **Source:** PRD §4.1 (diagnostics), §14 (invariant 10), plus deltas from [SPEC-dependencies](SPEC-dependencies.md) §8.4 (locked OTel triad: `opentelemetry` 0.27 + `opentelemetry-otlp` 0.27 + `tracing-opentelemetry` 0.28 — must be pinned together), §10.1 (claw-code `LaneFailureClass` typed failure taxonomy + `LaneCommitProvenance`), §10.2 (Codex W3C trace context non-optional on every Submission), §10.16 (BeeAI hierarchical `Emitter` namespace tree + `EventTrace` correlation with per-entity child emitters), §10.18 (**NVIDIA OpenShell OCSF v1.7.0 structured audit events** with canonical `class_uid` taxonomy), [SPEC-self-evolution](SPEC-self-evolution.md) §5.7 (separate audit log write path, cryptographically chained, unreachable from Change Artifacts)
+> **Crate:** `sera-telemetry`
+> **Priority:** Phase 0
 
 ---
 
@@ -19,6 +19,8 @@ The core principle: **evidence survives the run.** Every turn, tool call, hook e
 
 ### 2.1 Structured Tracing
 
+> **Implementation:** [SPEC-dependencies](SPEC-dependencies.md) §8.4 — the OpenTelemetry triad MUST be pinned exactly together: `opentelemetry = "=0.27"`, `opentelemetry-otlp = "=0.27"`, `tracing-opentelemetry = "=0.28"`. Version drift produces compile-time trait bound errors. Pin in workspace-level `Cargo.toml`.
+
 Distributed traces cover the full lifecycle of events through the system:
 
 ```
@@ -33,6 +35,7 @@ Each span carries:
 - Session key
 - Event ID
 - Duration and status
+- **W3C trace context** (non-optional — every gateway Submission carries `trace: W3cTraceContext`; see SPEC-gateway §3.1)
 
 #### Trace Propagation
 
@@ -42,6 +45,46 @@ Traces propagate across:
 - Memory operations
 - Approval flows (including HITL wait time)
 - Workflow triggers and execution
+
+### 2.1a Hierarchical `Emitter` Namespace Tree
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.16 BeeAI Framework.
+
+Beyond OpenTelemetry spans, SERA maintains a **hierarchical `Emitter` namespace tree** — every runtime entity (agent, tool, workflow, circle, session) owns a child emitter forked from a root singleton. Listeners match by string name, `re.Pattern`, or predicate. Pattern-matched subscriptions work without regex on the hot path via namespace path prefix comparison.
+
+```rust
+pub struct Emitter {
+    pub namespace: Vec<String>,        // Hierarchical path, e.g. ["gateway", "session", "tool"]
+    pub context: HashMap<String, serde_json::Value>, // Propagated to all child emitters
+    pub trace: Option<EventTrace>,     // Span/trace correlation
+    parent: Option<Weak<Emitter>>,
+}
+
+pub struct EventMeta {
+    pub id: EventId,
+    pub name: String,
+    pub path: Vec<String>,             // Hierarchical namespace path
+    pub created_at: DateTime<Utc>,
+    pub source: String,                // The emitter that produced this event
+    pub creator: String,                // The object that owns the emitter
+    pub context: HashMap<String, serde_json::Value>,
+    pub group_id: Option<String>,      // For batch correlation
+    pub trace: Option<EventTrace>,
+    pub data_type: String,             // serde type tag
+}
+
+impl Emitter {
+    pub fn child(&self, namespace: &str, creator: &str) -> Arc<Emitter> { /* ... */ }
+    pub fn root() -> Arc<Emitter> { /* singleton */ }
+}
+```
+
+**Why both OTel AND Emitter?** They serve different use cases:
+
+- **OpenTelemetry** is for distributed-systems tracing — request-level causality across services, sampling, exporter fan-out
+- **Emitter** is for programmatic in-process event subscription — plugins, hooks, internal subsystems wanting to react to events without registering an OTel span processor
+
+A plugin subscribing to `["gateway", "session", "tool", "*"]` via the Emitter tree gets hot-path-friendly callbacks; the same events also generate OTel spans for distributed trace export. Both layers are populated from the same source, but consumers pick whichever one fits their use case.
 
 ### 2.2 Metrics
 
@@ -89,26 +132,129 @@ tracing::info!(
 
 ## 3. Audit Log
 
-The audit log is a **separate, append-only, tamper-evident** record of all security-relevant actions:
+The audit log is a **separate, append-only, cryptographically chained** record of all security-relevant actions. SERA adopts the **OCSF v1.7.0** (Open Cybersecurity Schema Framework) taxonomy from [SPEC-dependencies](SPEC-dependencies.md) §10.18 (NVIDIA OpenShell) to make the audit log SIEM-compatible without custom schema work.
 
-| Event Type | What's Recorded |
+### 3.0 OCSF v1.7.0 Event Classes
+
+| class_uid | Class | Use in SERA |
+|---|---|---|
+| `1007` | Process Activity | Tool execution, sandbox process lifecycle |
+| `2004` | Detection Finding | Policy violations, denied actions, doom-loop detection |
+| `3002` | Authentication | Principal login, token refresh, failed auth |
+| `3005` | Authorization | AuthZ check results (allow, deny, needs_approval) |
+| `4001` | Network Activity | Outbound egress (CONNECT allowed/denied) |
+| `4002` | HTTP Activity | L7 method+path decisions on the egress proxy |
+| `4007` | SSH Activity | Interactive shell session events (if enabled) |
+| `5019` | Device Config State Change | Config hot-reload, Change Artifact promotion, policy updates |
+| `6002` | Application Lifecycle | Gateway boot, shutdown, crash, two-generation transition |
+| `6003` | Application Activity | Tool invocation lifecycle (start/end), approval decisions |
+
+Every OCSF event carries canonical fields: `actor.process.name` (binary path + PID), `dst_endpoint`, `firewall_rule.name` (for network events), `action`/`disposition` (Allowed/Denied), `raw_data` (for forensic replay), and a custom `sera.change_artifact_id` extension field when the event is part of a self-evolution flow.
+
+### 3.1 Event Type → OCSF Mapping
+
+| Event Type | OCSF class_uid |
 |---|---|
-| Authentication | Principal login, token refresh, failed auth |
-| Authorization | AuthZ check results (allow, deny, needs_approval) |
-| Tool execution | Tool name, arguments (sanitized), result status, principal, risk level |
-| Config changes | What changed, who proposed, who approved |
-| Secret access | Secret path accessed (never the value), by whom |
-| Approval decisions | Approval request, decision (approved/rejected/escalated), by whom |
-| Session lifecycle | Created, transitioned, archived, destroyed |
-| Memory writes | What was written, to which tier, by whom |
+| Authentication | 3002 |
+| Authorization | 3005 |
+| Tool execution | 1007 + 6003 |
+| Config changes | 5019 |
+| Secret access | 3005 + custom `sera.secret_access` extension |
+| Approval decisions | 6003 |
+| Session lifecycle | 6002 |
+| Memory writes | 6003 + custom `sera.memory_write` extension |
+| Policy violation / doom-loop | 2004 |
+| Outbound network | 4001 + 4002 |
+| Self-evolution (Change Artifact) | 5019 + custom `sera.meta_change` extension |
 
-### Audit Storage
+### 3.2 Audit Storage — Separate Write Path
 
-Audit logs are stored in the database (`sera-db`) with:
-- Immutable rows (append-only)
-- Timestamps
-- Principal identity
-- Action details
+> **Source:** [SPEC-self-evolution](SPEC-self-evolution.md) §5.7 — critical architectural invariant.
+
+The audit log is on a **separate write path** from the normal event pipeline. It is cryptographically chained (beads-style content-hash chain per SPEC-dependencies §10.4), append-only, and **unreachable from any Change Artifact code path**:
+
+```rust
+pub struct AuditLog {
+    /// The audit log storage backend is bound at gateway boot and cannot be rebound at runtime.
+    /// No Change Artifact can modify this binding (enforced by CON-02 + CON-03 + §5.7).
+    backend: &'static dyn AuditBackend,
+}
+
+pub struct AuditEntry {
+    pub id: AuditId,
+    pub ocsf_class_uid: u32,
+    pub payload: serde_json::Value,      // OCSF v1.7.0 schema
+    pub timestamp: DateTime<Utc>,
+    pub prev_hash: [u8; 32],             // Cryptographic chain link
+    pub this_hash: [u8; 32],             // Hash of (payload + prev_hash)
+    pub signature: Option<AuditSignature>, // Optional: HSM-signed for enterprise
+}
+
+#[async_trait]
+pub trait AuditBackend: Send + Sync {
+    /// Append-only write. There is no update or delete API at any language level.
+    async fn append(&self, entry: AuditEntry) -> Result<(), AuditError>;
+
+    /// Verify the chain is intact from entry_id back to the last known-good boot.
+    async fn verify_chain(&self, from: AuditId) -> Result<VerifyResult, AuditError>;
+}
+```
+
+**Invariants enforced in Rust:**
+
+1. **No delete/update API at any layer.** The `AuditBackend` trait has only `append` and `verify_chain`. A Change Artifact cannot compile code that mutates audit entries.
+2. **Static binding.** The backend is `&'static dyn AuditBackend`, bound at gateway boot via an `OnceCell`. Runtime rebinding fails at the type level.
+3. **Chain verification at boot.** If the chain is broken, the gateway refuses to start. Tampering produces a hard failure, not silent drift.
+4. **Separate credentials.** The audit log's underlying storage (file, S3, blockchain, etc.) uses credentials never exposed to the normal event pipeline. A compromised event pipeline cannot write forged audit entries.
+
+SIEM compatibility is out-of-the-box via OCSF — SERA audit logs can be ingested directly by Splunk OCSF Add-on, Amazon Security Lake, and Elastic Filebeat without schema mapping.
+
+### 3.3 `LaneFailureClass` Typed Failure Taxonomy
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.1 claw-code.
+
+Failure events use a typed enum rather than error strings to enable routing and aggregation without parsing log text:
+
+```rust
+pub enum LaneFailureClass {
+    PromptDelivery,
+    TrustGate,
+    BranchDivergence,
+    Compile,
+    Test,
+    PluginStartup,
+    McpStartup,
+    McpHandshake,
+    GatewayRouting,
+    ToolRuntime,
+    WorkspaceMismatch,
+    Infra,
+    OrphanReaped,
+    ConstitutionalViolation, // Fired when the constitutional_gate rejects a change
+    KillSwitchActivated,      // Fired when the kill switch is triggered
+}
+```
+
+The coordinator agent (or human operator) can decide whether to retry, escalate, or reroute a failure based on its class without parsing log text. Every OCSF `2004 Detection Finding` event carries a `sera.lane_failure_class` extension.
+
+### 3.4 `LaneCommitProvenance` for Subagent Result Reporting
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.1 claw-code.
+
+When a subagent finishes work, it emits a `LaneCommitProvenance` struct describing what it actually did at the filesystem/git level:
+
+```rust
+pub struct LaneCommitProvenance {
+    pub commit: Option<GitSha>,
+    pub branch: Option<String>,
+    pub worktree: Option<PathBuf>,
+    pub canonical_commit: Option<GitSha>,
+    pub superseded_by: Option<GitSha>,
+    pub lineage: Vec<GitSha>,
+}
+```
+
+This lets the parent session verify what actually happened rather than trusting a free-text summary. Matches opencode's two-layer persistence pattern (SPEC-gateway §6.1b) and becomes part of the run evidence bundle (§3.1).
 
 ---
 
@@ -247,14 +393,16 @@ sera:
 
 | Dependency | Spec | Relationship |
 |---|---|---|
-| `sera-gateway` | [SPEC-gateway](SPEC-gateway.md) | Health endpoints, event tracing |
-| `sera-runtime` | [SPEC-runtime](SPEC-runtime.md) | Turn tracing |
-| `sera-tools` | [SPEC-tools](SPEC-tools.md) | Tool call audit |
-| `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Hook execution tracing |
-| `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | AuthN/AuthZ audit |
-| `sera-hitl` | [SPEC-hitl-approval](SPEC-hitl-approval.md) | Approval audit |
-| `sera-secrets` | [SPEC-secrets](SPEC-secrets.md) | Secret access audit |
-| `sera-db` | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) | Audit log storage |
+| `sera-gateway` | [SPEC-gateway](SPEC-gateway.md) | Health endpoints, event tracing; W3C trace non-optional on every Submission |
+| `sera-runtime` | [SPEC-runtime](SPEC-runtime.md) | Turn tracing; `TurnOutcome` events |
+| `sera-tools` | [SPEC-tools](SPEC-tools.md) | Tool call audit; OCSF 1007 + 6003 + per-sandbox denial events (class 4001/4002) |
+| `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Hook execution tracing; constitutional_gate emits 2004 + `sera.meta_change` |
+| `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | AuthN (OCSF 3002) + AuthZ (OCSF 3005) audit |
+| `sera-hitl` | [SPEC-hitl-approval](SPEC-hitl-approval.md) | Approval audit (OCSF 6003) |
+| `sera-secrets` | [SPEC-secrets](SPEC-secrets.md) | Secret access audit (OCSF 3005 + `sera.secret_access` extension) |
+| `sera-db` | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) | Audit log storage — via a **separate write path** not reachable from Change Artifacts |
+| `sera-meta` | [SPEC-self-evolution](SPEC-self-evolution.md) | Audit log's append-only guarantee + cryptographic chain; `sera.meta_change` OCSF extension; constitutional gate violations route here |
+| Dependencies | [SPEC-dependencies](SPEC-dependencies.md) | §8.4 OTel triad pinning requirement; §10.1 claw-code `LaneFailureClass` + `LaneCommitProvenance`; §10.2 Codex W3C trace context; §10.16 BeeAI `Emitter` namespace tree; **§10.18 NVIDIA OpenShell OCSF v1.7.0 adoption** |
 
 ---
 

@@ -1,8 +1,8 @@
 # SPEC: Crate Decomposition
 
-> **Status:** DRAFT  
-> **Source:** PRD §12  
-> **Priority:** Phase 0 (workspace setup)  
+> **Status:** DRAFT
+> **Source:** PRD §12, plus deltas from [SPEC-dependencies](SPEC-dependencies.md) §5, §8.3, §12, §16 (drop `sera-acp`, collapse `sera-queue` to `apalis`, add `sera-meta`, harden plugin SDK boundary)
+> **Priority:** Phase 0 (workspace setup)
 
 ---
 
@@ -26,25 +26,30 @@ SERA is built as a **Rust workspace** — a monorepo of interconnected crates wi
 │  sera-runtime                                │
 ├─────────────────────────────────────────────┤
 │  Interop                                     │
-│  sera-mcp, sera-a2a, sera-acp, sera-agui     │
+│  sera-mcp, sera-a2a, sera-agui               │
 ├─────────────────────────────────────────────┤
 │  Core Domain                                 │
 │  sera-session, sera-memory, sera-tools,      │
 │  sera-hooks, sera-auth, sera-models,         │
-│  sera-skills, sera-hitl, sera-workflow       │
+│  sera-skills, sera-hitl, sera-workflow,      │
+│  sera-meta (Phase 4 impl; Phase 0–3 types)   │
 ├─────────────────────────────────────────────┤
 │  Infrastructure                              │
-│  sera-db, sera-queue, sera-cache,            │
-│  sera-telemetry, sera-secrets                │
+│  sera-db, sera-queue (apalis adapter),       │
+│  sera-cache, sera-telemetry, sera-secrets    │
 ├─────────────────────────────────────────────┤
 │  Foundation                                  │
 │  sera-types, sera-config, sera-errors        │
 ├─────────────────────────────────────────────┤
-│  Hook SDKs (separate publishable crates)     │
+│  Plugin / Hook SDKs (separate publishable)   │
+│  sera-plugin-sdk (hard boundary — plugins    │
+│   may ONLY import from here, not from core)  │
 │  sera-hook-sdk, sera-hook-sdk-python,        │
 │  sera-hook-sdk-ts                            │
 └─────────────────────────────────────────────┘
 ```
+
+> **ACP dropped.** The `sera-acp` crate has been removed. The IBM/BeeAI Agent Communication Protocol was donated to the Linux Foundation and merged into A2A on 2025-08-25. See [SPEC-dependencies](SPEC-dependencies.md) §5 (Interop Protocol Adapters) and §10.16 (BeeAI Framework ACP→A2A migration playbook). SERA's ACP support is provided by the A2A adapter.
 
 ---
 
@@ -62,34 +67,35 @@ SERA is built as a **Rust workspace** — a monorepo of interconnected crates wi
 
 | Crate | Purpose | Key Dependencies |
 |---|---|---|
-| `sera-db` | Database abstraction (PostgreSQL + SQLite), migrations | `sqlx`, `sea-query` |
-| `sera-queue` | Lane-aware FIFO queue, global throttle, queue modes | `tokio` |
-| `sera-cache` | Caching layer (Redis + in-memory) | `redis`, `moka` |
-| `sera-telemetry` | OpenTelemetry tracing, metrics, structured logging | `tracing`, `opentelemetry` |
-| `sera-secrets` | Secret provider trait + built-in providers (env, file, Vault, AWS SM, etc.) | `reqwest`, `tokio` |
+| `sera-db` | Database abstraction (PostgreSQL + SQLite), migrations | `sqlx` 0.8 (compile-time checked queries); **avoid `sea-orm`** — see [SPEC-dependencies](SPEC-dependencies.md) §8.2 |
+| `sera-queue` | **Thin trait over `apalis` 0.7** + session-lane FIFO layer (lane-aware FIFO, global throttle, cron scheduling, orphan recovery) — replaces the hand-rolled queue in the original plan | `apalis`, `apalis-sql`, `tokio` — see [SPEC-dependencies](SPEC-dependencies.md) §8.3 |
+| `sera-cache` | Caching layer (Redis + in-memory) | `moka` 0.12 (in-process), `redis` 0.27 or `fred` 9 (distributed) |
+| `sera-telemetry` | OpenTelemetry tracing, metrics, structured logging, **OCSF v1.7.0 audit events** | `tracing`, `opentelemetry` 0.27 (pinned triad), `opentelemetry-otlp` 0.27, `tracing-opentelemetry` 0.28 — **must be pinned together** |
+| `sera-secrets` | Secret provider trait + built-in providers (env, file, Vault, AWS SM, etc.) | `reqwest`, `tokio`, `vaultrs`, `aws-sdk-secretsmanager`, `azure_security_keyvault_secrets` |
 
 ### Core Domain
 
 | Crate | Purpose | Key Dependencies |
 |---|---|---|
-| `sera-session` | Session state machine, transcript, compaction | `sera-db`, `sera-queue` |
-| `sera-memory` | Memory trait + file-based default backend (with optional git) + LCM option | `sera-db`, `git2` |
-| `sera-tools` | Tool registry, schema, profiles, execution, credential injection | `sera-types`, `sera-secrets` |
-| `sera-hooks` | WASM runtime, chainable hook pipelines, fuel metering, per-instance config | `wasmtime` |
-| `sera-auth` | AuthN (JWT, OIDC, SCIM), Principal registry, AuthZ trait, built-in RBAC, AuthZen client, SSF/CAEP/RISC | `jsonwebtoken`, `openidconnect` |
-| `sera-models` | Model adapter trait + provider implementations | `reqwest` |
-| `sera-skills` | Skill pack loading, AgentSkills compat, mode transitions | `sera-types` |
-| `sera-hitl` | Approval routing, escalation chains, dynamic risk-based routing, approval state machine | `sera-types` |
-| `sera-workflow` | Triggered workflow engine, cron scheduler, dreaming built-in workflow | `sera-types`, `cron` |
+| `sera-session` | Session state machine (6-state lifecycle per [SPEC-dependencies](SPEC-dependencies.md) §10.1 claw-code `WorkerStatus`), transcript (`ContentBlock` enum per §10.1), two-layer persistence (sqlx + shadow git per §10.7 opencode), compaction | `sera-db`, `sera-queue`, `git2` |
+| `sera-memory` | Memory trait + **four-tier ABC** (`Unconstrained / Token / SlidingWindow / Summarize + ReadOnly` per [SPEC-dependencies](SPEC-dependencies.md) §10.16 BeeAI) + file-based default backend with optional git + LCM option + experience pool | `sera-db`, `git2`, `fastembed` |
+| `sera-tools` | Tool registry, schema, profiles, execution, credential injection, **`SandboxProvider` trait** (Docker/WASM/MicroVM/External/**OpenShell**), `SsrfValidator`, per-binary SHA-256 TOFU identity | `sera-types`, `sera-secrets`, `bollard`, `wasmtime`, `regorus` (in-process OPA) |
+| `sera-hooks` | WASM runtime, chainable hook pipelines, fuel metering, per-instance config, **`constitutional_gate` hook point (no `fail_open`)**, `updated_input` on `HookResult` per [SPEC-dependencies](SPEC-dependencies.md) §10.1 | `wasmtime` 43, `wasmtime-wasi`, `wasmtime-wasi-http` (allow-list via `WasiHttpView::send_request`) |
+| `sera-auth` | AuthN (JWT, OIDC, SCIM), Principal registry, AuthZ trait, built-in RBAC, AuthZen client, SSF/CAEP/RISC, **capability tokens with narrowing**, **`MetaChange` / `CodeChange` / `MetaApprover` capabilities** per [SPEC-self-evolution](SPEC-self-evolution.md) §5.2 | `jsonwebtoken` 10, `openidconnect` 3.5, `oauth2` 5, `casbin` 2.19 |
+| `sera-models` | Model adapter trait + provider implementations, **parser registry** (hermes/mistral/llama/qwen/deepseek/etc. per [SPEC-dependencies](SPEC-dependencies.md) §10.6), structured output via `llguidance` | `genai` (primary), `async-openai`, `llguidance`, `outlines-core`, `tiktoken`, `tokenizers` |
+| `sera-skills` | Skill pack loading, **`AGENTS.md` + `SKILL.md` cross-tool standards** per [SPEC-dependencies](SPEC-dependencies.md) §10.11, three-tier microagent classification per §10.10, mode transitions | `sera-types` |
+| `sera-hitl` | Approval routing, escalation chains, dynamic risk-based routing, approval state machine with `revision_requested` state, `CorrectedError { feedback }` tool-result variant per [SPEC-dependencies](SPEC-dependencies.md) §10.7, `SecurityAnalyzer` trait per §10.10 | `sera-types` |
+| `sera-workflow` | Triggered workflow engine, cron scheduler (via `apalis`), **`WorkflowTask` modeled on beads `Issue` with atomic claim** per [SPEC-dependencies](SPEC-dependencies.md) §10.4 (promoted from Phase-3 to Phase-1 design input), dreaming built-in workflow, `meta_scope` field for self-evolution routing | `sera-types`, `apalis` |
+| **`sera-meta`** (new) | **Self-evolution machinery** per [SPEC-self-evolution](SPEC-self-evolution.md). Change Artifact data model, blast-radius scope enum, constitutional anchor, shadow-session dry-run, two-generation live pattern, kill switch. **Phase 4 implementation; Phase 0–3 design-forward types** | `sera-types`, `sera-auth`, `sera-hooks`, `sera-config` |
 
 ### Interop
 
 | Crate | Purpose | Key Dependencies |
 |---|---|---|
-| `sera-mcp` | MCP server + client bridge | `mcp-sdk` |
-| `sera-a2a` | A2A protocol adapter | `tonic` |
-| `sera-acp` | ACP protocol adapter | `tonic` |
-| `sera-agui` | AG-UI streaming protocol — full stream for SPAs + minimal stream for thin clients/HMIs | `axum`, `tokio` |
+| `sera-mcp` | MCP server + client bridge | **`rmcp` 1.3** with `server`/`client`/`macros` features + `schemars` — see [SPEC-dependencies](SPEC-dependencies.md) §5 |
+| `sera-a2a` | A2A protocol adapter — generated from canonical `a2aproject/A2A` `specification/a2a.proto` at a pinned commit | `tonic`, `prost` — see [SPEC-dependencies](SPEC-dependencies.md) §5 |
+| ~~`sera-acp`~~ | **DROPPED** — ACP merged into A2A under LF (2025-08-25). See [SPEC-dependencies](SPEC-dependencies.md) §5 + §10.16 for the migration playbook. Legacy clients use the A2A adapter. | — |
+| `sera-agui` | AG-UI streaming protocol — full stream for SPAs + minimal stream for thin clients/HMIs. **Hand-rolled ~200-line serde enum set** over the 17 canonical event types from `ag-ui-protocol/ag-ui` at pinned commit | `axum::response::sse`, `async-stream`, `tokio-stream` — see [SPEC-dependencies](SPEC-dependencies.md) §5 |
 
 ### Runtime
 
@@ -131,22 +137,27 @@ sera-types ← sera-config, sera-errors
 sera-db, sera-queue, sera-cache, sera-telemetry, sera-secrets
   ↑
 sera-session, sera-memory, sera-tools, sera-hooks, sera-auth,
-sera-models, sera-skills, sera-hitl, sera-workflow
+sera-models, sera-skills, sera-hitl, sera-workflow, sera-meta
   ↑
 sera-runtime
   ↑
-sera-mcp, sera-a2a, sera-acp, sera-agui → sera-gateway
+sera-mcp, sera-a2a, sera-agui → sera-gateway
   ↑
 sera-cli, sera-tui, sera-sdk
+  ↑
+sera-plugin-sdk (hard import boundary — plugins may only import
+                 from sera-plugin-sdk, not from any core crate)
 ```
 
 Key dependency rules:
 - **Foundation crates** have no internal dependencies (only external)
 - **Infrastructure crates** depend on foundation only
 - **Core domain crates** depend on foundation + infrastructure
-- **Runtime** depends on all core domain crates
+- **`sera-meta`** depends on `sera-types`, `sera-auth`, `sera-hooks`, `sera-config` (self-evolution machinery)
+- **Runtime** depends on all core domain crates including `sera-meta`
 - **Gateway** depends on runtime + interop
 - **Clients** depend on SDK only (which depends on gateway protos)
+- **Plugin SDK boundary:** external plugins may **only** import from `sera-plugin-sdk`, never from any `crates/sera-*` core crate. Enforced in CI via a static check per [SPEC-dependencies](SPEC-dependencies.md) §10.5 openclaw `AGENTS.md` import rule.
 
 ---
 
@@ -205,17 +216,20 @@ members = [
     "crates/sera-skills",
     "crates/sera-hitl",
     "crates/sera-workflow",
+    "crates/sera-meta",
     "crates/sera-mcp",
     "crates/sera-a2a",
-    "crates/sera-acp",
     "crates/sera-agui",
     "crates/sera-runtime",
     "crates/sera-gateway",
     "crates/sera-cli",
     "crates/sera-tui",
     "crates/sera-sdk",
+    "sdk/plugin/sera-plugin-sdk",
     "sdk/hooks/sera-hook-sdk",
 ]
+# NOTE: sera-acp was removed; ACP merged into A2A (LF, 2025-08-25).
+# See SPEC-dependencies §5 and §10.16.
 ```
 
 ### 6.2 Feature Flags

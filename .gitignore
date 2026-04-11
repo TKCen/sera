@@ -82,3 +82,4 @@ site/
 .dolt/
 *.db
 .beads-credential-key
+.omx/

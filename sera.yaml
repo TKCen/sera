@@ -1,0 +1,31 @@
+---
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: my-sera
+spec:
+  tier: local
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lm-studio
+spec:
+  kind: openai-compatible
+  base_url: "http://localhost:1234/v1"
+  default_model: gemma-4-12b
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  model: gemma-4-12b
+  persona:
+    immutable_anchor: |
+      You are Sera, an autonomous assistant running on a local SERA instance.
+      You are persistent, you remember things, and you improve over time.
+      Your tone is warm, direct, and technically competent.
+  tools:
+    allow: ["memory_*", "file_*", "shell", "session_*"]

@@ -25,11 +25,13 @@ SERA has six distinct versioned interface surfaces:
 | Surface | What It Covers | Consumers | Versioning Mechanism |
 |---|---|---|---|
 | **Config Schemas** | Manifest `apiVersion` per resource kind | Operators, agents, tooling | `sera.dev/v1`, `sera.dev/v1beta1` |
-| **gRPC Contracts** | Protobuf service definitions | External adapters, connectors, tools, runtimes, model providers | Proto package versioning |
-| **Rust Traits** | Public trait interfaces (`MemoryBackend`, `Tool`, `SandboxProvider`, etc.) | Internal crates, custom backends | Crate semver |
+| **gRPC Contracts** | Protobuf service definitions | External adapters, connectors, tools, runtimes, model providers | Proto package versioning; **serde alias-based forward-compat on JSON envelopes** per [SPEC-dependencies](SPEC-dependencies.md) §10.2 (Codex pattern) |
+| **Rust Traits** | Public trait interfaces (`MemoryBackend`, `Tool`, `SandboxProvider`, `AgentRuntime`, `ContextEngine`, `Condenser`, `ResultAggregator`, etc.) | Internal crates, custom backends | Crate semver |
 | **Hook SDK** | WASM component model interface for hooks | Hook authors (Rust, Python, TS) | WIT package versioning |
-| **Interop Protocols** | MCP, A2A, ACP, AG-UI protocol versions | External agents, clients | Protocol version negotiation |
+| **Interop Protocols** | MCP, A2A, AG-UI protocol versions (ACP dropped — merged into A2A, see [SPEC-interop](SPEC-interop.md) §5) | External agents, clients | Protocol version negotiation |
 | **CLI/API** | CLI commands, REST/WebSocket API | Client applications, scripts | API version header |
+| **Binary Artifacts** | Signed Rust binaries for Tier-3 self-evolution | Operators, canary pipeline | Content-hashed signed artifacts per [SPEC-self-evolution](SPEC-self-evolution.md) §8 — new in this spec §4.5 |
+| **Database Schema** | PostgreSQL + SQLite migrations | Running gateway, rollback pipeline | Reversibility contract — new in this spec §4.6 |
 
 ---
 
@@ -154,6 +156,7 @@ message VersionInfo {
     string api_version = 2;            // e.g., "v1"
     repeated string supported_versions = 3;  // e.g., ["v1", "v1beta1"]
     map<string, string> capabilities = 4;    // Feature flags
+    BuildIdentity build_identity = 5;  // Signed build provenance, see §4.5
 }
 
 service ChannelConnector {
@@ -161,6 +164,62 @@ service ChannelConnector {
     // ... existing RPCs
 }
 ```
+
+### 4.5 Serde Alias-Based Forward Compatibility on JSON Envelopes
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.2 — openai/codex `codex-app-server-protocol` pattern where v1 and v2 types coexist via serde `alias` attributes (`task_started` ↔ `turn_started`).
+
+When a gRPC service or JSON-RPC envelope renames a field, wrapper, or event kind, **do not bump the proto version immediately**. Instead, introduce a serde alias that accepts both the old and new names on deserialization while emitting the new name on serialization. This lets the gateway and harness roll out the new name on independent timelines without breaking the wire.
+
+```rust
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnLifecycleEvent {
+    #[serde(alias = "task_started")]
+    TurnStarted { turn_id: TurnId, started_at: DateTime<Utc> },
+    // ...
+}
+```
+
+Aliases are removed only when a new major proto version is cut and the old receivers are out of the support window.
+
+### 4.6 Signed Binary Artifacts (new)
+
+> **Source:** [SPEC-self-evolution](SPEC-self-evolution.md) §5.6, §8, §10.
+
+Every SERA binary carries an embedded `BuildIdentity` struct that the gateway verifies at boot. Binaries produced for Tier-3 self-evolution additionally carry a signature from the active signer set.
+
+```rust
+pub struct BuildIdentity {
+    pub version: String,            // semver, e.g. "0.4.0"
+    pub commit: [u8; 20],           // git SHA-1
+    pub build_time: DateTime<Utc>,
+    pub signer_fingerprint: [u8; 32],  // SHA-256 of the signing key's public component
+    pub constitution_hash: [u8; 32],   // Hash of compiled-in constitutional rule set
+}
+```
+
+**Boot verification.** At gateway startup, SERA:
+1. Reads the embedded `BuildIdentity` from the running binary
+2. Looks up the `signer_fingerprint` in a trusted signer set held in an OS-protected file (not in the normal config surface)
+3. Verifies the constitution hash matches `sera_meta::constitution::hash()`
+4. Refuses to start if either check fails
+
+This closes the "self-update brick" failure mode — a binary that falsifies its signing provenance cannot start, and a binary whose constitution has been tampered with likewise cannot start.
+
+### 4.7 Schema Migration Reversibility Contract (new)
+
+> **Source:** [SPEC-self-evolution](SPEC-self-evolution.md) §5.6, §14.2.
+
+Every database schema migration ships as one of three declared kinds:
+
+| Kind | Meaning | Allowed Scopes |
+|---|---|---|
+| **Reversible** | Forward + backward migration both defined and dry-run tested | Any tier, any scope |
+| **Forward-only with paired migration-out** | A separate migration-out exists, has been dry-run against current state, and is referenced by the forward migration's metadata | Tier 2, Tier 3 (with explicit acknowledgement) |
+| **Irreversible** | Data loss is permanent; rollback is impossible without a prior backup | Tier 3 only, with operator-signed offline key (meta-change scope `DbMigration`) |
+
+The migration framework refuses to apply a migration whose kind does not match the scope it was proposed under. This closes the "schema-drift orphan" failure mode.
 
 ---
 
@@ -292,7 +351,7 @@ pub struct ProtocolSupport {
 pub enum ProtocolKind {
     Mcp,
     A2A,
-    Acp,
+    // Acp — removed. Merged into A2A on 2025-08-25. See SPEC-interop §5.
     AgUi,
 }
 ```
@@ -393,8 +452,10 @@ WARN [sera-config] Manifest "agents/sera.yaml" uses deprecated apiVersion "sera.
 | `sera-types` | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) | Version types, ApiVersion, capability types defined here |
 | `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Hook WIT versioning |
 | Protobuf contracts | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) §5 | gRPC contract versioning |
-| Interop | [SPEC-interop](SPEC-interop.md) | Protocol version negotiation |
+| Interop | [SPEC-interop](SPEC-interop.md) | Protocol version negotiation (ACP dropped) |
 | Gateway | [SPEC-gateway](SPEC-gateway.md) | Capability manifest served via health endpoint |
+| Self-evolution | [SPEC-self-evolution](SPEC-self-evolution.md) | Signed binary artifacts, schema migration reversibility, serde alias-based forward compat — §4.5, §4.6, §4.7 of this spec are the primary versioning support for Tier 3 |
+| Dependencies | [SPEC-dependencies](SPEC-dependencies.md) | Forward-compat patterns sourced from codex (§10.2), opencode (§10.7), BeeAI (§10.16) |
 
 ---
 

@@ -1,9 +1,9 @@
 # SPEC: Tools (`sera-tools`)
 
-> **Status:** DRAFT  
-> **Source:** PRD §4.3, §13 (ToolService proto), §14 (invariant 5)  
-> **Crate:** `sera-tools`  
-> **Priority:** Phase 1  
+> **Status:** DRAFT
+> **Source:** PRD §4.3, §13 (ToolService proto), §14 (invariant 5), plus deltas from [SPEC-dependencies](SPEC-dependencies.md) §9.3 (Docker sandbox via `bollard`, WASM via `wasmtime`, MicroVM via `firecracker` binary wrap, `microsandbox` watch-only), §10.2 (Codex `DynamicToolSpec` schema-driven registration + `defer_loading` + three-layer sandbox model), §10.7 (opencode `Tool.Context::ask()` inline approval + `FileTime.withLock` conflict detection + tree-sitter bash analysis + `assertExternalDirectoryEffect` path policy), §10.8 (NemoClaw per-binary egress allowlist + method+path REST rules + enforce/audit modes + TLS terminate/passthrough + Landlock rule-union gotcha + pinned-image dual-field lockstep + opt-in preset system + Sentry-class exfiltration defense + SSRF validation), §10.13 (openai-agents-python `is_enabled` / `needs_approval` / `tool_use_behavior`), §10.16 (BeeAI `Tool` Pydantic-schema interface + `BaseCache` SHA-512 content-addressed caching), §10.18 (**`NVIDIA/OpenShell`** — published mTLS gRPC protocol, `SandboxPolicy` proto schema, in-process OPA via `regorus`, binary SHA-256 TOFU identity, `allowed_ips: [CIDR]` SSRF mitigation, `access` preset shorthand, AI-assisted policy advisor, hot-reload with version tracking, `inference.local` virtual host)
+> **Crate:** `sera-tools`
+> **Priority:** Phase 1
 
 ---
 
@@ -28,13 +28,30 @@ A critical design principle: **capability exposure is separated from execution a
 
 ## 3. Tool Trait
 
+SERA exposes tools via **two parallel registration paths** — both are first-class and interoperable:
+
+1. **Rust trait path** — the `Tool` trait, for in-process tools compiled into the gateway binary
+2. **Schema-driven path** — `DynamicToolSpec` values, for MCP-bridged tools, external gRPC tools, and runtime-registered tools whose implementation lives outside the gateway
+
+Both paths produce the same `ToolRegistryEntry` and flow through the same tool-call pipeline.
+
+### 3.1 Rust `Tool` trait
+
 ```rust
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn metadata(&self) -> ToolMetadata;
-    fn schema(&self) -> ToolSchema;
+    fn schema(&self) -> ToolSchema;              // Derived from schemars on the input struct
     async fn execute(&self, input: ToolInput, ctx: ToolContext) -> Result<ToolOutput, ToolError>;
     fn risk_level(&self) -> RiskLevel;
+
+    /// Dynamic tool visibility callback (openai-agents-python pattern, SPEC-dependencies §10.13).
+    /// Tool is hidden from the LLM at registration time if this returns false.
+    fn is_enabled(&self, ctx: &ToolEnableContext) -> bool { true }
+
+    /// Per-tool HITL gate (openai-agents-python needs_approval pattern).
+    /// Returns Some(ApprovalSpec) if this specific call requires approval based on its arguments.
+    fn needs_approval(&self, input: &ToolInput, ctx: &ToolContext) -> Option<ApprovalSpec> { None }
 }
 
 pub enum RiskLevel {
@@ -45,17 +62,133 @@ pub enum RiskLevel {
 }
 ```
 
-### Tool Context
+### 3.2 Schema-Driven `DynamicToolSpec`
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.2 Codex. Schema-driven registration, no Rust trait required.
+
+```rust
+pub struct DynamicToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,   // JSON Schema — derived externally (e.g. from MCP server)
+    pub output_schema: Option<serde_json::Value>,
+    pub defer_loading: bool,                // If true, not injected into context until activated (progressive disclosure)
+    pub risk_level: RiskLevel,
+    pub execution_target: ExecutionTarget,
+}
+
+pub struct DynamicToolCallRequest {
+    pub call_id: ToolCallId,
+    pub turn_id: TurnId,                    // Scoping every call with turn_id is essential for routing multi-call results
+    pub tool: String,
+    pub arguments: serde_json::Value,
+}
+
+pub struct DynamicToolResponse {
+    pub call_id: ToolCallId,
+    pub turn_id: TurnId,
+    pub content_items: Vec<DynamicToolCallOutputContentItem>,
+    pub success: bool,
+}
+
+pub enum DynamicToolCallOutputContentItem {
+    InputText { text: String },
+    InputImage { image_url: String },
+}
+```
+
+**Why both paths?** MCP tools arrive at runtime from external servers with their own JSON Schema — wrapping them in the `Tool` trait requires ad-hoc code. The `DynamicToolSpec` path lets them register as first-class citizens without imposing a Rust type on their schema.
+
+### 3.3 `tool_use_behavior` Discriminated Union
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.13 openai-agents-python.
+
+```rust
+pub enum ToolUseBehavior {
+    /// Re-invoke the LLM after each tool result (default — standard agent loop)
+    RunLlmAgain,
+
+    /// Stop the loop after the first tool call and return its result as the final output
+    StopOnFirstTool,
+
+    /// Stop when the LLM calls any tool in this set
+    StopAtTools(HashSet<String>),
+
+    /// Custom function decides whether to continue the loop after each tool call
+    ToolsToFinalOutputFunction(Box<dyn Fn(&ToolResult) -> ToolLoopDecision + Send + Sync>),
+}
+
+pub enum ToolLoopDecision {
+    Continue,
+    Stop,
+    StopWith(ToolResult),
+}
+```
+
+Per-agent `tool_use_behavior` lets the harness compose short-circuit logic without subclassing the runner.
+
+### 3.4 Tool Context (opencode-enhanced)
 
 ```rust
 pub struct ToolContext {
     pub session: SessionRef,
-    pub principal: PrincipalRef,       // The acting principal (may be agent or human)
-    pub credentials: CredentialBag,     // Populated by Secret Manager + pre_tool hooks
+    pub principal: PrincipalRef,
+    pub credentials: CredentialBag,
     pub policy: ToolPolicy,
     pub audit_handle: AuditHandle,
+    pub turn_id: TurnId,
+    pub call_id: ToolCallId,
+    pub agent: AgentRef,
+    pub abort: AbortSignal,
+    pub messages: Arc<SessionTranscript>,
+
+    /// Inline approval callback — the tool itself can request HITL approval mid-execution.
+    /// Source: SPEC-dependencies §10.7 opencode Tool.Context::ask().
+    pub ask: Box<dyn Fn(ApprovalRequest) -> BoxFuture<'static, ApprovalResponse> + Send + Sync>,
+
+    /// Metadata updater — tool can update its own lifecycle metadata (progress, intermediate state).
+    pub metadata: Box<dyn Fn(MetadataUpdate) + Send + Sync>,
 }
 ```
+
+Inline `ask()` is the key insight: the tool itself is responsible for requesting approval during execution, not a separate interceptor layer. This keeps approval logic close to the tool's own state machine and avoids having to re-design the tool-call pipeline every time a new approval pattern is added.
+
+### 3.5 `FileTime.withLock` Conflict Detection
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.7 opencode.
+
+File-write tools MUST check file modification time before writing. If the file has been modified externally since the harness last read it, raise a conflict error rather than silently overwrite.
+
+```rust
+pub struct FileTime {
+    known_times: Mutex<HashMap<PathBuf, SystemTime>>,
+}
+
+impl FileTime {
+    pub async fn with_lock<F, R>(&self, path: &Path, f: F) -> Result<R, FileTimeError>
+    where F: FnOnce() -> BoxFuture<'static, R>;
+
+    pub async fn record_read(&self, path: &Path) -> Result<(), FileTimeError>;
+    pub async fn check_unchanged_since_read(&self, path: &Path) -> Result<(), FileTimeError>;
+}
+```
+
+This is a file-system-level companion to the atomic-claim protocol — concurrent-edit safety for multi-agent worktrees without requiring OS-level locking.
+
+### 3.6 `SsrfValidator` Trait
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.8 NemoClaw + §10.18 OpenShell.
+
+Tools that accept URL arguments run the URL through a pluggable `SsrfValidator` before any network operation:
+
+```rust
+#[async_trait]
+pub trait SsrfValidator: Send + Sync {
+    async fn validate(&self, url: &Url, policy: &NetworkPolicy) -> Result<(), SsrfError>;
+}
+```
+
+The validator checks for private IPs, link-local addresses, DNS rebinding vectors, and policy-specific allow/deny lists. This runs **in addition to** network egress policy — SSRF is a request-side concern (what URL the tool was given) while network policy is a connection-side concern (what the egress proxy permits).
 
 ### Tool Metadata
 
@@ -216,11 +349,115 @@ Agent requests tool call
 
 ## 6a. Sandbox Lifecycle Management
 
-> **Enhancement: OpenSwarm §3 (Isolated Execution), Strategic Rearchitecture §Bunnyshell/Firecracker**
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §9.3 (crate choices), §10.2 (Codex three-layer sandbox model), §10.8 (NemoClaw policy schema), §10.18 (NVIDIA OpenShell Rust gRPC protocol + `regorus` in-process OPA + OCSF events + binary SHA-256 TOFU identity).
 
-When a tool's `ExecutionTarget` is `Sandbox`, the tool system provisions an ephemeral execution environment via the `SandboxProvider` trait. The sandbox provides hardware or process-level isolation for untrusted code execution.
+When a tool's `ExecutionTarget` is `Sandbox`, the tool system provisions an execution environment via the `SandboxProvider` trait. The sandbox provides hardware or process-level isolation for untrusted code execution.
 
-### Sandbox Provider Trait
+### 6a.0 Three-Layer Sandbox Policy Model
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.2 Codex + §10.18 OpenShell `SandboxPolicy` proto.
+
+Sandbox policy has **three orthogonal layers**, not a single flat allowlist:
+
+1. **Coarse `SandboxPolicy`** — per-session/per-agent default (read-only vs workspace-write vs full-access vs external-contained)
+2. **Fine `FileSystemSandboxPolicy`** — per-exec filesystem scope (specific mount points, read-only/read-write per path, Landlock compatibility mode)
+3. **Fine `NetworkSandboxPolicy`** — per-exec network egress allowlist (method+path REST rules, TLS terminate/passthrough, `allowed_ips: [CIDR]`, enforce/audit mode, per-binary SHA-256 TOFU)
+
+All three layers apply simultaneously; the intersection is the effective policy for that execution.
+
+```rust
+pub enum SandboxPolicy {
+    /// Default — no writes, no network, read-only workspace
+    ReadOnly { access: ReadOnlyAccess, network_access: bool },
+    /// Writes to workspace only, no network
+    WorkspaceWrite { allowed_paths: Vec<PathBuf>, network_access: bool },
+    /// Full access — used for trusted contexts
+    DangerFullAccess,
+    /// Harness itself is already containerized; policy enforcement delegates up
+    ExternalSandbox { network_access: NetworkAccess },
+}
+
+pub struct NetworkPolicyRule {
+    pub name: String,
+    pub endpoints: Vec<NetworkEndpoint>,
+    pub binaries: Vec<NetworkBinary>,  // Per-binary scoping — only this rule applies if the caller binary matches
+}
+
+pub struct NetworkEndpoint {
+    pub host: String,                       // Glob: "*.example.com"
+    pub ports: Vec<u16>,
+    pub protocol: Protocol,                 // Rest | Sql | L4
+    pub tls: TlsHandling,                   // Terminate (MITM for L7 rules) | Passthrough (trusted endpoint)
+    pub enforcement: EnforcementMode,        // Enforce | Audit
+    pub access: AccessPreset,                // ReadOnly | ReadWrite | Full — expands to L7 rules
+    pub rules: Vec<L7Rule>,                 // Explicit method+path allow rules
+    pub allowed_ips: Vec<IpNet>,             // CIDR allowlist (SSRF mitigation beyond host-pattern filtering)
+}
+
+pub struct L7Rule {
+    pub method: HttpMethod,                  // GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS
+    pub path: String,                        // Wildcard path: "/v1/messages/batches/**"
+}
+
+pub struct NetworkBinary {
+    pub path: PathBuf,                       // /usr/local/bin/claude
+    pub tofu_sha256: Option<[u8; 32]>,       // Trust-on-first-use content hash (§6a.2)
+}
+
+pub enum EnforcementMode {
+    Enforce,                                 // Rule decisions are binding
+    Audit,                                   // Rule decisions are logged but not enforced — incremental rollout
+}
+
+pub enum TlsHandling {
+    Terminate,                                // Proxy terminates TLS, inspects payload against L7 rules
+    Passthrough,                              // Trusted endpoint; TLS is preserved end-to-end
+}
+```
+
+**Deny-by-default filesystem policy.** The filesystem policy MUST declare `read_only` and `read_write` paths explicitly. The agent's home directory (`/sandbox`) is read-only; writable state is restricted to `/sandbox/.agent-data/` or an analogous subdirectory via symlinks. This prevents agents from tampering with their own runtime environment.
+
+**Landlock rule-union gotcha** (must be in invariants): Landlock grants the union of all matching rules, not the intersection. The `include_workdir` setting must always be `false` — when `true`, OpenShell would auto-add WORKDIR to `read_write`, silently overriding any explicit `read_only` entry. All writable paths must be declared explicitly. This closes NemoClaw issue #804.
+
+**Opt-in preset system.** Base sandbox policy ships with a **minimum** set of egress rules (inference provider only). Common developer tooling (GitHub, npm, brew, huggingface, slack, etc.) lives in **opt-in presets** under `policies/presets/*.yaml`. Even GitHub is not in the base — operators explicitly opt in during onboarding. This is deny-by-default taken seriously.
+
+### 6a.1 Hot-Reload with Version Tracking
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.18 OpenShell.
+
+Static fields (`filesystem`, `landlock`, `process`) are **locked at sandbox creation** and cannot be modified. Dynamic fields (`network_policies`, `inference`) can be hot-reloaded via a version-tracked poll loop:
+
+```rust
+pub enum PolicyStatus {
+    Pending,                                 // Applied by gateway, not yet loaded by sandbox
+    Loaded { version: u64, hash: [u8; 32] },  // Sandbox has loaded this version
+    Failed { reason: String },
+    Superseded { by_version: u64 },
+}
+```
+
+Version numbers are monotonic. Policy changes are content-hashed (SHA-256) for integrity. Sandboxes poll `GetSandboxConfig` for updates; the gateway pushes via `UpdateConfig`.
+
+### 6a.2 Binary SHA-256 Trust-On-First-Use
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.18 OpenShell.
+
+Network policy rules can bind to specific binaries by content hash. The first time a binary makes an outbound call matching a rule, its SHA-256 content hash is recorded. Subsequent calls from the same path but a different hash are rejected — preventing agent process substitution attacks (e.g., an attacker replacing `/usr/local/bin/claude` with a malicious binary).
+
+### 6a.3 AI-Assisted Policy Advisor
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.18 OpenShell. **Unique contribution — not present in any other research source.**
+
+When a sandbox denies outbound traffic in `Audit` mode (§6a.0), the gateway aggregates denial events and proposes policy rules. A `PolicyDraftAdvisor` (optionally LLM-backed) generates candidate rules and surfaces them to operators in chunks:
+
+```rust
+pub async fn submit_policy_analysis(&self, denials: Vec<DenialEvent>) -> Result<DraftPolicy, AdvisorError>;
+pub async fn approve_draft_chunk(&self, chunk_id: ChunkId, decision: ChunkDecision) -> Result<(), AdvisorError>;
+```
+
+Operators approve, reject, or edit individual chunks. Approved chunks are promoted to `Enforce` mode and added to the base policy. This turns audit-mode rollout into an iterative, explainable policy design loop.
+
+### 6a.4 Sandbox Provider Trait
 
 ```rust
 #[async_trait]
@@ -241,6 +478,9 @@ pub trait SandboxProvider: Send + Sync {
     /// Write a file to the sandbox filesystem.
     async fn write_file(&self, id: &SandboxId, path: &str, content: &[u8]) -> Result<(), SandboxError>;
 
+    /// Hot-reload the dynamic portion of the policy (network_policies, inference).
+    async fn set_policy(&self, id: &SandboxId, policy: &SandboxPolicy) -> Result<PolicyStatus, SandboxError>;
+
     /// Destroy the sandbox. All state is lost.
     async fn destroy(&self, id: &SandboxId) -> Result<(), SandboxError>;
 
@@ -250,27 +490,77 @@ pub trait SandboxProvider: Send + Sync {
 
 pub struct SandboxConfig {
     pub profile: SandboxProfile,
-    pub timeout: Duration,              // Kill sandbox after this duration
-    pub memory_limit: Option<u64>,      // Bytes
-    pub cpu_limit: Option<f64>,         // CPU fraction
-    pub network_access: bool,           // Allow external network (default: false)
-    pub filesystem_mounts: Vec<Mount>,  // Read-only or read-write mounts from host
+    pub policy: SandboxPolicy,            // Three-layer policy per §6a.0
+    pub timeout: Duration,
+    pub memory_limit: Option<u64>,
+    pub cpu_limit: Option<f64>,
+    pub filesystem_mounts: Vec<Mount>,
+    pub pinned_image_digest: Option<[u8; 32]>, // SHA-256 of the sandbox image — prevents registry compromise
+    pub blueprint_digest: Option<[u8; 32]>,    // Mirrors the top-level blueprint digest for dual-field lockstep
 }
 
 pub enum SandboxProfile {
-    Docker(DockerProfile),              // Docker container
-    Wasm,                               // WASM sandbox (lightweight)
-    MicroVm(MicroVmProfile),            // Firecracker / similar microVM
-    External(String),                   // External provider via gRPC/MCP
-}
-
-pub struct SandboxResult {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-    pub duration: Duration,
+    Docker(DockerProfile),      // bollard — already in sera-docker
+    Wasm,                       // wasmtime — shared with hook runtime
+    MicroVm(MicroVmProfile),    // firecracker binary wrapped via tokio::process::Command
+    External(String),           // External provider via gRPC/MCP
+    OpenShell(OpenShellConfig), // Tier-3 enterprise backend (§6a.5)
 }
 ```
+
+**Pinned image digest dual-field lockstep.** The blueprint declares a top-level `digest: sha256:...` that MUST match `components.sandbox.image` digest. Release tooling rewrites both together; CI enforces lockstep. This blocks `:latest` force-push attacks and registry compromise per [SPEC-dependencies](SPEC-dependencies.md) §10.8 NemoClaw issue #1438.
+
+### 6a.5 `OpenShellSandboxProvider` — Tier-3 Enterprise Backend
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.18 — published mTLS gRPC protocol at `github.com/NVIDIA/OpenShell`.
+
+SERA ships an `OpenShellSandboxProvider` implementation that speaks the OpenShell gRPC protocol directly. Tier-3 deployments can use this as their sandbox backend without running SERA's native implementation.
+
+```rust
+pub struct OpenShellConfig {
+    pub endpoint: String,                    // gRPC endpoint (typically port 8080 in-cluster, 30051 NodePort)
+    pub ca_cert: PathBuf,
+    pub client_cert: PathBuf,
+    pub client_key: PathBuf,
+}
+
+pub struct OpenShellSandboxProvider {
+    client: OpenShellClient,                 // Generated by tonic from proto/openshell.proto
+}
+```
+
+The proto files (`proto/openshell.proto`, `proto/sandbox.proto`, `proto/datamodel.proto`) are Apache-2.0 and are vendored into `crates/sera-tools/openshell-proto/` at a pinned commit. `tonic-build` generates the Rust client stubs during `build.rs`.
+
+**Native implementation mirrors OpenShell.** Even without the OpenShell backend, SERA's native sandbox implementation mirrors OpenShell's enforcement primitives: `regorus` in-process OPA for Rego policy evaluation (no external OPA sidecar), named `NetworkPolicyRule` hot-reload with version tracking, per-binary SHA-256 TOFU, `allowed_ips: [CIDR]` SSRF mitigation, `inference.local` virtual host routing, OCSF v1.7.0 audit events (see [SPEC-observability](SPEC-observability.md)). Operators running SERA without the OpenShell backend get equivalent security guarantees.
+
+### 6a.6 `inference.local` Virtual Host Pattern
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.18 OpenShell.
+
+All inference requests from inside a sandbox go to a **single virtual hostname** (`inference.local:443`). The sandbox's egress proxy intercepts, rewrites the `model` field in the JSON body, injects auth headers, and forwards to the resolved provider. Provider profiles (`openai`, `anthropic`, `nvidia`, `vllm`, `nim-local`) are configured via `GetInferenceBundle`:
+
+```rust
+pub struct ResolvedRoute {
+    pub base_url: String,
+    pub api_key: SecretRef,
+    pub protocols: Vec<InferenceProtocol>,   // openai | anthropic | nim | ...
+    pub model_id: String,
+    pub provider_type: ProviderType,
+    pub credential_env: Option<String>,      // Env var name the sandbox injects
+    pub dynamic_endpoint: bool,              // If true, base_url is resolved per-call
+    pub timeout_secs: u64,
+}
+```
+
+This is cleaner than per-provider egress rules — one rule allows `inference.local`, and provider routing happens behind the proxy. It also means credential injection never flows through the sandbox filesystem.
+
+### 6a.7 Pre-Execute Shell AST Analysis
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.7 opencode tree-sitter bash analysis.
+
+Before executing any `bash` tool invocation, SERA parses the shell command via `tree-sitter-bash` and extracts the set of file paths the command will touch (via `BashArity` analysis of shell verbs: `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`, `chown`, `cat`, etc.). Each path is checked against the filesystem policy **before** the shell process is spawned. This avoids needing OS-level sandboxing for most cases — untrusted paths are rejected at parse time, not at execution time.
+
+The analysis runs as a `pre_execute` hook emitting a `ShellAudit` event to the gateway for policy evaluation.
 
 ### Lifecycle
 
@@ -397,12 +687,16 @@ See [SPEC-interop](SPEC-interop.md) for full MCP integration details.
 
 | Dependency | Spec | Relationship |
 |---|---|---|
-| `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | AuthZ for tool execution |
-| `sera-secrets` | [SPEC-secrets](SPEC-secrets.md) | Credential resolution and injection |
-| `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Pre/post tool hook chains |
-| `sera-hitl` | [SPEC-hitl-approval](SPEC-hitl-approval.md) | Approval gating for risky tools |
-| `sera-mcp` | [SPEC-interop](SPEC-interop.md) | MCP bridge for external tools |
-| `sera-runtime` | [SPEC-runtime](SPEC-runtime.md) | Tool execution within turn loop |
+| `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | AuthZ for tool execution; `needs_approval` callback integration |
+| `sera-secrets` | [SPEC-secrets](SPEC-secrets.md) | Credential resolution and injection; `GetInferenceBundle` credential flow never touches filesystem |
+| `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Pre/post tool hook chains; `pre_execute` shell AST analysis hook |
+| `sera-hitl` | [SPEC-hitl-approval](SPEC-hitl-approval.md) | Approval gating for risky tools; inline `Tool.Context::ask()`; `CorrectedError` feedback |
+| `sera-mcp` | [SPEC-interop](SPEC-interop.md) | MCP bridge for external tools; MCP tools register via `DynamicToolSpec` path |
+| `sera-runtime` | [SPEC-runtime](SPEC-runtime.md) | Tool execution within turn loop; `tool_use_behavior` policy; `DynamicToolCallRequest { call_id, turn_id }` |
+| `sera-docker` | existing Rust crate | Docker sandbox backend via `bollard` — already in the workspace |
+| `sera-observability` | [SPEC-observability](SPEC-observability.md) | OCSF v1.7.0 audit events for all tool executions and sandbox denials |
+| `sera-meta` | [SPEC-self-evolution](SPEC-self-evolution.md) | Tier 2 scope includes tool policy changes; constitutional gate checks policy modifications |
+| Dependencies | [SPEC-dependencies](SPEC-dependencies.md) | §9.3 sandbox crate choices (`bollard`, `wasmtime`, `firecracker` binary wrap, `microsandbox` watch-only); §10.2 Codex three-layer sandbox + `DynamicToolSpec`; §10.7 opencode `Tool.Context::ask()` + `FileTime.withLock` + tree-sitter bash; §10.8 NemoClaw policy schema + presets + Sentry defense; §10.13 openai-agents-python `is_enabled`/`needs_approval`/`tool_use_behavior`; §10.16 BeeAI content-addressed cache; **§10.18 NVIDIA OpenShell full enforcement stack** |
 
 ---
 

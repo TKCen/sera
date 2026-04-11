@@ -1,9 +1,9 @@
 # SPEC: Memory System (`sera-memory`)
 
-> **Status:** DRAFT  
-> **Source:** PRD §6.1, §6.2, §6.4, §14 (invariants 3, 7)  
-> **Crate:** `sera-memory`  
-> **Priority:** Phase 1  
+> **Status:** DRAFT
+> **Source:** PRD §6.1, §6.2, §6.4, §14 (invariants 3, 7), plus deltas from [SPEC-dependencies](SPEC-dependencies.md) §10.4 (beads content-hash IDs solve multi-writer workspace merge conflicts + `Wisp`/ephemeral lifecycle), §10.10 (OpenHands composable `PipelineCondenser` — moved to SPEC-runtime §6a, referenced from here), §10.12 (ChatDev `blackboard` as Circle-level concept — see SPEC-circles §3f, distinct from per-agent memory), §10.14 (CrewAI unified Memory model with `RecallFlow` adaptive-depth recall — alternative to four-tier split), §10.15 (MetaGPT `Memory.index[cause_by]` O(1) filtered retrieval + `RoleZeroLongTermMemory` experience pool), §10.16 (**BeeAI four-tier memory ABC** — directly validated: `Unconstrained / Token / SlidingWindow / Summarize + ReadOnly` wrapper), §10.17 (CAMEL three memory tiers + `WorkflowMemoryManager` coordinator-scoped cross-task summary)
+> **Crate:** `sera-memory`
+> **Priority:** Phase 1
 
 ---
 
@@ -22,19 +22,113 @@ Memory is **not a monolith** — it is a workflow. Memory operations (especially
 pub trait MemoryBackend: Send + Sync {
     /// Store a memory entry
     async fn write(&self, entry: MemoryEntry, ctx: &MemoryContext) -> Result<MemoryId, MemoryError>;
-    
+
     /// Search memories (may trigger a workflow: embed → search → rank → expand)
     async fn search(&self, query: &MemoryQuery, ctx: &MemoryContext) -> Result<Vec<MemoryResult>, MemoryError>;
-    
+
     /// Get a specific memory by ID
     async fn get(&self, id: &MemoryId) -> Result<MemoryEntry, MemoryError>;
-    
+
     /// Compact/summarize older memories (implementation-specific)
     async fn compact(&self, scope: &CompactionScope) -> Result<CompactionResult, MemoryError>;
-    
+
     /// Health and stats
     async fn stats(&self) -> MemoryStats;
 }
+
+/// Content-hash ID for memory entries (beads pattern, SPEC-dependencies §10.4).
+/// SHA-256 of canonical serialization. Two agents writing the same entry on separate branches
+/// produce identical IDs — merge-safe across multi-writer workspaces. This closes the
+/// open question about git conflict resolution in multi-agent workspaces (§5.3).
+pub struct MemoryId(pub [u8; 32]);
+
+impl MemoryId {
+    pub fn from_entry(entry: &MemoryEntry) -> Self {
+        Self(sha256_canonical(entry))
+    }
+}
+```
+
+## 2.0 Four-Tier Memory ABC
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.16 BeeAI — the four tiers below are directly validated by BeeAI's production implementation. SERA ships these exact four variants plus the read-only wrapper.
+
+Beyond the pluggable `MemoryBackend` trait, SERA provides four standard **working-memory tier** implementations that wrap any backend:
+
+```rust
+#[async_trait]
+pub trait MemoryTier: Send + Sync {
+    async fn messages(&self) -> Vec<Message>;
+    async fn add(&self, message: Message) -> Result<(), MemoryError>;
+    async fn delete(&self, id: MessageId) -> Result<(), MemoryError>;
+    async fn reset(&self) -> Result<(), MemoryError>;
+}
+
+/// Tier 1: No limit — keeps full history. Use for short interactive sessions.
+pub struct UnconstrainedMemory { storage: Vec<Message> }
+
+/// Tier 2: Evicts oldest when token budget exceeded.
+pub struct TokenMemory { storage: VecDeque<Message>, budget: usize, counter: TokenCounter }
+
+/// Tier 3: Fixed message-count sliding window.
+pub struct SlidingWindowMemory { storage: VecDeque<Message>, max_messages: usize }
+
+/// Tier 4: LLM-driven compaction when the budget is hit. The most sophisticated variant.
+/// Uses sera-runtime §6a PipelineCondenser internally.
+pub struct SummarizeMemory { storage: Vec<Message>, condenser: Arc<dyn Condenser>, budget: usize }
+
+/// Wrapper: prevents mutation. Use to pass memory views into sub-agents without risking writes.
+pub struct ReadOnlyMemory<T: MemoryTier> { inner: T }
+```
+
+These are orthogonal to `MemoryBackend` — the backend is about durable long-term storage, the tier is about the ephemeral working-memory window fed into each LLM turn. A single agent uses **both**: one backend (file / LCM / database) and one tier (typically `SlidingWindowMemory` or `SummarizeMemory` for long-running sessions).
+
+## 2.0a Ephemeral / Wisp Lifecycle
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.4 beads.
+
+Some memory entries are **ephemeral** — transient scratch state that must not pollute the durable log or be synced across multi-agent workspaces. SERA mirrors beads' `Wisp` pattern:
+
+```rust
+pub struct MemoryEntry {
+    // ... existing fields ...
+    pub ephemeral: bool,              // If true, not synced via git, TTL-compacted
+    pub wisp_type: Option<WispType>,  // TTL-based compaction class
+}
+
+pub enum WispType {
+    ScratchPad,        // Inline agent notes during turn execution
+    TempCalc,          // Intermediate calculation state
+    DebugTrace,        // Diagnostic output that should not persist beyond the session
+    SessionNote,       // Session-scoped context that survives within a session but not across restarts
+}
+```
+
+Ephemeral entries are stored in a separate `.sera-wisp/` directory, excluded from git (if git management is enabled), and TTL-compacted by the dreaming workflow.
+
+## 2.0b Coordinator-Scoped `WorkflowMemoryManager`
+
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.17 CAMEL.
+
+In a multi-agent Circle run, a coordinator agent often needs a summary of completed sub-task results to inject into subsequent task assignments. This is distinct from per-agent memory — it belongs to the Circle coordinator's session, not to any individual member.
+
+```rust
+pub struct WorkflowMemoryManager {
+    circle_id: CircleId,
+    completed_tasks: HashMap<TaskId, TaskSummary>,
+    active_context: RollingSummary,
+}
+
+pub struct TaskSummary {
+    pub task_id: TaskId,
+    pub assignee: PrincipalRef,
+    pub result_digest: String,        // Structured summary, not full transcript
+    pub cause_by: Option<ActionId>,   // MetaGPT routing key (SPEC-dependencies §10.15)
+    pub completed_at: DateTime<Utc>,
+}
+```
+
+The Circle coordinator reads `completed_tasks` when assigning new sub-tasks, giving it cross-task context without requiring the full per-member transcripts. Distinct from the `CircleBlackboard` (SPEC-circles §3f) which is a write-many/read-all artifact bus — `WorkflowMemoryManager` is coordinator-scoped and read-only to workers.
 
 ---
 
@@ -300,14 +394,24 @@ write() → write file → git add → git commit (template)
 compact() → modify files → git add → git commit (template)
 ```
 
-### 5.3 Conflict Resolution
+### 5.3 Conflict Resolution — RESOLVED via content-hash IDs + Dolt
 
-> [!IMPORTANT]  
-> **Requires further research.** If two agents share a workspace with git, how are merge conflicts resolved? Possible strategies:
-> - Single-writer per workspace (enforce via workspace ownership)
-> - Last-writer-wins with conflict logging
-> - Agent-assisted merge resolution
-> - Separate branches per agent with periodic merge
+> **Source:** [SPEC-dependencies](SPEC-dependencies.md) §10.4 beads + Dolt (git-for-SQL).
+
+Content-hash `MemoryId`s (§2) plus Dolt storage solve the multi-writer conflict problem cleanly:
+
+1. **Content-addressed IDs** — two agents creating an entry with identical content on separate branches produce the same `MemoryId`. No collision, no reconciliation needed.
+2. **Dolt cell-level merge** — for structured memory (database backend in Tier-3), Dolt provides cell-level 3-way merge. Conflicts are resolved per-field, not per-row.
+3. **Git for file-based backend** — file-based memory uses content-hash filenames, so independent writes of the same content produce the same file. Merge conflicts only arise when two agents modify the **same key with different content** — a genuine semantic conflict that requires human review.
+
+**Strategy by tier:**
+
+| Tier | Multi-writer model |
+|---|---|
+| Tier 1 (file-based, local) | Single-writer enforced by workspace ownership — one agent per workspace |
+| Tier 2 (file-based, multi-agent) | Content-hash filenames + git, semantic conflicts surface as merge conflicts for human review |
+| Tier 3 (database, multi-agent) | Dolt SQL server mode with cell-level 3-way merge, content-hash IDs prevent accidental collisions |
+| Tier 3+ (federated) | Wasteland DoltHub fork/sync pattern (SPEC-dependencies §10.4) — out of scope for SERA 1.0 |
 
 ---
 
@@ -396,10 +500,12 @@ agents:
 |---|---|---|
 | `sera-hooks` | [SPEC-hooks](SPEC-hooks.md) | Pre/post memory write hook chains |
 | `sera-tools` | [SPEC-tools](SPEC-tools.md) | Memory access via tool interface |
-| `sera-runtime` | [SPEC-runtime](SPEC-runtime.md) | Memory injection in context assembly |
-| `sera-workflow` | [SPEC-workflow-engine](SPEC-workflow-engine.md) | Dreaming workflow reads/writes memory |
+| `sera-runtime` | [SPEC-runtime](SPEC-runtime.md) | Memory injection in context assembly; **`PipelineCondenser` lives in SPEC-runtime §6a** — this spec references it for `SummarizeMemory` implementation |
+| `sera-workflow` | [SPEC-workflow-engine](SPEC-workflow-engine.md) | Dreaming workflow reads/writes memory; `WorkflowMemoryManager` (§2.0b) backs coordinator-scoped summaries |
 | `sera-auth` | [SPEC-identity-authz](SPEC-identity-authz.md) | AuthZ for memory access |
-| `sera-db` | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) | Database backends use sera-db |
+| `sera-circles` | [SPEC-circles](SPEC-circles.md) | `CircleBlackboard` is distinct from per-agent memory; `WorkflowMemoryManager` is coordinator-scoped |
+| `sera-db` | [SPEC-crate-decomposition](SPEC-crate-decomposition.md) | Database backends use sera-db; Dolt server mode for Tier-3 multi-writer |
+| Dependencies | [SPEC-dependencies](SPEC-dependencies.md) | §10.4 beads content-hash IDs + `Wisp` ephemeral lifecycle + Dolt conflict resolution; §10.10 OpenHands `PipelineCondenser` (the most complete compaction architecture); §10.14 CrewAI unified Memory with `RecallFlow`; §10.15 MetaGPT `Memory.index[cause_by]` + `RoleZeroLongTermMemory` experience pool; **§10.16 BeeAI four-tier memory ABC (directly validated)**; §10.17 CAMEL three memory tiers + `WorkflowMemoryManager` |
 
 ---
 

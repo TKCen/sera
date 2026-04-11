@@ -1,0 +1,6 @@
+{
+  "provider": "lm-studio",
+  "model": "text-embedding-embeddinggemma-300m-qat",
+  "baseUrl": "http://host.docker.internal:1234",
+  "dimension": 768
+}

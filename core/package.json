@@ -48,14 +48,14 @@
     "vitest": "^4.1.2"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.61.1",
+    "@mariozechner/pi-ai": "^0.66.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@qdrant/js-client-rest": "^1.11",
     "@slack/web-api": "^7.15.0",
-    "@types/nodemailer": "^7.0.11",
+    "@types/nodemailer": "^8.0.0",
     "argon2": "^0.44.0",
-    "axios": "^1.14.0",
-    "chokidar": "^3.6.0",
+    "axios": "^1.15.0",
+    "chokidar": "^5.0.0",
     "cors": "^2.8",
     "cron-parser": "^5.5.0",
     "discord.js": "^14.26.0",
@@ -66,18 +66,18 @@
     "jose": "^6.2.2",
     "js-yaml": "^4.1",
     "node-pg-migrate": "^8.0.4",
-    "nodemailer": "^8.0.4",
-    "openai": "^4.0",
+    "nodemailer": "^8.0.5",
+    "openai": "^6.34",
     "opossum": "^9.0.0",
-    "pdf-parse": "^1.1.1",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.11",
     "pg-boss": "^12.15.0",
-    "simple-git": "^3.33.0",
-    "uuid": "^10.0",
+    "simple-git": "^3.35.2",
+    "uuid": "^13.0",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.17.5",
     "vscode-uri": "^3.0",
     "ws": "^8.20.0",
-    "zod": "^3.25.76"
+    "zod": "^4.3.6"
   }
 }

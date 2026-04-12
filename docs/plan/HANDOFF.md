@@ -8,19 +8,23 @@
 
 ## 1. What this session accomplished
 
-**Phase 1 progress.** Six commits on `sera20` implementing core execution substrate wiring:
+**Phase 1 progress.** Eight commits on `sera20` implementing core execution substrate wiring:
 
-1. **feat: wire DefaultHarness think step to LlmClient via LlmProvider trait.** Connected the four-method turn lifecycle's think step to actual LLM inference via sera-gateway's llm_client.rs, bridging DefaultHarness to language model execution.
+1. **`876d7ac` — feat: wire DefaultHarness think step to LlmClient via LlmProvider trait.** Connected the four-method turn lifecycle's think step to actual LLM inference via sera-gateway's llm_client.rs, bridging DefaultHarness to language model execution.
 
-2. **feat: wire gateway chat handler through harness_dispatch.** Integrated sera-gateway's orchestrator to route chat operations through harness_dispatch::dispatch, replacing direct reasoning_loop calls with the new turn-based harness model.
+2. **`bc67370` — feat: wire gateway chat handler through harness_dispatch.** Integrated sera-gateway's orchestrator to route chat operations through harness_dispatch::dispatch, replacing direct reasoning_loop calls with the new turn-based harness model.
 
-3. **feat: wire NDJSON runtime loop to DefaultRuntime.execute_turn.** Connected sera-runtime's NDJSON child process loop to DefaultRuntime.execute_turn, enabling async turn execution via stdio transport.
+3. **`77c9c1e` — feat: wire NDJSON runtime loop to DefaultRuntime.execute_turn.** Connected sera-runtime's NDJSON child process loop to DefaultRuntime.execute_turn, enabling async turn execution via stdio transport.
 
-4. **chore: delete deprecated TurnResult from sera-types.** Removed TurnResult from sera-types; it was deprecated in Phase 0 and is no longer referenced in active code.
+4. **`e21334f` — chore: delete deprecated TurnResult from sera-types.** Removed TurnResult from sera-types; it was deprecated in Phase 0 and is no longer referenced in active code.
 
-5. **feat: add SqlxSessionPersist for durable session storage.** Implemented sqlx-backed persistence for session parts (WorkflowTask, execution state, context snapshots) in sera-gateway's session_persist.rs.
+5. **`73493ff` — feat: add SqlxSessionPersist for durable session storage.** Implemented sqlx-backed persistence for session parts (WorkflowTask, execution state, context snapshots) in sera-gateway's session_persist.rs.
 
-6. **Queue backend was already wired in AppState from prior session.** QueueBackend integration into sera-gateway's AppState was already complete from an earlier handoff; Phase 1 verified and built upon it.
+6. **`d4d8d65` — docs: update HANDOFF.md for Phase 1 progress (interim).** Updated this handoff during the session to track Phase 1 execution substrate items as they were completed.
+
+7. **`8e4e830` — feat: wire condensers into ContextEngine compact method.** Connected the condenser trait impls (LLMSummarizing, LLMAttention, StructuredSummary, and others) into ContextEngine's compact method, enabling context compression for token management.
+
+8. **`e6dfd0e` — feat: wire ConstitutionalGate hooks into observe/react lifecycle.** Integrated sera-hooks' ConstitutionalGate enforcement into the turn lifecycle's observe and react methods, enabling policy-driven agent behavior.
 
 ---
 
@@ -57,9 +61,9 @@
 
 ## 3. What's next — Phase 1
 
-Phase 0 is complete. All type contracts, trait boundaries, and infrastructure crates are in place. Phase 1 execution substrate wiring is underway:
+Phase 0 is complete. All type contracts, trait boundaries, and infrastructure crates are in place. Phase 1 execution substrate wiring is complete for all 8 scheduled items.
 
-### Phase 1 completed items
+### Phase 1 completed execution substrate items
 
 - [x] Wire DefaultHarness think step to llm_client.rs
 - [x] Connect sera-gateway orchestrator to harness_dispatch::dispatch
@@ -67,15 +71,17 @@ Phase 0 is complete. All type contracts, trait boundaries, and infrastructure cr
 - [x] Add sqlx persistence for session parts
 - [x] Delete deprecated TurnResult
 - [x] Wire NDJSON runtime loop to DefaultRuntime.execute_turn
+- [x] Wire condensers into ContextEngine compact method
+- [x] Wire ConstitutionalGate hooks into observe/react lifecycle
 
-### Phase 1 remaining priorities
+### Phase 1 remaining work — design decisions required
 
-1. **Compaction wiring** — Wire condensers into ContextEngine compact method, connect token counting
-2. **sera-hooks P1** — HookPoint::ConstitutionalGate enforcement, HookResult::updated_input
-3. **Execution workers** — apalis job workers replacing LocalQueueBackend for production queue
-4. **Circle coordination** — Wire circle dispatch into harness_dispatch
-5. **HITL routing** — Route to human-in-the-loop orchestrator via HitlRouter
-6. **Enterprise transports** — WebSocket/gRPC transport implementations (behind feature gates)
+All 8 execution substrate items are complete. Remaining Phase 1 work requires architectural design decisions before wiring can begin:
+
+- [ ] **apalis job workers** — Feature flag exists in sera-queue but no implementation. Requires design of worker pool lifecycle, task scheduling policy, failure recovery, and production queue backend.
+- [ ] **Circle coordination** — No scaffold yet. Requires design of circle dispatch routing, cross-agent message routing, and persistent circle state.
+- [ ] **HITL routing integration** — sera-hitl has types/router, needs wiring to turn lifecycle. Requires decision on HitlRouter trait impl, interrupt/resume semantics, and human approval workflow.
+- [ ] **Enterprise transports** — WebSocket/gRPC implementations (behind feature gates). Requires protocol specification, connection pooling strategy, and transport negotiation policy.
 
 ---
 

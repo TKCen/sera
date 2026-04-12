@@ -3,8 +3,14 @@
 //! Replaces the TypeScript agent-runtime (core/agent-runtime/).
 //! Communicates via NDJSON on stdin/stdout using Submission/Event envelope types.
 
+use std::collections::HashMap;
+
 use sera_runtime::config::RuntimeConfig;
+use sera_runtime::context_engine::pipeline::ContextPipeline;
+use sera_runtime::default_runtime::DefaultRuntime;
 use sera_runtime::health;
+use sera_runtime::llm_client::LlmClient;
+use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
 use serde::{Deserialize, Serialize};
 
 /// Local NDJSON submission type — serde-compatible with sera-gateway's Submission.
@@ -88,8 +94,13 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Build the DefaultRuntime with context engine and LLM client
+    let context_engine = Box::new(ContextPipeline::new());
+    let llm_client = Box::new(LlmClient::new(&config));
+    let runtime = DefaultRuntime::new(context_engine).with_llm(llm_client);
+
     // NDJSON Submission/Event loop on stdin/stdout
-    let result = run_ndjson_loop(&config).await;
+    let result = run_ndjson_loop(&config, &runtime).await;
 
     match result {
         Ok(()) => tracing::info!("NDJSON loop exited cleanly"),
@@ -108,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Read Submissions from stdin (NDJSON), process each, write Events to stdout.
-async fn run_ndjson_loop(_config: &RuntimeConfig) -> anyhow::Result<()> {
+async fn run_ndjson_loop(config: &RuntimeConfig, runtime: &DefaultRuntime) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let stdin = tokio::io::stdin();
@@ -169,25 +180,104 @@ async fn run_ndjson_loop(_config: &RuntimeConfig) -> anyhow::Result<()> {
         json.push('\n');
         stdout.write_all(json.as_bytes()).await?;
 
-        // Process the submission (P0 stub — returns placeholder)
-        let response_delta = match &submission.op {
-            Op::UserTurn { .. } => "[turn executed - model call pending]".to_string(),
-            Op::Steer { .. } => "[steer acknowledged]".to_string(),
-            Op::Interrupt => "[interrupt acknowledged]".to_string(),
-            Op::System(SystemOp::HealthCheck) => "[healthy]".to_string(),
-            Op::System(SystemOp::Shutdown) => unreachable!(),
-        };
+        // Convert Submission to TurnContext and execute via DefaultRuntime
+        let turn_ctx = submission_to_turn_context(&submission, &config.agent_id, turn_id);
+        let outcome = runtime.execute_turn(turn_ctx).await;
 
-        // Emit StreamingDelta with the response
-        let delta = Event {
-            id: uuid::Uuid::new_v4(),
-            submission_id: submission.id,
-            msg: EventMsg::StreamingDelta { delta: response_delta },
-            timestamp: chrono::Utc::now(),
-        };
-        json = serde_json::to_string(&delta)?;
-        json.push('\n');
-        stdout.write_all(json.as_bytes()).await?;
+        // Convert TurnOutcome to Event messages
+        match outcome {
+            Ok(TurnOutcome::FinalOutput { response, .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta { delta: response },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+            Ok(TurnOutcome::RunAgain { .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta {
+                        delta: "[run_again — tool calls dispatched]".to_string(),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+            Ok(TurnOutcome::Handoff { target_agent_id, .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta {
+                        delta: format!("[handoff -> {target_agent_id}]"),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+            Ok(TurnOutcome::Compact { .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta {
+                        delta: "[compact — context condensed]".to_string(),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+            Ok(TurnOutcome::Interruption { reason, .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta {
+                        delta: format!("[interrupted: {reason}]"),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+            Ok(TurnOutcome::Stop { summary, .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta {
+                        delta: format!("[stop: {summary}]"),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+            Err(e) => {
+                tracing::error!("execute_turn failed: {e:?}");
+                let err_event = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::Error {
+                        code: "turn_error".to_string(),
+                        message: format!("{e:?}"),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&err_event)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
+        }
 
         // Emit TurnCompleted
         let completed = Event {
@@ -203,6 +293,29 @@ async fn run_ndjson_loop(_config: &RuntimeConfig) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Convert a local `Submission` into a `TurnContext` for the runtime.
+fn submission_to_turn_context(
+    submission: &Submission,
+    agent_id: &str,
+    turn_id: uuid::Uuid,
+) -> TurnContext {
+    let messages = match &submission.op {
+        Op::UserTurn { items, .. } => items.clone(),
+        Op::Steer { items } => items.clone(),
+        Op::Interrupt | Op::System(_) => vec![],
+    };
+
+    TurnContext {
+        event_id: turn_id.to_string(),
+        agent_id: agent_id.to_string(),
+        session_key: format!("session:{agent_id}:{}", submission.id),
+        messages,
+        available_tools: vec![],
+        metadata: HashMap::new(),
+        change_artifact: None,
+    }
 }
 
 /// Send periodic heartbeats to sera-core.

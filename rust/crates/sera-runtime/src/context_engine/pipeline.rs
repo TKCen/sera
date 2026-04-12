@@ -1,6 +1,9 @@
 //! ContextPipeline — wraps the old ContextPipeline as a ContextEngine impl.
 
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
+use tiktoken_rs::cl100k_base;
+use tiktoken_rs::CoreBPE;
 
 use crate::compaction::Condenser;
 
@@ -36,10 +39,13 @@ impl Default for ContextPipeline {
     }
 }
 
+static TOKENIZER: Lazy<CoreBPE> =
+    Lazy::new(|| cl100k_base().expect("cl100k_base encoding must be available"));
+
 fn estimate_tokens(messages: &[serde_json::Value]) -> u32 {
     messages
         .iter()
-        .map(|m| m.to_string().len() as u32 / 4)
+        .map(|m| TOKENIZER.encode_ordinary(&m.to_string()).len() as u32)
         .sum()
 }
 

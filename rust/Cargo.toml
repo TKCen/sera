@@ -123,6 +123,7 @@ opentelemetry-otlp   = "=0.27"   # EXACT
 tracing-opentelemetry = "=0.28"  # EXACT
 
 once_cell = "1"
+tiktoken-rs = "0.5"
 figment    = { version = "0.10", features = ["env", "toml"] }
 schemars   = { version = "1", features = ["derive"] }
 jsonschema = { version = "0.46", default-features = false }

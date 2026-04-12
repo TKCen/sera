@@ -981,6 +981,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         tool_result: None,
         principal: Some(principal_json.clone()),
         metadata: std::collections::HashMap::new(),
+        change_artifact: None, // TODO(P0-5/P0-6): populate from gateway pipeline
     };
     let pre_route_result = run_hook_point(state, HookPoint::PreRoute, &chains, pre_route_ctx).await;
     match &pre_route_result.outcome {
@@ -1073,6 +1074,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         tool_result: None,
         principal: Some(principal_json.clone()),
         metadata: std::collections::HashMap::new(),
+        change_artifact: None, // TODO(P0-5/P0-6): populate from gateway pipeline
     };
     let post_route_result = run_hook_point(state, HookPoint::PostRoute, &chains, post_route_ctx).await;
     match &post_route_result.outcome {
@@ -1096,6 +1098,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         tool_result: None,
         principal: Some(principal_json.clone()),
         metadata: std::collections::HashMap::new(),
+        change_artifact: None, // TODO(P0-5/P0-6): populate from gateway pipeline
     };
     let pre_turn_result = run_hook_point(state, HookPoint::PreTurn, &chains, pre_turn_ctx).await;
     match &pre_turn_result.outcome {
@@ -1130,6 +1133,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             "reply".to_string(),
             serde_json::json!(result.reply),
         )]),
+        change_artifact: None, // TODO(P0-5/P0-6): populate from gateway pipeline
     };
     let post_turn_result = run_hook_point(state, HookPoint::PostTurn, &chains, post_turn_ctx).await;
     match &post_turn_result.outcome {

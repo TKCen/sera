@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 // ── Hook Points ──────────────────────────────────────────────────────────────
 
-/// The 16 hook points where chains can fire across the SERA system.
+/// The 20 hook points where chains can fire across the SERA system.
 /// SPEC-hooks: each point has a defined context shape and allowed result types.
 ///
 /// Ordering follows the event lifecycle: route → turn → tool → deliver → memory → session.
@@ -35,12 +35,21 @@ pub enum HookPoint {
     ContextSkill,
     /// During tool injection — tool filtering, capability policy.
     ContextTool,
+    /// Before LLM call — prompt inspection, cost control, context trimming.
+    #[serde(rename = "on_llm_start")]
+    OnLlmStart,
     /// Before tool execution — approval gates, argument validation, secret injection.
     PreTool,
     /// After tool execution — result sanitization, audit, risk assessment.
     PostTool,
+    /// After LLM response — response inspection, safety checks.
+    #[serde(rename = "on_llm_end")]
+    OnLlmEnd,
     /// After runtime, before delivery — response filtering, compliance, redaction.
     PostTurn,
+    /// Fail-closed constitutional check — gates the turn on constitutional policy.
+    #[serde(rename = "constitutional_gate")]
+    ConstitutionalGate,
     /// Before delivery to client/channel — formatting, channel-specific transforms.
     PreDeliver,
     /// After delivery confirmed — analytics, notification triggers.
@@ -53,6 +62,9 @@ pub enum HookPoint {
     OnApprovalRequest,
     /// When scheduled/triggered workflow fires — gating, context injection.
     OnWorkflowTrigger,
+    /// When a change artifact is proposed — review gates, policy checks.
+    #[serde(rename = "on_change_artifact_proposed")]
+    OnChangeArtifactProposed,
 }
 
 impl HookPoint {
@@ -65,15 +77,19 @@ impl HookPoint {
         HookPoint::ContextMemory,
         HookPoint::ContextSkill,
         HookPoint::ContextTool,
+        HookPoint::OnLlmStart,
         HookPoint::PreTool,
         HookPoint::PostTool,
+        HookPoint::OnLlmEnd,
         HookPoint::PostTurn,
+        HookPoint::ConstitutionalGate,
         HookPoint::PreDeliver,
         HookPoint::PostDeliver,
         HookPoint::PreMemoryWrite,
         HookPoint::OnSessionTransition,
         HookPoint::OnApprovalRequest,
         HookPoint::OnWorkflowTrigger,
+        HookPoint::OnChangeArtifactProposed,
     ];
 }
 
@@ -136,6 +152,9 @@ pub enum HookResult {
         /// Modified context — merged into the ongoing HookContext.
         #[serde(default)]
         context_updates: HashMap<String, serde_json::Value>,
+        /// Optionally replace the input value for downstream hooks.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        updated_input: Option<serde_json::Value>,
     },
     /// Short-circuit: block the operation.
     Reject {
@@ -160,6 +179,7 @@ impl HookResult {
     pub fn pass() -> Self {
         HookResult::Continue {
             context_updates: HashMap::new(),
+            updated_input: None,
         }
     }
 
@@ -167,6 +187,7 @@ impl HookResult {
     pub fn pass_with(updates: HashMap<String, serde_json::Value>) -> Self {
         HookResult::Continue {
             context_updates: updates,
+            updated_input: None,
         }
     }
 
@@ -230,6 +251,9 @@ pub struct HookContext {
     /// Arbitrary metadata — hooks can read and modify this.
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Change artifact associated with this hook invocation (present for evolution hooks).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_artifact: Option<crate::evolution::ChangeArtifactId>,
 }
 
 impl HookContext {
@@ -243,6 +267,7 @@ impl HookContext {
             tool_result: None,
             principal: None,
             metadata: HashMap::new(),
+            change_artifact: None,
         }
     }
 
@@ -357,7 +382,7 @@ mod tests {
 
     #[test]
     fn hook_point_count() {
-        assert_eq!(HookPoint::ALL.len(), 16, "spec defines 16 hook points");
+        assert_eq!(HookPoint::ALL.len(), 20, "spec defines 20 hook points");
     }
 
     #[test]
@@ -427,7 +452,7 @@ mod tests {
         updates.insert("filtered".to_string(), serde_json::json!(true));
         let result = HookResult::pass_with(updates);
         assert!(result.is_continue());
-        if let HookResult::Continue { context_updates } = &result {
+        if let HookResult::Continue { context_updates, .. } = &result {
             assert!(context_updates.contains_key("filtered"));
         }
     }

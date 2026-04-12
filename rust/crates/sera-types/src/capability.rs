@@ -67,6 +67,19 @@ pub struct SecretsCapability {
     pub access: Option<Vec<String>>,
 }
 
+/// Agent-level capability for self-evolution operations.
+/// Distinct from `ResolvedCapabilities` which are container-level grants.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCapability {
+    MetaChange,
+    CodeChange,
+    MetaApprover,
+    ConfigRead,
+    ConfigPropose,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

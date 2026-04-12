@@ -1,6 +1,9 @@
 //! SERA Domain Types — shared types matching the BYOH contract schemas
 //! and the full sera-core domain model.
 
+pub mod evolution;
+pub mod versioning;
+pub mod content_block;
 pub mod agent;
 pub mod connector;
 pub mod runtime;
@@ -24,6 +27,10 @@ pub mod secrets;
 pub mod session;
 pub mod skill;
 pub mod tool;
+
+pub use evolution::*;
+pub use versioning::BuildIdentity;
+pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
 
 use serde::{Deserialize, Serialize};
 

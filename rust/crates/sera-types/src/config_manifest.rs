@@ -34,6 +34,7 @@ impl ApiVersion {
 /// Resource kinds supported by the SERA config system.
 /// MVS supports: Instance, Provider, Agent, Connector.
 /// Post-MVS adds: HookChain, ToolProfile, WorkflowDef, ApprovalPolicy, SecretProvider, InteropConfig.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
     Instance,
@@ -47,6 +48,9 @@ pub enum ResourceKind {
     ApprovalPolicy,
     SecretProvider,
     InteropConfig,
+    SandboxPolicy,
+    Circle,
+    ChangeArtifact,
 }
 
 impl std::str::FromStr for ResourceKind {
@@ -64,6 +68,9 @@ impl std::str::FromStr for ResourceKind {
             "ApprovalPolicy" => Ok(Self::ApprovalPolicy),
             "SecretProvider" => Ok(Self::SecretProvider),
             "InteropConfig" => Ok(Self::InteropConfig),
+            "SandboxPolicy" => Ok(Self::SandboxPolicy),
+            "Circle" => Ok(Self::Circle),
+            "ChangeArtifact" => Ok(Self::ChangeArtifact),
             _ => Err(format!("unknown resource kind: {}", s)),
         }
     }
@@ -82,6 +89,9 @@ impl std::fmt::Display for ResourceKind {
             Self::ApprovalPolicy => write!(f, "ApprovalPolicy"),
             Self::SecretProvider => write!(f, "SecretProvider"),
             Self::InteropConfig => write!(f, "InteropConfig"),
+            Self::SandboxPolicy => write!(f, "SandboxPolicy"),
+            Self::Circle => write!(f, "Circle"),
+            Self::ChangeArtifact => write!(f, "ChangeArtifact"),
         }
     }
 }
@@ -95,6 +105,10 @@ pub struct ResourceMetadata {
     pub labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub annotations: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_artifact: Option<crate::evolution::ChangeArtifactId>,
+    #[serde(default)]
+    pub shadow: bool,
 }
 
 /// A raw config manifest as parsed from YAML before kind-specific validation.
@@ -201,6 +215,10 @@ pub struct AgentSpec {
 pub struct PersonaSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub immutable_anchor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mutable_persona: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mutable_token_budget: Option<u32>,
 }
 
 /// Tool configuration within an agent spec.
@@ -364,6 +382,8 @@ spec:
                 name: "test".to_string(),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
+                change_artifact: None,
+                shadow: false,
             },
             spec: serde_json::Value::Null,
         };
@@ -380,6 +400,8 @@ spec:
                 name: "test".to_string(),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
+                change_artifact: None,
+                shadow: false,
             },
             spec: serde_json::Value::Null,
         };

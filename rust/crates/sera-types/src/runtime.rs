@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::evolution::ChangeArtifactId;
+
 // ── Input types ──────────────────────────────────────────────────────────────
 
 /// Context passed to the runtime for a single agent turn.
@@ -30,6 +32,9 @@ pub struct TurnContext {
     /// Arbitrary metadata: model overrides, hook-injected state, etc.
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+    /// The change artifact this turn is associated with, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_artifact: Option<ChangeArtifactId>,
 }
 
 // ── Output types ─────────────────────────────────────────────────────────────
@@ -74,6 +79,44 @@ pub struct TurnResult {
     pub tokens_used: TokenUsage,
     /// Wall-clock duration of the turn in milliseconds.
     pub duration_ms: u64,
+}
+
+/// The outcome of a completed agent turn (SPEC-runtime §2.3).
+/// Replaces `TurnResult` in the design-forward contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    RunAgain {
+        tool_calls: Vec<ToolCall>,
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
+    Handoff {
+        target_agent_id: String,
+        context: serde_json::Value,
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
+    FinalOutput {
+        response: String,
+        tool_calls: Vec<ToolCall>,
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
+    Compact {
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
+    Interruption {
+        hook_point: String,
+        reason: String,
+        duration_ms: u64,
+    },
+    Stop {
+        summary: String,
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
 }
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
@@ -179,6 +222,7 @@ mod tests {
             messages: vec![serde_json::json!({"role": "user", "content": "Hello"})],
             available_tools: vec![],
             metadata: HashMap::new(),
+            change_artifact: None,
         }
     }
 

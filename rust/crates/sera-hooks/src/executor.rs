@@ -106,7 +106,8 @@ impl ChainExecutor {
             };
 
             match hook_result {
-                HookResult::Continue { context_updates } => {
+                HookResult::Continue { context_updates, .. } => {
+                    // TODO(P0-5/P0-6): handle updated_input field from HookResult::Continue
                     ctx.apply_updates(context_updates);
                 }
                 terminal => {

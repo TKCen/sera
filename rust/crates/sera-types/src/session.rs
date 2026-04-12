@@ -10,13 +10,19 @@ use serde::{Deserialize, Serialize};
 /// SPEC-gateway §6: full state machine with hook-driven transitions.
 ///
 /// State transitions:
-/// - Created → Active, Destroyed
-/// - Active → WaitingForApproval, Compacting, Suspended, Archived, Destroyed
+/// - Created → Active, Spawning, Shadow, Destroyed
+/// - Spawning → Created (failure rollback), Destroyed (failure destroy)
+/// - Active → WaitingForApproval, Compacting, Suspended, Archived, Destroyed, TrustRequired, ReadyForPrompt, Paused
 /// - WaitingForApproval → Active, Archived, Destroyed
 /// - Compacting → Active, Destroyed
 /// - Suspended → Active, Archived, Destroyed
 /// - Archived → Destroyed
+/// - TrustRequired → Active (trust established), Archived (trust denied)
+/// - ReadyForPrompt → Active (prompt received)
+/// - Paused → Active (unpause), Archived, Destroyed
+/// - Shadow → Destroyed (terminal for shadow sessions)
 /// - Destroyed → (terminal)
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionState {
@@ -35,6 +41,18 @@ pub enum SessionState {
     Archived,
     /// Permanently deleted, no recovery.
     Destroyed,
+    /// Container starting — transitional state before Active.
+    Spawning,
+    /// Requires trust establishment before proceeding.
+    #[serde(rename = "trust_required")]
+    TrustRequired,
+    /// Ready to accept user input.
+    #[serde(rename = "ready_for_prompt")]
+    ReadyForPrompt,
+    /// Operator-initiated pause (distinct from Suspended which is system-initiated).
+    Paused,
+    /// Shadow session for testing/monitoring.
+    Shadow,
 }
 
 impl SessionState {
@@ -42,15 +60,23 @@ impl SessionState {
     pub fn can_transition_to(self, target: SessionState) -> bool {
         matches!(
             (self, target),
-            // Created can activate or be destroyed
+            // Created can activate, spawn, enter shadow, or be destroyed
             (SessionState::Created, SessionState::Active)
             | (SessionState::Created, SessionState::Destroyed)
+            | (SessionState::Created, SessionState::Spawning)
+            | (SessionState::Created, SessionState::Shadow)
+            // Spawning can roll back to Created or be destroyed on failure
+            | (SessionState::Spawning, SessionState::Created)
+            | (SessionState::Spawning, SessionState::Destroyed)
             // Active is the hub — can go anywhere except Created
             | (SessionState::Active, SessionState::WaitingForApproval)
             | (SessionState::Active, SessionState::Compacting)
             | (SessionState::Active, SessionState::Suspended)
             | (SessionState::Active, SessionState::Archived)
             | (SessionState::Active, SessionState::Destroyed)
+            | (SessionState::Active, SessionState::TrustRequired)
+            | (SessionState::Active, SessionState::ReadyForPrompt)
+            | (SessionState::Active, SessionState::Paused)
             // WaitingForApproval resolves back to Active, or ends
             | (SessionState::WaitingForApproval, SessionState::Active)
             | (SessionState::WaitingForApproval, SessionState::Archived)
@@ -64,13 +90,24 @@ impl SessionState {
             | (SessionState::Suspended, SessionState::Destroyed)
             // Archived can only be destroyed
             | (SessionState::Archived, SessionState::Destroyed)
+            // TrustRequired resolves to Active (trust established) or Archived (trust denied)
+            | (SessionState::TrustRequired, SessionState::Active)
+            | (SessionState::TrustRequired, SessionState::Archived)
+            // ReadyForPrompt transitions to Active when prompt is received
+            | (SessionState::ReadyForPrompt, SessionState::Active)
+            // Paused can unpause, archive, or be destroyed
+            | (SessionState::Paused, SessionState::Active)
+            | (SessionState::Paused, SessionState::Archived)
+            | (SessionState::Paused, SessionState::Destroyed)
+            // Shadow sessions can only be destroyed
+            | (SessionState::Shadow, SessionState::Destroyed)
             // Destroyed is terminal — no transitions
         )
     }
 
     /// Whether this state allows processing new turns.
     pub fn is_runnable(self) -> bool {
-        self == SessionState::Active
+        matches!(self, SessionState::Active | SessionState::ReadyForPrompt)
     }
 
     /// Whether this is a terminal state.
@@ -218,15 +255,29 @@ impl SessionStateMachine {
     fn default_transitions() -> Vec<SessionTransition> {
         vec![
             SessionTransition::new(SessionState::Created, SessionState::Active),
+            SessionTransition::new(SessionState::Created, SessionState::Spawning),
+            SessionTransition::new(SessionState::Created, SessionState::Shadow),
+            SessionTransition::new(SessionState::Spawning, SessionState::Created),
+            SessionTransition::new(SessionState::Spawning, SessionState::Destroyed),
             SessionTransition::new(SessionState::Active, SessionState::WaitingForApproval),
             SessionTransition::new(SessionState::Active, SessionState::Compacting),
             SessionTransition::new(SessionState::Active, SessionState::Suspended),
+            SessionTransition::new(SessionState::Active, SessionState::TrustRequired),
+            SessionTransition::new(SessionState::Active, SessionState::ReadyForPrompt),
+            SessionTransition::new(SessionState::Active, SessionState::Paused),
             SessionTransition::new(SessionState::WaitingForApproval, SessionState::Active),
             SessionTransition::new(SessionState::WaitingForApproval, SessionState::Suspended),
             SessionTransition::new(SessionState::Compacting, SessionState::Active),
             SessionTransition::new(SessionState::Compacting, SessionState::Archived),
             SessionTransition::new(SessionState::Suspended, SessionState::Active),
             SessionTransition::new(SessionState::Archived, SessionState::Destroyed),
+            SessionTransition::new(SessionState::TrustRequired, SessionState::Active),
+            SessionTransition::new(SessionState::TrustRequired, SessionState::Archived),
+            SessionTransition::new(SessionState::ReadyForPrompt, SessionState::Active),
+            SessionTransition::new(SessionState::Paused, SessionState::Active),
+            SessionTransition::new(SessionState::Paused, SessionState::Archived),
+            SessionTransition::new(SessionState::Paused, SessionState::Destroyed),
+            SessionTransition::new(SessionState::Shadow, SessionState::Destroyed),
         ]
     }
 

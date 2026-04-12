@@ -110,7 +110,7 @@ cron = "0.13"
 chrono = { version = "0.4", features = ["serde"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Async trait support
 async-trait = "0.1"

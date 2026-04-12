@@ -1,28 +1,26 @@
-# SERA 2.0 Phase 0 — Session Handoff
+# SERA 2.0 Phase 1 — Session Handoff
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**M2 milestone reached. M4 milestone reached.** Lanes D and F are complete. All Phase 0 lanes (A–F) are done.
+**Phase 1 progress.** Six commits on `sera20` implementing core execution substrate wiring:
 
-Six commits on `sera20`:
+1. **feat: wire DefaultHarness think step to LlmClient via LlmProvider trait.** Connected the four-method turn lifecycle's think step to actual LLM inference via sera-gateway's llm_client.rs, bridging DefaultHarness to language model execution.
 
-1. **`4fcfe21` — feat: rename sera-core → sera-gateway.** `git mv` + 3-file update (workspace Cargo.toml, crate Cargo.toml, CLAUDE.md). Clean diff.
+2. **feat: wire gateway chat handler through harness_dispatch.** Integrated sera-gateway's orchestrator to route chat operations through harness_dispatch::dispatch, replacing direct reasoning_loop calls with the new turn-based harness model.
 
-2. **`d60bf37` — feat: SQ/EQ envelope, transport spine, harness dispatch.** Submission/Event/Op envelope types, AppServerTransport (6 variants, InProcess always compiled), Transport trait, InProcessTransport (mpsc), StdioTransport (NDJSON child process), HarnessRegistry, PluginRegistry, SessionPersist (PartTable + SessionSnapshot stubs), KillSwitch (arm/disarm/handle_command), GenerationMarker, ConnectorRegistry. 8 gateway acceptance tests.
+3. **feat: wire NDJSON runtime loop to DefaultRuntime.execute_turn.** Connected sera-runtime's NDJSON child process loop to DefaultRuntime.execute_turn, enabling async turn execution via stdio transport.
 
-3. **`9120100` — feat: sera-runtime contract migration.** ContextEngine trait (ingest/assemble/compact/maintain), ContextPipeline + KvCachePipeline impls, PipelineCondenser + 9 Condenser impls (NoOp through LLM stubs), Handoff type, four-method turn lifecycle (observe/think/act/react), DOOM_LOOP_THRESHOLD=3, SubagentHandle stub, DefaultHarness. 11 runtime acceptance tests.
+4. **chore: delete deprecated TurnResult from sera-types.** Removed TurnResult from sera-types; it was deprecated in Phase 0 and is no longer referenced in active code.
 
-4. **`19c0e45` — chore: delete sera-docker shim.** All call sites in sera-gateway migrated to `sera_tools::sandbox::docker::DockerSandboxProvider`. sera-docker crate deleted.
+5. **feat: add SqlxSessionPersist for durable session storage.** Implemented sqlx-backed persistence for session parts (WorkflowTask, execution state, context snapshots) in sera-gateway's session_persist.rs.
 
-5. **`6b99041` — fix: complete M2 migration.** AgentRuntime::execute_turn returns TurnOutcome. default_runtime.rs uses new ContextEngine. Deleted: reasoning_loop.rs, tool_loop_detector.rs, context_pipeline.rs, context_assembler.rs. main.rs rewritten for NDJSON Submission/Event. bin/sera.rs local TurnResult renamed to MvsTurnResult. Integration tests updated.
-
-6. **`5a2e15d` — feat: Lane F scaffolds.** sera-testing: MockQueueBackend (4 tests) + MockSandboxProvider (4 tests). sera-session: 6-state SessionStateMachine (8 tests) + ContentBlock transcript (6 tests).
+6. **Queue backend was already wired in AppState from prior session.** QueueBackend integration into sera-gateway's AppState was already complete from an earlier handoff; Phase 1 verified and built upon it.
 
 ---
 
@@ -59,24 +57,25 @@ Six commits on `sera20`:
 
 ## 3. What's next — Phase 1
 
-Phase 0 is complete. All type contracts, trait boundaries, and infrastructure crates are in place. Phase 1 focuses on wiring the execution substrate:
+Phase 0 is complete. All type contracts, trait boundaries, and infrastructure crates are in place. Phase 1 execution substrate wiring is underway:
 
-### Phase 1 priorities
+### Phase 1 completed items
 
-1. **Runtime execution substrate** — sqlx persistence for WorkflowTask, apalis job workers, circle coordination, HITL routing
-2. **Model integration** — Wire LLM calls through the four-method lifecycle (think step), connect to LiteLLM gateway
-3. **Transport wiring** — Connect StdioTransport to gateway's harness dispatch, wire InProcessTransport for integrated mode
-4. **Compaction wiring** — Wire condensers into ContextEngine compact method, connect to token counting
-5. **sera-testing integration tests** — Use MockQueueBackend + MockSandboxProvider for full-stack integration tests
-6. **sera-hooks P1** — HookPoint::ConstitutionalGate enforcement, HookResult::updated_input
-7. **Enterprise features** — WebSocket/gRPC transport implementations (behind feature gates)
+- [x] Wire DefaultHarness think step to llm_client.rs
+- [x] Connect sera-gateway orchestrator to harness_dispatch::dispatch
+- [x] Wire sera-queue QueueBackend into AppState (already existed)
+- [x] Add sqlx persistence for session parts
+- [x] Delete deprecated TurnResult
+- [x] Wire NDJSON runtime loop to DefaultRuntime.execute_turn
 
-### Recommended first steps
+### Phase 1 remaining priorities
 
-1. Wire the `DefaultHarness` in sera-runtime to call LLM via `llm_client.rs` in the `think` step
-2. Connect sera-gateway's orchestrator to `harness_dispatch::dispatch` instead of direct reasoning_loop calls
-3. Add sqlx persistence for session parts (sera-gateway's `session_persist.rs`)
-4. Wire sera-queue's `QueueBackend` into sera-gateway's `AppState.queue_backend`
+1. **Compaction wiring** — Wire condensers into ContextEngine compact method, connect token counting
+2. **sera-hooks P1** — HookPoint::ConstitutionalGate enforcement, HookResult::updated_input
+3. **Execution workers** — apalis job workers replacing LocalQueueBackend for production queue
+4. **Circle coordination** — Wire circle dispatch into harness_dispatch
+5. **HITL routing** — Route to human-in-the-loop orchestrator via HitlRouter
+6. **Enterprise transports** — WebSocket/gRPC transport implementations (behind feature gates)
 
 ---
 

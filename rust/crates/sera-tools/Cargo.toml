@@ -1,0 +1,33 @@
+[package]
+name = "sera-tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sera-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+sha2 = "0.10"
+hex = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+
+# Feature-gated
+bollard = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+
+[features]
+default = ["docker"]
+docker = ["dep:bollard", "dep:futures-util"]
+wasm = []
+microvm = []
+external = []
+openshell = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+tempfile = { workspace = true }

@@ -1,0 +1,9 @@
+[package]
+name = "sera-secrets"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

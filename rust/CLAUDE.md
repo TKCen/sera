@@ -39,31 +39,39 @@ cargo check -p sera-core
 
 | Crate             | Type | Purpose                                                 |
 | ----------------- | ---- | ------------------------------------------------------- |
-| `sera-domain`     | lib  | Shared types, enums, IDs (leaf crate, no internal deps) |
+| `sera-types`      | lib  | Shared types, enums, IDs (leaf crate, no internal deps) |
 | `sera-config`     | lib  | Environment/file config loading                         |
 | `sera-db`         | lib  | PostgreSQL via sqlx, migrations, repositories           |
 | `sera-auth`       | lib  | API keys, JWT, OIDC, axum middleware                    |
 | `sera-events`     | lib  | Audit trail, Centrifugo pub/sub, lifecycle events       |
-| `sera-docker`     | lib  | Container lifecycle via bollard                         |
 | `sera-hooks`      | lib  | In-process hook registry + chain executor               |
 | `sera-hitl`       | lib  | HITL approval routing, escalation chains                |
 | `sera-workflow`   | lib  | Workflow engine, dreaming config, cron scheduling       |
+| `sera-telemetry`  | lib  | OTel tracing, AuditBackend, LaneFailureClass            |
+| `sera-queue`      | lib  | QueueBackend trait, LocalQueueBackend, GlobalThrottle    |
+| `sera-tools`      | lib  | SandboxProvider, SsrfValidator, BashAstChecker          |
+| `sera-errors`     | lib  | Error types scaffold                                    |
+| `sera-cache`      | lib  | Cache layer scaffold                                    |
+| `sera-secrets`    | lib  | Secrets management scaffold                             |
+| `sera-session`    | lib  | 6-state SessionStateMachine, ContentBlock transcript    |
 | `sera-gateway`    | bin  | Main API server + SQ/EQ gateway (axum)                  |
-| `sera-runtime`    | bin  | Agent worker binary — runs inside containers            |
+| `sera-runtime`    | both | Agent worker binary + lib (ContextEngine, Condensers)   |
 | `sera-tui`        | bin  | Terminal UI (ratatui) — replaces Go TUI                 |
-| `sera-testing`    | lib  | Test utilities, fixtures, golden tests                  |
+| `sera-testing`    | lib  | Test utilities, MockQueueBackend, MockSandboxProvider   |
 | `sera-byoh-agent` | bin  | BYOH agent reference implementation                     |
 
 ## Dependency Graph
 
 ```
-sera-domain (leaf)
+sera-types (leaf)
   └─ sera-config
   └─ sera-db ← sera-auth
-  └─ sera-events ← sera-docker
-  └─ sera-core (all above)
-  └─ sera-runtime (domain + config only)
-  └─ sera-tui (domain + reqwest only)
+  └─ sera-events
+  └─ sera-tools (sandbox, ssrf, kill-switch)
+  └─ sera-gateway (all above + queue + transport + envelope)
+  └─ sera-runtime (types + config + context-engine + condensers)
+  └─ sera-tui (types + reqwest only)
+  └─ sera-session (types + serde)
 ```
 
 ## Development Workflow

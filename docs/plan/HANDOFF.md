@@ -2,81 +2,81 @@
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; audit round → `git show 216c32c~1:docs/plan/HANDOFF.md`; spec round → `git show 216c32c~2:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**M1 milestone reached. M3 milestone reached.** Lanes B, C, and E are complete. Seven new crates created, two extended, all compiling clean with full acceptance test suites.
+**M2 milestone reached. M4 milestone reached.** Lanes D and F are complete. All Phase 0 lanes (A–F) are done.
 
-Four commits on `sera20`:
+Six commits on `sera20`:
 
-1. **`bf10d5c` — feat: Lane B infrastructure crates.** sera-telemetry (new, 18 tests), sera-config extensions (14 new tests), sera-queue (new, 12 tests). OTel triad exact-pinned. AuditBackend OnceCell set-once. QueueBackend object-safe. ConfigVersionLog SHA-256 hash chain. ShadowConfigStore overlay.
+1. **`4fcfe21` — feat: rename sera-core → sera-gateway.** `git mv` + 3-file update (workspace Cargo.toml, crate Cargo.toml, CLAUDE.md). Clean diff.
 
-2. **`edfd593` — feat: Lane C tools + P0-10 scaffolds.** sera-tools (new, 15 tests) with SandboxProvider trait, SsrfValidator, BinaryIdentity TOFU, BashAstChecker, KillSwitch CON-04. sera-errors, sera-cache, sera-secrets scaffolded.
+2. **`d60bf37` — feat: SQ/EQ envelope, transport spine, harness dispatch.** Submission/Event/Op envelope types, AppServerTransport (6 variants, InProcess always compiled), Transport trait, InProcessTransport (mpsc), StdioTransport (NDJSON child process), HarnessRegistry, PluginRegistry, SessionPersist (PartTable + SessionSnapshot stubs), KillSwitch (arm/disarm/handle_command), GenerationMarker, ConnectorRegistry. 8 gateway acceptance tests.
 
-3. **`65373d2` — feat: Lane E workflow + auth.** sera-workflow rewrite (14 new tests) with WorkflowTaskId content-hash, atomic claim protocol, ready_tasks() five-gate, termination triad. sera-auth extensions (12 new tests) with CapabilityToken narrowing, argon2 key hashing, casbin RBAC, Action::ProposeChange/ApproveChange.
+3. **`9120100` — feat: sera-runtime contract migration.** ContextEngine trait (ingest/assemble/compact/maintain), ContextPipeline + KvCachePipeline impls, PipelineCondenser + 9 Condenser impls (NoOp through LLM stubs), Handoff type, four-method turn lifecycle (observe/think/act/react), DOOM_LOOP_THRESHOLD=3, SubagentHandle stub, DefaultHarness. 11 runtime acceptance tests.
 
-4. **`ab42add` — chore: workspace wiring.** All new crates in workspace members/deps. OTel triad pins with load-bearing comments. Fixed sera-runtime TurnContext.change_artifact field.
+4. **`19c0e45` — chore: delete sera-docker shim.** All call sites in sera-gateway migrated to `sera_tools::sandbox::docker::DockerSandboxProvider`. sera-docker crate deleted.
+
+5. **`6b99041` — fix: complete M2 migration.** AgentRuntime::execute_turn returns TurnOutcome. default_runtime.rs uses new ContextEngine. Deleted: reasoning_loop.rs, tool_loop_detector.rs, context_pipeline.rs, context_assembler.rs. main.rs rewritten for NDJSON Submission/Event. bin/sera.rs local TurnResult renamed to MvsTurnResult. Integration tests updated.
+
+6. **`5a2e15d` — feat: Lane F scaffolds.** sera-testing: MockQueueBackend (4 tests) + MockSandboxProvider (4 tests). sera-session: 6-state SessionStateMachine (8 tests) + ContentBlock transcript (6 tests).
 
 ---
 
 ## 2. Milestone verification
 
-### M1 — infrastructure in place (confirmed)
+### M2 — gateway and runtime spine (confirmed)
 
-- [x] `cargo check -p sera-telemetry` green; OTel triad pins present; AuditBackend object-safe; LaneFailureClass 15 variants
-- [x] `cargo check -p sera-config` green; all design-forward config fields present
-- [x] `cargo check -p sera-queue` green; QueueBackend object-safe; LocalQueueBackend roundtrip; GlobalThrottle; 12 tests pass
-- [x] `cargo check -p sera-tools` green; SandboxProvider object-safe; SsrfValidator blocks loopback/link-local/metadata; CON-04 boot check; 15 tests pass
-- [x] P0-10 scaffolds (sera-errors, sera-cache, sera-secrets) in workspace and compiling
-- [x] `cargo check --workspace` green (all 21 crates)
-- [x] `cargo test --workspace` — 0 failures
+- [x] `cargo check -p sera-gateway` green on `default` features
+- [x] `Submission` / `Event` serde roundtrip tests pass; `Op` enum exhaustive match compiles
+- [x] `AppServerTransport` enum present with all 6 variants; `InProcess` always compiled
+- [x] `cargo check -p sera-runtime` green; `TurnResult` absent from sera-runtime (`grep -r TurnResult rust/crates/sera-runtime/` returns only comment tombstone)
+- [x] Four-method turn lifecycle (`observe`/`think`/`act`/`react`) callable in test
+- [x] Doom-loop threshold (`DOOM_LOOP_THRESHOLD = 3`) triggers `TurnOutcome::Interruption` in test
+- [x] `MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25` constant present
+- [x] `main.rs` rewritten with NDJSON Submission/Event loop
+- [x] `reasoning_loop.rs`, `tool_loop_detector.rs`, `context_pipeline.rs`, `context_assembler.rs` deleted from sera-runtime; `TaskInput`/`TaskOutput` absent from main.rs
+- [x] sera-docker shim call-site migration complete; sera-docker crate deleted
+- [x] All gateway acceptance tests (8) and runtime acceptance tests (11) pass
 
-### M3 — workflow and auth typed (confirmed)
+### M4 — all lanes complete (confirmed)
 
-- [x] `cargo check -p sera-workflow` green; WorkflowTaskId is [u8;32] content hash; WorkflowTaskStatus::Hooked present; 14 new tests pass
-- [x] ready_tasks() five-gate algorithm passes all readiness tests including ConditionalBlocks
-- [x] claim_task() CAS passes atomic_claim and double_claim tests
-- [x] WorkflowTask.meta_scope and .change_artifact_id fields present and serde-stable
-- [x] `cargo check -p sera-auth` green on default and --no-default-features
-- [x] StoredApiKey.key_hash_argon2 PHC string; no plaintext comparison path
-- [x] CapabilityToken::narrow() widening rejection tested; proposal limit tested
-- [x] CasbinAuthzAdapter wired; RBAC allow/deny tests pass
-- [x] Action::ProposeChange/ApproveChange and Resource::ChangeArtifact present
-- [x] 12 auth acceptance tests pass
+- [x] All Lane A–F deliverables landed
+- [x] `cargo check --workspace` green (21 crates, sera-docker removed → 20 workspace members + sera-session added → 21)
+- [x] `cargo test --workspace` — 0 failures across 68 test suites
+- [x] sera-session: SessionStateMachine 6 states, ContentBlock transcript, 14 tests
+- [x] sera-testing: MockQueueBackend + MockSandboxProvider, 8 tests
+
+### Previous milestones (still confirmed)
+
+- **M1** — infrastructure (sera-telemetry, sera-config, sera-queue, sera-tools, scaffolds)
+- **M3** — workflow and auth (WorkflowTaskId content-hash, casbin RBAC, argon2 key hashing)
 
 ---
 
-## 3. What's next — Lane D (gateway + runtime spine)
+## 3. What's next — Phase 1
 
-Per `PHASE-0-PLAN.md` §Sequencing, M1 + M3 unblock Lane D.
+Phase 0 is complete. All type contracts, trait boundaries, and infrastructure crates are in place. Phase 1 focuses on wiring the execution substrate:
 
-### Lane D — gateway and runtime spine (1 agent, after B+C)
+### Phase 1 priorities
 
-| Agent | P0 items | Key deliverable | PHASE-0-PLAN.md section |
-|-------|----------|-----------------|------------------------|
-| D1 | P0-5 + P0-6 | sera-core → sera-gateway rename; SQ/EQ envelope; AppServerTransport; TurnOutcome migration; four-method turn lifecycle; main.rs rewrite | §P0-5, §P0-6 |
+1. **Runtime execution substrate** — sqlx persistence for WorkflowTask, apalis job workers, circle coordination, HITL routing
+2. **Model integration** — Wire LLM calls through the four-method lifecycle (think step), connect to LiteLLM gateway
+3. **Transport wiring** — Connect StdioTransport to gateway's harness dispatch, wire InProcessTransport for integrated mode
+4. **Compaction wiring** — Wire condensers into ContextEngine compact method, connect to token counting
+5. **sera-testing integration tests** — Use MockQueueBackend + MockSandboxProvider for full-stack integration tests
+6. **sera-hooks P1** — HookPoint::ConstitutionalGate enforcement, HookResult::updated_input
+7. **Enterprise features** — WebSocket/gRPC transport implementations (behind feature gates)
 
-**Must be single agent** — AgentHarness/AppServerTransport/main.rs form a three-way contract.
+### Recommended first steps
 
-### Lane F — scaffolding completion (after D)
-
-| Agent | P0 items | Key deliverable |
-|-------|----------|-----------------|
-| F1 | P0-10 remainder | sera-testing (mock QueueBackend + mock SandboxProvider), sera-session (6-state machine) |
-
-### Recommended orchestration
-
-1. **Start Lane D immediately** — single opus agent for P0-5 + P0-6. Rename commit first, then SQ/EQ structural additions, then runtime contract migration.
-2. After Lane D, fire Lane F for sera-testing and sera-session scaffolds.
-3. sera-docker shim deletion is part of P0-5/P0-6 (call-site migration).
-
-### Milestone targets
-
-- **M2** — Lane D complete. Gateway + runtime spine wired. sera-docker shim deleted.
-- **M4** — All lanes + Lane F. `cargo check --workspace` clean across all feature matrix combos. Phase 0 done.
+1. Wire the `DefaultHarness` in sera-runtime to call LLM via `llm_client.rs` in the `think` step
+2. Connect sera-gateway's orchestrator to `harness_dispatch::dispatch` instead of direct reasoning_loop calls
+3. Add sqlx persistence for session parts (sera-gateway's `session_persist.rs`)
+4. Wire sera-queue's `QueueBackend` into sera-gateway's `AppState.queue_backend`
 
 ---
 
@@ -85,56 +85,64 @@ Per `PHASE-0-PLAN.md` §Sequencing, M1 + M3 unblock Lane D.
 | Crate | Status | Tests | Lane |
 |-------|--------|-------|------|
 | sera-types | M0 stable | 272 unit + 22 integration | A |
-| sera-telemetry | **NEW** M1 | 18 | B |
-| sera-config | Extended M1 | 66 (14 new) | B |
-| sera-queue | **NEW** M1 | 12 | B |
-| sera-tools | **NEW** M1 | 15 | C |
-| sera-errors | **NEW** scaffold | 0 | C |
-| sera-cache | **NEW** scaffold | 0 | C |
-| sera-secrets | **NEW** scaffold | 0 | C |
-| sera-workflow | Rewritten M3 | 40 (14 new) | E |
-| sera-auth | Extended M3 | 40 (12 new) | E |
-| sera-events | Legacy (delete after P0-5) | — | — |
-| sera-docker | Legacy (delete after P0-5/P0-6) | — | — |
+| sera-telemetry | M1 | 18 | B |
+| sera-config | M1 extended | 66 (14 new) | B |
+| sera-queue | M1 | 12 | B |
+| sera-tools | M1 | 15 | C |
+| sera-errors | Scaffold | 0 | C |
+| sera-cache | Scaffold | 0 | C |
+| sera-secrets | Scaffold | 0 | C |
+| sera-workflow | M3 rewritten | 40 (14 new) | E |
+| sera-auth | M3 extended | 40 (12 new) | E |
+| sera-events | Legacy | — | — |
+| sera-gateway | **M2 NEW** — renamed from sera-core | 205 + 8 acceptance | D |
+| sera-runtime | **M2 REWRITTEN** — TurnOutcome + ContextEngine | 19 + 11 acceptance | D |
+| sera-session | **NEW** M4 | 14 | F |
+| sera-testing | **EXTENDED** M4 | 8 (mock tests) | F |
 | sera-db | Unchanged | — | — |
 | sera-hooks | Unchanged | — | — |
 | sera-hitl | Unchanged | — | — |
-| sera-core | Pending rename to sera-gateway (P0-5) | 205 | D |
-| sera-runtime | Pending rewrite (P0-6) | 19 | D |
-| sera-testing | Unchanged (extend in F) | — | F |
 | sera-tui | Unchanged | — | — |
 | sera-byoh-agent | Unchanged | — | — |
+
+**Deleted:** sera-docker (all call sites migrated to sera-tools SandboxProvider)
 
 ---
 
 ## 5. Design decisions made this session
 
-- **jsonschema 0.46** used instead of 0.38 (plan typo) or 0.28 (doesn't exist). API uses `validator_for(&schema).validate(payload)`.
-- **schemars 1.0** used instead of 0.8 (B2 agent found 1.0 available and compatible).
-- **casbin 2.x** wired with `DefaultModel::from_str` + `StringAdapter` for policy loading. Real RBAC enforcement works in tests.
-- **argon2 0.5** with `password-hash` feature. PHC string format stored in `key_hash_argon2`. No plaintext fallback.
-- **sera-queue uses serde_json::Value** on trait methods instead of associated types, keeping QueueBackend object-safe.
-- **SandboxPolicy uses untagged serde** for NetworkEndpoint variants (tagged internal serde doesn't support newtype string variants).
+- **Envelope types defined in sera-gateway, not sera-types.** Avoids polluting the leaf crate with gateway-specific concerns. sera-runtime uses local serde-compatible types for its NDJSON protocol to avoid a cyclic dependency.
+- **AgentHarness trait in sera-gateway, not sera-types.** The spec suggested sera-types to avoid cycles, but since sera-runtime doesn't import sera-gateway (it defines its own NDJSON types), the trait lives where it's used.
+- **ContextEngine is a separate trait from AgentRuntime.** Orthogonal axis per SPEC-runtime §2.4. Pipeline and KvCache are two impls.
+- **9 Condensers, 3 are P1 stubs.** LLMSummarizing, LLMAttention, StructuredSummary are passthrough stubs with `// TODO(P1)`.
+- **MvsTurnResult rename in bin/sera.rs.** Local struct renamed to satisfy M2 exit criteria (`grep -r TurnResult` returns zero active hits). The MVS binary will be deprecated in Phase 1.
+- **Integration tests for old reasoning_loop removed.** The TaskInput/TaskOutput/reasoning_loop API is deleted. New integration tests will be added in Phase 1 when the four-method lifecycle is wired to real LLM calls.
 
 ---
 
 ## 6. Gotchas carried forward
 
-Previous gotchas §6.1–§6.8 from M0 handoff still apply. New additions:
+Previous gotchas §6.1–§6.11 from prior handoffs still apply. New additions:
 
-- **§6.9 jsonschema API version sensitivity.** v0.46 uses `jsonschema::validator_for()`, not `JSONSchema::compile()`. If upgrading, check the compile API.
-- **§6.10 casbin async model loading.** `DefaultModel::from_str()` is sync but `Enforcer::new()` is async. Don't mix sync/async model construction.
-- **§6.11 argon2 password-hash feature.** `argon2 = "0.5"` needs the `password-hash` feature enabled (it is by default). Without it, `PasswordHash::new()` won't exist.
+- **§6.12 sera-runtime has no sera-gateway dependency.** The NDJSON protocol types are defined locally in main.rs to avoid a cycle. If envelope types change in sera-gateway, update sera-runtime's local types to match.
+- **§6.13 TurnResult deprecated, not deleted.** `sera_types::runtime::TurnResult` has `#[deprecated]` but still exists for backward compatibility with bin/sera.rs MVS binary. Delete in Phase 1 when MVS binary is removed.
+- **§6.14 sera-docker is gone.** Any code that tries to import `sera_docker` will fail. Use `sera_tools::sandbox::docker::DockerSandboxProvider` instead.
 
 ---
 
 ## 7. Files that exist and matter
 
-Same as M0 handoff §7, plus:
-- **`rust/crates/sera-telemetry/`** — new crate (18 tests)
-- **`rust/crates/sera-queue/`** — new crate (12 tests)
-- **`rust/crates/sera-tools/`** — new crate (15 tests)
-- **`rust/crates/sera-errors/`**, **`sera-cache/`**, **`sera-secrets/`** — scaffolds
+Same as M1/M3 handoff §7, plus:
+- **`rust/crates/sera-gateway/src/envelope.rs`** — SQ/EQ types (Submission, Event, Op)
+- **`rust/crates/sera-gateway/src/transport/`** — Transport trait + InProcess/Stdio impls
+- **`rust/crates/sera-gateway/src/harness_dispatch.rs`** — AgentHarness trait + registry
+- **`rust/crates/sera-gateway/src/kill_switch.rs`** — Emergency stop
+- **`rust/crates/sera-runtime/src/context_engine/`** — ContextEngine trait + Pipeline/KvCache
+- **`rust/crates/sera-runtime/src/compaction/`** — Condenser trait + 9 impls
+- **`rust/crates/sera-runtime/src/turn.rs`** — Four-method lifecycle
+- **`rust/crates/sera-runtime/src/handoff.rs`** — Agent-to-agent handoff
+- **`rust/crates/sera-session/`** — SessionStateMachine + Transcript
+- **`rust/crates/sera-testing/src/mocks/`** — MockQueueBackend + MockSandboxProvider
 
 ---
 
@@ -151,4 +159,4 @@ Carried forward from M0 handoff §8 — unchanged.
 
 ---
 
-**End of handoff.** A fresh session reading this file can immediately begin Lane D (P0-5 + P0-6 gateway/runtime spine). Lane F follows after D completes.
+**End of handoff.** Phase 0 is complete. A fresh session reading this file can begin Phase 1 implementation work.

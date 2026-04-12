@@ -144,4 +144,11 @@ Carried forward from M0 handoff §8 — unchanged.
 
 ---
 
+## 9. Session tooling
+
+- **Task tracking:** Use `bd` (beads) for all task tracking. Run `bd prime` for full workflow context. Do NOT use TodoWrite, TaskCreate, or markdown TODO lists.
+- **Knowledge management:** Use `omc wiki` for persistent knowledge across sessions. Significant discoveries, design decisions, and environment quirks should be captured via `wiki add` or `wiki ingest`. Query existing knowledge with `wiki query` before re-investigating known issues.
+
+---
+
 **End of handoff.** A fresh session reading this file can immediately begin Lane D (P0-5 + P0-6 gateway/runtime spine). Lane F follows after D completes.

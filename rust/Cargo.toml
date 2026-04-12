@@ -20,6 +20,7 @@ members = [
   "crates/sera-errors",
   "crates/sera-cache",
   "crates/sera-secrets",
+  "crates/sera-session",
 ]
 
 [workspace.package]
@@ -143,6 +144,7 @@ sera-queue = { path = "crates/sera-queue" }
 sera-errors = { path = "crates/sera-errors" }
 sera-cache = { path = "crates/sera-cache" }
 sera-secrets = { path = "crates/sera-secrets" }
+sera-session = { path = "crates/sera-session" }
 
 [profile.release]
 lto = true

@@ -3247,6 +3247,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-session"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "sera-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "sera-telemetry"
 version = "0.1.0"
 dependencies = [
@@ -3270,8 +3283,11 @@ dependencies = [
 name = "sera-testing"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "insta",
  "sera-db",
+ "sera-queue",
+ "sera-tools",
  "sera-types",
  "serde",
  "serde_json",

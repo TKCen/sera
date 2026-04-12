@@ -1,0 +1,182 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tokio::sync::Mutex;
+use async_trait::async_trait;
+use sera_tools::sandbox::{
+    ExecResult, SandboxConfig, SandboxError, SandboxHandle, SandboxProvider,
+};
+
+struct MockSandbox {
+    _config: SandboxConfig,
+    files: HashMap<String, Vec<u8>>,
+    status: String,
+}
+
+/// In-memory mock sandbox provider for testing.
+pub struct MockSandboxProvider {
+    sandboxes: Arc<Mutex<HashMap<String, MockSandbox>>>,
+    next_id: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl MockSandboxProvider {
+    pub fn new() -> Self {
+        Self {
+            sandboxes: Arc::new(Mutex::new(HashMap::new())),
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        }
+    }
+}
+
+impl Default for MockSandboxProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SandboxProvider for MockSandboxProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    async fn create(&self, config: &SandboxConfig) -> Result<SandboxHandle, SandboxError> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let handle_str = format!("mock-sandbox-{id}");
+        let mut sandboxes = self.sandboxes.lock().await;
+        sandboxes.insert(
+            handle_str.clone(),
+            MockSandbox {
+                _config: config.clone(),
+                files: HashMap::new(),
+                status: "running".to_string(),
+            },
+        );
+        Ok(SandboxHandle(handle_str))
+    }
+
+    async fn execute(
+        &self,
+        handle: &SandboxHandle,
+        command: &str,
+        _env: &HashMap<String, String>,
+    ) -> Result<ExecResult, SandboxError> {
+        let sandboxes = self.sandboxes.lock().await;
+        if !sandboxes.contains_key(&handle.0) {
+            return Err(SandboxError::NotFound);
+        }
+        Ok(ExecResult {
+            exit_code: 0,
+            stdout: format!("mock: {command}"),
+            stderr: String::new(),
+        })
+    }
+
+    async fn read_file(
+        &self,
+        handle: &SandboxHandle,
+        path: &str,
+    ) -> Result<Vec<u8>, SandboxError> {
+        let sandboxes = self.sandboxes.lock().await;
+        let sandbox = sandboxes.get(&handle.0).ok_or(SandboxError::NotFound)?;
+        sandbox
+            .files
+            .get(path)
+            .cloned()
+            .ok_or(SandboxError::NotFound)
+    }
+
+    async fn write_file(
+        &self,
+        handle: &SandboxHandle,
+        path: &str,
+        content: &[u8],
+    ) -> Result<(), SandboxError> {
+        let mut sandboxes = self.sandboxes.lock().await;
+        let sandbox = sandboxes.get_mut(&handle.0).ok_or(SandboxError::NotFound)?;
+        sandbox.files.insert(path.to_string(), content.to_vec());
+        Ok(())
+    }
+
+    async fn destroy(&self, handle: &SandboxHandle) -> Result<(), SandboxError> {
+        let mut sandboxes = self.sandboxes.lock().await;
+        sandboxes.remove(&handle.0).ok_or(SandboxError::NotFound)?;
+        Ok(())
+    }
+
+    async fn status(&self, handle: &SandboxHandle) -> Result<String, SandboxError> {
+        let sandboxes = self.sandboxes.lock().await;
+        let sandbox = sandboxes.get(&handle.0).ok_or(SandboxError::NotFound)?;
+        Ok(sandbox.status.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mock_sandbox_create_destroy() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+        let status = provider.status(&handle).await.unwrap();
+        assert_eq!(status, "running");
+        provider.destroy(&handle).await.unwrap();
+        // After destroy, status should return NotFound
+        let err = provider.status(&handle).await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_exec_returns_command() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+        let result = provider
+            .execute(&handle, "echo hello", &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "mock: echo hello");
+        assert!(result.stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_file_roundtrip() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+        let content = b"hello, world!";
+        provider
+            .write_file(&handle, "/tmp/test.txt", content)
+            .await
+            .unwrap();
+        let read_back = provider.read_file(&handle, "/tmp/test.txt").await.unwrap();
+        assert_eq!(read_back, content);
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_not_found() {
+        let provider = MockSandboxProvider::new();
+        let bogus = SandboxHandle("does-not-exist".to_string());
+
+        let err = provider
+            .execute(&bogus, "ls", &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+
+        let err = provider.read_file(&bogus, "/any").await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+
+        let err = provider
+            .write_file(&bogus, "/any", b"data")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+
+        let err = provider.destroy(&bogus).await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+
+        let err = provider.status(&bogus).await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
+}

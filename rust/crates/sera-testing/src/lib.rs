@@ -5,3 +5,5 @@
 //! - Golden/snapshot test helpers (via `insta`)
 //! - Contract test runners (compare Rust vs TypeScript output)
 //! - Test fixtures for manifests, agents, policies
+
+pub mod mocks;

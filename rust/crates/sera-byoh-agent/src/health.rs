@@ -1,5 +1,5 @@
 use axum::{routing::get, Json, Router};
-use sera_domain::HealthResponse;
+use sera_types::HealthResponse;
 use tracing::info;
 
 pub async fn serve(port: u16) {

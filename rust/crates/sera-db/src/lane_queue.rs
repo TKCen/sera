@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
-use sera_domain::event::Event;
+use sera_types::event::Event;
 
 /// How queued messages are handled while a run is active for this session.
 ///
@@ -264,7 +264,7 @@ impl LaneQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sera_domain::{
+    use sera_types::{
         event::{Event, EventSource},
         principal::{PrincipalId, PrincipalKind, PrincipalRef},
     };

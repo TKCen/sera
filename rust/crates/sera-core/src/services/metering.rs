@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use sera_db::metering::MeteringRepository;
 use sera_db::DbError;
-use sera_domain::metering::BudgetStatus;
+use sera_types::metering::BudgetStatus;
 
 /// Metering service error types.
 #[derive(Debug, Error)]

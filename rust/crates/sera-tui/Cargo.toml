@@ -8,7 +8,7 @@ name = "sera-tui"
 path = "src/main.rs"
 
 [dependencies]
-sera-domain.workspace = true
+sera-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

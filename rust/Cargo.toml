@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/sera-domain",
+  "crates/sera-types",
   "crates/sera-config",
   "crates/sera-db",
   "crates/sera-auth",
@@ -108,7 +108,7 @@ clap = { version = "4", features = ["derive"] }
 async-trait = "0.1"
 
 # Workspace crates
-sera-domain = { path = "crates/sera-domain" }
+sera-types = { path = "crates/sera-types" }
 sera-config = { path = "crates/sera-config" }
 sera-db = { path = "crates/sera-db" }
 sera-auth = { path = "crates/sera-auth" }

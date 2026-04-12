@@ -16,7 +16,7 @@
 //! ```rust,ignore
 //! use std::sync::Arc;
 //! use sera_hooks::{ChainExecutor, HookRegistry};
-//! use sera_domain::hook::{HookChain, HookContext, HookPoint};
+//! use sera_types::hook::{HookChain, HookContext, HookPoint};
 //!
 //! let mut registry = HookRegistry::new();
 //! registry.register(Box::new(MyHook::new()));

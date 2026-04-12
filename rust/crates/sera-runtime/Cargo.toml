@@ -12,7 +12,7 @@ name = "sera-runtime"
 path = "src/main.rs"
 
 [dependencies]
-sera-domain.workspace = true
+sera-types.workspace = true
 sera-config.workspace = true
 sera-db.workspace = true
 rusqlite.workspace = true

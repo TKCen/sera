@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sera_domain::hook::{HookContext, HookMetadata, HookResult};
+use sera_types::hook::{HookContext, HookMetadata, HookResult};
 
 use crate::error::HookError;
 

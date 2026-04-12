@@ -5,7 +5,7 @@
 //! See SPEC-runtime §3 for the complete turn loop design.
 
 use async_trait::async_trait;
-use sera_domain::runtime::{
+use sera_types::runtime::{
     AgentRuntime, HealthStatus, RuntimeCapabilities, RuntimeError, TokenUsage, TurnContext,
     TurnResult,
 };

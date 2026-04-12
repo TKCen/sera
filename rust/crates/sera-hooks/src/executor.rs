@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use sera_domain::hook::{ChainResult, HookChain, HookContext, HookPoint, HookResult};
+use sera_types::hook::{ChainResult, HookChain, HookContext, HookPoint, HookResult};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 

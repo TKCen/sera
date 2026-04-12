@@ -9,7 +9,7 @@ mod heartbeat;
 mod llm;
 
 use sera_config::SeraConfig;
-use sera_domain::{TaskInput, TaskOutput};
+use sera_types::{TaskInput, TaskOutput};
 use std::io::{self, BufRead};
 use tokio::signal;
 use tracing::{error, info};

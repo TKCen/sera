@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-sera-domain.workspace = true
+sera-types.workspace = true
 sera-db.workspace = true
 sqlx.workspace = true
 serde.workspace = true

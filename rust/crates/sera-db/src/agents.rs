@@ -2,7 +2,7 @@
 
 use sqlx::PgPool;
 
-use sera_domain::agent::{AgentInstance, AgentStatus};
+use sera_types::agent::{AgentInstance, AgentStatus};
 use crate::error::DbError;
 
 /// Row type for agent_templates table.

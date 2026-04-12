@@ -84,7 +84,7 @@ impl Default for ToolRegistry {
 // ── Trait-based registry (SPEC-tools aligned) ────────────────────────────────
 
 use std::collections::HashMap;
-use sera_domain::tool::{Tool, ToolInput, ToolOutput, ToolError, ToolContext, ToolMetadata};
+use sera_types::tool::{Tool, ToolInput, ToolOutput, ToolError, ToolContext, ToolMetadata};
 
 /// Spec-aligned tool registry using the Tool trait.
 #[allow(dead_code)]
@@ -163,12 +163,12 @@ impl Default for TraitToolRegistry {
 #[cfg(test)]
 mod trait_registry_tests {
     use super::TraitToolRegistry;
-    use sera_domain::tool::{
+    use sera_types::tool::{
         AuditHandle, CredentialBag, ExecutionTarget, FunctionParameters, RiskLevel,
         SessionRef, Tool, ToolContext, ToolError, ToolInput, ToolMetadata, ToolOutput,
         ToolPolicy, ToolProfile, ToolSchema,
     };
-    use sera_domain::principal::{PrincipalId, PrincipalRef};
+    use sera_types::principal::{PrincipalId, PrincipalRef};
     use std::collections::HashMap;
 
     // ── Mock tool for testing ─────────────────────────────────────────────
@@ -216,7 +216,7 @@ mod trait_registry_tests {
             session: SessionRef::new("test-session"),
             principal: PrincipalRef {
                 id: PrincipalId("agent-001".to_string()),
-                kind: sera_domain::principal::PrincipalKind::Agent,
+                kind: sera_types::principal::PrincipalKind::Agent,
             },
             credentials: CredentialBag::new(),
             policy,

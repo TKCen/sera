@@ -1,4 +1,4 @@
-use sera_domain::hook::HookPoint;
+use sera_types::hook::HookPoint;
 use thiserror::Error;
 
 /// Errors produced by the hook registry and chain executor.

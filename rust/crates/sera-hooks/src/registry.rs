@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sera_domain::hook::HookMetadata;
+use sera_types::hook::HookMetadata;
 use tracing::debug;
 
 use crate::hook_trait::Hook;

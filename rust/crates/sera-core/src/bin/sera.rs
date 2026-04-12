@@ -32,11 +32,11 @@ use sera_config::manifest_loader::{
 use sera_config::secrets::SecretResolver;
 use sera_db::lane_queue::{LaneQueue, QueueMode};
 use sera_db::sqlite::SqliteDb;
-use sera_domain::event::Event as DomainEvent;
-use sera_domain::hook::{HookChain, HookContext, HookPoint, HookResult};
-use sera_domain::principal::{PrincipalId, PrincipalKind, PrincipalRef};
+use sera_types::event::Event as DomainEvent;
+use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
+use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_hooks::{ChainExecutor, HookRegistry};
-use sera_domain::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
+use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 use sera_runtime::context::ContextManager;
 use sera_runtime::tools::mvs_tools::MvsToolRegistry;
 
@@ -900,7 +900,7 @@ async fn run_hook_point(
     point: HookPoint,
     chains: &[HookChain],
     ctx: HookContext,
-) -> sera_domain::hook::ChainResult {
+) -> sera_types::hook::ChainResult {
     match state.chain_executor.execute_at_point(point, chains, ctx).await {
         Ok(result) => {
             if result.hooks_executed > 0 {
@@ -915,7 +915,7 @@ async fn run_hook_point(
         }
         Err(e) => {
             tracing::warn!(point = ?point, error = %e, "Hook chain error (fail-open, continuing)");
-            sera_domain::hook::ChainResult {
+            sera_types::hook::ChainResult {
                 context: HookContext::new(point),
                 outcome: HookResult::pass(),
                 hooks_executed: 0,

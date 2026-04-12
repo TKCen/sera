@@ -24,8 +24,8 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
-    use sera_domain::principal::{Principal, PrincipalId, PrincipalKind, PrincipalRef};
-    use sera_domain::tool::RiskLevel;
+    use sera_types::principal::{Principal, PrincipalId, PrincipalKind, PrincipalRef};
+    use sera_types::tool::RiskLevel;
 
     use super::*;
 

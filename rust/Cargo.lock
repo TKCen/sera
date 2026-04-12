@@ -2377,7 +2377,7 @@ dependencies = [
  "axum",
  "jsonwebtoken",
  "sera-db",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2392,7 +2392,7 @@ dependencies = [
  "axum",
  "reqwest",
  "sera-config",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "tokio",
@@ -2406,7 +2406,7 @@ version = "0.1.0"
 dependencies = [
  "notify",
  "notify-debouncer-mini",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2439,12 +2439,12 @@ dependencies = [
  "sera-config",
  "sera-db",
  "sera-docker",
- "sera-domain",
  "sera-events",
  "sera-hitl",
  "sera-hooks",
  "sera-runtime",
  "sera-testing",
+ "sera-types",
  "sera-workflow",
  "serde",
  "serde_json",
@@ -2474,7 +2474,7 @@ dependencies = [
  "hex",
  "rand 0.8.5",
  "rusqlite",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "sha2",
@@ -2493,8 +2493,8 @@ version = "0.1.0"
 dependencies = [
  "bollard",
  "futures-util",
- "sera-domain",
  "sera-events",
+ "sera-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2504,28 +2504,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "sera-domain"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "sera-events"
 version = "0.1.0"
 dependencies = [
  "jsonwebtoken",
  "reqwest",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "sha2",
@@ -2541,7 +2525,7 @@ name = "sera-hitl"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2555,7 +2539,7 @@ name = "sera-hooks"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2577,7 +2561,7 @@ dependencies = [
  "rusqlite",
  "sera-config",
  "sera-db",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2596,7 +2580,7 @@ version = "0.1.0"
 dependencies = [
  "insta",
  "sera-db",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "sqlx",
@@ -2611,7 +2595,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "reqwest",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2622,12 +2606,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-types"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "sera-workflow"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "cron",
- "sera-domain",
+ "sera-types",
  "serde",
  "serde_json",
  "thiserror",

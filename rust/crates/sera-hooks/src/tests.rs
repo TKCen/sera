@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sera_domain::hook::{
+use sera_types::hook::{
     HookChain, HookContext, HookInstance, HookMetadata, HookPoint, HookResult,
 };
 

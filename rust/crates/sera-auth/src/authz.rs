@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use sera_domain::principal::PrincipalRef;
+use sera_types::principal::PrincipalRef;
 
 // ---------------------------------------------------------------------------
 // Action
@@ -200,7 +200,7 @@ impl AuthorizationProvider for DefaultAuthzProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sera_domain::principal::{PrincipalId, PrincipalKind};
+    use sera_types::principal::{PrincipalId, PrincipalKind};
 
     fn make_principal_ref() -> PrincipalRef {
         PrincipalRef {

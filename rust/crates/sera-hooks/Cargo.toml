@@ -6,7 +6,7 @@ license.workspace = true
 description = "In-process hook registry and chain executor for SERA"
 
 [dependencies]
-sera-domain = { workspace = true }
+sera-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
-use sera_domain::tool::ToolDefinition;
+use sera_types::tool::ToolDefinition;
 
 /// Context for a single agent turn, mutated in place by each pipeline step.
 #[derive(Debug, Clone)]

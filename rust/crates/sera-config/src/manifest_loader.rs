@@ -8,11 +8,11 @@
 //! environment variables: `SERA_SECRET_<PATH>` where path separators
 //! become underscores and the whole thing is uppercased.
 
-use sera_domain::config_manifest::{
+use sera_types::config_manifest::{
     AgentSpec, ConfigManifest, ConfigManifestError, ConnectorSpec, InstanceSpec, ProviderSpec,
     RawManifest, ResourceKind,
 };
-use sera_domain::hook::HookChain;
+use sera_types::hook::HookChain;
 use std::path::Path;
 
 /// All parsed and validated manifests from a SERA config file, organized by kind.
@@ -459,7 +459,7 @@ spec:
             kind: "openai".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
             default_model: None,
-            api_key: Some(sera_domain::config_manifest::SecretRef {
+            api_key: Some(sera_types::config_manifest::SecretRef {
                 secret: "providers/openai/api-key".to_string(),
             }),
         };
@@ -536,7 +536,7 @@ spec:
         let specs = set.hook_chain_specs();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "content-filter-chain");
-        assert_eq!(specs[0].point, sera_domain::hook::HookPoint::PreRoute);
+        assert_eq!(specs[0].point, sera_types::hook::HookPoint::PreRoute);
         assert_eq!(specs[0].hooks.len(), 1);
         assert!(specs[0].fail_open);
     }

@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sera_domain::principal::PrincipalRef;
+use sera_types::principal::PrincipalRef;
 use uuid::Uuid;
 
 use crate::types::{ApprovalSpec, ApprovalTarget, ApprovalRouting};

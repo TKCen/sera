@@ -1,6 +1,6 @@
 //! ApprovalRouter — resolves routing configuration into escalation chains.
 
-use sera_domain::tool::RiskLevel;
+use sera_types::tool::RiskLevel;
 
 use crate::mode::EnforcementMode;
 use crate::types::{ApprovalPolicy, ApprovalRouting, ApprovalTarget};

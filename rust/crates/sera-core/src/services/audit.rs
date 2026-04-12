@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use sera_db::audit::{AuditRepository, AuditRow};
 use sera_events::audit::AuditHashChain;
 use sera_events::centrifugo::CentrifugoClient;
-use sera_domain::audit::ActorType;
+use sera_types::audit::ActorType;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuditError {
@@ -137,9 +137,9 @@ impl AuditService {
         let rows = AuditRepository::get_chain_for_verification(&self.pool, count).await?;
 
         // Convert AuditRow to AuditRecord for verification
-        let records: Vec<sera_domain::audit::AuditRecord> = rows
+        let records: Vec<sera_types::audit::AuditRecord> = rows
             .into_iter()
-            .map(|row| sera_domain::audit::AuditRecord {
+            .map(|row| sera_types::audit::AuditRecord {
                 id: row.sequence.to_string(), // Use sequence as ID for now
                 sequence: row.sequence.to_string(),
                 timestamp: row

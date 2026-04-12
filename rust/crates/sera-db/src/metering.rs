@@ -211,7 +211,7 @@ impl MeteringRepository {
     pub async fn check_budget(
         pool: &PgPool,
         agent_id: &str,
-    ) -> Result<sera_domain::metering::BudgetStatus, DbError> {
+    ) -> Result<sera_types::metering::BudgetStatus, DbError> {
         let quota = Self::get_quota(pool, agent_id).await?;
 
         let (hourly_quota, daily_quota) = match &quota {
@@ -228,7 +228,7 @@ impl MeteringRepository {
         let allowed = (hourly_quota == 0 || hourly_used < hourly_quota)
             && (daily_quota == 0 || daily_used < daily_quota);
 
-        Ok(sera_domain::metering::BudgetStatus {
+        Ok(sera_types::metering::BudgetStatus {
             allowed,
             hourly_used: hourly_used as u64,
             hourly_quota: hourly_quota as u64,

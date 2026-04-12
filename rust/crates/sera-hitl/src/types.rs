@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use sera_domain::principal::PrincipalRef;
-use sera_domain::tool::RiskLevel;
+use sera_types::principal::PrincipalRef;
+use sera_types::tool::RiskLevel;
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ members = [
   "crates/sera-auth",
   "crates/sera-events",
   "crates/sera-docker",
+  "crates/sera-tools",
   "crates/sera-testing",
   "crates/sera-core",
   "crates/sera-runtime",
@@ -15,6 +16,11 @@ members = [
   "crates/sera-hitl",
   "crates/sera-hooks",
   "crates/sera-workflow",
+  "crates/sera-telemetry",
+  "crates/sera-queue",
+  "crates/sera-errors",
+  "crates/sera-cache",
+  "crates/sera-secrets",
 ]
 
 [workspace.package]
@@ -66,6 +72,8 @@ hex = "0.4"
 base64 = "0.22"
 urlencoding = "2"
 zeroize = { version = "1", features = ["derive"] }
+argon2 = "0.5"
+casbin = "2"
 
 # WebSocket
 tokio-tungstenite = { version = "0.26", features = ["connect", "rustls-tls-webpki-roots"] }
@@ -107,18 +115,36 @@ clap = { version = "4", features = ["derive"] }
 # Async trait support
 async-trait = "0.1"
 
+# OTel triad — EXACT version pins are load-bearing.
+# These three crates must move together; drift produces compile-time trait-bound errors.
+# See SPEC-dependencies §8.4 and HANDOFF §6.2 before changing any of these pins.
+opentelemetry        = { version = "=0.27", features = ["trace"] }   # EXACT — load-bearing triad
+opentelemetry-otlp   = "=0.27"   # EXACT
+tracing-opentelemetry = "=0.28"  # EXACT
+
+once_cell = "1"
+figment    = { version = "0.10", features = ["env", "toml"] }
+schemars   = { version = "1", features = ["derive"] }
+jsonschema = { version = "0.46", default-features = false }
+
 # Workspace crates
 sera-types = { path = "crates/sera-types" }
+sera-telemetry = { path = "crates/sera-telemetry" }
 sera-config = { path = "crates/sera-config" }
 sera-db = { path = "crates/sera-db" }
 sera-auth = { path = "crates/sera-auth" }
 sera-events = { path = "crates/sera-events" }
 sera-docker = { path = "crates/sera-docker" }
+sera-tools = { path = "crates/sera-tools" }
 sera-runtime = { path = "crates/sera-runtime" }
 sera-testing = { path = "crates/sera-testing" }
 sera-hitl = { path = "crates/sera-hitl" }
 sera-hooks = { path = "crates/sera-hooks" }
 sera-workflow = { path = "crates/sera-workflow" }
+sera-queue = { path = "crates/sera-queue" }
+sera-errors = { path = "crates/sera-errors" }
+sera-cache = { path = "crates/sera-cache" }
+sera-secrets = { path = "crates/sera-secrets" }
 
 [profile.release]
 lto = true

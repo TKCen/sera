@@ -154,6 +154,7 @@ mod tests {
             messages: vec![serde_json::json!({"role": "user", "content": "Hello"})],
             available_tools: vec![],
             metadata: HashMap::new(),
+            change_artifact: None,
         }
     }
 

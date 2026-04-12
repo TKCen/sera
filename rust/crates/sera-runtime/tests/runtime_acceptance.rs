@@ -70,7 +70,7 @@ async fn four_method_lifecycle_callable() {
     let act_result = turn::act(&ctx, &think_result);
     matches!(act_result, ActResult::ToolResults(_));
 
-    let outcome = turn::react(&act_result, &think_result.tokens, 50, None, &[]).await;
+    let outcome = turn::react(&act_result, &think_result, 50, None, &[]).await;
     matches!(outcome, TurnOutcome::FinalOutput { .. });
 }
 

@@ -265,17 +265,26 @@ pub enum ActResult {
 /// When a hook rejects the response, `TurnOutcome::Interruption` is returned instead.
 pub async fn react(
     act_result: &ActResult,
-    tokens: &TokenUsage,
+    think_result: &ThinkResult,
     elapsed_ms: u64,
     executor: Option<&ChainExecutor>,
     chains: &[HookChain],
 ) -> TurnOutcome {
+    let tokens = &think_result.tokens;
+
     // Build a preliminary outcome from act results.
     let outcome = match act_result {
         ActResult::ToolResults(results) => {
             if results.is_empty() {
+                // Extract the LLM's response content for the final output.
+                let response = think_result
+                    .response
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 TurnOutcome::FinalOutput {
-                    response: "[react stub — no tool calls]".to_string(),
+                    response,
                     tool_calls: vec![],
                     tokens_used: tokens.clone(),
                     duration_ms: elapsed_ms,
@@ -547,14 +556,22 @@ mod tests {
 
     // ── react() tests ─────────────────────────────────────────────────────────
 
+    fn make_think_result(content: &str) -> ThinkResult {
+        ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": content}),
+            tool_calls: vec![],
+            tokens: TokenUsage::default(),
+        }
+    }
+
     #[tokio::test]
     async fn react_no_hooks_returns_final_output() {
         let act = ActResult::ToolResults(vec![]);
-        let tokens = TokenUsage::default();
-        let outcome = react(&act, &tokens, 10, None, &[]).await;
+        let think = make_think_result("Hello from LLM");
+        let outcome = react(&act, &think, 10, None, &[]).await;
         match outcome {
             TurnOutcome::FinalOutput { response, .. } => {
-                assert_eq!(response, "[react stub — no tool calls]");
+                assert_eq!(response, "Hello from LLM");
             }
             other => panic!("expected FinalOutput, got {:?}", other),
         }
@@ -563,13 +580,13 @@ mod tests {
     #[tokio::test]
     async fn react_allow_hook_passes_final_output_through() {
         let act = ActResult::ToolResults(vec![]);
-        let tokens = TokenUsage::default();
+        let think = make_think_result("Hello from LLM");
         let exec = make_allow_executor();
         let chain = make_chain("always-allow");
-        let outcome = react(&act, &tokens, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
         match outcome {
             TurnOutcome::FinalOutput { response, .. } => {
-                assert_eq!(response, "[react stub — no tool calls]");
+                assert_eq!(response, "Hello from LLM");
             }
             other => panic!("expected FinalOutput, got {:?}", other),
         }
@@ -578,10 +595,10 @@ mod tests {
     #[tokio::test]
     async fn react_reject_hook_returns_interruption() {
         let act = ActResult::ToolResults(vec![]);
-        let tokens = TokenUsage::default();
+        let think = make_think_result("Hello from LLM");
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let outcome = react(&act, &tokens, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
         match outcome {
             TurnOutcome::Interruption { hook_point, reason, .. } => {
                 assert_eq!(hook_point, "constitutional_gate");
@@ -595,10 +612,10 @@ mod tests {
     async fn react_reject_hook_does_not_fire_on_run_again() {
         // ConstitutionalGate only fires on FinalOutput; RunAgain should pass through.
         let act = ActResult::ToolResults(vec![serde_json::json!({"tool": "result"})]);
-        let tokens = TokenUsage::default();
+        let think = make_think_result("");
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let outcome = react(&act, &tokens, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
         match outcome {
             TurnOutcome::RunAgain { .. } => {}
             other => panic!("expected RunAgain, got {:?}", other),
@@ -611,10 +628,10 @@ mod tests {
         let act = ActResult::Interruption {
             reason: "doom loop: 3 consecutive act cycles".into(),
         };
-        let tokens = TokenUsage::default();
+        let think = make_think_result("");
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let outcome = react(&act, &tokens, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
         match outcome {
             TurnOutcome::Interruption { hook_point, reason, .. } => {
                 assert_eq!(hook_point, "doom_loop");

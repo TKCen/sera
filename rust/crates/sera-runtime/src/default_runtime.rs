@@ -142,7 +142,7 @@ impl AgentRuntime for DefaultRuntime {
         let act_result = turn::act(&turn_ctx, &think_result);
 
         // 4. React — decide outcome, run ConstitutionalGate hooks on response
-        Ok(turn::react(&act_result, &think_result.tokens, timer.elapsed_ms(), None, &[]).await)
+        Ok(turn::react(&act_result, &think_result, timer.elapsed_ms(), None, &[]).await)
     }
 
     /// Report runtime capabilities.
@@ -204,7 +204,7 @@ mod tests {
 
         match outcome {
             TurnOutcome::FinalOutput { response, tool_calls, tokens_used, .. } => {
-                assert_eq!(response, "[react stub — no tool calls]");
+                assert_eq!(response, "[think stub]");
                 assert!(tool_calls.is_empty());
                 assert_eq!(tokens_used.prompt_tokens, 0);
                 assert_eq!(tokens_used.completion_tokens, 0);

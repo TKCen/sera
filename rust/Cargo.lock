@@ -3070,56 +3070,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sera-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "axum 0.8.8",
- "base64",
- "chrono",
- "clap",
- "cron",
- "futures-util",
- "hex",
- "insta",
- "jsonwebtoken",
- "rand 0.8.5",
- "regex",
- "reqwest",
- "rusqlite",
- "sera-auth",
- "sera-config",
- "sera-db",
- "sera-docker",
- "sera-events",
- "sera-hitl",
- "sera-hooks",
- "sera-runtime",
- "sera-testing",
- "sera-types",
- "sera-workflow",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tower 0.5.3",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
 name = "sera-db"
 version = "0.1.0"
 dependencies = [
@@ -3178,6 +3128,56 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sera-gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum 0.8.8",
+ "base64",
+ "chrono",
+ "clap",
+ "cron",
+ "futures-util",
+ "hex",
+ "insta",
+ "jsonwebtoken",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "sera-auth",
+ "sera-config",
+ "sera-db",
+ "sera-docker",
+ "sera-events",
+ "sera-hitl",
+ "sera-hooks",
+ "sera-runtime",
+ "sera-testing",
+ "sera-types",
+ "sera-workflow",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower 0.5.3",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
  "uuid",
 ]
 

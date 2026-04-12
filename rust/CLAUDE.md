@@ -48,7 +48,7 @@ cargo check -p sera-core
 | `sera-hooks`      | lib  | In-process hook registry + chain executor               |
 | `sera-hitl`       | lib  | HITL approval routing, escalation chains                |
 | `sera-workflow`   | lib  | Workflow engine, dreaming config, cron scheduling       |
-| `sera-core`       | bin  | Main API server (axum) — replaces TypeScript core       |
+| `sera-gateway`    | bin  | Main API server + SQ/EQ gateway (axum)                  |
 | `sera-runtime`    | bin  | Agent worker binary — runs inside containers            |
 | `sera-tui`        | bin  | Terminal UI (ratatui) — replaces Go TUI                 |
 | `sera-testing`    | lib  | Test utilities, fixtures, golden tests                  |

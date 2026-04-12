@@ -1,10 +1,10 @@
 [package]
-name = "sera-core"
+name = "sera-gateway"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "sera-core"
+name = "sera-gateway"
 path = "src/main.rs"
 
 [[bin]]

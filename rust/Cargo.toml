@@ -9,7 +9,7 @@ members = [
   "crates/sera-docker",
   "crates/sera-tools",
   "crates/sera-testing",
-  "crates/sera-core",
+  "crates/sera-gateway",
   "crates/sera-runtime",
   "crates/sera-tui",
   "crates/sera-byoh-agent",

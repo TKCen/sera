@@ -68,20 +68,6 @@ impl TokenUsage {
     }
 }
 
-/// The result of a completed agent turn.
-#[deprecated(note = "Use TurnOutcome — TurnResult will be removed in Phase 1")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TurnResult {
-    /// The final text response from the model.
-    pub response: String,
-    /// All tool calls made during the turn (in order).
-    pub tool_calls: Vec<ToolCall>,
-    /// Token usage for the entire turn (may span multiple model calls).
-    pub tokens_used: TokenUsage,
-    /// Wall-clock duration of the turn in milliseconds.
-    pub duration_ms: u64,
-}
-
 /// The outcome of a completed agent turn (SPEC-runtime §2.3).
 /// Replaces `TurnResult` in the design-forward contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,30 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn turn_result_with_tool_calls() {
-        let result = TurnResult {
-            response: "I ran the tool for you.".to_string(),
-            tool_calls: vec![ToolCall {
-                id: "call-abc".to_string(),
-                name: "memory_read".to_string(),
-                arguments: serde_json::json!({"path": "notes.md"}),
-                result: Some(crate::tool::ToolResult::success("# Notes\nSome content")),
-            }],
-            tokens_used: TokenUsage {
-                prompt_tokens: 120,
-                completion_tokens: 40,
-                total_tokens: 160,
-            },
-            duration_ms: 512,
-        };
-        assert_eq!(result.tool_calls.len(), 1);
-        assert_eq!(result.tool_calls[0].name, "memory_read");
-        assert!(result.tool_calls[0].result.is_some());
-        assert!(!result.tool_calls[0].result.as_ref().unwrap().is_error);
-        assert_eq!(result.duration_ms, 512);
-    }
-
-    #[test]
     fn token_usage_total_calculation() {
         let usage = TokenUsage {
             prompt_tokens: 300,
@@ -376,22 +338,4 @@ mod tests {
         assert_eq!(parsed.messages.len(), ctx.messages.len());
     }
 
-    #[test]
-    fn turn_result_serde_roundtrip() {
-        let result = TurnResult {
-            response: "Done.".to_string(),
-            tool_calls: vec![],
-            tokens_used: TokenUsage {
-                prompt_tokens: 50,
-                completion_tokens: 10,
-                total_tokens: 60,
-            },
-            duration_ms: 200,
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        let parsed: TurnResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.response, "Done.");
-        assert_eq!(parsed.tokens_used.prompt_tokens, 50);
-        assert_eq!(parsed.duration_ms, 200);
-    }
 }

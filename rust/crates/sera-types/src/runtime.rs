@@ -69,6 +69,7 @@ impl TokenUsage {
 }
 
 /// The result of a completed agent turn.
+#[deprecated(note = "Use TurnOutcome — TurnResult will be removed in Phase 1")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnResult {
     /// The final text response from the model.

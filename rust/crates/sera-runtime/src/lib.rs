@@ -4,11 +4,21 @@
 //! standalone sera-runtime binary (container agent) and the MVS sera binary
 //! (integrated gateway).
 
+// New modules (Lane D, P0-6)
+pub mod compaction;
+pub mod context_engine;
+pub mod handoff;
+pub mod harness;
+pub mod subagent;
+pub mod turn;
+
+// Existing modules
 pub mod config;
 pub mod context;
-pub mod default_runtime;
-pub mod context_pipeline;
 pub mod context_assembler;
+pub mod context_pipeline;
+#[allow(deprecated)]
+pub mod default_runtime;
 pub mod error;
 pub mod health;
 pub mod llm_client;

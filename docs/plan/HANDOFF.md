@@ -8,11 +8,15 @@
 
 ## 1. What this session accomplished
 
-**E2E tool execution working.** Sixteen commits on `sera20` — fifteen from sessions 1–3 plus one tool dispatch commit (session 4):
+**E2E tool execution working + standalone CLI.** Eighteen commits on `sera20` — fifteen from sessions 1–3 plus three from session 4:
 
-**Session 4 — concrete ToolDispatcher (1 bead resolved):**
+**Session 4 — concrete ToolDispatcher + standalone CLI (2 beads resolved):**
 
 16. **`43acd0c` — feat: add concrete ToolDispatcher impl and tool-call loop.** `RegistryDispatcher` bridges `ToolDispatcher` trait to existing `ToolExecutor`-based `ToolRegistry` (13 built-in tools). Tool-call loop in `DefaultRuntime::execute_turn()` re-enters think() on `RunAgain`, capped at `max_tool_iterations`. main.rs wired with dispatcher + tool definitions for LLM. 7 new tests. Closes sera-kjf9.
+
+17. **`5e1ece0` — docs: update HANDOFF.md — session 4 concrete ToolDispatcher.**
+
+18. **`059b273` — feat: add CLI args and interactive REPL to sera-runtime.** The runtime binary is now a standalone CLI: `sera-runtime --llm-url http://localhost:1234/v1 -m qwen/qwen3.5-35b-a3b`. Auto-detects interactive (TTY → REPL) vs programmatic (piped → NDJSON). Conversation history, system prompt support, all args have env var fallbacks. Closes sera-wn3c.
 
 **Session 3 — E2E turn path (5 beads resolved):**
 
@@ -85,9 +89,34 @@
 
 ---
 
-## 3. What's next — Phase 2
+## 3. What's next — Discord→Gateway→Harness vertical slice
 
-**Phase 1 is complete.** All execution substrate wiring, design decisions, and remaining items are implemented and tested.
+**Phase 1 is complete. Harness is standalone and proven E2E.**
+
+### Session 5 target: Wire MVS gateway to sera-runtime via Stdio transport + Docker Compose
+
+**Goal:** Discord message → MVS `sera` binary → spawn/pipe to `sera-runtime` via NDJSON → LLM + tool calls → reply on Discord. Single docker-compose with one container.
+
+**What exists:**
+- `sera-runtime` binary: standalone CLI with LLM client, 13 tools, tool-call loop, NDJSON transport. Tested E2E against LM Studio.
+- MVS `sera` binary (`sera-gateway/src/bin/sera.rs`): full Discord adapter (WebSocket gateway, heartbeat, REST replies), SQLite sessions, YAML manifest config, hook lifecycle (pre_route/post_route/pre_turn/post_turn).
+- `StdioTransport` (`sera-gateway/src/transport/stdio.rs`): spawns child process, NDJSON on stdin/stdout, feature-gated behind `stdio`.
+- MVS `execute_turn()` (sera.rs:545): builds messages from transcript, resolves provider, calls LLM directly with its own tool loop. This is the function to **replace** with a sera-runtime dispatch.
+
+**What needs to happen:**
+1. **Replace `execute_turn()` in sera.rs** — instead of calling the LLM directly, spawn or reuse a `sera-runtime` child process via `StdioTransport`. Send a `Submission` with the conversation messages. Read back `Event` messages. Extract the final response.
+2. **Pass LLM config through** — the MVS binary resolves provider (base_url, model, api_key) from manifests. These need to be passed as env vars or CLI args to the spawned `sera-runtime` process.
+3. **Docker Compose** — single container with both `sera` (gateway) and `sera-runtime` (harness) binaries. LLM endpoint on host network (LM Studio). Discord bot token via env var.
+4. **Dockerfile** — multi-stage build producing both binaries in one image.
+
+**Architecture:**
+```
+Discord ←WebSocket→ sera (MVS gateway) ←NDJSON stdio→ sera-runtime (harness)
+                          │                                    │
+                       SQLite                           LM Studio (host)
+```
+
+**Key constraint:** The gateway dispatches to the harness but does NOT own tool execution. The harness is the worker that does all "thinking + doing."
 
 ### Phase 1 completed items (all 12)
 
@@ -153,6 +182,7 @@ All design decisions resolved and implemented in the second Phase 1 session:
 - **Tool-call loop in DefaultRuntime, not main.rs.** The loop (observe→think→act→react→RunAgain→repeat) belongs in `execute_turn()` because it's an AgentRuntime concern. main.rs just handles NDJSON transport. Loop capped at `max_tool_iterations` (default 10).
 - **Message accumulation order matters.** When re-entering think() after tool results, the assistant message (with tool_calls) is appended BEFORE tool result messages. This is an OpenAI API requirement — the LLM expects tool_call before tool results.
 - **Tool definitions via serde round-trip.** `crate::types::ToolDefinition` (Value-based parameters) → `serde_json::Value` → `sera_types::tool::ToolDefinition` (typed FunctionParameters). All 13 tool schemas round-trip successfully (validated by test).
+- **Standalone CLI with TTY detection.** `sera-runtime` uses clap for CLI args + `atty` for TTY detection. Interactive mode (REPL with conversation history) when stdin is a TTY; NDJSON mode when piped. All CLI args have env var fallbacks for container deployments. `--ndjson` flag forces NDJSON even on a TTY.
 
 ### Session 3 — E2E turn path
 

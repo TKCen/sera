@@ -13,7 +13,7 @@ use sera_types::runtime::{
     TurnOutcome,
 };
 
-use crate::turn::{self, LlmProvider, ReactMode};
+use crate::turn::{self, LlmProvider, ReactMode, ToolDispatcher};
 
 // ── TurnTimer ────────────────────────────────────────────────────────────────
 
@@ -51,6 +51,7 @@ impl Default for TurnTimer {
 pub struct DefaultRuntime {
     context: Box<dyn crate::context_engine::ContextEngine>,
     llm: Option<Box<dyn LlmProvider>>,
+    tool_dispatcher: Option<Box<dyn ToolDispatcher>>,
     max_tool_iterations: u32,
 }
 
@@ -59,6 +60,7 @@ impl std::fmt::Debug for DefaultRuntime {
         f.debug_struct("DefaultRuntime")
             .field("context", &self.context.describe())
             .field("has_llm", &self.llm.is_some())
+            .field("has_tool_dispatcher", &self.tool_dispatcher.is_some())
             .field("max_tool_iterations", &self.max_tool_iterations)
             .finish()
     }
@@ -72,6 +74,7 @@ impl DefaultRuntime {
         Self {
             context,
             llm: None,
+            tool_dispatcher: None,
             max_tool_iterations: 10,
         }
     }
@@ -79,6 +82,12 @@ impl DefaultRuntime {
     /// Set the LLM provider for the think step.
     pub fn with_llm(mut self, llm: Box<dyn LlmProvider>) -> Self {
         self.llm = Some(llm);
+        self
+    }
+
+    /// Set the tool dispatcher for the act step.
+    pub fn with_tool_dispatcher(mut self, dispatcher: Box<dyn ToolDispatcher>) -> Self {
+        self.tool_dispatcher = Some(dispatcher);
         self
     }
 
@@ -139,7 +148,7 @@ impl AgentRuntime for DefaultRuntime {
         .await;
 
         // 3. Act — dispatch tool calls, doom-loop detection
-        let act_result = turn::act(&turn_ctx, &think_result);
+        let act_result = turn::act(&turn_ctx, &think_result, self.tool_dispatcher.as_deref()).await;
 
         // 4. React — decide outcome, run ConstitutionalGate hooks on response
         Ok(turn::react(&act_result, &think_result, timer.elapsed_ms(), None, &[]).await)

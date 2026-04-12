@@ -47,6 +47,40 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<ThinkResult, ThinkError>;
 }
 
+// ── ToolDispatcher trait ────────────────────────────────────────────────────
+
+/// Errors from tool dispatch.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolError {
+    #[error("tool not found: {0}")]
+    NotFound(String),
+    #[error("tool execution failed: {0}")]
+    ExecutionFailed(String),
+    #[error("invalid arguments: {0}")]
+    InvalidArguments(String),
+}
+
+/// Trait for dispatching tool calls from the act step.
+///
+/// Tool calls and results use `serde_json::Value` to stay decoupled from
+/// any specific tool registry implementation. The gateway provides the
+/// concrete implementation that bridges to sera-tools or MCP servers.
+#[async_trait]
+pub trait ToolDispatcher: Send + Sync {
+    /// Execute a single tool call and return the result.
+    ///
+    /// The `tool_call` value follows the OpenAI tool_call format:
+    /// ```json
+    /// {"id": "call_xxx", "type": "function", "function": {"name": "...", "arguments": "..."}}
+    /// ```
+    ///
+    /// Returns a tool result value:
+    /// ```json
+    /// {"tool_call_id": "call_xxx", "role": "tool", "content": "..."}
+    /// ```
+    async fn dispatch(&self, tool_call: &serde_json::Value) -> Result<serde_json::Value, ToolError>;
+}
+
 // ── Turn context ─────────────────────────────────────────────────────────────
 
 /// Turn context for the four-method lifecycle.
@@ -169,7 +203,15 @@ pub struct ThinkResult {
 }
 
 /// Act — dispatch tool calls, check for handoffs, doom-loop detection.
-pub fn act(ctx: &TurnContext, think_result: &ThinkResult) -> ActResult {
+///
+/// When a `ToolDispatcher` is provided, tool calls from the LLM are dispatched
+/// and their results collected. Without a dispatcher, tool calls are acknowledged
+/// but return empty results (useful for tests).
+pub async fn act(
+    ctx: &TurnContext,
+    think_result: &ThinkResult,
+    tool_dispatcher: Option<&dyn ToolDispatcher>,
+) -> ActResult {
     // Doom loop check
     if ctx.doom_loop_count >= DOOM_LOOP_THRESHOLD {
         return ActResult::Interruption {
@@ -238,8 +280,47 @@ pub fn act(ctx: &TurnContext, think_result: &ThinkResult) -> ActResult {
         }
     }
 
-    // Normal tool dispatch (P0 stub — returns empty results)
-    ActResult::ToolResults(vec![])
+    // No tool calls — return empty results
+    if think_result.tool_calls.is_empty() {
+        return ActResult::ToolResults(vec![]);
+    }
+
+    // Dispatch tool calls
+    match tool_dispatcher {
+        Some(dispatcher) => {
+            let mut results = Vec::with_capacity(think_result.tool_calls.len());
+            for tc in &think_result.tool_calls {
+                match dispatcher.dispatch(tc).await {
+                    Ok(result) => results.push(result),
+                    Err(e) => {
+                        let tool_call_id = tc.get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or("unknown");
+                        results.push(serde_json::json!({
+                            "tool_call_id": tool_call_id,
+                            "role": "tool",
+                            "content": format!("[tool error: {e}]"),
+                        }));
+                    }
+                }
+            }
+            ActResult::ToolResults(results)
+        }
+        None => {
+            // No dispatcher — return empty results for each tool call
+            let results: Vec<serde_json::Value> = think_result.tool_calls.iter().map(|tc| {
+                let tool_call_id = tc.get("id")
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("unknown");
+                serde_json::json!({
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "content": "[no tool dispatcher configured]",
+                })
+            }).collect();
+            ActResult::ToolResults(results)
+        }
+    }
 }
 
 /// Result of the act step.
@@ -641,8 +722,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn act_hitl_strict_mode_returns_waiting_for_approval() {
+    #[tokio::test]
+    async fn act_hitl_strict_mode_returns_waiting_for_approval() {
         let mut ctx = make_turn_ctx(vec![]);
         ctx.enforcement_mode = sera_hitl::EnforcementMode::Strict;
         ctx.approval_routing = sera_hitl::ApprovalRouting::Static {
@@ -655,7 +736,7 @@ mod tests {
             })],
             tokens: TokenUsage::default(),
         };
-        let result = act(&ctx, &think_result);
+        let result = act(&ctx, &think_result, None).await;
         match result {
             ActResult::WaitingForApproval { tool_call, ticket_id } => {
                 assert!(!ticket_id.is_empty());
@@ -668,8 +749,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn act_hitl_autonomous_mode_skips_approval() {
+    #[tokio::test]
+    async fn act_hitl_autonomous_mode_skips_approval() {
         let ctx = make_turn_ctx(vec![]);
         // Autonomous mode is the default in make_turn_ctx
         let think_result = ThinkResult {
@@ -679,7 +760,7 @@ mod tests {
             })],
             tokens: TokenUsage::default(),
         };
-        let result = act(&ctx, &think_result);
+        let result = act(&ctx, &think_result, None).await;
         match result {
             ActResult::ToolResults(_) => {} // Expected — no approval needed
             other => panic!("expected ToolResults, got {:?}", other),

@@ -67,7 +67,7 @@ async fn four_method_lifecycle_callable() {
     let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None).await;
     assert!(think_result.tool_calls.is_empty());
 
-    let act_result = turn::act(&ctx, &think_result);
+    let act_result = turn::act(&ctx, &think_result, None).await;
     matches!(act_result, ActResult::ToolResults(_));
 
     let outcome = turn::react(&act_result, &think_result, 50, None, &[]).await;
@@ -76,8 +76,8 @@ async fn four_method_lifecycle_callable() {
 
 // ── 4. Doom loop triggers interruption ──────────────────────────────────────
 
-#[test]
-fn doom_loop_triggers_interruption() {
+#[tokio::test]
+async fn doom_loop_triggers_interruption() {
     let ctx = TurnContext {
         turn_id: Uuid::new_v4(),
         session_key: "sess-1".into(),
@@ -99,7 +99,7 @@ fn doom_loop_triggers_interruption() {
         tokens: TokenUsage::default(),
     };
 
-    let result = turn::act(&ctx, &think_result);
+    let result = turn::act(&ctx, &think_result, None).await;
     match result {
         ActResult::Interruption { reason } => {
             assert!(reason.contains("doom loop"));

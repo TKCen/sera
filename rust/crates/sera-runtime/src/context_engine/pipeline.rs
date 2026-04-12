@@ -2,6 +2,8 @@
 
 use async_trait::async_trait;
 
+use crate::compaction::Condenser;
+
 use super::{
     CheckpointReason, CompactionCheckpoint, ContextEngine, ContextEngineDescriptor, ContextError,
     ContextWindow, TokenBudget,
@@ -10,13 +12,21 @@ use super::{
 /// Pipeline-based context engine.
 pub struct ContextPipeline {
     messages: Vec<serde_json::Value>,
+    condensers: Vec<Box<dyn Condenser>>,
 }
 
 impl ContextPipeline {
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
+            condensers: Vec::new(),
         }
+    }
+
+    /// Add a condenser to the pipeline; condensers are applied in insertion order.
+    pub fn with_condenser(mut self, condenser: Box<dyn Condenser>) -> Self {
+        self.condensers.push(condenser);
+        self
     }
 }
 
@@ -24,6 +34,13 @@ impl Default for ContextPipeline {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn estimate_tokens(messages: &[serde_json::Value]) -> u32 {
+    messages
+        .iter()
+        .map(|m| m.to_string().len() as u32 / 4)
+        .sum()
 }
 
 #[async_trait]
@@ -34,12 +51,7 @@ impl ContextEngine for ContextPipeline {
     }
 
     async fn assemble(&self, budget: TokenBudget) -> Result<ContextWindow, ContextError> {
-        // Simple char/4 token estimation for P0
-        let estimated: u32 = self
-            .messages
-            .iter()
-            .map(|m| m.to_string().len() as u32 / 4)
-            .sum();
+        let estimated = estimate_tokens(&self.messages);
 
         if estimated > budget.max_tokens {
             return Err(ContextError::BudgetExceeded {
@@ -58,26 +70,16 @@ impl ContextEngine for ContextPipeline {
         &mut self,
         trigger: CheckpointReason,
     ) -> Result<CompactionCheckpoint, ContextError> {
-        let tokens_before: u32 = self
-            .messages
-            .iter()
-            .map(|m| m.to_string().len() as u32 / 4)
-            .sum();
+        let tokens_before = estimate_tokens(&self.messages);
 
-        // Simple compaction: keep first and last quarter
-        let len = self.messages.len();
-        if len > 4 {
-            let keep_end = len / 4;
-            let mut compacted = vec![self.messages[0].clone()];
-            compacted.extend_from_slice(&self.messages[len - keep_end..]);
-            self.messages = compacted;
+        // Run each condenser in order, passing the output of one into the next.
+        let mut messages = self.messages.clone();
+        for condenser in &self.condensers {
+            messages = condenser.condense(messages).await;
         }
+        self.messages = messages;
 
-        let tokens_after: u32 = self
-            .messages
-            .iter()
-            .map(|m| m.to_string().len() as u32 / 4)
-            .sum();
+        let tokens_after = estimate_tokens(&self.messages);
 
         Ok(CompactionCheckpoint {
             checkpoint_id: uuid::Uuid::new_v4(),
@@ -99,5 +101,57 @@ impl ContextEngine for ContextPipeline {
             name: "pipeline".to_string(),
             version: "0.1.0".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::compaction::condensers::RecentEventsCondenser;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn compact_with_sliding_window_reduces_messages() {
+        // Keep only the 3 most recent messages.
+        let mut engine = ContextPipeline::new()
+            .with_condenser(Box::new(RecentEventsCondenser::new(3)));
+
+        // Ingest 8 messages.
+        for i in 0u8..8 {
+            engine
+                .ingest(json!({ "role": "user", "content": format!("msg {i}") }))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(engine.messages.len(), 8);
+
+        let checkpoint = engine.compact(CheckpointReason::Manual).await.unwrap();
+
+        // Only 3 messages should remain.
+        assert_eq!(engine.messages.len(), 3);
+        // The last ingested message is msg 7.
+        assert_eq!(engine.messages[2]["content"], "msg 7");
+        // Tokens were reduced.
+        assert!(checkpoint.tokens_after <= checkpoint.tokens_before);
+    }
+
+    #[tokio::test]
+    async fn compact_no_condensers_is_identity() {
+        let mut engine = ContextPipeline::new();
+
+        for i in 0u8..5 {
+            engine
+                .ingest(json!({ "role": "user", "content": format!("msg {i}") }))
+                .await
+                .unwrap();
+        }
+
+        let _checkpoint = engine.compact(CheckpointReason::AutoThreshold).await.unwrap();
+
+        // Without any condenser the messages are unchanged.
+        assert_eq!(engine.messages.len(), 5);
     }
 }

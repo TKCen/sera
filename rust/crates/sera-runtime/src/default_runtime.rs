@@ -117,7 +117,7 @@ impl AgentRuntime for DefaultRuntime {
             .filter_map(|t| serde_json::to_value(t).ok())
             .collect();
 
-        let turn_ctx = turn::TurnContext {
+        let mut turn_ctx = turn::TurnContext {
             turn_id: uuid::Uuid::new_v4(),
             session_key: ctx.session_key,
             agent_id: ctx.agent_id,
@@ -132,26 +132,65 @@ impl AgentRuntime for DefaultRuntime {
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         };
 
-        // 1. Observe — filter messages, run ConstitutionalGate hooks on input
-        let observed = match turn::observe(&turn_ctx, None, &[]).await {
-            Ok(msgs) => msgs,
-            Err(interruption) => return Ok(interruption),
-        };
+        for _iteration in 0..self.max_tool_iterations {
+            // 1. Observe — filter messages, run ConstitutionalGate hooks on input
+            let observed = match turn::observe(&turn_ctx, None, &[]).await {
+                Ok(msgs) => msgs,
+                Err(interruption) => return Ok(interruption),
+            };
 
-        // 2. Think — call LLM
-        let think_result = turn::think(
-            &observed,
-            &turn_ctx.tools,
-            &turn_ctx.react_mode,
-            self.llm.as_deref(),
-        )
-        .await;
+            // 2. Think — call LLM
+            let think_result = turn::think(
+                &observed,
+                &turn_ctx.tools,
+                &turn_ctx.react_mode,
+                self.llm.as_deref(),
+            )
+            .await;
 
-        // 3. Act — dispatch tool calls, doom-loop detection
-        let act_result = turn::act(&turn_ctx, &think_result, self.tool_dispatcher.as_deref()).await;
+            // 3. Act — dispatch tool calls, doom-loop detection
+            let act_result = turn::act(&turn_ctx, &think_result, self.tool_dispatcher.as_deref()).await;
 
-        // 4. React — decide outcome, run ConstitutionalGate hooks on response
-        Ok(turn::react(&act_result, &think_result, timer.elapsed_ms(), None, &[]).await)
+            // 4. React — decide outcome, run ConstitutionalGate hooks on response
+            let outcome = turn::react(&act_result, &think_result, timer.elapsed_ms(), None, &[]).await;
+
+            match outcome {
+                TurnOutcome::RunAgain { tokens_used, .. } => {
+                    // Append the assistant message (with tool_calls) to the conversation.
+                    // The LLM API requires this message before tool results.
+                    turn_ctx.messages.push(think_result.response);
+
+                    // Append tool result messages from act
+                    if let turn::ActResult::ToolResults(ref results) = act_result {
+                        for result in results {
+                            turn_ctx.messages.push(result.clone());
+                        }
+                    }
+
+                    // Increment doom loop counter and continue
+                    turn_ctx.doom_loop_count += 1;
+
+                    tracing::debug!(
+                        iteration = _iteration + 1,
+                        doom_loop_count = turn_ctx.doom_loop_count,
+                        tokens = tokens_used.total_tokens,
+                        "tool-call loop: re-entering think with tool results"
+                    );
+                }
+                // Any other outcome (FinalOutput, Handoff, Interruption, etc.) — return immediately
+                other => return Ok(other),
+            }
+        }
+
+        // Exhausted max_tool_iterations
+        Ok(TurnOutcome::Interruption {
+            hook_point: "tool_loop".to_string(),
+            reason: format!(
+                "max tool iterations ({}) exceeded",
+                self.max_tool_iterations
+            ),
+            duration_ms: timer.elapsed_ms(),
+        })
     }
 
     /// Report runtime capabilities.

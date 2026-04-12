@@ -11,6 +11,7 @@ pub mod spawn;
 pub mod tool_search;
 pub mod centrifugo;
 pub mod mvs_tools;
+pub mod dispatcher;
 
 use crate::types::{FunctionDefinition, ToolDefinition};
 
@@ -72,6 +73,11 @@ impl ToolRegistry {
             .find(|t| t.name() == name)
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
         tool.execute(args).await
+    }
+
+    /// Look up a tool executor by name.
+    pub fn get(&self, name: &str) -> Option<&dyn ToolExecutor> {
+        self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
     }
 }
 

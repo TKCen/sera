@@ -4,12 +4,15 @@
 //! Communicates via NDJSON on stdin/stdout using Submission/Event envelope types.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sera_runtime::config::RuntimeConfig;
 use sera_runtime::context_engine::pipeline::ContextPipeline;
 use sera_runtime::default_runtime::DefaultRuntime;
 use sera_runtime::health;
 use sera_runtime::llm_client::LlmClient;
+use sera_runtime::tools::ToolRegistry;
+use sera_runtime::tools::dispatcher::RegistryDispatcher;
 use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
 use serde::{Deserialize, Serialize};
 
@@ -94,13 +97,31 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Build the DefaultRuntime with context engine and LLM client
+    // Build tool registry and dispatcher
+    let registry = Arc::new(ToolRegistry::new());
+    let dispatcher = RegistryDispatcher::new(Arc::clone(&registry));
+
+    // Pre-compute tool definitions for the LLM via serde round-trip:
+    // crate::types::ToolDefinition (Value-based) → sera_types::tool::ToolDefinition (typed)
+    let tool_defs: Vec<sera_types::tool::ToolDefinition> = registry
+        .definitions()
+        .iter()
+        .filter_map(|d| {
+            let value = serde_json::to_value(d).ok()?;
+            serde_json::from_value(value).ok()
+        })
+        .collect();
+    tracing::info!(tool_count = tool_defs.len(), "tool definitions loaded for LLM");
+
+    // Build the DefaultRuntime with context engine, LLM client, and tool dispatcher
     let context_engine = Box::new(ContextPipeline::new());
     let llm_client = Box::new(LlmClient::new(&config));
-    let runtime = DefaultRuntime::new(context_engine).with_llm(llm_client);
+    let runtime = DefaultRuntime::new(context_engine)
+        .with_llm(llm_client)
+        .with_tool_dispatcher(Box::new(dispatcher));
 
     // NDJSON Submission/Event loop on stdin/stdout
-    let result = run_ndjson_loop(&config, &runtime).await;
+    let result = run_ndjson_loop(&config, &runtime, &tool_defs).await;
 
     match result {
         Ok(()) => tracing::info!("NDJSON loop exited cleanly"),
@@ -119,7 +140,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Read Submissions from stdin (NDJSON), process each, write Events to stdout.
-async fn run_ndjson_loop(config: &RuntimeConfig, runtime: &DefaultRuntime) -> anyhow::Result<()> {
+async fn run_ndjson_loop(
+    config: &RuntimeConfig,
+    runtime: &DefaultRuntime,
+    tool_defs: &[sera_types::tool::ToolDefinition],
+) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let stdin = tokio::io::stdin();
@@ -181,7 +206,7 @@ async fn run_ndjson_loop(config: &RuntimeConfig, runtime: &DefaultRuntime) -> an
         stdout.write_all(json.as_bytes()).await?;
 
         // Convert Submission to TurnContext and execute via DefaultRuntime
-        let turn_ctx = submission_to_turn_context(&submission, &config.agent_id, turn_id);
+        let turn_ctx = submission_to_turn_context(&submission, &config.agent_id, turn_id, tool_defs);
         let outcome = runtime.execute_turn(turn_ctx).await;
 
         // Convert TurnOutcome to Event messages
@@ -313,6 +338,7 @@ fn submission_to_turn_context(
     submission: &Submission,
     agent_id: &str,
     turn_id: uuid::Uuid,
+    tool_defs: &[sera_types::tool::ToolDefinition],
 ) -> TurnContext {
     let messages = match &submission.op {
         Op::UserTurn { items, .. } => items.clone(),
@@ -325,7 +351,7 @@ fn submission_to_turn_context(
         agent_id: agent_id.to_string(),
         session_key: format!("session:{agent_id}:{}", submission.id),
         messages,
-        available_tools: vec![],
+        available_tools: tool_defs.to_vec(),
         metadata: HashMap::new(),
         change_artifact: None,
     }

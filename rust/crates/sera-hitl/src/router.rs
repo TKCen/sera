@@ -80,6 +80,11 @@ impl ApprovalRouter {
         }
     }
 
+    /// Public version of risk_level_to_score for external callers.
+    pub fn risk_level_to_score_public(level: RiskLevel) -> f64 {
+        Self::risk_level_to_score(level)
+    }
+
     /// Convert a `RiskLevel` to a representative score for threshold matching.
     fn risk_level_to_score(level: RiskLevel) -> f64 {
         match level {

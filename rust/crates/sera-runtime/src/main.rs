@@ -262,6 +262,19 @@ async fn run_ndjson_loop(config: &RuntimeConfig, runtime: &DefaultRuntime) -> an
                 json.push('\n');
                 stdout.write_all(json.as_bytes()).await?;
             }
+            Ok(TurnOutcome::WaitingForApproval { ticket_id, .. }) => {
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta {
+                        delta: format!("[waiting_for_approval: ticket={ticket_id}]"),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
             Err(e) => {
                 tracing::error!("execute_turn failed: {e:?}");
                 let err_event = Event {

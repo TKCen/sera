@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
+use sera_hitl;
 use sera_types::runtime::{
     AgentRuntime, HealthStatus, RuntimeCapabilities, RuntimeError, TurnContext,
     TurnOutcome,
@@ -118,6 +119,8 @@ impl AgentRuntime for DefaultRuntime {
             change_artifact: ctx.change_artifact.map(|id| id.to_string()),
             react_mode: ReactMode::Default,
             doom_loop_count: 0,
+            enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+            approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         };
 
         // 1. Observe — filter messages, run ConstitutionalGate hooks on input

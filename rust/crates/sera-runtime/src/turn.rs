@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use async_trait::async_trait;
+use sera_hitl;
 use sera_hooks::ChainExecutor;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::runtime::{TokenUsage, TurnOutcome};
@@ -60,6 +61,8 @@ pub struct TurnContext {
     pub change_artifact: Option<String>,
     pub react_mode: ReactMode,
     pub doom_loop_count: u32,
+    pub enforcement_mode: sera_hitl::EnforcementMode,
+    pub approval_routing: sera_hitl::ApprovalRouting,
 }
 
 /// Observe — filter messages by watch signals and run ConstitutionalGate hooks on input.
@@ -192,11 +195,55 @@ pub fn act(ctx: &TurnContext, think_result: &ThinkResult) -> ActResult {
         }
     }
 
+    // HITL approval check
+    for tc in &think_result.tool_calls {
+        // Extract tool name and determine risk level
+        let tool_name = tc.get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown");
+
+        // Default to Execute risk for tool calls (can be refined later with per-tool risk)
+        let risk_level = sera_types::tool::RiskLevel::Execute;
+
+        if sera_hitl::ApprovalRouter::needs_approval(
+            ctx.enforcement_mode,
+            risk_level,
+            &ctx.approval_routing,
+        ) {
+            // Create approval ticket
+            let spec = sera_hitl::ApprovalSpec {
+                scope: sera_hitl::ApprovalScope::ToolCall {
+                    tool_name: tool_name.to_string(),
+                    risk_level,
+                },
+                description: format!("Tool call: {tool_name}"),
+                urgency: sera_hitl::ApprovalUrgency::Medium,
+                routing: ctx.approval_routing.clone(),
+                timeout: std::time::Duration::from_secs(300),
+                required_approvals: 1,
+                evidence: sera_hitl::ApprovalEvidence {
+                    tool_args: tc.get("function").and_then(|f| f.get("arguments")).cloned(),
+                    risk_score: Some(sera_hitl::ApprovalRouter::risk_level_to_score_public(risk_level)),
+                    principal: sera_types::principal::Principal::default_admin().as_ref(),
+                    session_context: Some(ctx.session_key.clone()),
+                    additional: std::collections::HashMap::new(),
+                },
+            };
+            let ticket = sera_hitl::ApprovalTicket::new(spec, &ctx.session_key);
+            return ActResult::WaitingForApproval {
+                tool_call: tc.clone(),
+                ticket_id: ticket.id.clone(),
+            };
+        }
+    }
+
     // Normal tool dispatch (P0 stub — returns empty results)
     ActResult::ToolResults(vec![])
 }
 
 /// Result of the act step.
+#[derive(Debug)]
 pub enum ActResult {
     ToolResults(Vec<serde_json::Value>),
     Handoff {
@@ -205,6 +252,10 @@ pub enum ActResult {
     },
     Interruption {
         reason: String,
+    },
+    WaitingForApproval {
+        tool_call: serde_json::Value,
+        ticket_id: String,
     },
 }
 
@@ -246,6 +297,12 @@ pub async fn react(
         ActResult::Interruption { reason } => TurnOutcome::Interruption {
             hook_point: "doom_loop".to_string(),
             reason: reason.clone(),
+            duration_ms: elapsed_ms,
+        },
+        ActResult::WaitingForApproval { tool_call, ticket_id } => TurnOutcome::WaitingForApproval {
+            tool_call: tool_call.clone(),
+            ticket_id: ticket_id.clone(),
+            tokens_used: tokens.clone(),
             duration_ms: elapsed_ms,
         },
     };
@@ -337,6 +394,8 @@ mod tests {
             change_artifact: None,
             react_mode: ReactMode::Default,
             doom_loop_count: 0,
+            enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+            approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         }
     }
 
@@ -562,6 +621,51 @@ mod tests {
                 assert!(reason.contains("doom loop"));
             }
             other => panic!("expected doom_loop Interruption, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn act_hitl_strict_mode_returns_waiting_for_approval() {
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.enforcement_mode = sera_hitl::EnforcementMode::Strict;
+        ctx.approval_routing = sera_hitl::ApprovalRouting::Static {
+            targets: vec![sera_hitl::ApprovalTarget::Role { name: "admin".to_string() }],
+        };
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "let me run that"}),
+            tool_calls: vec![serde_json::json!({
+                "function": { "name": "shell", "arguments": {"cmd": "ls"} }
+            })],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&ctx, &think_result);
+        match result {
+            ActResult::WaitingForApproval { tool_call, ticket_id } => {
+                assert!(!ticket_id.is_empty());
+                assert_eq!(
+                    tool_call.get("function").unwrap().get("name").unwrap().as_str().unwrap(),
+                    "shell"
+                );
+            }
+            other => panic!("expected WaitingForApproval, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn act_hitl_autonomous_mode_skips_approval() {
+        let ctx = make_turn_ctx(vec![]);
+        // Autonomous mode is the default in make_turn_ctx
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "running"}),
+            tool_calls: vec![serde_json::json!({
+                "function": { "name": "shell", "arguments": {"cmd": "ls"} }
+            })],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&ctx, &think_result);
+        match result {
+            ActResult::ToolResults(_) => {} // Expected — no approval needed
+            other => panic!("expected ToolResults, got {:?}", other),
         }
     }
 }

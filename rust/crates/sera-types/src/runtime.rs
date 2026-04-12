@@ -99,6 +99,15 @@ pub enum TurnOutcome {
         reason: String,
         duration_ms: u64,
     },
+    /// The turn is paused waiting for human/agent approval of a tool call.
+    WaitingForApproval {
+        /// The tool call that requires approval.
+        tool_call: serde_json::Value,
+        /// Approval ticket ID for tracking.
+        ticket_id: String,
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
     Stop {
         summary: String,
         tokens_used: TokenUsage,

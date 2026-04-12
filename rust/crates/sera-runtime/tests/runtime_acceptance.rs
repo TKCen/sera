@@ -1,5 +1,6 @@
 //! Runtime acceptance tests — Lane D, P0-6.
 
+use sera_hitl;
 use sera_types::runtime::{TokenUsage, TurnOutcome};
 
 use sera_runtime::compaction::condensers::*;
@@ -56,6 +57,8 @@ async fn four_method_lifecycle_callable() {
         change_artifact: None,
         react_mode: ReactMode::Default,
         doom_loop_count: 0,
+        enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+        approval_routing: sera_hitl::ApprovalRouting::Autonomous,
     };
 
     let observed = turn::observe(&ctx, None, &[]).await.unwrap();
@@ -86,6 +89,8 @@ fn doom_loop_triggers_interruption() {
         change_artifact: None,
         react_mode: ReactMode::Default,
         doom_loop_count: DOOM_LOOP_THRESHOLD,
+        enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+        approval_routing: sera_hitl::ApprovalRouting::Autonomous,
     };
 
     let think_result = ThinkResult {
@@ -196,6 +201,8 @@ fn turn_context_has_change_artifact_field() {
         change_artifact: Some("ca-123".into()),
         react_mode: ReactMode::Default,
         doom_loop_count: 0,
+        enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+        approval_routing: sera_hitl::ApprovalRouting::Autonomous,
     };
     assert_eq!(ctx.change_artifact.as_deref(), Some("ca-123"));
 }

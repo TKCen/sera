@@ -2,13 +2,17 @@
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** Phase 1+2 session 3 → `git show 13f1b6c:docs/plan/HANDOFF.md`; Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**Phase 1 complete + E2E turn path stubs resolved.** Fifteen commits on `sera20` — twelve Phase 1 (sessions 1–2) plus three E2E turn path fixes (session 3):
+**E2E tool execution working.** Sixteen commits on `sera20` — fifteen from sessions 1–3 plus one tool dispatch commit (session 4):
+
+**Session 4 — concrete ToolDispatcher (1 bead resolved):**
+
+16. **`43acd0c` — feat: add concrete ToolDispatcher impl and tool-call loop.** `RegistryDispatcher` bridges `ToolDispatcher` trait to existing `ToolExecutor`-based `ToolRegistry` (13 built-in tools). Tool-call loop in `DefaultRuntime::execute_turn()` re-enters think() on `RunAgain`, capped at `max_tool_iterations`. main.rs wired with dispatcher + tool definitions for LLM. 7 new tests. Closes sera-kjf9.
 
 **Session 3 — E2E turn path (5 beads resolved):**
 
@@ -142,7 +146,15 @@ All design decisions resolved and implemented in the second Phase 1 session:
 
 ## 5. Design decisions made this session
 
-### Session 3 — E2E turn path (current)
+### Session 4 — concrete ToolDispatcher (current)
+
+- **Bridge to ToolExecutor, not TraitToolRegistry.** The `RegistryDispatcher` bridges `ToolDispatcher` (trait in turn.rs) to the existing `ToolExecutor`-based `ToolRegistry` (13 working tools in sera-runtime/src/tools/). The spec-aligned `TraitToolRegistry` exists but has zero concrete tool implementations — bridging to it would mean rewriting all 13 tools for no user-visible benefit. Migration to `TraitToolRegistry` is a follow-up task for policy enforcement.
+- **No sera-tools dependency needed.** sera-runtime already has its own `ToolRegistry` and 13 `ToolExecutor` implementations. The sera-tools crate's `registry.rs` is a separate, simpler abstraction.
+- **Tool-call loop in DefaultRuntime, not main.rs.** The loop (observe→think→act→react→RunAgain→repeat) belongs in `execute_turn()` because it's an AgentRuntime concern. main.rs just handles NDJSON transport. Loop capped at `max_tool_iterations` (default 10).
+- **Message accumulation order matters.** When re-entering think() after tool results, the assistant message (with tool_calls) is appended BEFORE tool result messages. This is an OpenAI API requirement — the LLM expects tool_call before tool results.
+- **Tool definitions via serde round-trip.** `crate::types::ToolDefinition` (Value-based parameters) → `serde_json::Value` → `sera_types::tool::ToolDefinition` (typed FunctionParameters). All 13 tool schemas round-trip successfully (validated by test).
+
+### Session 3 — E2E turn path
 
 - **Gateway is a thin event dispatcher.** The gateway routes messages to harnesses and persists sessions. It has **zero involvement in tool execution**. Tool management and execution are entirely harness-internal. A future management plane may push tool/skill configuration to harnesses, but that's a separate concern.
 - **Harness is fully self-contained.** The harness/runtime owns the complete turn loop (observe/think/act/react), LLM calls, tool registry, tool execution, and context management. It must run standalone via Stdio/WebSocket transport without calling back to the gateway.
@@ -172,7 +184,9 @@ Previous gotchas §6.1–§6.11 from prior handoffs still apply. New additions:
 - **§6.14 sera-docker is gone.** Any code that tries to import `sera_docker` will fail. Use `sera_tools::sandbox::docker::DockerSandboxProvider` instead.
 - **§6.15 Gateway is a thin event dispatcher — NOT a tool orchestrator.** The gateway routes messages to harnesses and persists sessions. It has zero involvement in tool management or execution. Tool registry, tool dispatch, and tool execution are entirely harness-internal. Do not add tool-related logic to sera-gateway. See sera-kjf9 for the concrete ToolDispatcher impl work.
 - **§6.16 AgentHarness trait is misplaced in sera-gateway.** It should live in a shared crate (sera-types or new sera-harness) since harnesses are standalone processes. See sera-w9bn. Do not add harness logic that assumes gateway access.
-- **§6.17 sera-runtime needs sera-tools dep.** Currently sera-runtime does not depend on sera-tools, so it cannot build a concrete ToolDispatcher. This is the next blocking item for E2E tool-call turns. See sera-kjf9.
+- **§6.17 ~~sera-runtime needs sera-tools dep.~~** ✅ Resolved in session 4. sera-runtime had its own `ToolRegistry` with 13 `ToolExecutor` impls — no sera-tools dep was needed. `RegistryDispatcher` bridges `ToolDispatcher` to `ToolRegistry`.
+- **§6.18 Two ToolDefinition types coexist.** `crate::types::ToolDefinition` (Value-based parameters) and `sera_types::tool::ToolDefinition` (typed `FunctionParameters`). main.rs does a serde round-trip to convert. If a new tool uses exotic JSON Schema features (arrays with `items`, `oneOf`, nested objects), the round-trip may silently drop fields. The `all_tool_definitions_round_trip` test catches this.
+- **§6.19 Two tool registries coexist in sera-runtime.** `ToolRegistry` (ToolExecutor-based, 13 tools, used for dispatch) and `TraitToolRegistry` (sera_types::Tool-based, zero tools, spec-aligned with policy). Follow-up task: migrate ToolExecutor impls to the Tool trait for policy enforcement.
 
 ---
 
@@ -190,6 +204,7 @@ Same as M1/M3 handoff §7, plus:
 - **`rust/crates/sera-runtime/src/turn.rs`** — Four-method lifecycle
 - **`rust/crates/sera-runtime/src/handoff.rs`** — Agent-to-agent handoff
 - **`rust/crates/sera-session/`** — SessionStateMachine + Transcript
+- **`rust/crates/sera-runtime/src/tools/dispatcher.rs`** — RegistryDispatcher (ToolDispatcher → ToolRegistry bridge)
 - **`rust/crates/sera-testing/src/mocks/`** — MockQueueBackend + MockSandboxProvider
 
 ---

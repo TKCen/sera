@@ -7,6 +7,9 @@ pub mod in_process;
 #[cfg(feature = "stdio")]
 pub mod stdio;
 
+#[cfg(feature = "enterprise")]
+pub mod websocket;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;

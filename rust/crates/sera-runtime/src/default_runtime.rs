@@ -120,8 +120,11 @@ impl AgentRuntime for DefaultRuntime {
             doom_loop_count: 0,
         };
 
-        // 1. Observe — filter messages
-        let observed = turn::observe(&turn_ctx);
+        // 1. Observe — filter messages, run ConstitutionalGate hooks on input
+        let observed = match turn::observe(&turn_ctx, None, &[]).await {
+            Ok(msgs) => msgs,
+            Err(interruption) => return Ok(interruption),
+        };
 
         // 2. Think — call LLM
         let think_result = turn::think(
@@ -135,8 +138,8 @@ impl AgentRuntime for DefaultRuntime {
         // 3. Act — dispatch tool calls, doom-loop detection
         let act_result = turn::act(&turn_ctx, &think_result);
 
-        // 4. React — decide outcome
-        Ok(turn::react(&act_result, &think_result.tokens, timer.elapsed_ms()))
+        // 4. React — decide outcome, run ConstitutionalGate hooks on response
+        Ok(turn::react(&act_result, &think_result.tokens, timer.elapsed_ms(), None, &[]).await)
     }
 
     /// Report runtime capabilities.

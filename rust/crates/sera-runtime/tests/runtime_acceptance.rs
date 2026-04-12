@@ -58,7 +58,7 @@ async fn four_method_lifecycle_callable() {
         doom_loop_count: 0,
     };
 
-    let observed = turn::observe(&ctx);
+    let observed = turn::observe(&ctx, None, &[]).await.unwrap();
     assert_eq!(observed.len(), 1);
 
     let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None).await;
@@ -67,7 +67,7 @@ async fn four_method_lifecycle_callable() {
     let act_result = turn::act(&ctx, &think_result);
     matches!(act_result, ActResult::ToolResults(_));
 
-    let outcome = turn::react(&act_result, &think_result.tokens, 50);
+    let outcome = turn::react(&act_result, &think_result.tokens, 50, None, &[]).await;
     matches!(outcome, TurnOutcome::FinalOutput { .. });
 }
 

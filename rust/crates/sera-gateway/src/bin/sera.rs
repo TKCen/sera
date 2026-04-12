@@ -37,8 +37,6 @@ use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
-use sera_runtime::context::ContextManager;
-use sera_runtime::tools::mvs_tools::MvsToolRegistry;
 
 // Re-use sera-core's Discord connector.
 #[path = "../discord.rs"]
@@ -104,6 +102,164 @@ enum SecretCommands {
     Delete { path: String },
 }
 
+// ── StdioHarness — manages a running sera-runtime child process ─────────────
+
+/// A handle to a long-lived `sera-runtime --ndjson` child process.
+/// Spawned once per agent on startup; reused for every turn.
+struct StdioHarness {
+    stdin: Mutex<tokio::process::ChildStdin>,
+    stdout: Mutex<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    #[allow(dead_code)]
+    child: Mutex<tokio::process::Child>,
+}
+
+impl StdioHarness {
+    /// Spawn a `sera-runtime --ndjson --no-health` process with the given env.
+    async fn spawn(
+        runtime_bin: &str,
+        env: std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<Self> {
+        let mut cmd = tokio::process::Command::new(runtime_bin);
+        cmd.arg("--ndjson")
+            .arg("--no-health")
+            .envs(&env)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit());
+
+        let mut child = cmd.spawn()?;
+        let stdin = child.stdin.take().expect("stdin piped");
+        let stdout = child.stdout.take().expect("stdout piped");
+
+        Ok(Self {
+            stdin: Mutex::new(stdin),
+            stdout: Mutex::new(tokio::io::BufReader::new(stdout)),
+            child: Mutex::new(child),
+        })
+    }
+
+    /// Send a turn with the given conversation messages to the runtime.
+    /// Blocks until the runtime emits `TurnCompleted`, returns accumulated response.
+    async fn send_turn(&self, messages: Vec<serde_json::Value>) -> anyhow::Result<String> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let submission = serde_json::json!({
+            "id": uuid::Uuid::new_v4(),
+            "op": {
+                "type": "user_turn",
+                "items": messages,
+            }
+        });
+
+        let mut json_line = serde_json::to_string(&submission)?;
+        json_line.push('\n');
+
+        // Acquire both locks — serialises concurrent turns through this harness.
+        let mut stdin = self.stdin.lock().await;
+        let mut stdout = self.stdout.lock().await;
+
+        stdin.write_all(json_line.as_bytes()).await?;
+        stdin.flush().await?;
+
+        let mut response = String::new();
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let n = stdout.read_line(&mut line).await?;
+            if n == 0 {
+                anyhow::bail!("sera-runtime closed stdout unexpectedly");
+            }
+
+            let event: serde_json::Value = serde_json::from_str(line.trim())?;
+            let msg_type = event
+                .get("msg")
+                .and_then(|m| m.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+
+            match msg_type {
+                "streaming_delta" => {
+                    if let Some(delta) = event
+                        .get("msg")
+                        .and_then(|m| m.get("delta"))
+                        .and_then(|d| d.as_str())
+                    {
+                        response.push_str(delta);
+                    }
+                }
+                "turn_completed" => break,
+                "error" => {
+                    let code = event
+                        .get("msg")
+                        .and_then(|m| m.get("code"))
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("unknown");
+                    let message = event
+                        .get("msg")
+                        .and_then(|m| m.get("message"))
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown error");
+                    anyhow::bail!("[runtime error] {code}: {message}");
+                }
+                _ => {} // TurnStarted etc — skip
+            }
+        }
+
+        Ok(response)
+    }
+
+    /// Send a graceful shutdown command to the runtime process.
+    #[allow(dead_code)]
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let cmd = serde_json::json!({
+            "id": uuid::Uuid::new_v4(),
+            "op": { "type": "system", "system_op": "shutdown" }
+        });
+        let mut json_line = serde_json::to_string(&cmd)?;
+        json_line.push('\n');
+
+        let mut stdin = self.stdin.lock().await;
+        let _ = stdin.write_all(json_line.as_bytes()).await;
+        let _ = stdin.flush().await;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl StdioHarness {
+    /// Spawn a mock runtime for testing — a bash script that reads NDJSON
+    /// submissions and replies with canned TurnStarted + StreamingDelta +
+    /// TurnCompleted events.
+    async fn spawn_mock() -> anyhow::Result<Self> {
+        let script = concat!(
+            r#"while IFS= read -r line; do "#,
+            r#"echo '{"id":"00000000-0000-0000-0000-000000000001","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"turn_started","turn_id":"00000000-0000-0000-0000-000000000002"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+            r#"echo '{"id":"00000000-0000-0000-0000-000000000003","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"streaming_delta","delta":"mock response"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+            r#"echo '{"id":"00000000-0000-0000-0000-000000000004","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"turn_completed","turn_id":"00000000-0000-0000-0000-000000000002"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+            r#"done"#,
+        );
+
+        let mut cmd = tokio::process::Command::new("bash");
+        cmd.args(["-c", script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn()?;
+        let stdin = child.stdin.take().expect("stdin piped");
+        let stdout = child.stdout.take().expect("stdout piped");
+
+        Ok(Self {
+            stdin: Mutex::new(stdin),
+            stdout: Mutex::new(tokio::io::BufReader::new(stdout)),
+            child: Mutex::new(child),
+        })
+    }
+}
+
 // ── Shared state ────────────────────────────────────────────────────────────
 
 struct AppState {
@@ -123,6 +279,8 @@ struct AppState {
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
     chain_executor: Arc<ChainExecutor>,
+    /// Pre-connected runtime harnesses keyed by agent name.
+    harnesses: std::collections::HashMap<String, Arc<StdioHarness>>,
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -248,6 +406,15 @@ async fn chat_handler(
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
 
+    // Look up the pre-connected runtime harness for this agent.
+    let harness = match state.harnesses.get(&agent_name) {
+        Some(h) => Arc::clone(h),
+        None => {
+            tracing::error!(agent = %agent_name, "No runtime harness registered");
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
+
     // Get or create a session for this agent.
     let db = state.db.lock().await;
     let session = db
@@ -269,23 +436,23 @@ async fn chat_handler(
     // Get recent transcript for context.
     let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
     let session_id = session.id.clone();
-    drop(db); // Release lock before making HTTP call.
+    drop(db); // Release lock before dispatching to harness.
 
     if req.stream {
         // SSE streaming mode: spawn turn execution and stream word-by-word.
-        let manifests = state.manifests.clone();
         let message = req.message.clone();
         let state_clone = Arc::clone(&state);
+        let harness_clone = Arc::clone(&harness);
         let sid = session_id.clone();
         let mid = format!("msg_{:08x}", rand::random::<u32>());
         let mid_clone = mid.clone();
 
         let sse_stream = stream::unfold(
-            StreamState::Pending { manifests, agent_spec, transcript, message, state: state_clone, session_id: sid, message_id: mid_clone },
+            StreamState::Pending { agent_spec, transcript, message, state: state_clone, harness: harness_clone, session_id: sid, message_id: mid_clone },
             |fold_state| async move {
                 match fold_state {
-                    StreamState::Pending { manifests, agent_spec, transcript, message, state, session_id, message_id } => {
-                        let result = execute_turn(&manifests, &agent_spec, &transcript, &message).await;
+                    StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, message_id } => {
+                        let result = execute_turn(&agent_spec, &transcript, &message, &harness).await;
 
                         // Save assistant response.
                         {
@@ -345,7 +512,7 @@ async fn chat_handler(
     } else {
         // Synchronous JSON mode (existing behavior).
         let result =
-            execute_turn(&state.manifests, &agent_spec, &transcript, &req.message).await;
+            execute_turn(&agent_spec, &transcript, &req.message, &harness).await;
 
         // Save assistant response and audit.
         let db = state.db.lock().await;
@@ -464,11 +631,11 @@ async fn transcript_handler(
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
     Pending {
-        manifests: ManifestSet,
         agent_spec: AgentSpec,
         transcript: Vec<sera_db::sqlite::TranscriptRow>,
         message: String,
         state: Arc<AppState>,
+        harness: Arc<StdioHarness>,
         session_id: String,
         message_id: String,
     },
@@ -482,73 +649,19 @@ enum StreamState {
     Done,
 }
 
-// ── Turn execution (inlined from sera-runtime reasoning loop) ───────────────
+// ── Turn execution (dispatched to sera-runtime harness) ─────────────────────
 
-/// Maximum number of tool-call iterations before forcing a text reply.
-const MAX_TOOL_ITERATIONS: usize = 10;
-
-/// Maximum number of context overflow retries before giving up.
-const MAX_CONTEXT_OVERFLOW_RETRIES: usize = 3;
-
-/// Returns true when the LLM returned a context-length-exceeded error.
+/// Execute a turn by dispatching to a pre-connected sera-runtime harness.
 ///
-/// OpenAI-compatible providers typically return HTTP 400 or 413 with one of
-/// the well-known strings in the body.
-fn is_context_overflow(status: reqwest::StatusCode, body: &str) -> bool {
-    (status == reqwest::StatusCode::BAD_REQUEST
-        || status == reqwest::StatusCode::PAYLOAD_TOO_LARGE)
-        && (body.contains("context_length_exceeded")
-            || body.contains("maximum context length")
-            || body.contains("too many tokens")
-            || body.contains("context window"))
-}
-
-/// Build the tool definitions array using the MVS tool registry.
-/// Falls back to an empty list if the agent has no tools configured.
-fn build_tool_definitions(agent_spec: &AgentSpec, registry: &MvsToolRegistry) -> Vec<serde_json::Value> {
-    if agent_spec.tools.is_none() {
-        return Vec::new();
-    }
-    registry.definitions()
-}
-
-/// Execute a single tool call via the MvsToolRegistry.
-async fn execute_tool_call(registry: &MvsToolRegistry, name: &str, arguments: &str) -> String {
-    tracing::info!(tool = %name, "Executing tool call");
-    let args: serde_json::Value =
-        serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
-    match registry.execute(name, &args).await {
-        Ok(output) => output,
-        Err(e) => format!("[tool error] {e}"),
-    }
-}
-
-/// Extract usage info from an OpenAI-compatible response body.
-fn extract_usage(body: &serde_json::Value) -> UsageInfo {
-    let usage = body.get("usage");
-    UsageInfo {
-        prompt_tokens: usage
-            .and_then(|u| u.get("prompt_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        completion_tokens: usage
-            .and_then(|u| u.get("completion_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        total_tokens: usage
-            .and_then(|u| u.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-    }
-}
-
+/// The gateway builds the conversation messages from the transcript and sends
+/// them to the harness. The harness (sera-runtime) owns LLM calls and tool
+/// execution — the gateway never touches those.
 async fn execute_turn(
-    manifests: &ManifestSet,
     agent_spec: &AgentSpec,
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
+    harness: &StdioHarness,
 ) -> MvsTurnResult {
-    let ctx_mgr = ContextManager::new(128_000);
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
     // Add system message from persona if configured.
@@ -564,7 +677,6 @@ async fn execute_turn(
     // Add transcript history (including tool_calls and tool results).
     for row in transcript {
         if row.role == "tool" {
-            // Tool result message.
             let mut msg = serde_json::json!({
                 "role": "tool",
                 "content": row.content.as_deref().unwrap_or(""),
@@ -574,7 +686,6 @@ async fn execute_turn(
             }
             messages.push(msg);
         } else if let Some(tc_json) = &row.tool_calls {
-            // Assistant message with tool_calls (no text content).
             let mut msg = serde_json::json!({ "role": "assistant" });
             if let Ok(tc) = serde_json::from_str::<serde_json::Value>(tc_json) {
                 msg["tool_calls"] = tc;
@@ -602,282 +713,26 @@ async fn execute_turn(
         }));
     }
 
-    // Resolve provider details.
-    let provider_spec: Option<ProviderSpec> =
-        manifests.provider_spec(&agent_spec.provider).ok().flatten();
-
-    let (base_url, model, api_key) = match provider_spec {
-        Some(ref p) => {
-            let key = resolve_provider_api_key(p).unwrap_or_default();
-            let model = agent_spec
-                .model
-                .as_deref()
-                .or(p.default_model.as_deref())
-                .unwrap_or("default")
-                .to_owned();
-            (p.base_url.clone(), model, key)
-        }
-        None => {
-            return MvsTurnResult {
-                reply: format!(
-                    "[sera] Provider '{}' not found in config.",
-                    agent_spec.provider
-                ),
+    match harness.send_turn(messages).await {
+        Ok(reply) => MvsTurnResult {
+            reply,
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+        },
+        Err(e) => {
+            tracing::error!(error = %e, "Runtime harness turn failed");
+            MvsTurnResult {
+                reply: format!("[sera] Runtime error: {e}"),
                 usage: UsageInfo {
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     total_tokens: 0,
                 },
-            };
+            }
         }
-    };
-
-    // Create the MVS tool registry scoped to this agent's workspace.
-    let workspace = match &agent_spec.workspace {
-        Some(w) => PathBuf::from(w),
-        None => PathBuf::from(format!("./data/agents/{}", agent_spec.provider)),
-    };
-    let tool_registry = MvsToolRegistry::new(&workspace);
-
-    // Build tool definitions from the registry.
-    let tools = build_tool_definitions(agent_spec, &tool_registry);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let mut cumulative_usage = UsageInfo {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-    };
-
-    // Tool-call loop: call LLM, execute tool calls, repeat until text reply
-    // or MAX_TOOL_ITERATIONS is reached.
-    let mut overflow_retries: usize = 0;
-    for iteration in 0..=MAX_TOOL_ITERATIONS {
-        // Context management: check if near limit and compact if needed.
-        if ctx_mgr.is_near_limit_json(&messages) {
-            tracing::warn!(
-                tokens = ContextManager::count_json_message_tokens(&messages),
-                "Context near limit, compacting messages"
-            );
-            // Simple compaction: remove oldest non-system messages.
-            let system_msgs: Vec<_> = messages.iter().filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system")).cloned().collect();
-            let non_system: Vec<_> = messages.iter().filter(|m| m.get("role").and_then(|r| r.as_str()) != Some("system")).cloned().collect();
-            let keep = non_system.len().min(4); // preserve recent
-            let to_keep = &non_system[non_system.len().saturating_sub(keep)..];
-            messages.clear();
-            messages.extend(system_msgs);
-            if non_system.len() > keep {
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!("[Context compacted: {} earlier messages removed to fit within context window.]", non_system.len() - keep),
-                }));
-            }
-            messages.extend(to_keep.iter().cloned());
-        }
-
-        // Log remaining context budget.
-        let current_tokens = ContextManager::count_json_message_tokens(&messages);
-        let budget = ctx_mgr.high_water_mark().saturating_sub(current_tokens);
-        tracing::debug!(current_tokens, budget, "Context budget before LLM call");
-
-        let mut request_body = serde_json::json!({
-            "model": model,
-            "messages": messages,
-            "max_tokens": 4096,
-        });
-
-        // Include tools if defined.
-        if !tools.is_empty() {
-            request_body["tools"] = serde_json::json!(tools);
-        }
-
-        let mut req_builder = client
-            .post(format!("{}/chat/completions", base_url))
-            .header("Content-Type", "application/json");
-        if !api_key.is_empty() {
-            req_builder = req_builder.header("Authorization", format!("Bearer {api_key}"));
-        }
-
-        let response = match req_builder.json(&request_body).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                return MvsTurnResult {
-                    reply: format!("[sera] LLM request failed: {e}"),
-                    usage: cumulative_usage,
-                };
-            }
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body_text = response.text().await.unwrap_or_default();
-
-            if is_context_overflow(status, &body_text)
-                && overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES
-            {
-                overflow_retries += 1;
-                tracing::warn!(
-                    retry = overflow_retries,
-                    "Context overflow detected, performing aggressive compaction"
-                );
-
-                // Aggressive compaction: keep system messages + last 25% of non-system.
-                let system_msgs: Vec<_> = messages
-                    .iter()
-                    .filter(|m| {
-                        m.get("role").and_then(|r| r.as_str()) == Some("system")
-                    })
-                    .cloned()
-                    .collect();
-                let non_system: Vec<_> = messages
-                    .iter()
-                    .filter(|m| {
-                        m.get("role").and_then(|r| r.as_str()) != Some("system")
-                    })
-                    .cloned()
-                    .collect();
-                let keep_count = (non_system.len() / 4).max(2);
-                let removed = non_system.len().saturating_sub(keep_count);
-                let to_keep = non_system[non_system.len().saturating_sub(keep_count)..].to_vec();
-
-                messages.clear();
-                messages.extend(system_msgs);
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!(
-                        "[Context aggressively compacted (retry {}/{}): {} messages removed to fit within model's context window.]",
-                        overflow_retries, MAX_CONTEXT_OVERFLOW_RETRIES, removed
-                    ),
-                }));
-                messages.extend(to_keep);
-
-                continue; // retry the LLM call
-            }
-
-            return MvsTurnResult {
-                reply: format!("[sera] LLM error {status}: {body_text}"),
-                usage: cumulative_usage,
-            };
-        }
-
-        let body: serde_json::Value = match response.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                return MvsTurnResult {
-                    reply: format!("[sera] Failed to parse LLM response: {e}"),
-                    usage: cumulative_usage,
-                };
-            }
-        };
-
-        // Reset overflow retry counter on a successful response.
-        overflow_retries = 0;
-
-        // Accumulate usage.
-        let step_usage = extract_usage(&body);
-        cumulative_usage.prompt_tokens += step_usage.prompt_tokens;
-        cumulative_usage.completion_tokens += step_usage.completion_tokens;
-        cumulative_usage.total_tokens += step_usage.total_tokens;
-
-        // Extract the first choice.
-        let choice = match body.get("choices").and_then(|c| c.get(0)) {
-            Some(c) => c,
-            None => {
-                return MvsTurnResult {
-                    reply: "[sera] No choices in LLM response".to_owned(),
-                    usage: cumulative_usage,
-                };
-            }
-        };
-
-        let message = match choice.get("message") {
-            Some(m) => m,
-            None => {
-                return MvsTurnResult {
-                    reply: "[sera] No message in LLM choice".to_owned(),
-                    usage: cumulative_usage,
-                };
-            }
-        };
-
-        let finish_reason = choice
-            .get("finish_reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("stop");
-
-        // Check for tool calls.
-        let tool_calls = message
-            .get("tool_calls")
-            .and_then(|tc| tc.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        if finish_reason == "tool_calls" || !tool_calls.is_empty() {
-            if iteration == MAX_TOOL_ITERATIONS {
-                tracing::warn!("Max tool iterations ({MAX_TOOL_ITERATIONS}) reached, returning last content");
-                let content = message
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("[sera] Max tool iterations reached");
-                return MvsTurnResult {
-                    reply: content.to_owned(),
-                    usage: cumulative_usage,
-                };
-            }
-
-            // Append the assistant message with tool_calls to the conversation.
-            messages.push(message.clone());
-
-            // Execute each tool call, truncate output, and append tool results.
-            for tc in &tool_calls {
-                let tc_id = tc
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let fn_obj = tc.get("function");
-                let fn_name = fn_obj
-                    .and_then(|f| f.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let fn_args = fn_obj
-                    .and_then(|f| f.get("arguments"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("{}");
-
-                let raw_result = execute_tool_call(&tool_registry, fn_name, fn_args).await;
-                // Truncate tool output to stay within context budget.
-                let result = ctx_mgr.truncate_tool_output(&raw_result);
-
-                messages.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": result,
-                }));
-            }
-            // Continue the loop — call LLM again with tool results.
-            continue;
-        }
-
-        // No tool calls — extract the text reply.
-        let reply = message
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("[sera] No response from LLM")
-            .to_owned();
-
-        return MvsTurnResult {
-            reply,
-            usage: cumulative_usage,
-        };
-    }
-
-    // Should not reach here, but just in case.
-    MvsTurnResult {
-        reply: "[sera] Turn loop exited unexpectedly".to_owned(),
-        usage: cumulative_usage,
     }
 }
 
@@ -1030,6 +885,17 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         }
     };
 
+    // Look up the pre-connected runtime harness for this agent.
+    let harness = match state.harnesses.get(&agent_name) {
+        Some(h) => Arc::clone(h),
+        None => {
+            let err_msg = format!("No runtime harness for agent '{agent_name}'");
+            tracing::error!("{err_msg}");
+            send_error_to_discord(state, &msg.channel_id, &err_msg).await;
+            return Ok(());
+        }
+    };
+
     // Use agent name + channel_id as the session key so different agents
     // in the same channel maintain separate conversation histories.
     let session_key = format!("discord:{}:{}", agent_name, msg.channel_id);
@@ -1113,8 +979,8 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Continue { .. } => {}
     }
 
-    // Execute the agent turn.
-    let result = execute_turn(&state.manifests, &agent_spec, &transcript, &msg.content).await;
+    // Execute the agent turn via the pre-connected harness.
+    let result = execute_turn(&agent_spec, &transcript, &msg.content, &harness).await;
 
     {
         let db = state.db.lock().await;
@@ -1473,6 +1339,54 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     let hook_registry = Arc::new(HookRegistry::new());
     let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
 
+    // 3b. Spawn a sera-runtime harness for each agent.
+    let runtime_bin = std::env::var("SERA_RUNTIME_BIN")
+        .unwrap_or_else(|_| "sera-runtime".to_string());
+    let mut harnesses = std::collections::HashMap::new();
+
+    for agent_name in manifests.agent_names() {
+        let agent_spec = match manifests.agent_spec(agent_name).ok().flatten() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let provider_spec: Option<ProviderSpec> =
+            manifests.provider_spec(&agent_spec.provider).ok().flatten();
+
+        let (base_url, model, api_key_val) = match provider_spec {
+            Some(ref p) => {
+                let key = resolve_provider_api_key(p).unwrap_or_default();
+                let model = agent_spec
+                    .model
+                    .as_deref()
+                    .or(p.default_model.as_deref())
+                    .unwrap_or("default")
+                    .to_owned();
+                (p.base_url.clone(), model, key)
+            }
+            None => {
+                tracing::warn!(agent = %agent_name, "No provider found, skipping harness");
+                continue;
+            }
+        };
+
+        let mut env = std::collections::HashMap::new();
+        env.insert("LLM_BASE_URL".to_string(), base_url);
+        env.insert("LLM_MODEL".to_string(), model.clone());
+        env.insert("LLM_API_KEY".to_string(), api_key_val);
+        env.insert("AGENT_ID".to_string(), agent_name.to_string());
+
+        match StdioHarness::spawn(&runtime_bin, env).await {
+            Ok(harness) => {
+                tracing::info!(agent = %agent_name, model = %model, "Spawned runtime harness");
+                harnesses.insert(agent_name.to_string(), Arc::new(harness));
+            }
+            Err(e) => {
+                tracing::error!(agent = %agent_name, error = %e, "Failed to spawn runtime harness");
+            }
+        }
+    }
+
     let state = Arc::new(AppState {
         db: Mutex::new(db),
         manifests,
@@ -1481,6 +1395,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
         hook_registry,
         chain_executor,
+        harnesses,
     });
 
     // 4. Start event processing loop.
@@ -1547,6 +1462,30 @@ mod tests {
         parse_manifests(TEMPLATE_YAML).unwrap()
     }
 
+    async fn test_harnesses() -> std::collections::HashMap<String, Arc<StdioHarness>> {
+        let mut h = std::collections::HashMap::new();
+        h.insert(
+            "sera".to_string(),
+            Arc::new(StdioHarness::spawn_mock().await.unwrap()),
+        );
+        h
+    }
+
+    async fn test_state_async() -> Arc<AppState> {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+        Arc::new(AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: None,
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
+            harnesses: test_harnesses().await,
+        })
+    }
+
     fn test_state() -> Arc<AppState> {
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
@@ -1558,6 +1497,22 @@ mod tests {
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
             chain_executor,
+            harnesses: std::collections::HashMap::new(),
+        })
+    }
+
+    async fn test_state_with_api_key_async(key: &str) -> Arc<AppState> {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+        Arc::new(AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: Some(key.to_owned()),
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
+            harnesses: test_harnesses().await,
         })
     }
 
@@ -1572,6 +1527,7 @@ mod tests {
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
             chain_executor,
+            harnesses: std::collections::HashMap::new(),
         })
     }
 
@@ -1757,7 +1713,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_endpoint_creates_session_and_transcript() {
-        let state = test_state();
+        let state = test_state_async().await;
         let app = build_router(Arc::clone(&state));
 
         // The LLM call will fail (no real provider), but the session and
@@ -1849,78 +1805,11 @@ mod tests {
         assert_eq!(json["usage"]["total_tokens"], 150);
     }
 
-    // -- Turn execution helpers --
-
-    #[test]
-    fn build_tool_definitions_from_agent_spec() {
-        let manifests = test_manifests();
-        let spec = manifests.agent_spec("sera").unwrap().unwrap();
-        let workspace = std::path::PathBuf::from("./data/agents/test");
-        let registry = MvsToolRegistry::new(&workspace);
-        let tools = build_tool_definitions(&spec, &registry);
-        // Registry provides 8 MVS tools.
-        assert_eq!(tools.len(), 8);
-        // Each tool should be a function type.
-        for tool in &tools {
-            assert_eq!(tool["type"], "function");
-            assert!(tool["function"]["name"].as_str().is_some());
-        }
-    }
-
-    #[test]
-    fn build_tool_definitions_empty_when_no_tools() {
-        let spec = AgentSpec {
-            provider: "test".to_owned(),
-            model: None,
-            persona: None,
-            tools: None,
-            workspace: None,
-        };
-        let workspace = std::path::PathBuf::from("./data/agents/test");
-        let registry = MvsToolRegistry::new(&workspace);
-        let tools = build_tool_definitions(&spec, &registry);
-        assert!(tools.is_empty());
-    }
-
-    #[tokio::test]
-    async fn execute_tool_call_unknown_tool_returns_error() {
-        let workspace = tempfile::tempdir().unwrap();
-        let registry = MvsToolRegistry::new(workspace.path());
-        let result = execute_tool_call(&registry, "nonexistent_tool", "{}").await;
-        assert!(result.contains("[tool error]"));
-        assert!(result.contains("nonexistent_tool"));
-    }
-
-    #[test]
-    fn extract_usage_from_llm_body() {
-        let body = serde_json::json!({
-            "choices": [{ "message": { "content": "hi" } }],
-            "usage": {
-                "prompt_tokens": 42,
-                "completion_tokens": 10,
-                "total_tokens": 52
-            }
-        });
-        let usage = extract_usage(&body);
-        assert_eq!(usage.prompt_tokens, 42);
-        assert_eq!(usage.completion_tokens, 10);
-        assert_eq!(usage.total_tokens, 52);
-    }
-
-    #[test]
-    fn extract_usage_missing_defaults_to_zero() {
-        let body = serde_json::json!({ "choices": [] });
-        let usage = extract_usage(&body);
-        assert_eq!(usage.prompt_tokens, 0);
-        assert_eq!(usage.completion_tokens, 0);
-        assert_eq!(usage.total_tokens, 0);
-    }
-
     // -- Event processing (mock LLM) --
 
     #[tokio::test]
     async fn event_loop_processes_discord_message() {
-        let state = test_state();
+        let state = test_state_async().await;
         let (tx, rx) = mpsc::channel::<DiscordMessage>(16);
 
         // Spawn the event loop.
@@ -1964,7 +1853,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_endpoint_saves_transcript_to_db() {
-        let state = test_state();
+        let state = test_state_async().await;
         let app = build_router(Arc::clone(&state));
 
         // First request creates a session.
@@ -1996,7 +1885,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_key_accepted_with_valid_bearer() {
-        let state = test_state_with_api_key("test-secret-key");
+        let state = test_state_with_api_key_async("test-secret-key").await;
         let app = build_router(state);
 
         let response = app
@@ -2066,7 +1955,7 @@ mod tests {
     #[tokio::test]
     async fn no_api_key_configured_allows_all_access() {
         // When no API key is set, all requests should be allowed (autonomous mode).
-        let state = test_state(); // api_key: None
+        let state = test_state_async().await; // api_key: None
         let app = build_router(state);
 
         let response = app
@@ -2099,6 +1988,7 @@ mod tests {
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
             chain_executor,
+            harnesses: std::collections::HashMap::new(),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -2116,6 +2006,7 @@ mod tests {
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
             chain_executor,
+            harnesses: std::collections::HashMap::new(),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -2134,6 +2025,7 @@ mod tests {
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
             chain_executor,
+            harnesses: std::collections::HashMap::new(),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -2152,75 +2044,10 @@ mod tests {
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
             chain_executor,
+            harnesses: std::collections::HashMap::new(),
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
-    }
-
-    // -- is_context_overflow --
-
-    #[test]
-    fn context_overflow_detected_400_context_length_exceeded() {
-        assert!(is_context_overflow(
-            reqwest::StatusCode::BAD_REQUEST,
-            r#"{"error":{"code":"context_length_exceeded","message":"..."}}"#
-        ));
-    }
-
-    #[test]
-    fn context_overflow_detected_400_maximum_context_length() {
-        assert!(is_context_overflow(
-            reqwest::StatusCode::BAD_REQUEST,
-            "This model's maximum context length is 4096 tokens."
-        ));
-    }
-
-    #[test]
-    fn context_overflow_detected_400_too_many_tokens() {
-        assert!(is_context_overflow(
-            reqwest::StatusCode::BAD_REQUEST,
-            "too many tokens in the request"
-        ));
-    }
-
-    #[test]
-    fn context_overflow_detected_400_context_window() {
-        assert!(is_context_overflow(
-            reqwest::StatusCode::BAD_REQUEST,
-            "exceeds the context window size"
-        ));
-    }
-
-    #[test]
-    fn context_overflow_detected_413() {
-        assert!(is_context_overflow(
-            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
-            "context_length_exceeded"
-        ));
-    }
-
-    #[test]
-    fn context_overflow_false_for_other_400() {
-        assert!(!is_context_overflow(
-            reqwest::StatusCode::BAD_REQUEST,
-            r#"{"error":{"code":"invalid_request","message":"bad param"}}"#
-        ));
-    }
-
-    #[test]
-    fn context_overflow_false_for_500() {
-        assert!(!is_context_overflow(
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-            "context_length_exceeded"
-        ));
-    }
-
-    #[test]
-    fn context_overflow_false_for_401() {
-        assert!(!is_context_overflow(
-            reqwest::StatusCode::UNAUTHORIZED,
-            "context_length_exceeded"
-        ));
     }
 
     // ── SSE streaming tests ──────────────────────────────────────────────────

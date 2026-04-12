@@ -10,6 +10,9 @@ use sera_db::DbPool;
 use sera_docker::ContainerManager;
 use sera_events::CentrifugoClient;
 
+use sera_gateway::envelope::GenerationMarker;
+use sera_gateway::harness_dispatch::HarnessRegistry;
+use sera_gateway::kill_switch::KillSwitch;
 use crate::services::schedule_service::ScheduleService;
 
 /// Shared application state.
@@ -25,4 +28,9 @@ pub struct AppState {
     pub centrifugo: Option<Arc<CentrifugoClient>>,
     pub mcp_registry: Arc<RwLock<crate::routes::mcp::McpRegistry>>,
     pub schedule_svc: Arc<ScheduleService>,
+    pub harness_registry: HarnessRegistry,
+    pub plugin_registry: sera_gateway::harness_dispatch::PluginRegistry,
+    pub queue_backend: Arc<dyn sera_queue::QueueBackend>,
+    pub generation_marker: GenerationMarker,
+    pub kill_switch: Arc<KillSwitch>,
 }

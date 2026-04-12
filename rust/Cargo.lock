@@ -3137,6 +3137,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "async-trait",
  "axum 0.8.8",
  "base64",
  "chrono",
@@ -3157,6 +3158,7 @@ dependencies = [
  "sera-events",
  "sera-hitl",
  "sera-hooks",
+ "sera-queue",
  "sera-runtime",
  "sera-testing",
  "sera-types",

@@ -3,6 +3,10 @@ name = "sera-gateway"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "sera_gateway"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sera-gateway"
 path = "src/main.rs"
@@ -56,8 +60,20 @@ rand.workspace = true
 cron.workspace = true
 chrono.workspace = true
 regex.workspace = true
+async-trait.workspace = true
+sera-queue.workspace = true
+
+[features]
+default = ["in-process"]
+in-process = []
+stdio = []
+grpc = []
+webhook-back = []
+connector-discord = []
+enterprise = []
 
 [dev-dependencies]
 sera-testing.workspace = true
 insta.workspace = true
 tempfile.workspace = true
+async-stream.workspace = true

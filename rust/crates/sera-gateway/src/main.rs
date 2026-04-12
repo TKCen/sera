@@ -96,6 +96,11 @@ async fn main() -> anyhow::Result<()> {
         centrifugo,
         mcp_registry: Arc::new(RwLock::new(routes::mcp::McpRegistry::new())),
         schedule_svc: schedule_svc.clone(),
+        harness_registry: sera_gateway::harness_dispatch::new_harness_registry(),
+        plugin_registry: sera_gateway::harness_dispatch::new_plugin_registry(),
+        queue_backend: Arc::new(sera_queue::LocalQueueBackend::new()),
+        generation_marker: sera_gateway::generation::current_generation(),
+        kill_switch: Arc::new(sera_gateway::kill_switch::KillSwitch::new()),
     };
 
     // Build router

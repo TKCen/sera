@@ -2,94 +2,148 @@
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** audit round → `git show HEAD~1:docs/plan/HANDOFF.md`; spec round → `git show HEAD~2:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** plan round → `git show 216c32c:docs/plan/HANDOFF.md`; audit round → `git show 216c32c~1:docs/plan/HANDOFF.md`; spec round → `git show 216c32c~2:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**Single P0 task from the previous handoff: completed.** Produced [`docs/plan/PHASE-0-PLAN.md`](PHASE-0-PLAN.md) — 3248 lines, code-level breakdown covering all 9 P0 items from `IMPL-AUDIT.md` §5, with sequencing graph, parallel lanes A–F, milestone exit criteria M0–M4, and a §4.6 design-forward-obligations traceability matrix.
+**M0 milestone reached.** Lane A (P0-1) is complete — `sera-domain` renamed to `sera-types`, design-forward primitives added, 19 acceptance tests passing, full workspace compiles clean.
 
-Produced via orchestrated fan-out: 5 Wave 1 sonnet agents (one per crate group) + 2 Wave 2 sonnet agents (sequencing + test catalog) + 1 Haiku stager, assembled via bash concatenation to keep main context lean. No Rust code was written this session — the plan is a document, implementation starts next session.
+Three commits on `sera20`:
 
----
+1. **`37ca870` — refactor: rename sera-domain to sera-types.** `git mv`, 13 dependent Cargo.toml patches, global `sera_domain` → `sera_types` search-replace. `cargo check --workspace` clean.
 
-## 2. The Phase 0 plan document — how to use it
+2. **`e49d07f` — feat: design-forward primitives.** New files: `evolution.rs` (ChangeArtifactId, BlastRadius 22 variants, CapabilityToken, ConstitutionalRule, EvolutionTier, AgentCapability), `versioning.rs` (BuildIdentity), `content_block.rs` (ContentBlock, ConversationRole, ConversationMessage, ActionId). Patched: `runtime.rs` (+TurnOutcome 6-variant enum, TurnContext.change_artifact), `session.rs` (+5 SessionState variants with transition arcs), `config_manifest.rs` (+3 ResourceKind variants, ResourceMetadata.shadow, PersonaSpec.mutable_persona/mutable_token_budget), `capability.rs` (+AgentCapability enum), `hook.rs` (+4 HookPoint variants → 20 total, HookContext.change_artifact, HookResult::Continue.updated_input). `#[non_exhaustive]` on ResourceKind, SessionState, BlastRadius, EvolutionTier. 19 acceptance tests (15 catalog + 4 GAP).
 
-[`docs/plan/PHASE-0-PLAN.md`](PHASE-0-PLAN.md) is structured as:
+3. **`4fac0d9` — chore: delete old sera-domain, add Phase 0 plan docs.**
 
-1. **Preamble + how-to-use + document map** — one-page orientation.
-2. **§Sequencing, parallel lanes, and milestones** — inter-crate ordering, lane assignments (A–F), M0–M4 exit criteria. **Read this first.**
-3. **Nine P0-N sections** (`P0-1 sera-types` through `P0-9 sera-workflow` plus `P0-10 partial scaffolding`) — each self-contained: strategy, files to create/modify, Cargo features, workspace deps, acceptance tests, downstream cascade. Agents working on one crate need only their section.
-4. **§Acceptance-test catalog** — maps every IMPL-AUDIT §4.6 obligation to a test function. Any row marked `GAP` blocks M4.
-
-**Read order for next session:** §Sequencing → §P0-1 (the single first-mover) → drill into other P0-N sections only when starting that lane.
+Downstream breakage triaged with `// TODO(P0-5/P0-6)` stubs:
+- `sera-hooks/src/executor.rs:109` — `..` pattern for `updated_input` field
+- `sera-core/src/bin/sera.rs` — `change_artifact: None` at 4 HookContext construction sites
 
 ---
 
-## 3. What's next — Lane A (serialised, blocks everything)
+## 2. What's next — four parallel lanes (M0 is reached)
 
-Per `PHASE-0-PLAN.md` §Sequencing, Lane A runs alone as the sole first-mover. **No parallel lanes may begin until M0 is reached.**
+Per `PHASE-0-PLAN.md` §Sequencing, M0 unblocks four parallel lanes. The next session should fan out immediately.
 
-**Lane A = P0-1 · `sera-domain` → `sera-types` rename + design-forward primitives.**
+### Lane B — infrastructure foundations (3 parallel agents)
 
-Two commits on a single branch:
+| Agent | P0 item | Key deliverable | PHASE-0-PLAN.md section |
+|-------|---------|-----------------|------------------------|
+| B1 | P0-2 sera-telemetry | New crate alongside sera-events; OTel triad pins; AuditBackend trait; LaneFailureClass 15 variants | §P0-2 |
+| B2 | P0-3 sera-config | figment/schemars extension; ShadowConfigStore; ConfigVersionLog | §P0-3 |
+| B3 | P0-4 sera-queue | Extract from sera-db; QueueBackend trait; LocalQueueBackend; GlobalThrottle; apalis feature gate | §P0-4 |
 
-1. **Commit 1: mechanical rename.** `git mv crates/sera-domain crates/sera-types`; update workspace `Cargo.toml` members + workspace-dependencies key; patch 13 dependent `Cargo.toml` files from `sera-domain.workspace = true` to `sera-types.workspace = true`; global search-replace `use sera_domain::` → `use sera_types::`. Gate: `cargo check --workspace` shows only expected downstream structural breakage (not rename-caused errors).
+**Blocks:** Lane D (gateway needs QueueBackend stable)
 
-2. **Commit 2: design-forward primitives.** Ultrawork-parallelisable — create `src/evolution.rs`, `src/versioning.rs`, `src/content_block.rs` and patch `src/runtime.rs`, `src/session.rs`, `src/config_manifest.rs`, `src/capability.rs`, `src/hook.rs`, `src/lib.rs` independently. 15 acceptance tests across `tests/evolution.rs`, `tests/versioning.rs`, `tests/content_block.rs`, `tests/session.rs`, `tests/config_manifest.rs`.
+### Lane C — tools absorption (1–2 agents)
 
-M0 exit criteria (copy from PHASE-0-PLAN.md §M0):
-- `cargo check -p sera-types` green on default features.
-- All 15 P0-1 acceptance tests pass.
-- Downstream breakage triaged with `// TODO(P0-5/P0-6)` stubs at `sera-runtime` `TurnResult` match sites, `sera-hooks` `HookPoint::ALL` count assertion (16 → 20), `sera-core` gateway pipeline pattern-match.
+| Agent | P0 item | Key deliverable | PHASE-0-PLAN.md section |
+|-------|---------|-----------------|------------------------|
+| C1 | P0-8 sera-tools | New crate absorbing sera-docker; SandboxProvider trait; SsrfValidator; CON-04 kill-switch | §P0-8 |
+| C2 | P0-10 partial | Scaffold sera-errors, sera-cache, sera-secrets (leaf crates, no production logic) | §P0-10 |
 
-**After M0 lands**, the next session can fan out four lanes in parallel: Lane B (telemetry + config + queue), Lane C (tools + scaffolds), Lane E (workflow + auth split to two agents), and begin Lane D's rename commit.
+**Blocks:** Lane D (gateway acquires DockerSandboxProvider)
+
+### Lane D — gateway + runtime spine (1 agent, after B+C)
+
+| Agent | P0 items | Key deliverable | PHASE-0-PLAN.md section |
+|-------|----------|-----------------|------------------------|
+| D1 | P0-5 + P0-6 | sera-core → sera-gateway rename; SQ/EQ envelope; AppServerTransport; TurnOutcome migration; four-method turn lifecycle; main.rs rewrite | §P0-5, §P0-6 |
+
+**Must be single agent** — AgentHarness/AppServerTransport/main.rs form a three-way contract.
+
+### Lane E — workflow + auth typing (2 agents, independent of B/C/D)
+
+| Agent | P0 item | Key deliverable | PHASE-0-PLAN.md section |
+|-------|---------|-----------------|------------------------|
+| E1 | P0-9 sera-workflow | WorkflowTask (beads schema); WorkflowTaskId content-hash; atomic claim; termination triad | §P0-9 |
+| E2 | P0-7 sera-auth | argon2 key hashing; casbin RBAC; CapabilityToken narrowing; Action::ProposeChange/ApproveChange | §P0-7 |
+
+**Blocks:** Nothing in Phase 0
+
+### Recommended orchestration
+
+1. Fan out **5 agents** immediately: B1, B2, B3, C1, E1 (or E2). These are all independent after M0.
+2. C2 (scaffolding) can run in parallel with C1 or as a quick follow-up.
+3. E2 can run in parallel with E1.
+4. **Lane D waits for Lanes B and C** (M1 milestone). Start D only after `cargo check -p sera-queue` and `cargo check -p sera-tools` are green.
+5. Lane F (sera-testing, sera-session scaffolds) waits for Lane D.
+
+### Milestone targets
+
+- **M1** — Lanes B + C complete. `cargo check` green for sera-telemetry, sera-config, sera-queue, sera-tools, sera-errors, sera-cache, sera-secrets.
+- **M2** — Lane D complete. Gateway + runtime spine wired. sera-docker shim deleted.
+- **M3** — Lane E complete. Workflow + auth typed and tested.
+- **M4** — All lanes + Lane F. `cargo check --workspace` clean across all feature matrix combos. Phase 0 done.
 
 ---
 
-## 4. Known gaps in the plan (must fix before M4)
+## 3. M0 verification checklist (confirmed)
 
-The §4.6 traceability matrix flagged four obligations without a matching acceptance test. The implementer must add these during Lane A (items §4, §11, §12, §13 all live in sera-types):
+All items below were verified before push:
 
-- **§4 `ConstitutionalRule`** — add `constitutional_rule_serde_roundtrip` to `tests/evolution.rs`. Verify all 4 fields plus `ConstitutionalEnforcementPoint` exhaustive variants.
-- **§11 `HookPoint::ConstitutionalGate` fail-closed** — add `hook_point_constitutional_gate_is_fail_closed` to a new `tests/hooks.rs`. Assert `HookPoint::ALL.len() == 20` and that the gate's default enforcement is fail-closed.
-- **§12 `HookContext.change_artifact`** — add `hook_context_change_artifact_field_roundtrip` to `tests/hooks.rs`. Round-trip a `HookContext { change_artifact: Some(ChangeArtifactId([1u8;32])), .. }`.
-- **§13 `HookResult::updated_input`** — add `hook_result_updated_input_roundtrip` to `tests/hooks.rs`. Round-trip `HookResult::Continue { updated_input: Some(json!(...)) }`.
-
-These are tracked in PHASE-0-PLAN.md's §Acceptance-test catalog → Gaps subsection.
+- [x] `cargo check -p sera-types` passes (0 errors)
+- [x] `cargo check --workspace` passes (0 errors, 14 crates)
+- [x] `rust/crates/sera-types/` exists; `rust/crates/sera-domain/` deleted
+- [x] All 13 dependent Cargo.toml files updated to `sera-types`
+- [x] Zero `sera_domain` references in .rs files
+- [x] Zero `sera-domain` references in Cargo.toml files
+- [x] 19 acceptance tests pass (272 unit + 22 integration = 294 total)
+- [x] Downstream breakage triaged with TODO stubs
+- [x] 4 GAP tests from §4.6 traceability matrix implemented
 
 ---
 
-## 5. Gotchas carried forward
+## 4. Known gaps resolved
 
-Unchanged from previous handoffs — all still apply:
+All four §4.6 traceability gaps from the previous handoff are now closed:
 
-- **§6.1 Hook false-alarms** on Edit/Write. Tool confirmation is authoritative; verify with `ls` if uncertain.
-- **§6.2 OTel triad version lock** is load-bearing. `opentelemetry = "=0.27"`, `opentelemetry-otlp = "=0.27"`, `tracing-opentelemetry = "=0.28"` MUST be exact-equals. Drift → compile-time trait bound errors.
+- **§4 `ConstitutionalRule`** — `constitutional_rule_serde_roundtrip` in `tests/evolution.rs`
+- **§11 `HookPoint::ConstitutionalGate`** — `hook_point_constitutional_gate_is_fail_closed` in `tests/hooks.rs`
+- **§12 `HookContext.change_artifact`** — `hook_context_change_artifact_field_roundtrip` in `tests/hooks.rs`
+- **§13 `HookResult::updated_input`** — `hook_result_updated_input_roundtrip` in `tests/hooks.rs`
+
+No remaining GAP items for sera-types. Future GAP items (if any) will surface in per-crate P0-N sections.
+
+---
+
+## 5. Design decisions made this session
+
+- **TurnResult kept alongside TurnOutcome.** The plan called for "replace", but removing TurnResult would break sera-runtime's DefaultRuntime and sera-core's gateway pipeline (Lane D work). Both types coexist until P0-5/P0-6 migrates all consumers to TurnOutcome.
+- **`[u8; 64]` serde for CapabilityToken.signature.** Serde doesn't auto-derive arrays > 32 bytes. Agent 1 added a custom `bytes64` serde helper module in `evolution.rs`.
+- **HookResult::Continue `updated_input` field.** Added with `#[serde(skip_serializing_if = "Option::is_none")]` and defaulting to `None` in `pass()` / `pass_with()` helpers. Downstream `sera-hooks/executor.rs` uses `..` pattern to ignore it until P0-5/P0-6.
+
+---
+
+## 6. Gotchas carried forward
+
+- **§6.1 Hook false-alarms** on Edit/Write. Tool confirmation is authoritative.
+- **§6.2 OTel triad version lock** is load-bearing. `opentelemetry = "=0.27"`, `opentelemetry-otlp = "=0.27"`, `tracing-opentelemetry = "=0.28"` MUST be exact-equals.
 - **§6.3 `wasmtime`** pinned loose `">=43, <50"`. Revisit quarterly.
-- **§6.4 Beads is Go, not Rust.** SERA integrates beads by shelling out to `bd` CLI in Phase 1, not as a Rust library dep. sera-workflow's `WorkflowTask` mirrors the beads `Issue` schema but does not depend on it.
-- **§6.5 Context window pressure.** Previous session hit 73%; this session stayed leaner by extracting Wave 1 outputs to `/tmp/phase0-plan/*.md` and concatenating via bash. Next session should delete `/tmp/phase0-plan/` only after confirming `PHASE-0-PLAN.md` reads clean (the tmp files are redundant with the committed plan).
-- **§6.6 Rename-in-place** is the agreed strategy for `sera-domain` → `sera-types`. `git mv`, update 13 Cargo.toml files, global `use` search-replace. See PHASE-0-PLAN.md §P0-1 for the full Cargo.toml edit table.
+- **§6.4 Beads is Go, not Rust.** Shell out to `bd` CLI in Phase 1.
+- **§6.5 Context window pressure.** M0 session used ultrawork with 3 parallel sonnet agents + haiku finisher. Stayed under 60% context budget. Recommend same pattern for M1 fan-out.
+- **§6.6 Rename-in-place** — DONE for sera-types. Still pending: `sera-core → sera-gateway` (P0-5), `sera-events → sera-telemetry` (P0-2, new-crate-alongside strategy).
 - **§6.7 Hook stop-loop on cancel.** `/oh-my-claudecode:cancel` clears ultrawork + skill-active state; if the stop hook keeps firing, re-run cancel.
+- **§6.8 `thiserror` v2 `source` fields** — any field named `source` is auto-treated as `#[source]`. Use `reason` for plain String error context.
 
 ---
 
-## 6. Files that exist and matter
+## 7. Files that exist and matter
 
 - **`docs/plan/HANDOFF.md`** — this file
-- **`docs/plan/PHASE-0-PLAN.md`** — the new 3248-line Phase 0 plan
-- **`docs/plan/IMPL-AUDIT.md`** — the audit (869 lines); still the authority for "what should exist"
+- **`docs/plan/PHASE-0-PLAN.md`** — 3248-line Phase 0 plan (authority for all P0-N work)
+- **`docs/plan/IMPL-AUDIT.md`** — the audit (869 lines; authority for "what should exist")
 - **19 patched specs** in `docs/plan/specs/`
-- **`docs/plan/plan.md`** and **`docs/plan/architecture.md`** — unchanged, still authoritative
+- **`rust/CLAUDE.md`** — Rust workspace dev guide (crate map needs updating for sera-types)
 
-Do not re-read `plan.md`, `architecture.md`, or whole specs cold. PHASE-0-PLAN.md and IMPL-AUDIT.md's per-crate deltas already cite the specific sections that matter.
+Do not re-read `plan.md`, `architecture.md`, or whole specs cold. PHASE-0-PLAN.md §P0-N sections cite the specific spec sections that matter.
 
 ---
 
-## 7. Cross-reference map (carried forward)
-
-Unchanged from previous handoff. When a future change touches one of these concerns, look at every listed spec to maintain consistency:
+## 8. Cross-reference map (carried forward)
 
 | Concern | Specs that matter |
 |---|---|
@@ -103,8 +157,8 @@ Unchanged from previous handoff. When a future change touches one of these conce
 | Self-evolution scope added | SPEC-self-evolution §9, SPEC-hitl-approval §5e, SPEC-identity-authz §5.1b, SPEC-config §7a §7b |
 | Audit event added | SPEC-observability §3.0 §3.1, SPEC-self-evolution §5.7, SPEC-security §4.6 |
 | Crate audit / delta question | `docs/plan/IMPL-AUDIT.md` §2 — per-crate sections |
-| **Phase 0 implementation question (NEW)** | **`docs/plan/PHASE-0-PLAN.md` §P0-N — per-item sections** |
+| Phase 0 implementation question | `docs/plan/PHASE-0-PLAN.md` §P0-N — per-item sections |
 
 ---
 
-**End of handoff.** A fresh session reading this file plus `PHASE-0-PLAN.md` §Sequencing and §P0-1 has everything needed to start Lane A (M0).
+**End of handoff.** A fresh session reading this file can immediately fan out Lanes B, C, and E. Lane D waits for M1.

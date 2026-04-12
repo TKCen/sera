@@ -11,9 +11,12 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 
+use sera_gateway::envelope::{EventMsg, Op, Submission, W3cTraceContext};
+use sera_gateway::harness_dispatch;
 use crate::error::AppError;
 use crate::state::AppState;
 use sera_db::sessions::SessionRepository;
+use sera_types::content_block::ContentBlock;
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
@@ -153,7 +156,13 @@ pub async fn chat(
 
         Ok(Json(response).into_response())
     } else {
-        // Synchronous mode: wait for response
+        // Synchronous mode: try harness first, fall back to HTTP
+        if let Some(harness_response) =
+            try_dispatch_via_harness(&state, &agent_id, &body, &session_id).await?
+        {
+            return Ok(Json(harness_response).into_response());
+        }
+
         let resp = client
             .post(format!("{chat_url}/chat"))
             .json(&serde_json::json!({
@@ -200,6 +209,89 @@ pub async fn chat(
         })
         .into_response())
     }
+}
+
+/// Try to dispatch a chat message through a registered in-process harness.
+///
+/// Returns `Ok(Some(ChatResponse))` if a harness was found and succeeded,
+/// `Ok(None)` if no harness is registered for this agent (caller should fall
+/// back to HTTP), or `Err` if a harness was found but returned an error.
+async fn try_dispatch_via_harness(
+    state: &AppState,
+    agent_id: &str,
+    body: &ChatRequest,
+    session_id: &str,
+) -> Result<Option<ChatResponse>, AppError> {
+    // Fast-path: check if agent has a registered harness before acquiring a
+    // read lock for the full dispatch call.
+    {
+        let reg = state.harness_registry.read().await;
+        if !reg.contains_key(agent_id) {
+            return Ok(None);
+        }
+    }
+
+    // Build a Submission from the ChatRequest.
+    let items = vec![ContentBlock::Text {
+        text: body.message.clone(),
+    }];
+
+    let submission = Submission {
+        id: uuid::Uuid::new_v4(),
+        op: Op::UserTurn {
+            items,
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+
+    // Dispatch and collect the event stream.
+    let event_stream = harness_dispatch::dispatch(&submission, agent_id, &state.harness_registry)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Harness dispatch error: {e}")))?;
+
+    // Collect all events and extract reply from StreamingDelta / TurnCompleted.
+    let events: Vec<sera_gateway::envelope::Event> = event_stream.collect().await;
+
+    let mut reply_parts: Vec<String> = Vec::new();
+    let mut error_msg: Option<String> = None;
+
+    for event in &events {
+        match &event.msg {
+            EventMsg::StreamingDelta { delta } => {
+                reply_parts.push(delta.clone());
+            }
+            EventMsg::Error { message, .. } => {
+                error_msg = Some(message.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let reply = if reply_parts.is_empty() {
+        error_msg
+            .as_deref()
+            .map(|e| format!("Error: {e}"))
+            .unwrap_or_else(|| "No response generated.".to_string())
+    } else {
+        reply_parts.join("")
+    };
+
+    Ok(Some(ChatResponse {
+        reply: Some(reply),
+        thought: error_msg.map(|e| format!("Harness error: {e}")),
+        thoughts: None,
+        citations: None,
+        session_id: session_id.to_string(),
+        message_id: None,
+        usage: None,
+    }))
 }
 
 /// Background task to process chat in stream mode.
@@ -581,5 +673,86 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("test"));
         assert!(json.contains("sess-1"));
+    }
+
+    // ── harness dispatch helper unit tests ────────────────────────────────────
+
+    /// StreamingDelta events should be concatenated into the final reply.
+    #[test]
+    fn streaming_deltas_are_joined() {
+        let deltas = vec!["Hello", ", ", "world!"];
+        let reply_parts: Vec<String> = deltas.iter().map(|s| s.to_string()).collect();
+        let reply = if reply_parts.is_empty() {
+            "No response generated.".to_string()
+        } else {
+            reply_parts.join("")
+        };
+        assert_eq!(reply, "Hello, world!");
+    }
+
+    /// An empty event list produces the no-response fallback string.
+    #[test]
+    fn empty_event_stream_produces_fallback() {
+        let reply_parts: Vec<String> = Vec::new();
+        let error_msg: Option<String> = None;
+        let reply = if reply_parts.is_empty() {
+            error_msg
+                .as_deref()
+                .map(|e| format!("Error: {e}"))
+                .unwrap_or_else(|| "No response generated.".to_string())
+        } else {
+            reply_parts.join("")
+        };
+        assert_eq!(reply, "No response generated.");
+    }
+
+    /// An Error event with no deltas surfaces as a prefixed error string.
+    #[test]
+    fn error_event_surfaces_in_reply() {
+        let reply_parts: Vec<String> = Vec::new();
+        let error_msg: Option<String> = Some("model unavailable".to_string());
+        let reply = if reply_parts.is_empty() {
+            error_msg
+                .as_deref()
+                .map(|e| format!("Error: {e}"))
+                .unwrap_or_else(|| "No response generated.".to_string())
+        } else {
+            reply_parts.join("")
+        };
+        assert_eq!(reply, "Error: model unavailable");
+    }
+
+    /// A Submission built from a ChatRequest carries the message as a Text block.
+    #[test]
+    fn submission_built_from_chat_request() {
+        use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+        use sera_types::content_block::ContentBlock;
+
+        let items = vec![ContentBlock::Text { text: "ping".to_string() }];
+        let submission = Submission {
+            id: uuid::Uuid::new_v4(),
+            op: Op::UserTurn {
+                items,
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model_override: None,
+                effort: None,
+                final_output_schema: None,
+            },
+            trace: W3cTraceContext::default(),
+            change_artifact: None,
+        };
+
+        if let Op::UserTurn { items, .. } = &submission.op {
+            assert_eq!(items.len(), 1);
+            if let ContentBlock::Text { text } = &items[0] {
+                assert_eq!(text, "ping");
+            } else {
+                panic!("expected Text block");
+            }
+        } else {
+            panic!("expected UserTurn op");
+        }
     }
 }

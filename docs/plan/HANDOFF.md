@@ -1,14 +1,24 @@
-# SERA 2.0 Phase 1 — Session Handoff
+# SERA 2.0 Phase 1+2 — Session Handoff
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**Phase 1 complete.** Twelve commits on `sera20` — eight execution substrate wiring (session 1) plus four design+implement items (session 2):
+**Phase 1 complete + E2E turn path stubs resolved.** Fifteen commits on `sera20` — twelve Phase 1 (sessions 1–2) plus three E2E turn path fixes (session 3):
+
+**Session 3 — E2E turn path (5 beads resolved):**
+
+13. **`245a3c1` — feat: pass LLM response through react() instead of stub string.** react() now receives ThinkResult and extracts actual LLM response content for FinalOutput. Closes sera-ba3p.
+
+14. **`d7db888` — feat: replace naive token counting with tiktoken-rs cl100k_base.** ContextPipeline::estimate_tokens uses lazily-initialized BPE encoder instead of len/4 heuristic. Closes sera-vfj9.
+
+15. **`409aff6` — feat: add ToolDispatcher trait and wire into act() step.** ToolDispatcher trait in sera-runtime (async, serde_json::Value in/out). act() is now async — dispatches tool calls through dispatcher when provided. DefaultRuntime gains .with_tool_dispatcher(). Closes sera-d5tk, sera-3iqk. sera-ouyt was already implemented (LlmClient wired in main.rs).
+
+**Session 1–2 — Phase 1 (twelve commits):**
 
 **Session 1 — execution substrate wiring:**
 
@@ -132,8 +142,20 @@ All design decisions resolved and implemented in the second Phase 1 session:
 
 ## 5. Design decisions made this session
 
+### Session 3 — E2E turn path (current)
+
+- **Gateway is a thin event dispatcher.** The gateway routes messages to harnesses and persists sessions. It has **zero involvement in tool execution**. Tool management and execution are entirely harness-internal. A future management plane may push tool/skill configuration to harnesses, but that's a separate concern.
+- **Harness is fully self-contained.** The harness/runtime owns the complete turn loop (observe/think/act/react), LLM calls, tool registry, tool execution, and context management. It must run standalone via Stdio/WebSocket transport without calling back to the gateway.
+- **`ToolDispatcher` trait in sera-runtime.** Follows the same decoupled pattern as `LlmProvider` — defined in sera-runtime, concrete impl will also live there. The gateway does not provide tool dispatch.
+- **`react()` receives `ThinkResult`.** Instead of a separate `TokenUsage` param, react() takes the full ThinkResult and extracts the LLM response content for FinalOutput. Eliminates the stub string.
+- **`act()` is async.** Tool dispatch is inherently async; act() now takes an optional `ToolDispatcher` and dispatches tool calls through it.
+- **Token counting via tiktoken-rs cl100k_base.** Replaces the `len/4` heuristic in ContextPipeline. Lazy-initialized static encoder.
+- **AgentHarness trait needs to move out of sera-gateway** (sera-w9bn). Currently in harness_dispatch.rs — should live in a shared crate since harnesses are standalone processes, not gateway-owned objects.
+
+### Previous sessions
+
 - **Envelope types defined in sera-gateway, not sera-types.** Avoids polluting the leaf crate with gateway-specific concerns. sera-runtime uses local serde-compatible types for its NDJSON protocol to avoid a cyclic dependency.
-- **AgentHarness trait in sera-gateway, not sera-types.** The spec suggested sera-types to avoid cycles, but since sera-runtime doesn't import sera-gateway (it defines its own NDJSON types), the trait lives where it's used.
+- **AgentHarness trait in sera-gateway, not sera-types.** ⚠️ **Deprecated decision** — see sera-w9bn. This should move to a shared crate.
 - **ContextEngine is a separate trait from AgentRuntime.** Orthogonal axis per SPEC-runtime §2.4. Pipeline and KvCache are two impls.
 - **9 Condensers, 3 are P1 stubs.** LLMSummarizing, LLMAttention, StructuredSummary are passthrough stubs with `// TODO(P1)`.
 - **MvsTurnResult rename in bin/sera.rs.** Local struct renamed to satisfy M2 exit criteria (`grep -r TurnResult` returns zero active hits). The MVS binary will be deprecated in Phase 1.
@@ -148,6 +170,9 @@ Previous gotchas §6.1–§6.11 from prior handoffs still apply. New additions:
 - **§6.12 sera-runtime has no sera-gateway dependency.** The NDJSON protocol types are defined locally in main.rs to avoid a cycle. If envelope types change in sera-gateway, update sera-runtime's local types to match.
 - **§6.13 TurnResult deprecated, not deleted.** `sera_types::runtime::TurnResult` has `#[deprecated]` but still exists for backward compatibility with bin/sera.rs MVS binary. Delete in Phase 1 when MVS binary is removed.
 - **§6.14 sera-docker is gone.** Any code that tries to import `sera_docker` will fail. Use `sera_tools::sandbox::docker::DockerSandboxProvider` instead.
+- **§6.15 Gateway is a thin event dispatcher — NOT a tool orchestrator.** The gateway routes messages to harnesses and persists sessions. It has zero involvement in tool management or execution. Tool registry, tool dispatch, and tool execution are entirely harness-internal. Do not add tool-related logic to sera-gateway. See sera-kjf9 for the concrete ToolDispatcher impl work.
+- **§6.16 AgentHarness trait is misplaced in sera-gateway.** It should live in a shared crate (sera-types or new sera-harness) since harnesses are standalone processes. See sera-w9bn. Do not add harness logic that assumes gateway access.
+- **§6.17 sera-runtime needs sera-tools dep.** Currently sera-runtime does not depend on sera-tools, so it cannot build a concrete ToolDispatcher. This is the next blocking item for E2E tool-call turns. See sera-kjf9.
 
 ---
 

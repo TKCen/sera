@@ -12,19 +12,14 @@ pub mod harness;
 pub mod subagent;
 pub mod turn;
 
-// Existing modules
+// Retained modules
 pub mod config;
 pub mod context;
-pub mod context_assembler;
-pub mod context_pipeline;
-#[allow(deprecated)]
 pub mod default_runtime;
 pub mod error;
 pub mod health;
 pub mod llm_client;
 pub mod manifest;
-pub mod reasoning_loop;
 pub mod session_manager;
-pub mod tool_loop_detector;
 pub mod tools;
 pub mod types;

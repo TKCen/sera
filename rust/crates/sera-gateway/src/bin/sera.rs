@@ -193,7 +193,7 @@ struct TranscriptEntry {
 
 /// Internal result from a turn execution, carrying the reply text and usage
 /// info extracted from the LLM response.
-struct TurnResult {
+struct MvsTurnResult {
     reply: String,
     usage: UsageInfo,
 }
@@ -547,7 +547,7 @@ async fn execute_turn(
     agent_spec: &AgentSpec,
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
-) -> TurnResult {
+) -> MvsTurnResult {
     let ctx_mgr = ContextManager::new(128_000);
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -618,7 +618,7 @@ async fn execute_turn(
             (p.base_url.clone(), model, key)
         }
         None => {
-            return TurnResult {
+            return MvsTurnResult {
                 reply: format!(
                     "[sera] Provider '{}' not found in config.",
                     agent_spec.provider
@@ -704,7 +704,7 @@ async fn execute_turn(
         let response = match req_builder.json(&request_body).send().await {
             Ok(resp) => resp,
             Err(e) => {
-                return TurnResult {
+                return MvsTurnResult {
                     reply: format!("[sera] LLM request failed: {e}"),
                     usage: cumulative_usage,
                 };
@@ -757,7 +757,7 @@ async fn execute_turn(
                 continue; // retry the LLM call
             }
 
-            return TurnResult {
+            return MvsTurnResult {
                 reply: format!("[sera] LLM error {status}: {body_text}"),
                 usage: cumulative_usage,
             };
@@ -766,7 +766,7 @@ async fn execute_turn(
         let body: serde_json::Value = match response.json().await {
             Ok(v) => v,
             Err(e) => {
-                return TurnResult {
+                return MvsTurnResult {
                     reply: format!("[sera] Failed to parse LLM response: {e}"),
                     usage: cumulative_usage,
                 };
@@ -786,7 +786,7 @@ async fn execute_turn(
         let choice = match body.get("choices").and_then(|c| c.get(0)) {
             Some(c) => c,
             None => {
-                return TurnResult {
+                return MvsTurnResult {
                     reply: "[sera] No choices in LLM response".to_owned(),
                     usage: cumulative_usage,
                 };
@@ -796,7 +796,7 @@ async fn execute_turn(
         let message = match choice.get("message") {
             Some(m) => m,
             None => {
-                return TurnResult {
+                return MvsTurnResult {
                     reply: "[sera] No message in LLM choice".to_owned(),
                     usage: cumulative_usage,
                 };
@@ -822,7 +822,7 @@ async fn execute_turn(
                     .get("content")
                     .and_then(|c| c.as_str())
                     .unwrap_or("[sera] Max tool iterations reached");
-                return TurnResult {
+                return MvsTurnResult {
                     reply: content.to_owned(),
                     usage: cumulative_usage,
                 };
@@ -868,14 +868,14 @@ async fn execute_turn(
             .unwrap_or("[sera] No response from LLM")
             .to_owned();
 
-        return TurnResult {
+        return MvsTurnResult {
             reply,
             usage: cumulative_usage,
         };
     }
 
     // Should not reach here, but just in case.
-    TurnResult {
+    MvsTurnResult {
         reply: "[sera] Turn loop exited unexpectedly".to_owned(),
         usage: cumulative_usage,
     }

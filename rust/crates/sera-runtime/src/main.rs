@@ -1,23 +1,78 @@
 //! SERA Runtime — the agent worker process that runs inside containers.
 //!
 //! Replaces the TypeScript agent-runtime (core/agent-runtime/).
-//! Handles: reasoning loop, tool execution, LLM proxy calls, context management.
+//! Communicates via NDJSON on stdin/stdout using Submission/Event envelope types.
 
 mod config;
 mod context;
-mod context_assembler;
 mod error;
 mod health;
 mod llm_client;
 mod manifest;
-mod reasoning_loop;
 mod session_manager;
-mod tool_loop_detector;
 mod tools;
 mod types;
 
+// New P0-6 modules (available via lib.rs for library consumers)
+mod compaction;
+mod context_engine;
+mod default_runtime;
+mod handoff;
+mod harness;
+mod subagent;
+mod turn;
+
 use config::RuntimeConfig;
-use types::{TaskInput, TaskOutput};
+use serde::{Deserialize, Serialize};
+
+/// Local NDJSON submission type — serde-compatible with sera-gateway's Submission.
+/// Defined locally to avoid a cyclic dependency (sera-gateway depends on sera-runtime).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Submission {
+    id: uuid::Uuid,
+    op: Op,
+}
+
+/// Local operation enum — mirrors sera-gateway's Op.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Op {
+    UserTurn {
+        items: Vec<serde_json::Value>,
+        #[serde(default)]
+        model_override: Option<String>,
+    },
+    Steer {
+        items: Vec<serde_json::Value>,
+    },
+    Interrupt,
+    System(SystemOp),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "system_op", rename_all = "snake_case")]
+enum SystemOp {
+    Shutdown,
+    HealthCheck,
+}
+
+/// Local NDJSON event type — serde-compatible with sera-gateway's Event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Event {
+    id: uuid::Uuid,
+    submission_id: uuid::Uuid,
+    msg: EventMsg,
+    timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EventMsg {
+    TurnStarted { turn_id: uuid::Uuid },
+    TurnCompleted { turn_id: uuid::Uuid },
+    StreamingDelta { delta: String },
+    Error { code: String, message: String },
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -32,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         agent_id = %config.agent_id,
         mode = %config.lifecycle_mode,
-        "sera-runtime-rs starting"
+        "sera-runtime-rs starting (NDJSON transport)"
     );
 
     // Start health server in background
@@ -51,22 +106,17 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Read TaskInput from stdin
-    let input = read_task_input().await;
+    // NDJSON Submission/Event loop on stdin/stdout
+    let result = run_ndjson_loop(&config).await;
 
-    match input {
-        Ok(task) => {
-            tracing::info!(task_id = %task.task_id, "Processing task");
-            let output = reasoning_loop::run(&config, task).await?;
-            write_task_output(&output)?;
-        }
-        Err(e) => {
-            // In persistent mode, no stdin task is expected — run health server only
+    match result {
+        Ok(()) => tracing::info!("NDJSON loop exited cleanly"),
+        Err(ref e) => {
             if config.lifecycle_mode == "persistent" {
                 tracing::info!("Persistent mode — waiting for chat requests on port {health_port}");
                 health_handle.await?;
             } else {
-                tracing::error!("Failed to read task input: {e}");
+                tracing::error!("NDJSON loop failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -75,36 +125,101 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Read TaskInput from stdin as a JSON line.
-async fn read_task_input() -> anyhow::Result<TaskInput> {
-    use tokio::io::AsyncBufReadExt;
+/// Read Submissions from stdin (NDJSON), process each, write Events to stdout.
+async fn run_ndjson_loop(_config: &RuntimeConfig) -> anyhow::Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let stdin = tokio::io::stdin();
-    let mut reader = tokio::io::BufReader::new(stdin);
+    let mut reader = BufReader::new(stdin);
+    let mut stdout = tokio::io::stdout();
     let mut line = String::new();
 
-    // Read with a timeout — persistent agents may not receive stdin
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        reader.read_line(&mut line),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(0)) => anyhow::bail!("Empty stdin"),
-        Ok(Ok(_)) => {
-            let input: TaskInput = serde_json::from_str(line.trim())?;
-            Ok(input)
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            // stdin closed
+            tracing::info!("stdin closed, exiting NDJSON loop");
+            break;
         }
-        Ok(Err(e)) => anyhow::bail!("Stdin read error: {e}"),
-        Err(_) => anyhow::bail!("Stdin timeout — no task input received"),
-    }
-}
 
-/// Write TaskOutput to stdout as JSON.
-fn write_task_output(output: &TaskOutput) -> anyhow::Result<()> {
-    let json = serde_json::to_string(output)?;
-    println!("{json}");
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let submission: Submission = match serde_json::from_str(trimmed) {
+            Ok(s) => s,
+            Err(e) => {
+                let err_event = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: uuid::Uuid::nil(),
+                    msg: EventMsg::Error {
+                        code: "parse_error".to_string(),
+                        message: format!("failed to parse submission: {e}"),
+                    },
+                    timestamp: chrono::Utc::now(),
+                };
+                let mut json = serde_json::to_string(&err_event)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+                stdout.flush().await?;
+                continue;
+            }
+        };
+
+        // Check for shutdown
+        if matches!(&submission.op, Op::System(SystemOp::Shutdown)) {
+            tracing::info!("received shutdown command, exiting");
+            break;
+        }
+
+        let turn_id = uuid::Uuid::new_v4();
+
+        // Emit TurnStarted
+        let started = Event {
+            id: uuid::Uuid::new_v4(),
+            submission_id: submission.id,
+            msg: EventMsg::TurnStarted { turn_id },
+            timestamp: chrono::Utc::now(),
+        };
+        let mut json = serde_json::to_string(&started)?;
+        json.push('\n');
+        stdout.write_all(json.as_bytes()).await?;
+
+        // Process the submission (P0 stub — returns placeholder)
+        let response_delta = match &submission.op {
+            Op::UserTurn { .. } => "[turn executed - model call pending]".to_string(),
+            Op::Steer { .. } => "[steer acknowledged]".to_string(),
+            Op::Interrupt => "[interrupt acknowledged]".to_string(),
+            Op::System(SystemOp::HealthCheck) => "[healthy]".to_string(),
+            Op::System(SystemOp::Shutdown) => unreachable!(),
+        };
+
+        // Emit StreamingDelta with the response
+        let delta = Event {
+            id: uuid::Uuid::new_v4(),
+            submission_id: submission.id,
+            msg: EventMsg::StreamingDelta { delta: response_delta },
+            timestamp: chrono::Utc::now(),
+        };
+        json = serde_json::to_string(&delta)?;
+        json.push('\n');
+        stdout.write_all(json.as_bytes()).await?;
+
+        // Emit TurnCompleted
+        let completed = Event {
+            id: uuid::Uuid::new_v4(),
+            submission_id: submission.id,
+            msg: EventMsg::TurnCompleted { turn_id },
+            timestamp: chrono::Utc::now(),
+        };
+        json = serde_json::to_string(&completed)?;
+        json.push('\n');
+        stdout.write_all(json.as_bytes()).await?;
+        stdout.flush().await?;
+    }
+
     Ok(())
 }
 

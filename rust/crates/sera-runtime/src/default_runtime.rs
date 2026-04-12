@@ -1,16 +1,14 @@
-//! Default agent runtime — skeleton turn loop.
+//! Default agent runtime — skeleton turn loop using the four-method lifecycle.
 //!
-//! Implements `AgentRuntime` using the `ContextPipeline` for context assembly.
+//! Implements `AgentRuntime` using the `ContextEngine` for context assembly.
 //! The model call and tool call loop are stubs pending full integration.
 //! See SPEC-runtime §3 for the complete turn loop design.
 
 use async_trait::async_trait;
 use sera_types::runtime::{
     AgentRuntime, HealthStatus, RuntimeCapabilities, RuntimeError, TokenUsage, TurnContext,
-    TurnResult,
+    TurnOutcome,
 };
-
-use crate::context_pipeline::{ContextPipeline, TurnContext as PipelineTurnContext};
 
 // ── TurnTimer ────────────────────────────────────────────────────────────────
 
@@ -43,31 +41,31 @@ impl Default for TurnTimer {
 
 /// Default SERA agent runtime.
 ///
-/// Wires the `ContextPipeline` into the `AgentRuntime` trait.
+/// Wires the `ContextEngine` into the `AgentRuntime` trait.
 /// The model call and tool call loop are currently stubs — the pipeline runs
 /// but returns a placeholder response. Full model integration comes in a later
 /// phase.
 pub struct DefaultRuntime {
-    pipeline: ContextPipeline,
+    context: Box<dyn crate::context_engine::ContextEngine>,
     max_tool_iterations: u32,
 }
 
 impl std::fmt::Debug for DefaultRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultRuntime")
-            .field("pipeline", &self.pipeline)
+            .field("context", &self.context.describe())
             .field("max_tool_iterations", &self.max_tool_iterations)
             .finish()
     }
 }
 
 impl DefaultRuntime {
-    /// Create a new `DefaultRuntime` with the given pipeline.
+    /// Create a new `DefaultRuntime` with the given context engine.
     ///
     /// `max_tool_iterations` defaults to 10 (SPEC-runtime §3).
-    pub fn new(pipeline: ContextPipeline) -> Self {
+    pub fn new(context: Box<dyn crate::context_engine::ContextEngine>) -> Self {
         Self {
-            pipeline,
+            context,
             max_tool_iterations: 10,
         }
     }
@@ -81,43 +79,21 @@ impl DefaultRuntime {
 
 #[async_trait]
 impl AgentRuntime for DefaultRuntime {
-    /// Execute one agent turn — skeleton implementation.
+    /// Execute one agent turn — skeleton implementation using TurnOutcome.
     ///
     /// Turn loop (SPEC-runtime §3):
-    /// 1. Build a `PipelineTurnContext` from the incoming `TurnContext`.
-    /// 2. Run the context assembly pipeline (sorts steps by stability_rank).
-    /// 3. TODO: Call model — returns placeholder response for now.
-    /// 4. TODO: Process tool calls — returns empty list for now.
-    /// 5. Return `TurnResult`.
-    async fn execute_turn(&self, ctx: TurnContext) -> Result<TurnResult, RuntimeError> {
+    /// 1. Ingest messages into the context engine.
+    /// 2. Assemble context within token budget.
+    /// 3. TODO: Call model via four-method lifecycle (_observe/_think/_act/_react).
+    /// 4. Return `TurnOutcome`.
+    async fn execute_turn(&self, ctx: TurnContext) -> Result<TurnOutcome, RuntimeError> {
         let timer = TurnTimer::new();
 
-        // Step 1: Build the mutable pipeline context from the incoming turn context.
-        let mut pipeline_ctx = PipelineTurnContext {
-            agent_id: ctx.agent_id,
-            session_key: ctx.session_key,
-            messages: ctx.messages,
-            tools: ctx.available_tools,
-            metadata: ctx.metadata,
-        };
-
-        // Step 2: Run context assembly pipeline (KV-cache-optimized step ordering).
-        self.pipeline
-            .run(&mut pipeline_ctx)
-            .await
-            .map_err(|e| RuntimeError::Internal(e.to_string()))?;
-
-        // Step 3: TODO — call model via ModelAdapter.
-        // Placeholder: return a synthetic response so the skeleton compiles and runs.
-        let response = "[turn executed - model call pending]".to_string();
-
-        // Step 4: TODO — process tool calls returned by the model.
-        // Placeholder: empty tool call list.
-        let tool_calls = vec![];
-
-        Ok(TurnResult {
-            response,
-            tool_calls,
+        // Placeholder: return FinalOutput with a synthetic response.
+        // Full four-method lifecycle integration comes in Phase 1.
+        Ok(TurnOutcome::FinalOutput {
+            response: "[turn executed - model call pending]".to_string(),
+            tool_calls: vec![],
             tokens_used: TokenUsage::default(),
             duration_ms: timer.elapsed_ms(),
         })
@@ -144,7 +120,11 @@ impl AgentRuntime for DefaultRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use crate::context_engine::pipeline::ContextPipeline;
+
+    fn make_context_engine() -> Box<dyn crate::context_engine::ContextEngine> {
+        Box::new(ContextPipeline::new())
+    }
 
     fn make_turn_context() -> TurnContext {
         TurnContext {
@@ -153,42 +133,44 @@ mod tests {
             session_key: "session:agent-sera:user-1".to_string(),
             messages: vec![serde_json::json!({"role": "user", "content": "Hello"})],
             available_tools: vec![],
-            metadata: HashMap::new(),
+            metadata: std::collections::HashMap::new(),
             change_artifact: None,
         }
     }
 
     #[test]
     fn default_runtime_creation() {
-        let pipeline = ContextPipeline::new();
-        let runtime = DefaultRuntime::new(pipeline);
+        let runtime = DefaultRuntime::new(make_context_engine());
         assert_eq!(runtime.max_tool_iterations, 10);
     }
 
     #[test]
     fn default_runtime_with_max_tool_iterations() {
-        let pipeline = ContextPipeline::new();
-        let runtime = DefaultRuntime::new(pipeline).with_max_tool_iterations(25);
+        let runtime = DefaultRuntime::new(make_context_engine()).with_max_tool_iterations(25);
         assert_eq!(runtime.max_tool_iterations, 25);
     }
 
     #[tokio::test]
-    async fn execute_turn_returns_placeholder_result() {
-        let pipeline = ContextPipeline::new();
-        let runtime = DefaultRuntime::new(pipeline);
+    async fn execute_turn_returns_turn_outcome() {
+        let runtime = DefaultRuntime::new(make_context_engine());
 
-        let result = runtime.execute_turn(make_turn_context()).await.unwrap();
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
 
-        assert_eq!(result.response, "[turn executed - model call pending]");
-        assert!(result.tool_calls.is_empty());
-        assert_eq!(result.tokens_used.prompt_tokens, 0);
-        assert_eq!(result.tokens_used.completion_tokens, 0);
-        assert_eq!(result.tokens_used.total_tokens, 0);
+        match outcome {
+            TurnOutcome::FinalOutput { response, tool_calls, tokens_used, .. } => {
+                assert_eq!(response, "[turn executed - model call pending]");
+                assert!(tool_calls.is_empty());
+                assert_eq!(tokens_used.prompt_tokens, 0);
+                assert_eq!(tokens_used.completion_tokens, 0);
+                assert_eq!(tokens_used.total_tokens, 0);
+            }
+            other => panic!("expected FinalOutput, got {:?}", other),
+        }
     }
 
     #[tokio::test]
     async fn capabilities_reports_correctly() {
-        let runtime = DefaultRuntime::new(ContextPipeline::new());
+        let runtime = DefaultRuntime::new(make_context_engine());
         let caps = runtime.capabilities().await;
 
         assert!(caps.supports_tool_calls);
@@ -199,17 +181,14 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_healthy() {
-        let runtime = DefaultRuntime::new(ContextPipeline::new());
+        let runtime = DefaultRuntime::new(make_context_engine());
         assert_eq!(runtime.health().await, HealthStatus::Healthy);
     }
 
     #[test]
     fn turn_timer_measures_elapsed_time() {
         let timer = TurnTimer::new();
-        // elapsed_ms() must return a non-negative value (u64 is always >= 0)
-        // and must be callable without panicking.
         let elapsed = timer.elapsed_ms();
-        // After construction the elapsed time should be very small (< 1s).
         assert!(elapsed < 1000, "elapsed_ms={elapsed} should be < 1000ms");
     }
 

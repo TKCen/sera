@@ -200,7 +200,7 @@ pub trait AgentRuntime: Send + Sync {
     ///
     /// Responsible for: context assembly, model call, tool call loop,
     /// memory write, and response delivery.
-    async fn execute_turn(&self, ctx: TurnContext) -> Result<TurnResult, RuntimeError>;
+    async fn execute_turn(&self, ctx: TurnContext) -> Result<TurnOutcome, RuntimeError>;
 
     /// Report what this runtime supports.
     async fn capabilities(&self) -> RuntimeCapabilities;

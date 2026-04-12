@@ -13,11 +13,12 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+sqlx = { workspace = true, optional = true }
 
 [features]
 default = ["local"]
 local = []
-apalis = []
+apalis = ["dep:sqlx"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

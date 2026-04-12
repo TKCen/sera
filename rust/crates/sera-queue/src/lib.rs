@@ -14,3 +14,9 @@ pub use throttle::GlobalThrottle;
 
 #[cfg(feature = "local")]
 pub use local::LocalQueueBackend;
+
+#[cfg(feature = "apalis")]
+pub mod sqlx_backend;
+
+#[cfg(feature = "apalis")]
+pub use sqlx_backend::SqlxQueueBackend;

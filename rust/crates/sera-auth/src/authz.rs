@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use sera_types::evolution::{BlastRadius, ChangeArtifactId};
 use sera_types::principal::PrincipalRef;
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,10 @@ pub enum Action {
     MemoryAccess(String),
     /// Modify a named config path.
     ConfigChange(String),
+    /// Propose a change artifact within the given blast radius.
+    ProposeChange(BlastRadius),
+    /// Approve a specific change artifact.
+    ApproveChange(ChangeArtifactId),
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +54,25 @@ pub enum Resource {
     Config(String),
     Workflow(String),
     System,
+    /// A specific change artifact (identified by content-addressed hash).
+    ChangeArtifact(ChangeArtifactId),
+}
+
+// ---------------------------------------------------------------------------
+// PendingApprovalHint
+// ---------------------------------------------------------------------------
+
+/// Hint returned alongside [`AuthzDecision::NeedsApproval`] for Phase 0.
+///
+/// Carries enough context for the HITL routing layer to find the right
+/// approval queue without embedding full policy logic here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingApprovalHint {
+    /// Human-readable routing key (e.g. approval policy ID or queue name).
+    pub routing_hint: String,
+    /// Optional scope annotation (e.g. blast-radius label, tier name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -183,13 +207,25 @@ impl AuthorizationProvider for DefaultAuthzProvider {
     async fn check(
         &self,
         _principal: &PrincipalRef,
-        _action: &Action,
+        action: &Action,
         _resource: &Resource,
         _context: &AuthzContext,
     ) -> Result<AuthzDecision, AuthzError> {
-        // TODO(sera-32zt): Replace with role-based checks once PrincipalGroup
-        // and role tables are available. Tier 1 default: allow everything.
-        Ok(AuthzDecision::Allow)
+        match action {
+            // Phase 0: change-proposal and approval actions require explicit
+            // policy grant. Deny by default until a CasbinAuthzAdapter or
+            // enterprise policy provider is wired in.
+            Action::ProposeChange(_) | Action::ApproveChange(_) => {
+                Ok(AuthzDecision::Deny(DenyReason::new(
+                    "change_action_requires_policy",
+                    "ProposeChange and ApproveChange require explicit policy grant",
+                )))
+            }
+            // TODO(sera-32zt): Replace remaining variants with role-based
+            // checks once PrincipalGroup and role tables are available.
+            // Tier 1 default: allow everything else.
+            _ => Ok(AuthzDecision::Allow),
+        }
     }
 }
 

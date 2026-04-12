@@ -6,11 +6,13 @@ use crate::{
 };
 
 /// In-memory registry of workflow definitions.
+#[deprecated(note = "Use WorkflowEngine (Phase 1)")]
 #[derive(Debug, Default)]
 pub struct WorkflowRegistry {
     workflows: HashMap<String, WorkflowDef>,
 }
 
+#[allow(deprecated)]
 impl WorkflowRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {

@@ -8,23 +8,35 @@
 
 ## 1. What this session accomplished
 
-**Phase 1 progress.** Eight commits on `sera20` implementing core execution substrate wiring:
+**Phase 1 complete.** Twelve commits on `sera20` — eight execution substrate wiring (session 1) plus four design+implement items (session 2):
 
-1. **`876d7ac` — feat: wire DefaultHarness think step to LlmClient via LlmProvider trait.** Connected the four-method turn lifecycle's think step to actual LLM inference via sera-gateway's llm_client.rs, bridging DefaultHarness to language model execution.
+**Session 1 — execution substrate wiring:**
 
-2. **`bc67370` — feat: wire gateway chat handler through harness_dispatch.** Integrated sera-gateway's orchestrator to route chat operations through harness_dispatch::dispatch, replacing direct reasoning_loop calls with the new turn-based harness model.
+1. **`876d7ac` — feat: wire DefaultHarness think step to LlmClient via LlmProvider trait.** Connected the four-method turn lifecycle's think step to actual LLM inference via sera-gateway's llm_client.rs.
 
-3. **`77c9c1e` — feat: wire NDJSON runtime loop to DefaultRuntime.execute_turn.** Connected sera-runtime's NDJSON child process loop to DefaultRuntime.execute_turn, enabling async turn execution via stdio transport.
+2. **`bc67370` — feat: wire gateway chat handler through harness_dispatch.** Integrated sera-gateway's orchestrator to route chat operations through harness_dispatch::dispatch.
 
-4. **`e21334f` — chore: delete deprecated TurnResult from sera-types.** Removed TurnResult from sera-types; it was deprecated in Phase 0 and is no longer referenced in active code.
+3. **`77c9c1e` — feat: wire NDJSON runtime loop to DefaultRuntime.execute_turn.** Connected sera-runtime's NDJSON child process loop to DefaultRuntime.execute_turn.
 
-5. **`73493ff` — feat: add SqlxSessionPersist for durable session storage.** Implemented sqlx-backed persistence for session parts (WorkflowTask, execution state, context snapshots) in sera-gateway's session_persist.rs.
+4. **`e21334f` — chore: delete deprecated TurnResult from sera-types.** Removed TurnResult; deprecated in Phase 0.
 
-6. **`d4d8d65` — docs: update HANDOFF.md for Phase 1 progress (interim).** Updated this handoff during the session to track Phase 1 execution substrate items as they were completed.
+5. **`73493ff` — feat: add SqlxSessionPersist for durable session storage.** sqlx-backed persistence for session parts in sera-gateway.
 
-7. **`8e4e830` — feat: wire condensers into ContextEngine compact method.** Connected the condenser trait impls (LLMSummarizing, LLMAttention, StructuredSummary, and others) into ContextEngine's compact method, enabling context compression for token management.
+6. **`d4d8d65` — docs: update HANDOFF.md for Phase 1 progress (interim).**
 
-8. **`e6dfd0e` — feat: wire ConstitutionalGate hooks into observe/react lifecycle.** Integrated sera-hooks' ConstitutionalGate enforcement into the turn lifecycle's observe and react methods, enabling policy-driven agent behavior.
+7. **`8e4e830` — feat: wire condensers into ContextEngine compact method.** Connected condenser trait impls into ContextEngine's compact method.
+
+8. **`e6dfd0e` — feat: wire ConstitutionalGate hooks into observe/react lifecycle.** Integrated ConstitutionalGate enforcement into observe and react methods.
+
+**Session 2 — design decisions resolved + implemented:**
+
+9. **`b974d14` — feat: add SqlxQueueBackend behind apalis feature flag.** PostgreSQL-backed QueueBackend using sqlx with `FOR UPDATE SKIP LOCKED` concurrency, ack/nack, orphan recovery. Gated behind `apalis` feature in sera-queue.
+
+10. **`27a38cd` — feat: wire HITL ApprovalRouter into turn lifecycle act() step.** Added `WaitingForApproval` variant to TurnOutcome/ActResult. `ApprovalRouter.needs_approval()` wired into act(); creates ApprovalTicket when approval required.
+
+11. **`0f3956f` — feat: add circle coordination scaffold with CircleState and shared memory.** CircleCoordinator with CircleState, SharedMemory KV store, CircleMessage (broadcast + directed) in sera-gateway. 14 tests.
+
+12. **`b35dae1` — feat: add WebSocket transport behind enterprise feature gate.** WebSocketTransport implementing Transport trait using tokio-tungstenite, JSON-serialized SQ/EQ envelope. Behind `enterprise` feature flag.
 
 ---
 
@@ -59,11 +71,11 @@
 
 ---
 
-## 3. What's next — Phase 1
+## 3. What's next — Phase 2
 
-Phase 0 is complete. All type contracts, trait boundaries, and infrastructure crates are in place. Phase 1 execution substrate wiring is complete for all 8 scheduled items.
+**Phase 1 is complete.** All execution substrate wiring, design decisions, and remaining items are implemented and tested.
 
-### Phase 1 completed execution substrate items
+### Phase 1 completed items (all 12)
 
 - [x] Wire DefaultHarness think step to llm_client.rs
 - [x] Connect sera-gateway orchestrator to harness_dispatch::dispatch
@@ -73,15 +85,19 @@ Phase 0 is complete. All type contracts, trait boundaries, and infrastructure cr
 - [x] Wire NDJSON runtime loop to DefaultRuntime.execute_turn
 - [x] Wire condensers into ContextEngine compact method
 - [x] Wire ConstitutionalGate hooks into observe/react lifecycle
+- [x] SqlxQueueBackend behind apalis feature flag
+- [x] HITL ApprovalRouter wired into act() step
+- [x] Circle coordination scaffold (CircleState, SharedMemory, CircleMessage)
+- [x] WebSocket transport behind enterprise feature gate
 
-### Phase 1 remaining work — design decisions required
+### Phase 1 remaining work — now complete
 
-All 8 execution substrate items are complete. Remaining Phase 1 work requires architectural design decisions before wiring can begin:
+All design decisions resolved and implemented in the second Phase 1 session:
 
-- [ ] **apalis job workers** — Feature flag exists in sera-queue but no implementation. Requires design of worker pool lifecycle, task scheduling policy, failure recovery, and production queue backend.
-- [ ] **Circle coordination** — No scaffold yet. Requires design of circle dispatch routing, cross-agent message routing, and persistent circle state.
-- [ ] **HITL routing integration** — sera-hitl has types/router, needs wiring to turn lifecycle. Requires decision on HitlRouter trait impl, interrupt/resume semantics, and human approval workflow.
-- [ ] **Enterprise transports** — WebSocket/gRPC implementations (behind feature gates). Requires protocol specification, connection pooling strategy, and transport negotiation policy.
+- [x] **apalis job workers** — `SqlxQueueBackend` in sera-queue behind `apalis` feature flag. PostgreSQL-backed with `FOR UPDATE SKIP LOCKED` concurrency, ack/nack/orphan recovery.
+- [x] **Circle coordination** — `CircleCoordinator` with `CircleState`, `SharedMemory` (KV store), and `CircleMessage` (broadcast + directed) in sera-gateway/services/circle_state.rs. 14 tests.
+- [x] **HITL routing integration** — `WaitingForApproval` variant added to `TurnOutcome` and `ActResult`. `ApprovalRouter.needs_approval()` wired into `act()`. Creates `ApprovalTicket` when approval required; autonomous mode skips all checks.
+- [x] **Enterprise transports** — `WebSocketTransport` implementing `Transport` trait in sera-gateway/transport/websocket.rs, behind `enterprise` feature flag. tokio-tungstenite, JSON-serialized SQ/EQ envelope over text frames.
 
 ---
 
@@ -139,7 +155,9 @@ Previous gotchas §6.1–§6.11 from prior handoffs still apply. New additions:
 
 Same as M1/M3 handoff §7, plus:
 - **`rust/crates/sera-gateway/src/envelope.rs`** — SQ/EQ types (Submission, Event, Op)
-- **`rust/crates/sera-gateway/src/transport/`** — Transport trait + InProcess/Stdio impls
+- **`rust/crates/sera-gateway/src/transport/`** — Transport trait + InProcess/Stdio/WebSocket impls
+- **`rust/crates/sera-gateway/src/services/circle_state.rs`** — CircleCoordinator + CircleState + SharedMemory
+- **`rust/crates/sera-queue/src/sqlx_backend.rs`** — SqlxQueueBackend (PostgreSQL, behind `apalis` feature)
 - **`rust/crates/sera-gateway/src/harness_dispatch.rs`** — AgentHarness trait + registry
 - **`rust/crates/sera-gateway/src/kill_switch.rs`** — Emergency stop
 - **`rust/crates/sera-runtime/src/context_engine/`** — ContextEngine trait + Pipeline/KvCache

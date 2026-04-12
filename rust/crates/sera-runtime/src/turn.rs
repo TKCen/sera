@@ -369,6 +369,7 @@ pub async fn react(
                     tool_calls: vec![],
                     tokens_used: tokens.clone(),
                     duration_ms: elapsed_ms,
+                    transcript: vec![],
                 }
             } else {
                 TurnOutcome::RunAgain {
@@ -435,6 +436,7 @@ pub async fn react(
                             tool_calls: vec![],
                             tokens_used: tokens.clone(),
                             duration_ms: elapsed_ms,
+                            transcript: vec![],
                         };
                     }
                 }

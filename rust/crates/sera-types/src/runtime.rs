@@ -89,6 +89,10 @@ pub enum TurnOutcome {
         tool_calls: Vec<ToolCall>,
         tokens_used: TokenUsage,
         duration_ms: u64,
+        /// Accumulated conversation messages during the tool-call loop (assistant + tool results).
+        /// Used by the gateway to persist full turn history to the session transcript.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        transcript: Vec<serde_json::Value>,
     },
     Compact {
         tokens_used: TokenUsage,

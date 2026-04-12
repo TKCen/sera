@@ -139,8 +139,9 @@ impl StdioHarness {
     }
 
     /// Send a turn with the given conversation messages to the runtime.
-    /// Blocks until the runtime emits `TurnCompleted`, returns accumulated response.
-    async fn send_turn(&self, messages: Vec<serde_json::Value>) -> anyhow::Result<String> {
+    /// Blocks until the runtime emits `TurnCompleted`, returns a `TurnEvents`
+    /// containing the response text and any tool call events.
+    async fn send_turn(&self, messages: Vec<serde_json::Value>, session_key: &str) -> anyhow::Result<TurnEvents> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
         let submission = serde_json::json!({
@@ -148,6 +149,7 @@ impl StdioHarness {
             "op": {
                 "type": "user_turn",
                 "items": messages,
+                "session_key": session_key,
             }
         });
 
@@ -161,7 +163,7 @@ impl StdioHarness {
         stdin.write_all(json_line.as_bytes()).await?;
         stdin.flush().await?;
 
-        let mut response = String::new();
+        let mut result = TurnEvents::default();
         let mut line = String::new();
 
         loop {
@@ -185,7 +187,24 @@ impl StdioHarness {
                         .and_then(|m| m.get("delta"))
                         .and_then(|d| d.as_str())
                     {
-                        response.push_str(delta);
+                        result.response.push_str(delta);
+                    }
+                }
+                "tool_call_begin" => {
+                    if let Some(msg) = event.get("msg") {
+                        result.tool_events.push(ToolEvent::Begin {
+                            call_id: msg.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            tool: msg.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            arguments: msg.get("arguments").cloned().unwrap_or(serde_json::Value::Null),
+                        });
+                    }
+                }
+                "tool_call_end" => {
+                    if let Some(msg) = event.get("msg") {
+                        result.tool_events.push(ToolEvent::End {
+                            call_id: msg.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            content: msg.get("result").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        });
                     }
                 }
                 "turn_completed" => break,
@@ -206,7 +225,7 @@ impl StdioHarness {
             }
         }
 
-        Ok(response)
+        Ok(result)
     }
 
     /// Send a graceful shutdown command to the runtime process.
@@ -258,6 +277,22 @@ impl StdioHarness {
             child: Mutex::new(child),
         })
     }
+}
+
+// ── Turn event types ────────────────────────────────────────────────────────
+
+/// A tool call event captured from the runtime's NDJSON output.
+#[derive(Debug, Clone)]
+enum ToolEvent {
+    Begin { call_id: String, tool: String, arguments: serde_json::Value },
+    End { call_id: String, content: String },
+}
+
+/// Result from a harness turn — response text plus all tool call events.
+#[derive(Debug, Default)]
+struct TurnEvents {
+    response: String,
+    tool_events: Vec<ToolEvent>,
 }
 
 // ── Shared state ────────────────────────────────────────────────────────────
@@ -349,10 +384,11 @@ struct TranscriptEntry {
     created_at: String,
 }
 
-/// Internal result from a turn execution, carrying the reply text and usage
-/// info extracted from the LLM response.
+/// Internal result from a turn execution, carrying the reply text, tool events,
+/// and usage info extracted from the LLM response.
 struct MvsTurnResult {
     reply: String,
+    tool_events: Vec<ToolEvent>,
     usage: UsageInfo,
 }
 
@@ -436,6 +472,7 @@ async fn chat_handler(
     // Get recent transcript for context.
     let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
     let session_id = session.id.clone();
+    let session_key = format!("http:{}:{}", agent_name, session_id);
     drop(db); // Release lock before dispatching to harness.
 
     if req.stream {
@@ -444,19 +481,21 @@ async fn chat_handler(
         let state_clone = Arc::clone(&state);
         let harness_clone = Arc::clone(&harness);
         let sid = session_id.clone();
+        let skey = session_key.clone();
         let mid = format!("msg_{:08x}", rand::random::<u32>());
         let mid_clone = mid.clone();
 
         let sse_stream = stream::unfold(
-            StreamState::Pending { agent_spec, transcript, message, state: state_clone, harness: harness_clone, session_id: sid, message_id: mid_clone },
+            StreamState::Pending { agent_spec, transcript, message, state: state_clone, harness: harness_clone, session_id: sid, session_key: skey, message_id: mid_clone },
             |fold_state| async move {
                 match fold_state {
-                    StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, message_id } => {
-                        let result = execute_turn(&agent_spec, &transcript, &message, &harness).await;
+                    StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, session_key, message_id } => {
+                        let result = execute_turn(&agent_spec, &transcript, &message, &harness, &session_key).await;
 
-                        // Save assistant response.
+                        // Save tool events and assistant response.
                         {
                             let db = state.db.lock().await;
+                            persist_tool_events(&db, &session_id, &result.tool_events);
                             let _ = db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None);
                             let _ = db.append_audit(
                                 "response_sent", "agent:sera", "agent",
@@ -512,10 +551,11 @@ async fn chat_handler(
     } else {
         // Synchronous JSON mode (existing behavior).
         let result =
-            execute_turn(&agent_spec, &transcript, &req.message, &harness).await;
+            execute_turn(&agent_spec, &transcript, &req.message, &harness, &session_key).await;
 
-        // Save assistant response and audit.
+        // Save tool events and assistant response.
         let db = state.db.lock().await;
+        persist_tool_events(&db, &session_id, &result.tool_events);
         db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -637,6 +677,7 @@ enum StreamState {
         state: Arc<AppState>,
         harness: Arc<StdioHarness>,
         session_id: String,
+        session_key: String,
         message_id: String,
     },
     Streaming {
@@ -661,6 +702,7 @@ async fn execute_turn(
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
     harness: &StdioHarness,
+    session_key: &str,
 ) -> MvsTurnResult {
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -713,9 +755,10 @@ async fn execute_turn(
         }));
     }
 
-    match harness.send_turn(messages).await {
-        Ok(reply) => MvsTurnResult {
-            reply,
+    match harness.send_turn(messages, session_key).await {
+        Ok(events) => MvsTurnResult {
+            reply: events.response,
+            tool_events: events.tool_events,
             usage: UsageInfo {
                 prompt_tokens: 0,
                 completion_tokens: 0,
@@ -726,6 +769,7 @@ async fn execute_turn(
             tracing::error!(error = %e, "Runtime harness turn failed");
             MvsTurnResult {
                 reply: format!("[sera] Runtime error: {e}"),
+                tool_events: vec![],
                 usage: UsageInfo {
                     prompt_tokens: 0,
                     completion_tokens: 0,
@@ -737,6 +781,43 @@ async fn execute_turn(
 }
 
 // ── Event processing loop ───────────────────────────────────────────────────
+
+/// Persist tool call events to the session transcript.
+///
+/// For each ToolEvent::Begin, saves an assistant message with tool_calls JSON.
+/// For each ToolEvent::End, saves a tool message with the result content.
+fn persist_tool_events(db: &sera_db::sqlite::SqliteDb, session_id: &str, events: &[ToolEvent]) {
+    for event in events {
+        match event {
+            ToolEvent::Begin { call_id, tool, arguments } => {
+                let tool_calls_json = serde_json::json!([{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool,
+                        "arguments": arguments.to_string(),
+                    }
+                }]);
+                let _ = db.append_transcript(
+                    session_id,
+                    "assistant",
+                    None,
+                    Some(&tool_calls_json.to_string()),
+                    None,
+                );
+            }
+            ToolEvent::End { call_id, content } => {
+                let _ = db.append_transcript(
+                    session_id,
+                    "tool",
+                    Some(content),
+                    None,
+                    Some(call_id),
+                );
+            }
+        }
+    }
+}
 
 /// Send a user-visible error message to a Discord channel.
 async fn send_error_to_discord(state: &AppState, channel_id: &str, error: &str) {
@@ -979,12 +1060,45 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Continue { .. } => {}
     }
 
-    // Execute the agent turn via the pre-connected harness.
-    let result = execute_turn(&agent_spec, &transcript, &msg.content, &harness).await;
+    // ── Lane queue: enqueue and check if we can dispatch immediately ──
+    {
+        let mut lq = state.lane_queue.lock().await;
+        let enqueue_result = lq.enqueue(domain_event.clone());
+        match enqueue_result {
+            sera_db::lane_queue::EnqueueResult::Ready => {
+                // Lane was idle — dequeue and proceed with dispatch.
+                let _ = lq.dequeue(&session_key);
+            }
+            sera_db::lane_queue::EnqueueResult::Queued => {
+                tracing::info!(session_key = %session_key, "Message queued behind active turn");
+                return Ok(());
+            }
+            sera_db::lane_queue::EnqueueResult::Steer => {
+                tracing::info!(session_key = %session_key, "Steer event queued for tool boundary injection");
+                return Ok(());
+            }
+            sera_db::lane_queue::EnqueueResult::Interrupt => {
+                tracing::info!(session_key = %session_key, "Interrupt: active run should be aborted");
+                // Future: send abort signal to harness. For now, dequeue the interrupt event.
+                let _ = lq.dequeue(&session_key);
+            }
+        }
+    }
 
+    // Execute the agent turn via the pre-connected harness.
+    let result = execute_turn(&agent_spec, &transcript, &msg.content, &harness, &session_key).await;
+
+    // Persist tool call events to transcript before the final response.
     {
         let db = state.db.lock().await;
+        persist_tool_events(&db, &session.id, &result.tool_events);
         let _ = db.append_transcript(&session.id, "assistant", Some(&result.reply), None, None);
+    }
+
+    // Complete the run and drain any pending messages for this session.
+    {
+        let mut lq = state.lane_queue.lock().await;
+        lq.complete_run(&session_key);
     }
 
     // ── post_turn: after execute_turn, before delivery ──
@@ -1021,6 +1135,67 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         }
     } else {
         tracing::warn!("No Discord connector available to send reply");
+    }
+
+    // ── Drain pending messages for this session ──
+    // After completing a turn, check if more messages arrived while we were busy.
+    // Process them sequentially (per-session serialization via lane queue).
+    loop {
+        let has_pending = {
+            let lq = state.lane_queue.lock().await;
+            lq.has_pending(&session_key)
+        };
+        if !has_pending {
+            break;
+        }
+
+        // Dequeue the next batch.
+        let batch = {
+            let mut lq = state.lane_queue.lock().await;
+            lq.dequeue(&session_key)
+        };
+        let Some(batch) = batch else { break };
+
+        // Coalesce batch messages into a single user message (Collect mode).
+        let combined_content: String = batch
+            .iter()
+            .filter_map(|qe| qe.event.text.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if combined_content.is_empty() {
+            let mut lq = state.lane_queue.lock().await;
+            lq.complete_run(&session_key);
+            continue;
+        }
+
+        // Get fresh transcript for the follow-up turn.
+        let transcript = {
+            let db = state.db.lock().await;
+            let _ = db.append_transcript(&session.id, "user", Some(&combined_content), None, None);
+            db.get_transcript_recent(&session.id, 20).unwrap_or_default()
+        };
+
+        let follow_up = execute_turn(&agent_spec, &transcript, &combined_content, &harness, &session_key).await;
+
+        {
+            let db = state.db.lock().await;
+            persist_tool_events(&db, &session.id, &follow_up.tool_events);
+            let _ = db.append_transcript(&session.id, "assistant", Some(&follow_up.reply), None, None);
+        }
+
+        // Complete run for this follow-up turn.
+        {
+            let mut lq = state.lane_queue.lock().await;
+            lq.complete_run(&session_key);
+        }
+
+        // Send the follow-up reply to Discord.
+        if let Some(ref dc) = state.discord
+            && let Err(e) = dc.send_message(&msg.channel_id, &follow_up.reply).await
+        {
+            tracing::error!("Failed to send Discord follow-up reply: {e}");
+        }
     }
 
     Ok(())

@@ -117,6 +117,8 @@ impl AgentRuntime for DefaultRuntime {
             .filter_map(|t| serde_json::to_value(t).ok())
             .collect();
 
+        let original_message_count = ctx.messages.len();
+
         let mut turn_ctx = turn::TurnContext {
             turn_id: uuid::Uuid::new_v4(),
             session_key: ctx.session_key,
@@ -177,7 +179,18 @@ impl AgentRuntime for DefaultRuntime {
                         "tool-call loop: re-entering think with tool results"
                     );
                 }
-                // Any other outcome (FinalOutput, Handoff, Interruption, etc.) — return immediately
+                // Inject accumulated transcript into FinalOutput before returning
+                TurnOutcome::FinalOutput { response, tool_calls, tokens_used, duration_ms, .. } => {
+                    let transcript = turn_ctx.messages[original_message_count..].to_vec();
+                    return Ok(TurnOutcome::FinalOutput {
+                        response,
+                        tool_calls,
+                        tokens_used,
+                        duration_ms,
+                        transcript,
+                    });
+                }
+                // Any other outcome (Handoff, Interruption, etc.) — return immediately
                 other => return Ok(other),
             }
         }

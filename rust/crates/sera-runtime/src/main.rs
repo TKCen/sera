@@ -106,9 +106,14 @@ enum Op {
         items: Vec<serde_json::Value>,
         #[serde(default)]
         model_override: Option<String>,
+        /// Session key provided by the gateway for per-session context tracking.
+        #[serde(default)]
+        session_key: Option<String>,
     },
     Steer {
         items: Vec<serde_json::Value>,
+        #[serde(default)]
+        session_key: Option<String>,
     },
     Interrupt,
     System(SystemOp),
@@ -136,6 +141,19 @@ enum EventMsg {
     TurnStarted { turn_id: uuid::Uuid },
     TurnCompleted { turn_id: uuid::Uuid },
     StreamingDelta { delta: String },
+    /// Tool call started — emitted for each tool invocation during the turn.
+    ToolCallBegin {
+        turn_id: uuid::Uuid,
+        call_id: String,
+        tool: String,
+        arguments: serde_json::Value,
+    },
+    /// Tool call completed — emitted after tool execution with the result.
+    ToolCallEnd {
+        turn_id: uuid::Uuid,
+        call_id: String,
+        result: String,
+    },
     Error { code: String, message: String },
 }
 
@@ -372,7 +390,63 @@ async fn run_ndjson_loop(
 
         // Convert TurnOutcome to Event messages
         match outcome {
-            Ok(TurnOutcome::FinalOutput { response, .. }) => {
+            Ok(TurnOutcome::FinalOutput { response, transcript, .. }) => {
+                // Emit tool call events from the accumulated transcript.
+                // The transcript contains assistant messages (with tool_calls) and
+                // tool result messages accumulated during the tool-call loop.
+                for msg in &transcript {
+                    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    if role == "assistant" {
+                        if let Some(tool_calls) = msg.get("tool_calls").and_then(|tc| tc.as_array()) {
+                            for tc in tool_calls {
+                                let call_id = tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string();
+                                let tool_name = tc.get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let arguments_str = tc.get("function")
+                                    .and_then(|f| f.get("arguments"))
+                                    .and_then(|a| a.as_str())
+                                    .unwrap_or("{}");
+                                let arguments = serde_json::from_str(arguments_str)
+                                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                                let begin_event = Event {
+                                    id: uuid::Uuid::new_v4(),
+                                    submission_id: submission.id,
+                                    msg: EventMsg::ToolCallBegin {
+                                        turn_id,
+                                        call_id: call_id.clone(),
+                                        tool: tool_name,
+                                        arguments,
+                                    },
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                json = serde_json::to_string(&begin_event)?;
+                                json.push('\n');
+                                stdout.write_all(json.as_bytes()).await?;
+                            }
+                        }
+                    } else if role == "tool" {
+                        let call_id = msg.get("tool_call_id").and_then(|id| id.as_str()).unwrap_or("").to_string();
+                        let result_content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                        let end_event = Event {
+                            id: uuid::Uuid::new_v4(),
+                            submission_id: submission.id,
+                            msg: EventMsg::ToolCallEnd {
+                                turn_id,
+                                call_id,
+                                result: result_content,
+                            },
+                            timestamp: chrono::Utc::now(),
+                        };
+                        json = serde_json::to_string(&end_event)?;
+                        json.push('\n');
+                        stdout.write_all(json.as_bytes()).await?;
+                    }
+                }
+
+                // Emit the final response
                 let delta = Event {
                     id: uuid::Uuid::new_v4(),
                     submission_id: submission.id,
@@ -501,16 +575,20 @@ fn submission_to_turn_context(
     turn_id: uuid::Uuid,
     tool_defs: &[sera_types::tool::ToolDefinition],
 ) -> TurnContext {
-    let messages = match &submission.op {
-        Op::UserTurn { items, .. } => items.clone(),
-        Op::Steer { items } => items.clone(),
-        Op::Interrupt | Op::System(_) => vec![],
+    let (messages, session_key_override) = match &submission.op {
+        Op::UserTurn { items, session_key, .. } => (items.clone(), session_key.clone()),
+        Op::Steer { items, session_key } => (items.clone(), session_key.clone()),
+        Op::Interrupt | Op::System(_) => (vec![], None),
     };
+
+    // Use gateway-provided session_key when available, otherwise generate one.
+    let session_key = session_key_override
+        .unwrap_or_else(|| format!("session:{agent_id}:{}", submission.id));
 
     TurnContext {
         event_id: turn_id.to_string(),
         agent_id: agent_id.to_string(),
-        session_key: format!("session:{agent_id}:{}", submission.id),
+        session_key,
         messages,
         available_tools: tool_defs.to_vec(),
         metadata: HashMap::new(),

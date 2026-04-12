@@ -95,32 +95,45 @@
 
 ---
 
-## 3. What's next — E2E validation + protocol alignment
+## 3. What's next — lane-aware harness routing + E2E Docker validation
 
-**Session 5 complete. Gateway dispatches to sera-runtime. Docker setup ready.**
+**Session 5 complete. Gateway dispatches to sera-runtime via StdioHarness. Docker setup ready.**
 
-### Session 6 target: E2E validation in Docker + protocol alignment
+### Session 6 target: Lane-aware routing, per-session harness connections, E2E in Docker
 
-**Goal:** Validate the full Discord → gateway → runtime pipeline in Docker, then align the gateway Submission/Event types with the runtime's NDJSON protocol.
+**Goal:** Multiple Discord sessions route through the lane-aware queue to the same agent harness. The gateway records all messages/thinking steps to the session transcript. Context management lives in the runtime (plugin). Validate E2E in Docker with Discord.
 
 **What exists (after session 5):**
-- `StdioHarness` in sera.rs: spawns `sera-runtime --ndjson` per agent on startup, sends turns via NDJSON, reads events back. LLM config (base_url, model, api_key) passed as env vars.
-- `Dockerfile.sera`: multi-stage build producing both `sera` and `sera-runtime` binaries.
-- `docker-compose.sera.yml`: single service, host networking, Discord token via env var.
-- `sera.yaml.example`: sample manifest with local LLM provider + Discord connector.
+- `StdioHarness` in sera.rs: spawns `sera-runtime --ndjson` per agent on startup, sends turns via NDJSON. LLM config passed as env vars.
+- `LaneQueue` in sera-db: lane-aware FIFO queue with per-session lanes, 5 queue modes (Collect/Followup/Steer/SteerBacklog/Interrupt), global concurrency throttle. Already in AppState but **not wired** into message processing.
+- `Dockerfile.sera` + `docker-compose.sera.yml` + `sera.yaml.example`.
+- Session persistence (SQLite): sessions, transcripts, audit log.
 
-**Architecture (implemented):**
+**Architecture (target):**
 ```
-Discord ←WebSocket→ sera (MVS gateway) ←NDJSON stdio→ sera-runtime (harness)
-                          │                                    │
-                       SQLite                           LM Studio (host)
+Discord ch1 ──┐                    ┌─ session:sera:ch1 ─┐
+Discord ch2 ──┼→ sera (gateway) ──→│  LaneQueue §5      │──→ StdioHarness ──→ sera-runtime
+HTTP /chat  ──┘   │                └─ session:sera:ch2 ─┘      (one per agent)
+                  SQLite (sessions, transcripts, audit)
 ```
+
+- Multiple sessions route to the **same agent harness** — the lane queue serialises per-session while allowing cross-session concurrency up to the global cap.
+- The harness connection is **per session** conceptually (the lane owns the conversation state) but the physical harness process is shared — the lane queue ensures only one turn runs per session at a time.
+- Context management (compaction, token budgets) is **runtime-internal** — the gateway sends the full transcript, the runtime manages its own context window. Context engine can be a plugin.
+- The gateway's session transcript records **everything**: user messages, assistant replies, tool calls, tool results, thinking steps — for observability and replay.
 
 **What needs to happen:**
-1. **E2E validation** — `docker compose up`, send Discord message, verify response with tool calls.
-2. **Protocol alignment** — the gateway's typed `Submission` uses `ContentBlock` items while the runtime expects OpenAI-format messages as `serde_json::Value`. The `StdioHarness` currently bypasses the typed envelope and builds JSON directly. Unify the wire format so `AgentHarness::handle(Submission)` works end-to-end.
-3. **Harness lifecycle management** — currently harnesses spawn on gateway startup. Future: spawn/connect on agent creation/activation via API. Register in `HarnessRegistry` for `dispatch()`.
-4. **Token usage propagation** — runtime should emit `TokenUsage` in `TurnCompleted` events so the gateway can report accurate usage.
+1. **Wire LaneQueue into process_message/chat_handler** — enqueue → dequeue → dispatch to harness → complete_run. Currently process_message calls execute_turn directly, bypassing the queue.
+2. **Per-session transcript forwarding** — the gateway sends recent transcript (or delta) to the harness per turn. The harness uses it as conversation history. The gateway records the response back to the transcript.
+3. **Record tool calls and thinking steps** — when the runtime emits tool/thinking events via NDJSON, the gateway should persist them to the session transcript (not just the final response).
+4. **E2E Docker validation** — `docker compose up`, send Discord messages across multiple channels, verify: (a) responses arrive, (b) tool calls work, (c) concurrent sessions don't interfere, (d) transcript persists.
+5. **Protocol alignment** — review the OpenClaw design (SPEC-dependencies §10.5) for `supports()` + `parent_session_key` patterns. Align the Submission/Event wire format so `AgentHarness::handle(Submission)` works with the typed envelope.
+
+**Key constraints:**
+- The gateway dispatches to the harness but does NOT own tool execution or context management.
+- The harness is the worker — all LLM calls, tool execution, and context window management.
+- The gateway owns: connectors (Discord), session persistence, hook lifecycle, lane-aware routing, and transcript recording.
+- See SPEC-gateway §5 for lane queue semantics, §3 for SQ/EQ envelope.
 
 **Key constraint:** The gateway dispatches to the harness but does NOT own tool execution. The harness is the worker that does all "thinking + doing."
 

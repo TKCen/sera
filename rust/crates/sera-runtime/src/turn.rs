@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use uuid::Uuid;
 
+use async_trait::async_trait;
 use sera_types::runtime::{TokenUsage, TurnOutcome};
 
 use crate::handoff::Handoff;
@@ -18,6 +19,32 @@ pub enum ReactMode {
     /// Deterministic ordering (P0 stub).
     ByOrder,
 }
+
+// ── LlmProvider trait ────────────────────────────────────────────────────────
+
+/// Errors from the LLM provider.
+#[derive(Debug, thiserror::Error)]
+pub enum ThinkError {
+    #[error("LLM call failed: {0}")]
+    Llm(String),
+    #[error("type conversion error: {0}")]
+    Conversion(String),
+}
+
+/// Trait for calling an LLM from the think step.
+///
+/// Messages and tools use `serde_json::Value` to stay decoupled from any
+/// specific provider's wire types. Implementations convert internally.
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    async fn chat(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+    ) -> Result<ThinkResult, ThinkError>;
+}
+
+// ── Turn context ─────────────────────────────────────────────────────────────
 
 /// Turn context for the four-method lifecycle.
 pub struct TurnContext {
@@ -39,17 +66,32 @@ pub fn observe(ctx: &TurnContext) -> Vec<serde_json::Value> {
     ctx.messages.clone()
 }
 
-/// Think — call the LLM (P0 stub returns empty).
+/// Think — call the LLM via the provided `LlmProvider`.
+///
+/// Falls back to a stub response when no provider is given (useful for tests).
 pub async fn think(
-    _messages: &[serde_json::Value],
-    _tools: &[serde_json::Value],
+    messages: &[serde_json::Value],
+    tools: &[serde_json::Value],
     _react_mode: &ReactMode,
+    llm: Option<&dyn LlmProvider>,
 ) -> ThinkResult {
-    // P0 stub — actual LLM call integration is Phase 1
-    ThinkResult {
-        response: serde_json::json!({"role": "assistant", "content": "[think stub]"}),
-        tool_calls: vec![],
-        tokens: TokenUsage::default(),
+    match llm {
+        Some(provider) => match provider.chat(messages, tools).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("LLM call failed in think step: {e}");
+                ThinkResult {
+                    response: serde_json::json!({"role": "assistant", "content": format!("[LLM error: {e}]")}),
+                    tool_calls: vec![],
+                    tokens: TokenUsage::default(),
+                }
+            }
+        },
+        None => ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "[think stub]"}),
+            tool_calls: vec![],
+            tokens: TokenUsage::default(),
+        },
     }
 }
 

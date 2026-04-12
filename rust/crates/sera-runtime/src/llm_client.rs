@@ -3,7 +3,11 @@
 //! Supports both streaming (SSE) and non-streaming OpenAI-compatible chat completions.
 //! Works with LM Studio, Ollama, OpenAI, and any OpenAI-compatible API.
 
+use async_trait::async_trait;
+use sera_types::runtime::TokenUsage;
+
 use crate::config::RuntimeConfig;
+use crate::turn::{LlmProvider, ThinkError, ThinkResult};
 use crate::types::{ChatMessage, ToolCall, ToolCallFunction, ToolDefinition};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -477,6 +481,69 @@ impl LlmClient {
             finish_reason,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LlmProvider implementation
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl LlmProvider for LlmClient {
+    async fn chat(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+    ) -> Result<ThinkResult, ThinkError> {
+        // Convert Value messages to ChatMessage
+        let chat_messages: Vec<ChatMessage> = messages
+            .iter()
+            .map(|m| serde_json::from_value(m.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ThinkError::Conversion(format!("message deserialization: {e}")))?;
+
+        // Convert Value tools to ToolDefinition
+        let tool_defs: Vec<ToolDefinition> = tools
+            .iter()
+            .map(|t| serde_json::from_value(t.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ThinkError::Conversion(format!("tool deserialization: {e}")))?;
+
+        // Call the LLM
+        let result = LlmClient::chat(self, &chat_messages, &tool_defs)
+            .await
+            .map_err(|e| ThinkError::Llm(e.to_string()))?;
+
+        // Convert tool calls to Value
+        let tool_calls: Vec<serde_json::Value> = result
+            .message
+            .tool_calls
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tc| {
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": tc.call_type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    }
+                })
+            })
+            .collect();
+
+        Ok(ThinkResult {
+            response: serde_json::json!({
+                "role": "assistant",
+                "content": result.message.content,
+            }),
+            tool_calls,
+            tokens: TokenUsage {
+                prompt_tokens: result.prompt_tokens,
+                completion_tokens: result.completion_tokens,
+                total_tokens: result.prompt_tokens + result.completion_tokens,
+            },
         })
     }
 }

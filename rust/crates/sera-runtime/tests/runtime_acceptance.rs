@@ -61,7 +61,7 @@ async fn four_method_lifecycle_callable() {
     let observed = turn::observe(&ctx);
     assert_eq!(observed.len(), 1);
 
-    let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode).await;
+    let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None).await;
     assert!(think_result.tool_calls.is_empty());
 
     let act_result = turn::act(&ctx, &think_result);

@@ -2,13 +2,17 @@
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** Phase 1+2 session 4 → `git show 6440dca:docs/plan/HANDOFF.md`; Phase 1+2 session 3 → `git show 13f1b6c:docs/plan/HANDOFF.md`; Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** Phase 1+2 session 5 → `git show d02f7f7:docs/plan/HANDOFF.md`; Phase 1+2 session 4 → `git show 6440dca:docs/plan/HANDOFF.md`; Phase 1+2 session 3 → `git show 13f1b6c:docs/plan/HANDOFF.md`; Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**Gateway dispatches to sera-runtime via StdioHarness.** Twenty commits on `sera20` — eighteen from sessions 1–4 plus two from session 5:
+**Lane-aware routing, session-aware harness, transcript recording.** Twenty-two commits on `sera20` — twenty from sessions 1–5 plus one from session 6:
+
+**Session 6 — Lane queue wiring + session-aware harness + transcript recording (3 beads resolved):**
+
+21. **`106e4e3` — feat: wire lane queue, session-aware harness, and transcript recording.** Three interconnected changes: (a) Session-aware harness — `session_key` added to NDJSON Submission, gateway passes it through `StdioHarness::send_turn()`, runtime uses it in `TurnContext` instead of generating throwaway keys. (b) Lane queue wiring — `process_message()` enqueues to `LaneQueue` before dispatching; Ready→dispatch, Queued→wait, Interrupt→abort+dispatch; drain loop after each turn for pending messages. (c) Transcript recording — `DefaultRuntime` accumulates tool-call messages during the loop, returns them in `FinalOutput.transcript`; runtime emits `ToolCallBegin`/`ToolCallEnd` NDJSON events; gateway captures via `StdioHarness` and persists to SQLite (assistant+tool_calls and tool+content rows). Closes sera-vx9y, sera-umvp, sera-mmiq.
 
 **Session 5 — StdioHarness dispatch + Docker setup (1 bead resolved):**
 
@@ -95,47 +99,43 @@
 
 ---
 
-## 3. What's next — lane-aware harness routing + E2E Docker validation
+## 3. What's next — E2E Docker validation + tool-level resource safety
 
-**Session 5 complete. Gateway dispatches to sera-runtime via StdioHarness. Docker setup ready.**
+**Session 6 complete. Lane queue wired, harness session-aware, transcript records tool calls.**
 
-### Session 6 target: Lane-aware routing, per-session harness connections, E2E in Docker
+### Session 7 target: E2E Docker validation, tool-level resource safety, protocol alignment
 
-**Goal:** Multiple Discord sessions route through the lane-aware queue to the same agent harness. The gateway records all messages/thinking steps to the session transcript. Context management lives in the runtime (plugin). Validate E2E in Docker with Discord.
+**Goal:** Validate the full pipeline E2E in Docker with Discord. Add tool-level resource safety (FileTime.withLock pattern). Align the NDJSON protocol with the typed SQ/EQ envelope.
 
-**What exists (after session 5):**
-- `StdioHarness` in sera.rs: spawns `sera-runtime --ndjson` per agent on startup, sends turns via NDJSON. LLM config passed as env vars.
-- `LaneQueue` in sera-db: lane-aware FIFO queue with per-session lanes, 5 queue modes (Collect/Followup/Steer/SteerBacklog/Interrupt), global concurrency throttle. Already in AppState but **not wired** into message processing.
+**What exists (after session 6):**
+- `StdioHarness` in sera.rs: spawns `sera-runtime --ndjson` per agent on startup, sends turns via NDJSON with `session_key`. Returns structured `TurnEvents` with response text + `ToolEvent::Begin`/`End`.
+- `LaneQueue` wired into `process_message()`: enqueue → dequeue → dispatch → complete_run → drain loop. Per-session serialization with cross-session concurrency. 5 queue modes. Global cap (default 10).
+- Transcript recording: `DefaultRuntime` accumulates tool-call messages in `FinalOutput.transcript`. Runtime emits `ToolCallBegin`/`ToolCallEnd` NDJSON events. Gateway persists assistant+tool_calls and tool+content rows to SQLite.
 - `Dockerfile.sera` + `docker-compose.sera.yml` + `sera.yaml.example`.
-- Session persistence (SQLite): sessions, transcripts, audit log.
+- Session persistence (SQLite): sessions, transcripts (now includes tool calls), audit log.
 
-**Architecture (target):**
+**Architecture (implemented):**
 ```
 Discord ch1 ──┐                    ┌─ session:sera:ch1 ─┐
-Discord ch2 ──┼→ sera (gateway) ──→│  LaneQueue §5      │──→ StdioHarness ──→ sera-runtime
-HTTP /chat  ──┘   │                └─ session:sera:ch2 ─┘      (one per agent)
-                  SQLite (sessions, transcripts, audit)
+Discord ch2 ���─┼→ sera (gateway) ──→│  LaneQueue §5      │──→ StdioHarness ──�� sera-runtime
+HTTP /chat  ──┘   │                └─ session:sera:ch2 ─���      (one per agent)
+                  SQLite (sessions, transcripts w/ tool calls, audit)
 ```
 
-- Multiple sessions route to the **same agent harness** — the lane queue serialises per-session while allowing cross-session concurrency up to the global cap.
-- The harness connection is **per session** conceptually (the lane owns the conversation state) but the physical harness process is shared — the lane queue ensures only one turn runs per session at a time.
-- Context management (compaction, token budgets) is **runtime-internal** — the gateway sends the full transcript, the runtime manages its own context window. Context engine can be a plugin.
-- The gateway's session transcript records **everything**: user messages, assistant replies, tool calls, tool results, thinking steps — for observability and replay.
-
 **What needs to happen:**
-1. **Wire LaneQueue into process_message/chat_handler** — enqueue → dequeue → dispatch to harness → complete_run. Currently process_message calls execute_turn directly, bypassing the queue.
-2. **Per-session transcript forwarding** — the gateway sends recent transcript (or delta) to the harness per turn. The harness uses it as conversation history. The gateway records the response back to the transcript.
-3. **Record tool calls and thinking steps** — when the runtime emits tool/thinking events via NDJSON, the gateway should persist them to the session transcript (not just the final response).
-4. **E2E Docker validation** — `docker compose up`, send Discord messages across multiple channels, verify: (a) responses arrive, (b) tool calls work, (c) concurrent sessions don't interfere, (d) transcript persists.
-5. **Protocol alignment** — review the OpenClaw design (SPEC-dependencies §10.5) for `supports()` + `parent_session_key` patterns. Align the Submission/Event wire format so `AgentHarness::handle(Submission)` works with the typed envelope.
+1. **E2E Docker validation** — `docker compose -f rust/docker-compose.sera.yml up --build`, send Discord messages across multiple channels, verify: (a) responses arrive with tool call results, (b) concurrent sessions work (different channels), (c) same-session messages serialize correctly, (d) transcript persists all messages + tool calls.
+2. **Tool-level resource safety** — Add `FileTime.withLock` pattern to `file_write`/`file_edit` tools in sera-runtime: check mtime before writing, reject if file was modified since last read by this session. This is how OpenClaw prevents workspace conflicts between concurrent sessions (see SPEC-dependencies §10.7).
+3. **Protocol alignment** — Review the OpenClaw design (SPEC-dependencies §10.5) for `supports()` + `parent_session_key` patterns. Align the Submission/Event wire format so `AgentHarness::handle(Submission)` works with the typed envelope. Currently StdioHarness builds JSON directly (§6.20).
+4. **chat_handler lane queue integration** — The HTTP chat handler doesn't yet use the lane queue (only process_message does). Wire it for completeness.
+5. **Steer injection at tool boundary** — The lane queue supports Steer mode but the runtime doesn't yet check for steer events at tool boundaries. Wire the peek_steer/take_steer flow.
 
 **Key constraints:**
-- The gateway dispatches to the harness but does NOT own tool execution or context management.
-- The harness is the worker — all LLM calls, tool execution, and context window management.
-- The gateway owns: connectors (Discord), session persistence, hook lifecycle, lane-aware routing, and transcript recording.
+- Gateway owns: connectors (Discord), session persistence, hook lifecycle, lane-aware routing, transcript recording. NO agent-level locking.
+- Runtime owns: LLM calls, tool execution, context management, tool-level resource safety (mtime checks, atomic ops).
+- Context management is a runtime concern (plugin-capable) — the gateway sends the conversation, the runtime manages its window.
+- The session_key enables per-session context state in the runtime when context management plugins are added.
 - See SPEC-gateway §5 for lane queue semantics, §3 for SQ/EQ envelope.
-
-**Key constraint:** The gateway dispatches to the harness but does NOT own tool execution. The harness is the worker that does all "thinking + doing."
+- See SPEC-dependencies §10.5 for OpenClaw patterns, §10.7 for opencode FileTime.withLock.
 
 ### Phase 1 completed items (all 12)
 
@@ -194,7 +194,15 @@ All design decisions resolved and implemented in the second Phase 1 session:
 
 ## 5. Design decisions made this session
 
-### Session 5 — StdioHarness dispatch (current)
+### Session 6 — Lane queue + session-aware harness + transcript (current)
+
+- **Lane queue wired into process_message, not chat_handler.** The Discord event loop (process_message) uses the full enqueue → dispatch → complete_run → drain pattern. The HTTP chat_handler uses session_key for the harness but does not yet go through the lane queue — it's a synchronous request/response and doesn't need queue semantics yet. Follow-up: wire chat_handler through the queue for consistency.
+- **Session key format: `discord:{agent}:{channel_id}` for Discord, `http:{agent}:{session_id}` for HTTP.** Different channels map to different sessions. Same channel always maps to the same session (per-session serialization). HTTP sessions use the SQLite session ID since there's no channel concept.
+- **Transcript field on FinalOutput, not event callbacks.** Rather than threading a callback/channel into DefaultRuntime for per-tool-call event emission, we added a `transcript: Vec<serde_json::Value>` field to `TurnOutcome::FinalOutput`. The runtime accumulates assistant+tool_calls and tool result messages during the tool-call loop and returns them. The NDJSON loop then emits `ToolCallBegin`/`ToolCallEnd` events from this data. Simpler than callbacks; sufficient for current needs.
+- **TurnEvents struct wraps harness response.** `StdioHarness::send_turn()` now returns `TurnEvents { response: String, tool_events: Vec<ToolEvent> }` instead of a bare String. The gateway uses `persist_tool_events()` to write tool calls to the transcript before the final assistant response.
+- **Drain loop in process_message, not spawned task.** After a turn completes, the drain loop runs inline (check has_pending → dequeue → execute → complete_run → repeat). This is simpler than spawning separate tasks and maintains the sequential event_loop processing model. Cross-session concurrency comes from the lane queue's global cap, not from concurrent event_loop processing.
+
+### Session 5 — StdioHarness dispatch
 
 - **Gateway routes to pre-connected harness, not per-turn spawn.** `StdioHarness` is spawned once per agent on startup and reused for all turns. The gateway resolves provider config (base_url, model, api_key) from manifests and passes them as env vars to the child process. Harness lifecycle management (spawn on agent creation/activation) is a follow-up.
 - **StdioHarness bypasses typed Submission/Event envelope.** The gateway's `Submission` uses `ContentBlock` items while the runtime expects OpenAI-format messages as `serde_json::Value`. Rather than force a lossy conversion, the harness builds runtime-compatible JSON directly. Protocol alignment is a follow-up task.
@@ -246,6 +254,9 @@ Previous gotchas §6.1–§6.11 from prior handoffs still apply. New additions:
 - **§6.20 StdioHarness bypasses typed Submission envelope.** The gateway's `Submission` type uses `ContentBlock` items while the runtime's NDJSON protocol expects `Vec<serde_json::Value>` (OpenAI-format messages). `StdioHarness::send_turn()` builds JSON directly rather than going through the typed `Submission`. Do not try to use `Transport::send_submission()` or `AgentHarness::handle()` with the StdioHarness until the protocol is aligned.
 - **§6.21 Harness spawned on startup, not on agent creation.** `StdioHarness` instances are spawned in `run_start()` for each agent in the manifest. If the manifest changes at runtime, the harnesses won't update. Future: move harness lifecycle to agent creation/activation API.
 - **§6.19 Two tool registries coexist in sera-runtime.** `ToolRegistry` (ToolExecutor-based, 13 tools, used for dispatch) and `TraitToolRegistry` (sera_types::Tool-based, zero tools, spec-aligned with policy). Follow-up task: migrate ToolExecutor impls to the Tool trait for policy enforcement.
+- **§6.22 Lane queue is in-memory only.** The LaneQueue in sera-db is a pure in-memory HashMap. On gateway restart, all queue state is lost. This is acceptable for Tier 1 (local) but needs SQLite backing for crash recovery. The drain loop in process_message will not resume pending messages after restart.
+- **§6.23 chat_handler does not use lane queue.** The HTTP `/api/chat` handler passes `session_key` to the harness but does not enqueue through `LaneQueue`. This means HTTP requests can race with Discord messages on the same session. Wire it through the queue for full consistency.
+- **§6.24 FinalOutput.transcript is serde_json::Value vec.** The `transcript` field on `TurnOutcome::FinalOutput` carries OpenAI-format messages (role + content/tool_calls). It uses `#[serde(default, skip_serializing_if = "Vec::is_empty")]` for backward compat. Downstream code pattern-matching on FinalOutput must use `..` to ignore it or explicitly destructure it.
 
 ---
 

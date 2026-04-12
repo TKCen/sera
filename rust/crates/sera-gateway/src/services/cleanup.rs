@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use sqlx::PgPool;
-use sera_docker::ContainerManager;
+use sera_tools::sandbox::{SandboxHandle, SandboxProvider};
 use sera_db::error::DbError;
 
 /// Represents an agent eligible for cleanup.
@@ -26,14 +26,14 @@ pub struct CleanupSummary {
 pub enum CleanupError {
     #[error("database error: {0}")]
     Db(#[from] DbError),
-    #[error("docker error: {0}")]
-    Docker(#[from] sera_docker::error::DockerError),
+    #[error("sandbox error: {0}")]
+    Sandbox(#[from] sera_tools::sandbox::SandboxError),
 }
 
 /// Service for cleaning up expired resources — terminated agents, expired keys/sessions.
 pub struct CleanupService {
     pool: Arc<PgPool>,
-    container_manager: Option<Arc<ContainerManager>>,
+    sandbox: Option<Arc<dyn SandboxProvider>>,
     terminated_retention_secs: u64,
 }
 
@@ -44,12 +44,12 @@ impl CleanupService {
     /// Defaults to 3600 (1 hour) if not specified.
     pub fn new(
         pool: Arc<PgPool>,
-        container_manager: Option<Arc<ContainerManager>>,
+        sandbox: Option<Arc<dyn SandboxProvider>>,
         terminated_retention_secs: Option<u64>,
     ) -> Self {
         Self {
             pool,
-            container_manager,
+            sandbox,
             terminated_retention_secs: terminated_retention_secs.unwrap_or(3600),
         }
     }
@@ -113,12 +113,12 @@ impl CleanupService {
         let mut agents_cleaned: i64 = 0;
 
         // Clean up expired agents and their containers
-        if let Some(cm) = &self.container_manager {
+        if let Some(sandbox) = &self.sandbox {
             let expired = self.find_expired_agents().await?;
 
             for agent in expired {
                 if let Some(container_id) = &agent.container_id {
-                    match cm.stop_container(container_id).await {
+                    match sandbox.destroy(&SandboxHandle(container_id.clone())).await {
                         Ok(_) => {
                             agents_cleaned += 1;
                             tracing::info!(

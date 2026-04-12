@@ -7,15 +7,16 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use std::sync::Arc;
 use sera_db::{agents::AgentRepository, DbError};
-use sera_docker::container::ContainerManager;
+use sera_tools::sandbox::{SandboxConfig, SandboxHandle, SandboxProvider};
 
 /// High-level agent lifecycle orchestration.
 ///
 /// Manages agent manifest validation, database persistence, and container lifecycle.
 pub struct Orchestrator {
     pool: PgPool,
-    container_manager: ContainerManager,
+    sandbox: Arc<dyn SandboxProvider>,
 }
 
 impl Orchestrator {
@@ -23,12 +24,9 @@ impl Orchestrator {
     ///
     /// # Arguments
     /// * `pool` — PostgreSQL connection pool
-    /// * `container_manager` — Docker container manager
-    pub fn new(pool: PgPool, container_manager: ContainerManager) -> Self {
-        Self {
-            pool,
-            container_manager,
-        }
+    /// * `sandbox` — Sandbox provider (Docker, WASM, etc.)
+    pub fn new(pool: PgPool, sandbox: Arc<dyn SandboxProvider>) -> Self {
+        Self { pool, sandbox }
     }
 
     /// Validate an agent manifest JSON.
@@ -170,20 +168,24 @@ impl Orchestrator {
             env_vars.insert("SERA_CIRCLE".to_string(), circle.clone());
         }
 
-        let container_id = self
-            .container_manager
-            .start_container(
-                agent_id,
-                &agent.name,
-                &agent.template_name,
-                &image,
-                "sera-network",
-                env_vars,
-                None,
-                None,
-            )
+        let config = SandboxConfig {
+            image: Some(image),
+            env: env_vars,
+            labels: HashMap::from([
+                ("sera.instance".to_string(), agent_id.to_string()),
+                ("sera.agent".to_string(), agent.name.clone()),
+                ("sera.template".to_string(), agent.template_name.clone()),
+            ]),
+            ..Default::default()
+        };
+
+        let handle = self
+            .sandbox
+            .create(&config)
             .await
-            .map_err(OrchestratorError::Docker)?;
+            .map_err(OrchestratorError::Sandbox)?;
+
+        let container_id = handle.0;
 
         // Update agent status to running and store container ID
         AgentRepository::update_status(&self.pool, agent_id, "running")
@@ -212,10 +214,10 @@ impl Orchestrator {
             .map_err(OrchestratorError::Db)?;
 
         if let Some(container_id) = &agent.container_id {
-            self.container_manager
-                .stop_container(container_id)
+            self.sandbox
+                .destroy(&SandboxHandle(container_id.clone()))
                 .await
-                .map_err(OrchestratorError::Docker)?;
+                .map_err(OrchestratorError::Sandbox)?;
         } else {
             tracing::warn!(agent_id, "Agent has no container_id to stop");
         }
@@ -284,9 +286,9 @@ pub enum OrchestratorError {
     #[error("database error: {0}")]
     Db(#[from] DbError),
 
-    /// Docker/container management error.
-    #[error("container error: {0}")]
-    Docker(#[from] sera_docker::error::DockerError),
+    /// Sandbox/container management error.
+    #[error("sandbox error: {0}")]
+    Sandbox(#[from] sera_tools::sandbox::SandboxError),
 
     /// Manifest validation error.
     #[error("invalid manifest: {0}")]

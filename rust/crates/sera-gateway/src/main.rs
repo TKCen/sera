@@ -28,7 +28,7 @@ use sera_auth::JwtService;
 use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
-use sera_docker::ContainerManager;
+use sera_tools::sandbox::docker::DockerSandboxProvider;
 
 use crate::services::schedule_service::ScheduleService;
 use crate::state::AppState;
@@ -59,11 +59,12 @@ async fn main() -> anyhow::Result<()> {
     let db = DbPool::connect(&config.database_url).await?;
     tracing::info!("Connected to database");
 
-    // Initialize Docker client
-    let docker = Arc::new(ContainerManager::new().map_err(|e| {
-        tracing::warn!("Docker not available: {e}");
-        anyhow::anyhow!("Docker connection failed: {e}")
-    })?);
+    // Initialize sandbox provider (Docker)
+    let sandbox: Arc<dyn sera_tools::sandbox::SandboxProvider> =
+        Arc::new(DockerSandboxProvider::new().map_err(|e| {
+            tracing::warn!("Docker not available: {e}");
+            anyhow::anyhow!("Docker connection failed: {e}")
+        })?);
     tracing::info!("Connected to Docker daemon");
 
     // Build shared state
@@ -91,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         jwt: jwt_service.clone(),
         providers,
-        docker,
+        sandbox,
         providers_path,
         centrifugo,
         mcp_registry: Arc::new(RwLock::new(routes::mcp::McpRegistry::new())),

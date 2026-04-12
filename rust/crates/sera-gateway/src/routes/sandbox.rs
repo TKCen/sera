@@ -51,21 +51,20 @@ pub async fn spawn(
         .name
         .unwrap_or_else(|| format!("sera-sandbox-{}", &uuid::Uuid::new_v4().to_string()[..8]));
 
-    let instance_id = uuid::Uuid::new_v4().to_string();
-    let container_id = state
-        .docker
-        .start_container(
-            &instance_id,
-            &container_name,
-            "sandbox",
-            &body.image,
-            &body.network,
-            body.env,
-            None,
-            None,
-        )
+    let config = sera_tools::sandbox::SandboxConfig {
+        image: Some(body.image.clone()),
+        env: body.env,
+        labels: body.labels,
+        ..Default::default()
+    };
+
+    let handle = state
+        .sandbox
+        .create(&config)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker spawn failed: {e}")))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Sandbox spawn failed: {e}")))?;
+
+    let container_id = handle.0;
 
     Ok((
         StatusCode::CREATED,
@@ -97,14 +96,16 @@ pub async fn exec(
     State(state): State<AppState>,
     Json(body): Json<ExecRequest>,
 ) -> Result<Json<ExecResponse>, AppError> {
+    let cmd = body.command.join(" ");
+    let handle = sera_tools::sandbox::SandboxHandle(body.container_id.clone());
     let output = state
-        .docker
-        .exec_in_container(&body.container_id, &body.command, body.working_dir.as_deref())
+        .sandbox
+        .execute(&handle, &cmd, &HashMap::new())
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker exec failed: {e}")))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Sandbox exec failed: {e}")))?;
 
     Ok(Json(ExecResponse {
-        exit_code: output.exit_code,
+        exit_code: output.exit_code as i64,
         stdout: output.stdout,
         stderr: output.stderr,
     }))

@@ -332,7 +332,7 @@ pub(crate) async fn get_agent_chat_url(state: &AppState, agent_id: &str) -> Resu
     match row {
         Some((Some(_container_id),)) => {
             // Use container name on sera_net with chat port 3100
-            // Container naming matches sera-docker: sera-agent-{name}-{instance_id[..8]}
+            // Container naming: sera-agent-{name}-{instance_id[..8]}
             // Note: container.rs uses instance_id for naming, NOT container_id
             let name_row: Option<(String,)> = sqlx::query_as(
                 "SELECT name FROM agent_instances WHERE id = $1::uuid"

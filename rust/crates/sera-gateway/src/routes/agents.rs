@@ -282,7 +282,7 @@ pub async fn start_instance(
     }
 
     // Build bind mounts — use HOST path so Docker daemon can find the directory
-    let binds = vec![
+    let _binds = vec![
         format!("{}:/workspace:rw", workspace_host_dir),
         // Memory mount - per instance
         format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
@@ -307,20 +307,23 @@ pub async fn start_instance(
     env_vars.insert("SERA_LLM_PROXY_URL".to_string(), "http://sera-core:3001/v1/llm".to_string());
     env_vars.insert("AGENT_CHAT_PORT".to_string(), "3100".to_string());
 
-    let container_id = state
-        .docker
-        .start_container(
-            &id,
-            &instance.name,
-            template_ref,
-            "sera-agent-worker:latest",
-            "sera_net",
-            env_vars,
-            Some(binds),
-            None,
-        )
+    let config = sera_tools::sandbox::SandboxConfig {
+        image: Some("sera-agent-worker:latest".to_string()),
+        env: env_vars,
+        labels: std::collections::HashMap::from([
+            ("sera.instance".to_string(), id.clone()),
+            ("sera.agent".to_string(), instance.name.clone()),
+        ]),
+        ..Default::default()
+    };
+
+    let handle = state
+        .sandbox
+        .create(&config)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Sandbox error: {e}")))?;
+
+    let container_id = handle.0;
 
     // Update status and container_id
     AgentRepository::update_status(state.db.inner(), &id, "running").await?;
@@ -344,10 +347,10 @@ pub async fn stop_instance(
 
     if let Some(container_id) = &instance.container_id {
         state
-            .docker
-            .stop_container(container_id)
+            .sandbox
+            .destroy(&sera_tools::sandbox::SandboxHandle(container_id.clone()))
             .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Sandbox error: {e}")))?;
     }
 
     // Update status and clear container_id
@@ -372,10 +375,10 @@ pub async fn restart_instance(
 
     if let Some(container_id) = &instance.container_id {
         state
-            .docker
-            .stop_container(container_id)
+            .sandbox
+            .destroy(&sera_tools::sandbox::SandboxHandle(container_id.clone()))
             .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Sandbox error: {e}")))?;
     }
 
     // Update status and clear container_id
@@ -440,7 +443,7 @@ pub async fn restart_instance(
         let _ = std::fs::set_permissions(&workspace_container_dir, std::fs::Permissions::from_mode(0o777));
     }
 
-    let binds = vec![
+    let _binds = vec![
         format!("{}:/workspace:rw", workspace_host_dir),
         format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
         format!("{}/knowledge/agents/{}:/knowledge/personal:ro", host_workspaces.replace("/workspaces", ""), instance.name),
@@ -463,20 +466,23 @@ pub async fn restart_instance(
     env_vars.insert("SERA_LLM_PROXY_URL".to_string(), "http://sera-core:3001/v1/llm".to_string());
     env_vars.insert("AGENT_CHAT_PORT".to_string(), "3100".to_string());
 
-    let container_id = state
-        .docker
-        .start_container(
-            &id,
-            &instance.name,
-            template_ref,
-            "sera-agent-worker:latest",
-            "sera_net",
-            env_vars,
-            Some(binds),
-            None,
-        )
+    let config = sera_tools::sandbox::SandboxConfig {
+        image: Some("sera-agent-worker:latest".to_string()),
+        env: env_vars,
+        labels: std::collections::HashMap::from([
+            ("sera.instance".to_string(), id.clone()),
+            ("sera.agent".to_string(), instance.name.clone()),
+        ]),
+        ..Default::default()
+    };
+
+    let handle = state
+        .sandbox
+        .create(&config)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Docker error: {e}")))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Sandbox error: {e}")))?;
+
+    let container_id = handle.0;
 
     AgentRepository::update_status(state.db.inner(), &id, "running").await?;
     sqlx::query("UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id::text = $2")

@@ -3091,22 +3091,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sera-docker"
-version = "0.1.0"
-dependencies = [
- "bollard",
- "futures-util",
- "sera-events",
- "sera-types",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "sera-errors"
 version = "0.1.0"
 dependencies = [
@@ -3154,13 +3138,13 @@ dependencies = [
  "sera-auth",
  "sera-config",
  "sera-db",
- "sera-docker",
  "sera-events",
  "sera-hitl",
  "sera-hooks",
  "sera-queue",
  "sera-runtime",
  "sera-testing",
+ "sera-tools",
  "sera-types",
  "sera-workflow",
  "serde",

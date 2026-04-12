@@ -7,8 +7,8 @@ use sera_auth::JwtService;
 use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
-use sera_docker::ContainerManager;
 use sera_events::CentrifugoClient;
+use sera_tools::sandbox::SandboxProvider;
 
 use sera_gateway::envelope::GenerationMarker;
 use sera_gateway::harness_dispatch::HarnessRegistry;
@@ -23,7 +23,7 @@ pub struct AppState {
     pub config: Arc<CoreConfig>,
     pub jwt: Arc<JwtService>,
     pub providers: Arc<RwLock<ProvidersConfig>>,
-    pub docker: Arc<ContainerManager>,
+    pub sandbox: Arc<dyn SandboxProvider>,
     pub providers_path: Option<String>,
     pub centrifugo: Option<Arc<CentrifugoClient>>,
     pub mcp_registry: Arc<RwLock<crate::routes::mcp::McpRegistry>>,

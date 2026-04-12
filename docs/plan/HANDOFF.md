@@ -2,13 +2,19 @@
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-12
-> **Previous handoffs:** Phase 1+2 session 3 → `git show 13f1b6c:docs/plan/HANDOFF.md`; Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
+> **Previous handoffs:** Phase 1+2 session 4 → `git show 6440dca:docs/plan/HANDOFF.md`; Phase 1+2 session 3 → `git show 13f1b6c:docs/plan/HANDOFF.md`; Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. What this session accomplished
 
-**E2E tool execution working + standalone CLI.** Eighteen commits on `sera20` — fifteen from sessions 1–3 plus three from session 4:
+**Gateway dispatches to sera-runtime via StdioHarness.** Twenty commits on `sera20` — eighteen from sessions 1–4 plus two from session 5:
+
+**Session 5 — StdioHarness dispatch + Docker setup (1 bead resolved):**
+
+19. **`208f062` — feat: replace inline LLM loop with StdioHarness dispatch to sera-runtime.** The gateway no longer calls the LLM directly. On startup, it spawns a `sera-runtime --ndjson` child process per agent via `StdioHarness` and routes turns through NDJSON stdin/stdout. Removed ~480 lines of inline LLM calling, tool execution, and context overflow handling. 64 tests pass with mock harness. Closes sera-uzg5.
+
+20. **`8ce11cd` — feat: add Docker setup for sera gateway + runtime.** `Dockerfile.sera` multi-stage build producing both `sera` and `sera-runtime` binaries. `docker-compose.sera.yml` with host networking for LM Studio. `sera.yaml.example` with local LLM provider + Discord connector.
 
 **Session 4 — concrete ToolDispatcher + standalone CLI (2 beads resolved):**
 
@@ -89,32 +95,32 @@
 
 ---
 
-## 3. What's next — Discord→Gateway→Harness vertical slice
+## 3. What's next — E2E validation + protocol alignment
 
-**Phase 1 is complete. Harness is standalone and proven E2E.**
+**Session 5 complete. Gateway dispatches to sera-runtime. Docker setup ready.**
 
-### Session 5 target: Wire MVS gateway to sera-runtime via Stdio transport + Docker Compose
+### Session 6 target: E2E validation in Docker + protocol alignment
 
-**Goal:** Discord message → MVS `sera` binary → spawn/pipe to `sera-runtime` via NDJSON → LLM + tool calls → reply on Discord. Single docker-compose with one container.
+**Goal:** Validate the full Discord → gateway → runtime pipeline in Docker, then align the gateway Submission/Event types with the runtime's NDJSON protocol.
 
-**What exists:**
-- `sera-runtime` binary: standalone CLI with LLM client, 13 tools, tool-call loop, NDJSON transport. Tested E2E against LM Studio.
-- MVS `sera` binary (`sera-gateway/src/bin/sera.rs`): full Discord adapter (WebSocket gateway, heartbeat, REST replies), SQLite sessions, YAML manifest config, hook lifecycle (pre_route/post_route/pre_turn/post_turn).
-- `StdioTransport` (`sera-gateway/src/transport/stdio.rs`): spawns child process, NDJSON on stdin/stdout, feature-gated behind `stdio`.
-- MVS `execute_turn()` (sera.rs:545): builds messages from transcript, resolves provider, calls LLM directly with its own tool loop. This is the function to **replace** with a sera-runtime dispatch.
+**What exists (after session 5):**
+- `StdioHarness` in sera.rs: spawns `sera-runtime --ndjson` per agent on startup, sends turns via NDJSON, reads events back. LLM config (base_url, model, api_key) passed as env vars.
+- `Dockerfile.sera`: multi-stage build producing both `sera` and `sera-runtime` binaries.
+- `docker-compose.sera.yml`: single service, host networking, Discord token via env var.
+- `sera.yaml.example`: sample manifest with local LLM provider + Discord connector.
 
-**What needs to happen:**
-1. **Replace `execute_turn()` in sera.rs** — instead of calling the LLM directly, spawn or reuse a `sera-runtime` child process via `StdioTransport`. Send a `Submission` with the conversation messages. Read back `Event` messages. Extract the final response.
-2. **Pass LLM config through** — the MVS binary resolves provider (base_url, model, api_key) from manifests. These need to be passed as env vars or CLI args to the spawned `sera-runtime` process.
-3. **Docker Compose** — single container with both `sera` (gateway) and `sera-runtime` (harness) binaries. LLM endpoint on host network (LM Studio). Discord bot token via env var.
-4. **Dockerfile** — multi-stage build producing both binaries in one image.
-
-**Architecture:**
+**Architecture (implemented):**
 ```
 Discord ←WebSocket→ sera (MVS gateway) ←NDJSON stdio→ sera-runtime (harness)
                           │                                    │
                        SQLite                           LM Studio (host)
 ```
+
+**What needs to happen:**
+1. **E2E validation** — `docker compose up`, send Discord message, verify response with tool calls.
+2. **Protocol alignment** — the gateway's typed `Submission` uses `ContentBlock` items while the runtime expects OpenAI-format messages as `serde_json::Value`. The `StdioHarness` currently bypasses the typed envelope and builds JSON directly. Unify the wire format so `AgentHarness::handle(Submission)` works end-to-end.
+3. **Harness lifecycle management** — currently harnesses spawn on gateway startup. Future: spawn/connect on agent creation/activation via API. Register in `HarnessRegistry` for `dispatch()`.
+4. **Token usage propagation** — runtime should emit `TokenUsage` in `TurnCompleted` events so the gateway can report accurate usage.
 
 **Key constraint:** The gateway dispatches to the harness but does NOT own tool execution. The harness is the worker that does all "thinking + doing."
 
@@ -175,7 +181,15 @@ All design decisions resolved and implemented in the second Phase 1 session:
 
 ## 5. Design decisions made this session
 
-### Session 4 — concrete ToolDispatcher (current)
+### Session 5 — StdioHarness dispatch (current)
+
+- **Gateway routes to pre-connected harness, not per-turn spawn.** `StdioHarness` is spawned once per agent on startup and reused for all turns. The gateway resolves provider config (base_url, model, api_key) from manifests and passes them as env vars to the child process. Harness lifecycle management (spawn on agent creation/activation) is a follow-up.
+- **StdioHarness bypasses typed Submission/Event envelope.** The gateway's `Submission` uses `ContentBlock` items while the runtime expects OpenAI-format messages as `serde_json::Value`. Rather than force a lossy conversion, the harness builds runtime-compatible JSON directly. Protocol alignment is a follow-up task.
+- **Gateway no longer imports sera-runtime tools or context.** Removed `ContextManager` and `MvsToolRegistry` imports from sera.rs. The gateway's role is strictly: Discord adapter, session persistence, hook lifecycle, and Stdio transport. All LLM calls and tool execution live in the runtime.
+- **Mock harness for tests.** `StdioHarness::spawn_mock()` (test-only) spawns a bash script that echoes canned NDJSON events. This avoids needing a real LLM for the 64 sera binary tests.
+- **Usage info is zeroed.** The runtime's NDJSON events don't currently include `TokenUsage`. The gateway returns zeroed usage until the runtime emits it in `TurnCompleted`.
+
+### Session 4 — concrete ToolDispatcher
 
 - **Bridge to ToolExecutor, not TraitToolRegistry.** The `RegistryDispatcher` bridges `ToolDispatcher` (trait in turn.rs) to the existing `ToolExecutor`-based `ToolRegistry` (13 working tools in sera-runtime/src/tools/). The spec-aligned `TraitToolRegistry` exists but has zero concrete tool implementations — bridging to it would mean rewriting all 13 tools for no user-visible benefit. Migration to `TraitToolRegistry` is a follow-up task for policy enforcement.
 - **No sera-tools dependency needed.** sera-runtime already has its own `ToolRegistry` and 13 `ToolExecutor` implementations. The sera-tools crate's `registry.rs` is a separate, simpler abstraction.
@@ -216,6 +230,8 @@ Previous gotchas §6.1–§6.11 from prior handoffs still apply. New additions:
 - **§6.16 AgentHarness trait is misplaced in sera-gateway.** It should live in a shared crate (sera-types or new sera-harness) since harnesses are standalone processes. See sera-w9bn. Do not add harness logic that assumes gateway access.
 - **§6.17 ~~sera-runtime needs sera-tools dep.~~** ✅ Resolved in session 4. sera-runtime had its own `ToolRegistry` with 13 `ToolExecutor` impls — no sera-tools dep was needed. `RegistryDispatcher` bridges `ToolDispatcher` to `ToolRegistry`.
 - **§6.18 Two ToolDefinition types coexist.** `crate::types::ToolDefinition` (Value-based parameters) and `sera_types::tool::ToolDefinition` (typed `FunctionParameters`). main.rs does a serde round-trip to convert. If a new tool uses exotic JSON Schema features (arrays with `items`, `oneOf`, nested objects), the round-trip may silently drop fields. The `all_tool_definitions_round_trip` test catches this.
+- **§6.20 StdioHarness bypasses typed Submission envelope.** The gateway's `Submission` type uses `ContentBlock` items while the runtime's NDJSON protocol expects `Vec<serde_json::Value>` (OpenAI-format messages). `StdioHarness::send_turn()` builds JSON directly rather than going through the typed `Submission`. Do not try to use `Transport::send_submission()` or `AgentHarness::handle()` with the StdioHarness until the protocol is aligned.
+- **§6.21 Harness spawned on startup, not on agent creation.** `StdioHarness` instances are spawned in `run_start()` for each agent in the manifest. If the manifest changes at runtime, the harnesses won't update. Future: move harness lifecycle to agent creation/activation API.
 - **§6.19 Two tool registries coexist in sera-runtime.** `ToolRegistry` (ToolExecutor-based, 13 tools, used for dispatch) and `TraitToolRegistry` (sera_types::Tool-based, zero tools, spec-aligned with policy). Follow-up task: migrate ToolExecutor impls to the Tool trait for policy enforcement.
 
 ---

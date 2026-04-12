@@ -86,7 +86,7 @@ impl AgentRuntime for DefaultRuntime {
     /// 2. Assemble context within token budget.
     /// 3. TODO: Call model via four-method lifecycle (_observe/_think/_act/_react).
     /// 4. Return `TurnOutcome`.
-    async fn execute_turn(&self, ctx: TurnContext) -> Result<TurnOutcome, RuntimeError> {
+    async fn execute_turn(&self, _ctx: TurnContext) -> Result<TurnOutcome, RuntimeError> {
         let timer = TurnTimer::new();
 
         // Placeholder: return FinalOutput with a synthetic response.

@@ -48,16 +48,16 @@ pub fn check_termination(
     config: &TerminationConfig,
     state: &TerminationState,
 ) -> Option<TerminationReason> {
-    if let Some(max_cost) = config.max_cost_usd {
-        if state.cost_usd_accumulated >= max_cost {
-            return Some(TerminationReason::BudgetExhausted);
-        }
+    if let Some(max_cost) = config.max_cost_usd
+        && state.cost_usd_accumulated >= max_cost
+    {
+        return Some(TerminationReason::BudgetExhausted);
     }
 
-    if let Some(max_rounds) = config.max_rounds {
-        if state.rounds_elapsed >= max_rounds {
-            return Some(TerminationReason::NRoundExceeded);
-        }
+    if let Some(max_rounds) = config.max_rounds
+        && state.rounds_elapsed >= max_rounds
+    {
+        return Some(TerminationReason::NRoundExceeded);
     }
 
     if state.consecutive_idle_rounds >= 3 {

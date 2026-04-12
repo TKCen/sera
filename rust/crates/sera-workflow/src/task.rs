@@ -199,6 +199,7 @@ where
 
 impl WorkflowTask {
     /// Construct a new task, computing its content-addressed [`WorkflowTaskId`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: impl Into<String>,
         description: impl Into<String>,

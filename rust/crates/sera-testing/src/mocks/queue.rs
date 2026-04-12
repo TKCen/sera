@@ -5,10 +5,12 @@ use tokio::sync::Mutex;
 use async_trait::async_trait;
 use sera_queue::{QueueBackend, QueueError};
 
+type QueueMap = HashMap<String, VecDeque<(String, serde_json::Value)>>;
+
 /// In-memory mock queue backend for testing.
 #[derive(Clone)]
 pub struct MockQueueBackend {
-    queues: Arc<Mutex<HashMap<String, VecDeque<(String, serde_json::Value)>>>>,
+    queues: Arc<Mutex<QueueMap>>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
 }
 

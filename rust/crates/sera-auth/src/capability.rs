@@ -96,13 +96,13 @@ impl CapabilityToken {
     /// Returns [`CapabilityTokenError::ProposalLimitExhausted`] if the limit
     /// would be exceeded.
     pub fn consume_proposal(&mut self) -> Result<(), CapabilityTokenError> {
-        if let Some(limit) = self.max_proposals {
-            if self.proposals_consumed >= limit {
-                return Err(CapabilityTokenError::ProposalLimitExhausted {
-                    limit,
-                    consumed: self.proposals_consumed,
-                });
-            }
+        if let Some(limit) = self.max_proposals
+            && self.proposals_consumed >= limit
+        {
+            return Err(CapabilityTokenError::ProposalLimitExhausted {
+                limit,
+                consumed: self.proposals_consumed,
+            });
         }
         self.proposals_consumed += 1;
         Ok(())

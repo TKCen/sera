@@ -78,13 +78,12 @@ pub fn act(ctx: &TurnContext, think_result: &ThinkResult) -> ActResult {
             .get("function")
             .and_then(|f| f.get("name"))
             .and_then(|n| n.as_str())
+            && ctx.handoffs.iter().any(|h| h.tool_name == name)
         {
-            if ctx.handoffs.iter().any(|h| h.tool_name == name) {
-                return ActResult::Handoff {
-                    target: name.to_string(),
-                    context: tc.clone(),
-                };
-            }
+            return ActResult::Handoff {
+                target: name.to_string(),
+                context: tc.clone(),
+            };
         }
     }
 

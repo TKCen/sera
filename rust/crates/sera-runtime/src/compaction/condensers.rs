@@ -172,13 +172,13 @@ impl Condenser for ObservationMaskingCondenser {
 
         for msg in messages.iter_mut().take(cutoff) {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role == "tool" {
-                if let Some(obj) = msg.as_object_mut() {
-                    obj.insert(
-                        "content".to_string(),
-                        serde_json::Value::String("[masked]".to_string()),
-                    );
-                }
+            if role == "tool"
+                && let Some(obj) = msg.as_object_mut()
+            {
+                obj.insert(
+                    "content".to_string(),
+                    serde_json::Value::String("[masked]".to_string()),
+                );
             }
         }
         messages
@@ -206,21 +206,20 @@ impl Condenser for BrowserOutputCondenser {
     async fn condense(&self, mut messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
         for msg in &mut messages {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role == "tool" {
-                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
-                    if content.len() > self.max_chars {
-                        let truncated = format!(
-                            "{}... [truncated, {} chars total]",
-                            &content[..self.max_chars],
-                            content.len()
-                        );
-                        if let Some(obj) = msg.as_object_mut() {
-                            obj.insert(
-                                "content".to_string(),
-                                serde_json::Value::String(truncated),
-                            );
-                        }
-                    }
+            if role == "tool"
+                && let Some(content) = msg.get("content").and_then(|c| c.as_str())
+                && content.len() > self.max_chars
+            {
+                let truncated = format!(
+                    "{}... [truncated, {} chars total]",
+                    &content[..self.max_chars],
+                    content.len()
+                );
+                if let Some(obj) = msg.as_object_mut() {
+                    obj.insert(
+                        "content".to_string(),
+                        serde_json::Value::String(truncated),
+                    );
                 }
             }
         }

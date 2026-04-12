@@ -16,7 +16,7 @@ use crate::task::{DependencyType, WorkflowTask, WorkflowTaskId, WorkflowTaskStat
 ///    once closed (redundant given gate 1, but kept for clarity).
 ///
 /// Results are sorted by `(priority ASC, id bytes)` for determinism.
-pub fn ready_tasks<'a>(tasks: &'a [WorkflowTask], now: DateTime<Utc>) -> Vec<&'a WorkflowTask> {
+pub fn ready_tasks(tasks: &[WorkflowTask], now: DateTime<Utc>) -> Vec<&WorkflowTask> {
     let mut ready: Vec<&WorkflowTask> = tasks
         .iter()
         .filter(|t| is_ready(t, tasks, now))
@@ -68,10 +68,10 @@ fn is_ready(task: &WorkflowTask, all: &[WorkflowTask], now: DateTime<Utc>) -> bo
     }
 
     // Gate 3 — not deferred.
-    if let Some(defer) = task.defer_until {
-        if defer > now {
-            return false;
-        }
+    if let Some(defer) = task.defer_until
+        && defer > now
+    {
+        return false;
     }
 
     // Gate 4 — not awaiting an external signal.

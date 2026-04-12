@@ -3,26 +3,8 @@
 //! Replaces the TypeScript agent-runtime (core/agent-runtime/).
 //! Communicates via NDJSON on stdin/stdout using Submission/Event envelope types.
 
-mod config;
-mod context;
-mod error;
-mod health;
-mod llm_client;
-mod manifest;
-mod session_manager;
-mod tools;
-mod types;
-
-// New P0-6 modules (available via lib.rs for library consumers)
-mod compaction;
-mod context_engine;
-mod default_runtime;
-mod handoff;
-mod harness;
-mod subagent;
-mod turn;
-
-use config::RuntimeConfig;
+use sera_runtime::config::RuntimeConfig;
+use sera_runtime::health;
 use serde::{Deserialize, Serialize};
 
 /// Local NDJSON submission type — serde-compatible with sera-gateway's Submission.

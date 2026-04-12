@@ -45,7 +45,7 @@ pub enum ClaimError {
 /// - [`ClaimError::AlreadyClaimed`] if the task is already `Hooked`.
 /// - [`ClaimError::StatusMismatch`] if the task is not `Open`.
 pub fn claim_task(
-    tasks: &mut Vec<WorkflowTask>,
+    tasks: &mut [WorkflowTask],
     task_id: &WorkflowTaskId,
     agent_id: &str,
     now: DateTime<Utc>,
@@ -81,7 +81,7 @@ pub fn claim_task(
 /// Validates that the task is still `Hooked` and that the token's `agent_id`
 /// matches the current assignee.
 pub fn confirm_claim(
-    tasks: &mut Vec<WorkflowTask>,
+    tasks: &mut [WorkflowTask],
     token: &ClaimToken,
 ) -> Result<(), ClaimError> {
     let task = tasks
@@ -122,7 +122,7 @@ impl StaleClaimReaper {
     /// uses `now` minus the stale window compared against `created_at` as a
     /// conservative proxy.  Real callers should store `hooked_at` in
     /// `metadata` or add a dedicated field in a later revision.
-    pub fn reap_stale(&self, tasks: &mut Vec<WorkflowTask>, now: DateTime<Utc>) -> usize {
+    pub fn reap_stale(&self, tasks: &mut [WorkflowTask], now: DateTime<Utc>) -> usize {
         let stale_cutoff = now
             - chrono::Duration::from_std(self.stale_after)
                 .unwrap_or(chrono::Duration::seconds(60));

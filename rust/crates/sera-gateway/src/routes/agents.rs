@@ -282,7 +282,7 @@ pub async fn start_instance(
     }
 
     // Build bind mounts — use HOST path so Docker daemon can find the directory
-    let _binds = vec![
+    let _binds = [
         format!("{}:/workspace:rw", workspace_host_dir),
         // Memory mount - per instance
         format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
@@ -443,7 +443,7 @@ pub async fn restart_instance(
         let _ = std::fs::set_permissions(&workspace_container_dir, std::fs::Permissions::from_mode(0o777));
     }
 
-    let _binds = vec![
+    let _binds = [
         format!("{}:/workspace:rw", workspace_host_dir),
         format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
         format!("{}/knowledge/agents/{}:/knowledge/personal:ro", host_workspaces.replace("/workspaces", ""), instance.name),

@@ -33,12 +33,12 @@ pub fn boot_health_check(socket_path: &str) -> Result<(), KillSwitchError> {
         let path = Path::new(socket_path);
 
         // Check parent directory exists and is accessible
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                return Err(KillSwitchError::BindFailed {
-                    reason: format!("parent directory does not exist: {}", parent.display()),
-                });
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            return Err(KillSwitchError::BindFailed {
+                reason: format!("parent directory does not exist: {}", parent.display()),
+            });
         }
 
         // Attempt to bind to validate the path is usable.

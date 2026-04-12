@@ -1,0 +1,48 @@
+# sera.yaml — example configuration for sera gateway + runtime
+#
+# Copy to sera.yaml and adjust to your setup:
+#   cp sera.yaml.example sera.yaml
+#
+# Discord token: set DISCORD_TOKEN env var or use `sera secrets set`
+# LLM endpoint: adjust base_url / model to match your provider
+---
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: my-sera
+spec:
+  tier: local
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lm-studio
+spec:
+  kind: openai-compatible
+  base_url: "http://localhost:1234/v1"
+  default_model: qwen/qwen3-32b
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  model: qwen/qwen3-32b
+  persona:
+    immutable_anchor: |
+      You are Sera, an autonomous assistant running inside a sandboxed
+      environment. You can use tools to read/write files, execute shell
+      commands, and manage your memory. Be helpful, concise, and safe.
+  tools:
+    allow: ["memory_*", "file_*", "shell", "session_*"]
+---
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  token:
+    env: DISCORD_TOKEN
+  agent: sera

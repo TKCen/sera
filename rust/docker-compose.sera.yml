@@ -1,0 +1,29 @@
+# docker-compose for the sera gateway + runtime stack.
+#
+# Prerequisites:
+#   1. Copy sera.yaml.example to sera.yaml (or mount your own)
+#   2. Set DISCORD_TOKEN in .env or export it
+#   3. LM Studio (or any OpenAI-compatible endpoint) running on the host
+#
+# Usage:
+#   docker compose -f rust/docker-compose.sera.yml up --build
+
+services:
+  sera:
+    build:
+      context: ..
+      dockerfile: rust/Dockerfile.sera
+    volumes:
+      - ./sera.yaml:/app/sera.yaml:ro
+      - sera-data:/app/data
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - SERA_API_KEY=${SERA_API_KEY:-}
+      - RUST_LOG=${RUST_LOG:-info}
+      - SERA_RUNTIME_BIN=/usr/local/bin/sera-runtime
+    # host network so the container can reach LM Studio on localhost:1234
+    network_mode: host
+    restart: unless-stopped
+
+volumes:
+  sera-data:

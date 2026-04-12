@@ -13,7 +13,18 @@ notify.workspace = true
 notify-debouncer-mini.workspace = true
 tracing.workspace = true
 sera-types.workspace = true
+sha2.workspace = true
+async-trait.workspace = true
+once_cell.workspace = true
+figment.workspace = true
+schemars.workspace = true
+jsonschema.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros"] }
+
+[features]
+default = []
+schema-validation = []

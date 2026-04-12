@@ -10,7 +10,20 @@ pub mod providers;
 pub mod secrets;
 pub mod watchers;
 
+pub mod config_store;
+pub mod env_override;
+pub mod layer_merge;
+pub mod schema_registry;
+pub mod shadow_store;
+pub mod version_log;
+
 pub use watchers::{FileWatcher, FileWatcherError, ResourceType, WatchAction, WatchEvent};
+
+pub use config_store::{ConfigStore, ConfigStoreError, ManifestValue};
+pub use layer_merge::{LayeredManifestSet, ManifestLayer};
+pub use schema_registry::SchemaRegistry;
+pub use shadow_store::ShadowConfigStore;
+pub use version_log::{ChangeArtifactId, ConfigVersionEntry, ConfigVersionLog};
 
 use std::env;
 

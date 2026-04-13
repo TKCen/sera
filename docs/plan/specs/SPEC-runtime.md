@@ -17,6 +17,46 @@ The **default runtime** is a highly configurable pipeline shipped with SERA. **E
 
 ---
 
+## 1a. Library Crate vs Binary — Deployment Modes
+
+> **Design decision — 2026-04-13.** The runtime ships in two forms. These are **not** different architectures; they are the same crate compiled with different entry points.
+
+### Library mode (default — embedded in gateway)
+
+`sera-runtime` is a **library crate** that the gateway calls directly via a Rust function call. In this mode:
+
+- There is **no process boundary** — no gRPC hop, no serialization overhead, no IPC latency
+- The gateway allocates a `TurnContext`, calls `runtime.execute_turn(ctx)`, and receives a `TurnOutcome`
+- Tool call events emitted by the runtime are handled by the gateway in the same async task via a channel — there is no network call
+- This is the path for all standard local and enterprise deployments
+
+### Binary mode (standalone / BYOH reference)
+
+The same crate compiles as an executable for two use cases:
+
+1. **Pet / standalone mode** — `sera start` with a minimal config; the runtime binary manages its own file-based memory and workspace. No database, no external services required.
+2. **BYOH reference implementation** — The binary demonstrates the ACP/gRPC harness protocol so third-party runtime authors (Claude Code, Codex, Hermes) can implement compatible BYOH workers. The binary connects to the gateway via the `Grpc` or `WebSocket` `AppServerTransport` variant (see SPEC-gateway §7a).
+
+### What the runtime does and does NOT do
+
+The runtime's **only responsibilities** are:
+
+1. Receive session context injected by the gateway (soul/persona, memory, tool schemas)
+2. Run the turn loop — call the LLM, read tool call requests from the response
+3. Forward tool call events to the gateway and wait for results
+4. Return the turn result (`TurnOutcome`) to the gateway
+
+The runtime **does NOT**:
+
+- Execute tools — tool dispatch, AuthZ, and execution are gateway responsibilities (see SPEC-tools §6 and SPEC-gateway §2)
+- Hold credentials — the gateway resolves credentials and injects results; the runtime sees only tool outputs
+- Know the network topology — the runtime receives injected context; it does not know where memory is stored, which sandbox provider is active, or which LLM provider is in use
+- Own durable state — all session state, memory, and audit records live at the gateway; the runtime is stateless between turns
+
+This design is what makes runtimes "cattle" — they can be restarted, cloned, or replaced without data loss. All durable state is gateway-owned.
+
+---
+
 ## 2. Agent + Runtime Traits
 
 SERA's runtime layer has two orthogonal axes, each with its own trait. This follows the openclaw pattern (SPEC-dependencies §10.5) where harness selection (turn loop) and context assembly are **separate, independently pluggable slots** — replacing the context engine does not require replacing the harness.

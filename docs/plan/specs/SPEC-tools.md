@@ -327,23 +327,33 @@ Deny always wins over allow. The authorization system (`sera-auth`) is checked *
 
 ## 6. Tool Execution Flow
 
+> **Design decision — 2026-04-13.** Tool dispatch, AuthZ, and execution are **gateway responsibilities**, not harness responsibilities. The harness forwards tool call requests to the gateway and waits for results. It never executes tools directly.
+
 ```
-Agent requests tool call
-  → Resolve tool from registry
-  → Check ToolPolicy (profile + allow/deny)
-  → pre_tool hook chain
-    → Secret injection (credential resolution via sera-secrets)
-    → Risk assessment
-    → Argument validation
-    → Approval gate check (may route to sera-hitl)
-  → AuthZ check via sera-auth (can this principal execute this tool?)
-  → Execute tool
-  → post_tool hook chain
-    → Result sanitization
-    → Audit logging
-    → Risk assessment of result
-  → Return result to runtime (re-enters model)
+Harness              Gateway                         Tool Executor
+  │                     │                                  │
+  │── tool_call ────────▶│                                  │
+  │  (name, args)       │── Resolve tool from registry     │
+  │                     │── Check ToolPolicy               │
+  │                     │── pre_tool hook chain:           │
+  │                     │    Secret injection              │
+  │                     │    Risk assessment               │
+  │                     │    Argument validation           │
+  │                     │    Approval gate (→ sera-hitl)   │
+  │                     │── AuthZ check via sera-auth ────▶│
+  │                     │── dispatch ─────────────────────▶│ (local/sandboxed/remote)
+  │                     │◀─ result ────────────────────────│
+  │                     │── post_tool hook chain:          │
+  │                     │    Result sanitization           │
+  │                     │    Audit logging                 │
+  │                     │    Risk assessment of result     │
+  │◀─ tool_result ───────│                                  │
+  │  (re-enters model)  │                                  │
 ```
+
+**The harness never holds credentials.** The harness never knows the network topology. This boundary is what makes it safe to expose enterprise systems (PLCs, SCADA, ERPs, cloud APIs) to agents — the gateway holds the connections and enforces policy; the harness just sees results.
+
+For BYOH harnesses (Claude Code, Codex, Hermes), this same flow applies. When a BYOH harness emits a `tool_call`, the gateway intercepts it via the SQ/EQ envelope and runs the full dispatch pipeline before returning a `tool_result`. The BYOH harness has no direct path to any tool executor.
 
 ---
 
@@ -697,6 +707,29 @@ See [SPEC-interop](SPEC-interop.md) for full MCP integration details.
 | `sera-observability` | [SPEC-observability](SPEC-observability.md) | OCSF v1.7.0 audit events for all tool executions and sandbox denials |
 | `sera-meta` | [SPEC-self-evolution](SPEC-self-evolution.md) | Tier 2 scope includes tool policy changes; constitutional gate checks policy modifications |
 | Dependencies | [SPEC-dependencies](SPEC-dependencies.md) | §9.3 sandbox crate choices (`bollard`, `wasmtime`, `firecracker` binary wrap, `microsandbox` watch-only); §10.2 Codex three-layer sandbox + `DynamicToolSpec`; §10.7 opencode `Tool.Context::ask()` + `FileTime.withLock` + tree-sitter bash; §10.8 NemoClaw policy schema + presets + Sentry defense; §10.13 openai-agents-python `is_enabled`/`needs_approval`/`tool_use_behavior`; §10.16 BeeAI content-addressed cache; **§10.18 NVIDIA OpenShell full enforcement stack** |
+
+---
+
+## 13a. BYOH Tool Injection (Future Target)
+
+> **Design target — 2026-04-13.** Not implemented in Phase 1–3. Recorded here as an explicit architectural goal.
+
+When a BYOH harness (Claude Code, Codex, Hermes, external agent) connects to the gateway, the gateway CAN augment that harness's tool schema with sera-managed tools. The harness calls `knowledge_query` or `memory_write` — the call routes through the gateway's full dispatch pipeline, hits the policy layer, gets logged, and lands in the correct backend.
+
+**What this enables:**
+
+- Constitutional gates apply to Claude Code the same as `sera-runtime` — same `pre_tool` hook chains, same AuthZ checks
+- Memory and knowledge are **unified** across all connected agents, regardless of harness
+- Full audit trail regardless of which harness made the call
+- The gateway becomes a **universal policy enforcement layer** for a heterogeneous agent ecosystem
+
+**Implementation sketch:**
+
+At BYOH harness registration, the gateway sends an augmented tool schema that includes gateway-managed tools (`knowledge_query`, `knowledge_store`, `memory_write`, etc.) alongside the harness's native tools. When the harness emits one of these tool calls in its output, the gateway intercepts via the SQ/EQ envelope and routes through the standard dispatch pipeline before returning the result.
+
+This requires no changes to the BYOH harness itself — it sees the tools as part of its schema and emits tool calls in its normal format.
+
+**Dependencies:** BYOH registration (SPEC-gateway §7a), tool schema negotiation protocol (TBD), SQ/EQ envelope version compatibility (SPEC-versioning §4.5).
 
 ---
 

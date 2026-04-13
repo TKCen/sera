@@ -19,6 +19,50 @@ Hooks are:
 
 ---
 
+## 1a. Layer Assignment — Harness-Side vs Gateway-Side
+
+> **Design decision — 2026-04-13.** Hooks are NOT all equivalent. They split cleanly by which layer owns them and why.
+
+Conflating these two groups leads to incorrect security models — harness-side hooks can never enforce policy because the harness is untrusted cattle; gateway-side hooks must be gateway-owned because they are policy, not convention.
+
+### Harness-side hooks (operational, no security relevance)
+
+These hooks run in the harness process. They affect how the harness formats, assembles, and packages information — not whether something is permitted. A compromised or misbehaving harness can ignore them without violating the system's security invariants.
+
+| Hook Point | Layer | Purpose |
+|---|---|---|
+| `context_persona` | Harness | How to format persona injection, how to condense when context is full |
+| `context_memory` | Harness | Memory tier selection, RAG tuning for context assembly |
+| `context_skill` | Harness | Skill filtering, mode transitions |
+| `context_tool` | Harness | Tool schema formatting for context injection |
+| `pre_turn` | Harness | Context enrichment before context assembly begins |
+| `on_llm_start` | Harness | Immediately before the model call — token budget check, warm-up |
+| `on_llm_end` | Harness | Immediately after the model call, before tool dispatch — response validation |
+| `post_turn` | Harness | After runtime completes, before result is returned to gateway |
+
+### Gateway-side hooks (policy, security-critical)
+
+These hooks run in the gateway process. They enforce policy decisions that the harness cannot override. They apply equally to all connected harnesses — whether the default embedded runtime, a BYOH harness, or an external agent.
+
+| Hook Point | Layer | Purpose |
+|---|---|---|
+| `constitutional_gate` | Gateway | Fail-closed constitutional invariant enforcement; fires before all others |
+| `pre_route` | Gateway | Content filtering, rate limiting, classification — before queue |
+| `post_route` | Gateway | Routing override, logging — after routing decision |
+| `pre_tool` | **Gateway** | **AuthZ enforcement, secret injection, approval gates** — harness never executes tools |
+| `post_tool` | **Gateway** | **Audit, result sanitization, risk assessment of result** |
+| `pre_deliver` | Gateway | Final content filtering before delivery to client/channel |
+| `on_approval_request` | Gateway | HITL routing — routes to the correct approver, escalation logic |
+| `on_session_transition` | Gateway | Lifecycle hooks, cleanup, notification |
+| `pre_memory_write` | Gateway | Content policy, PII filtering before durable memory write |
+| `on_workflow_trigger` | Gateway | Workflow gating, context injection |
+| `on_change_artifact_proposed` | Gateway | Observability, meta-approval routing |
+
+> [!IMPORTANT]
+> `pre_tool` and `post_tool` are **gateway-side**. The harness forwards tool call requests to the gateway; the gateway runs these hook chains before and after dispatching to the tool executor. The harness never runs tool hooks directly and cannot bypass them.
+
+---
+
 ## 2. Hook Chain Architecture
 
 ### 2.1 Chain Structure

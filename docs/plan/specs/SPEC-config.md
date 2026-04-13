@@ -20,6 +20,28 @@ The configuration layer is SERA's **declarative system definition**. It governs 
 
 ---
 
+## 1a. Recompilation vs Configuration — Core Invariant
+
+> **Design invariant — 2026-04-13.** This invariant governs all backend and feature decisions.
+
+**Recompilation is a deployment event. Configuration is an operational event. These must never be conflated.**
+
+Concretely:
+
+- **All officially supported backend implementations ship in the binary.** Switching from SQLite to PostgreSQL, from embedded WebSocket to Centrifugo, from file memory to Qdrant — none of these require a different binary. They require a config change and a restart.
+- **Feature flags that require recompilation are prohibited** for officially supported features. Feature flags that control runtime behaviour (audit mode, enforcement mode) are fine — they are configuration.
+- **Third-party / custom backends** integrate via the gRPC plugin interface (see SPEC-plugins) — they run as separate processes and connect to the gateway. They do not require gateway recompilation.
+
+**Why this matters:**
+
+In regulated environments (industrial, healthcare, finance), changing a binary triggers a full change management process — review, sign-off, staging deployment, rollback plan. Changing a config file is an operational procedure. If switching memory backends required a binary change, every memory backend migration would be a deployment event. Under this invariant, it's a config change.
+
+This is how PostgreSQL itself works: you don't recompile PostgreSQL to change your storage engine or authentication method. You change `postgresql.conf` and reload. SERA follows the same model.
+
+**Enforcement:** The config system (§4) validates all backend selections against the compiled-in registry at startup. If a selected backend is not compiled in, the error message is unambiguous: "backend X is not supported by this binary" — not a runtime crash or silent fallback.
+
+---
+
 ## 2. Composable Config Model
 
 Inspired by Kubernetes, SERA configuration uses **typed manifests** instead of a single monolithic YAML file. Each manifest describes one logical resource (an agent, a connector, a hook chain, a provider, etc.).

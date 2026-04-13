@@ -15,6 +15,73 @@ In Tier 1 (local), the gateway is the **single entrypoint process**. Built-in ad
 
 ---
 
+## 1a. Gateway as Manufacturing Execution System (MES)
+
+> **Architectural framing — 2026-04-13.** This analogy is not cosmetic — it drives concrete design decisions about where state lives, which components are ephemeral, and why.
+
+The SERA gateway is a **Manufacturing Execution System for AI agents**. The MES analogy maps directly onto the architecture:
+
+| MES concept | SERA equivalent |
+|---|---|
+| **Manufacturing order** | Session — persisted at the gateway, survives worker failures |
+| **Work record** | Memory — owned and injected by the gateway, not held by the runtime |
+| **Production line / work cell** | Circle — agent groups with shared constitutions |
+| **Quality gate** | HITL — nothing destructive without human sign-off |
+| **Industrial compliance log** | Merkle audit chain — immutable, for SOC 2 / ISO auditors |
+| **Industrial middleware / event bus** | Hook system |
+| **Machine operators (cattle)** | Runtimes — ephemeral, replaceable, cloneable |
+
+**Workers are cattle.** Runtimes have no durable local state by design. If a worker crashes mid-turn, the gateway re-queues the turn to a fresh worker. The work record (session, memory, transcript) is always safe at the gateway. This is how industrial systems achieve resilience — not by making individual machines reliable, but by making machine loss inconsequential.
+
+**Sessions are manufacturing orders.** A session persists at the gateway layer across the entire lifecycle of the agent's engagement with a task — across worker restarts, model provider failures, and HITL interruptions. The gateway owns session state; runtimes are stateless.
+
+---
+
+## 1b. Tool Dispatch Ownership
+
+> **Design decision — 2026-04-13.** Tool dispatch belongs entirely to the gateway. This is not a performance consideration — it is a security and architectural boundary.
+
+The tool execution pipeline lives at the gateway, not the harness:
+
+```
+Harness              Gateway                   Tool Executor
+  │                     │                            │
+  │── tool_call ────────▶│                            │
+  │                     │── CapabilityPolicy check ──▶│
+  │                     │── pre_tool hooks ───────────▶│
+  │                     │── dispatch ─────────────────▶│ (local/sandboxed/remote)
+  │                     │◀─ result ────────────────────│
+  │◀─ tool_result ───────│                            │
+```
+
+**Why this matters for remote access:** Industrial systems (PLCs, SCADA, sensors, ERP) are safely exposed to agents because the gateway holds the connections and enforces policy. The harness never holds credentials, never knows the network topology, and never has a direct path to sensitive infrastructure. The harness just sees tool results.
+
+The gateway is responsible for:
+- **Resolving** which executor handles a given tool call
+- **AuthZ** via CapabilityPolicy before dispatch
+- **`pre_tool` and `post_tool` hook chains**
+- **Credential injection** — harnesses never receive raw credentials
+- **Audit** — every tool call is logged with full provenance
+
+See SPEC-tools §6 for the complete dispatch flow.
+
+---
+
+## 1c. Context Injection Responsibility
+
+In **enterprise/cattle mode**, the gateway is responsible for assembling and injecting all session context into the runtime before the turn begins. The runtime does not know the source of the context it receives:
+
+- Soul/persona definition → injected as system prompt prefix
+- Memory → selected by the gateway (semantic retrieval, scope filtering) and injected
+- Tool schemas → selected by the gateway (CapabilityPolicy, progressive disclosure) and injected
+- Circle constitution → injected as part of context assembly
+
+The runtime treats all of this as an opaque context window. It does not read files, query databases, or talk to the memory backend directly.
+
+In **standalone/pet mode**, the runtime itself reads workspace files (`soul.md`, `memory.md`) during context assembly — but this is an implementation detail of the file-based `ContextEngine`, not a general architecture principle. See SPEC-memory §1a for the two-backend model.
+
+---
+
 ## 2. Responsibilities
 
 1. **Event ingress and egress routing** with hook pipeline support (`pre_route` / `post_route` chains)
@@ -628,6 +695,42 @@ sera:
       token: { secret: "connectors/discord-main/token" }
       agent: "sera"
 ```
+
+---
+
+## 13a. LLM Proxy Surface
+
+> **Design decision — 2026-04-13.** The gateway CAN act as a universal LLM proxy for any connected harness.
+
+When a BYOH harness (Claude Code, Codex, Hermes, external agent) connects to the gateway, all LLM calls from that harness can be routed through the gateway's LLM proxy surface. This is optional but recommended for regulated environments.
+
+The gateway LLM proxy provides:
+
+| Feature | Description |
+|---|---|
+| **Budget enforcement** | Per-agent, per-circle, per-project token budget tracking and hard caps |
+| **Cost attribution** | All LLM spend attributed to the originating agent/circle/project |
+| **Provider routing** | Opaque rerouting to different models/providers without harness changes |
+| **Provider failover** | Automatic failover when a provider returns errors or exceeds latency threshold |
+| **Audit log** | Every LLM request and response logged with full provenance |
+| **Content filtering** | Pre-prompt and post-response filtering before content leaves the compliance boundary |
+
+For regulated environments (industrial, healthcare, finance) this is not optional — it is a **compliance requirement**. All LLM calls MUST go through the control plane so they can be audited, filtered, and attributed. The gateway is the compliance boundary.
+
+```yaml
+sera:
+  llm_proxy:
+    enabled: true                    # false = harnesses call providers directly (not recommended)
+    audit_all_calls: true
+    content_filter:
+      pre_prompt: true               # Filter prompts before they leave the network
+      post_response: true            # Filter responses before harness sees them
+    budget:
+      default_per_agent_tokens: 1000000
+      hard_cap_on_exceed: true       # Reject calls that would exceed budget
+```
+
+**Inference virtual host.** When `enabled: true`, harnesses inside sandboxes direct all inference requests to `inference.local:443`. The gateway intercepts, rewrites the `model` field, injects auth headers, and forwards to the resolved provider. This is the same `inference.local` pattern as OpenShell (SPEC-tools §6a.6) — one egress rule covers all providers.
 
 ---
 

@@ -15,6 +15,64 @@ Memory is **not a monolith** — it is a workflow. Memory operations (especially
 
 ---
 
+## 1a. Two Backends — File and Gateway
+
+> **Design decision — 2026-04-13.** Memory looks different depending on deployment mode. From the LLM's perspective, both modes deliver the same thing: injected context and callable tools.
+
+### From the LLM's perspective, memory is two things only
+
+1. **Injected context** — files/records that appear in the system prompt before the first turn, automatically, without any LLM action. The LLM doesn't retrieve them; they just arrive.
+2. **Tools** — `knowledge_query`, `knowledge_store`, `memory_write`. Explicit LLM calls into the memory system.
+
+Hooks that intercept writes, trigger sync, or augment injections are **transparent middleware** — invisible to the LLM. The LLM never sees the `MemoryBackend` trait or knows which backend is active.
+
+### File backend (pet / standalone mode)
+
+Used when `memory.backend: file` is configured. The runtime (or its `ContextEngine`) reads workspace files directly:
+
+- `soul.md` — immutable anchor / persona definition
+- `memory.md` — agent's durable working memory
+- `knowledge/*.md` — topic-organized knowledge base
+
+These files are **auto-injected** at session start via the `ContextEngine.assemble()` step. Tools write back to these files. Git management is optional (see §5).
+
+**Context injection responsibility in file mode:** the `ContextEngine` running in the runtime reads and assembles workspace files. The gateway provides the workspace path; the runtime reads it.
+
+### Gateway backend (enterprise / cattle mode)
+
+Used when `memory.backend: postgres` (or equivalent) is configured. The gateway owns all memory:
+
+- **PostgreSQL** for structured, queryable memory entries
+- **Qdrant** (or compatible) for semantic embedding index
+- Memory is session-scoped, agent-scoped, or circle-scoped
+- Semantic retrieval via embeddings — the gateway selects top-K relevant entries
+
+**Context injection responsibility in gateway mode:** the **gateway** assembles and injects memory context. The runtime receives an already-assembled context window. It does NOT read `soul.md` directly — the soul definition is injected BY THE GATEWAY as part of context assembly. The runtime doesn't know the source.
+
+```
+Gateway backend flow:
+  Session start → Gateway queries PostgreSQL + Qdrant
+               → Selects top-K memory entries for current task
+               → Assembles system prompt prefix with injected context
+               → Sends assembled context window to runtime
+               → Runtime receives opaque context — doesn't know it came from Qdrant
+```
+
+### Switching backends
+
+Backend selection is a **configuration change, not a recompilation**. Both backends are compiled into the binary. See SPEC-config §1a and SPEC-deployment §1a for the single-binary / feature-activation model.
+
+```yaml
+memory:
+  backend: postgres          # switch to file: change this line, restart
+  postgres:
+    url: "${DATABASE_URL}"
+  qdrant:
+    url: "http://qdrant:6334"
+```
+
+---
+
 ## 2. Memory Trait
 
 ```rust

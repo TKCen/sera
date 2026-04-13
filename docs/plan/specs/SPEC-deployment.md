@@ -8,7 +8,70 @@
 
 ## 1. Overview
 
-SERA supports a **deployment spectrum** from single-entrypoint local development to multi-node enterprise clusters. The architecture is designed so that every component works at every tier — the difference is in backends, auth complexity, and operational tooling.
+SERA ships as a **single binary**. All officially supported backend implementations are compiled in. Configuration selects which backends are active at runtime.
+
+There is no separate "standalone binary" vs "enterprise deployment" architecture. It is **one system with features activated by configuration**. `sera start` produces a single process with everything embedded, zero external dependencies, file memory backend, embedded WebSocket, and a single agent. The full gateway is present — most features are simply not activated.
+
+---
+
+## 1a. Feature Activation Model
+
+> **Design decision — 2026-04-13.** This replaces the "deployment tiers" framing as the primary mental model.
+
+**Recompilation is a deployment event. Configuration is an operational event. These must never be conflated.**
+
+Add features by changing configuration and restarting — not by switching architectures or recompiling:
+
+```yaml
+# Start minimal — everything embedded, file backends, no external dependencies
+memory:
+  backend: file               # switch to postgres: change this line, restart
+
+realtime:
+  backend: embedded-ws        # switch to centrifugo: change this line + url, restart
+  centrifugo:
+    url: http://centrifugo:8000
+
+egress:
+  backend: none               # switch to squid: change this line + proxy, restart
+  squid:
+    proxy: http://squid:3128
+
+auth:
+  backend: autonomous         # switch to oidc: change this line + provider, restart
+  oidc:
+    issuer: https://auth.example.com
+
+sandbox:
+  backend: none               # switch to docker: change this line, restart
+```
+
+This is how serious infrastructure software works — PostgreSQL, Nginx, Kafka all ship with pluggable backends selected by configuration, not by rebuilding. SERA follows the same model.
+
+**All officially supported backends ship in the binary.** There are no feature flags, no conditional compilation for backends, no recompilation to switch between SQLite and PostgreSQL. The binary is always complete. Config selects which backend is active.
+
+**What `sera start` gives you by default:**
+
+| Feature | Default | Activated by |
+|---|---|---|
+| Memory | File-based | `memory.backend: file` |
+| Database | SQLite | `db.backend: sqlite` |
+| Queue | SQLite-backed | `queue.backend: sqlite` |
+| Real-time | Embedded WebSocket | `realtime.backend: embedded-ws` |
+| Auth | Autonomous (no auth) | `auth.backend: autonomous` |
+| Secrets | Environment variables | `secrets.backend: env` |
+| Sandbox | None | `sandbox.backend: none` |
+| Egress proxy | None | `egress.backend: none` |
+
+To add a feature — e.g., moving memory to PostgreSQL — change one config field and restart. No Docker image rebuild, no code change.
+
+---
+
+## 2. Deployment Tiers
+
+> **Note:** The tier table below describes common *groupings* of feature activations, not architectural variants. A "Tier 2" deployment is a Tier 1 deployment with postgres memory, JWT auth, and Redis cache enabled. The binary is identical.
+
+### Tier 1: Local Development
 
 ---
 

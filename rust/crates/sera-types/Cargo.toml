@@ -12,6 +12,8 @@ time.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,6 +1,8 @@
 //! SERA Domain Types — shared types matching the BYOH contract schemas
 //! and the full sera-core domain model.
 
+pub mod envelope;
+pub mod harness;
 pub mod evolution;
 pub mod versioning;
 pub mod content_block;

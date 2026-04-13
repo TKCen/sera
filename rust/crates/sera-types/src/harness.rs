@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 
@@ -67,7 +68,7 @@ pub async fn dispatch(
 // ── Plugin registry ─────────────────────────────────────────────────────────
 
 /// Plugin event for the plugin bus.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginEvent {
     pub event_id: uuid::Uuid,
     pub event_type: String,

@@ -104,6 +104,9 @@ async fn main() -> anyhow::Result<()> {
         kill_switch: Arc::new(sera_gateway::kill_switch::KillSwitch::new()),
     };
 
+    // Extract queue backend before app_state is moved into the router.
+    let queue_backend = app_state.queue_backend.clone();
+
     // Build router
     let app = build_router(app_state, jwt_service, api_key);
 
@@ -119,6 +122,44 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // Spawn Discord connector if DISCORD_TOKEN is set.
+    // Two tasks: one runs the WebSocket connector, one forwards DiscordMessages
+    // into the queue backend as per-channel lanes ("discord:{channel_id}").
+    if let Ok(discord_token) = std::env::var("DISCORD_TOKEN") {
+        let agent_name = std::env::var("DISCORD_AGENT_NAME")
+            .unwrap_or_else(|_| "sera".to_string());
+        let (discord_tx, mut discord_rx) =
+            tokio::sync::mpsc::channel::<discord::DiscordMessage>(128);
+        let queue = queue_backend;
+
+        tracing::info!("Discord connector spawned (agent_name={agent_name})");
+
+        tokio::spawn(async move {
+            let connector =
+                discord::DiscordConnector::new(&discord_token, &agent_name, discord_tx);
+            if let Err(e) = connector.run().await {
+                tracing::error!("Discord connector exited with error: {e}");
+            }
+        });
+
+        tokio::spawn(async move {
+            while let Some(msg) = discord_rx.recv().await {
+                let lane = format!("discord:{}", msg.channel_id);
+                let payload = serde_json::json!({
+                    "channel_id": msg.channel_id,
+                    "user_id": msg.user_id,
+                    "username": msg.username,
+                    "content": msg.content,
+                    "message_id": msg.message_id,
+                });
+                match queue.push(&lane, payload).await {
+                    Ok(id) => tracing::debug!("Discord message queued: job={id} lane={lane}"),
+                    Err(e) => tracing::error!("Failed to enqueue Discord message: {e}"),
+                }
+            }
+        });
+    }
 
     // Start server
     let addr = format!("0.0.0.0:{port}");

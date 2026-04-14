@@ -3,7 +3,7 @@
 #
 # Usage:
 #   sera-omc                          # auto-generated session name
-#   sera-omc <bead-id>                # claim bead + named session
+#   sera-omc <bead-id>                # claim bead + named session + handoff
 #   sera-omc <bead-id> [omc-args...]  # pass extra args to omc
 
 set -euo pipefail
@@ -13,6 +13,9 @@ KEYWORDS="✻ Worked for,● APPROVED,✓ Closed,compile error,thread panicked,F
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERA_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/..")"
+
+# shellcheck source=lib/beads.sh
+source "${SCRIPT_DIR}/lib/beads.sh"
 
 BEAD_ID=""
 OMC_ARGS=()
@@ -26,7 +29,9 @@ OMC_ARGS=("$@")
 if [[ -n "$BEAD_ID" ]]; then
   SESSION="omc-sera-${BEAD_ID}"
   echo "[sera-omc] Claiming bead ${BEAD_ID}..."
-  bd update "${BEAD_ID}" --claim 2>/dev/null || true
+  bead_claim "${BEAD_ID}" || true
+  HANDOFF="${SERA_ROOT}/artifacts/handoffs/omc-sera-${BEAD_ID}.md"
+  bead_gen_handoff "${BEAD_ID}" "${HANDOFF}" || true
 else
   SESSION="omc-sera-$(date +%s | rev | cut -c1-4)"
 fi

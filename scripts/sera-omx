@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-DISCORD_CHANNEL="1492957434690670713"
+DISCORD_CHANNEL="1493263362753302749"
 KEYWORDS="✻ Worked for,● APPROVED,✓ Closed,compile error,thread panicked,FATAL"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

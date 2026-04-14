@@ -173,7 +173,19 @@ impl StdioHarness {
                 anyhow::bail!("sera-runtime closed stdout unexpectedly");
             }
 
-            let event: serde_json::Value = serde_json::from_str(line.trim())?;
+            // Skip non-JSON lines (empty, debug output, log lines, etc.)
+            let trimmed = line.trim();
+            if trimmed.is_empty() || !trimmed.starts_with('{') {
+                continue;
+            }
+
+            let event: serde_json::Value = match serde_json::from_str(trimmed) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::debug!("Skipping non-JSON line from runtime: {}", e);
+                    continue;
+                }
+            };
             let msg_type = event
                 .get("msg")
                 .and_then(|m| m.get("type"))

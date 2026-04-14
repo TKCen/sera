@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# sera-dev — Unified SERA development environment wrapper
+#
+# Usage:
+#   sera-dev status          Health check: git, Rust workspace, beads, tmux
+#   sera-dev work [task-id]  Claim a bead and show work context
+#   sera-dev maintain        Run clippy, tests, and TS validation
+#   sera-dev help            Show this help
+#
+# Works from any directory inside the repo.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+ROOT="$(find_repo_root)"
+if [[ -z "$ROOT" ]]; then
+  echo "Error: must be run from inside the sera git repository" >&2
+  exit 1
+fi
+
+RUST_DIR="${ROOT}/rust"
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+cmd_status() {
+  local errors=0
+
+  header "Git"
+  local branch
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+  info "Branch: ${YELLOW}${branch}${NC}"
+
+  local staged unstaged untracked
+  staged="$(git -C "$ROOT" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')"
+  unstaged="$(git -C "$ROOT" diff --name-only 2>/dev/null | wc -l | tr -d ' ')"
+  untracked="$(git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')"
+  info "Staged: ${staged}  Unstaged: ${unstaged}  Untracked: ${untracked}"
+
+  local ahead behind
+  ahead="$(git -C "$ROOT" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+  behind="$(git -C "$ROOT" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo '?')"
+  info "Ahead: ${ahead}  Behind: ${behind}"
+
+  header "Rust Workspace"
+  if check_command cargo; then
+    local rust_out
+    if rust_out="$(cargo check --workspace --manifest-path "${RUST_DIR}/Cargo.toml" 2>&1)"; then
+      pass "cargo check --workspace"
+    else
+      fail "cargo check --workspace"
+      echo "$rust_out" | tail -20 | sed 's/^/    /'
+      errors=$((errors + 1))
+    fi
+  else
+    warn "cargo not found — skipping Rust checks"
+  fi
+
+  header "Beads (bd)"
+  if check_command bd; then
+    echo ""
+    bd ready 2>/dev/null || warn "bd ready failed"
+  else
+    warn "bd not found — skipping beads status"
+  fi
+
+  header "Tmux Sessions"
+  if check_command tmux; then
+    local sessions
+    sessions="$(tmux list-sessions 2>/dev/null || true)"
+    if [[ -z "$sessions" ]]; then
+      info "No active tmux sessions"
+    else
+      echo "$sessions" | sed 's/^/  /'
+    fi
+  else
+    warn "tmux not found — skipping session list"
+  fi
+
+  echo ""
+  if [[ "$errors" -gt 0 ]]; then
+    echo -e "${YELLOW}Status complete — ${errors} issue(s) found${NC}"
+  else
+    echo -e "${GREEN}Status complete — all checks passed${NC}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# work
+# ---------------------------------------------------------------------------
+
+cmd_work() {
+  local task_id="${1:-}"
+
+  if [[ -z "$task_id" ]]; then
+    header "Available Work"
+    if check_command bd; then
+      bd ready 2>/dev/null || warn "bd ready failed"
+    else
+      warn "bd not found — install beads to see available work"
+    fi
+    echo ""
+    info "Usage: sera-dev work <task-id>  to claim a specific task"
+    return 0
+  fi
+
+  header "Work: ${task_id}"
+
+  if ! check_command bd; then
+    warn "bd not found — cannot claim task automatically"
+    info "Task: ${task_id}"
+    return 0
+  fi
+
+  local status_line
+  status_line="$(bd show "$task_id" 2>/dev/null | head -1 || echo "")"
+
+  if echo "$status_line" | grep -q "IN_PROGRESS"; then
+    info "Already in progress: ${task_id}"
+  else
+    if bd update "$task_id" --claim 2>/dev/null; then
+      pass "Claimed: ${task_id}"
+    else
+      warn "Could not claim ${task_id} (may already be claimed or not found)"
+    fi
+  fi
+
+  echo ""
+  bd show "$task_id" 2>/dev/null || true
+
+  echo ""
+  info "Docs: ${ROOT}/docs/ARCHITECTURE.md"
+  info "Rust: cd ${RUST_DIR} && cargo check --workspace"
+}
+
+# ---------------------------------------------------------------------------
+# maintain
+# ---------------------------------------------------------------------------
+
+cmd_maintain() {
+  local passed=0 failed=0
+
+  header "Rust: clippy"
+  if check_command cargo; then
+    if cargo clippy --workspace --manifest-path "${RUST_DIR}/Cargo.toml" -- -D warnings 2>&1; then
+      pass "cargo clippy"
+      passed=$((passed + 1))
+    else
+      fail "cargo clippy"
+      failed=$((failed + 1))
+    fi
+  else
+    warn "cargo not found — skipping clippy"
+  fi
+
+  header "Rust: tests"
+  if check_command cargo; then
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+      if cargo test --workspace --manifest-path "${RUST_DIR}/Cargo.toml" 2>&1; then
+        pass "cargo test --workspace"
+        passed=$((passed + 1))
+      else
+        fail "cargo test --workspace"
+        failed=$((failed + 1))
+      fi
+    else
+      warn "DATABASE_URL not set — skipping integration tests (set it to run full suite)"
+      if cargo test --workspace --manifest-path "${RUST_DIR}/Cargo.toml" \
+           --exclude sera-db 2>&1; then
+        pass "cargo test (no DB)"
+        passed=$((passed + 1))
+      else
+        fail "cargo test (no DB)"
+        failed=$((failed + 1))
+      fi
+    fi
+  else
+    warn "cargo not found — skipping Rust tests"
+  fi
+
+  header "TypeScript: validate"
+  if [[ -f "${ROOT}/scripts/validate.sh" ]]; then
+    if bash "${ROOT}/scripts/validate.sh" 2>&1; then
+      pass "scripts/validate.sh"
+      passed=$((passed + 1))
+    else
+      fail "scripts/validate.sh"
+      failed=$((failed + 1))
+    fi
+  else
+    warn "scripts/validate.sh not found — skipping TS checks"
+  fi
+
+  echo ""
+  echo -e "${BOLD}Summary:${NC} ${GREEN}${passed} passed${NC}  ${RED}${failed} failed${NC}"
+  if [[ "$failed" -gt 0 ]]; then
+    echo -e "${YELLOW}Fix the failures above before pushing.${NC}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# help / usage
+# ---------------------------------------------------------------------------
+
+cmd_help() {
+  cat <<'EOF'
+
+sera-dev — SERA development environment wrapper
+
+USAGE:
+  sera-dev <command> [args]
+
+COMMANDS:
+  status          Health check: git, Rust workspace, beads, tmux
+  work [task-id]  Show available work or claim a specific bead
+  maintain        Run clippy, tests, and TypeScript validation
+  help            Show this help
+
+EXAMPLES:
+  sera-dev status
+  sera-dev work
+  sera-dev work sera-t6ta
+  sera-dev maintain
+
+INTEGRATION:
+  Requires: git (always), cargo (Rust checks), bd (beads), tmux (session list)
+  Missing tools produce warnings, not errors.
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+COMMAND="${1:-help}"
+shift || true
+
+case "$COMMAND" in
+  status)   cmd_status "$@" ;;
+  work)     cmd_work "$@" ;;
+  maintain) cmd_maintain "$@" ;;
+  help|--help|-h) cmd_help ;;
+  *)
+    echo -e "${RED}Unknown command: ${COMMAND}${NC}" >&2
+    cmd_help >&2
+    exit 1
+    ;;
+esac

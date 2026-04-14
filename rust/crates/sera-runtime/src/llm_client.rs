@@ -213,7 +213,6 @@ impl LlmClient {
             "messages": messages,
             "max_tokens": self.max_tokens,
             "stream": true,
-            "stream_options": { "include_usage": true },
         });
 
         if !tools.is_empty() {
@@ -389,8 +388,45 @@ impl LlmClient {
                 };
 
                 if data == "[DONE]" {
-                    // Stream complete
-                    break;
+                    // Stream complete — exit both loops by building tool_calls and returning early
+                    let tool_calls = if tool_calls_map.is_empty() {
+                        None
+                    } else {
+                        let mut sorted: Vec<(usize, ToolCallAccumulator)> =
+                            tool_calls_map.into_iter().collect();
+                        sorted.sort_by_key(|(idx, _)| *idx);
+
+                        Some(
+                            sorted
+                                .into_iter()
+                                .map(|(_, acc)| ToolCall {
+                                    id: acc.id,
+                                    call_type: "function".to_string(),
+                                    function: ToolCallFunction {
+                                        name: acc.function_name,
+                                        arguments: acc.arguments,
+                                    },
+                                })
+                                .collect(),
+                        )
+                    };
+
+                    return Ok(LlmChatResult {
+                        message: ChatMessage {
+                            role: "assistant".to_string(),
+                            content: if content.is_empty() {
+                                None
+                            } else {
+                                Some(content)
+                            },
+                            tool_calls,
+                            tool_call_id: None,
+                            name: None,
+                        },
+                        finish_reason,
+                        prompt_tokens: usage.prompt_tokens,
+                        completion_tokens: usage.completion_tokens,
+                    });
                 }
 
                 // Parse the JSON chunk

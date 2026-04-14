@@ -1230,7 +1230,7 @@ metadata:
 spec:
   kind: openai-compatible
   base_url: "http://localhost:1234/v1"
-  default_model: gemma-4-12b
+  default_model: qwen/qwen3.5-35b-a3b
 ---
 apiVersion: sera.dev/v1
 kind: Agent
@@ -1238,7 +1238,7 @@ metadata:
   name: sera
 spec:
   provider: lm-studio
-  model: gemma-4-12b
+  model: qwen/qwen3.5-35b-a3b
   persona:
     immutable_anchor: |
       You are Sera, an autonomous assistant.

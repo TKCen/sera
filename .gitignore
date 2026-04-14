@@ -83,3 +83,7 @@ site/
 *.db
 .beads-credential-key
 .omx/
+
+# Untracked directories to ignore
+artifacts/
+secrets/

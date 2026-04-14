@@ -40,5 +40,8 @@ regex.workspace = true
 once_cell.workspace = true
 tiktoken-rs.workspace = true
 
+fs2 = "0.4"
+rand.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

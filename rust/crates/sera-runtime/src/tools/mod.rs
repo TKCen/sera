@@ -1,6 +1,8 @@
 //! Tool executor framework and registry.
 
 pub mod file_ops;
+pub mod file_write;
+pub mod file_edit;
 pub mod http_request;
 pub mod shell_exec;
 pub mod knowledge;
@@ -36,6 +38,7 @@ impl ToolRegistry {
             Box::new(file_ops::FileRead),
             Box::new(file_ops::FileWrite),
             Box::new(file_ops::FileList),
+            Box::new(file_edit::FileEdit),
             Box::new(shell_exec::ShellExec),
             Box::new(http_request::HttpRequest),
             Box::new(knowledge::KnowledgeStore),

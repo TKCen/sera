@@ -1,6 +1,7 @@
 //! File operation tools: file-read, file-write, file-list.
 
 use super::ToolExecutor;
+use crate::tools::file_write::locked_write;
 
 /// Read file contents.
 pub struct FileRead;
@@ -55,8 +56,9 @@ impl ToolExecutor for FileWrite {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        tokio::fs::write(path, content).await?;
-        Ok(format!("Written {} bytes to {path}", content.len()))
+        let byte_len = content.len();
+        locked_write(std::path::Path::new(path), content.as_bytes().to_vec()).await?;
+        Ok(format!("Written {byte_len} bytes to {path}"))
     }
 }
 

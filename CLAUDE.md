@@ -108,6 +108,7 @@ When completing a workflow loop or resolving a non-trivial issue, check whether 
 - **Squid egress proxy fails on `docker restart`**: The squid PID file persists across restarts, causing `FATAL: Squid is already running`. Workaround: `docker compose down sera-egress-proxy && docker compose up -d sera-egress-proxy`. See #363.
 - **API endpoints require auth header**: All `/api/*` endpoints (except `/api/health/*`) require `Authorization: Bearer <key>`. Dev key: `sera_bootstrap_dev_123`.
 - **Prettier format check differs between Windows and Linux**: Jules PRs formatted on Linux may fail CI format check when our pre-commit hook reformats on Windows. Always run `bun run format` before pushing.
+- **Use `sera-omc`/`sera-omx` for monitored sessions**: Run `scripts/sera-omc [bead-id]` instead of bare `omc` to launch a clawhip-monitored tmux session with Discord notifications (keywords: "✻ Worked for", "● APPROVED", "✓ Closed", "FATAL", etc.). Use `scripts/sera-omx [bead-id]` for Codex (OMX) sessions. Both scripts auto-claim the bead if provided and name the session `omc-sera-<bead-id>`.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->

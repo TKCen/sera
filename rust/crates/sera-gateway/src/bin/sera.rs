@@ -2117,14 +2117,14 @@ mod tests {
             event_loop(event_state, rx).await;
         });
 
-        // Send a Discord message.
+        // Send a Discord message (DM or mention required for processing).
         tx.send(DiscordMessage {
             channel_id: "ch_001".into(),
             user_id: "user_001".into(),
             username: "tester".into(),
             content: "ping".into(),
             message_id: "msg_001".into(),
-            is_dm: false,
+            is_dm: true, // Must be DM or mention bot to trigger processing
             mentions_bot: false,
         })
         .await

@@ -13,6 +13,7 @@ use sera_tools::sandbox::SandboxProvider;
 use sera_gateway::envelope::GenerationMarker;
 use sera_gateway::harness_dispatch::HarnessRegistry;
 use sera_gateway::kill_switch::KillSwitch;
+use sera_gateway::transcript_persist::TranscriptPersistence;
 use crate::services::schedule_service::ScheduleService;
 
 /// Shared application state.
@@ -33,4 +34,5 @@ pub struct AppState {
     pub queue_backend: Arc<dyn sera_queue::QueueBackend>,
     pub generation_marker: GenerationMarker,
     pub kill_switch: Arc<KillSwitch>,
+    pub transcript_persistence: Arc<TranscriptPersistence>,
 }

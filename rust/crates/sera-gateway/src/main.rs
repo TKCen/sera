@@ -87,6 +87,10 @@ async fn main() -> anyhow::Result<()> {
 
     let schedule_svc = Arc::new(ScheduleService::new(db.clone()));
 
+    // Initialize transcript persistence
+    let session_persist = Arc::new(sera_gateway::session_persist::SqlxSessionPersist::from_db_pool(&db));
+    let transcript_persistence = Arc::new(sera_gateway::transcript_persist::TranscriptPersistence::new(session_persist));
+
     let app_state = AppState {
         db,
         config: config.clone(),
@@ -102,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         queue_backend: Arc::new(sera_queue::LocalQueueBackend::new()),
         generation_marker: sera_gateway::generation::current_generation(),
         kill_switch: Arc::new(sera_gateway::kill_switch::KillSwitch::new()),
+        transcript_persistence: transcript_persistence.clone(),
     };
 
     // Extract queue backend before app_state is moved into the router.

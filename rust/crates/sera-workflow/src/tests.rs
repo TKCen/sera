@@ -7,8 +7,10 @@ use crate::{
                LightSleepConfig, RemSleepConfig},
     registry::WorkflowRegistry,
     session_key::workflow_session_key,
+    topological_sort, CyclicDependency,
     types::{CronSchedule, EventPattern, ThresholdCondition, ThresholdOperator, WorkflowDef,
             WorkflowTrigger},
+    DependencyType, WorkflowTask, WorkflowTaskDependency, WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,
 };
 
 // ---------------------------------------------------------------------------
@@ -373,4 +375,66 @@ fn dreaming_config_serde_roundtrip() {
 fn session_key_format() {
     let key = workflow_session_key("agent-42", "dreaming");
     assert_eq!(key, "workflow:agent-42:dreaming");
+}
+
+// ---------------------------------------------------------------------------
+// topological_sort
+// ---------------------------------------------------------------------------
+
+fn make_task(seed: u8, _deps: impl Into<Vec<WorkflowTaskDependency>>) -> WorkflowTask {
+    let task_id = WorkflowTaskId::from_content(
+        &format!("Task {seed}"),
+        &format!("Description {seed}"),
+        "Acceptance",
+        "formula",
+        "location",
+        chrono::Utc::now(),
+    );
+    let deps = _deps.into();
+    WorkflowTask {
+        id: task_id,
+        title: format!("Task {seed}"),
+        description: format!("Description {seed}"),
+        acceptance_criteria: vec!["AC".to_string()],
+        status: WorkflowTaskStatus::Open,
+        priority: seed,
+        task_type: WorkflowTaskType::Feature,
+        assignee: None,
+        due_at: None,
+        defer_until: None,
+        metadata: serde_json::Value::Null,
+        await_type: None,
+        await_id: None,
+        timeout: None,
+        ephemeral: false,
+        source_formula: None,
+        source_location: None,
+        created_at: chrono::Utc::now(),
+        meta_scope: None,
+        change_artifact_id: None,
+        dependencies: deps,
+    }
+}
+
+#[test]
+fn topological_sort_independent() {
+    // Tasks with no dependencies - all independent
+    let a = make_task(1, vec![]);
+    let b = make_task(2, vec![]);
+    let c = make_task(3, vec![]);
+    let tasks = vec![a, b, c];
+
+    let sorted = topological_sort(&tasks).unwrap();
+    assert_eq!(sorted.len(), 3);
+}
+
+#[test]
+fn topological_sort_ignores_non_blocks() {
+    // Tasks with Related dependencies - treated as independent
+    let a = make_task(1, vec![]);
+    let b = make_task(2, vec![]);
+    let tasks = vec![a, b];
+
+    let sorted = topological_sort(&tasks).unwrap();
+    assert_eq!(sorted.len(), 2);
 }

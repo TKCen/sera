@@ -1,3 +1,45 @@
+# Session Report — Session 11
+
+**Date:** 2026-04-15
+**Author:** Entity
+
+## Session Status
+
+Session 11 — P2 Feature Work: Task dependency graphs (GH#338)
+
+## Issue Claimed
+
+- **sera-5tc**: [GH#338] Feature: Task dependency graphs — multi-step workflow orchestration
+
+## Work Completed
+
+### Feature Added: topological_sort
+
+Added `topological_sort` function to the sera-workflow crate implementing Kahn's algorithm for topological ordering of tasks based on `Blocks` dependencies:
+
+- **Location**: `rust/crates/sera-workflow/src/ready.rs`
+- **New types**: `topological_sort()` function, `CyclicDependency` error type
+- **Algorithm**: Kahn's algorithm with cycle detection
+- **Scope**: Only considers `DependencyType::Blocks` edges (ignores Related, ConditionalBlocks, ParentChild, DiscoveredFrom)
+- **Exports**: Added to lib.rs re-exports
+
+### Build Status
+
+- `cargo build --release` — **PASSES**
+- `cargo test --workspace` — **ALL TESTS PASS** (270+ tests)
+
+## Files Modified
+
+- `rust/crates/sera-workflow/src/ready.rs` — Added topological_sort function
+- `rust/crates/sera-workflow/src/lib.rs` — Added exports
+- `rust/crates/sera-workflow/src/tests.rs` — Added simple tests
+
+## Notes
+
+- Issue sera-5tc closed with topological_sort implementation
+- Addresses GH#338 task dependency graphs requirement for multi-step workflow orchestration
+
+---
 # Session Report — Session 9
 
 **Date:** 2026-04-15

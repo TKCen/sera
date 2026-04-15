@@ -87,6 +87,87 @@ fn is_ready(task: &WorkflowTask, all: &[WorkflowTask], now: DateTime<Utc>) -> bo
     true
 }
 
+/// Compute the topological ordering of tasks based on `Blocks` dependencies.
+///
+/// Uses Kahn's algorithm with cycle detection. Returns tasks in dependency order:
+/// all tasks appear AFTER any tasks they depend on via `Blocks` edges.
+/// Only considers `Blocks` dependency edges (not `Related`, `ConditionalBlocks`,
+/// `ParentChild`, or `DiscoveredFrom`).
+///
+/// Returns `Ok(sorted_ids)` on success, or `Err(CyclicDependency)` if the
+/// graph contains a cycle.
+pub fn topological_sort(tasks: &[WorkflowTask]) -> Result<Vec<WorkflowTaskId>, CyclicDependency> {
+    // Build adjacency map: blocker -> blocked tasks.
+    let mut out_degree: std::collections::HashMap<WorkflowTaskId, usize> =
+        std::collections::HashMap::new();
+    let mut adj: std::collections::HashMap<WorkflowTaskId, Vec<WorkflowTaskId>> =
+        std::collections::HashMap::new();
+
+    // Initialize all tasks with 0 out-degree.
+    for task in tasks {
+        out_degree.insert(task.id, 0);
+    }
+
+    // Build graph based on Blocks dependencies only.
+    for task in tasks {
+        for dep in &task.dependencies {
+            // Only consider Blocks edges (dep.from -> dep.to means from blocks to).
+            if dep.kind != DependencyType::Blocks {
+                continue;
+            }
+            // Ensure both tasks exist.
+            if !out_degree.contains_key(&dep.from) || !out_degree.contains_key(&dep.to) {
+                continue;
+            }
+            // Add edge: dep.from blocks dep.to -> dep.to depends on dep.from.
+            *out_degree.entry(dep.to).or_insert(0) += 1;
+            adj.entry(dep.from).or_default().push(dep.to);
+        }
+    }
+
+    // Kahn's algorithm: start with nodes that have in-degree 0.
+    let mut queue: std::collections::VecDeque<WorkflowTaskId> = out_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(&id, _)| id)
+        .collect();
+
+    let mut result: Vec<WorkflowTaskId> = Vec::with_capacity(tasks.len());
+
+    while let Some(current) = queue.pop_front() {
+        result.push(current);
+        if let Some(neighbors) = adj.get(&current) {
+            for &nbr in neighbors {
+                if let Some(deg) = out_degree.get_mut(&nbr) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(nbr);
+                    }
+                }
+            }
+        }
+    }
+
+    // If we didn't process all nodes, there's a cycle.
+    if result.len() != tasks.len() {
+        Err(CyclicDependency)
+    } else {
+        Ok(result)
+    }
+}
+
+/// Error returned when a dependency graph contains a cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CyclicDependency;
+
+impl std::fmt::Display for CyclicDependency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cyclic dependency detected in task graph")
+    }
+}
+
+impl std::error::Error for CyclicDependency {}
+
 /// Compute the transitive closure of task dependencies starting from `roots`.
 ///
 /// Returns all [`WorkflowTaskId`]s reachable via any dependency edge

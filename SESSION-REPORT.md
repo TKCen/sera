@@ -152,3 +152,54 @@ For Discord routing to work, `sera.yaml` must have:
 - Messages will be filtered if not a DM and not mentioning the bot
 - Most likely cause of "messages not reaching LLM" is runtime harness not spawning (path issue or missing binary)
 - Issue remains IN_PROGRESS — further diagnosis requires running the gateway with Discord token set
+
+---
+
+# Session Report — Session 10
+
+**Date:** 2026-04-15
+**Author:** Entity
+
+## Session Status
+
+Session 10 — P2 Feature Work: Hybrid retrieval design
+
+## Issue Claimed
+
+- **sera-t5k**: llm: Hybrid retrieval — index + vector + recency in ContextAssembler
+
+## Work Completed
+
+### Design Document Created
+
+Created comprehensive design document at `rust/docs/plan/HYBRID-RETRIEVAL.md` covering:
+
+- **Problem Statement**: ContextPipeline misses semantically related content, has no recency awareness
+- **Architecture**: New hybrid retrieval layer combining keyword, vector, recency, and index lookup
+- **Implementation Plan**: 4 phases extending ContextEngine trait, creating HybridRetrieval module
+- **New Types**: RetrievedMemory, HybridStrategy, EmbeddingService trait
+- **Configuration**: Per-agent config via CapabilityPolicy with weights and fusion methods
+- **Design Decisions**: Replace vs augment (optional), performance impact, per-agent config, fallback behavior
+- **Dependencies**: sera-qme (knowledge index), embedding service availability
+
+### Current Implementation Gap Identified
+
+- `SearchStrategy::Hybrid` enum already exists in `sera-types/src/memory.rs` but is unimplemented
+- `ContextPipeline` assembles context by simple concatenation, no retrieval logic
+- Need: EmbeddingService trait, HybridRetrieval module, extension to ContextEngine trait
+
+## Build Status
+
+- `cargo build --release` — **PASSES** (with 2 warnings)
+- `cargo test --workspace` — **ALL TESTS PASS**
+
+## Files Created
+
+- `rust/docs/plan/HYBRID-RETRIEVAL.md` — Complete design document
+
+## Notes
+
+- Issue sera-t5k remains IN_PROGRESS — design complete, implementation pending
+- Documented the architecture for implementing hybrid retrieval
+- Next steps: Implement embedding service, HybridRetrieval module, integrate with pipeline
+- Dependencies on sera-qme (source ingestion) noted in doc

@@ -27,7 +27,7 @@ The SERA Rust workspace is **substantially implemented** with **19 of 26 planned
 |-------|-------------|--------|------------|
 | Phase 0 | Foundation & MVP | COMPLETE | 100% |
 | Phase 1 | Core Domain Expansion | IN PROGRESS | ~75% |
-| Phase 2 | Self-Evolution Machinery | IN PROGRESS | 40% |
+| Phase 2 | Self-Evolution Machinery | IN PROGRESS | 65% |
 | Phase 3 | Interop Protocols (MCP/A2A/AG-UI) | NOT STARTED | 0% |
 | Phase 4 | Clients & SDK | NOT STARTED | 0% |
 
@@ -91,7 +91,7 @@ The SERA Rust workspace is **substantially implemented** with **19 of 26 planned
 |-------|---------------|----------|--------|
 | sera-models | SPEC-runtime §5 | P1 | 🔲 NOT STARTED |
 | sera-skills | SPEC-runtime §13 | P1 | 🔲 NOT STARTED |
-| sera-meta | SPEC-self-evolution | P2 | 🔲 NOT STARTED |
+| sera-meta | SPEC-self-evolution | P2 | ✅ COMPLETE (Session 14) |
 | sera-mcp | SPEC-interop | P3 | 🔲 NOT STARTED |
 | sera-a2a | SPEC-interop | P3 | 🔲 NOT STARTED |
 | sera-agui | SPEC-interop | P3 | 🔲 NOT STARTED |

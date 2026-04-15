@@ -26,6 +26,12 @@
   - `TokenBounded` — Tier 2: Evicts oldest when token budget exceeded
   - `SlidingWindow` — Tier 3: Fixed message-count sliding window
   - `Summarizing` — Tier 4: LLM-driven compaction when budget hit
+- Implemented actual memory wrapper types in new `sera-session/src/memory_wrapper.rs`:
+  - `UnconstrainedMemory` — keeps all history
+  - `TokenMemory` — evicts by token budget
+  - `SlidingWindowMemory` — fixed size sliding window
+  - `SummarizeMemory` — LLM-driven compaction
+- Added `MemoryWrapper` trait and factory function `create_memory_wrapper()`
 - Aligns with SPEC-memory §2.0 Four-Tier Memory ABC (BeeAI validated)
 
 ## Test Results
@@ -46,10 +52,9 @@
 - Could benefit from integration tests with the database backend in future
 
 ### WP-009 (100% complete)
-- The `WorkingMemoryTier` enum is defined but no actual memory tier implementations (UnconstrainedMemory, TokenMemory, etc.) have been created
-- Future work would involve implementing the actual memory tier wrapper types
+- The four-tier memory wrapper types are fully implemented and tested
+- Could benefit from integration with the actual LLM client for summarization in Tier 4
 
 ## Next Session Priorities
 1. Wire `TranscriptPersistence` into the session creation/loading flow in the gateway
-2. Implement the actual four-tier memory wrapper types (UnconstrainedMemory, TokenMemory, SlidingWindowMemory, SummarizeMemory)
-3. Continue with remaining SERA 2.0 work packages as assigned
+2. Continue with remaining SERA 2.0 work packages as assigned

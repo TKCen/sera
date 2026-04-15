@@ -23,6 +23,10 @@ pub struct DiscordMessage {
     pub content: String,
     #[allow(dead_code)]
     pub message_id: String,
+    /// Whether this message was a DM (not a guild channel).
+    pub is_dm: bool,
+    /// Whether the bot was mentioned in this message (for guild channels).
+    pub mentions_bot: bool,
 }
 
 /// Discord Gateway connector — connects via WebSocket, handles heartbeat,
@@ -31,6 +35,8 @@ pub struct DiscordConnector {
     token: String,
     agent_name: String,
     tx: mpsc::Sender<DiscordMessage>,
+    /// Bot's own user ID, set on READY event.
+    bot_user_id: std::sync::Mutex<Option<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +129,9 @@ pub fn strip_mentions(content: &str) -> String {
 ///
 /// Returns `None` if the payload is not a MESSAGE_CREATE dispatch, or if the
 /// message author is a bot.
-pub fn parse_message_create(payload: &Value) -> Option<DiscordMessage> {
+/// 
+/// The `is_dm` and `mentions_bot` fields are set based on the raw payload data.
+pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Option<DiscordMessage> {
     if payload.get("op")?.as_u64()? != OP_DISPATCH {
         return None;
     }
@@ -138,12 +146,27 @@ pub fn parse_message_create(payload: &Value) -> Option<DiscordMessage> {
         return None;
     }
 
+    // Check if this is a DM (no guild_id) or mentions the bot
+    let is_dm = d.get("guild_id").is_none();
+    let mentions_bot = if let Some(bot_id) = bot_user_id {
+        d.get("mentions")
+            .and_then(|m| m.as_array())
+            .map(|arr| arr.iter().any(|u| {
+                u.get("id").and_then(Value::as_str) == Some(bot_id)
+            }))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     Some(DiscordMessage {
         channel_id: d.get("channel_id")?.as_str()?.to_owned(),
         user_id: author.get("id")?.as_str()?.to_owned(),
         username: author.get("username")?.as_str()?.to_owned(),
         content: strip_mentions(d.get("content")?.as_str()?),
         message_id: d.get("id")?.as_str()?.to_owned(),
+        is_dm,
+        mentions_bot,
     })
 }
 
@@ -170,6 +193,7 @@ impl DiscordConnector {
             token: token.to_owned(),
             agent_name: agent_name.to_owned(),
             tx,
+            bot_user_id: std::sync::Mutex::new(None),
         }
     }
 
@@ -317,6 +341,17 @@ impl DiscordConnector {
                 if let Some(event) = parse_dispatch_event(payload) {
                     match event.as_str() {
                         "READY" => {
+                            let user_id = payload
+                                .get("d")
+                                .and_then(|d| d.get("user"))
+                                .and_then(|u| u.get("id"))
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            if let Some(ref uid) = user_id
+                                && let Ok(mut guard) = self.bot_user_id.lock()
+                            {
+                                *guard = Some(uid.clone());
+                            }
                             let username = payload
                                 .get("d")
                                 .and_then(|d| d.get("user"))
@@ -326,7 +361,8 @@ impl DiscordConnector {
                             tracing::info!("Discord adapter ready as {username}");
                         }
                         "MESSAGE_CREATE" => {
-                            if let Some(msg) = parse_message_create(payload)
+                            let bot_id = self.bot_user_id.lock().ok().and_then(|g| g.clone());
+                            if let Some(msg) = parse_message_create(payload, bot_id.as_deref())
                                 && let Err(e) = self.tx.send(msg).await
                             {
                                 tracing::error!("Failed to dispatch Discord message: {e}");
@@ -365,6 +401,8 @@ mod tests {
             username: "testuser".into(),
             content: "hello world".into(),
             message_id: "msg001".into(),
+            is_dm: false,
+            mentions_bot: false,
         };
         assert_eq!(msg.channel_id, "123456");
         assert_eq!(msg.user_id, "789");
@@ -431,7 +469,7 @@ mod tests {
                 }
             }
         });
-        let msg = parse_message_create(&payload).expect("should parse");
+        let msg = parse_message_create(&payload, None).expect("should parse");
         assert_eq!(msg.message_id, "msg123");
         assert_eq!(msg.channel_id, "ch456");
         assert_eq!(msg.content, "Hello SERA!");
@@ -456,7 +494,7 @@ mod tests {
                 }
             }
         });
-        assert!(parse_message_create(&payload).is_none());
+        assert!(parse_message_create(&payload, None).is_none());
     }
 
     #[test]
@@ -476,7 +514,7 @@ mod tests {
                 }
             }
         });
-        let msg = parse_message_create(&payload).expect("should parse when bot field absent");
+        let msg = parse_message_create(&payload, None).expect("should parse when bot field absent");
         assert_eq!(msg.username, "bob");
     }
 
@@ -491,7 +529,7 @@ mod tests {
                 "user": { "username": "sera", "discriminator": "0001" }
             }
         });
-        assert!(parse_message_create(&payload).is_none());
+        assert!(parse_message_create(&payload, None).is_none());
     }
 
     #[test]
@@ -500,7 +538,7 @@ mod tests {
             "op": 10,
             "d": { "heartbeat_interval": 41250 }
         });
-        assert!(parse_message_create(&payload).is_none());
+        assert!(parse_message_create(&payload, None).is_none());
     }
 
     #[test]
@@ -608,7 +646,7 @@ mod tests {
                 }
             }
         });
-        let msg = parse_message_create(&payload).expect("should parse");
+        let msg = parse_message_create(&payload, None).expect("should parse");
         assert_eq!(msg.content, "help me");
     }
 }

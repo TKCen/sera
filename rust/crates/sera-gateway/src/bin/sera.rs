@@ -888,8 +888,21 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     tracing::info!(
         user = %msg.username,
         channel = %msg.channel_id,
+        is_dm = %msg.is_dm,
+        mentions_bot = %msg.mentions_bot,
         "Received Discord message"
     );
+
+    // Filter: Only respond to DMs or when mentioned.
+    // Ignore messages in other channels that don't mention the bot.
+    if !msg.is_dm && !msg.mentions_bot {
+        tracing::debug!(
+            user = %msg.username,
+            channel = %msg.channel_id,
+            "Ignoring message - not a DM and bot not mentioned"
+        );
+        return Ok(());
+    }
 
     // Audit: Discord message received.
     {
@@ -1527,8 +1540,12 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
 
     // 3b. Spawn a sera-runtime harness for each agent.
-    let runtime_bin = std::env::var("SERA_RUNTIME_BIN")
-        .unwrap_or_else(|_| "sera-runtime".to_string());
+    // Use absolute path to the runtime binary (in the same directory as the gateway binary).
+    let runtime_bin = std::env::var("SERA_RUNTIME_BIN").unwrap_or_else(|_| {
+        let exe_path = std::env::current_exe().unwrap_or_default();
+        let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
+        exe_dir.join("sera-runtime").to_string_lossy().to_string()
+    });
     let mut harnesses = std::collections::HashMap::new();
 
     for agent_name in manifests.agent_names() {
@@ -2012,6 +2029,8 @@ mod tests {
             username: "tester".into(),
             content: "ping".into(),
             message_id: "msg_001".into(),
+            is_dm: false,
+            mentions_bot: false,
         })
         .await
         .unwrap();

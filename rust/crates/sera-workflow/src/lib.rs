@@ -16,10 +16,13 @@
 //! - [`termination`] — termination triad: [`check_termination`], [`TerminationConfig`].
 
 pub mod claim;
+pub mod coordination;
 pub mod dreaming;
+pub mod source_ingest;
 pub mod error;
 pub mod ready;
 pub mod registry;
+pub mod scc;
 pub mod schedule;
 pub mod session_key;
 pub mod task;
@@ -51,6 +54,15 @@ pub use termination::{
     check_termination, TerminationConfig, TerminationReason, TerminationState,
     WorkflowTermination,
 };
+
+// Re-exports — Circle coordination (SPEC-circles).
+pub use coordination::{
+    AggregatedResult, AggregationError, AllComplete, CircleMemory, ConcurrencyPolicy,
+    ConcurrencyScheduler, ConvergenceConfig, ConvergenceState, CoordResult, CoordTask,
+    CoordinationError, CoordinationPolicy, Coordinator, Custom, ExecFn, FirstSuccess, Majority,
+    Outcome, ParticipantId, ResultAggregator, WorkflowMemoryManager,
+};
+pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
 
 #[cfg(test)]
 mod tests;

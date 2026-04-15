@@ -27,6 +27,8 @@ wasm = []
 microvm = []
 external = []
 openshell = []
+# Enable live HTTP fetching in knowledge-ingest (requires reqwest in deps).
+http_fetch = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }

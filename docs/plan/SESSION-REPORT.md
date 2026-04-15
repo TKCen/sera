@@ -1,3 +1,37 @@
+# Session Report — 2026-04-16 (Session 14 — P2 Bundle)
+
+## P2 Bundle — COMPLETE
+
+### P2-A: sera-meta artifact pipeline (sera-vu17) ✅
+- Added `crates/sera-meta/src/artifact_pipeline.rs` — `ChangeArtifactStore` with in-memory `tokio::sync::RwLock<HashMap>` backing.
+- API: `submit`, `get`, `list_by_status`, `transition` with `ArtifactStoreError` (NotFound / InvalidTransition).
+- 4 new async tests; 25/25 sera-meta tests pass.
+
+### P2-B: Circle coordination (sera-0arf) ✅
+- Added `crates/sera-gateway/src/services/coordination.rs` — Tarjan SCC cycle detection, `ResultAggregator` trait + `ConcatAggregator`/`FirstWinsAggregator`, `ConvergenceConfig::should_terminate`, `ConcurrencyPolicy { Serial, Parallel, Bounded }`.
+- 11 new tests; 14 existing circle_state tests still pass.
+- One-line `#[derive(Debug)]` added to `AppError` to unblock bin-test compilation.
+
+### P2-C: Source ingestion workflow (sera-qme) ✅
+- Added `crates/sera-workflow/src/source_ingest.rs` — `SourceRef`/`SourceKind`, `IngestedFact`, `KnowledgeBlock`, `SourceFetcher`/`FactExtractor` traits, `IngestionPipeline<F, E>` composer.
+- `derive_title()` helper strips query/fragment and takes last path segment.
+- 4 new tests; 40 unit + 14 integration tests pass.
+
+### P2-D: Chat handler → LaneQueue wiring (sera-t4zo) ✅
+- Modified `crates/sera-gateway/src/routes/chat.rs` to enqueue onto `LaneQueue` matching `bin/sera.rs` pattern (Ready/Queued/Steer/Interrupt).
+- Added `LaneAction` enum + `LaneRunGuard` RAII guard that calls `complete_run` on Drop.
+- `session_key = format!("http:{agent_id}:{session_id}")`. Returns 202 Accepted on Queued/Steer.
+- Added `lane_queue: Arc<Mutex<LaneQueue>>` field to gateway-lib `AppState`.
+- 1 new test + 237 gateway tests pass.
+
+## Verification
+
+- `cargo check --workspace` → pass
+- `cargo build --release` → pass (1m 48s)
+- `cargo test --workspace` → pass, 0 failures
+
+---
+
 # Session Report — 2026-04-15
 
 ## Accomplishments

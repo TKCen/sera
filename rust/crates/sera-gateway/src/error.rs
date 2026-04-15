@@ -12,6 +12,7 @@ use sera_db::DbError;
 
 /// Application-level error that converts to HTTP responses.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum AppError {
     /// Database errors.
     Db(DbError),

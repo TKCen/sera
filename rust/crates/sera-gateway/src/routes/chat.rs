@@ -15,8 +15,89 @@ use sera_gateway::envelope::{EventMsg, Op, Submission, W3cTraceContext};
 use sera_gateway::harness_dispatch;
 use crate::error::AppError;
 use crate::state::AppState;
+use sera_db::lane_queue::EnqueueResult;
 use sera_db::sessions::SessionRepository;
+use sera_queue::QueueBackend;
 use sera_types::content_block::ContentBlock;
+use sera_types::event::Event as DomainEvent;
+use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
+
+/// Result of an enqueue on the in-memory LaneQueue — whether the handler
+/// should dispatch immediately or short-circuit with a "queued" response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneAction {
+    Dispatch,
+    Queued,
+}
+
+/// RAII guard that calls `complete_run` on the shared [`LaneQueue`] when
+/// dropped. This ensures the lane is released on every exit path — including
+/// early returns from `?` and panics — mirroring the explicit `complete_run`
+/// calls used by the Discord message loop in bin/sera.rs.
+struct LaneRunGuard {
+    lane_queue: std::sync::Arc<tokio::sync::Mutex<sera_db::lane_queue::LaneQueue>>,
+    session_key: String,
+}
+
+impl Drop for LaneRunGuard {
+    fn drop(&mut self) {
+        // blocking_lock is safe here: complete_run is synchronous and cheap,
+        // and we're outside the async executor's main path on Drop.
+        let key = std::mem::take(&mut self.session_key);
+        let lq = self.lane_queue.clone();
+        tokio::spawn(async move {
+            let mut guard = lq.lock().await;
+            guard.complete_run(&key);
+        });
+    }
+}
+
+/// Payload shape enqueued on the chat lane. Consumed by the runtime worker loop
+/// (see sera-runtime). Kept as a flat JSON object so existing QueueBackend
+/// implementations (local + apalis) don't need a typed schema yet.
+///
+/// TODO(sera-runtime): build the worker loop that pulls from `chat:{session_id}`
+/// lanes and drives a turn via the harness registry. Until then, the gateway
+/// still dispatches synchronously via harness/HTTP for the response — this
+/// enqueue is the durable record of the incoming request.
+fn build_chat_task_payload(
+    task_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    message: &str,
+    stream: bool,
+    context: &[ChatMessage],
+) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": task_id,
+        "kind": "chat",
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "message": message,
+        "stream": stream,
+        "context": context,
+    })
+}
+
+/// Enqueue a chat task onto the lane backend. Returns the job id assigned by
+/// the backend. Lane convention: `chat:{session_id}` — one lane per chat
+/// session so ordering within a session is preserved.
+pub(crate) async fn enqueue_chat_task(
+    backend: &dyn QueueBackend,
+    task_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    message: &str,
+    stream: bool,
+    context: &[ChatMessage],
+) -> Result<String, AppError> {
+    let lane = format!("chat:{session_id}");
+    let payload = build_chat_task_payload(task_id, session_id, agent_id, message, stream, context);
+    backend
+        .push(&lane, payload)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to enqueue chat task: {e}")))
+}
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
@@ -113,6 +194,84 @@ pub async fn chat(
         uuid::Uuid::new_v4().to_string()
     };
 
+    // 2a. In-memory lane queue: serialise per-session turns across channels.
+    // Mirrors the pattern used by the Discord process_message loop in
+    // bin/sera.rs (~lines 1147-1167). The queue enforces single-writer-per
+    // session plus a global concurrency cap, so concurrent HTTP chat calls for
+    // the same session don't race the harness.
+    let session_key = format!("http:{}:{}", agent_id, session_id);
+    let principal = PrincipalRef {
+        id: PrincipalId::new("http-chat"),
+        kind: PrincipalKind::Human,
+    };
+    let domain_event = DomainEvent::api_message(&agent_id, &session_key, principal, &body.message);
+
+    let lane_action = {
+        let mut lq = state.lane_queue.lock().await;
+        let result = lq.enqueue(domain_event.clone());
+        match result {
+            EnqueueResult::Ready => {
+                // Lane was idle — dequeue and proceed with dispatch.
+                let _ = lq.dequeue(&session_key);
+                LaneAction::Dispatch
+            }
+            EnqueueResult::Queued => {
+                tracing::info!(session_key = %session_key, "Chat message queued behind active turn");
+                LaneAction::Queued
+            }
+            EnqueueResult::Steer => {
+                tracing::info!(session_key = %session_key, "Chat steer event queued for tool boundary injection");
+                LaneAction::Queued
+            }
+            EnqueueResult::Interrupt => {
+                tracing::info!(session_key = %session_key, "Chat interrupt: active run should be aborted");
+                // Future: send abort signal to harness. For now, dequeue the interrupt event.
+                let _ = lq.dequeue(&session_key);
+                LaneAction::Dispatch
+            }
+        }
+    };
+
+    if matches!(lane_action, LaneAction::Queued) {
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(ChatResponse {
+                reply: None,
+                thought: Some("queued behind active turn".to_string()),
+                thoughts: None,
+                citations: None,
+                session_id: session_id.clone(),
+                message_id: None,
+                usage: None,
+            }),
+        )
+            .into_response());
+    }
+
+    // Hold a guard that releases the active lane run on every exit path
+    // (Ok, Err, or panic). This matches the `lq.complete_run(&session_key)`
+    // calls that follow `execute_turn` in bin/sera.rs.
+    let _lane_guard = LaneRunGuard {
+        lane_queue: state.lane_queue.clone(),
+        session_key: session_key.clone(),
+    };
+
+    // 2b. Enqueue the chat task onto the LaneQueue so the runtime worker loop
+    // can observe / replay / process it. The gateway still dispatches
+    // synchronously below to produce the HTTP response; the runtime consumer
+    // is wired separately (see sera-runtime TODO).
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let _job_id = enqueue_chat_task(
+        state.queue_backend.as_ref(),
+        &task_id,
+        &session_id,
+        &agent_id,
+        &body.message,
+        body.stream,
+        &body.context,
+    )
+    .await?;
+
     // 3. Ensure container is running
     let chat_url = get_agent_chat_url(&state, &agent_id).await?;
 
@@ -138,7 +297,12 @@ pub async fn chat(
         let msg_id_clone = message_id.clone();
         let agent_id_clone = agent_id.clone();
 
+        // Move the lane guard into the spawned task so `complete_run` is only
+        // called after the background work finishes (not when this handler
+        // returns the 200 Accepted response).
+        let guard = _lane_guard;
         tokio::spawn(async move {
+            let _g = guard;
             if let Err(e) = process_chat_background(
                 &state_clone,
                 &chat_url_clone,
@@ -720,6 +884,131 @@ mod tests {
             reply_parts.join("")
         };
         assert_eq!(reply, "Error: model unavailable");
+    }
+
+    /// Enqueuing a chat task pushes a JSON payload onto the `chat:{session_id}` lane.
+    #[tokio::test]
+    async fn enqueue_chat_task_pushes_to_lane() {
+        use sera_queue::{LocalQueueBackend, QueueBackend};
+
+        let backend = LocalQueueBackend::new();
+        let session_id = "sess-abc";
+        let agent_id = "agent-1";
+        let task_id = "task-xyz";
+        let context: Vec<ChatMessage> = vec![];
+
+        let job_id = match enqueue_chat_task(
+            &backend,
+            task_id,
+            session_id,
+            agent_id,
+            "hello runtime",
+            false,
+            &context,
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(_) => panic!("enqueue failed"),
+        };
+        assert!(!job_id.is_empty(), "job id should be non-empty");
+
+        // Pull from the expected lane and assert payload shape.
+        let lane = format!("chat:{session_id}");
+        let pulled = backend.pull(&lane).await.expect("pull ok");
+        let (_id, payload) = pulled.expect("one item on the lane");
+        assert_eq!(payload["task_id"], task_id);
+        assert_eq!(payload["kind"], "chat");
+        assert_eq!(payload["session_id"], session_id);
+        assert_eq!(payload["agent_id"], agent_id);
+        assert_eq!(payload["message"], "hello runtime");
+        assert_eq!(payload["stream"], false);
+
+        // Lane should now be empty.
+        let empty = backend.pull(&lane).await.expect("pull ok");
+        assert!(empty.is_none(), "lane should be drained");
+    }
+
+    /// Two enqueues to the same session preserve FIFO order on the lane.
+    #[tokio::test]
+    async fn enqueue_chat_task_preserves_order_per_session() {
+        use sera_queue::{LocalQueueBackend, QueueBackend};
+
+        let backend = LocalQueueBackend::new();
+        let session_id = "sess-order";
+        let context: Vec<ChatMessage> = vec![];
+
+        if enqueue_chat_task(&backend, "t1", session_id, "a", "first", false, &context)
+            .await
+            .is_err()
+        {
+            panic!("first enqueue failed");
+        }
+        if enqueue_chat_task(&backend, "t2", session_id, "a", "second", false, &context)
+            .await
+            .is_err()
+        {
+            panic!("second enqueue failed");
+        }
+
+        let lane = format!("chat:{session_id}");
+        let (_, p1) = backend.pull(&lane).await.unwrap().unwrap();
+        let (_, p2) = backend.pull(&lane).await.unwrap().unwrap();
+        assert_eq!(p1["message"], "first");
+        assert_eq!(p2["message"], "second");
+    }
+
+    /// Exercises the lane-queue enqueue path that the chat handler uses: the
+    /// first event for a session returns `Ready` so dispatch proceeds, and a
+    /// second event while processing returns `Queued` so the handler can
+    /// short-circuit with a 202.
+    #[tokio::test]
+    async fn lane_queue_enqueue_path_for_chat_handler() {
+        use sera_db::lane_queue::{EnqueueResult, LaneQueue, QueueMode};
+        use sera_types::event::Event as DomainEvent;
+        use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
+
+        let lq = std::sync::Arc::new(tokio::sync::Mutex::new(LaneQueue::new(
+            10,
+            QueueMode::Collect,
+        )));
+
+        let agent_id = "agent-1";
+        let session_id = "sess-lq";
+        let session_key = format!("http:{agent_id}:{session_id}");
+        let principal = PrincipalRef {
+            id: PrincipalId::new("http-chat"),
+            kind: PrincipalKind::Human,
+        };
+        let event_one =
+            DomainEvent::api_message(agent_id, &session_key, principal.clone(), "hello");
+        let event_two =
+            DomainEvent::api_message(agent_id, &session_key, principal.clone(), "world");
+
+        // First enqueue: lane idle → Ready; dispatch path dequeues.
+        {
+            let mut g = lq.lock().await;
+            let r = g.enqueue(event_one);
+            assert_eq!(r, EnqueueResult::Ready);
+            let batch = g.dequeue(&session_key).expect("ready dequeue");
+            assert_eq!(batch.len(), 1);
+            assert_eq!(g.active_runs(), 1);
+        }
+
+        // Second enqueue while processing: Queued → handler returns 202.
+        {
+            let mut g = lq.lock().await;
+            let r = g.enqueue(event_two);
+            assert_eq!(r, EnqueueResult::Queued);
+        }
+
+        // complete_run releases the slot.
+        {
+            let mut g = lq.lock().await;
+            g.complete_run(&session_key);
+            assert_eq!(g.active_runs(), 0);
+            assert!(g.has_pending(&session_key));
+        }
     }
 
     /// A Submission built from a ChatRequest carries the message as a Text block.

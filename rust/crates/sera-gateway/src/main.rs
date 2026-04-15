@@ -107,6 +107,9 @@ async fn main() -> anyhow::Result<()> {
         generation_marker: sera_gateway::generation::current_generation(),
         kill_switch: Arc::new(sera_gateway::kill_switch::KillSwitch::new()),
         transcript_persistence: transcript_persistence.clone(),
+        lane_queue: std::sync::Arc::new(tokio::sync::Mutex::new(
+            sera_db::lane_queue::LaneQueue::new(10, sera_db::lane_queue::QueueMode::Collect),
+        )),
     };
 
     // Extract queue backend before app_state is moved into the router.

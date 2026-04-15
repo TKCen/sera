@@ -23,6 +23,7 @@ members = [
   "crates/sera-session",
   "crates/sera-models",
   "crates/sera-skills",
+  "crates/sera-meta",
 ]
 
 [workspace.package]
@@ -154,6 +155,7 @@ sera-secrets = { path = "crates/sera-secrets" }
 sera-session = { path = "crates/sera-session" }
 sera-models = { path = "crates/sera-models" }
 sera-skills = { path = "crates/sera-skills" }
+sera-meta = { path = "crates/sera-meta" }
 
 [profile.release]
 lto = true

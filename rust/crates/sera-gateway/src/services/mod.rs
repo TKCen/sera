@@ -16,6 +16,8 @@ pub mod circle_registry;
 #[allow(dead_code)]
 pub mod circle_state;
 #[allow(dead_code)]
+pub mod coordination;
+#[allow(dead_code)]
 pub mod embedding;
 #[allow(dead_code)]
 pub mod heartbeat;

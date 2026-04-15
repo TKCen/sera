@@ -1,12 +1,13 @@
 //! Shared application state passed to all handlers via axum State extractor.
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use sera_auth::JwtService;
 use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
+use sera_db::lane_queue::LaneQueue;
 use sera_events::CentrifugoClient;
 use sera_tools::sandbox::SandboxProvider;
 
@@ -35,4 +36,8 @@ pub struct AppState {
     pub generation_marker: GenerationMarker,
     pub kill_switch: Arc<KillSwitch>,
     pub transcript_persistence: Arc<TranscriptPersistence>,
+    /// Per-session lane queue for serialising inbound messages across channels
+    /// (Discord, HTTP chat, API). Wraps [`LaneQueue`] in a tokio [`Mutex`] so
+    /// async handlers can mutate the shared state.
+    pub lane_queue: Arc<Mutex<LaneQueue>>,
 }

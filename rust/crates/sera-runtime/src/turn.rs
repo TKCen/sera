@@ -84,6 +84,7 @@ pub trait ToolDispatcher: Send + Sync {
 // ── Turn context ─────────────────────────────────────────────────────────────
 
 /// Turn context for the four-method lifecycle.
+#[derive(Clone)]
 pub struct TurnContext {
     pub turn_id: Uuid,
     pub session_key: String,
@@ -97,6 +98,9 @@ pub struct TurnContext {
     pub doom_loop_count: u32,
     pub enforcement_mode: sera_hitl::EnforcementMode,
     pub approval_routing: sera_hitl::ApprovalRouting,
+    /// Pending steer event from the lane queue (injected at next tool boundary).
+    /// Set by the gateway when the session has a queued steer message.
+    pub pending_steer: Option<serde_json::Value>,
 }
 
 /// Observe — filter messages by watch signals and run ConstitutionalGate hooks on input.
@@ -208,7 +212,7 @@ pub struct ThinkResult {
 /// and their results collected. Without a dispatcher, tool calls are acknowledged
 /// but return empty results (useful for tests).
 pub async fn act(
-    ctx: &TurnContext,
+    ctx: &mut TurnContext,
     think_result: &ThinkResult,
     tool_dispatcher: Option<&dyn ToolDispatcher>,
 ) -> ActResult {
@@ -285,8 +289,8 @@ pub async fn act(
         return ActResult::ToolResults(vec![]);
     }
 
-    // Dispatch tool calls
-    match tool_dispatcher {
+    // Dispatch tool calls and capture the result
+    let act_result_inner = match tool_dispatcher {
         Some(dispatcher) => {
             let mut results = Vec::with_capacity(think_result.tool_calls.len());
             for tc in &think_result.tool_calls {
@@ -309,7 +313,8 @@ pub async fn act(
         None => {
             // No dispatcher — return empty results for each tool call
             let results: Vec<serde_json::Value> = think_result.tool_calls.iter().map(|tc| {
-                let tool_call_id = tc.get("id")
+                let tool_call_id = tc
+                    .get("id")
                     .and_then(|id| id.as_str())
                     .unwrap_or("unknown");
                 serde_json::json!({
@@ -320,7 +325,32 @@ pub async fn act(
             }).collect();
             ActResult::ToolResults(results)
         }
+    };
+
+    // ── Steer injection: if there's a pending steer message, inject it now (at tool boundary) ──
+    // This implements the "Steer Contract" from SPEC-gateway §5.2:
+    // Check for steer after each tool call; if present, inject into transcript and signal RunAgain.
+    if let Some(steer_content) = ctx.pending_steer.take() {
+        tracing::info!(
+            session_key = %ctx.session_key,
+            "Steer injection at tool boundary"
+        );
+        // Convert steer content to a user message and prepend to results
+        let steer_message = serde_json::json!({
+            "role": "user",
+            "content": steer_content
+        });
+        // Return a special result that signals to the runtime to re-enter think with the steer message
+        return ActResult::SteerInjected {
+            steer_message,
+            tool_results: match act_result_inner {
+                ActResult::ToolResults(r) => r,
+                _ => vec![],
+            },
+        };
     }
+
+    act_result_inner
 }
 
 /// Result of the act step.
@@ -337,6 +367,12 @@ pub enum ActResult {
     WaitingForApproval {
         tool_call: serde_json::Value,
         ticket_id: String,
+    },
+    /// Steer message injected at tool boundary — runtime should re-enter think with this message.
+    /// Remaining tool calls from the current assistant message are skipped.
+    SteerInjected {
+        steer_message: serde_json::Value,
+        tool_results: Vec<serde_json::Value>,
     },
 }
 
@@ -396,6 +432,16 @@ pub async fn react(
             tokens_used: tokens.clone(),
             duration_ms: elapsed_ms,
         },
+        ActResult::SteerInjected { steer_message: _, tool_results: _ } => {
+            // Steer injection at tool boundary: return RunAgain with steer message prepended
+            // The tool results are already included in the act step, we add the steer message
+            // to prompt the model to respond to the user's new input
+            TurnOutcome::RunAgain {
+                tool_calls: vec![],
+                tokens_used: tokens.clone(),
+                duration_ms: elapsed_ms,
+            }
+        }
     };
 
     // Run ConstitutionalGate hooks on FinalOutput responses only.
@@ -488,6 +534,7 @@ mod tests {
             doom_loop_count: 0,
             enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
+            pending_steer: None,
         }
     }
 
@@ -738,7 +785,7 @@ mod tests {
             })],
             tokens: TokenUsage::default(),
         };
-        let result = act(&ctx, &think_result, None).await;
+        let result = act(&mut ctx, &think_result, None).await;
         match result {
             ActResult::WaitingForApproval { tool_call, ticket_id } => {
                 assert!(!ticket_id.is_empty());
@@ -753,7 +800,7 @@ mod tests {
 
     #[tokio::test]
     async fn act_hitl_autonomous_mode_skips_approval() {
-        let ctx = make_turn_ctx(vec![]);
+        let mut ctx = make_turn_ctx(vec![]);
         // Autonomous mode is the default in make_turn_ctx
         let think_result = ThinkResult {
             response: serde_json::json!({"role": "assistant", "content": "running"}),
@@ -762,7 +809,7 @@ mod tests {
             })],
             tokens: TokenUsage::default(),
         };
-        let result = act(&ctx, &think_result, None).await;
+        let result = act(&mut ctx, &think_result, None).await;
         match result {
             ActResult::ToolResults(_) => {} // Expected — no approval needed
             other => panic!("expected ToolResults, got {:?}", other),

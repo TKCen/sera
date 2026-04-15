@@ -132,6 +132,7 @@ impl AgentRuntime for DefaultRuntime {
             doom_loop_count: 0,
             enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
+            pending_steer: None,
         };
 
         for _iteration in 0..self.max_tool_iterations {
@@ -151,7 +152,7 @@ impl AgentRuntime for DefaultRuntime {
             .await;
 
             // 3. Act — dispatch tool calls, doom-loop detection
-            let act_result = turn::act(&turn_ctx, &think_result, self.tool_dispatcher.as_deref()).await;
+            let act_result = turn::act(&mut turn_ctx, &think_result, self.tool_dispatcher.as_deref()).await;
 
             // 4. React — decide outcome, run ConstitutionalGate hooks on response
             let outcome = turn::react(&act_result, &think_result, timer.elapsed_ms(), None, &[]).await;
@@ -167,6 +168,12 @@ impl AgentRuntime for DefaultRuntime {
                         for result in results {
                             turn_ctx.messages.push(result.clone());
                         }
+                    }
+
+                    // If steer was injected at tool boundary, add the steer message to conversation
+                    if let turn::ActResult::SteerInjected { steer_message, .. } = &act_result {
+                        turn_ctx.messages.push(steer_message.clone());
+                        tracing::debug!("Steer message injected into conversation for next think");
                     }
 
                     // Increment doom loop counter and continue

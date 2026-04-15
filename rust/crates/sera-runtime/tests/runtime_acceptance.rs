@@ -46,7 +46,7 @@ fn context_engine_trait_object_safe() {
 
 #[tokio::test]
 async fn four_method_lifecycle_callable() {
-    let ctx = TurnContext {
+    let mut ctx = TurnContext {
         turn_id: Uuid::new_v4(),
         session_key: "sess-1".into(),
         agent_id: "agent-1".into(),
@@ -59,6 +59,7 @@ async fn four_method_lifecycle_callable() {
         doom_loop_count: 0,
         enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
+        pending_steer: None,
     };
 
     let observed = turn::observe(&ctx, None, &[]).await.unwrap();
@@ -67,7 +68,7 @@ async fn four_method_lifecycle_callable() {
     let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None).await;
     assert!(think_result.tool_calls.is_empty());
 
-    let act_result = turn::act(&ctx, &think_result, None).await;
+    let act_result = turn::act(&mut ctx.clone(), &think_result, None).await;
     matches!(act_result, ActResult::ToolResults(_));
 
     let outcome = turn::react(&act_result, &think_result, 50, None, &[]).await;
@@ -78,7 +79,7 @@ async fn four_method_lifecycle_callable() {
 
 #[tokio::test]
 async fn doom_loop_triggers_interruption() {
-    let ctx = TurnContext {
+    let mut ctx = TurnContext {
         turn_id: Uuid::new_v4(),
         session_key: "sess-1".into(),
         agent_id: "agent-1".into(),
@@ -91,6 +92,7 @@ async fn doom_loop_triggers_interruption() {
         doom_loop_count: DOOM_LOOP_THRESHOLD,
         enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
+        pending_steer: None,
     };
 
     let think_result = ThinkResult {
@@ -99,7 +101,7 @@ async fn doom_loop_triggers_interruption() {
         tokens: TokenUsage::default(),
     };
 
-    let result = turn::act(&ctx, &think_result, None).await;
+    let result = turn::act(&mut ctx, &think_result, None).await;
     match result {
         ActResult::Interruption { reason } => {
             assert!(reason.contains("doom loop"));
@@ -190,7 +192,7 @@ async fn context_pipeline_wraps_as_context_engine() {
 
 #[test]
 fn turn_context_has_change_artifact_field() {
-    let ctx = TurnContext {
+    let mut ctx = TurnContext {
         turn_id: Uuid::new_v4(),
         session_key: String::new(),
         agent_id: String::new(),
@@ -203,6 +205,7 @@ fn turn_context_has_change_artifact_field() {
         doom_loop_count: 0,
         enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
+        pending_steer: None,
     };
     assert_eq!(ctx.change_artifact.as_deref(), Some("ca-123"));
 }

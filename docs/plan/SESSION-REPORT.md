@@ -47,6 +47,27 @@
   - Analysis: The lane queue wiring is primarily used in the MVS standalone binary, not the main gateway
 - No code changes made — requires further investigation of the exact scope of this issue
 
+---
+
+## Session 4 — 2026-04-15 (Evening)
+
+### Issue: sera-5ehb — Phase 2: Steer injection at tool boundary
+
+#### Accomplishments
+- **TurnContext Extension**: Added `pending_steer: Option<serde_json::Value>` field to `TurnContext` in `sera-types/src/runtime.rs`
+- **Runtime Initialization**: Updated `DefaultRuntime` in `sera-runtime/src/default_runtime.rs` to initialize `pending_steer` to `None`
+- **ActResult Enum**: Added new variant `SteerInjected { steer_message: serde_json::Value, tool_results: Vec<serde_json::Value> }` in `sera-runtime/src/turn.rs`
+- **Mutability Change**: Modified `act` function signature to take `&mut TurnContext` instead of `&TurnContext` to allow `pending_steer.take()`
+- **Steer Injection Logic**: Implemented logic in `act` to check `ctx.pending_steer.take()` after tool dispatching — if present, stops further tool calls and returns `SteerInjected`
+- **React Handler**: Updated `react` loop to handle `ActResult::SteerInjected` by appending steer message to transcript and returning `TurnOutcome::RunAgain`
+- **Clone Derives**: Added `#[derive(Clone)]` to `TurnContext` (in `sera-runtime/src/turn.rs`) and `Handoff` (in `sera-runtime/src/handoff.rs`) to support the mutable reference pattern
+
+#### Compilation Fixes
+- Fixed test file `runtime_acceptance.rs`:
+  - Added `pending_steer: None` to all `TurnContext` initializations
+  - Changed `let ctx` to `let mut ctx` for mutable access
+  - Changed `turn::act(&ctx, ...)` to `turn::act(&mut ctx, ...)`
+
 ## Test Results
 - `cargo build --release`: **PASS** — builds successfully
 - `cargo test --workspace`: **PASS** (63/64 tests pass, 1 pre-existing failure)
@@ -69,7 +90,13 @@
 ### sera-t4zo (claimed, 0% progress)
 - Requires further investigation to determine if HTTP chat handler needs lane queue wiring or if the existing Discord-based implementation satisfies the requirement
 
+### sera-5ehb (Phase 2: Steer injection)
+- **Gateway Integration**: The runtime side is complete. Need to verify that `sera-gateway` (message processing loop in `sera-gateway/src/bin/sera.rs`) correctly populates `pending_steer` from the `LaneQueue`
+- **Integration Test**: Add test coverage for the full steer injection flow (gateway detects pending steer → passes to runtime → runtime injects at tool boundary → react loop triggers re-turn)
+
 ## Next Session Priorities
-1. Further investigate `sera-t4zo` lane queue scope
-2. Consider wiring transcript persistence into chat endpoint for actual usage
-3. Continue with remaining SERA 2.0 work packages as assigned
+1. Wire `pending_steer` population in gateway message loop (sera-5ehb completion)
+2. Add integration tests for steer injection flow
+3. Further investigate `sera-t4zo` lane queue scope
+4. Consider wiring transcript persistence into chat endpoint for actual usage
+5. Continue with remaining SERA 2.0 work packages as assigned

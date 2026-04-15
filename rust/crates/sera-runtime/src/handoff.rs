@@ -19,6 +19,7 @@ pub struct HandoffInputData {
 }
 
 /// Handoff definition — a tool that transfers control to another agent.
+#[derive(Clone)]
 pub struct Handoff {
     pub tool_name: String,
     pub tool_description: String,

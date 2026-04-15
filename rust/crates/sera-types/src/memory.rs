@@ -183,6 +183,21 @@ pub enum MemoryTier {
     Shared,
 }
 
+/// Working-memory tier — determines eviction/compaction strategy.
+/// SPEC-memory §2.0 Four-Tier Memory ABC (BeeAIvalidated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkingMemoryTier {
+    /// Tier 1: No limit — keeps full history. Use for short interactive sessions.
+    Unconstrained,
+    /// Tier 2: Evicts oldest when token budget exceeded.
+    TokenBounded,
+    /// Tier 3: Fixed message-count sliding window.
+    SlidingWindow,
+    /// Tier 4: LLM-driven compaction when the budget is hit.
+    Summarizing,
+}
+
 /// Search strategy for memory queries.
 /// SPEC-memory §2a: embedding-based semantic search with fallback to keyword.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

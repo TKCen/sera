@@ -150,3 +150,155 @@ impl StaleClaimReaper {
         count
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task::WorkflowTask;
+
+    fn make_task(id: WorkflowTaskId, status: WorkflowTaskStatus) -> WorkflowTask {
+        WorkflowTask {
+            id,
+            title: "Test task".to_string(),
+            description: "Test description".to_string(),
+            acceptance_criteria: vec!["Done".to_string()],
+            status,
+            priority: 0,
+            task_type: crate::task::WorkflowTaskType::Feature,
+            assignee: None,
+            due_at: None,
+            defer_until: None,
+            metadata: serde_json::Value::Null,
+            await_type: None,
+            await_id: None,
+            timeout: None,
+            ephemeral: false,
+            source_formula: None,
+            source_location: None,
+            created_at: chrono::Utc::now(),
+            meta_scope: None,
+            change_artifact_id: None,
+            dependencies: vec![],
+        }
+    }
+
+    #[test]
+    fn claim_task_from_open_succeeds() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::Open)];
+
+        let result = claim_task(&mut tasks, &task_id, "agent-1", chrono::Utc::now());
+
+        assert!(result.is_ok());
+        let token = result.unwrap();
+        assert_eq!(token.agent_id, "agent-1");
+        assert_eq!(token.task_id, task_id);
+    }
+
+    #[test]
+    fn claim_task_from_hook_already_claimed() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::Hooked)];
+        tasks[0].assignee = Some("agent-2".to_string());
+
+        let result = claim_task(&mut tasks, &task_id, "agent-1", chrono::Utc::now());
+
+        assert!(matches!(result, Err(ClaimError::AlreadyClaimed { by }) if by == "agent-2"));
+    }
+
+    #[test]
+    fn claim_task_from_in_progress_fails() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::InProgress)];
+
+        let result = claim_task(&mut tasks, &task_id, "agent-1", chrono::Utc::now());
+
+        assert!(matches!(result, Err(ClaimError::StatusMismatch { current }) if current == WorkflowTaskStatus::InProgress));
+    }
+
+    #[test]
+    fn claim_task_not_found() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let other_id = WorkflowTaskId::from_content("other", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::Open)];
+
+        let result = claim_task(&mut tasks, &other_id, "agent-1", chrono::Utc::now());
+
+        assert!(matches!(result, Err(ClaimError::NotFound)));
+    }
+
+    #[test]
+    fn confirm_claim_from_hooked_succeeds() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::Hooked)];
+        tasks[0].assignee = Some("agent-1".to_string());
+
+        let token = ClaimToken {
+            task_id,
+            agent_id: "agent-1".to_string(),
+            claimed_at: chrono::Utc::now(),
+            idempotency_key: uuid::Uuid::new_v4(),
+        };
+
+        let result = confirm_claim(&mut tasks, &token);
+
+        assert!(result.is_ok());
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::InProgress);
+    }
+
+    #[test]
+    fn confirm_claim_idempotent() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::InProgress)];
+        tasks[0].assignee = Some("agent-1".to_string());
+
+        let token = ClaimToken {
+            task_id,
+            agent_id: "agent-1".to_string(),
+            claimed_at: chrono::Utc::now(),
+            idempotency_key: uuid::Uuid::new_v4(),
+        };
+
+        let result = confirm_claim(&mut tasks, &token);
+
+        // Idempotent — task is already InProgress
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn stale_claim_reaper_resets_stale() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::Hooked)];
+        tasks[0].assignee = Some("agent-1".to_string());
+        // Set hooked_at to 2 minutes ago
+        let two_minutes_ago = (chrono::Utc::now() - chrono::Duration::minutes(2)).to_rfc3339();
+        tasks[0].metadata = serde_json::json!({ "hooked_at": two_minutes_ago });
+
+        let reaper = StaleClaimReaper::new(std::time::Duration::from_secs(60));
+        let count = reaper.reap_stale(&mut tasks, chrono::Utc::now());
+
+        assert_eq!(count, 1);
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Open);
+        assert!(tasks[0].assignee.is_none());
+    }
+
+    #[test]
+    fn stale_claim_reaper_keeps_recent() {
+        let task_id = WorkflowTaskId::from_content("t", "d", "ac", "f", "l", chrono::Utc::now());
+        let mut tasks = vec![make_task(task_id, WorkflowTaskStatus::Hooked)];
+        tasks[0].assignee = Some("agent-1".to_string());
+        // Set hooked_at to 10 seconds ago
+        let ten_seconds_ago = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+        tasks[0].metadata = serde_json::json!({ "hooked_at": ten_seconds_ago });
+
+        let reaper = StaleClaimReaper::new(std::time::Duration::from_secs(60));
+        let count = reaper.reap_stale(&mut tasks, chrono::Utc::now());
+
+        assert_eq!(count, 0);
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Hooked);
+    }
+}

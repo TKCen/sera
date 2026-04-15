@@ -7,4 +7,5 @@ pub mod harness_dispatch;
 pub mod kill_switch;
 pub mod plugin;
 pub mod session_persist;
+pub mod transcript_persist;
 pub mod transport;

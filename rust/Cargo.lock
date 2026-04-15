@@ -3221,6 +3221,7 @@ dependencies = [
  "sera-hooks",
  "sera-queue",
  "sera-runtime",
+ "sera-session",
  "sera-testing",
  "sera-tools",
  "sera-types",

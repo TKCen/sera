@@ -28,6 +28,7 @@ sera-runtime.workspace = true
 sera-hooks.workspace = true
 sera-hitl.workspace = true
 sera-workflow.workspace = true
+sera-session.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

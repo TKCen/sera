@@ -36,7 +36,7 @@ pub struct TranscriptEntry {
 }
 
 /// Session transcript — ordered list of entries.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Transcript {
     entries: Vec<TranscriptEntry>,
 }

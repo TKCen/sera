@@ -1,3 +1,80 @@
+# Session Report — Session 9
+
+**Date:** 2026-04-15
+**Author:** Entity
+
+## Session Status
+
+Session 9 — P2 Feature Work: sera-domain crate documentation
+
+## Issue Claimed
+
+- **sera-2sxo**: Write sera-domain crate documentation
+
+## Work Completed
+
+### Documentation Created
+
+Created comprehensive documentation at `rust/docs/plan/crate-docs/sera-domain.md` covering:
+
+- **Module Map**: All 29 modules in the crate with their purposes
+- **Core Types**: Principal, Event, Tool, Memory, Session, Runtime, Model, Queue, Connector, Observability, Hook
+- **Type Relationships**: ASCII diagrams showing how types compose together
+- **Usage Examples**: Code examples for creating Events, defining Tools, implementing MemoryBackend
+- **Feature Flags**: Documentation of available feature flags
+- **Related Documentation**: Links to migration plan, MVS review, architecture docs
+
+### What Was Documented
+
+The sera-domain crate (published as `sera-types`) is the shared type definitions crate for SERA 2.0. It contains:
+
+| Module | Purpose |
+|--------|---------|
+| `principal` | Identity for any acting entity (human, agent, service, system) |
+| `event` | The unit of work flowing through the gateway |
+| `tool` | Tool definitions, schemas, execution, and policies |
+| `memory` | RecallSignals, DreamingScore, MemoryBackend trait |
+| `session` | SessionStateMachine, transcript, content blocks |
+| `runtime` | AgentRuntime trait, TurnContext, runtime capabilities |
+| `model` | ModelAdapter, LLM client types |
+| `queue` | QueueBackend trait, queue operations |
+| `connector` | ChannelConnector, inbound/outbound routing |
+| `observability` | Tracing, metrics, audit backends |
+| `skill` | Skill system for capability discovery |
+| `hook` | In-process hook registry and chain executor |
+| `audit` | Audit trail definitions |
+| `agent` | Agent instance management |
+| `manifest` | AgentTemplate, YAML manifest loading |
+| `config_manifest` | K8s-style config with secret resolution |
+| `capability` | CapabilityPolicy definitions |
+| `policy` | Tier policies, sandbox boundaries |
+| `sandbox` | Sandbox tier info, status tracking |
+| `secrets` | Secret management types |
+| `metering` | Usage tracking, budgets |
+| `chat` | Chat messages, tool calls, agent actions |
+| `content_block` | ConversationMessage, role types |
+| `envelope` | Submission, Op, EventMsg, approval types |
+| `harness` | AgentHarness trait, plugin system |
+| `evolution` | Self-improvement types |
+| `versioning` | BuildIdentity for version tracking |
+| `intercom` | Inter-process communication |
+
+### Build Status
+
+- `cargo build --release` — **PASSES**
+- `cargo test --workspace` — **ALL TESTS PASS** (270+ tests)
+
+## Files Created
+
+- `rust/docs/plan/crate-docs/sera-domain.md` — Complete crate documentation
+
+## Notes
+
+- Issue sera-2sxo closed with message: "Created comprehensive documentation at docs/plan/crate-docs/sera-domain.md covering all domain types, module map, core type signatures, relationships, usage examples, and feature flags"
+- Documentation created in the correct location as specified in the issue description
+
+---
+
 # Session Report — Session 8
 
 **Date:** 2026-04-15

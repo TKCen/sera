@@ -1,24 +1,21 @@
 [package]
-name = "sera-hooks"
+name = "sera-skills"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "In-process hook registry and chain executor for SERA"
+description = "Skill pack loading and capability discovery for SERA agents"
 
 [dependencies]
 sera-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-tokio = { workspace = true }
 async-trait = { workspace = true }
-wasmtime = { workspace = true, optional = true }
-wasmtime-wasi = { workspace = true, optional = true }
-
-[features]
-default = []
-wasm = ["wasmtime", "wasmtime-wasi"]
+tokio = { workspace = true }
+tracing = { workspace = true }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+tempfile.workspace = true

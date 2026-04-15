@@ -9,8 +9,7 @@
 //! These wrappers wrap a backing store (typically Transcript from sera-session)
 //! and enforce the eviction/compaction policy based on the configured tier.
 
-use crate::transcript::{ContentBlock, Role, Transcript, TranscriptEntry};
-use chrono::Utc;
+use crate::transcript::{ContentBlock, Transcript, TranscriptEntry};
 use serde::{Deserialize, Serialize};
 
 /// Configuration for a memory tier.
@@ -630,6 +629,8 @@ pub fn create_memory_wrapper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use crate::transcript::Role;
     use uuid::Uuid;
 
     fn make_entry(role: Role) -> TranscriptEntry {
@@ -654,13 +655,11 @@ mod tests {
         assert!(!mem.needs_maintenance());
     }
 
-#[test]
+    #[test]
     fn token_bounded_tracks_tokens() {
-        // Just verify token counting works correctly
         let config = TokenConfig::default();
         let mem = TokenMemory::new(config);
         let stats = mem.stats();
-        // TokenMemory should track entry count
         assert_eq!(stats.entry_count, 0);
     }
 
@@ -672,22 +671,18 @@ mod tests {
         for _ in 0..10 {
             mem.push(make_entry(Role::User));
         }
-        // Should keep only max_messages
         assert_eq!(mem.stats().entry_count, 5);
     }
 
     #[test]
     fn summarize_basic() {
-        // Just verify SummarizeMemory can be created and used
         let config = SummarizeConfig::default();
         let mut mem = SummarizeMemory::new(config);
-        
-        // Add some entries
+
         for _ in 0..3 {
             mem.push(make_entry(Role::User));
         }
-        
-        // Should have entries
+
         assert!(mem.stats().entry_count > 0);
     }
 

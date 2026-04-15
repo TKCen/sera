@@ -9,12 +9,12 @@
 //! - [`executor::ChainExecutor`] — execute chains of hooks at a given point.
 //! - [`error::HookError`] — all failure modes.
 //!
-//! WASM hook execution is a future concern; this crate handles native Rust hooks only.
+//! WASM hook execution is supported via the `wasm` feature flag.
+//! When enabled, [`wasm_adapter::WasmHookAdapter`] provides WASM runtime support.
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use std::sync::Arc;
 //! use sera_hooks::{ChainExecutor, HookRegistry};
 //! use sera_types::hook::{HookChain, HookContext, HookPoint};
 //!
@@ -30,6 +30,10 @@ pub mod error;
 pub mod executor;
 pub mod hook_trait;
 pub mod registry;
+
+// WASM adapter is only compiled with the wasm feature
+#[cfg(feature = "wasm")]
+pub mod wasm_adapter;
 
 // Convenient re-exports.
 pub use error::HookError;

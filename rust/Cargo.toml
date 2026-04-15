@@ -21,6 +21,8 @@ members = [
   "crates/sera-cache",
   "crates/sera-secrets",
   "crates/sera-session",
+  "crates/sera-models",
+  "crates/sera-skills",
 ]
 
 [workspace.package]
@@ -56,6 +58,10 @@ bollard = "0.18"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# WASM runtime
+wasmtime = "26"
+wasmtime-wasi = "26"
 
 # Error handling
 thiserror = "2"
@@ -146,6 +152,8 @@ sera-errors = { path = "crates/sera-errors" }
 sera-cache = { path = "crates/sera-cache" }
 sera-secrets = { path = "crates/sera-secrets" }
 sera-session = { path = "crates/sera-session" }
+sera-models = { path = "crates/sera-models" }
+sera-skills = { path = "crates/sera-skills" }
 
 [profile.release]
 lto = true

@@ -12,3 +12,4 @@
 pub mod memory_wrapper;
 pub mod state;
 pub mod transcript;
+pub mod persistence;

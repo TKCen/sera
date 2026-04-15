@@ -792,6 +792,63 @@ async fn execute_turn(
     }
 }
 
+// ── Steer injection ────────────────────────────────────────────────────────
+
+/// Send a steer operation to the runtime harness.
+/// This is used for tool boundary injection of steer messages.
+async fn execute_steer(
+    harness: &StdioHarness,
+    steer_messages: &[serde_json::Value],
+    session_key: &str,
+) -> MvsTurnResult {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let submission = serde_json::json!({
+        "id": uuid::Uuid::new_v4(),
+        "op": {
+            "type": "steer",
+            "items": steer_messages,
+            "session_key": session_key,
+        },
+    });
+
+    let mut json_line = serde_json::to_string(&submission).unwrap();
+    json_line.push('\n');
+
+    let mut stdin = harness.stdin.lock().await;
+    let mut stdout = harness.stdout.lock().await;
+
+    stdin.write_all(json_line.as_bytes()).await.unwrap();
+    stdin.flush().await.unwrap();
+
+    // Read TurnCompleted event.
+    let mut line = String::new();
+    loop {
+        match stdout.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if event.get("type").and_then(|v| v.as_str()) == Some("turn_completed") {
+                        break;
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+        line.clear();
+    }
+
+    MvsTurnResult {
+        reply: "[steer injected]".to_string(),
+        tool_events: vec![],
+        usage: UsageInfo {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        },
+    }
+}
+
 // ── Event processing loop ───────────────────────────────────────────────────
 
 /// Persist tool call events to the session transcript.
@@ -1181,14 +1238,52 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         };
         let Some(batch) = batch else { break };
 
-        // Coalesce batch messages into a single user message (Collect mode).
-        let combined_content: String = batch
+        // Check if any events in the batch are marked for steer injection.
+        let has_steer = batch.iter().any(|qe| qe.is_steer);
+
+        // Separate steer events from regular user events.
+        let steer_content: Vec<serde_json::Value> = batch
             .iter()
+            .filter(|qe| qe.is_steer)
+            .filter_map(|qe| qe.event.text.as_ref().map(|t| serde_json::json!({"role": "user", "content": t})))
+            .collect();
+
+        let user_content: String = batch
+            .iter()
+            .filter(|qe| !qe.is_steer)
             .filter_map(|qe| qe.event.text.as_deref())
             .collect::<Vec<_>>()
             .join("\n");
 
-        if combined_content.is_empty() {
+        // Handle steer injection: send as Op::Steer if we have steer events.
+        if has_steer && !steer_content.is_empty() {
+            tracing::info!(session_key = %session_key, "Injecting steer event at tool boundary");
+            let follow_up = execute_steer(&harness, &steer_content, &session_key).await;
+            // Persist the steer as a user message in transcript.
+            {
+                let db = state.db.lock().await;
+                let steer_text = steer_content.iter()
+                    .filter_map(|m| m.get("content").and_then(|c| c.as_str()).map(String::from))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = db.append_transcript(&session.id, "user", Some(&steer_text), None, None);
+            }
+            // Complete run after steer injection.
+            {
+                let mut lq = state.lane_queue.lock().await;
+                lq.complete_run(&session_key);
+            }
+            // Send steering response to Discord if any.
+            if let Some(ref dc) = state.discord
+                && let Err(e) = dc.send_message(&msg.channel_id, &follow_up.reply).await
+            {
+                tracing::error!("Failed to send Discord steer response: {e}");
+            }
+            continue;
+        }
+
+        // Handle regular user messages (Collect mode).
+        if user_content.is_empty() {
             let mut lq = state.lane_queue.lock().await;
             lq.complete_run(&session_key);
             continue;
@@ -1197,11 +1292,11 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         // Get fresh transcript for the follow-up turn.
         let transcript = {
             let db = state.db.lock().await;
-            let _ = db.append_transcript(&session.id, "user", Some(&combined_content), None, None);
+            let _ = db.append_transcript(&session.id, "user", Some(&user_content), None, None);
             db.get_transcript_recent(&session.id, 20).unwrap_or_default()
         };
 
-        let follow_up = execute_turn(&agent_spec, &transcript, &combined_content, &harness, &session_key).await;
+        let follow_up = execute_turn(&agent_spec, &transcript, &user_content, &harness, &session_key).await;
 
         {
             let db = state.db.lock().await;

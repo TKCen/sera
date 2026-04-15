@@ -10,9 +10,8 @@
 //! and enforce the eviction/compaction policy based on the configured tier.
 
 use crate::transcript::{ContentBlock, Role, Transcript, TranscriptEntry};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Configuration for a memory tier.
 /// Each tier has its own specific configuration options.
@@ -241,15 +240,17 @@ impl TokenMemory {
     }
 
     /// Estimate tokens in a transcript entry.
+    #[allow(dead_code)]
     fn estimate_tokens(entry: &TranscriptEntry) -> u32 {
         // Rough estimate: ~4 characters per token
         let char_count: usize = entry.blocks.iter().map(|b| match b {
             ContentBlock::Text { text } => text.len(),
-            ContentBlock::ToolUse { input, .. } => serde_json::to_string(input).map(|s| s.len()).unwrap_or(0),
+            ContentBlock::ToolUse { input, .. } => {
+                serde_json::to_string(input).map(|s| s.len()).unwrap_or(0)
+            }
             ContentBlock::ToolResult { content, .. } => content.len(),
             ContentBlock::Thinking { thinking } => thinking.len(),
             ContentBlock::Image { data, .. } => data.len(),
-            _ => 0,
         }).sum();
         (char_count / 4) as u32
     }
@@ -486,14 +487,16 @@ impl SummarizeMemory {
     }
 
     /// Estimate tokens in a transcript entry.
+    #[allow(dead_code)]
     fn estimate_tokens(entry: &TranscriptEntry) -> u32 {
         let char_count: usize = entry.blocks.iter().map(|b| match b {
             ContentBlock::Text { text } => text.len(),
-            ContentBlock::ToolUse { input, .. } => serde_json::to_string(input).map(|s| s.len()).unwrap_or(0),
+            ContentBlock::ToolUse { input, .. } => {
+                serde_json::to_string(input).map(|s| s.len()).unwrap_or(0)
+            }
             ContentBlock::ToolResult { content, .. } => content.len(),
             ContentBlock::Thinking { thinking } => thinking.len(),
             ContentBlock::Image { data, .. } => data.len(),
-            _ => 0,
         }).sum();
         (char_count / 4) as u32
     }

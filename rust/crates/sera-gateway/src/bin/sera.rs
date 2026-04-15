@@ -827,10 +827,10 @@ async fn execute_steer(
         match stdout.read_line(&mut line).await {
             Ok(0) => break,
             Ok(_) => {
-                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if event.get("type").and_then(|v| v.as_str()) == Some("turn_completed") {
-                        break;
-                    }
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
+                    && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
+                {
+                    break;
                 }
             }
             Err(_) => break,

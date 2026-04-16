@@ -215,17 +215,19 @@ impl ProcessManager {
     /// The current execution status with step-level progress.
     pub async fn get_execution_status(
         &self,
-        _execution_id: Uuid,
+        execution_id: Uuid,
     ) -> Result<WorkflowExecution, ProcessManagerError> {
-        // TODO: Implement status retrieval from persistent storage
-        Err(ProcessManagerError::NotFound(
-            "workflow execution not found".to_string(),
-        ))
+        // Execution status retrieval requires persistent storage — deferred to sera-workflow
+        tracing::warn!(%execution_id, "Workflow execution status lookup not yet backed by persistent storage");
+        Err(ProcessManagerError::NotFound(format!(
+            "workflow execution {execution_id} not found — persistent execution tracking deferred to sera-workflow"
+        )))
     }
 
     /// Cancel a running workflow execution.
-    pub async fn cancel_execution(&self, _execution_id: Uuid) -> Result<(), ProcessManagerError> {
-        // TODO: Implement execution cancellation
+    pub async fn cancel_execution(&self, execution_id: Uuid) -> Result<(), ProcessManagerError> {
+        // Execution cancellation requires tracking running workflows — deferred to sera-workflow
+        tracing::warn!(%execution_id, "Workflow cancellation requested but execution tracking not yet implemented");
         Ok(())
     }
 }

@@ -1,11 +1,27 @@
 //! sera-secrets — secrets provider abstraction.
 //!
-//! Phase 0 scaffold. `SecretsProvider` trait + `EnvSecretsProvider`
-//! (reads SERA_SECRET_* env vars). DockerSandboxProvider needs this
-//! for secret injection at container create().
+//! Provides a unified async `SecretsProvider` trait with multiple backends:
+//!
+//! - [`EnvSecretsProvider`] — reads `SERA_SECRET_*` environment variables (read-only)
+//! - [`DockerSecretsProvider`] — reads Docker-mounted secrets from `/run/secrets/` (read-only)
+//! - [`FileSecretsProvider`] — reads and writes secrets as files in a directory
+//! - [`ChainedSecretsProvider`] — tries multiple providers in order for fallback
+//!
+//! Enterprise scaffolds (not yet implemented) live in [`enterprise`].
 
 use async_trait::async_trait;
 use thiserror::Error;
+
+pub mod chained;
+pub mod docker;
+pub mod enterprise;
+pub mod env;
+pub mod file;
+
+pub use chained::ChainedSecretsProvider;
+pub use docker::DockerSecretsProvider;
+pub use env::EnvSecretsProvider;
+pub use file::FileSecretsProvider;
 
 #[derive(Debug, Error)]
 pub enum SecretsError {
@@ -13,32 +29,31 @@ pub enum SecretsError {
     NotFound { key: String },
     #[error("provider error: {reason}")]
     Provider { reason: String },
+    #[error("provider is read-only")]
+    ReadOnly,
+    #[error("I/O error: {reason}")]
+    Io { reason: String },
 }
 
-/// Minimal async secrets provider interface.
+/// Async secrets provider interface.
+///
+/// Implementations must be `Send + Sync + 'static` to be usable in async contexts
+/// and as trait objects.
 #[async_trait]
 pub trait SecretsProvider: Send + Sync + 'static {
+    /// Returns a human-readable name for this provider (e.g. `"env"`, `"docker"`).
+    fn provider_name(&self) -> &str;
+
+    /// Retrieve a secret by key. Returns [`SecretsError::NotFound`] if absent.
     async fn get_secret(&self, key: &str) -> Result<String, SecretsError>;
+
+    /// List all available secret keys.
     async fn list_keys(&self) -> Result<Vec<String>, SecretsError>;
-}
 
-/// Reads secrets from `SERA_SECRET_*` environment variables.
-///
-/// E.g. `SERA_SECRET_DB_PASSWORD` → key `DB_PASSWORD`, value from env.
-pub struct EnvSecretsProvider;
+    /// Store a secret. Returns [`SecretsError::ReadOnly`] for read-only providers.
+    async fn store(&self, key: &str, value: &str) -> Result<(), SecretsError>;
 
-#[async_trait]
-impl SecretsProvider for EnvSecretsProvider {
-    async fn get_secret(&self, key: &str) -> Result<String, SecretsError> {
-        let env_key = format!("SERA_SECRET_{key}");
-        std::env::var(&env_key).map_err(|_| SecretsError::NotFound {
-            key: key.to_owned(),
-        })
-    }
-
-    async fn list_keys(&self) -> Result<Vec<String>, SecretsError> {
-        Ok(std::env::vars()
-            .filter_map(|(k, _)| k.strip_prefix("SERA_SECRET_").map(|s| s.to_owned()))
-            .collect())
-    }
+    /// Delete a secret. Returns [`SecretsError::ReadOnly`] for read-only providers,
+    /// or [`SecretsError::NotFound`] if the key does not exist.
+    async fn delete(&self, key: &str) -> Result<(), SecretsError>;
 }

@@ -76,11 +76,13 @@ pub async fn list_models(State(state): State<AppState>) -> Json<ModelListRespons
 /// Supports both streaming (SSE) and non-streaming responses.
 pub async fn chat_completions(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ChatCompletionRequest>,
 ) -> Result<Response, AppError> {
-    // Resolve agent ID from request context (in full impl, from JWT)
-    // For now, extract from X-Agent-Id header or default
-    let agent_id = "unknown"; // TODO: extract from auth context
+    // Resolve agent ID from X-Agent-Id header (full JWT extraction deferred to sera-auth middleware)
+    let agent_id = headers.get("x-agent-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
 
     // Resolve model name
     let model_name = body

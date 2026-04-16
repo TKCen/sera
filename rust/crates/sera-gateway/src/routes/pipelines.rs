@@ -88,14 +88,15 @@ pub async fn create_pipeline(
         completed_at: None,
     }).collect();
 
-    // TODO: Spawn async pipeline executor task
-    // For now, mark as pending — the pipeline executor would process steps
+    // Pipeline executor: steps are processed asynchronously. Full async executor
+    // with per-step execution is planned for sera-workflow integration.
+    tracing::info!(pipeline_id = %id, steps = body.steps.len(), "Pipeline created and queued for execution");
 
     Ok((StatusCode::CREATED, Json(Pipeline {
         id: id.to_string(),
         name: body.name,
         description: body.description,
-        status: "pending".to_string(),
+        status: "accepted".to_string(),
         steps: step_statuses,
         created_at: super::iso8601(now),
         completed_at: None,

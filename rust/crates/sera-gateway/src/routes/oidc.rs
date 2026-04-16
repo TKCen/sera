@@ -14,6 +14,10 @@ use std::collections::HashMap;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// In-memory session store — production path uses Redis or sera-session.
+static SESSION_STORE: std::sync::LazyLock<std::sync::RwLock<HashMap<String, OperatorIdentity>>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+
 /// Minimal OIDC config response — only issuerUrl and clientId (matches TS)
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,7 +91,7 @@ pub struct CallbackRequest {
     pub client_id: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorIdentity {
     pub sub: String,
@@ -170,8 +174,11 @@ pub async fn callback(
 
     // Create opaque session token (server-side only, never expose raw OIDC token)
     let session_token = format!("sess_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
-    // TODO: Store session mapping in session store (in-memory or Redis)
-    // For now, return the opaque token that can be stored in HttpOnly cookie
+    // Store session mapping in in-memory session store
+    if let Ok(mut store) = SESSION_STORE.write() {
+        store.insert(session_token.clone(), identity.clone());
+    }
+    // In-memory session store — production path uses Redis or sera-session
 
     Ok((
         StatusCode::OK,
@@ -273,9 +280,16 @@ fn base64_url_decode(s: &str) -> Result<String, String> {
 }
 
 /// POST /api/auth/logout — logout endpoint, invalidates session
-pub async fn logout() -> Json<serde_json::Value> {
-    // In production: extract session token from cookie/Authorization header
-    // and remove from session store
-    // TODO: Integrate with SessionStore when implemented
+pub async fn logout(
+    headers: axum::http::HeaderMap,
+) -> Json<serde_json::Value> {
+    // Extract session token from Authorization header and remove from session store
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
+        if let Ok(mut store) = SESSION_STORE.write() {
+            store.remove(token);
+        }
+    }
+    // In-memory session invalidation — production path uses Redis or sera-session
     Json(serde_json::json!({"loggedOut": true}))
 }

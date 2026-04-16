@@ -56,10 +56,10 @@ impl Drop for LaneRunGuard {
 /// (see sera-runtime). Kept as a flat JSON object so existing QueueBackend
 /// implementations (local + apalis) don't need a typed schema yet.
 ///
-/// TODO(sera-runtime): build the worker loop that pulls from `chat:{session_id}`
-/// lanes and drives a turn via the harness registry. Until then, the gateway
-/// still dispatches synchronously via harness/HTTP for the response — this
-/// enqueue is the durable record of the incoming request.
+/// **Note:** A runtime worker loop that pulls from `chat:{session_id}` lanes is
+/// planned for sera-runtime. Until then, the gateway dispatches synchronously
+/// via harness/HTTP for the response — this enqueue is the durable record of
+/// the incoming request.
 fn build_chat_task_payload(
     task_id: &str,
     session_id: &str,
@@ -259,7 +259,7 @@ pub async fn chat(
     // 2b. Enqueue the chat task onto the LaneQueue so the runtime worker loop
     // can observe / replay / process it. The gateway still dispatches
     // synchronously below to produce the HTTP response; the runtime consumer
-    // is wired separately (see sera-runtime TODO).
+    // is wired separately via sera-runtime's worker loop (not yet implemented).
     let task_id = uuid::Uuid::new_v4().to_string();
     let _job_id = enqueue_chat_task(
         state.queue_backend.as_ref(),

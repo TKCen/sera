@@ -31,7 +31,8 @@ pub async fn publish(
     State(state): State<AppState>,
     Json(body): Json<PublishRequest>,
 ) -> Result<Json<PublishResponse>, AppError> {
-    // TODO: Resolve manifest for agent authorization
+    // Agent authorization deferred to sera-auth middleware layer
+    tracing::debug!(agent = %body.agent, "intercom publish: authorization check deferred to middleware");
     let centrifugo = state
         .centrifugo
         .as_ref()
@@ -71,7 +72,8 @@ pub async fn dm(
     State(state): State<AppState>,
     Json(body): Json<DmRequest>,
 ) -> Result<Json<DmResponse>, AppError> {
-    // TODO: Resolve manifest for from agent authorization
+    // Agent authorization deferred to sera-auth middleware layer
+    tracing::debug!(from = %body.from, to = %body.to, "intercom dm: authorization check deferred to middleware");
     let centrifugo = state
         .centrifugo
         .as_ref()
@@ -121,7 +123,9 @@ pub async fn get_history(
         )));
     }
 
-    // TODO: Fetch from Centrifugo history API
+    // Centrifugo history API not yet integrated — CentrifugoClient lacks a history method.
+    // Returns empty results until the history endpoint is added to sera-events.
+    tracing::info!(channel = %params.channel, "intercom history: Centrifugo history API not yet integrated");
     Ok(Json(HistoryResponse {
         channel: params.channel,
         messages: vec![],
@@ -150,9 +154,9 @@ pub async fn get_channels(
         )));
     }
 
-    // TODO: Resolve manifest and return agent's authorized channels
+    // Default channel set — manifest-based channel authorization deferred to sera-auth
     Ok(Json(ChannelsResponse {
-        channels: vec![],
+        channels: vec![format!("agent:{}", params.agent), "broadcast".to_string()],
     }))
 }
 
@@ -227,7 +231,7 @@ pub struct SubscriptionQuery {
 
 /// GET /api/intercom/centrifugo/subscription — get subscription token for channel
 pub async fn get_subscription_token(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<SubscriptionQuery>,
 ) -> Result<Json<TokenResponse>, AppError> {
     if params.channel.is_empty() {
@@ -236,10 +240,20 @@ pub async fn get_subscription_token(
         )));
     }
 
-    // TODO: Generate JWT token for Centrifugo subscription (role-based)
-    Ok(Json(TokenResponse {
-        token: format!("sub-token-{}", params.channel),
-    }))
+    // Generate JWT token for Centrifugo channel subscription
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let token = state.jwt.issue(sera_auth::JwtClaims {
+        sub: params.channel.clone(),
+        iss: "sera".to_string(),
+        exp: now_secs + 3600,
+        agent_id: None,
+        instance_id: None,
+    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue subscription token: {e}")))?;
+
+    Ok(Json(TokenResponse { token }))
 }
 
 #[cfg(test)]

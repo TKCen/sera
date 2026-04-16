@@ -36,9 +36,10 @@ pub async fn definition(
         "LSP definition request"
     );
 
-    // TODO: Route to running LSP server process for the file's language
-    // This would use tokio::process::Command to communicate with the LSP
-    Ok(Json(vec![]))
+    // LSP server routing not yet implemented — requires a running language server process
+    // managed by sera-runtime. Until then, return 501 Not Implemented.
+    tracing::warn!(file = %body.file, "LSP definition: language server routing not yet available");
+    Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented — requires running language server process")))
 }
 
 #[derive(Deserialize)]
@@ -60,8 +61,9 @@ pub async fn references(
         "LSP references request"
     );
 
-    // TODO: Route to running LSP server process
-    Ok(Json(vec![]))
+    // LSP server routing not yet implemented — requires a running language server process
+    tracing::warn!(file = %body.file, "LSP references: language server routing not yet available");
+    Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented — requires running language server process")))
 }
 
 #[derive(Deserialize)]
@@ -93,6 +95,7 @@ pub async fn symbols(
 ) -> Result<Json<Vec<DocumentSymbol>>, AppError> {
     tracing::info!(file = %body.file, "LSP symbols request");
 
-    // TODO: Route to running LSP server process
-    Ok(Json(vec![]))
+    // LSP server routing not yet implemented — requires a running language server process
+    tracing::warn!(file = %body.file, "LSP symbols: language server routing not yet available");
+    Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented — requires running language server process")))
 }

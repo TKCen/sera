@@ -24,9 +24,14 @@ pub mod approval_matrix;
 pub mod artifact_pipeline;
 pub mod constitutional;
 pub mod policy;
+pub mod prompt_versioning;
 pub mod shadow_session;
 
 pub use approval_matrix::ApprovalRequirements;
+pub use prompt_versioning::{
+    ActivationMode, InMemoryPromptVersionStore, PromptSection, PromptVersion,
+    PromptVersionError, PromptVersionStore, MAX_SECTION_LENGTH,
+};
 
 // Re-export key types from sera-types for ergonomics
 pub use sera_types::evolution::{

@@ -23,14 +23,29 @@
 pub mod approval_matrix;
 pub mod artifact_pipeline;
 pub mod constitutional;
+pub mod interaction_scoring;
 pub mod policy;
+pub mod prompt_refinement;
 pub mod prompt_versioning;
 pub mod shadow_session;
+pub mod validation;
 
 pub use approval_matrix::ApprovalRequirements;
+pub use interaction_scoring::{
+    DimensionScore, InMemoryInteractionScorer, InteractionScore, InteractionScorer,
+    ScoringDimension, ScoringError, ScoringMode, ScoringRequest,
+};
+pub use prompt_refinement::{
+    InMemoryRefinementAnalyzer, PromptChange, RefinementAnalyzer, RefinementConfig,
+    RefinementError, RefinementResult, ScoredTrace,
+};
 pub use prompt_versioning::{
     ActivationMode, InMemoryPromptVersionStore, PromptSection, PromptVersion,
     PromptVersionError, PromptVersionStore, MAX_SECTION_LENGTH,
+};
+pub use validation::{
+    DriftAlert, ValidationConfig, ValidationError, ValidationManager, ValidationOutcome,
+    ValidationWindow,
 };
 
 // Re-export key types from sera-types for ergonomics

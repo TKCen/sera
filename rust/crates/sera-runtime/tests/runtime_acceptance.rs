@@ -210,6 +210,24 @@ fn turn_context_has_change_artifact_field() {
     assert_eq!(ctx.change_artifact.as_deref(), Some("ca-123"));
 }
 
+// ── Minimal ModelAdapter for compile-time condenser tests ───────────────────
+
+struct NoOpModelAdapter;
+
+#[async_trait::async_trait]
+impl sera_types::model::ModelAdapter for NoOpModelAdapter {
+    async fn chat_completion(
+        &self,
+        _request: sera_types::model::ModelRequest,
+    ) -> Result<sera_types::model::ModelResponse, sera_types::model::ModelError> {
+        Err(sera_types::model::ModelError::Timeout)
+    }
+    fn model_name(&self) -> &str { "noop" }
+    fn supports_tools(&self) -> bool { false }
+    fn supports_streaming(&self) -> bool { false }
+    fn max_context_tokens(&self) -> u32 { 4096 }
+}
+
 // ── 11. Each condenser compiles and has non-empty name ──────────────────────
 
 #[test]
@@ -221,9 +239,9 @@ fn each_condenser_compiles() {
         Box::new(AmortizedForgettingCondenser::new(0.5)),
         Box::new(ObservationMaskingCondenser::new(5)),
         Box::new(BrowserOutputCondenser::new(1000)),
-        Box::new(LlmSummarizingCondenser),
-        Box::new(LlmAttentionCondenser),
-        Box::new(StructuredSummaryCondenser),
+        Box::new(LlmSummarizingCondenser::new(std::sync::Arc::new(NoOpModelAdapter))),
+        Box::new(LlmAttentionCondenser::new(std::sync::Arc::new(NoOpModelAdapter))),
+        Box::new(StructuredSummaryCondenser::new(std::sync::Arc::new(NoOpModelAdapter))),
     ];
     assert_eq!(condensers.len(), 9);
     for c in &condensers {

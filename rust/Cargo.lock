@@ -3940,6 +3940,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "rand 0.8.5",
  "sera-events",
  "sera-types",
  "serde",

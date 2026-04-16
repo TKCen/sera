@@ -23,9 +23,22 @@ pub mod loader;
 pub mod skill_pack;
 pub mod bundle;
 pub mod knowledge_schema;
+pub mod knowledge_activity_log;
+pub mod knowledge_lint;
 
 pub use error::SkillsError;
 pub use loader::SkillLoader;
 pub use skill_pack::SkillPack;
 pub use bundle::SkillBundle;
 pub use knowledge_schema::{KnowledgeSchemaValidator, SchemaViolation, ViolationSeverity, default_schema};
+pub use knowledge_activity_log::{
+    KnowledgeOp,
+    KnowledgeActivityEntry,
+    KnowledgeActivityLog,
+    ActivityLogFilter,
+    DEFAULT_MAX_ENTRIES,
+};
+pub use knowledge_lint::{
+    BasicLinter, FindingSeverity, KnowledgeLinter, LintCheckKind, LintConfig, LintError,
+    LintFinding, LintReport, PageInfo,
+};

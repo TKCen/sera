@@ -1,81 +1,69 @@
-# Session Report — Session 19
+# Session Report — Session 20
 
 **Date:** 2026-04-16
 **Author:** Entity
 
 ## Session Status
 
-Session 19 — P3 Interop Bundle
+Session 20 — P3 Research + Memory Bundle
 
 ## Issues Closed
 
-- **sera-11ak**: P3-A sera-mcp: Implement MCP server/client bridge
-- **sera-su86**: P3-B sera-a2a: Implement A2A protocol adapter
-- **sera-4qel**: P3-C sera-agui: Implement AG-UI streaming protocol
-- **sera-uufs**: P3-D sera-errors: Adopt unified error codes across workspace crates
+- **sera-0ct**: P3-A Research: Subagent skill delegation and A2A communication
+- **sera-8vv**: P3-B Memory: Knowledge activity log
+- **sera-312**: P3-C Memory: Knowledge lint periodic health-check job
+- **sera-iyov**: P3-D sera-plugins: Implement gRPC plugin system
 
 ## Work Completed
 
-### P3-A: MCP Server/Client Bridge (sera-11ak)
+### P3-A: Research — Subagent Skill Delegation & A2A Communication (sera-0ct)
 
-New `sera-mcp` crate implementing SPEC-interop §3:
-- `McpServer` trait — exposes SERA tools to external MCP clients
-- `McpClientBridge` trait — consumes external MCP servers as tool sources
-- `McpServerConfig` — per-agent MCP server connection config (stdio/SSE/streamable-http)
-- `McpToolDescriptor` / `McpToolResult` — tool discovery and invocation types
-- `McpServerSettings` — global MCP server enable/port config
-- `McpError` → `SeraError` bridging via unified error codes
-- 5 unit tests passing
+New research document at `docs/research/subagent-delegation-a2a.md` (793 lines):
+- **Part 1: Internal Delegation** — skill-based delegation via `SkillTarget`, `SkillRouter` trait, `DelegationHandle` with oneshot callback (no polling), `StreamingDelegationHandle`, collaborative sessions
+- **Part 2: A2A Channels** — `AgentMessage` envelope with 5 `MessageKind` variants, `AgentMessageSkill` tool, `SessionChannel` trait with spawn/yield/send (GH#621)
+- **Part 3: External A2A** — `A2aBridgeService` trait for federation, trust-level tracking via `ExternalAgentRecord`, unified `SkillRouter` scoring internal + external candidates
+- **Part 4: Circle Orchestration** — `CircleDistributor` trait, `CircleContext` with shared memory + broadcast, `WorkflowMemoryManager` consolidation
 
-### P3-B: A2A Protocol Adapter (sera-su86)
+### P3-B: Knowledge Activity Log (sera-8vv)
 
-New `sera-a2a` crate implementing SPEC-interop §4:
-- Vendored A2A types from `a2aproject/A2A` specification:
-  - `AgentCard`, `AgentSkill`, `AuthenticationInfo` — agent discovery
-  - `Task`, `TaskStatus`, `Artifact`, `Part`, `FileContent` — task lifecycle
-  - `Message`, `MessageRole` — agent communication
-  - `A2aRequest`, `A2aResponse`, `A2aRpcError` — JSON-RPC wrappers
-- `A2aAdapter` trait — discover, send_task, get_task, cancel_task
-- `sera_agent_card()` builder for SERA's `/.well-known/agent.json`
-- Feature-gated `acp-compat` module with `AcpMessage` → A2A translator (SPEC-interop §5)
-- `A2aError` → `SeraError` bridging
-- 6 unit tests passing
+New module `sera-skills/src/knowledge_activity_log.rs` (654 lines):
+- `KnowledgeOp` enum (Store/Update/Delete/Synthesize/Lint)
+- `KnowledgeActivityEntry` with timestamp, scope, page_id, summary, metadata
+- `KnowledgeActivityLog` — append-only with rolling window eviction
+- `ActivityLogFilter` — filter by op, scope, time range, page_id
+- Full serde support, `Display` formatting
+- 28 unit tests passing
 
-### P3-C: AG-UI Streaming Protocol (sera-4qel)
+### P3-C: Knowledge Lint Health-Check (sera-312)
 
-New `sera-agui` crate implementing SPEC-interop §6:
-- `AgUiEvent` enum with all 17 canonical AG-UI event types (serde-tagged):
-  - Run lifecycle: RunStarted, RunFinished, RunError
-  - Text messages: TextMessageStart, TextMessageContent, TextMessageEnd
-  - Tool calls: ToolCallStart, ToolCallArgs, ToolCallEnd, ToolCallResult
-  - State: StateSnapshot, StateDelta, MessagesSnapshot
-  - Steps: StepStarted, StepFinished
-  - Extensions: Custom, Raw
-- `AgUiRole` enum (User, Assistant, System, Tool)
-- `THIN_CLIENT_EVENTS` constant and `is_thin_client_event()` filter
-- `to_sse_data()` SSE serialization
-- `AgUiError` → `SeraError` bridging
-- 10 unit tests passing
+New module `sera-skills/src/knowledge_lint.rs` (906 lines):
+- `LintCheckKind` enum (StaleContent/Orphan/Contradiction/KnowledgeGap/SchemaViolation/DuplicateContent)
+- `LintConfig` with defaults, `LintFinding` with severity, `LintReport` with helper methods
+- `KnowledgeLinter` async trait + `BasicLinter` implementing non-LLM checks:
+  - Stale content detection via configurable threshold
+  - Orphan detection via link graph analysis
+  - Schema violations via existing `KnowledgeSchemaValidator`
+  - Near-duplicate detection via Jaccard similarity (threshold 0.85)
+- LLM-requiring checks (Contradiction, KnowledgeGap) stubbed with TODO
+- 21 unit tests passing
 
-### P3-D: Unified Error Codes (sera-uufs)
+### P3-D: gRPC Plugin System (sera-iyov)
 
-Expanded `sera-errors` from 27-line scaffold to full error taxonomy:
-- `SeraErrorCode` expanded from 6 to 15 variants (added Forbidden, InvalidInput, AlreadyExists, PreconditionFailed, RateLimited, Unavailable, Cancelled, ResourceExhausted, NotImplemented)
-- `SeraErrorCode::http_status()` — maps each code to HTTP status
-- `SeraErrorCode::as_str()` — string tags for JSON/logging
-- `SeraError` struct — code + message + optional boxed source error
-- Convenience constructors: `internal()`, `not_found()`, `invalid_input()`, `unauthorized()`, `unavailable()`, `timeout()`
-- `IntoSeraError` trait for bridging crate-local errors
-- `ErrorResponse` serializable JSON body
-- All 3 new interop crates adopt `sera-errors` with `From<LocalError> for SeraError`
-- 5 unit tests passing
+New `sera-plugins` crate at `rust/crates/sera-plugins/` (6 source files):
+- `error.rs` — `PluginError` (8 variants) with `SeraError` bridging
+- `types.rs` — `PluginRegistration`, `PluginCapability` (7 variants), `PluginVersion`, `TlsConfig`, `PluginHealth`, `PluginInfo`
+- `registry.rs` — `PluginRegistry` async trait + `InMemoryPluginRegistry` (Arc<RwLock<HashMap>>)
+- `manifest.rs` — YAML manifest parser for `Kind: Plugin` manifests with duration string parsing
+- `circuit_breaker.rs` — 3-state circuit breaker (Closed → Open → HalfOpen)
+- 37 unit tests passing
 
 ## Quality Gates
 
-- `cargo check --workspace` — clean (0 warnings in new crates)
+- `cargo check --workspace` — clean (0 warnings)
 - `cargo build --release` — success
-- `cargo test --workspace` — all tests pass (26 new tests across 4 crates)
+- `cargo test --workspace` — all tests pass (86 new tests across 3 crates + research doc)
 
 ## Crate Map Updates
 
-Updated `rust/CLAUDE.md` crate map with 3 new crates and updated sera-errors description.
+- Added `sera-plugins` crate to workspace
+- Updated `sera-skills` with 2 new modules and `chrono` dependency

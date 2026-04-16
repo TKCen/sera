@@ -27,6 +27,7 @@ members = [
   "crates/sera-mcp",
   "crates/sera-a2a",
   "crates/sera-agui",
+  "crates/sera-plugins",
 ]
 
 [workspace.package]
@@ -162,6 +163,7 @@ sera-meta = { path = "crates/sera-meta" }
 sera-mcp = { path = "crates/sera-mcp" }
 sera-a2a = { path = "crates/sera-a2a" }
 sera-agui = { path = "crates/sera-agui" }
+sera-plugins = { path = "crates/sera-plugins" }
 
 [profile.release]
 lto = true

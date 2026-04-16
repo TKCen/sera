@@ -65,6 +65,7 @@ cargo check -p sera-core
 | `sera-mcp`        | lib  | MCP server/client bridge (SPEC-interop §3)              |
 | `sera-a2a`        | lib  | A2A protocol adapter, vendored types (SPEC-interop §4)  |
 | `sera-agui`       | lib  | AG-UI streaming protocol, 17 event types (SPEC-interop §6) |
+| `sera-plugins`    | lib  | gRPC plugin registry, SDK, circuit breaker (SPEC-plugins)   |
 
 ## Dependency Graph
 

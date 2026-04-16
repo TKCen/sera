@@ -1,12 +1,13 @@
 [package]
-name = "sera-skills"
+name = "sera-plugins"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Skill pack loading and capability discovery for SERA agents"
+description = "gRPC plugin registry and SDK for SERA"
 
 [dependencies]
 sera-types = { workspace = true }
+sera-errors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -14,9 +15,8 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-futures-util = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-tempfile.workspace = true

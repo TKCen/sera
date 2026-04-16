@@ -4012,6 +4012,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-plugins"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sera-errors",
+ "sera-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "sera-queue"
 version = "0.1.0"
 dependencies = [
@@ -4092,6 +4109,7 @@ name = "sera-skills"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "futures-util",
  "sera-types",
  "serde",

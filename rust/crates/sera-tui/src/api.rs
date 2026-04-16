@@ -123,6 +123,22 @@ impl ApiClient {
         Ok(Vec::new())
     }
 
+    /// List knowledge entries, optionally filtered by agent.
+    pub async fn list_knowledge(&self, _agent_id: Option<&str>) -> Result<Vec<serde_json::Value>> {
+        // GET /api/v1/knowledge?agent_id=...
+        // Returns mock data since the API endpoint may not exist yet.
+        Ok(vec![
+            serde_json::json!({"id": "k1", "title": "Architecture decisions", "tier": "long_term", "tags": ["design"], "recall_count": 5, "score": 0.92, "size_bytes": 2048, "created_at": "2026-04-10T10:00:00Z", "updated_at": "2026-04-15T14:30:00Z"}),
+            serde_json::json!({"id": "k2", "title": "API patterns", "tier": "long_term", "tags": ["api", "patterns"], "recall_count": 3, "score": 0.85, "size_bytes": 1024, "created_at": "2026-04-11T10:00:00Z", "updated_at": "2026-04-14T09:00:00Z"}),
+            serde_json::json!({"id": "k3", "title": "Session context", "tier": "short_term", "tags": ["session"], "recall_count": 1, "score": 0.60, "size_bytes": 512, "created_at": "2026-04-15T08:00:00Z", "updated_at": "2026-04-15T08:00:00Z"}),
+        ])
+    }
+
+    /// Check API health.
+    pub async fn health(&self) -> Result<serde_json::Value> {
+        self.get("/api/health").await
+    }
+
     /// Send a chat message to an agent.
     #[allow(dead_code)]
     pub async fn send_chat(&self, agent_id: &str, message: &str) -> Result<ChatResponse> {

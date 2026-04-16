@@ -2,8 +2,10 @@
 //!
 //! Replaces the Go TUI (tui/).
 //! Provides a dashboard for viewing and interacting with SERA agent instances.
+//! Also works as a CLI when invoked with subcommands.
 
 use anyhow::Result;
+use clap::Parser;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -15,11 +17,24 @@ use std::time::Duration;
 
 mod api;
 mod app;
+mod cli;
+mod cli_commands;
 mod ui;
 mod views;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = cli::Cli::parse();
+    let client = api::ApiClient::new(args.api_url, args.api_key);
+
+    match args.command {
+        None | Some(cli::Commands::Tui) => run_tui(client).await,
+        Some(cmd) => cli_commands::dispatch(client, cmd).await,
+    }
+}
+
+/// Launch the interactive ratatui TUI.
+async fn run_tui(client: api::ApiClient) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -27,18 +42,12 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let api_url =
-        std::env::var("SERA_API_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
-    let api_key = std::env::var("SERA_API_KEY")
-        .unwrap_or_else(|_| "sera_bootstrap_dev_123".to_string());
-
-    let client = api::ApiClient::new(api_url, api_key);
     let mut app = app::App::new(client);
 
     // Initial data load
     app.refresh().await;
 
-    // Main loop
+    // Main loop — 'q' quits, 'r' refreshes, 'm' opens knowledge view
     loop {
         terminal.draw(|f| app.render(f))?;
 

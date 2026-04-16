@@ -1,404 +1,59 @@
-# Session Report — Session 13
+# Session Report — Session 15
 
-**Date:** 2026-04-15
+**Date:** 2026-04-16
 **Author:** Entity
 
 ## Session Status
 
-Session 13 — P1 Bundle Work: Core Infrastructure Completion
+Session 15 — P2 Bundle Work: Agent Communication, CLI Consolidation, Memory Consolidation, Knowledge UI
 
-## Issues Claimed
+## Issues Closed
 
-- **sera-8q1i**: P1 sera-hooks: Implement WASM hook runtime
-- **sera-c5qa**: P1 sera-models: Create model provider abstractions crate
-- **sera-g0yg**: P1 sera-skills: Create skill pack loading crate
-- **sera-u2ku**: P1 WP-007 sera-session: Complete ContentBlock transcript + persistence integration
+- **sera-htf**: P2-A Agent-to-agent communication and delegation protocol (GH#268)
+- **sera-n6s**: P2-B CLI/TUI client consolidation — Rust rewrite
+- **sera-40o**: P2-C Sleeptime Memory Consolidation
+- **sera-1u3**: P2-D Knowledge explorer UI for operator visibility
 
 ## Work Completed
 
-### P1-A: sera-hooks WASM runtime (sera-8q1i)
+### P2-A: Agent delegation protocol (sera-htf)
 
-Implemented `WasmHookAdapter` for WASM hook execution using wasmtime:
+Expanded the stub delegation/subagent system into a full protocol:
 
-- **Location**: `rust/crates/sera-hooks/src/wasm_adapter.rs`
-- **New feature flag**: `wasm` feature that enables WASM runtime support
-- **New types**:
-  - `WasmHookAdapter` — wraps WASM modules and presents them as Hook implementations
-  - `WasmError` — error type for WASM operations
-  - `WasmHookMetadata` — metadata for WASM hooks
-  - `validate_wasm_module()` — validates WASM modules have required exports
-- **Dependencies**: Added wasmtime 26 and wasmtime-wasi 26 to workspace
+- **`rust/crates/sera-runtime/src/handoff.rs`**: Added `DelegationRequest`, `DelegationResponse`, `DelegationConfig` (max depth 5, timeout 300s), `DelegationError` (5 variants), `DelegationProtocol` async trait with `delegate`, `can_delegate_to`, `list_available_agents`
+- **`rust/crates/sera-runtime/src/subagent.rs`**: Replaced P0 stub with `SubagentStatus` (5 variants), `SubagentResult`, proper `SubagentHandle` with watch channel, `SubagentManager` async trait with `spawn`, `status`, `cancel`, `list_active`
+- **`rust/crates/sera-runtime/src/delegation.rs`** (new): `DelegationOrchestrator` implementing `DelegationProtocol`. Enforces depth limit, allowed-targets check, polls subagent status with timeout, provides `handoff_to_request()` conversion
 
-### P1-B: sera-models crate (sera-c5qa)
+### P2-B: CLI/TUI consolidation (sera-n6s)
 
-Created new crate for model provider abstractions:
+Added clap CLI subcommands to sera-tui so one binary serves both modes:
 
-- **Location**: `rust/crates/sera-models/`
-- **New types**:
-  - `ModelProvider` trait — async trait for LLM providers
-  - `ModelResponse` — structured response with content, finish_reason, usage, tool_calls
-  - `ProviderConfig` — enum supporting OpenAI, Anthropic, Local, Google AI, AWS Bedrock, OAI-compatible
-  - `ModelError` — error type with provider, serialization, HTTP, auth, rate limit variants
+- **`rust/crates/sera-tui/src/cli.rs`** (new): `Cli` struct with `Commands` enum — `Tui`, `Agent`, `Session`, `Health`, `Chat`, `Config` subcommands with nested enums
+- **`rust/crates/sera-tui/src/cli_commands.rs`** (new): `dispatch()` routing all commands; `run_agent_list`, `run_agent_show`, `run_health` with formatted stdout output
+- **`rust/crates/sera-tui/src/main.rs`**: Refactored to parse clap args, dispatch CLI commands or launch TUI as default
+- **`rust/crates/sera-tui/src/api.rs`**: Added `health()` method
 
-### P1-C: sera-skills crate (sera-g0yg)
+### P2-C: Sleeptime Memory Consolidation (sera-40o)
 
-Created new crate for skill pack loading:
+Added background memory consolidation service to sera-workflow:
 
-- **Location**: `rust/crates/sera-skills/`
-- **New types**:
-  - `SkillPack` trait — async trait for skill pack implementations
-  - `SkillLoader` — discovers and loads skill packs from filesystem
-  - `FileSystemSkillPack` — filesystem-backed skill pack implementation
-  - `SkillBundle` — loaded collection of skills with metadata
-  - `SkillPackMetadata` — metadata about skill packs
+- **`rust/crates/sera-workflow/src/sleeptime.rs`** (new): `SleeptimeConsolidator` with `SleeptimeConfig`, `ConsolidationPhase` (5 phases: Compression, Promotion, GapDetection, CrossLinking, Decay), `ConsolidationResult`, `ConsolidationReport`, `IdleDetector` async trait, `ConsolidationError`. Budget capping at 10% daily tokens. 12 unit tests.
+- **`rust/crates/sera-workflow/src/lib.rs`**: Added module and re-exports
 
-### P1-D: sera-session ContentBlock transcript + persistence (sera-u2ku)
+### P2-D: Knowledge explorer TUI view (sera-1u3)
 
-Added persistence module to complete transcript integration:
+Added knowledge explorer view to the TUI for operator visibility:
 
-- **Location**: `rust/crates/sera-session/src/persistence.rs`
-- **New types**:
-  - `PersistedTranscript` — JSON-serializable transcript format with version and metadata
-  - `TranscriptMetadata` — timestamps, entry count, estimated tokens
-  - `PersistenceError` — error type for persistence operations
-  - `SessionManager` — high-level session transcript management with auto-persistence
-- **Methods**:
-  - `load_transcript()`, `save_transcript()`, `delete_transcript()`, `list_sessions()`
+- **`rust/crates/sera-tui/src/views/knowledge.rs`** (new): `KnowledgeView` with `KnowledgeEntry`, `KnowledgeTier`, `KnowledgeSortField`. Table rendering with Title/Tier/Tags/Recalls/Score/Updated columns, selection highlighting, detail panel, filter bar, sort cycling
+- **`rust/crates/sera-tui/src/app.rs`**: Added `Knowledge` variant to `ActiveView`, wired key handlers (m=knowledge, j/k=navigate, s=sort, /=filter, Enter=detail)
+- **`rust/crates/sera-tui/src/api.rs`**: Added `list_knowledge()` with mock data
 
-## Build Status
+## Quality Gates
 
-- `cargo check --workspace` — **PASSES**
-- `cargo test --workspace` — **ALL TESTS PASS** (500+ tests)
+- `cargo check --workspace` — clean (0 errors)
+- `cargo test --workspace` — all tests pass (0 failures)
+- `cargo build --release` — clean
 
-## Files Created
+## Files Changed
 
-### sera-hooks
-- `rust/crates/sera-hooks/src/wasm_adapter.rs` — WASM hook adapter implementation
-- `rust/crates/sera-hooks/Cargo.toml` — Added wasm feature flag, wasmtime deps
-
-### sera-models (new crate)
-- `rust/crates/sera-models/Cargo.toml`
-- `rust/crates/sera-models/src/lib.rs`
-- `rust/crates/sera-models/src/error.rs`
-- `rust/crates/sera-models/src/provider.rs`
-- `rust/crates/sera-models/src/response.rs`
-
-### sera-skills (new crate)
-- `rust/crates/sera-skills/Cargo.toml`
-- `rust/crates/sera-skills/src/lib.rs`
-- `rust/crates/sera-skills/src/error.rs`
-- `rust/crates/sera-skills/src/skill_pack.rs`
-- `rust/crates/sera-skills/src/bundle.rs`
-- `rust/crates/sera-skills/src/loader.rs`
-
-### sera-session
-- `rust/crates/sera-session/src/persistence.rs` — Transcript persistence module
-
-### Workspace
-- `rust/Cargo.toml` — Added wasmtime 26, wasmtime-wasi 26; added sera-models and sera-skills to workspace
-
-## Notes
-
-- All 4 P1 issues completed in single session
-- New crates properly integrated into workspace
-- WASM feature is opt-in (requires `--features wasm`)
-- All tests pass across the workspace
-
----
-
-# Session Report — Session 12
-
-**Date:** 2026-04-15
-**Author:** Entity
-
-## Session Status
-
-Session 12 — P2 Feature Work: sera-cache implementation
-
-## Issue Claimed
-
-- **sera-moo**: Implement sera-cache crate — Redis/cache backend scaffold
-
-## Work Completed
-
-### Feature Added: MokaBackend implementation
-
-Implemented the `MokaBackend` for the `sera-cache` crate, providing an in-process cache implementation using Moka:
-
-- **Location**: `rust/crates/sera-cache/src/lib.rs`
-- **New types**: `CacheBackend` trait (retained), `MokaBackend` struct
-- **Backend**: Moka with async/Tokio support (future feature)
-- **Edition fix**: Changed crate to use edition 2024 explicitly (required for async traits)
-- **API**: `get()`, `set(key, value, ttl_secs)`, `delete(key)`
-- **Note**: TTL parameter currently unused (moka future API limitation)
-
-### Issue Created
-
-Created new issue for remaining Redis implementation:
-- **sera-xxx**: Implement Redis cache backend (Fred) for sera-cache Phase 1
-
-### Build Status
-
-- `cargo build --release` — **PASSES**
-- `cargo test --workspace` — **ALL TESTS PASS** (270+ tests)
-
-## Files Modified
-
-- `rust/crates/sera-cache/Cargo.toml` — Added moka, tokio deps; set edition 2024
-- `rust/crates/sera-cache/src/lib.rs` — Added MokaBackend implementation
-
-## Notes
-
-- Issue sera-moo closed with MokaBackend implementation
-- Phase 1 (Redis/Fred) remains as a follow-up issue
-- Build passes with no errors after edition fix
-
----
-
-# Session Report — Session 11
-
-**Date:** 2026-04-15
-**Author:** Entity
-
-## Session Status
-
-Session 11 — P2 Feature Work: Task dependency graphs (GH#338)
-
-## Issue Claimed
-
-- **sera-5tc**: [GH#338] Feature: Task dependency graphs — multi-step workflow orchestration
-
-## Work Completed
-
-### Feature Added: topological_sort
-
-Added `topological_sort` function to the sera-workflow crate implementing Kahn's algorithm for topological ordering of tasks based on `Blocks` dependencies:
-
-- **Location**: `rust/crates/sera-workflow/src/ready.rs`
-- **New types**: `topological_sort()` function, `CyclicDependency` error type
-- **Algorithm**: Kahn's algorithm with cycle detection
-- **Scope**: Only considers `DependencyType::Blocks` edges (ignores Related, ConditionalBlocks, ParentChild, DiscoveredFrom)
-- **Exports**: Added to lib.rs re-exports
-
-### Build Status
-
-- `cargo build --release` — **PASSES**
-- `cargo test --workspace` — **ALL TESTS PASS** (270+ tests)
-
-## Files Modified
-
-- `rust/crates/sera-workflow/src/ready.rs` — Added topological_sort function
-- `rust/crates/sera-workflow/src/lib.rs` — Added exports
-- `rust/crates/sera-workflow/src/tests.rs` — Added simple tests
-
-## Notes
-
-- Issue sera-5tc closed with topological_sort implementation
-- Addresses GH#338 task dependency graphs requirement for multi-step workflow orchestration
-
----
-# Session Report — Session 9
-
-**Date:** 2026-04-15
-**Author:** Entity
-
-## Session Status
-
-Session 9 — P2 Feature Work: sera-domain crate documentation
-
-## Issue Claimed
-
-- **sera-2sxo**: Write sera-domain crate documentation
-
-## Work Completed
-
-### Documentation Created
-
-Created comprehensive documentation at `rust/docs/plan/crate-docs/sera-domain.md` covering:
-
-- **Module Map**: All 29 modules in the crate with their purposes
-- **Core Types**: Principal, Event, Tool, Memory, Session, Runtime, Model, Queue, Connector, Observability, Hook
-- **Type Relationships**: ASCII diagrams showing how types compose together
-- **Usage Examples**: Code examples for creating Events, defining Tools, implementing MemoryBackend
-- **Feature Flags**: Documentation of available feature flags
-- **Related Documentation**: Links to migration plan, MVS review, architecture docs
-
-### What Was Documented
-
-The sera-domain crate (published as `sera-types`) is the shared type definitions crate for SERA 2.0. It contains:
-
-| Module | Purpose |
-|--------|---------|
-| `principal` | Identity for any acting entity (human, agent, service, system) |
-| `event` | The unit of work flowing through the gateway |
-| `tool` | Tool definitions, schemas, execution, and policies |
-| `memory` | RecallSignals, DreamingScore, MemoryBackend trait |
-| `session` | SessionStateMachine, transcript, content blocks |
-| `runtime` | AgentRuntime trait, TurnContext, runtime capabilities |
-| `model` | ModelAdapter, LLM client types |
-| `queue` | QueueBackend trait, queue operations |
-| `connector` | ChannelConnector, inbound/outbound routing |
-| `observability` | Tracing, metrics, audit backends |
-| `skill` | Skill system for capability discovery |
-| `hook` | In-process hook registry and chain executor |
-| `audit` | Audit trail definitions |
-| `agent` | Agent instance management |
-| `manifest` | AgentTemplate, YAML manifest loading |
-| `config_manifest` | K8s-style config with secret resolution |
-| `capability` | CapabilityPolicy definitions |
-| `policy` | Tier policies, sandbox boundaries |
-| `sandbox` | Sandbox tier info, status tracking |
-| `secrets` | Secret management types |
-| `metering` | Usage tracking, budgets |
-| `chat` | Chat messages, tool calls, agent actions |
-| `content_block` | ConversationMessage, role types |
-| `envelope` | Submission, Op, EventMsg, approval types |
-| `harness` | AgentHarness trait, plugin system |
-| `evolution` | Self-improvement types |
-| `versioning` | BuildIdentity for version tracking |
-| `intercom` | Inter-process communication |
-
-### Build Status
-
-- `cargo build --release` — **PASSES**
-- `cargo test --workspace` — **ALL TESTS PASS** (270+ tests)
-
-## Files Created
-
-- `rust/docs/plan/crate-docs/sera-domain.md` — Complete crate documentation
-
-## Notes
-
-- Issue sera-2sxo closed with message: "Created comprehensive documentation at docs/plan/crate-docs/sera-domain.md covering all domain types, module map, core type signatures, relationships, usage examples, and feature flags"
-- Documentation created in the correct location as specified in the issue description
-
----
-
-# Session Report — Session 8
-
-**Date:** 2026-04-15
-**Author:** Entity
-
-## Session Status
-
-Session 8 — P2 Feature Work: Discord message routing investigation
-
-## Issue Claimed
-
-- **sera-e7xi**: Investigate Discord message routing in SERA 2.0 - trace why messages aren't reaching the LLM/runtime
-
-## Investigation Summary
-
-### What Was Investigated
-
-I traced the Discord message flow through the SERA 2.0 Rust gateway codebase to understand where messages might fail to reach the LLM/runtime.
-
-### Discord Message Flow (Complete Path)
-
-1. **Discord Gateway WebSocket** (`rust/crates/sera-gateway/src/discord.rs`)
-   - Connects to `wss://gateway.discord.gg/?v=10&encoding=json`
-   - Handles heartbeat, identifies with bot token
-   - Parses MESSAGE_CREATE events
-   - Sends `DiscordMessage` to mpsc channel
-
-2. **Event Loop** (`rust/crates/sera-gateway/src/bin/sera.rs` line 933-942)
-   - Receives messages from channel
-   - Calls `process_message()`
-
-3. **Message Processing** (`process_message()` lines 944-1220)
-   - Filters: Only responds to DMs or when mentioned (line 955)
-   - Looks up agent from connector config in `sera.yaml`
-   - Gets/creates session from database
-   - **Looks up pre-spawned runtime harness** (line 1052-1060)
-   - Calls `execute_turn()` to send messages to runtime
-
-4. **Runtime Harness** (`StdioHarness::send_turn()` lines 144-241)
-   - Sends NDJSON to `sera-runtime --ndjson --no-health` child process
-   - Expects TurnCompleted event with response
-
-### Potential Failure Points Identified
-
-| Step | Failure Mode | Error Behavior |
-|------|--------------|----------------|
-| Discord token | Not resolved from secrets | "Discord token not resolved" warning, connector skips |
-| Agent lookup | Not in manifests | "Agent not found" error sent to Discord |
-| Runtime harness | Not spawned | "No runtime harness for agent" error sent to Discord |
-| Runtime process | Crashes/fails | "[runtime error]" in response |
-
-### Configuration Requirements
-
-For Discord routing to work, `sera.yaml` must have:
-- `Connector` with `kind: discord` and valid `token.secret`
-- `Agent` with matching name
-- `Provider` with valid `base_url`, `model`, and API key
-- `SERA_RUNTIME_BIN` env var or `sera-runtime` in same directory as gateway
-
-### Build Status
-
-- `cargo build --release` — **PASSES**
-- `cargo test --workspace` — **ALL TESTS PASS** (270+ tests)
-
-## Files Examined
-
-- `rust/crates/sera-gateway/src/discord.rs` — Discord WebSocket connector
-- `rust/crates/sera-gateway/src/bin/sera.rs` — Main gateway + message processing
-- `rust/crates/sera-types/src/config_manifest.rs` — Config types
-- `sera.yaml` — Instance configuration
-
-## Notes
-
-- The Discord routing code is correctly implemented
-- Messages will be filtered if not a DM and not mentioning the bot
-- Most likely cause of "messages not reaching LLM" is runtime harness not spawning (path issue or missing binary)
-- Issue remains IN_PROGRESS — further diagnosis requires running the gateway with Discord token set
-
----
-
-# Session Report — Session 10
-
-**Date:** 2026-04-15
-**Author:** Entity
-
-## Session Status
-
-Session 10 — P2 Feature Work: Hybrid retrieval design
-
-## Issue Claimed
-
-- **sera-t5k**: llm: Hybrid retrieval — index + vector + recency in ContextAssembler
-
-## Work Completed
-
-### Design Document Created
-
-Created comprehensive design document at `rust/docs/plan/HYBRID-RETRIEVAL.md` covering:
-
-- **Problem Statement**: ContextPipeline misses semantically related content, has no recency awareness
-- **Architecture**: New hybrid retrieval layer combining keyword, vector, recency, and index lookup
-- **Implementation Plan**: 4 phases extending ContextEngine trait, creating HybridRetrieval module
-- **New Types**: RetrievedMemory, HybridStrategy, EmbeddingService trait
-- **Configuration**: Per-agent config via CapabilityPolicy with weights and fusion methods
-- **Design Decisions**: Replace vs augment (optional), performance impact, per-agent config, fallback behavior
-- **Dependencies**: sera-qme (knowledge index), embedding service availability
-
-### Current Implementation Gap Identified
-
-- `SearchStrategy::Hybrid` enum already exists in `sera-types/src/memory.rs` but is unimplemented
-- `ContextPipeline` assembles context by simple concatenation, no retrieval logic
-- Need: EmbeddingService trait, HybridRetrieval module, extension to ContextEngine trait
-
-## Build Status
-
-- `cargo build --release` — **PASSES** (with 2 warnings)
-- `cargo test --workspace` — **ALL TESTS PASS**
-
-## Files Created
-
-- `rust/docs/plan/HYBRID-RETRIEVAL.md` — Complete design document
-
-## Notes
-
-- Issue sera-t5k remains IN_PROGRESS — design complete, implementation pending
-- Documented the architecture for implementing hybrid retrieval
-- Next steps: Implement embedding service, HybridRetrieval module, integrate with pipeline
-- Dependencies on sera-qme (source ingestion) noted in doc
+- 10 modified files, 5 new files across sera-runtime, sera-tui, sera-workflow

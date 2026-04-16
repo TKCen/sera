@@ -25,6 +25,7 @@ pub mod registry;
 pub mod scc;
 pub mod schedule;
 pub mod session_key;
+pub mod sleeptime;
 pub mod task;
 pub mod termination;
 pub mod types;
@@ -63,6 +64,12 @@ pub use coordination::{
     Outcome, ParticipantId, ResultAggregator, WorkflowMemoryManager,
 };
 pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
+
+// Re-exports — Sleeptime Memory Consolidation (SPEC-memory §2b / sera-40o).
+pub use sleeptime::{
+    ConsolidationError, ConsolidationPhase, ConsolidationReport, ConsolidationResult,
+    IdleDetector, SleeptimeConfig, SleeptimeConsolidator,
+};
 
 #[cfg(test)]
 mod tests;

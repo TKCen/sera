@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod agent_detail;
+pub mod knowledge;
 pub mod logs;
 
 use ratatui::prelude::*;

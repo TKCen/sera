@@ -7,6 +7,7 @@
 // New modules (Lane D, P0-6)
 pub mod compaction;
 pub mod context_engine;
+pub mod delegation;
 pub mod handoff;
 pub mod harness;
 pub mod subagent;

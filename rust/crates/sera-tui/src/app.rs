@@ -5,7 +5,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::api::ApiClient;
-use crate::views::{agents::AgentsView, View};
+use crate::views::{agents::AgentsView, knowledge::{KnowledgeEntry, KnowledgeView}, View};
 
 /// Active view in the TUI.
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +13,7 @@ pub enum ActiveView {
     Agents,
     AgentDetail(String),
     Logs(String),
+    Knowledge,
 }
 
 /// Main application state.
@@ -20,6 +21,7 @@ pub struct App {
     pub client: ApiClient,
     pub active_view: ActiveView,
     pub agents_view: AgentsView,
+    pub knowledge_view: KnowledgeView,
     pub status_message: String,
 }
 
@@ -30,7 +32,8 @@ impl App {
             client,
             active_view: ActiveView::Agents,
             agents_view: AgentsView::new(),
-            status_message: "Press 'r' to refresh, 'q' to quit, 'Enter' to view details".to_string(),
+            knowledge_view: KnowledgeView::new(),
+            status_message: "Press 'r' to refresh, 'q' to quit, 'Enter' to view details, 'm' for knowledge".to_string(),
         }
     }
 
@@ -62,6 +65,21 @@ impl App {
                 match self.client.get_agent_logs(id).await {
                     Ok(_logs) => {
                         self.status_message = "Logs loaded".to_string();
+                    }
+                    Err(e) => {
+                        self.status_message = format!("Error: {}", e);
+                    }
+                }
+            }
+            ActiveView::Knowledge => {
+                match self.client.list_knowledge(None).await {
+                    Ok(raw) => {
+                        let entries: Vec<KnowledgeEntry> = raw
+                            .iter()
+                            .map(KnowledgeEntry::from_json)
+                            .collect();
+                        self.knowledge_view.set_entries(entries);
+                        self.status_message = "Knowledge loaded. j/k navigate, Enter detail, 's' sort, '/' filter, Esc back".to_string();
                     }
                     Err(e) => {
                         self.status_message = format!("Error: {}", e);
@@ -104,6 +122,9 @@ impl App {
                     .style(Style::default().fg(Color::Yellow));
                 frame.render_widget(text, chunks[1]);
             }
+            ActiveView::Knowledge => {
+                self.knowledge_view.render(frame, chunks[1]);
+            }
         }
 
         // Render status bar
@@ -134,9 +155,41 @@ impl App {
                         self.refresh().await;
                     }
                 }
+                KeyCode::Char('m') => {
+                    self.active_view = ActiveView::Knowledge;
+                    self.refresh().await;
+                }
                 _ => {}
             },
             ActiveView::AgentDetail(_) | ActiveView::Logs(_) => match key {
+                KeyCode::Esc | KeyCode::Backspace => {
+                    self.active_view = ActiveView::Agents;
+                    self.refresh().await;
+                }
+                _ => {}
+            },
+            ActiveView::Knowledge => match key {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.knowledge_view.previous();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.knowledge_view.next();
+                }
+                KeyCode::Enter => {
+                    self.knowledge_view.toggle_detail();
+                }
+                KeyCode::Char('s') => {
+                    self.knowledge_view.cycle_sort();
+                }
+                KeyCode::Char('/') => {
+                    // Toggle filter — for now clear it if set, or set a placeholder
+                    // Full filter input would require a separate input mode
+                    let current = self.knowledge_view.filtered_entries().len();
+                    if current == 0 || self.knowledge_view.has_filter() {
+                        self.knowledge_view.set_filter(String::new());
+                        self.status_message = "Filter cleared".to_string();
+                    }
+                }
                 KeyCode::Esc | KeyCode::Backspace => {
                     self.active_view = ActiveView::Agents;
                     self.refresh().await;

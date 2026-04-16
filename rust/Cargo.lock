@@ -3736,6 +3736,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-a2a"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sera-errors",
+ "sera-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sera-agui"
+version = "0.1.0"
+dependencies = [
+ "sera-errors",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "sera-auth"
 version = "0.1.0"
 dependencies = [
@@ -3831,7 +3861,7 @@ name = "sera-errors"
 version = "0.1.0"
 dependencies = [
  "serde",
- "thiserror 2.0.18",
+ "serde_json",
 ]
 
 [[package]]
@@ -3931,6 +3961,21 @@ dependencies = [
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "sera-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "sera-errors",
+ "sera-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

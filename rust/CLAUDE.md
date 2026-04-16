@@ -50,7 +50,7 @@ cargo check -p sera-core
 | `sera-telemetry`  | lib  | OTel tracing, AuditBackend, LaneFailureClass            |
 | `sera-queue`      | lib  | QueueBackend trait, LocalQueueBackend, GlobalThrottle    |
 | `sera-tools`      | lib  | SandboxProvider, SsrfValidator, BashAstChecker          |
-| `sera-errors`     | lib  | Error types scaffold                                    |
+| `sera-errors`     | lib  | Unified error codes, SeraError, HTTP status mapping     |
 | `sera-cache`      | lib  | Cache layer scaffold                                    |
 | `sera-secrets`    | lib  | Secrets management scaffold                             |
 | `sera-session`    | lib  | 6-state SessionStateMachine, ContentBlock transcript    |
@@ -62,6 +62,9 @@ cargo check -p sera-core
 | `sera-skills`     | lib  | Skill pack loading, filesystem-based discovery           |
 | `sera-meta`       | lib  | Self-evolution: 3-tier policy, shadow sessions, rules    |
 | `sera-byoh-agent` | bin  | BYOH agent reference implementation                     |
+| `sera-mcp`        | lib  | MCP server/client bridge (SPEC-interop §3)              |
+| `sera-a2a`        | lib  | A2A protocol adapter, vendored types (SPEC-interop §4)  |
+| `sera-agui`       | lib  | AG-UI streaming protocol, 17 event types (SPEC-interop §6) |
 
 ## Dependency Graph
 

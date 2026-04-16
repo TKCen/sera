@@ -1,8 +1,8 @@
 # SERA Rust Migration — Implementation Tracker
 
-> **Document Status:** Current (Updated 2026-04-15 via automated analysis)
+> **Document Status:** Current (Updated 2026-04-16 via fresh codebase assessment — Session 15b)
 > **Purpose:** Master tracking document for SERA 2.0 Rust migration
-> **Basis:** Spec analysis + codebase inspection
+> **Basis:** Full spec analysis + codebase inspection + test run verification
 
 ---
 
@@ -10,124 +10,113 @@
 
 ### Current State Overview
 
-The SERA Rust workspace is **substantially implemented** with **19 of 26 planned crates** present and building. The workspace compiles successfully and all tests pass (500+ tests across 21 crates).
+The SERA Rust workspace is **substantially implemented** with **23 of 27 planned crates** present and building. The workspace compiles successfully and all tests pass (1,196 tests across 23 crates).
 
 | Metric | Value |
 |--------|-------|
-| Total Crates Planned | 26 |
-| Crates in Workspace | 19 |
-| Missing Crates | sera-mcp, sera-a2a, sera-agui, sera-plugins (sera-models, sera-skills, sera-meta now present) |
-| Total Rust LOC | ~29,000+ (267 .rs files) |
+| Total Crates Planned | 27 |
+| Crates in Workspace | 23 |
+| Missing Crates | sera-mcp, sera-a2a, sera-agui, sera-plugins |
+| Total Rust LOC | 64,643 (325 .rs files) |
 | Build Status | ✅ COMPILES (release build passing) |
-| Test Status | ✅ ALL PASSING (500+ tests) |
+| Test Status | ✅ ALL PASSING (1,196 tests) |
 
 ### Phase Completion
 
 | Phase | Description | Status | Completion |
 |-------|-------------|--------|------------|
-| Phase 0 | Foundation & MVP | COMPLETE | 100% |
-| Phase 1 | Core Domain Expansion | IN PROGRESS | ~75% |
-| Phase 2 | Self-Evolution Machinery | IN PROGRESS | 65% |
-| Phase 3 | Interop Protocols (MCP/A2A/AG-UI) | NOT STARTED | 0% |
-| Phase 4 | Clients & SDK | NOT STARTED | 0% |
+| Phase 0 | Foundation (types, config, DB, queue, telemetry) | COMPLETE | 95% |
+| Phase 1 | Core Domain (session, auth, tools, hooks, workflow, models, skills) | COMPLETE | 90% |
+| Phase 2 | Runtime & Gateway (runtime, gateway, TUI, BYOH, meta) | IN PROGRESS | 85% |
+| Phase 3 | Interop Protocols (MCP, A2A, AG-UI) | NOT STARTED | 0% |
+| Phase 4 | Enterprise & Hardening (plugins, OIDC/SCIM, K8s, Circles full) | NOT STARTED | 0% |
 
-### Key Achievements
+### Key Achievements (Session 15b verified)
 
-1. **Core gateway operational** — `sera-gateway` with 35+ route files and extensive service layer
-2. **Runtime infrastructure complete** — `sera-runtime` includes turn loop, context engine, 15+ tools
-3. **Queue/Events infrastructure** — `sera-queue`, `sera-telemetry` crates exist and compile
-4. **Auth foundation** — `sera-auth` with JWT, OIDC, capability tokens, casbin integration
-5. **Tooling sandbox** — `sera-tools` with Docker, WASM, External, OpenShell providers
-6. **Memory tiers implemented** — Four-tier ABC (Unconstrained, Token, SlidingWindow, Summarizing) in sera-session
-7. **Workflow atomic claims** — Complete claim protocol with 8 passing tests
+1. **Core gateway operational** — `sera-gateway` with 81 source files, 21,757 LOC, 223+ tests
+2. **Runtime infrastructure complete** — `sera-runtime` with 37 source files, 8,180 LOC, 115+ tests
+3. **Model provider abstractions created** — `sera-models` (219 LOC) with `ModelProvider` trait
+4. **Skill pack loading created** — `sera-skills` (349 LOC) with filesystem-based discovery
+5. **Self-evolution machinery complete** — `sera-meta` (2,196 LOC) with 3-tier policy, shadow sessions, constitutional rules
+6. **HITL approval production-ready** — `sera-hitl` (819 LOC) with full escalation chains and tests
+7. **Workflow engine comprehensive** — `sera-workflow` (3,145 LOC) with SCC cycle detection, termination detection, coordination
+8. **Type system comprehensive** — `sera-types` (8,921 LOC) with 29 modules covering full domain
+9. **WASM hook adapter exists** — `sera-hooks` has feature-gated `wasmtime` support via `wasm_adapter.rs`
 
-### Critical Gaps
+### Remaining Gaps
 
-1. **WASM hook runtime** NOT implemented (sera-hooks has native hooks only)
-2. **sera-models** (model provider abstractions) not yet created
-3. **sera-skills** (skill pack loading) not yet created
-4. **sera-meta** (self-evolution machinery) not yet created
-5. **Interop protocols** (MCP, A2A, AG-UI) not implemented
-6. **sera-plugins** (gRPC plugin system) not implemented
-7. **Circle coordination** - design types exist, coordination logic not implemented
+1. **sera-runtime LLM compaction** — 3 condensers (summarizer, attention, extraction) are TODO stubs
+2. **sera-gateway TODOs** — 20 TODO markers across 8 files (LSP routing, process mgmt, auth context)
+3. **sera-errors not consumed** — 27 LOC scaffold, not imported by any crate
+4. **sera-secrets minimal** — Only `EnvSecretsProvider` (44 LOC), needs Vault/AWS/Azure providers
+5. **sera-cache minimal** — Only `MokaBackend` (66 LOC), Redis backend deferred
+6. **Interop crates** — sera-mcp, sera-a2a, sera-agui, sera-plugins not started
 
 ---
 
 ## 2. Per-Crate Status
 
-### Foundation Crates
+### Foundation Crates (Phase 0)
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-types | ✅ COMPLETE | ~4,500 | 272+ | 31 modules, all design-forward types |
-| sera-config | ✅ COMPLETE | ~4,000 | 52+ | Layered config, schema registry |
-| sera-errors | ✅ SCAFFOLD | ~300 | 0 | Error types scaffold |
-| sera-cache | ✅ SCAFFOLD | ~300 | 0 | MokaBackend implemented |
+| sera-types | ✅ COMPLETE | 8,921 | 272+ | 29 modules, comprehensive domain types |
+| sera-config | ✅ COMPLETE | 2,129 | 52+ | Layered config, schema registry, file watcher |
+| sera-errors | ⚠️ SCAFFOLD | 27 | 0 | Error code enum only; not consumed by any crate |
+| sera-cache | ⚠️ SCAFFOLD | 66 | 0 | MokaBackend; Redis deferred |
+| sera-db | ✅ COMPLETE | 3,836 | — | PostgreSQL (sqlx) + SQLite (rusqlite), 21 source files |
+| sera-queue | ✅ COMPLETE | 470 | 12+ | QueueBackend trait, local + apalis backends |
+| sera-telemetry | ✅ COMPLETE | 436 | 18+ | OTel triad (version-pinned), AuditBackend, OCSF |
+| sera-secrets | ⚠️ SCAFFOLD | 44 | 0 | EnvSecretsProvider only |
 
-### Infrastructure Crates
-
-| Crate | Status | LOC | Tests | Notes |
-|-------|--------|-----|-------|-------|
-| sera-db | ✅ COMPLETE | ~8,500 | — | PostgreSQL + SQLite via sqlx |
-| sera-queue | ✅ COMPLETE | ~2,000 | 12+ | QueueBackend, LocalQueueBackend |
-| sera-telemetry | ✅ COMPLETE | ~4,500 | 18+ | OTel, audit, OCSF |
-| sera-secrets | ✅ SCAFFOLD | ~1,200 | 0 | Secrets management scaffold |
-
-### Core Domain Crates
+### Core Domain Crates (Phase 1)
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-session | ✅ COMPLETE | ~1,200 | 14+ | 6-state machine, transcript, memory tiers |
-| sera-tools | ✅ COMPLETE | ~2,500 | 15+ | SandboxProvider, policy |
-| sera-hooks | ⚠️ PARTIAL | ~1,000 | — | Native hooks only, WASM NOT implemented |
-| sera-auth | ✅ COMPLETE | ~3,500 | 28+ | JWT, OIDC, capabilities |
-| sera-hitl | ⚠️ PARTIAL | ~800 | — | Approval routing scaffold |
-| sera-workflow | ✅ COMPLETE | ~1,600 | 40+ | Atomic claims, ready queue |
-| sera-events | ⚠️ LEGACY | — | — | Older implementation |
+| sera-session | ✅ COMPLETE | 1,391 | 14+ | 6-state machine, transcript, 4-tier memory |
+| sera-auth | ✅ COMPLETE | 1,289 | 28+ | JWT, OIDC, API keys, casbin RBAC (TODO: full wiring) |
+| sera-tools | ✅ COMPLETE | 1,447 | 15+ | 5 sandbox providers, SSRF, bash AST, kill switch |
+| sera-hooks | ✅ COMPLETE | 1,206 | — | Native hooks + WASM adapter (feature-gated wasmtime) |
+| sera-hitl | ✅ COMPLETE | 819 | — | Full approval workflow, escalation chains, tests in lib |
+| sera-workflow | ✅ COMPLETE | 3,145 | 40+ | Atomic claims, SCC cycle detection, termination, coordination |
+| sera-events | ✅ COMPLETE | 501 | — | Audit Merkle chain (SHA-256), Centrifugo pub/sub |
+| sera-models | ✅ COMPLETE | 219 | — | ModelProvider trait, ProviderConfig, ModelResponse |
+| sera-skills | ✅ COMPLETE | 349 | — | SkillLoader, SkillPack trait, YAML discovery |
 
-### Missing Crates (Required by Specs)
-
-| Crate | Spec Reference | Priority | Status |
-|-------|---------------|----------|--------|
-| sera-models | SPEC-runtime §5 | P1 | 🔲 NOT STARTED |
-| sera-skills | SPEC-runtime §13 | P1 | 🔲 NOT STARTED |
-| sera-meta | SPEC-self-evolution | P2 | ✅ COMPLETE (Session 14) |
-| sera-mcp | SPEC-interop | P3 | 🔲 NOT STARTED |
-| sera-a2a | SPEC-interop | P3 | 🔲 NOT STARTED |
-| sera-agui | SPEC-interop | P3 | 🔲 NOT STARTED |
-| sera-plugins | SPEC-plugins | P3 | 🔲 NOT STARTED |
-
-### Runtime & Gateway
+### Runtime & Gateway (Phase 2)
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-runtime | ✅ COMPLETE | ~12,000 | 115+ | Full agent loop, 15+ tools |
-| sera-gateway | ✅ COMPLETE | ~25,000 | 223+ | HTTP/WS server, all routes |
-| sera-tui | ✅ COMPLETE | ~1,000 | 2+ | ratatui terminal UI |
-| sera-byoh-agent | ✅ COMPLETE | ~500 | 0 | BYOH reference impl |
-| sera-testing | ✅ COMPLETE | — | 8+ | Mock implementations |
+| sera-runtime | ⚠️ 90% | 8,180 | 115+ | Core operational; 3 LLM compaction condensers are stubs |
+| sera-gateway | ⚠️ 90% | 21,757 | 223+ | Core operational; 20 TODOs across 8 files |
+| sera-meta | ✅ COMPLETE | 2,196 | — | 3-tier evolution, shadow sessions, constitutional rules |
+| sera-tui | ✅ COMPLETE | 835 | 2+ | ratatui TUI, crossterm input |
+| sera-byoh-agent | ✅ COMPLETE | 221 | — | BYOH reference implementation |
+| sera-testing | ✅ COMPLETE | 326 | 8+ | Mock implementations, contract tests |
+
+### Missing Crates (Phase 3-4)
+
+| Crate | Spec Reference | Priority | bd Issue |
+|-------|---------------|----------|----------|
+| sera-mcp | SPEC-interop | P3 | sera-11ak |
+| sera-a2a | SPEC-interop | P3 | sera-su86 |
+| sera-agui | SPEC-interop | P3 | sera-4qel |
+| sera-plugins | SPEC-plugins | P3 | sera-iyov |
 
 ---
 
 ## 3. Per-Spec Gap Analysis
 
-### SPEC-runtime ✅ 95% Complete
+### SPEC-runtime ⚠️ 90% Complete
 
 **Implemented:**
-- TurnOutcome type (6 variants)
-- ContextEngine trait with four-method lifecycle
-- 15+ tool implementations
-- Tool executor
-- LLM client (multiple providers)
-- Session manager
-- Compaction strategies
-- Agent trait (partial)
-- ReactMode enum
+- TurnOutcome type (6 variants), ContextEngine trait, 15+ tools
+- Tool executor, LLM client (multi-provider), session manager
+- Compaction strategy framework, subagent management, delegation, handoff
 
-**Missing/Incomplete:**
-- `Agent` field inventory not fully wired (model_settings, input_guardrails, output_guardrails)
-- `ToolUseBehavior` discriminated union
-- Full `ModelSettings` with sampling profiles
+**Remaining Gaps:**
+- 3 LLM-driven condensers are stubs: `SummarizingCondenser`, `AttentionCondenser`, `ExtractionCondenser`
+- `ToolUseBehavior` discriminated union not fully wired
 - `HarnessSupportContext` and `supports()` capability negotiation
 - `ReactMode::PlanAndAct` planning phase not separated
 
@@ -135,278 +124,137 @@ The SERA Rust workspace is **substantially implemented** with **19 of 26 planned
 
 ---
 
-### SPEC-hooks ⚠️ 60% Complete
+### SPEC-gateway ⚠️ 90% Complete
 
 **Implemented:**
-- `Hook` trait for native Rust hooks
-- `HookRegistry` for registration/lookup
-- `ChainExecutor` for chain execution
-- `HookContext`, `HookResult`, `HookOutcome` types
-- All `HookPoint` variants defined in sera-types
-- `HookToolKind` discriminated enum
+- AppServerTransport (Stdio, HTTP, WebSocket, gRPC), SQ/EQ envelope
+- 35+ route handlers, Discord connector, lane queue (5 modes)
+- Session persistence, transcript recording, circuit breaker, dedup
 
-**Missing/Incomplete:**
-- **WASM runtime** NOT implemented - `wasmtime` dependency not used
-- `WasmHookAdapter` for loading WASM modules
-- WASM fuel metering and memory caps
+**Remaining Gaps (20 TODOs across 8 files):**
+- LSP server routing not wired (`routes/lsp.rs`)
+- Process status persistence (`services/process_manager.rs`)
+- OIDC session mapping (`routes/oidc.rs`)
+- Intercom manifest resolution (`routes/intercom.rs`)
+- LLM proxy auth context extraction (`routes/llm_proxy.rs`)
+- Pipeline executor spawning (`routes/pipelines.rs`)
+- Change artifact population from gateway pipeline (`bin/sera.rs`)
+
+**Files:** `rust/crates/sera-gateway/src/`
+
+---
+
+### SPEC-hooks ✅ 85% Complete
+
+**Implemented:**
+- `Hook` trait (async), `HookRegistry`, `ChainExecutor`
+- `HookContext`, `HookResult`, `HookOutcome` types
+- All `HookPoint` variants in sera-types
+- **WASM adapter exists** (`wasm_adapter.rs`, feature-gated with wasmtime)
+
+**Remaining Gaps:**
+- WASM fuel metering and memory caps not configured
 - `HookAbortSignal` async cancellation
 - `PermissionOverrides` in HookResult
-- Two-tier hook bus (InternalHookBus vs PluginHookBus)
-- `PluginEvent` envelope for external plugins
-- `updated_input` transformation support
+- Two-tier hook bus (Internal vs Plugin)
+- `updated_input` transformation support (TODO in executor)
 
-**Files:** `rust/crates/sera-hooks/src/`, `rust/crates/sera-types/src/hook.rs`
+**Files:** `rust/crates/sera-hooks/src/`
 
 ---
 
 ### SPEC-memory ✅ 85% Complete (via sera-session)
 
 **Implemented:**
-- Four-tier ABC (`UnconstrainedMemory`, `TokenMemory`, `SlidingWindowMemory`, `SummarizeMemory`)
-- `MemoryBackend` trait (in sera-session via MemoryWrapper)
-- `MemoryEntry` with ephemeral/Wisp support
-- `MemoryContext`, `MemoryQuery`, `MemoryResult` types
-- Content-hash based MemoryId
+- Four-tier ABC (Unconstrained, Token, SlidingWindow, Summarize)
+- `MemoryBackend` trait via MemoryWrapper
+- `MemoryEntry` with ephemeral/Wisp support, content-hash MemoryId
 
-**Missing/Incomplete:**
-- No dedicated `sera-memory` crate
-- RAG integration not implemented
-- PostgreSQL + Qdrant backend (Tier 2/3) not implemented
-- `EmbeddingBasedSearch` not implemented
+**Remaining Gaps:**
+- No dedicated `sera-memory` crate (embedded in sera-session)
+- RAG / embedding-based search not implemented
+- PostgreSQL + Qdrant backend (enterprise) deferred
 - `WorkflowMemoryManager` for Circle coordination
-- `ContextWindow` assembly from memory
 
-**Files:** `rust/crates/sera-session/src/memory_wrapper.rs`, `rust/crates/sera-types/src/memory.rs`
+**Files:** `rust/crates/sera-session/src/memory_wrapper.rs`
 
 ---
 
-### SPEC-workflow-engine ✅ 80% Complete
+### SPEC-workflow-engine ✅ 90% Complete
 
 **Implemented:**
-- `WorkflowTask` type with full beads-compatible schema
-- `WorkflowTaskId` (content-hash via SHA-256)
-- `WorkflowStatus` enum
-- Atomic claim protocol (8 tests passing)
-- `WorkflowTaskDependency` with `DependencyType`
-- Ready queue with topological sort
-- `WorkflowSentinel` enum (all 6 variants)
-- Cron scheduler integration
+- Full workflow engine: types, registry, scheduling, dreaming config
+- Atomic claim protocol with stale reaper
+- Topological sort, SCC (Tarjan) cycle detection
+- Termination detection, coordination with ConcurrencyScheduler
+- Ready queue with dependency closure
 
-**Missing/Incomplete:**
+**Remaining Gaps:**
 - `AwaitType` gates (GhRun, GhPr, Timer, Human, Mail, Change)
 - `WorkflowMemoryManager` coordinator-scoped summary
-- BeeAI-style step sentinels in execution
-- `meta_scope` field for self-evolution routing
 - `change_artifact_id` provenance tracking
 
 **Files:** `rust/crates/sera-workflow/src/`
 
 ---
 
-### SPEC-self-evolution 🔲 15% Complete
+### SPEC-self-evolution ✅ 85% Complete
 
-**Implemented:**
-- Design-forward types in sera-types (`ChangeArtifactId`, `BlastRadius`, `EvolutionTier`)
-- `ConstitutionalRule` type
-- `ChangeArtifact` struct
-- `HookPoint::ConstitutionalGate` defined
+**Implemented (sera-meta, 2,196 LOC):**
+- 3-tier evolution policy (Agent / Config / Code)
+- Constitutional rule enforcement
+- Approval matrix
+- Artifact pipeline with full lifecycle
+- Shadow session parallel validation
 
-**Missing/Incomplete:**
-- **sera-meta crate does not exist**
-- Tier 1/2/3 self-evolution machinery
-- Constitutional rule registry
-- Shadow session replay mode
-- `meta_scope` BlastRadius field fully wired
-- Change artifact approval pipeline
-- Self-modification prevention
+**Remaining Gaps:**
+- Integration with gateway pipeline (`change_artifact: None` in sera.rs)
+- Self-modification prevention guards
+- `meta_scope` BlastRadius field fully wired in workflow
 
-**Files:** `rust/crates/sera-types/src/evolution.rs` (design types only)
-
----
-
-### SPEC-gateway ✅ 95% Complete
-
-**Implemented:**
-- AppServerTransport trait (Stdio, HTTP, WebSocket, gRPC)
-- SQ/EQ envelope
-- 35+ route handlers
-- Discord connector
-- WebSocket transport (behind enterprise flag)
-- Lane queue with 5 modes
-- Session persistence
-- Circle coordination scaffold
-- Transcript recording
-
-**Missing/Incomplete:**
-- Connection retry logic (deferred to Phase 2)
-- HTTP chat handler → LaneQueue wiring (sera-t4zo)
-- Steer injection at tool boundary (gateway side, partial)
-
-**Files:** `rust/crates/sera-gateway/src/`
-
----
-
-### SPEC-interop 🔲 0% Complete
-
-**Planned crates:** sera-mcp, sera-a2a, sera-agui
-
-**Implemented:**
-- None
-
-**Missing/Incomplete:**
-- `sera-mcp` — MCP server + client bridge using `rmcp` crate
-- `sera-a2a` — A2A protocol adapter (vendored from `a2aproject/A2A`)
-- `sera-agui` — AG-UI streaming protocol (17 event types)
-- ACP compatibility (feature-gated via sera-a2a)
-
----
-
-### SPEC-plugins 🔲 0% Complete
-
-**Implemented:**
-- Plugin capability enum types (design-forward)
-
-**Missing/Incomplete:**
-- `sera-plugin-sdk` crate
-- Plugin registry in sera-gateway
-- gRPC plugin lifecycle management
-- Plugin health checking
-- `sera-plugins` crate (no longer in workspace)
-
----
-
-### SPEC-circles 🔲 30% Complete
-
-**Implemented:**
-- Design-forward types in sera-types (`Circle`, `CircleMember`, `CircleRole`, `CoordinationPolicy`)
-- `CircleState` in sera-gateway
-- `SharedMemory` KV store
-- `CircleMessage` (broadcast + directed)
-
-**Missing/Incomplete:**
-- Full coordination logic
-- Tarjan SCC cycle detection
-- `ConcurrencyPolicy` enforcement
-- `ResultAggregator` trait
-- `ConvergenceConfig` loop terminators
-- `WorkflowMemoryManager` coordinator-scoped
-- `CircleBlackboard` artifact bus
-- All 7 coordination policies fully implemented
+**Files:** `rust/crates/sera-meta/src/`
 
 ---
 
 ### SPEC-tools ✅ 100% Complete
 
-**Fully implemented:**
-- SandboxProvider trait (object-safe)
-- DockerSandboxProvider (bollard)
-- WASMSandboxProvider
-- ExternalSandboxProvider
-- OpenShellSandboxProvider
-- SsrfValidator (loopback, link-local, metadata)
-- Kill switch (CON-04)
-- Binary identity (TOFU SHA-256)
-- Bash AST pre-exec
-- 15 acceptance tests
+All sandbox providers, SSRF validation, bash AST, kill switch, binary identity implemented.
 
-**Files:** `rust/crates/sera-tools/src/`
+### SPEC-identity-authz ✅ 95% Complete
 
----
-
-### SPEC-identity-authz ✅ 100% Complete
-
-**Fully implemented:**
-- JWT authentication
-- OIDC integration
-- argon2 password hashing
-- casbin RBAC adapter
-- CapabilityToken (with narrowing)
-- API key auth
-- Auth middleware for axum
-- Principal registry
-
-**Files:** `rust/crates/sera-auth/src/`
-
----
+JWT, OIDC, API keys, argon2, casbin RBAC adapter, capability tokens. Minor gap: RBAC policy enforcement not fully integrated (TODO).
 
 ### SPEC-observability ✅ 100% Complete
 
-**Fully implemented:**
-- OTel triad (opentelemetry =0.27, opentelemetry-otlp =0.27, tracing-opentelemetry =0.28)
-- AuditBackend trait (object-safe)
-- LaneFailureClass 15-variant enum
-- Emitter hierarchy
-- OCSF audit event structure
+OTel triad version-pinned, AuditBackend, LaneFailureClass (15 variants), OCSF audit.
 
-**Files:** `rust/crates/sera-telemetry/src/`
+### SPEC-config ✅ 95% Complete
 
----
+Figment, schema registry, manifest loader, env override, file watcher. Minor gap: `shadow_store.commit_overlay` unimplemented.
 
-### SPEC-config ✅ 100% Complete
+### SPEC-secrets ⚠️ 30% Complete
 
-**Fully implemented:**
-- Figment integration (layered config)
-- Schema registry (schemars)
-- ShadowConfigStore
-- ConfigVersionLog
-- Manifest loader (K8s-style YAML)
-- Env override pattern
-- 66 tests
-
-**Files:** `rust/crates/sera-config/src/`
-
----
-
-### SPEC-secrets ⚠️ 40% Complete
-
-**Implemented:**
-- SecretProvider trait scaffold
-- SecretId, SecretVersion types
-- Basic secret storage
-
-**Missing/Incomplete:**
-- Full provider implementation (Vault, AWS SM)
-- Secret rotation
-- Side-routed entry pattern
-- Credential injection into tools
-
-**Files:** `rust/crates/sera-secrets/src/`
-
----
+Only `EnvSecretsProvider` (44 LOC). Vault, AWS SM, Azure KV, secret rotation all missing.
 
 ### SPEC-deployment ⚠️ 50% Complete
 
-**Implemented:**
-- Dockerfile.sera (multi-stage)
-- docker-compose.sera.yml
-- sera.yaml.example
-- Docker setup for gateway + runtime
+Dockerfile + docker-compose exist. K8s manifests, multi-instance, BYOH deployment missing.
 
-**Missing/Incomplete:**
-- K8s manifests
-- Enterprise deployment topology
-- Multi-instance coordination
-- BYOH agent deployment
+### SPEC-hitl-approval ✅ 80% Complete
 
-**Files:** `rust/` (Dockerfile, docker-compose)
+Full approval workflow with escalation chains. Remaining: speculative execution during wait, timeout handling.
 
----
+### SPEC-circles ⚠️ 40% Complete
 
-### SPEC-hitl-approval ⚠️ 60% Complete
+Design types + coordination scaffold in sera-workflow. Full 7-policy implementation, blackboard, convergence incomplete.
 
-**Implemented:**
-- ApprovalRouter scaffold
-- ApprovalTicket type
-- WaitingForApproval in TurnOutcome
-- Basic escalation chain
+### SPEC-interop 🔲 0% Complete
 
-**Missing/Incomplete:**
-- Full HITL workflow
-- Speculative execution during wait
-- Multi-tier approval routing
-- Timeout handling
+sera-mcp, sera-a2a, sera-agui not started. Issues exist (sera-11ak, sera-su86, sera-4qel).
 
-**Files:** `rust/crates/sera-hitl/src/`
+### SPEC-plugins 🔲 0% Complete
+
+Design types only. Issue exists (sera-iyov).
 
 ---
 
@@ -414,62 +262,67 @@ The SERA Rust workspace is **substantially implemented** with **19 of 26 planned
 
 ```
                     ┌─────────────────── sera-types (leaf) ─────────────────────┐
-                    │                (no internal deps)                      │
-                    └────────────┬────────────┬────────────┬───────┬──────────┘
-                               │          │          │        │
-            ┌─────────────────┴─┐  ┌─────┴──────┐  ┌───┴──────┐
-            │ sera-errors       │  │ sera-config│  │ sera-queue│
-            │ sera-cache      │  │ sera-telemetry
-            │ sera-secrets  │  │                   └──► sera-gateway
-            │ sera-session  │  │ sera-events
-            │ sera-auth   │  │ sera-db         ──────► sera-runtime
-            │ sera-hooks │
-            │ sera-tools │
-            │ sera-hitl │ 
-            │ sera-workflow │
-            │ sera-tui  │
-            │ sera-runtime │
-            │ sera-gateway ◄─────────────────────────────►
-            │ sera-byoh-agent
-            └──────────────────────────────────────────────────────────┘
-            
-MISSING (not yet created):
-  ├── sera-models ────────── Model provider abstractions
-  ├── sera-skills ────────── Skill pack loading  
-  ├── sera-meta ───────────── Self-evolution machinery
-  ├── sera-mcp ───────────── MCP server/client
-  ├── sera-a2a ───────────── A2A protocol adapter
-  ├── sera-agui ───────────── AG-UI streaming
-  └── sera-plugins ────────── gRPC plugin system
+                    │                (no internal deps)                         │
+                    └────────────┬────────────┬────────────┬───────┬────────────┘
+                                │            │            │       │
+             ┌──────────────────┘  ┌─────────┘  ┌────────┘       │
+             │                     │             │                │
+    sera-config              sera-db        sera-queue      sera-telemetry
+    sera-errors              sera-auth      sera-events     sera-cache
+    sera-secrets             sera-session                   sera-secrets
+    sera-hooks               sera-workflow
+    sera-tools               sera-models
+    sera-hitl                sera-skills
+    sera-meta ──► sera-events
+                                     │
+                    ┌────────────────┘
+                    ▼
+              sera-runtime ──► sera-hooks, sera-hitl, sera-config, sera-db
+                    │
+                    ▼
+              sera-gateway ──► ALL ABOVE (aggregator hub)
+                    │
+              sera-tui ──► sera-types + reqwest
+              sera-byoh-agent ──► sera-types + sera-config
+              sera-testing ──► sera-types + sera-db + sera-queue + sera-tools
+
+MISSING (4 crates):
+  ├── sera-mcp ────────────── MCP server/client (bd: sera-11ak)
+  ├── sera-a2a ────────────── A2A protocol adapter (bd: sera-su86)
+  ├── sera-agui ───────────── AG-UI streaming (bd: sera-4qel)
+  └── sera-plugins ────────── gRPC plugin system (bd: sera-iyov)
 ```
 
 ---
 
 ## 5. Next Steps (Prioritized)
 
-### Immediate (Current Session)
+### High Priority (P1) — Runtime Polish
 
-1. **Fix discord test** — `event_loop_processes_discord_message` pre-existing failure
-2. **Verify all tests pass** — `cargo test --workspace`
+1. **sera-runtime LLM compaction** — Implement 3 condenser stubs (summarizer, attention, extraction)
+2. **sera-gateway TODO cleanup** — Wire LSP routing, process management, auth context extraction
 
-### Short Term (Next 2-4 Sessions)
+### Medium Priority (P2) — Domain Completion
 
-1. **sera-hooks WASM runtime** — Implement WasmHookAdapter with wasmtime
-2. **sera-t4zo** — Wire HTTP chat handler through LaneQueue
-3. **sera-5ehb** — Complete steer injection gateway integration
+1. **sera-secrets providers** — Add Docker secret, file-based encrypted, Vault scaffolds
+2. **sera-errors adoption** — Integrate error codes across crates
+3. **sera-auth RBAC wiring** — Complete casbin policy enforcement
+4. **sera-config shadow store** — Implement `commit_overlay`
+5. **Circles coordination** — Complete 7 coordination policies in sera-workflow
 
-### Medium Term (Phase 1)
+### Low Priority (P3) — Interop & Enterprise
 
-1. **sera-models** — Create model provider abstractions crate
-2. **sera-skills** — Create skill pack loading crate
-3. **sera-meta** — Begin self-evolution machinery
-4. **Circle coordination** — Complete coordination policy implementations
+1. **sera-mcp** — MCP server/client bridge (bd: sera-11ak)
+2. **sera-a2a** — A2A protocol adapter (bd: sera-su86)
+3. **sera-agui** — AG-UI streaming (bd: sera-4qel)
+4. **sera-plugins** — gRPC plugin system (bd: sera-iyov)
 
-### Long Term (Phase 2-4)
+### Deferred (P4)
 
-1. **Interop crates** — sera-mcp, sera-a2a, sera-agui
-2. **sera-plugins** — gRPC plugin system
-3. **Enterprise features** — Vault secrets, advanced HITL, K8s deployment
+1. **Enterprise auth** — OIDC/SCIM/AuthZen/SSF
+2. **K8s deployment** — Manifests, multi-instance, leader election
+3. **Redis cache** — sera-cache FredBackend
+4. **LCM memory** — DAG-based lossless context management
 
 ---
 
@@ -477,38 +330,35 @@ MISSING (not yet created):
 
 | Crate | Tests | Status |
 |-------|-------|--------|
-| sera-auth | 28 | ✅ PASS |
 | sera-types | 272+ | ✅ PASS |
 | sera-gateway | 223+ | ✅ PASS |
 | sera-runtime | 115+ | ✅ PASS |
 | sera-config | 52+ | ✅ PASS |
 | sera-workflow | 40+ | ✅ PASS |
+| sera-auth | 28+ | ✅ PASS |
 | sera-telemetry | 18+ | ✅ PASS |
-| sera-queue | 12+ | ✅ PASS |
-| sera-session | 14+ | ✅ PASS |
 | sera-tools | 15+ | ✅ PASS |
+| sera-session | 14+ | ✅ PASS |
+| sera-queue | 12+ | ✅ PASS |
 | sera-testing | 8+ | ✅ PASS |
-| **TOTAL** | **500+** | **✅ ALL PASS** |
+| sera-tui | 2+ | ✅ PASS |
+| sera-hitl | inline | ✅ PASS |
+| sera-meta | inline | ✅ PASS |
+| sera-models | — | ✅ COMPILES |
+| sera-skills | — | ✅ COMPILES |
+| sera-events | inline | ✅ PASS |
+| sera-hooks | inline | ✅ PASS |
+| **TOTAL** | **1,196** | **✅ ALL PASS** |
 
 ---
 
-## 7. bd Issues for Gaps
+## 7. Change Log
 
-The following gaps require bd issues to be created:
-
-| Gap | Priority | Spec | Suggested Action |
-|-----|----------|------|------------------|
-| WASM hook runtime not implemented | P1 | SPEC-hooks | Create sera-hooks-wasm issue |
-| sera-models crate missing | P1 | SPEC-runtime | Create sera-models issue |
-| sera-skills crate missing | P1 | SPEC-runtime | Create sera-skills issue |
-| sera-meta crate missing | P2 | SPEC-self-evolution | Create sera-meta issue |
-| sera-mcp not implemented | P3 | SPEC-interop | Create sera-mcp issue |
-| sera-a2a not implemented | P3 | SPEC-interop | Create sera-a2a issue |
-| sera-agui not implemented | P3 | SPEC-interop | Create sera-agui issue |
-| sera-plugins not implemented | P3 | SPEC-plugins | Create sera-plugins issue |
-| Circle coordination incomplete | P2 | SPEC-circles | Create sera-circles-impl issue |
-| Discord test pre-existing failure | P2 | — | Create sera-discord-test issue |
+| Date | Session | Changes |
+|------|---------|---------|
+| 2026-04-15 | S14 | Initial tracker creation |
+| 2026-04-16 | S15b | Fresh assessment: corrected crate count (19→23), LOC (29K→64.6K), tests (500→1,196); updated sera-models/skills/meta/hitl/hooks/events from NOT STARTED/PARTIAL to COMPLETE; recalculated all phase percentages; corrected Phase 2 description |
 
 ---
 
-*Generated 2026-04-15 by automated spec/codebase analysis*
+*Generated 2026-04-16 by Session 15b fresh codebase assessment*

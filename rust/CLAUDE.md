@@ -58,6 +58,9 @@ cargo check -p sera-core
 | `sera-runtime`    | both | Agent worker binary + lib (ContextEngine, Condensers)   |
 | `sera-tui`        | bin  | Terminal UI (ratatui) — replaces Go TUI                 |
 | `sera-testing`    | lib  | Test utilities, MockQueueBackend, MockSandboxProvider   |
+| `sera-models`     | lib  | Model provider abstractions (ModelProvider trait)        |
+| `sera-skills`     | lib  | Skill pack loading, filesystem-based discovery           |
+| `sera-meta`       | lib  | Self-evolution: 3-tier policy, shadow sessions, rules    |
 | `sera-byoh-agent` | bin  | BYOH agent reference implementation                     |
 
 ## Dependency Graph

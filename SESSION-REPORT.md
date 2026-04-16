@@ -1,68 +1,62 @@
-# Session Report — Session 20
+# Session Report — Session 22
 
 **Date:** 2026-04-16
 **Author:** Entity
+**Branch:** sera20
 
 ## Session Status
 
-Session 20 — Phase 0 Completion Sprint
+Session 22 — Audit Fix Sprint: Top P1 Bugs
 
 ## Issues Closed
 
-No new beads issues — Phase 0 gaps were tracked in the IMPLEMENTATION-TRACKER, not as individual beads issues.
+| Bead | Title | Resolution |
+|------|-------|------------|
+| sera-dfi1 | P1-A: Hardcoded JWT secret in sera-auth Default impl | **Fixed** — env var + random fallback |
+| sera-5ct3 | P1-C: Parallel concurrency policy silently falls back to Sequential | **Fixed** — std::thread::scope for real parallelism |
+| sera-wk1q | P1-D: byoh-agent panics on startup failures | **Fixed** — Result propagation + error logging |
+| sera-ruez | P1-B: Production panics in gateway services (.expect on JSON) | **Closed as not-a-bug** — all .expect() in #[cfg(test)] |
+
+## Issues Assessed (Open)
+
+| Bead | Title | Assessment |
+|------|-------|------------|
+| sera-mp0c | P1-E: sera-db has 16 repository modules with zero tests | PG repos need live database; sqlite.rs already has 25+ tests. Needs testcontainers harness. |
+| sera-8lcc | P1-F: Sandbox providers are all stubs | Docker provider needs bollard wiring (~2-3h). WASI needs wasmtime. |
 
 ## Work Completed
 
-### Phase 0 Completion: sera-errors, sera-cache, sera-secrets
+### P1-A: Hardcoded JWT secret (sera-dfi1)
+- `sera-auth/src/jwt.rs` — `JwtService::Default` now reads `SERA_JWT_SECRET` env var
+- Falls back to random 32-byte hex secret with `tracing::warn!` if unset
+- Added `rand` and `hex` workspace deps to sera-auth
+- New test: `default_provider_reads_env_or_generates`
 
-All 8 Phase 0 foundation crates are now **100% complete** with tests and integration.
+### P1-C: Parallel concurrency policy (sera-5ct3)
+- `sera-workflow/src/coordination.rs` — `ConcurrencyPolicy::Parallel` now uses `std::thread::scope` for genuine OS-thread parallelism
+- `ConcurrencyPolicy::Bounded(n)` also parallelizes within each chunk
+- New test: `parallel_runs_concurrently` with atomic max-in-flight verification
+- No new dependencies (std::thread::scope stable since Rust 1.63)
 
-#### sera-errors (already complete, verified)
-- 248 LOC, 5 tests
-- `SeraErrorCode` (15 variants) with HTTP + gRPC status mapping
-- `SeraError` structured error with `IntoSeraError` trait
-- `ErrorResponse` serialisable body for JSON APIs
-- Already wired into `sera-gateway` via `AppError::Sera` variant with `From<SeraError>` impl
+### P1-D: BYOH agent panics (sera-wk1q)
+- `sera-byoh-agent/src/health.rs` — `serve()` returns `Result` instead of panicking on bind failure
+- `sera-byoh-agent/src/main.rs` — spawn site logs errors via `error!` macro
 
-#### sera-cache (tests added)
-- 134 LOC, 7 tests (NEW)
-- `CacheBackend` async trait + `MokaBackend` (in-process, Moka 0.12)
-- Tests: miss returns None, set/get roundtrip, TTL param, delete, overwrite, capacity eviction
-- Redis backend deferred to Phase 1
-
-#### sera-secrets (already complete, verified)
-- 636 LOC across 6 source files, 20 tests
-- 4 providers: `EnvSecretsProvider`, `DockerSecretsProvider`, `FileSecretsProvider`, `ChainedSecretsProvider`
-- Enterprise scaffolds (Vault, AWS, Azure) as documentation anchors
-- Full CRUD test coverage across all providers
-
-### IMPLEMENTATION-TRACKER.md Updated
-- Phase 0: 95% → 100% (all 8 crates ✅ COMPLETE)
-- Phase 3: 0% → 60% SCAFFOLDED (sera-mcp, sera-a2a, sera-agui, sera-plugins all in workspace)
-- Total crates: 23 → 27 (all planned crates present)
-- Total tests: 1,429 → 1,818
-- Total LOC: ~168,781 across 376 .rs files
-- Removed stale "Missing Crates" section, replaced with Phase 3 table
+### P1-B: Gateway .expect() assessment (sera-ruez)
+- Audited all `.expect()` calls in sera-gateway/src/services/
+- Every instance is inside `#[cfg(test)]` blocks — no production panic risk
+- Only non-test `.expect()` is Tarjan SCC algorithm invariant (logically safe)
+- Closed as not-a-bug
 
 ## Quality Gates
 
 - `cargo check --workspace` — clean (0 errors)
-- `cargo test --workspace` — 1,818 tests pass, 0 failures
-- `cargo test -p sera-cache` — 7 tests pass (newly added)
-- `cargo test -p sera-errors` — 5 tests pass
-- `cargo test -p sera-secrets` — 20 tests pass
+- `cargo clippy --workspace -- -D warnings` — clean (0 warnings)
+- `cargo test --workspace` — all tests pass, 0 failures
+- 6 files changed, +95 -9 lines
 
-## Phase 0 Final Status
+## Next Session Priorities
 
-| Crate | Status | Tests |
-|-------|--------|-------|
-| sera-types | ✅ COMPLETE | 272+ |
-| sera-config | ✅ COMPLETE | 52+ |
-| sera-errors | ✅ COMPLETE | 5 |
-| sera-cache | ✅ COMPLETE | 7 |
-| sera-db | ✅ COMPLETE | — |
-| sera-queue | ✅ COMPLETE | 12+ |
-| sera-telemetry | ✅ COMPLETE | 18+ |
-| sera-secrets | ✅ COMPLETE | 20 |
-
-**Phase 0: 8/8 crates COMPLETE (100%)**
+1. **sera-mp0c** — Set up PG integration test harness with testcontainers
+2. **sera-8lcc** — Implement Docker sandbox provider via bollard
+3. Remaining P2/P3 beads from Session 21 audit

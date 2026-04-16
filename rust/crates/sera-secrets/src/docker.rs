@@ -70,10 +70,10 @@ impl SecretsProvider for DockerSecretsProvider {
             let file_type = entry.file_type().map_err(|e| SecretsError::Io {
                 reason: e.to_string(),
             })?;
-            if file_type.is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    keys.push(name.to_owned());
-                }
+            if file_type.is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                keys.push(name.to_owned());
             }
         }
         Ok(keys)

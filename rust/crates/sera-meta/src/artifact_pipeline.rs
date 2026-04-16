@@ -47,7 +47,7 @@ impl ChangeArtifactStore {
 
     /// Submit a new artifact; returns its `ChangeArtifactId`.
     pub async fn submit(&self, artifact: ChangeArtifact) -> ChangeArtifactId {
-        let id = artifact.id.clone();
+        let id = artifact.id;
         self.inner.write().await.insert(id.hash, artifact);
         id
     }
@@ -80,7 +80,7 @@ impl ChangeArtifactStore {
         let mut guard = self.inner.write().await;
         let artifact = guard
             .get_mut(&id.hash)
-            .ok_or_else(|| ArtifactStoreError::NotFound(id.clone()))?;
+            .ok_or(ArtifactStoreError::NotFound(*id))?;
         if artifact.transition_to(new_status) {
             Ok(())
         } else {
@@ -190,7 +190,7 @@ impl ArtifactPipeline {
             return Err(PipelineError::PolicyRejected(eval.summary));
         }
 
-        let id = artifact.id.clone();
+        let id = artifact.id;
         let key = id.to_string();
 
         let shadow = if ApprovalRequirements::for_blast_radius(artifact.blast_radius)

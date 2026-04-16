@@ -30,6 +30,7 @@ pub struct EvolutionPolicy {
 
 impl EvolutionPolicy {
     /// Create a new `EvolutionPolicy`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         name: String,
@@ -266,7 +267,7 @@ impl PolicyEngine {
 
         if !policy.check_proposer(&artifact.proposer) {
             return Ok(EvolutionResult::rejected(
-                artifact.id.clone(),
+                artifact.id,
                 policy.id.clone(),
                 format!(
                     "proposer lacks required scopes for policy '{}'",
@@ -289,7 +290,7 @@ impl PolicyEngine {
         );
 
         Ok(EvolutionResult::approved(
-            artifact.id.clone(),
+            artifact.id,
             policy.id.clone(),
             summary,
             policy.requires_shadow_evaluation,

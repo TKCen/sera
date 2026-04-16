@@ -43,6 +43,7 @@ impl KnowledgeTier {
 
 /// Sort field for knowledge entries.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum KnowledgeSortField {
     ByRecency,
     ByScore,

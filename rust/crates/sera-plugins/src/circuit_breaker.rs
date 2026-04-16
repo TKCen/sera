@@ -62,12 +62,11 @@ impl CircuitBreaker {
     /// timeout has elapsed.
     pub fn state(&self) -> CircuitState {
         let mut inner = self.inner.lock().expect("circuit breaker lock poisoned");
-        if inner.state == CircuitState::Open {
-            if let Some(opened_at) = inner.opened_at {
-                if opened_at.elapsed() >= self.reset_timeout {
-                    inner.state = CircuitState::HalfOpen;
-                }
-            }
+        if inner.state == CircuitState::Open
+            && let Some(opened_at) = inner.opened_at
+            && opened_at.elapsed() >= self.reset_timeout
+        {
+            inner.state = CircuitState::HalfOpen;
         }
         inner.state
     }

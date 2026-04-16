@@ -153,13 +153,15 @@ fn matches_naming_pattern(name: &str, pattern: &str) -> bool {
     matches_pattern_recursive(name, pattern)
 }
 
+type TokenMatcher = (&'static str, fn(&str) -> Option<usize>);
+
 fn matches_pattern_recursive(input: &str, pattern: &str) -> bool {
     if pattern.is_empty() {
         return input.is_empty();
     }
 
     // Try each known token first
-    let tokens: &[(&str, fn(&str) -> Option<usize>)] = &[
+    let tokens: &[TokenMatcher] = &[
         ("YYYY", |s| {
             if s.len() >= 4 && s[..4].chars().all(|c| c.is_ascii_digit()) {
                 Some(4)
@@ -191,23 +193,21 @@ fn matches_pattern_recursive(input: &str, pattern: &str) -> bool {
     ];
 
     for (token, matcher) in tokens {
-        if let Some(pat_rest) = pattern.strip_prefix(token) {
-            if let Some(consumed) = matcher(input) {
-                if matches_pattern_recursive(&input[consumed..], pat_rest) {
-                    return true;
-                }
-            }
-            // Token did not match — fall through to literal check
+        if let Some(pat_rest) = pattern.strip_prefix(token)
+            && let Some(consumed) = matcher(input)
+            && matches_pattern_recursive(&input[consumed..], pat_rest)
+        {
+            return true;
         }
     }
 
     // Literal character match
     let pat_char = pattern.chars().next().unwrap();
     let pat_char_len = pat_char.len_utf8();
-    if let Some(inp_char) = input.chars().next() {
-        if inp_char == pat_char {
-            return matches_pattern_recursive(&input[inp_char.len_utf8()..], &pattern[pat_char_len..]);
-        }
+    if let Some(inp_char) = input.chars().next()
+        && inp_char == pat_char
+    {
+        return matches_pattern_recursive(&input[inp_char.len_utf8()..], &pattern[pat_char_len..]);
     }
 
     false

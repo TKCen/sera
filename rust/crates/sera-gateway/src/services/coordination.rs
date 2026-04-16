@@ -83,10 +83,10 @@ pub fn detect_cycles(edges: &[(NodeId, NodeId)]) -> Vec<Vec<NodeId>> {
                     self.result.push(component);
                 } else if component.len() == 1 {
                     let only = &component[0];
-                    if let Some(neighbours) = self.adj.get(only) {
-                        if neighbours.iter().any(|n| n == only) {
-                            self.result.push(component);
-                        }
+                    if let Some(neighbours) = self.adj.get(only)
+                        && neighbours.iter().any(|n| n == only)
+                    {
+                        self.result.push(component);
                     }
                 }
             }

@@ -145,7 +145,7 @@ impl InMemoryPromptVersionStore {
     }
 
     /// Deactivate all versions for the given key.
-    fn deactivate_all(versions: &mut Vec<PromptVersion>) {
+    fn deactivate_all(versions: &mut [PromptVersion]) {
         for v in versions.iter_mut() {
             v.active = false;
         }
@@ -296,10 +296,10 @@ impl PromptVersionStore for InMemoryPromptVersionStore {
     fn get_overrides(&self, agent_id: &str) -> HashMap<PromptSection, String> {
         let mut result = HashMap::new();
         for ((aid, section), versions) in &self.versions {
-            if aid == agent_id {
-                if let Some(active) = versions.iter().find(|v| v.active) {
-                    result.insert(*section, active.content.clone());
-                }
+            if aid == agent_id
+                && let Some(active) = versions.iter().find(|v| v.active)
+            {
+                result.insert(*section, active.content.clone());
             }
         }
         result

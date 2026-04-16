@@ -167,10 +167,10 @@ impl SessionManager {
         for entry in std::fs::read_dir(&self.storage_path)? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_file() {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    sessions.push(stem.to_string());
-                }
+            if path.is_file()
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                sessions.push(stem.to_string());
             }
         }
         sessions.sort();

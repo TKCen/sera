@@ -53,7 +53,7 @@ async fn run_agent_list(client: &ApiClient) -> Result<()> {
         println!("No agents found.");
         return Ok(());
     }
-    println!("{:<36}  {:<24}  {:<12}  {}", "ID", "NAME", "STATUS", "TEMPLATE");
+    println!("{:<36}  {:<24}  {:<12}  TEMPLATE", "ID", "NAME", "STATUS");
     println!("{}", "-".repeat(90));
     for agent in &agents {
         let name = agent.display_name.as_deref().unwrap_or(&agent.name);

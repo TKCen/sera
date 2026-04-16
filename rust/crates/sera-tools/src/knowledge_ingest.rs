@@ -56,10 +56,11 @@ pub enum IngestSource {
 }
 
 /// How to handle candidate blocks that already exist in the circle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MergePolicy {
     /// Skip if a block with the same content hash exists.
+    #[default]
     Skip,
     /// Overwrite the existing block.
     Overwrite,
@@ -67,28 +68,17 @@ pub enum MergePolicy {
     Append,
 }
 
-impl Default for MergePolicy {
-    fn default() -> Self {
-        Self::Skip
-    }
-}
-
 /// What action to take when a contradiction is detected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContradictionAction {
     /// Reject the incoming candidate — do not create a block for it.
     Reject,
     /// Tag the candidate with a conflict marker but still create the block.
+    #[default]
     Tag,
     /// Create the new block and mark the conflicting existing block as superseded.
     Supersede,
-}
-
-impl Default for ContradictionAction {
-    fn default() -> Self {
-        Self::Tag
-    }
 }
 
 /// Configuration for the contradiction-detection stage.

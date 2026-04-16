@@ -180,15 +180,15 @@ impl ActivityLogFilter {
     }
 
     fn matches(&self, entry: &KnowledgeActivityEntry) -> bool {
-        if let Some(op) = self.op {
-            if entry.op != op {
-                return false;
-            }
+        if let Some(op) = self.op
+            && entry.op != op
+        {
+            return false;
         }
-        if let Some(ref scope) = self.scope {
-            if &entry.scope != scope {
-                return false;
-            }
+        if let Some(ref scope) = self.scope
+            && &entry.scope != scope
+        {
+            return false;
         }
         if let Some(ref page_id) = self.page_id {
             match &entry.page_id {
@@ -196,15 +196,15 @@ impl ActivityLogFilter {
                 _ => return false,
             }
         }
-        if let Some(since) = self.since {
-            if entry.timestamp < since {
-                return false;
-            }
+        if let Some(since) = self.since
+            && entry.timestamp < since
+        {
+            return false;
         }
-        if let Some(until) = self.until {
-            if entry.timestamp > until {
-                return false;
-            }
+        if let Some(until) = self.until
+            && entry.timestamp > until
+        {
+            return false;
         }
         true
     }

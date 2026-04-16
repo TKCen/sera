@@ -222,15 +222,15 @@ impl ChangeArtifact {
 
     /// Transition to a new status. Returns true if the transition was valid.
     pub fn transition_to(&mut self, new_status: ChangeArtifactStatus) -> bool {
-        let valid = match (self.status, new_status) {
-            (ChangeArtifactStatus::Proposed, ChangeArtifactStatus::Evaluating) => true,
-            (ChangeArtifactStatus::Proposed, ChangeArtifactStatus::Rejected) => true,
-            (ChangeArtifactStatus::Evaluating, ChangeArtifactStatus::Approved) => true,
-            (ChangeArtifactStatus::Evaluating, ChangeArtifactStatus::Rejected) => true,
-            (ChangeArtifactStatus::Approved, ChangeArtifactStatus::Applied) => true,
-            (ChangeArtifactStatus::Applied, ChangeArtifactStatus::RolledBack) => true,
-            _ => false,
-        };
+        let valid = matches!(
+            (self.status, new_status),
+            (ChangeArtifactStatus::Proposed, ChangeArtifactStatus::Evaluating)
+                | (ChangeArtifactStatus::Proposed, ChangeArtifactStatus::Rejected)
+                | (ChangeArtifactStatus::Evaluating, ChangeArtifactStatus::Approved)
+                | (ChangeArtifactStatus::Evaluating, ChangeArtifactStatus::Rejected)
+                | (ChangeArtifactStatus::Approved, ChangeArtifactStatus::Applied)
+                | (ChangeArtifactStatus::Applied, ChangeArtifactStatus::RolledBack)
+        );
         if valid {
             self.status = new_status;
             self.updated_at = chrono::Utc::now();

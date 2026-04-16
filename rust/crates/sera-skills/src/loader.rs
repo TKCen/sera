@@ -44,10 +44,10 @@ impl SkillLoader {
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    packs.push(name.to_string());
-                }
+            if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                packs.push(name.to_string());
             }
         }
 
@@ -91,13 +91,11 @@ impl SkillPack for FileSystemSkillPack {
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Skip config files
-                    if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                        skills.push(stem.to_string());
-                    }
-                }
+            if path.is_file()
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                && path.extension().and_then(|e| e.to_str()) == Some("json")
+            {
+                skills.push(stem.to_string());
             }
         }
 

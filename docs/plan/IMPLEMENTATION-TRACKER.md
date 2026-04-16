@@ -91,14 +91,14 @@ The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** p
 | sera-byoh-agent | ✅ COMPLETE | 221 | — | BYOH reference implementation |
 | sera-testing | ✅ COMPLETE | 326 | 8+ | Mock implementations, contract tests |
 
-### Missing Crates (Phase 3-4)
+### Interop & Plugin Crates (Phase 3) — Added Sessions 19-20
 
-| Crate | Spec Reference | Priority | bd Issue |
-|-------|---------------|----------|----------|
-| sera-mcp | SPEC-interop | P3 | sera-11ak |
-| sera-a2a | SPEC-interop | P3 | sera-su86 |
-| sera-agui | SPEC-interop | P3 | sera-4qel |
-| sera-plugins | SPEC-plugins | P3 | sera-iyov |
+| Crate | Status | LOC | Tests | Notes |
+|-------|--------|-----|-------|-------|
+| sera-mcp | ✅ SCAFFOLDED | — | — | MCP server/client bridge (SPEC-interop §3) |
+| sera-a2a | ✅ SCAFFOLDED | — | — | A2A protocol adapter, vendored types (SPEC-interop §4) |
+| sera-agui | ✅ SCAFFOLDED | — | — | AG-UI streaming protocol, 17 event types (SPEC-interop §6) |
+| sera-plugins | ✅ SCAFFOLDED | — | 37 | gRPC plugin registry, SDK, circuit breaker (SPEC-plugins) |
 
 ---
 

@@ -22,8 +22,10 @@ pub mod error;
 pub mod loader;
 pub mod skill_pack;
 pub mod bundle;
+pub mod knowledge_schema;
 
 pub use error::SkillsError;
 pub use loader::SkillLoader;
 pub use skill_pack::SkillPack;
 pub use bundle::SkillBundle;
+pub use knowledge_schema::{KnowledgeSchemaValidator, SchemaViolation, ViolationSeverity, default_schema};

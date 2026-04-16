@@ -1,56 +1,63 @@
-# Session Report — Session 16
+# Session Report — Session 18
 
 **Date:** 2026-04-16
 **Author:** Entity
 
 ## Session Status
 
-Session 16 — P2 Bundle Work: Gateway TODO Resolution, Secrets Providers, Prompt Versioning, Web UI Redesign
+Session 18 — Epic 30 Closeout + P3 Bundle
 
 ## Issues Closed
 
-- **sera-4ciu**: P2-A Resolve 20 TODO markers across 8 gateway source files
-- **sera-aju7**: P2-B Implement real secret providers beyond EnvSecretsProvider
-- **sera-nvf**: P2-C Versioned System Prompt Self-Editing (Rust adaptation in sera-meta)
-- **sera-6h3**: P2-D Web UI comprehensive UX redesign — closed as superseded (web/ does not exist in Rust workspace)
+- **sera-chb**: P2-A Close Epic 30: Closed-Loop Self-Improvement — verified all P2 sub-stories (30.1-30.6, 30.3a) complete in sera-meta; remaining 30.3b/30.7 deferred to P3
+- **sera-ssf**: P3-B Memory contradiction detection on knowledge-store write
+- **sera-ov2**: P3-C Persistent read-only sources bind-mount for agent containers
+- **sera-bna**: P3-D Circle knowledge schema skill — structured wiki conventions
 
 ## Work Completed
 
-### P2-A: Gateway TODO Resolution (sera-4ciu)
+### P2-A: Epic 30 Closeout (sera-chb)
 
-Resolved all 20 TODO markers across 8 sera-gateway source files. Each TODO was either replaced with a real implementation or converted to a documented limitation with appropriate logging:
+Verified all P2-scope sub-stories for Epic 30 (Closed-Loop Self-Improvement) are complete in sera-meta:
 
-- **`routes/lsp.rs`** (3 TODOs): Replaced empty stubs with `tracing::warn!` + proper error returns explaining LSP server routing is not yet implemented
-- **`routes/intercom.rs`** (5 TODOs): Added authorization deferral comments with tracing, default channel set (`agent:{id}`, `broadcast`), real JWT subscription tokens via `state.jwt.issue()`
-- **`routes/oidc.rs`** (2 TODOs): Added in-memory `SESSION_STORE` via `LazyLock<RwLock<HashMap>>`, storing sessions on callback and removing on logout
-- **`routes/chat.rs`** (2 TODOs): Converted doc-level TODOs to proper doc comments about sera-runtime worker loop
-- **`routes/llm_proxy.rs`** (1 TODO): Added `HeaderMap` extractor, extracting agent_id from `X-Agent-Id` header
-- **`routes/pipelines.rs`** (1 TODO): Changed status to "accepted" with tracing, documented async executor deferral
-- **`services/process_manager.rs`** (2 TODOs): Added tracing warnings, improved error messages noting sera-workflow deferral
-- **`bin/sera.rs`** (4 TODOs): Replaced all `TODO(P0-5/P0-6)` with documentation about sera-meta evolution pipeline
+- **30.1 ConstitutionalRule registry** — `constitutional.rs`: Full registry with evaluate, register, unregister, rules_at
+- **30.2 ShadowSession** — `shadow_session.rs`: ShadowSession, ShadowSessionHandle, ShadowSessionRegistry
+- **30.3a Prompt versioning** — `prompt_versioning.rs`: PromptVersionStore trait, propose/activate/rollback
+- **30.4 Interaction scoring** — `interaction_scoring.rs`: 5 dimensions, 3 modes (SelfScore/Evaluator/Operator)
+- **30.5 Prompt refinement** — `prompt_refinement.rs`: Weekly cycle, weakest dimension analysis
+- **30.6 Validation/rollback** — `validation.rs`: 48h windows, drift detection, auto-rollback
+- **Supporting**: approval_matrix.rs (blast-radius matrix), artifact_pipeline.rs (propose→evaluate→approve→apply), policy.rs (3-tier PolicyEngine)
 
-### P2-B: Secrets Providers (sera-aju7)
+Remaining P3: 30.3b (sleeptime consolidation) and 30.7 (fine-tuning data export).
 
-Expanded sera-secrets from a 44-line scaffold to a full 6-module crate with 20 tests:
+### P3-B: Contradiction Detection (sera-ssf)
 
-- **`lib.rs`**: Expanded `SecretsProvider` trait with `store`, `delete`, `provider_name`; added `ReadOnly` and `Io` error variants
-- **`env.rs`**: Moved `EnvSecretsProvider` here; store/delete return ReadOnly
-- **`docker.rs`** (new): `DockerSecretsProvider` reading from `/run/secrets/` with configurable path
-- **`file.rs`** (new): `FileSecretsProvider` with full CRUD, auto-creates directories
-- **`chained.rs`** (new): `ChainedSecretsProvider` with fallback get, merged list, skip-ReadOnly store
-- **`enterprise.rs`** (new): Doc-commented scaffolds for Vault, AWS SM, Azure KV providers
+Replaced MVS stub in `sera-tools/knowledge_ingest.rs` with real contradiction detection (+421 LOC, 10 new tests):
 
-### P2-C: Versioned Prompt Sections (sera-nvf)
+- **`ContradictionConfig`**: `enabled` (default false), `similarity_threshold` (default 0.8), `action` (Reject/Tag/Supersede)
+- **`ContradictionDetector` trait**: Async trait for future extensibility
+- **`TextSimilarityDetector`**: Word-frequency cosine similarity — tokenizes by whitespace, builds frequency vectors, computes cosine sim; skips identical hashes (dedup ≠ contradiction)
+- **`IngestRequest`** updated with optional `contradiction_config`
+- **Pipeline** uses detector when config enabled; `Reject` excludes conflicting candidates, `Tag`/`Supersede` pass through
 
-Implemented Rust adaptation of versioned system prompt self-editing in sera-meta (444 LOC, 10 tests):
+### P3-C: Sources Bind-Mount (sera-ov2)
 
-- **`prompt_versioning.rs`** (new): `PromptSection` enum (Role, Principles, CommunicationStyle, ToolGuidelines, CustomInstructions), `ActivationMode` (Auto/Review), `PromptVersion` struct, `PromptVersionStore` trait, `InMemoryPromptVersionStore` with propose/activate/rollback/get_overrides
-- **`lib.rs`**: Added module and re-exports
-- Safety: 4000-char max, rationale required, rollback creates new versions (no history rewriting)
+Added read-only source mounts for agent containers (+196 LOC, 8 new tests):
 
-### P2-D: Web UI Redesign (sera-6h3)
+- **`SourceMount`** type in `sera-types/sandbox.rs`: host_path, container_path, optional label
+- **`SandboxConfig.sources`**: Vec<SourceMount> field (defaults to empty)
+- **`SandboxInfo.sources`**: Optional field for runtime reporting
+- **`validate_sources()`**: Enforces `/sources/` prefix and rejects `..` path traversal
+- **`build_source_binds()`** in Docker provider: Formats `host:container:ro` bind strings
 
-Closed as superseded — `web/` directory does not exist in the Rust workspace. The TS/React web UI was removed during the Rust migration. Web UI redesign needs a new issue once a Rust-native frontend is established.
+### P3-D: Knowledge Schema Skill (sera-bna)
+
+New `knowledge_schema` module in sera-skills (532 LOC, 20 new tests):
+
+- **Types** in `sera-types/skill.rs`: `KnowledgeSchema`, `PageTypeRule`, `CategoryRule`, `CrossReferenceRule`, `EnforcementMode` (Enforced/Advisory)
+- **`KnowledgeSchemaValidator`**: Validates page names against naming patterns, required frontmatter fields, cross-reference requirements
+- **`default_schema()`**: Sensible default for system circle (decision, architecture, runbook page types)
+- Naming pattern matcher supports `YYYY`/`MM`/`DD`/`<slug>` tokens
 
 ## Quality Gates
 

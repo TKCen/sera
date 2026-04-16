@@ -18,6 +18,7 @@ pub use policy::{
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use sera_types::sandbox::SourceMount;
 use thiserror::Error;
 
 pub use policy::SandboxPolicy as SandboxPolicyType;
@@ -35,6 +36,7 @@ pub struct SandboxConfig {
     pub labels: HashMap<String, String>,
     pub memory_limit_bytes: Option<u64>,
     pub cpu_limit: Option<f64>,
+    pub sources: Vec<SourceMount>,
 }
 
 /// Output from executing a command inside a sandbox.
@@ -60,6 +62,35 @@ pub enum SandboxError {
     NotFound,
     #[error("policy violation: {reason}")]
     PolicyViolation { reason: String },
+    #[error("invalid source mount: {reason}")]
+    InvalidSourceMount { reason: String },
+}
+
+/// Validate source mounts in a config.
+///
+/// Rules:
+/// - Container paths must start with `/sources/`
+/// - Container paths must not contain `..`
+pub fn validate_sources(sources: &[SourceMount]) -> Result<(), SandboxError> {
+    for mount in sources {
+        if mount.container_path.contains("..") {
+            return Err(SandboxError::InvalidSourceMount {
+                reason: format!(
+                    "container_path '{}' must not contain '..'",
+                    mount.container_path
+                ),
+            });
+        }
+        if !mount.container_path.starts_with("/sources/") {
+            return Err(SandboxError::InvalidSourceMount {
+                reason: format!(
+                    "container_path '{}' must start with '/sources/'",
+                    mount.container_path
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Object-safe async trait for sandbox providers.
@@ -99,4 +130,71 @@ pub trait SandboxProvider: Send + Sync {
 
     /// Get the status of the sandbox.
     async fn status(&self, handle: &SandboxHandle) -> Result<String, SandboxError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_mount(host: &str, container: &str) -> SourceMount {
+        SourceMount {
+            host_path: host.to_string(),
+            container_path: container.to_string(),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn sandbox_config_sources_default_empty() {
+        let config = SandboxConfig::default();
+        assert!(config.sources.is_empty());
+    }
+
+    #[test]
+    fn sandbox_config_with_sources() {
+        let config = SandboxConfig {
+            sources: vec![make_mount("/host/ref", "/sources/ref")],
+            ..Default::default()
+        };
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].container_path, "/sources/ref");
+    }
+
+    #[test]
+    fn validate_sources_accepts_valid_paths() {
+        let sources = vec![
+            make_mount("/host/a", "/sources/a"),
+            make_mount("/host/b", "/sources/b/nested"),
+        ];
+        assert!(validate_sources(&sources).is_ok());
+    }
+
+    #[test]
+    fn validate_sources_rejects_dotdot() {
+        let sources = vec![make_mount("/host/a", "/sources/../etc")];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn validate_sources_rejects_wrong_prefix() {
+        let sources = vec![make_mount("/host/a", "/data/a")];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+        assert!(err.to_string().contains("/sources/"));
+    }
+
+    #[test]
+    fn validate_sources_rejects_root_sources_exact() {
+        // "/sources/" requires something after the slash
+        let sources = vec![make_mount("/host/a", "/other/sources/a")];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+    }
+
+    #[test]
+    fn validate_sources_empty_ok() {
+        assert!(validate_sources(&[]).is_ok());
+    }
 }

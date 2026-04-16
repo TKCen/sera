@@ -1,6 +1,6 @@
 # SERA Rust Migration — Implementation Tracker
 
-> **Document Status:** Current (Updated 2026-04-16 via fresh codebase assessment — Session 15b)
+> **Document Status:** Current (Updated 2026-04-16 — Session 18)
 > **Purpose:** Master tracking document for SERA 2.0 Rust migration
 > **Basis:** Full spec analysis + codebase inspection + test run verification
 
@@ -19,7 +19,7 @@ The SERA Rust workspace is **substantially implemented** with **23 of 27 planned
 | Missing Crates | sera-mcp, sera-a2a, sera-agui, sera-plugins |
 | Total Rust LOC | 64,643 (325 .rs files) |
 | Build Status | ✅ COMPILES (release build passing) |
-| Test Status | ✅ ALL PASSING (1,196 tests) |
+| Test Status | ✅ ALL PASSING (1,309 tests) |
 
 ### Phase Completion
 
@@ -75,13 +75,13 @@ The SERA Rust workspace is **substantially implemented** with **23 of 27 planned
 |-------|--------|-----|-------|-------|
 | sera-session | ✅ COMPLETE | 1,391 | 14+ | 6-state machine, transcript, 4-tier memory |
 | sera-auth | ✅ COMPLETE | 1,289 | 28+ | JWT, OIDC, API keys, casbin RBAC (TODO: full wiring) |
-| sera-tools | ✅ COMPLETE | 1,447 | 15+ | 5 sandbox providers, SSRF, bash AST, kill switch |
+| sera-tools | ✅ COMPLETE | 1,900+ | 35+ | 5 sandbox providers, SSRF, bash AST, kill switch, contradiction detection, source mounts |
 | sera-hooks | ✅ COMPLETE | 1,206 | — | Native hooks + WASM adapter (feature-gated wasmtime) |
 | sera-hitl | ✅ COMPLETE | 819 | — | Full approval workflow, escalation chains, tests in lib |
 | sera-workflow | ✅ COMPLETE | 3,145 | 40+ | Atomic claims, SCC cycle detection, termination, coordination |
 | sera-events | ✅ COMPLETE | 501 | — | Audit Merkle chain (SHA-256), Centrifugo pub/sub |
 | sera-models | ✅ COMPLETE | 219 | — | ModelProvider trait, ProviderConfig, ModelResponse |
-| sera-skills | ✅ COMPLETE | 349 | — | SkillLoader, SkillPack trait, YAML discovery |
+| sera-skills | ✅ COMPLETE | 880+ | 20+ | SkillLoader, SkillPack trait, YAML discovery, KnowledgeSchemaValidator |
 
 ### Runtime & Gateway (Phase 2)
 
@@ -89,7 +89,7 @@ The SERA Rust workspace is **substantially implemented** with **23 of 27 planned
 |-------|--------|-----|-------|-------|
 | sera-runtime | ⚠️ 90% | 8,180 | 115+ | Core operational; 3 LLM compaction condensers are stubs |
 | sera-gateway | ⚠️ 90% | 21,757 | 223+ | Core operational; 20 TODOs across 8 files |
-| sera-meta | ✅ COMPLETE | 2,196 | — | 3-tier evolution, shadow sessions, constitutional rules |
+| sera-meta | ✅ COMPLETE | 2,196 | 64+ | 3-tier evolution, shadow sessions, constitutional rules (Epic 30 P2 closed) |
 | sera-tui | ✅ COMPLETE | 835 | 2+ | ratatui TUI, crossterm input |
 | sera-byoh-agent | ✅ COMPLETE | 221 | — | BYOH reference implementation |
 | sera-testing | ✅ COMPLETE | 326 | 8+ | Mock implementations, contract tests |

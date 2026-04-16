@@ -4,6 +4,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::LifecycleMode;
 
+/// A read-only source bind-mount for agent containers.
+/// Separates operator-provided reference material from agent-generated knowledge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceMount {
+    /// Host path to the source material.
+    pub host_path: String,
+    /// Container path (default: /sources/<name>).
+    pub container_path: String,
+    /// Human-readable label for this source.
+    pub label: Option<String>,
+}
+
 /// Sandbox security tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SandboxTier {
@@ -41,6 +53,8 @@ pub struct SandboxInfo {
     pub parent_agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceMount>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +110,7 @@ mod tests {
             chat_url: None,
             parent_agent: None,
             subagent_role: None,
+            sources: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SandboxInfo = serde_json::from_str(&json).unwrap();
@@ -121,6 +136,7 @@ mod tests {
             chat_url: Some("http://sera-core:3001/chat/inst-999".to_string()),
             parent_agent: Some("parent-agent".to_string()),
             subagent_role: Some("executor".to_string()),
+            sources: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SandboxInfo = serde_json::from_str(&json).unwrap();
@@ -146,10 +162,92 @@ mod tests {
             chat_url: None,
             parent_agent: None,
             subagent_role: None,
+            sources: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("lifecycle_mode"));
         assert!(!json.contains("proxy_enabled"));
         assert!(!json.contains("parent_agent"));
+    }
+
+    #[test]
+    fn source_mount_roundtrip() {
+        let mount = SourceMount {
+            host_path: "/host/docs".to_string(),
+            container_path: "/sources/docs".to_string(),
+            label: Some("Reference docs".to_string()),
+        };
+        let json = serde_json::to_string(&mount).unwrap();
+        let parsed: SourceMount = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.host_path, mount.host_path);
+        assert_eq!(parsed.container_path, mount.container_path);
+        assert_eq!(parsed.label, mount.label);
+    }
+
+    #[test]
+    fn source_mount_no_label_roundtrip() {
+        let mount = SourceMount {
+            host_path: "/host/data".to_string(),
+            container_path: "/sources/data".to_string(),
+            label: None,
+        };
+        let json = serde_json::to_string(&mount).unwrap();
+        let parsed: SourceMount = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.host_path, mount.host_path);
+        assert!(parsed.label.is_none());
+    }
+
+    #[test]
+    fn sandbox_info_with_sources_serializes_correctly() {
+        let info = SandboxInfo {
+            container_id: "c2".to_string(),
+            agent_name: "a2".to_string(),
+            sandbox_type: "docker".to_string(),
+            image: "img".to_string(),
+            status: SandboxStatus::Running,
+            created_at: "2026-04-05T00:00:00Z".to_string(),
+            tier: SandboxTier::Tier1,
+            instance_id: "inst2".to_string(),
+            lifecycle_mode: None,
+            proxy_enabled: None,
+            container_ip: None,
+            chat_url: None,
+            parent_agent: None,
+            subagent_role: None,
+            sources: vec![SourceMount {
+                host_path: "/host/ref".to_string(),
+                container_path: "/sources/ref".to_string(),
+                label: Some("Ref".to_string()),
+            }],
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("sources"));
+        assert!(json.contains("/sources/ref"));
+        let parsed: SandboxInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.sources.len(), 1);
+        assert_eq!(parsed.sources[0].host_path, "/host/ref");
+    }
+
+    #[test]
+    fn sandbox_info_empty_sources_not_serialized() {
+        let info = SandboxInfo {
+            container_id: "c3".to_string(),
+            agent_name: "a3".to_string(),
+            sandbox_type: "docker".to_string(),
+            image: "img".to_string(),
+            status: SandboxStatus::Running,
+            created_at: "2026-04-05T00:00:00Z".to_string(),
+            tier: SandboxTier::Tier1,
+            instance_id: "inst3".to_string(),
+            lifecycle_mode: None,
+            proxy_enabled: None,
+            container_ip: None,
+            chat_url: None,
+            parent_agent: None,
+            subagent_role: None,
+            sources: vec![],
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains("sources"));
     }
 }

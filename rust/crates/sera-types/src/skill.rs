@@ -168,6 +168,67 @@ impl SkillRegistry {
     }
 }
 
+/// A knowledge schema defines structured conventions for circle knowledge.
+/// Loaded into agent context when writing to the circle's scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeSchema {
+    /// Schema name (e.g., "engineering-wiki", "research-notes").
+    pub name: String,
+    /// Schema version for compatibility tracking.
+    pub version: String,
+    /// Allowed page types with their naming conventions.
+    pub page_types: Vec<PageTypeRule>,
+    /// Category definitions for organizing pages.
+    pub categories: Vec<CategoryRule>,
+    /// Cross-reference requirements between page types.
+    pub cross_reference_rules: Vec<CrossReferenceRule>,
+    /// Whether to enforce validation or just provide advisory guidance.
+    pub enforcement_mode: EnforcementMode,
+}
+
+/// Defines a page type and its naming convention.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageTypeRule {
+    /// Page type name (e.g., "decision", "architecture", "runbook").
+    pub name: String,
+    /// Naming pattern (e.g., "YYYY-MM-DD-<slug>").
+    pub naming_pattern: String,
+    /// Required frontmatter fields.
+    pub required_fields: Vec<String>,
+    /// Optional description of this page type.
+    pub description: Option<String>,
+}
+
+/// Defines a category for organizing pages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryRule {
+    pub name: String,
+    /// Allowed page types in this category.
+    pub allowed_page_types: Vec<String>,
+    pub description: Option<String>,
+}
+
+/// Defines cross-reference requirements between page types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossReferenceRule {
+    /// Source page type that must reference the target.
+    pub from_type: String,
+    /// Target page type that must be referenced.
+    pub to_type: String,
+    /// Whether this cross-reference is required or optional.
+    pub required: bool,
+}
+
+/// Whether schema rules are enforced or advisory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnforcementMode {
+    /// Reject non-conforming writes.
+    Enforced,
+    /// Warn but allow non-conforming writes.
+    Advisory,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

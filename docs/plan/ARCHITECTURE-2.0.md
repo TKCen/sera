@@ -1,8 +1,8 @@
 # SERA 2.0 — Rust Workspace Architecture Guide
 
-> **Companion to:** [architecture.md](architecture.md) (visual diagrams) · [ARCHITECTURE-ADDENDUM-2026-04-13.md](ARCHITECTURE-ADDENDUM-2026-04-13.md) (design decisions) · [Spec Index](specs/README.md)
+> **Companion to:** [architecture.md](architecture.md) (visual diagrams) · [ARCHITECTURE-ADDENDUM-2026-04-13.md](ARCHITECTURE-ADDENDUM-2026-04-13.md) (10 canonical design decisions) · [ARCHITECTURE-ADDENDUM-2026-04-16.md](ARCHITECTURE-ADDENDUM-2026-04-16.md) (Hermes comparison refinements: MemoryBlock, native hooks, sera-commands, flush_min_turns) · [Spec Index](specs/README.md)
 > **Scope:** Rust workspace (`rust/`) — crate graph, data flow, extensibility model, deployment tiers
-> **Read first:** [ARCHITECTURE-ADDENDUM-2026-04-13.md](ARCHITECTURE-ADDENDUM-2026-04-13.md) for the ten canonical design decisions that shape everything below.
+> **Read first:** [ARCHITECTURE-ADDENDUM-2026-04-13.md](ARCHITECTURE-ADDENDUM-2026-04-13.md) for the ten canonical design decisions, then [ARCHITECTURE-ADDENDUM-2026-04-16.md](ARCHITECTURE-ADDENDUM-2026-04-16.md) for Hermes-informed refinements.
 
 ---
 
@@ -26,10 +26,15 @@ The workspace has one true leaf crate (`sera-types`) from which all others grow.
 sera-types  ←──────────────────────────────────────────── leaf (no internal deps)
   │
   ├── sera-errors          error types scaffold
+  ├── sera-commands        shared command registry (CLI + gateway dispatch) — Hermes pattern
   ├── sera-config          env/file config loading; manifest_loader (K8s-style YAML)
   ├── sera-session         6-state SessionStateMachine, ContentBlock transcript
   ├── sera-cache           cache layer scaffold
   ├── sera-secrets         secrets management scaffold
+  │
+  └── MEMORY BLOCK (struct)   priority: f32, recency_boost: f32, char_budget: usize
+                              injected into every ContextWindow; self-assembly via
+                              1-sentence summary header for semantic lookups
   │
   ├── sera-db              PostgreSQL (sqlx) + SQLite (rusqlite), migrations, repos
   │     └── sera-auth      API keys, JWT, OIDC, axum middleware
@@ -74,7 +79,7 @@ External world
 ┌─────────────────────────────────────────────────────────────┐
 │  sera-gateway: Event Ingress                                │
 │                                                             │
-│  [⛓ edge_ingress]  ← webhooks, callbacks                   │
+│  [⛓ edge_ingress]  ← webhooks, callbacks                  │
 │       │                                                     │
 │  Event Router                                               │
 │  [⛓ pre_route]     ← authz, dedupe, rate-limit, PII filter │
@@ -86,12 +91,15 @@ External world
 │  │  Global concurrency cap (GlobalThrottle)             │   │
 │  └──────────────────────────────────────────────────────┘   │
 │       │                                                     │
-│  Session State Machine  (sera-session)                      │
-│  Created → Active → Compacting → Archived                   │
-│  [⛓ post_route]    ← audit, HITL hooks, async tasks        │
+│  Session State Machine  (sera-session)                     │
+│  Created → Active → Compacting → Archived                  │
+│  [⛓ post_route]    ← audit, HITL hooks, async tasks      │
 │       │                                                     │
 │  Dequeue turn → inject context window                       │
 │  (soul, memory, tool schemas — all assembled gateway-side)  │
+│  Hook naming (Hermes ↔ SERA):                              │
+│    Hermes: prefetch_all() + sync_all() + queue_prefetch_all() │
+│    SERA:   pre_agent_turn + post_human_turn                 │
 └─────────────────────────┬───────────────────────────────────┘
                           │ TurnContext
                           ▼
@@ -100,11 +108,13 @@ External world
 │                                                             │
 │  [⛓ pre_turn]                                              │
 │       │                                                     │
-│  ContextEngine::assemble(&TurnContext) → ContextWindow      │
-│  (pluggable — default pipeline, RAG-heavy, LCM/DAG,        │
-│   minimal; CompactionStrategy fires when budget nears)      │
-│       │                                                     │
-│  LLM call (provider-agnostic; gateway acts as LLM proxy)   │
+│  ContextEngine::assemble(&TurnContext) → ContextWindow
+│  (pluggable — default pipeline, RAG-heavy, LCM/DAG,
+│   minimal; CompactionStrategy fires when budget nears)
+│  flush_min_turns: 6  ← auto-prompt skill creation after N tool calls
+│  (Hermes self-improving skills loop — agent proposes saving approach as skill)
+│       │
+│  LLM call (provider-agnostic; gateway acts as LLM proxy)
 │       │                                                     │
 │  ┌── tool_call loop ────────────────────────────────────┐   │
 │  │  runtime emits tool_call event                       │   │
@@ -143,9 +153,9 @@ Behaviour is swapped at the trait boundary, not by recompiling. All traits are `
 | `QueueBackend` | `sera-queue` | Enqueue/dequeue turns. Implementations: `LocalQueueBackend` (SQLite), PostgreSQL (`apalis` 0.7 in Tier 3). Config selects active backend. |
 | `ContextEngine` | `sera-runtime` | Assemble a `ContextWindow` from a `TurnContext`. Pluggable strategy: default pipeline, RAG-heavy, LCM/DAG, minimal. Harness does not care which engine is active. |
 | `CompactionStrategy` | `sera-runtime` | Compact session history when the token budget nears threshold. Built-in: `AgentAsSummarizer` (default), `AlgorithmicCleanup`, `Hybrid`. |
-| `Hook` | `sera-hooks` | In-process hook interface. Every native Rust hook implements this. Future WASM hooks use a `WasmHookAdapter` that implements the same trait — `ChainExecutor` is unchanged. |
+| `Hook` | `sera-hooks` | In-process hook interface. **Built-in hooks are native Rust trait methods.** `WasmHookAdapter` implements the same trait for third-party opt-in isolation only — WASM chain executor is over-engineering for built-in hooks; plain method calls at known points work better (Hermes lesson). |
 | `SandboxProvider` | `sera-tools` | Execute sandboxed tool calls. Implementations: native (bollard + wasmtime), `OpenShellSandboxProvider` (gRPC, Tier 3), `MockSandboxProvider` (tests). |
-| `MemoryBackend` | `sera-gateway` | Read/write agent memory. File backend (Tier 1/2), PostgreSQL + Qdrant backend (Tier 2/3). Runtime never calls this directly — gateway injects assembled context. |
+| `MemoryBackend` | `sera-gateway` | Read/write agent memory. File backend (Tier 1/2), PostgreSQL + Qdrant backend (Tier 2/3). Runtime never calls this directly — gateway assembles a priority-ordered `MemoryBlock` (SPEC-memory §2.1) and injects it as opaque context. **2-tier injection model (Hermes pattern): compact always-present MemoryBlock + semantic search on demand. Add tiers only when 2-tier proves insufficient.** Each MemoryBlock has: `priority: f32`, `recency_boost: f32`, `char_budget: usize`, and a 1-sentence summary header enabling the agent to self-look up relevant memories. |
 | `AgentRuntimeService` | gRPC (proto) | External harness registration. BYOH runtimes (Claude Code, Codex, Hermes) implement this service and connect via gRPC. The embedded `sera-runtime` is called as a library — no gRPC hop. |
 
 ### 4.2 Trait Signatures (abbreviated)
@@ -195,14 +205,15 @@ See individual crate docs and specs for the full signatures:
 
 ---
 
-## 5. Three Extension Points
+## 5. Four Extension Points
 
-SERA has exactly three extension mechanisms. They must not be conflated.
+SERA has exactly four extension mechanisms. They must not be conflated.
 
 | Extension point | Mechanism | When to use |
 |---|---|---|
 | **Compiled-in backends** | Ships in binary; config selects which is active | Switching between officially supported implementations (e.g., SQLite → PostgreSQL queue, file → Qdrant memory) |
-| **WASM hooks** | Runtime-loaded, sandboxed middleware in the hook pipeline | Custom authz, content policy, PII filtering — small, fast, stateless, inline. No host FS/net access; external calls go through the gateway's approved proxy. |
+| **Native Rust hooks** (default) | Built-in hooks use plain Rust trait methods at known lifecycle points (`pre_agent_turn`, `post_human_turn`). No WASM overhead, no chain executor ceremony. | Core functionality: authz, PII filtering, audit, HITL routing, memory assembly |
+| **WASM hooks** (opt-in) | Runtime-loaded, sandboxed middleware — **for third-party isolation only**. Built-in hooks are NOT WASM. | Third-party custom authz, content policy, PII filtering — small, fast, stateless, inline. No host FS/net access; external calls go through the gateway's approved proxy. |
 | **gRPC plugins** | Out-of-process services registered with the gateway | Custom backends, enterprise connectors (Siemens PLC, SCADA, ERP), custom runtimes (BYOH), any language — stateful, independently scaled, own lifecycle |
 
 **Example decisions:**

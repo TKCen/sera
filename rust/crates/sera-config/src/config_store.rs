@@ -27,4 +27,9 @@ pub trait ConfigStore: Send + Sync + 'static {
 
     /// Return a monotonically increasing version counter for change detection.
     async fn version(&self) -> Result<u64, ConfigStoreError>;
+
+    /// Write a value to the store. Override this to make a store writable.
+    async fn put(&self, _key: &str, _value: ManifestValue) -> Result<(), ConfigStoreError> {
+        Err(ConfigStoreError::Backend("store is read-only".to_string()))
+    }
 }

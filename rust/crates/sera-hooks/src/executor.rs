@@ -37,6 +37,7 @@ impl ChainExecutor {
         let chain_start = Instant::now();
         let deadline = Duration::from_millis(chain.timeout_ms);
         let mut hooks_executed: usize = 0;
+        let mut updated_input: Option<serde_json::Value> = None;
 
         for instance in &chain.hooks {
             // Respect the enabled flag.
@@ -106,9 +107,12 @@ impl ChainExecutor {
             };
 
             match hook_result {
-                HookResult::Continue { context_updates, .. } => {
-                    // TODO(P0-5/P0-6): handle updated_input field from HookResult::Continue
+                HookResult::Continue { context_updates, updated_input: hook_input } => {
                     ctx.apply_updates(context_updates);
+                    // Last hook in the chain that sets updated_input wins.
+                    if hook_input.is_some() {
+                        updated_input = hook_input;
+                    }
                 }
                 terminal => {
                     // Short-circuit.
@@ -118,6 +122,7 @@ impl ChainExecutor {
                         outcome: terminal,
                         hooks_executed,
                         duration_ms,
+                        updated_input,
                     });
                 }
             }
@@ -138,6 +143,7 @@ impl ChainExecutor {
             outcome: HookResult::pass(),
             hooks_executed,
             duration_ms,
+            updated_input,
         })
     }
 
@@ -162,16 +168,23 @@ impl ChainExecutor {
                 outcome: HookResult::pass(),
                 hooks_executed: 0,
                 duration_ms: 0,
+                updated_input: None,
             });
         }
 
         let mut current_ctx = ctx;
         let mut total_executed = 0usize;
+        let mut updated_input: Option<serde_json::Value> = None;
         let start = Instant::now();
 
         for chain in matching {
             let result = self.execute_chain(chain, current_ctx).await?;
             total_executed += result.hooks_executed;
+
+            // Propagate updated_input: last chain that sets it wins.
+            if result.updated_input.is_some() {
+                updated_input = result.updated_input;
+            }
 
             if result.outcome.is_terminal() {
                 return Ok(ChainResult {
@@ -179,6 +192,7 @@ impl ChainExecutor {
                     outcome: result.outcome,
                     hooks_executed: total_executed,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    updated_input,
                 });
             }
 
@@ -191,6 +205,7 @@ impl ChainExecutor {
             outcome: HookResult::pass(),
             hooks_executed: total_executed,
             duration_ms: start.elapsed().as_millis() as u64,
+            updated_input,
         })
     }
 }

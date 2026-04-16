@@ -55,10 +55,14 @@ impl<S: ConfigStore> ShadowConfigStore<S> {
 
     /// Apply overlay changes to the prod store.
     ///
-    /// # Panics
-    ///
-    /// This method is not yet implemented.
+    /// Writes each overlay entry into the underlying prod store. Clears the
+    /// overlay on success. Returns an error if the prod store rejects any write
+    /// (e.g. a read-only backend); in that case the overlay is left intact.
     pub async fn commit_overlay(&self) -> Result<(), ConfigStoreError> {
-        unimplemented!("commit_overlay is not yet implemented for this milestone")
+        let mut overlay = self.overlay.write().await;
+        for (key, value) in overlay.drain() {
+            self.prod.put(&key, value).await?;
+        }
+        Ok(())
     }
 }

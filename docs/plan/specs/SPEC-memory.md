@@ -190,6 +190,104 @@ The Circle coordinator reads `completed_tasks` when assigning new sub-tasks, giv
 
 ---
 
+## 2.1 Two-Tier Injection Model (Hermes-Aligned)
+
+> **Design decision — 2026-04-16.** Hermes uses a proven 2-tier memory model: a compact injected block (always present in context) + semantic search (on-demand retrieval). SERA adopts this as the default before adding complexity. The four-tier working-memory ABC (§2.0) governs *eviction strategy*; this section governs *what the LLM sees each turn*.
+
+### Tier A — Compact Injected Block (`MemoryBlock`)
+
+Every turn, the gateway assembles a single `MemoryBlock` that is unconditionally injected into the context window. This block is budget-constrained and priority-ordered — the most important context always fits.
+
+```rust
+/// A prioritized block of memory content injected into every turn's context window.
+/// Analogous to Hermes's `prefetch_all` / SERA's `pre_agent_turn` hook output.
+///
+/// The gateway assembles this block; the runtime receives it as opaque context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryBlock {
+    /// Ordered memory segments — highest priority first.
+    pub segments: Vec<MemorySegment>,
+    /// Total character budget for the injected block.
+    /// Segments are included top-down until the budget is exhausted.
+    pub char_budget: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySegment {
+    /// Source identifier (e.g., "soul", "memory.md", "knowledge/rust-patterns").
+    pub source: String,
+    /// The content to inject.
+    pub content: String,
+    /// Priority for inclusion (0 = highest). Soul is always 0.
+    pub priority: u32,
+    /// Recency boost — added to base priority score for recently-accessed segments.
+    /// Decays over turns. Prevents important but old context from being permanently evicted.
+    pub recency_boost: f64,
+    /// Character count of this segment.
+    pub char_count: usize,
+}
+
+impl MemoryBlock {
+    /// Assemble the final injection string, respecting the character budget.
+    /// Segments are sorted by effective priority (priority - recency_boost, lower = better).
+    pub fn assemble(&self) -> String {
+        let mut sorted = self.segments.clone();
+        sorted.sort_by(|a, b| {
+            let eff_a = a.priority as f64 - a.recency_boost;
+            let eff_b = b.priority as f64 - b.recency_boost;
+            eff_a.partial_cmp(&eff_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        
+        let mut result = String::new();
+        let mut remaining = self.char_budget;
+        for seg in &sorted {
+            if seg.char_count <= remaining {
+                result.push_str(&seg.content);
+                result.push('\n');
+                remaining -= seg.char_count + 1;
+            }
+        }
+        result
+    }
+}
+```
+
+### Tier B — Semantic Search (On-Demand)
+
+Tier B is the existing embedding-based search system (§2a). It fires when:
+- The LLM explicitly calls `knowledge_query` / `memory_search` tools
+- The `context_memory` hook triggers retrieval based on turn content
+- The dreaming workflow promotes entries that cross the promotion gates
+
+### Design Rationale
+
+> Start with Hermes's 2-tier model and only add tiers when it breaks down.
+
+The four-tier working-memory ABC (§2.0) and the two-tier injection model serve different purposes:
+- **Working-memory tiers** = eviction/compaction strategy (how history is managed within a session)
+- **Injection tiers** = what context the LLM sees each turn (compact block + on-demand search)
+
+This separation avoids over-architecting. Most agents need only: (1) a soul + key facts always present, and (2) semantic search for everything else.
+
+### `flush_min_turns` — Auto-Prompt Skill Creation
+
+When the `MemoryBlock` consistently exceeds its `char_budget` for `flush_min_turns` consecutive turns (default: 6), the system emits a `memory_pressure` event. This event can trigger:
+- A dreaming workflow to compact and consolidate memory
+- A skill creation prompt — the agent is asked to extract recurring patterns into a reusable skill (Hermes's `skill_manage patch` pattern)
+- A notification to the operator that the agent's memory needs attention
+
+```yaml
+agents:
+  - name: "sera"
+    memory:
+      injection:
+        char_budget: 4000          # Characters for the compact block
+        flush_min_turns: 6         # Turns before memory_pressure fires
+        recency_half_life: 10      # Turns until recency_boost decays to 50%
+```
+
+---
+
 ## 2a. Embedding-Based Memory Search
 
 > **Enhancement: OpenSwarm v3 §3 (Smart Search / Wiki TOC Router)**
@@ -514,7 +612,7 @@ pub struct MemorySearchTool;
 
 | Hook Point | Fires When |
 |---|---|
-| `context_memory` | During memory injection step in context assembly |
+| `context_memory` (alias: `pre_agent_turn`) | During memory injection step in context assembly — assembles the `MemoryBlock` (§2.1) |
 | `pre_memory_write` | Before durable memory write |
 | `post_memory_search` | After memory search returns results — enables recall signal collection and result filtering |
 
@@ -576,3 +674,5 @@ agents:
 5. **Memory retention policies** — Are there configurable TTLs or retention policies per tier?
 6. **Memory export/import** — Can an agent's memory be exported and imported to another instance?
 7. **Embedding model deployment** — How is the local embedding model deployed alongside the primary model? Separate process? In-process?
+8. **Skill auto-creation from memory pressure** — When `flush_min_turns` fires, should the system auto-create skill drafts or only notify? Hermes auto-patches via `skill_manage`; SERA should at minimum prompt the agent.
+9. **MemoryBlock segment priority tuning** — Should priority values be operator-configurable per agent, or auto-tuned based on recall signals from the dreaming system?

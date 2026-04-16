@@ -925,6 +925,7 @@ async fn run_hook_point(
                 outcome: HookResult::pass(),
                 hooks_executed: 0,
                 duration_ms: 0,
+                updated_input: None,
             }
         }
     }

@@ -357,6 +357,10 @@ pub struct ChainResult {
     pub hooks_executed: usize,
     /// Total execution time in milliseconds.
     pub duration_ms: u64,
+    /// Input transformation from a Continue result, if any hook modified the input.
+    /// Last hook in the chain that sets this wins — subsequent hooks in the same
+    /// chain receive the transformed input via `HookContext`.
+    pub updated_input: Option<serde_json::Value>,
 }
 
 impl ChainResult {
@@ -575,6 +579,7 @@ mod tests {
             outcome: HookResult::pass(),
             hooks_executed: 3,
             duration_ms: 12,
+            updated_input: None,
         };
         assert!(result.is_success());
         assert!(!result.is_rejected());
@@ -588,6 +593,7 @@ mod tests {
             outcome: HookResult::reject("nope"),
             hooks_executed: 1,
             duration_ms: 2,
+            updated_input: None,
         };
         assert!(!result.is_success());
         assert!(result.is_rejected());
@@ -601,6 +607,7 @@ mod tests {
             outcome: HookResult::redirect("other-agent"),
             hooks_executed: 2,
             duration_ms: 5,
+            updated_input: None,
         };
         assert!(!result.is_success());
         assert!(!result.is_rejected());

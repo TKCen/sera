@@ -39,7 +39,8 @@ SERA is built as a **Rust workspace** — a monorepo of interconnected crates wi
 │  sera-cache, sera-telemetry, sera-secrets    │
 ├─────────────────────────────────────────────┤
 │  Foundation                                  │
-│  sera-types, sera-config, sera-errors        │
+│  sera-types, sera-config, sera-errors,       │
+│  sera-commands                               │
 ├─────────────────────────────────────────────┤
 │  Plugin / Hook SDKs (separate publishable)   │
 │  sera-plugin-sdk (hard boundary — plugins    │
@@ -62,6 +63,7 @@ SERA is built as a **Rust workspace** — a monorepo of interconnected crates wi
 | `sera-types` | Shared domain types, IDs, Principal model, event model, protobuf definitions, `ApiVersion`, `ResourceKind`, `CapabilityManifest` | `prost`, `serde`, `uuid` |
 | `sera-config` | Composable manifest loading, directory-based discovery, schema registry, validation, environment layering, hot-reload, agent-accessible config, bundled docs | `config`, `serde`, `schemars`, `notify` |
 | `sera-errors` | Unified error types with error codes | `thiserror` |
+| `sera-commands` | **Shared command registry** — unified command definitions used by both CLI and gateway. Commands are registered once and dispatched from either entrypoint. Inspired by Hermes's `COMMAND_REGISTRY` pattern. | `sera-types`, `clap` |
 
 ### Infrastructure
 
@@ -83,7 +85,7 @@ SERA is built as a **Rust workspace** — a monorepo of interconnected crates wi
 | `sera-hooks` | WASM runtime, chainable hook pipelines, fuel metering, per-instance config, **`constitutional_gate` hook point (no `fail_open`)**, `updated_input` on `HookResult` per [SPEC-dependencies](SPEC-dependencies.md) §10.1 | `wasmtime` 43, `wasmtime-wasi`, `wasmtime-wasi-http` (allow-list via `WasiHttpView::send_request`) |
 | `sera-auth` | AuthN (JWT, OIDC, SCIM), Principal registry, AuthZ trait, built-in RBAC, AuthZen client, SSF/CAEP/RISC, **capability tokens with narrowing**, **`MetaChange` / `CodeChange` / `MetaApprover` capabilities** per [SPEC-self-evolution](SPEC-self-evolution.md) §5.2 | `jsonwebtoken` 10, `openidconnect` 3.5, `oauth2` 5, `casbin` 2.19 |
 | `sera-models` | Model adapter trait + provider implementations, **parser registry** (hermes/mistral/llama/qwen/deepseek/etc. per [SPEC-dependencies](SPEC-dependencies.md) §10.6), structured output via `llguidance` | `genai` (primary), `async-openai`, `llguidance`, `outlines-core`, `tiktoken`, `tokenizers` |
-| `sera-skills` | Skill pack loading, **`AGENTS.md` + `SKILL.md` cross-tool standards** per [SPEC-dependencies](SPEC-dependencies.md) §10.11, three-tier microagent classification per §10.10, mode transitions | `sera-types` |
+| `sera-skills` | Skill pack loading, **`AGENTS.md` + `SKILL.md` cross-tool standards** per [SPEC-dependencies](SPEC-dependencies.md) §10.11, three-tier microagent classification per §10.10, mode transitions, **self-patching skill loop** (agent can propose skill edits via `skill_manage patch`, validated and applied in a closed loop — Hermes pattern) | `sera-types` |
 | `sera-hitl` | Approval routing, escalation chains, dynamic risk-based routing, approval state machine with `revision_requested` state, `CorrectedError { feedback }` tool-result variant per [SPEC-dependencies](SPEC-dependencies.md) §10.7, `SecurityAnalyzer` trait per §10.10 | `sera-types` |
 | `sera-workflow` | Triggered workflow engine, cron scheduler (via `apalis`), **`WorkflowTask` modeled on beads `Issue` with atomic claim** per [SPEC-dependencies](SPEC-dependencies.md) §10.4 (promoted from Phase-3 to Phase-1 design input), dreaming built-in workflow, `meta_scope` field for self-evolution routing | `sera-types`, `apalis` |
 | **`sera-meta`** (new) | **Self-evolution machinery** per [SPEC-self-evolution](SPEC-self-evolution.md). Change Artifact data model, blast-radius scope enum, constitutional anchor, shadow-session dry-run, two-generation live pattern, kill switch. **Phase 4 implementation; Phase 0–3 design-forward types** | `sera-types`, `sera-auth`, `sera-hooks`, `sera-config` |
@@ -132,7 +134,7 @@ These are in the **same monorepo** but are **separately publishable** to their r
 ## 4. Dependency Graph
 
 ```
-sera-types ← sera-config, sera-errors
+sera-types ← sera-config, sera-errors, sera-commands
   ↑
 sera-db, sera-queue, sera-cache, sera-telemetry, sera-secrets
   ↑
@@ -202,6 +204,7 @@ members = [
     "crates/sera-types",
     "crates/sera-config",
     "crates/sera-errors",
+    "crates/sera-commands",
     "crates/sera-db",
     "crates/sera-queue",
     "crates/sera-cache",

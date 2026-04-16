@@ -9,12 +9,12 @@
 
 ## 1. Overview
 
-The hook system is SERA's **extensibility backbone**. Hooks are chainable WASM-based processing pipelines that fire at defined points throughout the event lifecycle. They enable operators and developers to inject custom logic — content filtering, rate limiting, PII redaction, secret injection, risk assessment, compliance checks — without modifying core code.
+The hook system is SERA's **extensibility backbone**. Hooks are chainable processing pipelines that fire at defined points throughout the event lifecycle. Built-in hooks are **plain Rust trait implementations** (`impl Hook for MyHook`); WASM sandboxing is **opt-in for third-party isolation only**. They enable operators and developers to inject custom logic — content filtering, rate limiting, PII redaction, secret injection, risk assessment, compliance checks — without modifying core code.
 
 Hooks are:
 - **Chainable** — one hook's output feeds into the next
 - **Parameterized** — each hook instance has its own configuration block
-- **Sandboxed** — they run in a WASM runtime with fuel metering and memory caps
+- **Optionally sandboxed** — third-party hooks run in a WASM runtime with fuel metering and memory caps; built-in hooks run in-process as native Rust
 - **Short-circuitable** — any hook can `Reject` or `Redirect` to stop the chain
 
 ---
@@ -60,6 +60,47 @@ These hooks run in the gateway process. They enforce policy decisions that the h
 
 > [!IMPORTANT]
 > `pre_tool` and `post_tool` are **gateway-side**. The harness forwards tool call requests to the gateway; the gateway runs these hook chains before and after dispatching to the tool executor. The harness never runs tool hooks directly and cannot bypass them.
+
+---
+
+## 1b. Hook Implementation Strategy — Native-First, WASM Opt-In
+
+> **Design decision — 2026-04-16.** SERA originally specified WASM hooks at every stage. Hermes comparison revealed this is over-engineered. Built-in hooks should be plain Rust trait methods for performance and simplicity; WASM should be reserved for third-party isolation.
+
+### Native Rust Hooks (Default)
+
+All hooks that ship with SERA are implemented as plain Rust structs that implement the `Hook` trait (§2.2). They run in-process with zero serialization overhead. Examples:
+
+- `ContentFilter` — built-in content filtering
+- `RateLimiter` — built-in rate limiting
+- `SecretInjector` — credential injection from secret providers
+- `PiiRedactor` — PII detection and masking
+- `RiskChecker` — risk assessment for tool calls
+
+These hooks are registered at startup and participate in chains identically to WASM hooks — the `ChainExecutor` is agnostic to the implementation.
+
+### WASM Hooks (Opt-In for Third-Party Isolation)
+
+WASM hooks are used **only** when:
+1. The hook author is a third party who should not have access to the gateway process
+2. The hook needs to be hot-reloaded without restarting the gateway
+3. The operator requires sandboxing guarantees (fuel metering, memory caps) for untrusted code
+
+The `WasmHookAdapter` wraps a WASM component and implements the same `Hook` trait — the chain executor doesn't distinguish between native and WASM hooks.
+
+### Subprocess Hooks (Language-Agnostic Extension)
+
+As described in §2.6, subprocess hooks provide a third option for cases where neither native Rust nor WASM is practical.
+
+### Decision Matrix
+
+| Scenario | Implementation |
+|---|---|
+| SERA ships the hook | Native Rust (`impl Hook`) |
+| Operator writes a custom hook in Rust | Native Rust, compiled into a custom build |
+| Third-party publishes a hook | WASM component (sandboxed) |
+| Legacy script needs to be a hook | Subprocess hook (§2.6) |
+| Hot-reload without restart needed | WASM or subprocess |
 
 ---
 
@@ -337,9 +378,11 @@ spec:
 
 ---
 
-## 5. WASM Runtime
+## 5. WASM Runtime (Third-Party Isolation)
 
 > **Source:** [SPEC-dependencies](SPEC-dependencies.md) §6 — `wasmtime` 43 with Component Model + WASI Preview 2, `wasmtime-wasi-http` allow-list. **`extism` is explicitly rejected** (pinned to wasmtime <31, non-WIT proprietary ABI). See SPEC-dependencies §6 for the full rationale.
+
+> **Scope clarification — 2026-04-16.** The WASM runtime is for **third-party and operator-authored hooks only**. Built-in hooks (content filter, rate limiter, secret injector, etc.) are native Rust implementations of the `Hook` trait and do not use the WASM runtime. This avoids the overhead of WASM serialization for hooks that are compiled into the binary.
 
 ### 5.1 Runtime Configuration
 
@@ -407,7 +450,7 @@ This is the **only** outbound-network path available to hooks. Raw socket access
 
 ### 6.1 Toolchains
 
-Hooks are compiled to **WASM Components** using standard toolchains:
+Third-party hooks are compiled to **WASM Components** using standard toolchains. Built-in hooks are plain Rust implementations of the `Hook` trait and do not require WASM compilation:
 
 | Language | Toolchain | SDK Crate |
 |---|---|---|

@@ -170,16 +170,17 @@ mod tests {
     /// crate::types::ToolDefinition → serde_json::Value → sera_types::tool::ToolDefinition.
     /// This catches schema incompatibilities between the two ToolDefinition types.
     #[test]
-    fn all_tool_definitions_round_trip() {
+    fn all_tool_definitions_round_trip() -> Result<(), String> {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
         assert!(!defs.is_empty(), "registry should have tools");
 
         for def in &defs {
             let value = serde_json::to_value(def)
-                .unwrap_or_else(|e| panic!("failed to serialize tool '{}': {e}", def.function.name));
+                .map_err(|e| format!("failed to serialize tool '{}': {e}", def.function.name))?;
             let _typed: sera_types::tool::ToolDefinition = serde_json::from_value(value)
-                .unwrap_or_else(|e| panic!("failed to round-trip tool '{}': {e}", def.function.name));
+                .map_err(|e| format!("failed to round-trip tool '{}': {e}", def.function.name))?;
         }
+        Ok(())
     }
 }

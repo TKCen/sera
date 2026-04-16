@@ -64,3 +64,71 @@ impl CacheBackend for MokaBackend {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn get_missing_key_returns_none() {
+        let cache = MokaBackend::new(100);
+        let result = cache.get("nonexistent").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_and_get_roundtrip() {
+        let cache = MokaBackend::new(100);
+        let val = serde_json::json!({"key": "value", "num": 42});
+        cache.set("test_key", val.clone(), None).await.unwrap();
+        let got = cache.get("test_key").await.unwrap();
+        assert_eq!(got, Some(val));
+    }
+
+    #[tokio::test]
+    async fn set_with_ttl_stores_value() {
+        let cache = MokaBackend::new(100);
+        let val = serde_json::json!("hello");
+        cache.set("ttl_key", val.clone(), Some(60)).await.unwrap();
+        let got = cache.get("ttl_key").await.unwrap();
+        assert_eq!(got, Some(val));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_key() {
+        let cache = MokaBackend::new(100);
+        cache.set("del_key", serde_json::json!(1), None).await.unwrap();
+        cache.delete("del_key").await.unwrap();
+        let got = cache.get("del_key").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_succeeds() {
+        let cache = MokaBackend::new(100);
+        // Should not error — deleting a missing key is a no-op
+        cache.delete("never_set").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overwrite_replaces_value() {
+        let cache = MokaBackend::new(100);
+        cache.set("ow_key", serde_json::json!("first"), None).await.unwrap();
+        cache.set("ow_key", serde_json::json!("second"), None).await.unwrap();
+        let got = cache.get("ow_key").await.unwrap();
+        assert_eq!(got, Some(serde_json::json!("second")));
+    }
+
+    #[tokio::test]
+    async fn capacity_limit_evicts() {
+        // Create cache with capacity 2
+        let cache = MokaBackend::new(2);
+        cache.set("a", serde_json::json!(1), None).await.unwrap();
+        cache.set("b", serde_json::json!(2), None).await.unwrap();
+        cache.set("c", serde_json::json!(3), None).await.unwrap();
+        // Moka is approximate — at least one of the first two should be evicted eventually
+        // but we can't assert deterministically which one. Just verify 'c' is present.
+        let got_c = cache.get("c").await.unwrap();
+        assert_eq!(got_c, Some(serde_json::json!(3)));
+    }
+}

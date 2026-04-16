@@ -9,6 +9,7 @@ use serde_json::json;
 
 use sera_auth::AuthError;
 use sera_db::DbError;
+use sera_errors::SeraError;
 
 /// Application-level error that converts to HTTP responses.
 #[allow(dead_code)]
@@ -22,6 +23,8 @@ pub enum AppError {
     Forbidden(String),
     /// Generic internal errors.
     Internal(anyhow::Error),
+    /// Sera-classified errors from the shared error taxonomy.
+    Sera(SeraError),
 }
 
 impl IntoResponse for AppError {
@@ -51,6 +54,11 @@ impl IntoResponse for AppError {
                     "Internal server error".to_string(),
                 )
             }
+            AppError::Sera(e) => {
+                let status = StatusCode::from_u16(e.code.http_status())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                (status, e.message.clone())
+            }
         };
 
         (status, Json(json!({"error": message}))).into_response()
@@ -72,6 +80,12 @@ impl From<AuthError> for AppError {
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
         AppError::Internal(err)
+    }
+}
+
+impl From<SeraError> for AppError {
+    fn from(err: SeraError) -> Self {
+        AppError::Sera(err)
     }
 }
 
@@ -123,5 +137,16 @@ mod tests {
         let err = AppError::Db(DbError::Conflict("duplicate key".to_string()));
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn sera_error_maps_to_http_status() {
+        let err = AppError::Sera(SeraError::not_found("agent not found"));
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "agent not found");
     }
 }

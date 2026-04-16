@@ -13,6 +13,8 @@ pub mod harness;
 pub mod subagent;
 pub mod turn;
 
+pub use sera_errors;
+
 // Retained modules
 pub mod config;
 pub mod context;

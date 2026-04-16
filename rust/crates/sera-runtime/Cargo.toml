@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 sera-types.workspace = true
 sera-config.workspace = true
+sera-errors.workspace = true
 sera-db.workspace = true
 sera-hooks.workspace = true
 sera-hitl.workspace = true

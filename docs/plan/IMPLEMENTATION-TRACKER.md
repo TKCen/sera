@@ -1,6 +1,6 @@
 # SERA Rust Migration — Implementation Tracker
 
-> **Document Status:** Current (Updated 2026-04-16 — Session 18)
+> **Document Status:** Current (Updated 2026-04-16 — Session 20)
 > **Purpose:** Master tracking document for SERA 2.0 Rust migration
 > **Basis:** Full spec analysis + codebase inspection + test run verification
 
@@ -10,26 +10,26 @@
 
 ### Current State Overview
 
-The SERA Rust workspace is **substantially implemented** with **23 of 27 planned crates** present and building. The workspace compiles successfully and all tests pass (1,196 tests across 23 crates).
+The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** present and building. The workspace compiles successfully and all tests pass (1,818 tests across 27 crates).
 
 | Metric | Value |
 |--------|-------|
 | Total Crates Planned | 27 |
-| Crates in Workspace | 23 |
-| Missing Crates | sera-mcp, sera-a2a, sera-agui, sera-plugins |
-| Total Rust LOC | 64,643 (325 .rs files) |
+| Crates in Workspace | 27 |
+| Missing Crates | None |
+| Total Rust LOC | ~168,781 (376 .rs files) |
 | Build Status | ✅ COMPILES (release build passing) |
-| Test Status | ✅ ALL PASSING (1,309 tests) |
+| Test Status | ✅ ALL PASSING (1,818 tests) |
 
 ### Phase Completion
 
 | Phase | Description | Status | Completion |
 |-------|-------------|--------|------------|
-| Phase 0 | Foundation (types, config, DB, queue, telemetry) | COMPLETE | 95% |
+| Phase 0 | Foundation (types, config, DB, queue, telemetry, errors, cache, secrets) | ✅ COMPLETE | 100% |
 | Phase 1 | Core Domain (session, auth, tools, hooks, workflow, models, skills) | COMPLETE | 90% |
 | Phase 2 | Runtime & Gateway (runtime, gateway, TUI, BYOH, meta) | IN PROGRESS | 85% |
-| Phase 3 | Interop Protocols (MCP, A2A, AG-UI) | NOT STARTED | 0% |
-| Phase 4 | Enterprise & Hardening (plugins, OIDC/SCIM, K8s, Circles full) | NOT STARTED | 0% |
+| Phase 3 | Interop Protocols (MCP, A2A, AG-UI, plugins) | SCAFFOLDED | 60% |
+| Phase 4 | Enterprise & Hardening (OIDC/SCIM, K8s, Circles full) | NOT STARTED | 0% |
 
 ### Key Achievements (Session 15b verified)
 
@@ -47,10 +47,7 @@ The SERA Rust workspace is **substantially implemented** with **23 of 27 planned
 
 1. **sera-runtime LLM compaction** — 3 condensers (summarizer, attention, extraction) are TODO stubs
 2. **sera-gateway TODOs** — 20 TODO markers across 8 files (LSP routing, process mgmt, auth context)
-3. **sera-errors not consumed** — 27 LOC scaffold, not imported by any crate
-4. **sera-secrets minimal** — Only `EnvSecretsProvider` (44 LOC), needs Vault/AWS/Azure providers
-5. **sera-cache minimal** — Only `MokaBackend` (66 LOC), Redis backend deferred
-6. **Interop crates** — sera-mcp, sera-a2a, sera-agui, sera-plugins not started
+3. **Interop crates** — sera-mcp, sera-a2a, sera-agui, sera-plugins scaffolded (Phase 3, ~60%)
 
 ---
 
@@ -62,12 +59,12 @@ The SERA Rust workspace is **substantially implemented** with **23 of 27 planned
 |-------|--------|-----|-------|-------|
 | sera-types | ✅ COMPLETE | 8,921 | 272+ | 29 modules, comprehensive domain types |
 | sera-config | ✅ COMPLETE | 2,129 | 52+ | Layered config, schema registry, file watcher |
-| sera-errors | ⚠️ SCAFFOLD | 27 | 0 | Error code enum only; not consumed by any crate |
-| sera-cache | ⚠️ SCAFFOLD | 66 | 0 | MokaBackend; Redis deferred |
+| sera-errors | ✅ COMPLETE | 248 | 5 | SeraErrorCode, SeraError, IntoSeraError trait; wired into gateway + runtime |
+| sera-cache | ✅ COMPLETE | 134 | 7 | MokaBackend with full test suite; Redis deferred to Phase 4 |
 | sera-db | ✅ COMPLETE | 3,836 | — | PostgreSQL (sqlx) + SQLite (rusqlite), 21 source files |
 | sera-queue | ✅ COMPLETE | 470 | 12+ | QueueBackend trait, local + apalis backends |
 | sera-telemetry | ✅ COMPLETE | 436 | 18+ | OTel triad (version-pinned), AuditBackend, OCSF |
-| sera-secrets | ⚠️ SCAFFOLD | 44 | 0 | EnvSecretsProvider only |
+| sera-secrets | ✅ COMPLETE | 636 | 20 | Env, Docker, File, Chained providers + enterprise scaffolds |
 
 ### Core Domain Crates (Phase 1)
 

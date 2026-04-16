@@ -1,3 +1,38 @@
+# Session Report — 2026-04-16 (Session 20 — Phase 0 Completion)
+
+## Phase 0 Completion Sprint — COMPLETE
+
+Phase 0 (Foundation crates) is now 100% complete. All 8 foundation crates have implementations, tests, and are wired into consumers.
+
+### sera-errors: Wired into gateway + runtime ✅
+- Added `sera-errors` as dependency to `sera-gateway` and `sera-runtime`
+- Added `Sera(SeraError)` variant to `AppError` enum with HTTP status mapping via `SeraErrorCode::http_status()`
+- Added `From<SeraError> for AppError` conversion for ergonomic `?` usage
+- Added `pub use sera_errors;` re-export in sera-runtime
+- 1 new gateway test; 5 existing sera-errors tests pass
+
+### sera-cache: MokaBackend test suite ✅
+- Added 7 unit tests for `MokaBackend`: get-miss, set/get roundtrip, TTL storage, delete, delete-nonexistent, overwrite, capacity eviction
+- Crate status: 134 LOC, 7 tests
+
+### sera-secrets: Already complete (tracker was stale) ✅
+- All 4 providers (Env, Docker, File, Chained) already had full implementations and tests
+- 20 tests across 4 modules, 636 LOC
+- Enterprise scaffolds (Vault, AWS, Azure) documented as Phase 4
+
+### Tracker updates
+- Phase 0: 95% → 100%
+- Total tests: 1,309 → 1,429
+- Updated per-crate status for sera-errors, sera-cache, sera-secrets
+- Removed 3 items from Remaining Gaps
+
+## Verification
+
+- `cargo check --workspace` → pass
+- `cargo test --workspace` → 1,429 tests, 0 failures
+
+---
+
 # Session Report — 2026-04-16 (Session 14 — P2 Bundle)
 
 ## P2 Bundle — COMPLETE

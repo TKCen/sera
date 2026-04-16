@@ -38,7 +38,11 @@ async fn main() {
     );
 
     // Start health server
-    let health_handle = tokio::spawn(health::serve(config.chat_port));
+    let health_handle = tokio::spawn(async move {
+        if let Err(e) = health::serve(config.chat_port).await {
+            error!("Health server failed: {e}");
+        }
+    });
 
     // Start heartbeat for persistent mode
     let heartbeat_handle = if config.lifecycle_mode == "persistent" {

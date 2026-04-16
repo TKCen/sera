@@ -90,15 +90,30 @@ impl ConcurrencyScheduler {
                 .map(|(p, t)| exec(&p, &t))
                 .collect(),
             ConcurrencyPolicy::Parallel => {
-                pairs.into_iter().map(|(p, t)| exec(&p, &t)).collect()
+                std::thread::scope(|s| {
+                    let handles: Vec<_> = pairs
+                        .iter()
+                        .map(|(p, t)| s.spawn(|| exec(p, t)))
+                        .collect();
+                    handles
+                        .into_iter()
+                        .map(|h| h.join().expect("participant thread panicked"))
+                        .collect()
+                })
             }
             ConcurrencyPolicy::Bounded(n) => {
                 let limit = (n.max(1)) as usize;
                 let mut out = Vec::with_capacity(pairs.len());
                 for chunk in pairs.chunks(limit) {
-                    for (p, t) in chunk {
-                        out.push(exec(p, t));
-                    }
+                    std::thread::scope(|s| {
+                        let handles: Vec<_> = chunk
+                            .iter()
+                            .map(|(p, t)| s.spawn(|| exec(p, t)))
+                            .collect();
+                        for h in handles {
+                            out.push(h.join().expect("participant thread panicked"));
+                        }
+                    });
                 }
                 out
             }
@@ -627,6 +642,37 @@ mod tests {
         let results = sched.run(pairs, exec.as_ref());
         assert_eq!(results.len(), 5);
         assert!(max_seen.load(Ordering::SeqCst) <= 2);
+    }
+
+    #[test]
+    fn parallel_runs_concurrently() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let in_flight2 = in_flight.clone();
+        let max_seen2 = max_seen.clone();
+        let sched = ConcurrencyScheduler::new(ConcurrencyPolicy::Parallel);
+        let task = CoordTask {
+            task_id: "t".into(),
+            payload: json!(1),
+        };
+        let pairs: Vec<(String, CoordTask)> =
+            (0..4).map(|i| (format!("p{i}"), task.clone())).collect();
+        let exec: Box<ExecFn> = Box::new(move |p, t| {
+            let cur = in_flight2.fetch_add(1, Ordering::SeqCst) + 1;
+            max_seen2.fetch_max(cur, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(20));
+            in_flight2.fetch_sub(1, Ordering::SeqCst);
+            ok(p, &t.task_id, json!(p.to_string()))
+        });
+        let results = sched.run(pairs, exec.as_ref());
+        assert_eq!(results.len(), 4);
+        assert!(
+            max_seen.load(Ordering::SeqCst) > 1,
+            "expected >1 concurrent tasks, got {}" ,
+            max_seen.load(Ordering::SeqCst)
+        );
     }
 
     #[test]

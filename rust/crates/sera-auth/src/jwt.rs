@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use rand::RngCore;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::AuthError;
@@ -58,7 +59,19 @@ impl JwtService {
 
 impl Default for JwtService {
     fn default() -> Self {
-        Self::new("sera-secret".to_string())
+        let secret = match std::env::var("SERA_JWT_SECRET") {
+            Ok(s) if !s.is_empty() => s,
+            _ => {
+                tracing::warn!(
+                    "SERA_JWT_SECRET is not set — generating a random ephemeral JWT secret. \
+                     Tokens will not survive process restarts. Set SERA_JWT_SECRET in production."
+                );
+                let mut bytes = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut bytes);
+                hex::encode(bytes)
+            }
+        };
+        Self::new(secret)
     }
 }
 
@@ -148,6 +161,24 @@ mod tests {
 
         let result = service.verify("not.a.valid.token");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_provider_reads_env_or_generates() {
+        let now = current_unix_timestamp();
+        let claims = JwtClaims {
+            sub: "test-subject".to_string(),
+            iss: "sera".to_string(),
+            exp: now + 3600,
+            agent_id: None,
+            instance_id: None,
+        };
+
+        // Default should produce a working service regardless of env var presence.
+        let service = JwtService::default();
+        let token = service.issue(claims).expect("Failed to issue token via default service");
+        let verified = service.verify(&token).expect("Failed to verify token via default service");
+        assert_eq!(verified.sub, "test-subject");
     }
 
     #[test]

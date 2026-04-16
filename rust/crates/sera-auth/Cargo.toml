@@ -18,6 +18,8 @@ tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 jsonwebtoken.workspace = true
+rand.workspace = true
+hex.workspace = true
 axum.workspace = true
 async-trait = { workspace = true }
 argon2 = { workspace = true, optional = true }

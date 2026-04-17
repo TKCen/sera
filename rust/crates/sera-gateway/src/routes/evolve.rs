@@ -14,10 +14,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use sera_meta::artifact_pipeline::{DryRunOutcome, PipelineError};
+use sera_meta::constitutional::ConstitutionalRule;
 use sera_meta::{
     BlastRadius, ChangeArtifact, ChangeArtifactScope, ChangeArtifactStatus, ChangeProposer,
 };
-use sera_types::evolution::{CapabilityToken, ChangeArtifactId};
+use sera_types::evolution::{CapabilityToken, ChangeArtifactId, ConstitutionalEnforcementPoint};
 use sera_types::hook::{HookContext, HookPoint};
 
 use crate::error::AppError;
@@ -201,6 +202,32 @@ pub async fn propose(
     Ok((StatusCode::CREATED, Json(ArtifactView::from(&snapshot))))
 }
 
+/// Evaluate a `ChangeArtifact` against a pre-fetched set of constitutional
+/// rules. Pure and synchronous so it can be passed as the dry-run closure to
+/// [`sera_meta::artifact_pipeline::ArtifactPipeline::evaluate`].
+///
+/// This is the MVS "shadow replay" substitute until sera-runtime exposes a
+/// `ShadowSessionExecutor`: any rule applicable at `PreApproval` whose
+/// proposer-scope requirement fails produces
+/// [`DryRunOutcome::Failed`] with the rule id + reason.
+pub(crate) fn dry_run_against_rules(
+    artifact: &ChangeArtifact,
+    rules: &[ConstitutionalRule],
+) -> DryRunOutcome {
+    for rule in rules {
+        if !rule.is_applicable(&artifact.scope, &artifact.blast_radius) {
+            continue;
+        }
+        if !rule.check_proposer(&artifact.proposer) {
+            return DryRunOutcome::Failed(format!(
+                "constitutional rule '{}' rejected proposer: required scopes not held",
+                rule.base.id
+            ));
+        }
+    }
+    DryRunOutcome::Passed
+}
+
 /// `POST /api/evolve/evaluate/:id` — run the shadow-session dry-run and
 /// transition the artifact into `Approved` or `Rejected`.
 pub async fn evaluate(
@@ -209,12 +236,18 @@ pub async fn evaluate(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = parse_id(&id_hex)?;
 
-    // Route-layer dry-run: treat as Passed. Real deployments plug in a
-    // sera-runtime shadow replay; the pipeline API deliberately accepts a
-    // closure so this seam is swap-in ready.
+    // Pre-fetch every rule registered at `PreApproval`. The pipeline's evaluate
+    // closure is synchronous, so we snapshot the async registry here and then
+    // pass a pure sync filter into the pipeline. Tier-1 artifacts skip the
+    // closure entirely (see pipeline docs) — the fetch is still cheap.
+    let rules = state
+        .constitutional_registry
+        .rules_at(ConstitutionalEnforcementPoint::PreApproval)
+        .await;
+
     let outcome = state
         .evolution_pipeline
-        .evaluate(&id, |_artifact| DryRunOutcome::Passed)
+        .evaluate(&id, |artifact| dry_run_against_rules(artifact, &rules))
         .await
         .map_err(pipeline_err)?;
 
@@ -407,5 +440,119 @@ mod tests {
             expected: ChangeArtifactStatus::Approved,
         });
         assert!(matches!(err, AppError::Db(sera_db::DbError::Conflict(_))));
+    }
+
+    // ── dry_run_against_rules ─────────────────────────────────────────────
+    //
+    // These exercise the MVS shadow-replay substitute: the pure-sync helper
+    // that takes a snapshot of the ConstitutionalRegistry's PreApproval rules
+    // and gates the dry-run on them. Wiring into the `/api/evolve/evaluate`
+    // route is verified indirectly through the existing end-to-end pipeline
+    // test above (which covers the no-rules case).
+
+    fn rule_requiring(id: &str, required: Vec<BlastRadius>) -> ConstitutionalRule {
+        ConstitutionalRule::new(
+            sera_types::evolution::ConstitutionalRule {
+                id: id.to_string(),
+                description: format!("rule {id}"),
+                enforcement_point: ConstitutionalEnforcementPoint::PreApproval,
+                content_hash: [0u8; 32],
+            },
+            vec![ChangeArtifactScope::ConfigEvolution],
+            vec![BlastRadius::SingleHookConfig],
+            required,
+        )
+    }
+
+    fn tier2_artifact(proposer_scopes: Vec<BlastRadius>) -> ChangeArtifact {
+        ChangeArtifact::new(
+            "tier-2 hook config".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "proposer-1".to_string(),
+                capability_token: CapabilityToken {
+                    id: "tok-1".to_string(),
+                    scopes: proposer_scopes.into_iter().collect(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                    max_proposals: 10,
+                    signature: [0u8; 64],
+                },
+            },
+            serde_json::json!({ "hook": "on_turn_start" }),
+        )
+    }
+
+    /// With no applicable rules, the dry-run passes.
+    #[test]
+    fn dry_run_passes_without_rules() {
+        let artifact = tier2_artifact(vec![BlastRadius::SingleHookConfig]);
+        let outcome = dry_run_against_rules(&artifact, &[]);
+        assert_eq!(outcome, DryRunOutcome::Passed);
+    }
+
+    /// A rule that matches scope + blast radius but requires scopes the
+    /// proposer does not hold must produce `Failed` carrying the rule id.
+    #[test]
+    fn dry_run_fails_when_proposer_missing_required_scopes() {
+        let rule = rule_requiring("r-needs-runtime", vec![BlastRadius::RuntimeCrate]);
+        let artifact = tier2_artifact(vec![BlastRadius::SingleHookConfig]);
+
+        let outcome = dry_run_against_rules(&artifact, &[rule]);
+        match outcome {
+            DryRunOutcome::Failed(reason) => {
+                assert!(
+                    reason.contains("r-needs-runtime"),
+                    "failure reason should name the rule: {reason}"
+                );
+            }
+            DryRunOutcome::Passed => panic!("expected failure for missing scope"),
+        }
+    }
+
+    /// A rule whose scope/blast-radius does not match the artifact is ignored —
+    /// even if its required scopes are missing from the proposer.
+    #[test]
+    fn dry_run_skips_inapplicable_rule() {
+        // Rule targets ConfigEvolution/SingleHookConfig but we switch the
+        // artifact to AgentImprovement/AgentMemory so it no longer applies.
+        let rule = rule_requiring("r-inapplicable", vec![BlastRadius::RuntimeCrate]);
+        let artifact = ChangeArtifact::new(
+            "tier-1 memory".to_string(),
+            ChangeArtifactScope::AgentImprovement,
+            BlastRadius::AgentMemory,
+            ChangeProposer {
+                principal_id: "proposer-1".to_string(),
+                capability_token: stub_capability_token(BlastRadius::AgentMemory),
+            },
+            serde_json::json!({}),
+        );
+
+        let outcome = dry_run_against_rules(&artifact, &[rule]);
+        assert_eq!(outcome, DryRunOutcome::Passed);
+    }
+
+    /// When a rule violation is detected, the pipeline must transition the
+    /// artifact to `Rejected` (not `Approved`). This is the contract the
+    /// gateway relies on when surfacing `outcome: failed` to API clients.
+    #[tokio::test]
+    async fn pipeline_rejects_artifact_on_rule_violation() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = tier2_artifact(vec![BlastRadius::SingleHookConfig]);
+        let id = pipeline.propose(artifact).await.unwrap();
+
+        let rules = vec![rule_requiring(
+            "r-needs-runtime",
+            vec![BlastRadius::RuntimeCrate],
+        )];
+
+        let outcome = pipeline
+            .evaluate(&id, |artifact| dry_run_against_rules(artifact, &rules))
+            .await
+            .unwrap();
+        assert!(matches!(outcome, DryRunOutcome::Failed(_)));
+
+        let after = pipeline.get(&id).await.unwrap();
+        assert_eq!(after.status, ChangeArtifactStatus::Rejected);
     }
 }

@@ -99,6 +99,13 @@ async fn main() -> anyhow::Result<()> {
     let evolution_pipeline = Arc::new(
         sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
     );
+    // Constitutional-rule registry consulted at `PreApproval` inside the
+    // evolve `/evaluate` route. Starts empty — rules are seeded at startup in
+    // a follow-up; with no rules present the dry-run passes unconditionally,
+    // preserving today's behaviour while giving operators a real gate point.
+    let constitutional_registry = Arc::new(
+        sera_meta::constitutional::ConstitutionalRegistry::new(),
+    );
 
     let app_state = AppState {
         db,
@@ -120,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
             sera_db::lane_queue::LaneQueue::new(10, sera_db::lane_queue::QueueMode::Collect),
         )),
         evolution_pipeline,
+        constitutional_registry,
         hook_registry,
         chain_executor,
     };

@@ -11,6 +11,7 @@ use sera_db::lane_queue::LaneQueue;
 use sera_events::CentrifugoClient;
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_meta::artifact_pipeline::ArtifactPipeline;
+use sera_meta::constitutional::ConstitutionalRegistry;
 use sera_tools::sandbox::SandboxProvider;
 
 use sera_gateway::envelope::GenerationMarker;
@@ -46,6 +47,13 @@ pub struct AppState {
     /// propose → evaluate → approve → apply transitions are executed end to
     /// end against [`sera_meta::artifact_pipeline::ArtifactPipeline`].
     pub evolution_pipeline: Arc<ArtifactPipeline>,
+    /// Constitutional-rule registry — consulted at
+    /// [`sera_types::evolution::ConstitutionalEnforcementPoint::PreApproval`]
+    /// inside `/api/evolve/evaluate/:id` to gate the dry-run on rule
+    /// violations. Until sera-runtime exposes a ShadowSessionExecutor this
+    /// provides the real "shadow replay" gate; production wiring will layer
+    /// LLM-turn replay on top of the same registry.
+    pub constitutional_registry: Arc<ConstitutionalRegistry>,
     /// Registry of in-process hook modules shared with the chain executor.
     pub hook_registry: Arc<HookRegistry>,
     /// Chain executor used by evolve route handlers to fire

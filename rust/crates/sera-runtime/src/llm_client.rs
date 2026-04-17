@@ -692,6 +692,68 @@ fn parse_sse_data_line(line: &str) -> Option<SseChunk> {
     serde_json::from_str(data).ok()
 }
 
+// ---------------------------------------------------------------------------
+// Test helpers — request body building (mirrors chat_typed_with_behavior logic)
+// ---------------------------------------------------------------------------
+
+/// Build the streaming request body exactly as `chat_typed_with_behavior` would,
+/// without making any network call.  Exposed only under `#[cfg(test)]`.
+#[cfg(test)]
+fn build_streaming_body(
+    model: &str,
+    max_tokens: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    tool_use_behavior: &ToolUseBehavior,
+) -> Result<serde_json::Value, LlmError> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": true,
+    });
+
+    if !tools.is_empty() {
+        body["tools"] =
+            serde_json::to_value(tools).map_err(|e| LlmError::RequestError(e.to_string()))?;
+        if !matches!(tool_use_behavior, ToolUseBehavior::Auto) {
+            body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
+        }
+    } else if tool_use_behavior.forbids_tools() {
+        body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
+    }
+
+    Ok(body)
+}
+
+/// Build the non-streaming request body exactly as `chat_non_streaming_with_behavior` would.
+#[cfg(test)]
+fn build_non_streaming_body(
+    model: &str,
+    max_tokens: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    tool_use_behavior: &ToolUseBehavior,
+) -> Result<serde_json::Value, LlmError> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+    });
+
+    if !tools.is_empty() {
+        body["tools"] =
+            serde_json::to_value(tools).map_err(|e| LlmError::RequestError(e.to_string()))?;
+        if !matches!(tool_use_behavior, ToolUseBehavior::Auto) {
+            body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
+        }
+    } else if tool_use_behavior.forbids_tools() {
+        body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
+    }
+
+    Ok(body)
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -972,5 +1034,412 @@ mod tests {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Request body shaping tests
+    // =========================================================================
+
+    fn make_tool(name: &str) -> ToolDefinition {
+        use crate::types::{FunctionDefinition, ToolDefinition};
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: name.to_string(),
+                description: format!("Tool {name}"),
+                parameters: serde_json::json!({"type":"object","properties":{}}),
+            },
+        }
+    }
+
+    fn make_user_msg(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    // --- streaming body ---
+
+    #[test]
+    fn request_body_streaming_flag_is_true() {
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+        assert_eq!(body["stream"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn request_body_model_and_max_tokens_forwarded() {
+        let body = build_streaming_body(
+            "mistral-7b",
+            2048,
+            &[make_user_msg("ping")],
+            &[],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+        assert_eq!(body["model"], serde_json::json!("mistral-7b"));
+        assert_eq!(body["max_tokens"], serde_json::json!(2048));
+    }
+
+    #[test]
+    fn request_body_no_tool_choice_for_auto_with_tools() {
+        // Auto + tools present → tools array included, tool_choice omitted
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[make_tool("read_file")],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+        assert!(body["tools"].is_array());
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn request_body_tool_choice_required_with_tools() {
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[make_tool("read_file")],
+            &ToolUseBehavior::Required,
+        )
+        .unwrap();
+        assert_eq!(body["tool_choice"], serde_json::json!("required"));
+    }
+
+    #[test]
+    fn request_body_tool_choice_none_with_tools() {
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[make_tool("read_file")],
+            &ToolUseBehavior::None,
+        )
+        .unwrap();
+        assert_eq!(body["tool_choice"], serde_json::json!("none"));
+    }
+
+    #[test]
+    fn request_body_tool_choice_specific_with_tools() {
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[make_tool("read_file")],
+            &ToolUseBehavior::Specific { name: "read_file".to_string() },
+        )
+        .unwrap();
+        assert_eq!(body["tool_choice"]["type"], "function");
+        assert_eq!(body["tool_choice"]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn request_body_no_tools_array_when_empty() {
+        // No tools → tools key must not be present
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn request_body_tool_choice_none_no_tools_forces_field() {
+        // None behavior + no tools → tool_choice still set to "none"
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::None,
+        )
+        .unwrap();
+        assert_eq!(body["tool_choice"], serde_json::json!("none"));
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn request_body_required_no_tools_no_spurious_tool_choice() {
+        // Required + no tools → Required is not None so forbids_tools()=false
+        // → tool_choice must NOT be injected (the LLM call itself would fail
+        //   upstream via validate(), but the body builder must not panic)
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Required,
+        )
+        .unwrap();
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    // --- non-streaming body mirrors same rules ---
+
+    #[test]
+    fn non_streaming_body_has_no_stream_field() {
+        let body = build_non_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+        assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn non_streaming_body_tool_choice_required() {
+        let body = build_non_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[make_tool("write_file")],
+            &ToolUseBehavior::Required,
+        )
+        .unwrap();
+        assert_eq!(body["tool_choice"], serde_json::json!("required"));
+    }
+
+    #[test]
+    fn non_streaming_body_no_tool_choice_for_auto() {
+        let body = build_non_streaming_body(
+            "gpt-4",
+            512,
+            &[make_user_msg("hi")],
+            &[make_tool("write_file")],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    // =========================================================================
+    // Response parsing tests (NonStreamingResponse)
+    // =========================================================================
+
+    #[test]
+    fn non_streaming_missing_usage_defaults_to_zero() {
+        let json = r#"{
+            "choices": [{
+                "message": { "content": "ok", "tool_calls": null },
+                "finish_reason": "stop"
+            }]
+        }"#;
+        let parsed: NonStreamingResponse = serde_json::from_str(json).unwrap();
+        let usage = parsed.usage.unwrap_or_default();
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+    }
+
+    #[test]
+    fn non_streaming_null_content_and_tool_calls_both_absent() {
+        let json = r#"{
+            "choices": [{
+                "message": { "content": null },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 5, "completion_tokens": 0 }
+        }"#;
+        let parsed: NonStreamingResponse = serde_json::from_str(json).unwrap();
+        assert!(parsed.choices[0].message.content.is_none());
+        assert!(parsed.choices[0].message.tool_calls.is_none());
+    }
+
+    #[test]
+    fn non_streaming_finish_reason_tool_calls() {
+        let json = r#"{
+            "choices": [{
+                "message": { "content": null, "tool_calls": [
+                    {"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}
+                ]},
+                "finish_reason": "tool_calls"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 3 }
+        }"#;
+        let parsed: NonStreamingResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(parsed.choices[0].message.tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn non_streaming_only_first_choice_consumed() {
+        // OpenAI may return n>1 choices; wire format accepts multiple but we only
+        // use index 0.  Verify the struct at least deserializes all of them.
+        let json = r#"{
+            "choices": [
+                {"message":{"content":"first"},"finish_reason":"stop"},
+                {"message":{"content":"second"},"finish_reason":"stop"}
+            ],
+            "usage": {"prompt_tokens":1,"completion_tokens":1}
+        }"#;
+        let parsed: NonStreamingResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.choices.len(), 2);
+        assert_eq!(parsed.choices[0].message.content.as_deref(), Some("first"));
+    }
+
+    // =========================================================================
+    // Error classification edge cases
+    // =========================================================================
+
+    #[test]
+    fn error_401_maps_to_request_error() {
+        // 401 is not specially handled — falls through to generic RequestError
+        let err = classify_http_error(401, "unauthorized").unwrap_err();
+        assert!(matches!(err, LlmError::RequestError(_)));
+        assert!(err.to_string().contains("HTTP 401"));
+    }
+
+    #[test]
+    fn error_404_maps_to_request_error() {
+        let err = classify_http_error(404, "not found").unwrap_err();
+        assert!(matches!(err, LlmError::RequestError(_)));
+        assert!(err.to_string().contains("HTTP 404"));
+    }
+
+    #[test]
+    fn error_502_maps_to_request_error() {
+        let err = classify_http_error(502, "bad gateway").unwrap_err();
+        assert!(matches!(err, LlmError::RequestError(_)));
+        assert!(err.to_string().contains("HTTP 502"));
+    }
+
+    #[test]
+    fn error_context_overflow_context_window_keyword() {
+        // "context window" keyword (distinct from "context_length_exceeded")
+        let err = classify_http_error(400, "exceeded the context window limit").unwrap_err();
+        assert!(matches!(err, LlmError::ContextOverflow(_)));
+    }
+
+    #[test]
+    fn error_400_non_overflow_body_is_request_error() {
+        // 400 with body that doesn't match any overflow keyword
+        let err = classify_http_error(400, "invalid model specified").unwrap_err();
+        assert!(matches!(err, LlmError::RequestError(_)));
+        assert!(err.to_string().contains("HTTP 400"));
+    }
+
+    #[test]
+    fn error_body_exactly_500_chars_not_truncated() {
+        let body = "x".repeat(500);
+        let result = truncate_error(&body);
+        // Exactly 500 chars → not truncated (condition is > 500)
+        assert_eq!(result.len(), 500);
+        assert!(!result.ends_with("..."));
+    }
+
+    #[test]
+    fn error_body_501_chars_truncated() {
+        let body = "x".repeat(501);
+        let result = truncate_error(&body);
+        assert!(result.ends_with("..."));
+        assert!(result.len() < 510); // 500 chars + "..."
+    }
+
+    #[test]
+    fn error_empty_body_classifies_cleanly() {
+        let err = classify_http_error(429, "").unwrap_err();
+        assert!(matches!(err, LlmError::RateLimited(_)));
+    }
+
+    // =========================================================================
+    // SSE parsing edge cases
+    // =========================================================================
+
+    #[test]
+    fn sse_data_prefix_no_space_is_parsed() {
+        // "data:{...}" (no space after colon) must also be recognised
+        let line = r#"data:{"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}"#;
+        let chunk = parse_sse_data_line(line).expect("should parse data: without space");
+        let choices = chunk.choices.unwrap();
+        let delta = choices[0].delta.as_ref().unwrap();
+        assert_eq!(delta.content.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn sse_comment_line_returns_none() {
+        // SSE comment (starts with ':') — not a data line, parse_sse_data_line returns None
+        let result = parse_sse_data_line(": keep-alive");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn sse_usage_chunk_with_empty_choices() {
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":17}}"#;
+        let chunk = parse_sse_data_line(line).expect("should parse");
+        assert!(chunk.choices.as_ref().unwrap().is_empty());
+        let usage = chunk.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 42);
+        assert_eq!(usage.completion_tokens, 17);
+    }
+
+    #[test]
+    fn sse_content_and_tool_calls_in_same_delta() {
+        // Some models send content + tool_calls in a single delta
+        let line = r#"data: {"choices":[{"index":0,"delta":{"content":"thinking...","tool_calls":[{"index":0,"id":"c1","function":{"name":"fn","arguments":""}}]},"finish_reason":null}]}"#;
+        let chunk = parse_sse_data_line(line).expect("should parse");
+        let choices = chunk.choices.unwrap();
+        let delta = choices[0].delta.as_ref().unwrap();
+        assert_eq!(delta.content.as_deref(), Some("thinking..."));
+        assert!(delta.tool_calls.is_some());
+    }
+
+    #[test]
+    fn sse_tool_call_chunk_without_id_on_continuation() {
+        // Subsequent argument chunks omit the id field — accumulator must not overwrite
+        let mut map: HashMap<usize, ToolCallAccumulator> = HashMap::new();
+
+        // First chunk sets id + name
+        let c1 = r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"do_thing","arguments":""}}]},"finish_reason":null}]}"#;
+        let chunk1: SseChunk = serde_json::from_str(c1).unwrap();
+        apply_chunk_tool_calls(&chunk1, &mut map);
+
+        // Continuation chunk has no id
+        let c2 = r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]},"finish_reason":null}]}"#;
+        let chunk2: SseChunk = serde_json::from_str(c2).unwrap();
+        apply_chunk_tool_calls(&chunk2, &mut map);
+
+        let acc = map.get(&0).unwrap();
+        assert_eq!(acc.id, "call_x"); // not overwritten
+        assert_eq!(acc.function_name, "do_thing");
+        assert_eq!(acc.arguments, r#"{"x":1}"#);
+    }
+
+    #[test]
+    fn sse_finish_reason_length_captured() {
+        let line = r#"data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#;
+        let chunk = parse_sse_data_line(line).expect("should parse");
+        assert_eq!(
+            chunk.choices.unwrap()[0].finish_reason.as_deref(),
+            Some("length")
+        );
+    }
+
+    #[test]
+    fn sse_null_choices_field_handled() {
+        // Some providers send {"choices":null} on the usage-only final chunk
+        let line = r#"data: {"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
+        let chunk = parse_sse_data_line(line).expect("should parse");
+        assert!(chunk.choices.is_none());
+        let usage = chunk.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 5);
     }
 }

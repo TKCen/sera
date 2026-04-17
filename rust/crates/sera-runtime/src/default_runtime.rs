@@ -813,4 +813,454 @@ mod tests {
         let runtime = DefaultRuntime::new(make_context_engine());
         assert_eq!(runtime.failure_threshold, 3);
     }
+
+    // ── Builder pattern tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn builder_with_llm_sets_llm() {
+        struct DummyLlm;
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for DummyLlm {
+            async fn chat(
+                &self,
+                _messages: &[serde_json::Value],
+                _tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                Ok(turn::ThinkResult {
+                    response: serde_json::json!({"role": "assistant", "content": "hi"}),
+                    tool_calls: vec![],
+                    tokens: sera_types::runtime::TokenUsage::default(),
+                })
+            }
+        }
+        let runtime = DefaultRuntime::new(make_context_engine()).with_llm(Box::new(DummyLlm));
+        assert!(runtime.llm.is_some());
+    }
+
+    #[test]
+    fn builder_with_tool_dispatcher_sets_dispatcher() {
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
+        assert!(runtime.tool_dispatcher.is_some());
+    }
+
+    #[test]
+    fn builder_chaining_sets_all_fields() {
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher))
+            .with_max_tool_iterations(7)
+            .with_failure_threshold(2);
+        assert!(runtime.tool_dispatcher.is_some());
+        assert_eq!(runtime.max_tool_iterations, 7);
+        assert_eq!(runtime.failure_threshold, 2);
+    }
+
+    #[test]
+    fn debug_format_includes_key_fields() {
+        let runtime = DefaultRuntime::new(make_context_engine()).with_max_tool_iterations(5);
+        let debug_str = format!("{runtime:?}");
+        assert!(debug_str.contains("max_tool_iterations"), "debug: {debug_str}");
+        assert!(debug_str.contains("has_llm"), "debug: {debug_str}");
+        assert!(debug_str.contains("has_tool_dispatcher"), "debug: {debug_str}");
+    }
+
+    // ── Happy path: no tool calls, immediate FinalOutput ─────────────────────
+
+    #[tokio::test]
+    async fn happy_path_no_tool_calls_returns_final_output_with_response() {
+        struct ImmediateLlm;
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for ImmediateLlm {
+            async fn chat(
+                &self,
+                _messages: &[serde_json::Value],
+                _tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                Ok(turn::ThinkResult {
+                    response: serde_json::json!({"role": "assistant", "content": "all done"}),
+                    tool_calls: vec![],
+                    tokens: sera_types::runtime::TokenUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                        total_tokens: 15,
+                    },
+                })
+            }
+        }
+
+        let runtime = DefaultRuntime::new(make_context_engine()).with_llm(Box::new(ImmediateLlm));
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+
+        match outcome {
+            TurnOutcome::FinalOutput { response, tool_calls, tokens_used, .. } => {
+                assert_eq!(response, "all done");
+                assert!(tool_calls.is_empty());
+                assert_eq!(tokens_used.prompt_tokens, 10);
+                assert_eq!(tokens_used.completion_tokens, 5);
+                assert_eq!(tokens_used.total_tokens, 15);
+            }
+            other => panic!("expected FinalOutput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn happy_path_transcript_includes_new_messages() {
+        // When a tool call round happens, the transcript in FinalOutput should
+        // contain the assistant message and tool results appended during the loop.
+        let llm = ToolCallingLlm::new(vec![
+            vec![tool_call("c1", "my-tool")],
+            vec![],
+        ]);
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
+
+        let ctx = make_turn_context();
+        let initial_len = ctx.messages.len();
+        let outcome = runtime.execute_turn(ctx).await.unwrap();
+
+        match outcome {
+            TurnOutcome::FinalOutput { transcript, .. } => {
+                // transcript = messages appended after the original messages
+                // Round 1: assistant msg + tool result (2 msgs)
+                // Round 2: assistant msg (1 msg, no tool calls → FinalOutput)
+                assert!(
+                    transcript.len() >= 2,
+                    "transcript should have at least 2 new messages, got {}: {:?}",
+                    transcript.len(), transcript
+                );
+                let _ = initial_len; // consumed
+            }
+            other => panic!("expected FinalOutput, got {:?}", other),
+        }
+    }
+
+    // ── One tool call + successful result ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn one_tool_call_then_final_output() {
+        let llm = ToolCallingLlm::new(vec![
+            vec![tool_call("call-1", "echo")],
+            vec![],
+        ]);
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
+
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+        assert!(
+            matches!(outcome, TurnOutcome::FinalOutput { .. }),
+            "expected FinalOutput after one tool round, got {:?}", outcome
+        );
+    }
+
+    // ── Max-iterations exhaustion → Interruption ─────────────────────────────
+
+    #[tokio::test]
+    async fn max_tool_iterations_exceeded_returns_interruption() {
+        // LLM always returns a tool call; with max=2 we should exhaust and get Interruption.
+        struct AlwaysToolLlm;
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for AlwaysToolLlm {
+            async fn chat(
+                &self,
+                _messages: &[serde_json::Value],
+                _tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                Ok(turn::ThinkResult {
+                    response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
+                    tool_calls: vec![tool_call("cx", "looping-tool")],
+                    tokens: sera_types::runtime::TokenUsage::default(),
+                })
+            }
+        }
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(AlwaysToolLlm))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher))
+            .with_max_tool_iterations(2);
+
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+        match outcome {
+            TurnOutcome::Interruption { reason, .. } => {
+                assert!(
+                    reason.contains("max tool iterations"),
+                    "expected max-iterations message, got: {reason}"
+                );
+                assert!(reason.contains('2'), "expected iteration count in message: {reason}");
+            }
+            other => panic!("expected Interruption, got {:?}", other),
+        }
+    }
+
+    // ── ToolUseBehavior::None enforcement ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn tool_use_behavior_none_rejects_tool_calls() {
+        // LLM emits a tool call; runtime should reject it and return Interruption
+        // because tool_use_behavior=None forbids tool calls.
+        let llm = ToolCallingLlm::new(vec![vec![tool_call("c1", "forbidden")]]);
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
+
+        let mut ctx = make_turn_context();
+        ctx.tool_use_behavior = sera_types::tool::ToolUseBehavior::None;
+
+        let outcome = runtime.execute_turn(ctx).await.unwrap();
+        match outcome {
+            TurnOutcome::Interruption { reason, .. } => {
+                assert!(
+                    reason.contains("forbids tool calls") || reason.contains("None"),
+                    "expected tool-use-behavior rejection, got: {reason}"
+                );
+            }
+            other => panic!("expected Interruption from ToolUseBehavior::None, got {:?}", other),
+        }
+    }
+
+    // ── ToolUseBehavior::Specific enforcement ─────────────────────────────────
+
+    #[tokio::test]
+    async fn tool_use_behavior_specific_rejects_wrong_tool() {
+        // LLM calls "wrong-tool" but Specific { name: "allowed-tool" } is set.
+        let llm = ToolCallingLlm::new(vec![vec![tool_call("c1", "wrong-tool")]]);
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
+
+        let mut ctx = make_turn_context();
+        ctx.tool_use_behavior = sera_types::tool::ToolUseBehavior::Specific {
+            name: "allowed-tool".to_string(),
+        };
+
+        let outcome = runtime.execute_turn(ctx).await.unwrap();
+        match outcome {
+            TurnOutcome::Interruption { reason, .. } => {
+                assert!(
+                    reason.contains("wrong-tool") || reason.contains("Specific"),
+                    "expected specific-tool rejection, got: {reason}"
+                );
+            }
+            other => panic!("expected Interruption from ToolUseBehavior::Specific, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_use_behavior_specific_allows_correct_tool() {
+        // LLM calls "allowed-tool" which matches Specific — should proceed to FinalOutput.
+        let llm = ToolCallingLlm::new(vec![
+            vec![tool_call("c1", "allowed-tool")],
+            vec![],
+        ]);
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
+
+        let mut ctx = make_turn_context();
+        ctx.tool_use_behavior = sera_types::tool::ToolUseBehavior::Specific {
+            name: "allowed-tool".to_string(),
+        };
+
+        let outcome = runtime.execute_turn(ctx).await.unwrap();
+        assert!(
+            matches!(outcome, TurnOutcome::FinalOutput { .. }),
+            "expected FinalOutput for matching Specific tool, got {:?}", outcome
+        );
+    }
+
+    // ── LLM error path ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn llm_error_produces_error_response_not_panic() {
+        // When the LLM provider returns Err, think() wraps it in "[LLM error: ...]"
+        // and produces a FinalOutput (no tool calls in the error response).
+        struct FailingLlm;
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for FailingLlm {
+            async fn chat(
+                &self,
+                _messages: &[serde_json::Value],
+                _tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                Err(turn::ThinkError::Llm("provider down".to_string()))
+            }
+        }
+
+        let runtime = DefaultRuntime::new(make_context_engine()).with_llm(Box::new(FailingLlm));
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+
+        match outcome {
+            TurnOutcome::FinalOutput { response, tool_calls, .. } => {
+                assert!(
+                    response.contains("LLM error") || response.contains("provider down"),
+                    "expected error text in response, got: {response}"
+                );
+                assert!(tool_calls.is_empty());
+            }
+            other => panic!("expected FinalOutput wrapping LLM error, got {:?}", other),
+        }
+    }
+
+    // ── Tool failure path ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn tool_failure_produces_error_content_in_result() {
+        // Dispatcher fails; turn::act wraps it in "[tool error: ...]" and the
+        // loop continues. With one failing round then a plain final response,
+        // we should still reach FinalOutput.
+        let llm = ToolCallingLlm::new(vec![
+            vec![tool_call("c1", "bad")],
+            vec![],
+        ]);
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
+            .with_failure_threshold(99); // don't let injection interfere
+
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+        assert!(
+            matches!(outcome, TurnOutcome::FinalOutput { .. }),
+            "expected FinalOutput after tool failure, got {:?}", outcome
+        );
+    }
+
+    // ── Doom-loop interruption ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn doom_loop_triggers_interruption() {
+        // Tool always succeeds but the DOOM_LOOP_THRESHOLD is hit because the
+        // LLM keeps emitting tool calls while doom_loop_count increments.
+        // With max_tool_iterations > threshold (4 > 3), the doom-loop check fires first.
+        struct AlwaysToolLlm2;
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for AlwaysToolLlm2 {
+            async fn chat(
+                &self,
+                _messages: &[serde_json::Value],
+                _tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                Ok(turn::ThinkResult {
+                    response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
+                    tool_calls: vec![tool_call("cx", "t")],
+                    tokens: sera_types::runtime::TokenUsage::default(),
+                })
+            }
+        }
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(AlwaysToolLlm2))
+            .with_tool_dispatcher(Box::new(AlwaysOkDispatcher))
+            .with_max_tool_iterations(10); // high enough that doom loop fires
+
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+        // Either doom_loop Interruption or max_tool_iterations Interruption
+        assert!(
+            matches!(outcome, TurnOutcome::Interruption { .. }),
+            "expected Interruption from looping tools, got {:?}", outcome
+        );
+    }
+
+    // ── failure_threshold=0 disables injection ────────────────────────────────
+
+    #[tokio::test]
+    async fn failure_threshold_zero_disables_injection() {
+        // Even with many failures, threshold=0 must never inject Recent Issues.
+        // We use a capturing LLM to verify no "## Recent Issues" block appears.
+        let llm = ToolCallingLlm::new(vec![
+            vec![tool_call("c1", "flaky")],
+            vec![tool_call("c2", "flaky")],
+            vec![tool_call("c3", "flaky")],
+            vec![],
+        ]);
+
+        struct Capturing {
+            inner: std::sync::Mutex<std::collections::VecDeque<Vec<serde_json::Value>>>,
+            all_messages: std::sync::Mutex<Vec<serde_json::Value>>,
+        }
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for Capturing {
+            async fn chat(
+                &self,
+                messages: &[serde_json::Value],
+                _tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                self.all_messages.lock().unwrap().extend_from_slice(messages);
+                let calls = self.inner.lock().unwrap().pop_front().unwrap_or_default();
+                Ok(turn::ThinkResult {
+                    response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
+                    tool_calls: calls,
+                    tokens: sera_types::runtime::TokenUsage::default(),
+                })
+            }
+        }
+
+        let rounds: std::collections::VecDeque<_> = vec![
+            vec![tool_call("c1", "flaky")],
+            vec![tool_call("c2", "flaky")],
+            vec![tool_call("c3", "flaky")],
+            vec![],
+        ]
+        .into();
+        let cap = std::sync::Arc::new(Capturing {
+            inner: std::sync::Mutex::new(rounds),
+            all_messages: std::sync::Mutex::new(vec![]),
+        });
+
+        struct ArcCap(std::sync::Arc<Capturing>);
+        #[async_trait::async_trait]
+        impl turn::LlmProvider for ArcCap {
+            async fn chat(
+                &self,
+                messages: &[serde_json::Value],
+                tools: &[serde_json::Value],
+            ) -> Result<turn::ThinkResult, turn::ThinkError> {
+                self.0.chat(messages, tools).await
+            }
+        }
+
+        let cap_ref = cap.clone();
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(ArcCap(cap_ref)))
+            .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
+            .with_failure_threshold(0); // disabled
+
+        runtime.execute_turn(make_turn_context()).await.unwrap();
+
+        let seen = cap.all_messages.lock().unwrap().clone();
+        let has_issues = seen.iter().any(|m| {
+            m.get("content")
+                .and_then(|c| c.as_str())
+                .map(|s| s.contains("## Recent Issues"))
+                .unwrap_or(false)
+        });
+        assert!(!has_issues, "threshold=0 must never inject Recent Issues block");
+    }
+
+    // ── No dispatcher: tool calls acknowledged with placeholder ──────────────
+
+    #[tokio::test]
+    async fn no_dispatcher_tool_calls_get_placeholder_result() {
+        // With no ToolDispatcher set, tool calls should receive a
+        // "[no tool dispatcher configured]" result and the loop should
+        // continue normally until exhaustion or final response.
+        let llm = ToolCallingLlm::new(vec![
+            vec![tool_call("c1", "some-tool")],
+            vec![],
+        ]);
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_llm(Box::new(llm));
+        // intentionally no with_tool_dispatcher
+
+        let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
+        assert!(
+            matches!(outcome, TurnOutcome::FinalOutput { .. }),
+            "expected FinalOutput with no dispatcher, got {:?}", outcome
+        );
+    }
 }

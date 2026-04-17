@@ -255,7 +255,11 @@ pub async fn propose(
     // per-token counter. Returns 429 when `used >= max_proposals`.
     state
         .proposal_usage
-        .check_and_record(&body.capability_token)
+        .check_and_increment(
+            &body.capability_token.id,
+            body.capability_token.max_proposals,
+        )
+        .await
         .map_err(|e| AppError::TooManyRequests(e.to_string()))?;
 
     let proposer = ChangeProposer {

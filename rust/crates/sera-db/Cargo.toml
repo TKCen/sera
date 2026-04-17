@@ -24,6 +24,7 @@ hex.workspace = true
 zeroize.workspace = true
 rand.workspace = true
 chrono.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }

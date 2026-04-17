@@ -49,6 +49,10 @@ impl IntoResponse for AppError {
                     "Internal server error".to_string(),
                 )
             }
+            AppError::Db(DbError::QuotaExceeded { token_id, limit }) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("proposal limit reached for token '{token_id}': max_proposals={limit}"),
+            ),
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),

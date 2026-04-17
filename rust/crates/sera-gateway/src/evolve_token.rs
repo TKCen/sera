@@ -50,6 +50,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sera_types::evolution::{BlastRadius, CapabilityToken};
 use sha2::{Digest, Sha512};
 
+pub use sera_db::proposal_usage::{
+    InMemoryProposalUsageStore, PostgresProposalUsageStore, ProposalUsageStore,
+};
+
 /// Errors surfaced by evolve-token verification. Callers map these to HTTP
 /// status codes in the route layer (401 for signature/expiry failures, 403
 /// for scope mismatches).

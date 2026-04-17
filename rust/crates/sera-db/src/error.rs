@@ -16,6 +16,9 @@ pub enum DbError {
     Conflict(String),
     #[error("integrity error: {0}")]
     Integrity(String),
+    /// Proposal quota exhausted for the given token.
+    #[error("proposal limit reached for token '{token_id}': max_proposals={limit}")]
+    QuotaExceeded { token_id: String, limit: u32 },
 }
 
 impl From<DbError> for SeraError {
@@ -25,6 +28,7 @@ impl From<DbError> for SeraError {
             DbError::NotFound { .. } => SeraErrorCode::NotFound,
             DbError::Conflict(_) => SeraErrorCode::AlreadyExists,
             DbError::Integrity(_) => SeraErrorCode::InvalidInput,
+            DbError::QuotaExceeded { .. } => SeraErrorCode::InvalidInput,
         };
         SeraError::with_source(code, err.to_string(), err)
     }

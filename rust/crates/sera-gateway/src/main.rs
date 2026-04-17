@@ -127,7 +127,10 @@ async fn main() -> anyhow::Result<()> {
     let evolve_token_signer = Arc::new(
         sera_gateway::evolve_token::EvolveTokenSigner::new(evolve_token_secret.into_bytes()),
     );
-    let proposal_usage = sera_gateway::evolve_token::ProposalUsageTracker::new_arc();
+    let proposal_usage: std::sync::Arc<dyn sera_gateway::evolve_token::ProposalUsageStore> =
+        std::sync::Arc::new(
+            sera_gateway::evolve_token::PostgresProposalUsageStore::from_db_pool(&db),
+        );
 
     let app_state = AppState {
         db,

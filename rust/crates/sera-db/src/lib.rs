@@ -25,6 +25,7 @@ pub mod webhooks;
 pub mod job_queue;
 pub mod lane_queue;
 pub mod training_exports;
+pub mod proposal_usage;
 pub mod error;
 
 pub use pool::DbPool;

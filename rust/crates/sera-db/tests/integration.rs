@@ -17,6 +17,8 @@ pub mod agents;
 pub mod api_keys;
 #[path = "integration/audit.rs"]
 pub mod audit;
+#[path = "integration/proposal_usage.rs"]
+pub mod proposal_usage;
 
 use sqlx::{PgPool, Executor};
 use uuid::Uuid;

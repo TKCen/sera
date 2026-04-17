@@ -1,6 +1,6 @@
 # SERA Rust Migration — Implementation Tracker
 
-> **Document Status:** Current (Updated 2026-04-17 — Session 26)
+> **Document Status:** Current (Updated 2026-04-17 — Session 26 final close-out)
 > **Purpose:** Master tracking document for SERA 2.0 Rust migration
 > **Basis:** Full spec analysis + codebase inspection + test run verification
 
@@ -10,16 +10,16 @@
 
 ### Current State Overview
 
-The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** present and building. The workspace compiles successfully and all tests pass (2,455 tests across 27 crates).
+The SERA Rust workspace is **fully scaffolded** with **all 28 planned crates** present and building. The workspace compiles successfully and all tests pass (2,867 tests across 28 crates).
 
 | Metric | Value |
 |--------|-------|
-| Total Crates Planned | 27 |
-| Crates in Workspace | 27 |
+| Total Crates Planned | 28 |
+| Crates in Workspace | 28 |
 | Missing Crates | None |
-| Total Rust LOC | ~168,781 (376 .rs files) |
+| Total Rust LOC | ~168,781+ (376+ .rs files) |
 | Build Status | ✅ COMPILES (release build passing) |
-| Test Status | ✅ ALL PASSING (2,455 tests) |
+| Test Status | ✅ ALL PASSING (2,867 tests) |
 
 ### Phase Completion
 
@@ -27,33 +27,37 @@ The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** p
 |-------|-------------|--------|------------|
 | Phase 0 | Foundation (types, config, DB, queue, telemetry, errors, cache, secrets) | ✅ COMPLETE | 100% |
 | Phase 1 | Core Domain (session, auth, tools, hooks, workflow, models, skills) | COMPLETE | 95% |
-| Phase 2 | Runtime & Gateway (runtime, gateway, TUI, BYOH, meta) | IN PROGRESS | 97% |
-| Phase 3 | Interop Protocols (MCP, A2A, AG-UI, plugins) | IN PROGRESS | 75% |
+| Phase 2 | Runtime & Gateway (runtime, gateway, TUI, BYOH, meta) | IN PROGRESS | 98% |
+| Phase 3 | Interop Protocols (MCP, A2A, AG-UI, plugins) | IN PROGRESS | 85% |
 | Phase 4 | Enterprise & Hardening (OIDC/SCIM, K8s, Circles full) | NOT STARTED | 0% |
 
 ### Key Achievements (Session 15b verified; Sessions 25–26 extended)
 
-1. **Core gateway operational** — `sera-gateway` with 81 source files, 21,757 LOC, 270+ tests; startup validation hardened
-2. **Runtime infrastructure complete** — `sera-runtime` with 37 source files, 8,180 LOC, 106+ tests; ToolUseBehavior runtime enforcement landed
-3. **Model provider abstractions created** — `sera-models` (219 LOC) with `ModelProvider` trait; 62 tests (was wrongly reported as 0)
-4. **Skill pack loading created** — `sera-skills` (349 LOC) with filesystem-based discovery; 112 tests across 6 modules
-5. **Self-evolution machinery complete** — `sera-meta` (2,196 LOC) with 3-tier policy, shadow sessions, constitutional rules; ArtifactPipeline wired
-6. **HITL approval production-ready** — `sera-hitl` (819 LOC) with full escalation chains and tests
-7. **Workflow engine comprehensive** — `sera-workflow` (3,145 LOC) with SCC cycle detection, termination detection, coordination; Timer gate (`AwaitType::Timer`) landed
-8. **Type system comprehensive** — `sera-types` (8,921 LOC) with 29 modules covering full domain; NDJSON ProtocolCapabilities + HandshakeFrame finalized
-9. **Hooks hardened** — `sera-hooks` PermissionOverrides + HookCancellation + `updated_input` transformation landed; WASM adapter feature-gated via `wasmtime`
+1. **Core gateway operational** — `sera-gateway` with 81 source files, 21,757 LOC, 436 tests; startup validation hardened; /api/evolve/* full route set with HMAC-SHA-512 token signing
+2. **Runtime infrastructure complete** — `sera-runtime` with 37 source files, 8,180 LOC, 304 tests; ToolUseBehavior runtime enforcement landed; llm_client hardened
+3. **Model provider abstractions created** — `sera-models` (219 LOC) with `ModelProvider` trait; 83 tests
+4. **Skill pack loading created** — `sera-skills` (349 LOC) with filesystem-based discovery; 207 tests across 6 modules
+5. **Self-evolution machinery complete** — `sera-meta` (2,196 LOC) with 3-tier policy, shadow sessions, constitutional rules; ArtifactPipeline wired; 122 tests
+6. **HITL approval production-ready** — `sera-hitl` (819 LOC) with full escalation chains; 62 tests
+7. **Workflow engine comprehensive** — `sera-workflow` (3,145 LOC) with SCC cycle detection, termination detection, coordination; all 6 AwaitType gates complete (Timer/Human/GhRun/GhPr/Change/Mail) with per-gate Lookup traits + ReadyContext bundle
+8. **Type system comprehensive** — `sera-types` (8,921 LOC) with 29 modules covering full domain; NDJSON ProtocolCapabilities + HandshakeFrame finalized; 354 tests
+9. **Hooks hardened** — `sera-hooks` PermissionOverrides + HookCancellation + `updated_input` transformation landed; WASM adapter feature-gated via `wasmtime`; hook-ordering integration test
 10. **Session 25 ultrawork marathon** — 16 beads closed, ~95 new tests, gateway stub classification complete, HybridScorer (586 LOC, 14 tests) production-ready
-11. **Session 26 ultrawork marathon** — ~20 beads closed, ~366 new tests across 20 crates; RoleBasedAuthzProvider (Tier-1.5), ToolUseBehavior enforcement, commit_overlay bugfix, llm_proxy JWT impersonation fix, Timer gate, PermissionOverrides+HookCancellation, BYOH build_* seam extraction, contracts.rs golden YAML harness
+11. **Session 26 waves 1-6** — ~20 beads closed, ~366 new tests across 20 crates; RoleBasedAuthzProvider (Tier-1.5), ToolUseBehavior enforcement, commit_overlay bugfix, llm_proxy JWT impersonation fix, Timer gate, PermissionOverrides+HookCancellation, BYOH build_* seam extraction, contracts.rs golden YAML harness
+12. **Session 26 waves 7-21** — 21 further beads closed, ~412 additional tests; all 6 AwaitType gates, /api/evolve/* routes, JWT P1 hardening (nbf+iss+aud), SIGTERM graceful shutdown + LaneQueue drain, HMAC-SHA-512 CapabilityToken signing, ConstitutionalRegistry YAML seeding, sera-errors unified across 20+ crates, 4 production bugs fixed (shadow_store data loss, llm_proxy impersonation, JWT nbf bypass, parse_id 500→400)
 
 ### Remaining Gaps
 
-1. **sera-gateway HTTP routes** — Artifact proposal/evaluate/approve/apply handlers not yet wired (post-sera-k2gw)
-2. **HookContext.change_artifact threading** — Integration gap in gateway pipeline (follow-up to ser-k2gw)
-3. **Session commands schema** — task_queue.session_id parent key alignment (noted in gateway-stubs-classification.md)
-4. **Interop crates** — sera-mcp, sera-a2a, sera-agui, sera-plugins at ~75% (Phase 3, in progress)
-5. **Clippy compliance** — Workspace passes `cargo clippy -- -D warnings` (Session 21+); 56% dead code reduction (Session 25)
-6. **WASM fuel metering** — `sera-hooks` fuel + memory caps not yet configured
-7. **Circles coordination** — 7-policy implementation, blackboard, convergence incomplete (~40%)
+1. **DB-backed ProposalUsageTracker** — restart-safe max_proposals enforcement for /api/evolve/propose
+2. **Secret hot-reload for EvolveTokenSigner** — EvolveTokenSigner reads key at startup; rotation not live
+3. **sera-auth CapabilityTokenIssuer** — share type between gateway + agent-runtime
+4. **sera-gateway TraitToolRegistry migration** — 14+ Tool-trait adapters still in ToolExecutor
+5. **LaneRunGuard drop-time race** — potential race during shutdown exit (follow-up to SIGTERM work)
+6. **Postgres LaneQueue pending_count backend** — currently in-memory only
+7. **Mail gate Design B** — pattern-matching vs thread-id decision deferred
+8. **Circles coordination** — 7-policy implementation, blackboard, convergence incomplete (~40%)
+9. **WASM fuel metering** — `sera-hooks` fuel + memory caps not yet configured
+10. **ShadowSessionExecutor** — sera-runtime shadow execution path (sera-yif4 alt)
 
 ---
 
@@ -63,48 +67,49 @@ The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** p
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-types | ✅ COMPLETE | 8,921 | 334 | 29 modules, comprehensive domain types |
-| sera-config | ✅ COMPLETE | 2,129 | 81 | Layered config, schema registry, file watcher; commit_overlay bugfix landed (S26) |
-| sera-errors | ✅ COMPLETE | 248 | 5 | SeraErrorCode, SeraError, IntoSeraError trait; wired into gateway + runtime |
-| sera-cache | ✅ COMPLETE | 134 | 22 | MokaBackend with full test suite; +15 tests (S26); Redis deferred to Phase 4 |
-| sera-db | ✅ COMPLETE | 3,836 | 79 | PostgreSQL (sqlx) + SQLite (rusqlite), 21 source files |
-| sera-queue | ✅ COMPLETE | 470 | 23 | QueueBackend trait, local + apalis backends; +12 tests (S26) |
-| sera-telemetry | ✅ COMPLETE | 436 | 91 | OTel triad (version-pinned), AuditBackend, OCSF; +45 tests (S26) |
-| sera-secrets | ✅ COMPLETE | 636 | 53 | Env, Docker, File, Chained providers + enterprise scaffolds; +31 tests (S26) |
+| sera-types | ✅ COMPLETE | 8,921 | 354 | 29 modules, comprehensive domain types |
+| sera-config | ✅ COMPLETE | 2,129 | 67 | Layered config, schema registry, file watcher; commit_overlay bugfix landed (S26) |
+| sera-errors | ✅ COMPLETE | 248 | 5 | SeraErrorCode, SeraError, IntoSeraError trait; unified across 20+ crates (S26 waves 7-21) |
+| sera-cache | ✅ COMPLETE | 134 | 26 | MokaBackend with full test suite; Redis deferred to Phase 4 |
+| sera-db | ✅ COMPLETE | 3,836 | 100 | PostgreSQL (sqlx) + SQLite (rusqlite), 21 source files; LaneQueue pending_count + drain (S26) |
+| sera-queue | ✅ COMPLETE | 470 | 6 | QueueBackend trait, local + apalis backends |
+| sera-telemetry | ✅ COMPLETE | 436 | 31 | OTel triad (version-pinned), AuditBackend, OCSF |
+| sera-secrets | ✅ COMPLETE | 636 | 57 | Env, Docker, File, Chained providers + enterprise scaffolds |
+| sera-oci | ✅ COMPLETE | — | 70 | OCI image/layer operations; added S26 waves 7-21 |
 
 ### Core Domain Crates (Phase 1)
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-session | ✅ COMPLETE | 1,391 | 78 | 6-state machine, transcript, 4-tier memory |
-| sera-auth | ✅ COMPLETE | 1,289 | 53 | JWT, OIDC, API keys, casbin RBAC; RoleBasedAuthzProvider Tier-1.5 landed (S26) |
-| sera-tools | ✅ COMPLETE | 1,900+ | 145 | 5 sandbox providers, SSRF, bash AST, kill switch, contradiction detection, source mounts |
-| sera-hooks | ✅ COMPLETE | 1,206 | 37 | Native hooks + WASM adapter; PermissionOverrides + HookCancellation + updated_input (S26) |
-| sera-hitl | ✅ COMPLETE | 819 | 20 | Full approval workflow, escalation chains, tests in lib |
-| sera-workflow | ✅ COMPLETE | 3,145 | 110 | Atomic claims, SCC cycle detection, termination, coordination; Timer gate landed (S26) |
-| sera-events | ✅ COMPLETE | 501 | 34 | Audit Merkle chain (SHA-256), Centrifugo pub/sub; +22 tests (S26) |
-| sera-models | ✅ COMPLETE | 219 | 75 | ModelProvider trait, ProviderConfig, ModelResponse (was wrongly reported as 0) |
-| sera-skills | ✅ COMPLETE | 880+ | 190 | SkillLoader, SkillPack trait, YAML discovery, KnowledgeSchemaValidator; +50 tests (S26) |
+| sera-session | ✅ COMPLETE | 1,391 | 83 | 6-state machine, transcript, 4-tier memory |
+| sera-auth | ✅ COMPLETE | 1,289 | 75 | JWT (nbf+iss+aud+leeway P1 fix), OIDC, API keys, casbin RBAC; RoleBasedAuthzProvider Tier-1.5 (S26) |
+| sera-tools | ✅ COMPLETE | 1,900+ | 245 | 5 sandbox providers, SSRF, bash AST, kill switch, contradiction detection; +198 security tests (S26 waves 7-21) |
+| sera-hooks | ✅ COMPLETE | 1,206 | 43 | Native hooks + WASM adapter; PermissionOverrides + HookCancellation + updated_input (S26) |
+| sera-hitl | ✅ COMPLETE | 819 | 62 | Full approval workflow, escalation chains; +29 tests (S26 waves 7-21) |
+| sera-workflow | ✅ COMPLETE | 3,145 | 148 | Atomic claims, SCC cycle detection, termination, coordination; all 6 AwaitType gates complete (S26 waves 7-21) |
+| sera-events | ✅ COMPLETE | 501 | 40 | Audit Merkle chain (SHA-256), Centrifugo pub/sub |
+| sera-models | ✅ COMPLETE | 219 | 83 | ModelProvider trait, ProviderConfig, ModelResponse |
+| sera-skills | ✅ COMPLETE | 880+ | 207 | SkillLoader, SkillPack trait, YAML discovery, KnowledgeSchemaValidator |
 
 ### Runtime & Gateway (Phase 2)
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-runtime | ⚠️ 96% | 8,180 | 256 | Core operational; all 9 condensers implemented; ToolUseBehavior enforcement landed (S26) |
-| sera-gateway | ⚠️ 92% | 21,757 | 391 | Core operational; OIDC seam + intercom acting-context + llm_proxy JWT priority (S26) |
-| sera-meta | ✅ COMPLETE | 2,196 | 72 | 3-tier evolution, shadow sessions, constitutional rules (Epic 30 P2 closed) |
-| sera-tui | ✅ COMPLETE | 835 | 67 | ratatui TUI, crossterm input; +50 tests (S26) |
-| sera-byoh-agent | ✅ COMPLETE | 221 | 52 | BYOH reference implementation; build_* seam extraction + 52 tests (S26) |
-| sera-testing | ✅ COMPLETE | 326 | 37 | Mock implementations, contracts.rs golden YAML harness (S26); +29 tests |
+| sera-runtime | ⚠️ 97% | 8,180 | 304 | Core operational; all 9 condensers implemented; ToolUseBehavior enforcement; llm_client +37 tests; default_runtime +16 tests (S26 waves 7-21) |
+| sera-gateway | ⚠️ 95% | 21,757 | 436 | /api/evolve/* routes, HMAC-SHA-512 token signing, ConstitutionalRegistry YAML seeding, operator-key route, Tier-3 integration tests, max_proposals enforcement (S26 waves 7-21) |
+| sera-meta | ✅ COMPLETE | 2,196 | 122 | 3-tier evolution, shadow sessions, constitutional rules; +41 tests (S26 waves 7-21) |
+| sera-tui | ✅ COMPLETE | 835 | 67 | ratatui TUI, crossterm input |
+| sera-byoh-agent | ✅ COMPLETE | 221 | 52 | BYOH reference implementation; build_* seam extraction |
+| sera-testing | ✅ COMPLETE | 326 | 37 | Mock implementations, contracts.rs golden YAML harness |
 
 ### Interop & Plugin Crates (Phase 3) — Added Sessions 19-20
 
 | Crate | Status | LOC | Tests | Notes |
 |-------|--------|-----|-------|-------|
-| sera-mcp | ✅ IN PROGRESS | — | 70 | MCP server/client bridge; gating + rmcp_bridge + errors; +19 tests (S26) |
-| sera-a2a | ✅ IN PROGRESS | — | 15 | A2A protocol adapter; Client + InProcRouter + Capabilities; +7 tests (S26) |
-| sera-agui | ✅ IN PROGRESS | — | 17 | AG-UI streaming protocol, 17 event types; EventSink + SSE stream adapter; +7 tests (S26) |
-| sera-plugins | ✅ IN PROGRESS | — | 48 | gRPC plugin registry, SDK, circuit breaker; public API re-exports + integration tests (S26) |
+| sera-mcp | ⚠️ IN PROGRESS | — | 70 | MCP server/client bridge; gating + rmcp_bridge + errors |
+| sera-a2a | ⚠️ IN PROGRESS | — | 15 | A2A protocol adapter; Client + InProcRouter + Capabilities |
+| sera-agui | ⚠️ IN PROGRESS | — | 17 | AG-UI streaming protocol, 17 event types; EventSink + SSE stream adapter |
+| sera-plugins | ⚠️ IN PROGRESS | — | 45 | gRPC plugin registry, SDK, circuit breaker; public API re-exports |
 
 ---
 
@@ -192,11 +197,12 @@ The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** p
 - Termination detection, coordination with ConcurrencyScheduler
 - Ready queue with dependency closure
 - `AwaitType::Timer` gate + ready-queue integration (S26)
+- All 6 AwaitType gates fully integrated: Timer/Human/GhRun/GhPr/Change/Mail with per-gate Lookup traits + ReadyContext bundle (S26 waves 7-21)
 
 **Remaining Gaps:**
-- `AwaitType` gates: GhRun, GhPr, Human, Mail, Change (Timer done)
 - `WorkflowMemoryManager` coordinator-scoped summary
 - `change_artifact_id` provenance tracking
+- Mail gate Design B (pattern-matching vs thread-id, decision deferred)
 
 **Files:** `rust/crates/sera-workflow/src/`
 
@@ -310,10 +316,11 @@ Phase 3 crates (IN PROGRESS):
 ### Medium Priority (P2) — Domain Completion
 
 1. **sera-secrets Vault/cloud providers** — Add Vault, AWS SM, Azure KV backends
-2. **sera-errors adoption** — Integrate error codes across crates
+2. **sera-errors adoption** — Complete (unified across 20+ crates, S26 waves 7-21)
 3. **sera-auth RBAC wiring** — Complete casbin policy enforcement end-to-end
 4. **Circles coordination** — Complete 7 coordination policies in sera-workflow
-5. **sera-workflow AwaitType gates** — GhRun, GhPr, Human, Mail, Change (Timer done)
+5. **DB-backed ProposalUsageTracker** — Restart-safe max_proposals for /api/evolve/propose
+6. **Secret hot-reload for EvolveTokenSigner** — Live key rotation support
 
 ### Low Priority (P3) — Interop Completion
 
@@ -335,34 +342,35 @@ Phase 3 crates (IN PROGRESS):
 
 | Crate | Tests | Status |
 |-------|-------|--------|
-| sera-gateway | 391 | ✅ PASS |
-| sera-types | 334 | ✅ PASS |
-| sera-runtime | 256 | ✅ PASS |
-| sera-skills | 190 | ✅ PASS |
-| sera-tools | 145 | ✅ PASS |
-| sera-workflow | 110 | ✅ PASS |
-| sera-telemetry | 91 | ✅ PASS |
-| sera-config | 81 | ✅ PASS |
-| sera-db | 79 | ✅ PASS |
-| sera-session | 78 | ✅ PASS |
-| sera-models | 75 | ✅ PASS |
-| sera-meta | 72 | ✅ PASS |
+| sera-gateway | 436 | ✅ PASS |
+| sera-types | 354 | ✅ PASS |
+| sera-runtime | 304 | ✅ PASS |
+| sera-tools | 245 | ✅ PASS |
+| sera-skills | 207 | ✅ PASS |
+| sera-workflow | 148 | ✅ PASS |
+| sera-meta | 122 | ✅ PASS |
+| sera-db | 100 | ✅ PASS |
+| sera-session | 83 | ✅ PASS |
+| sera-models | 83 | ✅ PASS |
+| sera-auth | 75 | ✅ PASS |
+| sera-oci | 70 | ✅ PASS |
 | sera-mcp | 70 | ✅ PASS |
 | sera-tui | 67 | ✅ PASS |
-| sera-auth | 53 | ✅ PASS |
-| sera-secrets | 53 | ✅ PASS |
+| sera-config | 67 | ✅ PASS |
+| sera-hitl | 62 | ✅ PASS |
+| sera-secrets | 57 | ✅ PASS |
 | sera-byoh-agent | 52 | ✅ PASS |
-| sera-plugins | 48 | ✅ PASS |
+| sera-plugins | 45 | ✅ PASS |
+| sera-hooks | 43 | ✅ PASS |
+| sera-events | 40 | ✅ PASS |
 | sera-testing | 37 | ✅ PASS |
-| sera-hooks | 37 | ✅ PASS |
-| sera-events | 34 | ✅ PASS |
-| sera-queue | 23 | ✅ PASS |
-| sera-cache | 22 | ✅ PASS |
-| sera-hitl | 20 | ✅ PASS |
+| sera-telemetry | 31 | ✅ PASS |
+| sera-cache | 26 | ✅ PASS |
 | sera-agui | 17 | ✅ PASS |
 | sera-a2a | 15 | ✅ PASS |
+| sera-queue | 6 | ✅ PASS |
 | sera-errors | 5 | ✅ PASS |
-| **TOTAL** | **2,455** | **✅ ALL PASS** |
+| **TOTAL** | **2,867** | **✅ ALL PASS** |
 
 ---
 
@@ -374,8 +382,9 @@ Phase 3 crates (IN PROGRESS):
 | 2026-04-16 | S15b | Fresh assessment: corrected crate count (19→23), LOC (29K→64.6K), tests (500→1,196); updated sera-models/skills/meta/hitl/hooks/events from NOT STARTED/PARTIAL to COMPLETE; recalculated all phase percentages; corrected Phase 2 description |
 | 2026-04-16 | S21 | Code audit: removed false "3 condenser stubs" claim (all 9 implemented); reconciled test counts per crate from #[test] grep; fixed clippy workspace-wide (17 fixes across 10 files); SPEC-runtime bumped 90%→93% |
 | 2026-04-17 | S25 | Ultrawork marathon: 16 beads closed, ~95 new tests; Phase 2 bumped 85%→95%; gateway startup validation, runtime fixes, builder/querybuilder patterns, NDJSON protocol alignment, HybridScorer (586 LOC), 56% dead code reduction; 39 gateway stubs classified; ArtifactPipeline integrated; follow-ups filed for HTTP routes + HookContext threading |
-| 2026-04-17 | S26 | Ultrawork marathon: ~20 beads closed, ~366 new tests across 20 crates (1,188→2,455 incl. tokio::test recount); Phase 1 90%→95%, Phase 2 95%→97%, Phase 3 60%→75%; key features: ToolUseBehavior runtime enforcement, PermissionOverrides+HookCancellation+updated_input in hooks, Timer gate (AwaitType::Timer), RoleBasedAuthzProvider Tier-1.5+ActionKind, commit_overlay bugfix (SPEC-config→100%), llm_proxy JWT impersonation fix, BYOH build_* seam extraction, contracts.rs golden YAML harness; corrected sera-models stale 0→75 tests, sera-events 12→34; all SPEC-interop crates promoted from SCAFFOLDED to IN PROGRESS |
+| 2026-04-17 | S26 waves 1-6 | Ultrawork marathon: ~20 beads closed, ~366 new tests across 20 crates (1,188→2,455 incl. tokio::test recount); Phase 1 90%→95%, Phase 2 95%→97%, Phase 3 60%→75%; key features: ToolUseBehavior runtime enforcement, PermissionOverrides+HookCancellation+updated_input in hooks, Timer gate (AwaitType::Timer), RoleBasedAuthzProvider Tier-1.5+ActionKind, commit_overlay bugfix (SPEC-config→100%), llm_proxy JWT impersonation fix, BYOH build_* seam extraction, contracts.rs golden YAML harness; corrected sera-models stale 0→75 tests, sera-events 12→34; all SPEC-interop crates promoted from SCAFFOLDED to IN PROGRESS |
+| 2026-04-17 | S26 waves 7-21 | Final close-out: 21 further beads closed, ~412 additional tests (2,455→2,867 across 28 crates); Phase 2 97%→98%, Phase 3 75%→85%; all 6 AwaitType gates complete (Timer/Human/GhRun/GhPr/Change/Mail) with ReadyContext bundle; /api/evolve/* full route set with HMAC-SHA-512 CapabilityToken signing; JWT P1 hardening (nbf+iss+aud+leeway); SIGTERM graceful shutdown + LaneQueue drain; ConstitutionalRegistry YAML seeding; sera-errors unified across 20+ crates via From<> pattern; 4 production bugs fixed: shadow_store drain() data loss, llm_proxy X-Agent-Id impersonation, JWT nbf bypass, parse_id 500→400; new crate sera-oci added (70 tests) |
 
 ---
 
-*Updated 2026-04-17 by Session 26 ultrawork marathon*
+*Updated 2026-04-17 by Session 26 final close-out (waves 7-21)*

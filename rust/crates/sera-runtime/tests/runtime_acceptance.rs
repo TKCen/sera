@@ -59,12 +59,13 @@ async fn four_method_lifecycle_callable() {
         enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         pending_steer: None,
+        tool_use_behavior: Default::default(),
     };
 
     let observed = turn::observe(&ctx, None, &[]).await.unwrap();
     assert_eq!(observed.len(), 1);
 
-    let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None).await;
+    let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None, &Default::default()).await;
     assert!(think_result.tool_calls.is_empty());
 
     let act_result = turn::act(&mut ctx.clone(), &think_result, None).await;
@@ -92,6 +93,7 @@ async fn doom_loop_triggers_interruption() {
         enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         pending_steer: None,
+        tool_use_behavior: Default::default(),
     };
 
     let think_result = ThinkResult {
@@ -205,6 +207,7 @@ fn turn_context_has_change_artifact_field() {
         enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         pending_steer: None,
+        tool_use_behavior: Default::default(),
     };
     assert_eq!(ctx.change_artifact.as_deref(), Some("ca-123"));
 }

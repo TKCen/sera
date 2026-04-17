@@ -41,6 +41,13 @@ pub struct TurnContext {
     /// reconstruct the session hierarchy. `None` for root sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_key: Option<String>,
+    /// Tool selection policy for this turn (SPEC-runtime §6.3).
+    ///
+    /// Controls how the LLM chooses among available tools. Defaults to `Auto`
+    /// (model decides freely). The `OnLlmStart` hook may override this field
+    /// before the model call to enforce per-turn policy gates.
+    #[serde(default)]
+    pub tool_use_behavior: crate::tool::ToolUseBehavior,
 }
 
 // ── Output types ─────────────────────────────────────────────────────────────
@@ -230,6 +237,7 @@ mod tests {
             metadata: HashMap::new(),
             change_artifact: None,
             parent_session_key: None,
+            tool_use_behavior: crate::tool::ToolUseBehavior::default(),
         }
     }
 
@@ -382,6 +390,31 @@ mod tests {
         let legacy = r#"{"event_id":"e1","agent_id":"a1","session_key":"s1","messages":[],"available_tools":[]}"#;
         let parsed: TurnContext = serde_json::from_str(legacy).unwrap();
         assert!(parsed.parent_session_key.is_none());
+    }
+
+    #[test]
+    fn turn_context_tool_use_behavior_defaults_to_auto() {
+        let ctx = make_turn_context();
+        assert_eq!(ctx.tool_use_behavior, crate::tool::ToolUseBehavior::Auto);
+    }
+
+    #[test]
+    fn turn_context_tool_use_behavior_serde_roundtrip() {
+        let mut ctx = make_turn_context();
+        ctx.tool_use_behavior = crate::tool::ToolUseBehavior::Specific {
+            name: "read_file".to_string(),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let parsed: TurnContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tool_use_behavior, ctx.tool_use_behavior);
+    }
+
+    #[test]
+    fn turn_context_tool_use_behavior_default_from_legacy_json() {
+        // Frames without tool_use_behavior field deserialize as Auto.
+        let legacy = r#"{"event_id":"e1","agent_id":"a1","session_key":"s1","messages":[],"available_tools":[]}"#;
+        let parsed: TurnContext = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.tool_use_behavior, crate::tool::ToolUseBehavior::Auto);
     }
 
 }

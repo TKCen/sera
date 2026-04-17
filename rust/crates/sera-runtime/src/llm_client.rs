@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use sera_types::runtime::TokenUsage;
+use sera_types::tool::ToolUseBehavior;
 
 use crate::config::RuntimeConfig;
 use crate::turn::{LlmProvider, ThinkError, ThinkResult};
@@ -215,6 +216,19 @@ impl LlmClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> Result<LlmChatResult, LlmError> {
+        self.chat_typed_with_behavior(messages, tools, &ToolUseBehavior::Auto).await
+    }
+
+    /// Send a chat completion request with streaming SSE and an explicit tool-use policy.
+    ///
+    /// The `tool_use_behavior` is translated to an OpenAI-compatible `tool_choice`
+    /// field and included in the request body when tools are present.
+    pub async fn chat_typed_with_behavior(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        tool_use_behavior: &ToolUseBehavior,
+    ) -> Result<LlmChatResult, LlmError> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -225,6 +239,14 @@ impl LlmClient {
         if !tools.is_empty() {
             body["tools"] =
                 serde_json::to_value(tools).map_err(|e| LlmError::RequestError(e.to_string()))?;
+            // Only include tool_choice when the behavior is non-default, so that
+            // providers that don't support the field are not broken by unnecessary noise.
+            if !matches!(tool_use_behavior, ToolUseBehavior::Auto) {
+                body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
+            }
+        } else if tool_use_behavior.forbids_tools() {
+            // Explicitly tell the model not to call tools even when none are listed.
+            body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
         }
 
         let response = self.send_request(&body).await?;
@@ -244,6 +266,17 @@ impl LlmClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> Result<LlmChatResult, LlmError> {
+        self.chat_non_streaming_with_behavior(messages, tools, &ToolUseBehavior::Auto).await
+    }
+
+    /// Send a non-streaming chat completion request with an explicit tool-use policy.
+    #[allow(dead_code)]
+    pub async fn chat_non_streaming_with_behavior(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        tool_use_behavior: &ToolUseBehavior,
+    ) -> Result<LlmChatResult, LlmError> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -253,6 +286,11 @@ impl LlmClient {
         if !tools.is_empty() {
             body["tools"] =
                 serde_json::to_value(tools).map_err(|e| LlmError::RequestError(e.to_string()))?;
+            if !matches!(tool_use_behavior, ToolUseBehavior::Auto) {
+                body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
+            }
+        } else if tool_use_behavior.forbids_tools() {
+            body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
         }
 
         let response = self.send_request(&body).await?;
@@ -539,6 +577,15 @@ impl LlmProvider for LlmClient {
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
     ) -> Result<ThinkResult, ThinkError> {
+        <Self as LlmProvider>::chat_with_behavior(self, messages, tools, &ToolUseBehavior::Auto).await
+    }
+
+    async fn chat_with_behavior(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        tool_use_behavior: &ToolUseBehavior,
+    ) -> Result<ThinkResult, ThinkError> {
         // Convert Value messages to ChatMessage
         let chat_messages: Vec<ChatMessage> = messages
             .iter()
@@ -553,8 +600,9 @@ impl LlmProvider for LlmClient {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| ThinkError::Conversion(format!("tool deserialization: {e}")))?;
 
-        // Call the LLM
-        let result = LlmClient::chat(self, &chat_messages, &tool_defs)
+        // Call the LLM with the tool-use policy applied.
+        let result = self
+            .chat_typed_with_behavior(&chat_messages, &tool_defs, tool_use_behavior)
             .await
             .map_err(|e| ThinkError::Llm(e.to_string()))?;
 

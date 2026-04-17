@@ -303,6 +303,7 @@ async fn run_interactive(
             metadata: HashMap::new(),
             change_artifact: None,
             parent_session_key: None,
+            tool_use_behavior: Default::default(),
         };
 
         let outcome = runtime.execute_turn(turn_ctx).await;
@@ -657,6 +658,7 @@ fn submission_to_turn_context(
         metadata: HashMap::new(),
         change_artifact: None,
         parent_session_key,
+        tool_use_behavior: Default::default(),
     }
 }
 

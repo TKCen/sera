@@ -8,6 +8,7 @@ use sera_hitl;
 use sera_hooks::ChainExecutor;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::runtime::{TokenUsage, TurnOutcome};
+use sera_types::tool::ToolUseBehavior;
 
 use crate::handoff::Handoff;
 
@@ -45,6 +46,19 @@ pub trait LlmProvider: Send + Sync {
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
     ) -> Result<ThinkResult, ThinkError>;
+
+    /// Like `chat`, but also forwards the tool-use policy to the provider.
+    ///
+    /// The default implementation delegates to `chat`, ignoring the behavior.
+    /// Provider adapters that support `tool_choice` should override this method.
+    async fn chat_with_behavior(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        _tool_use_behavior: &ToolUseBehavior,
+    ) -> Result<ThinkResult, ThinkError> {
+        self.chat(messages, tools).await
+    }
 }
 
 // ── ToolDispatcher trait ────────────────────────────────────────────────────
@@ -101,6 +115,11 @@ pub struct TurnContext {
     /// Pending steer event from the lane queue (injected at next tool boundary).
     /// Set by the gateway when the session has a queued steer message.
     pub pending_steer: Option<serde_json::Value>,
+    /// Tool selection policy for this turn (SPEC-runtime §6.3).
+    ///
+    /// The `OnLlmStart` hook may mutate this field before the model call to
+    /// enforce per-turn policy gates. Defaults to `ToolUseBehavior::Auto`.
+    pub tool_use_behavior: ToolUseBehavior,
 }
 
 /// Observe — filter messages by watch signals and run ConstitutionalGate hooks on input.
@@ -173,14 +192,17 @@ pub async fn observe(
 /// Think — call the LLM via the provided `LlmProvider`.
 ///
 /// Falls back to a stub response when no provider is given (useful for tests).
+/// The `tool_use_behavior` is forwarded to the provider so it can set the
+/// appropriate `tool_choice` field on the wire request (SPEC-runtime §6.3).
 pub async fn think(
     messages: &[serde_json::Value],
     tools: &[serde_json::Value],
     _react_mode: &ReactMode,
     llm: Option<&dyn LlmProvider>,
+    tool_use_behavior: &ToolUseBehavior,
 ) -> ThinkResult {
     match llm {
-        Some(provider) => match provider.chat(messages, tools).await {
+        Some(provider) => match provider.chat_with_behavior(messages, tools, tool_use_behavior).await {
             Ok(result) => result,
             Err(e) => {
                 tracing::error!("LLM call failed in think step: {e}");
@@ -567,6 +589,7 @@ mod tests {
             enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
             pending_steer: None,
+            tool_use_behavior: ToolUseBehavior::Auto,
         }
     }
 

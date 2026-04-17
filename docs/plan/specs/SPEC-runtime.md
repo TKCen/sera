@@ -1031,6 +1031,90 @@ agents:
       max_active_skills: 3              # Maximum skills injected per turn
       auto_create: true                 # Agent can create new skills (via config_propose)
 ```
+## 13a. ToolUseBehavior
+
+> **Source:** `SPEC-dependencies §10.13` — openai-agents-python `tool_use_behavior` discriminated union.
+> **Implementation:** `sera_types::tool::ToolUseBehavior` (type path).
+
+### 13a.1 Type Definition
+
+`ToolUseBehavior` is a tagged-union enum controlling how the LLM selects among available tools on a given turn. It is the SERA canonical representation of the OpenAI `tool_choice` / Anthropic `tool_choice` concept. Every provider integration translates from this type to the provider's wire format; the runtime never constructs provider-specific values directly.
+
+```rust
+/// Policy telling the LLM how to choose among available tools.
+/// Maps to the OpenAI/Anthropic tool_choice concept.
+///
+/// Type path: `sera_types::tool::ToolUseBehavior`
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum ToolUseBehavior {
+    /// Model decides freely whether to call a tool.
+    #[default]
+    Auto,
+    /// Model MUST call at least one tool this turn (any of the available).
+    Required,
+    /// Model MUST NOT call any tools this turn.
+    None,
+    /// Model MUST call the named tool (must be in the available set).
+    Specific { name: String },
+}
+```
+
+**SERA wire format** (JSON — `tag = "mode"`):
+
+| Variant | JSON |
+|---|---|
+| `Auto` | `{"mode":"auto"}` |
+| `Required` | `{"mode":"required"}` |
+| `None` | `{"mode":"none"}` |
+| `Specific { name }` | `{"mode":"specific","name":"<name>"}` |
+
+### 13a.2 Provider Wire Mapping
+
+| SERA variant | OpenAI `tool_choice` | Anthropic `tool_choice` |
+|---|---|---|
+| `Auto` | `"auto"` | `{"type":"auto"}` |
+| `Required` | `"required"` | `{"type":"any"}` |
+| `None` | `"none"` | `{"type":"none"}` |
+| `Specific { name }` | `{"type":"function","function":{"name":"<name>"}}` | `{"type":"tool","name":"<name>"}` |
+
+Translation methods live on the enum:
+- `ToolUseBehavior::to_openai_tool_choice(&self) -> serde_json::Value`
+- `ToolUseBehavior::to_anthropic_tool_choice(&self) -> serde_json::Value`
+
+Provider adapters are expected to call the appropriate translator; they must not hard-code wire strings.
+
+### 13a.3 Validation Contract
+
+Before passing the behavior to the LLM client, callers should invoke:
+
+```rust
+pub fn validate(&self, available_tools: &[String]) -> Result<(), ToolUseValidationError>
+```
+
+Rules:
+- `Specific { name }` → `name` must be in `available_tools`; else `ToolUseValidationError::UnknownTool`.
+- `Required` with empty `available_tools` → `ToolUseValidationError::NoToolsAvailable`.
+- `Auto` and `None` → always valid.
+
+### 13a.4 Threading into the Turn Loop
+
+`ToolUseBehavior` is threaded through the turn loop as follows:
+
+1. **`sera_types::runtime::TurnContext`** carries `tool_use_behavior: ToolUseBehavior` (`#[serde(default)]` → `Auto` for legacy frames).
+2. **`sera_runtime::turn::TurnContext`** (internal loop context) mirrors this field.
+3. **`OnLlmStart` hook point** fires immediately before the model call; a hook implementation may mutate `turn_ctx.tool_use_behavior` to enforce per-turn policy gates (e.g., force `Required` when a specific skill is active).
+4. **`turn::think()`** forwards the behavior to `LlmProvider::chat_with_behavior()`.
+5. **`LlmClient`** translates to `tool_choice` via `to_openai_tool_choice()` and includes it in the request body when tools are present or when `None` is specified.
+
+### 13a.5 Out of Scope
+
+- Per-tool runtime gating based on `ToolUseBehavior` — SkillBoundGate lives in `sera-mcp` (separate lane).
+- Streaming tool-call parsing — separate concern.
+- Full provider adapter rewrite — adapters call the translator methods; no rewrite needed.
+
+---
+
 ## 14. Open Questions
 
 1. ~~**Skill system definition**~~ — Resolved: See §13.

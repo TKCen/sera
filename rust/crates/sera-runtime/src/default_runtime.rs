@@ -147,6 +147,7 @@ impl AgentRuntime for DefaultRuntime {
             enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
             pending_steer: None,
+            tool_use_behavior: ctx.tool_use_behavior,
         };
 
         // Per-tool failure counter, reset on session end (i.e. when this method returns).
@@ -197,11 +198,14 @@ impl AgentRuntime for DefaultRuntime {
             };
 
             // 2. Think — call LLM
+            // The OnLlmStart hook may have mutated turn_ctx.tool_use_behavior before
+            // this point to enforce per-turn policy gates (SPEC-runtime §6.3).
             let think_result = turn::think(
                 &observed,
                 &turn_ctx.tools,
                 &turn_ctx.react_mode,
                 self.llm.as_deref(),
+                &turn_ctx.tool_use_behavior,
             )
             .await;
 
@@ -328,6 +332,7 @@ mod tests {
             metadata: std::collections::HashMap::new(),
             change_artifact: None,
             parent_session_key: None,
+            tool_use_behavior: Default::default(),
         }
     }
 

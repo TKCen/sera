@@ -230,6 +230,129 @@ impl ToolPolicy {
     }
 }
 
+// ── ToolUseBehavior (SPEC-runtime §6.3) ──────────────────────────────────────
+
+/// Policy telling the LLM how to choose among available tools.
+///
+/// Maps to the OpenAI/Anthropic `tool_choice` concept; each provider
+/// integration is responsible for the wire-format translation.
+/// See `ToolUseBehavior::to_openai_tool_choice` and
+/// `ToolUseBehavior::to_anthropic_tool_choice` for the canonical mappings.
+///
+/// Type path: `sera_types::tool::ToolUseBehavior`
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum ToolUseBehavior {
+    /// Model decides freely whether to call a tool.
+    #[default]
+    Auto,
+    /// Model MUST call at least one tool this turn (any of the available).
+    Required,
+    /// Model MUST NOT call any tools this turn.
+    None,
+    /// Model MUST call the named tool (must be in the available set).
+    Specific { name: String },
+}
+
+impl ToolUseBehavior {
+    /// Returns `true` if the behavior forces at least one tool call.
+    pub fn is_forced(&self) -> bool {
+        matches!(self, Self::Required | Self::Specific { .. })
+    }
+
+    /// Returns `true` if the behavior forbids all tool calls.
+    pub fn forbids_tools(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Returns the required tool name when `Specific`, otherwise `None`.
+    pub fn forced_name(&self) -> Option<&str> {
+        if let Self::Specific { name } = self {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    /// Translate to the OpenAI `tool_choice` wire value.
+    ///
+    /// - `Auto`     → `"auto"`
+    /// - `None`     → `"none"`
+    /// - `Required` → `"required"`
+    /// - `Specific` → `{"type":"function","function":{"name":"<name>"}}`
+    pub fn to_openai_tool_choice(&self) -> serde_json::Value {
+        match self {
+            Self::Auto => serde_json::json!("auto"),
+            Self::None => serde_json::json!("none"),
+            Self::Required => serde_json::json!("required"),
+            Self::Specific { name } => serde_json::json!({
+                "type": "function",
+                "function": { "name": name }
+            }),
+        }
+    }
+
+    /// Translate to the Anthropic `tool_choice` wire value.
+    ///
+    /// - `Auto`     → `{"type":"auto"}`
+    /// - `None`     → `{"type":"none"}`  (Anthropic uses `none` in newer API versions)
+    /// - `Required` → `{"type":"any"}`
+    /// - `Specific` → `{"type":"tool","name":"<name>"}`
+    pub fn to_anthropic_tool_choice(&self) -> serde_json::Value {
+        match self {
+            Self::Auto => serde_json::json!({"type": "auto"}),
+            Self::None => serde_json::json!({"type": "none"}),
+            Self::Required => serde_json::json!({"type": "any"}),
+            Self::Specific { name } => serde_json::json!({
+                "type": "tool",
+                "name": name
+            }),
+        }
+    }
+
+    /// Validate this behavior against the set of available tool names.
+    ///
+    /// - `Specific { name }`: `name` must appear in `available_tools`; else error.
+    /// - `Required` with empty `available_tools`: error (cannot force a call with no tools).
+    /// - `Auto` and `None`: always valid.
+    pub fn validate(&self, available_tools: &[String]) -> Result<(), ToolUseValidationError> {
+        match self {
+            Self::Specific { name } => {
+                if !available_tools.iter().any(|t| t == name) {
+                    return Err(ToolUseValidationError::UnknownTool {
+                        name: name.clone(),
+                        available: available_tools.to_vec(),
+                    });
+                }
+            }
+            Self::Required => {
+                if available_tools.is_empty() {
+                    return Err(ToolUseValidationError::NoToolsAvailable);
+                }
+            }
+            Self::Auto | Self::None => {}
+        }
+        Ok(())
+    }
+}
+
+/// Validation errors returned by [`ToolUseBehavior::validate`].
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ToolUseValidationError {
+    /// `Specific { name }` refers to a tool not in the available set.
+    #[error(
+        "tool_use_behavior specifies unknown tool '{name}'; available: [{available}]",
+        available = .available.join(", ")
+    )]
+    UnknownTool {
+        name: String,
+        available: Vec<String>,
+    },
+    /// `Required` was set but no tools are available.
+    #[error("tool_use_behavior is Required but no tools are available")]
+    NoToolsAvailable,
+}
+
 // ── Tool trait + execution context types (SPEC-tools §3) ─────────────────────
 
 use async_trait::async_trait;
@@ -773,5 +896,158 @@ mod tests {
         let policy = ToolPolicy::from_profile(ToolProfile::Basic);
         assert!(policy.allows("memory_read"));
         assert!(!policy.allows("shell"));
+    }
+
+    // ── ToolUseBehavior tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn tool_use_behavior_default_is_auto() {
+        assert_eq!(ToolUseBehavior::default(), ToolUseBehavior::Auto);
+    }
+
+    #[test]
+    fn tool_use_behavior_predicates() {
+        assert!(!ToolUseBehavior::Auto.is_forced());
+        assert!(!ToolUseBehavior::Auto.forbids_tools());
+        assert!(ToolUseBehavior::Auto.forced_name().is_none());
+
+        assert!(!ToolUseBehavior::None.is_forced());
+        assert!(ToolUseBehavior::None.forbids_tools());
+        assert!(ToolUseBehavior::None.forced_name().is_none());
+
+        assert!(ToolUseBehavior::Required.is_forced());
+        assert!(!ToolUseBehavior::Required.forbids_tools());
+        assert!(ToolUseBehavior::Required.forced_name().is_none());
+
+        let specific = ToolUseBehavior::Specific { name: "read_file".to_string() };
+        assert!(specific.is_forced());
+        assert!(!specific.forbids_tools());
+        assert_eq!(specific.forced_name(), Some("read_file"));
+    }
+
+    #[test]
+    fn tool_use_behavior_serde_roundtrip() {
+        let cases = vec![
+            ToolUseBehavior::Auto,
+            ToolUseBehavior::None,
+            ToolUseBehavior::Required,
+            ToolUseBehavior::Specific { name: "shell".to_string() },
+        ];
+        for behavior in cases {
+            let json = serde_json::to_string(&behavior).unwrap();
+            let parsed: ToolUseBehavior = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, behavior);
+        }
+    }
+
+    #[test]
+    fn tool_use_behavior_json_shapes() {
+        // Canonical JSON shapes matching OpenAI tool_choice surface.
+        let auto: ToolUseBehavior = serde_json::from_str(r#"{"mode":"auto"}"#).unwrap();
+        assert_eq!(auto, ToolUseBehavior::Auto);
+
+        let none: ToolUseBehavior = serde_json::from_str(r#"{"mode":"none"}"#).unwrap();
+        assert_eq!(none, ToolUseBehavior::None);
+
+        let required: ToolUseBehavior = serde_json::from_str(r#"{"mode":"required"}"#).unwrap();
+        assert_eq!(required, ToolUseBehavior::Required);
+
+        let specific: ToolUseBehavior =
+            serde_json::from_str(r#"{"mode":"specific","name":"read_file"}"#).unwrap();
+        assert_eq!(specific, ToolUseBehavior::Specific { name: "read_file".to_string() });
+    }
+
+    #[test]
+    fn tool_use_behavior_openai_translator() {
+        assert_eq!(ToolUseBehavior::Auto.to_openai_tool_choice(), serde_json::json!("auto"));
+        assert_eq!(ToolUseBehavior::None.to_openai_tool_choice(), serde_json::json!("none"));
+        assert_eq!(ToolUseBehavior::Required.to_openai_tool_choice(), serde_json::json!("required"));
+        let tc = ToolUseBehavior::Specific { name: "read_file".to_string() }
+            .to_openai_tool_choice();
+        assert_eq!(tc["type"], "function");
+        assert_eq!(tc["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn tool_use_behavior_anthropic_translator() {
+        assert_eq!(
+            ToolUseBehavior::Auto.to_anthropic_tool_choice(),
+            serde_json::json!({"type": "auto"})
+        );
+        assert_eq!(
+            ToolUseBehavior::None.to_anthropic_tool_choice(),
+            serde_json::json!({"type": "none"})
+        );
+        assert_eq!(
+            ToolUseBehavior::Required.to_anthropic_tool_choice(),
+            serde_json::json!({"type": "any"})
+        );
+        let tc = ToolUseBehavior::Specific { name: "shell".to_string() }
+            .to_anthropic_tool_choice();
+        assert_eq!(tc["type"], "tool");
+        assert_eq!(tc["name"], "shell");
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_auto_always_valid() {
+        assert!(ToolUseBehavior::Auto.validate(&[]).is_ok());
+        assert!(ToolUseBehavior::Auto.validate(&["any_tool".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_none_always_valid() {
+        assert!(ToolUseBehavior::None.validate(&[]).is_ok());
+        assert!(ToolUseBehavior::None.validate(&["any_tool".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_required_empty_tools_fails() {
+        let err = ToolUseBehavior::Required.validate(&[]).unwrap_err();
+        assert!(matches!(err, ToolUseValidationError::NoToolsAvailable));
+        assert!(err.to_string().contains("no tools are available"));
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_required_with_tools_ok() {
+        assert!(
+            ToolUseBehavior::Required
+                .validate(&["shell".to_string(), "memory_read".to_string()])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_specific_known_tool_ok() {
+        let tools = vec!["read_file".to_string(), "write_file".to_string()];
+        assert!(
+            ToolUseBehavior::Specific { name: "read_file".to_string() }
+                .validate(&tools)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_specific_unknown_tool_fails() {
+        let tools = vec!["read_file".to_string()];
+        let err = ToolUseBehavior::Specific { name: "shell".to_string() }
+            .validate(&tools)
+            .unwrap_err();
+        match &err {
+            ToolUseValidationError::UnknownTool { name, available } => {
+                assert_eq!(name, "shell");
+                assert_eq!(available, &["read_file".to_string()]);
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+        assert!(err.to_string().contains("shell"));
+        assert!(err.to_string().contains("read_file"));
+    }
+
+    #[test]
+    fn tool_use_behavior_validation_specific_empty_tools_fails() {
+        let err = ToolUseBehavior::Specific { name: "shell".to_string() }
+            .validate(&[])
+            .unwrap_err();
+        assert!(matches!(err, ToolUseValidationError::UnknownTool { .. }));
     }
 }

@@ -27,6 +27,23 @@ pub use policy::SandboxPolicy as SandboxPolicyType;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SandboxHandle(pub String);
 
+/// A read-write or read-only bind mount requested by the caller on sandbox
+/// create. Used for ephemeral agent spawns that need scratch volumes, config
+/// drops, or parent-worktree sharing beyond the curated [`SourceMount`] set.
+///
+/// Unlike [`SourceMount`], mounts specified here:
+/// - may be writable (`read_only = false`),
+/// - are not restricted to the `/sources/` container prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountSpec {
+    /// Absolute host path.
+    pub host_path: String,
+    /// Absolute container path.
+    pub container_path: String,
+    /// If `true`, bind is mounted read-only (`:ro`).
+    pub read_only: bool,
+}
+
 /// Configuration for creating a new sandbox.
 #[derive(Debug, Clone, Default)]
 pub struct SandboxConfig {
@@ -37,6 +54,9 @@ pub struct SandboxConfig {
     pub memory_limit_bytes: Option<u64>,
     pub cpu_limit: Option<f64>,
     pub sources: Vec<SourceMount>,
+    /// Additional bind mounts requested by the caller (ephemeral agents etc.).
+    /// Appended after [`Self::sources`] into the Docker `-v` flag list.
+    pub additional_mounts: Vec<MountSpec>,
 }
 
 /// Output from executing a command inside a sandbox.

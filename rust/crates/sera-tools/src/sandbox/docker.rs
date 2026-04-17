@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use sera_types::sandbox::SourceMount;
 
-use super::{ExecResult, SandboxConfig, SandboxError, SandboxHandle, SandboxProvider};
+use super::{ExecResult, MountSpec, SandboxConfig, SandboxError, SandboxHandle, SandboxProvider};
 
 /// Default per-exec timeout (60 s).
 const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(60);
@@ -57,6 +57,7 @@ struct StoredConfig {
     image: String,
     env: HashMap<String, String>,
     source_binds: Vec<String>,
+    additional_binds: Vec<String>,
 }
 
 impl DockerSandboxProvider {
@@ -104,6 +105,21 @@ impl DockerSandboxProvider {
             .map(|m| format!("{}:{}:ro", m.host_path, m.container_path))
             .collect()
     }
+
+    /// Format additional mounts as Docker bind-mount strings (`host:container`
+    /// or `host:container:ro` depending on `read_only`).
+    pub fn build_additional_binds(mounts: &[MountSpec]) -> Vec<String> {
+        mounts
+            .iter()
+            .map(|m| {
+                if m.read_only {
+                    format!("{}:{}:ro", m.host_path, m.container_path)
+                } else {
+                    format!("{}:{}", m.host_path, m.container_path)
+                }
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -122,11 +138,13 @@ impl SandboxProvider for DockerSandboxProvider {
         // Validate source mounts up-front.
         super::validate_sources(&config.sources)?;
         let source_binds = Self::build_source_binds(&config.sources);
+        let additional_binds = Self::build_additional_binds(&config.additional_mounts);
 
         let stored = StoredConfig {
             image,
             env: config.env.clone(),
             source_binds,
+            additional_binds,
         };
 
         let id = format!("sera-sbx-{}", Uuid::new_v4());
@@ -157,6 +175,9 @@ impl SandboxProvider for DockerSandboxProvider {
             cmd.arg("-e").arg(format!("{}={}", k, v));
         }
         for bind in &stored.source_binds {
+            cmd.arg("-v").arg(bind);
+        }
+        for bind in &stored.additional_binds {
             cmd.arg("-v").arg(bind);
         }
 
@@ -262,6 +283,65 @@ mod tests {
     fn build_source_binds_empty() {
         let binds = DockerSandboxProvider::build_source_binds(&[]);
         assert!(binds.is_empty());
+    }
+
+    #[test]
+    fn build_additional_binds_formats_rw_and_ro() {
+        let mounts = vec![
+            MountSpec {
+                host_path: "/host/cache".to_string(),
+                container_path: "/cache".to_string(),
+                read_only: false,
+            },
+            MountSpec {
+                host_path: "/host/config".to_string(),
+                container_path: "/etc/agent".to_string(),
+                read_only: true,
+            },
+        ];
+        let binds = DockerSandboxProvider::build_additional_binds(&mounts);
+        assert_eq!(binds.len(), 2);
+        // rw mount: no :ro suffix
+        assert_eq!(binds[0], "/host/cache:/cache");
+        // ro mount: :ro suffix
+        assert_eq!(binds[1], "/host/config:/etc/agent:ro");
+    }
+
+    #[tokio::test]
+    async fn additional_mounts_are_stored_for_execute() {
+        // Verify the SandboxConfig.additional_mounts feeds into the stored bind
+        // list, which is what `execute` appends as `-v host:container[:ro]` args.
+        let Ok(provider) = DockerSandboxProvider::new() else {
+            eprintln!("docker client init failed; skipping test");
+            return;
+        };
+        let config = SandboxConfig {
+            image: Some("alpine:3".to_string()),
+            additional_mounts: vec![
+                MountSpec {
+                    host_path: "/host/data".to_string(),
+                    container_path: "/data".to_string(),
+                    read_only: false,
+                },
+                MountSpec {
+                    host_path: "/host/conf".to_string(),
+                    container_path: "/conf".to_string(),
+                    read_only: true,
+                },
+            ],
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.expect("create");
+        let guard = provider.configs.lock().await;
+        let stored = guard.get(&handle.0).expect("stored config");
+        assert_eq!(
+            stored.additional_binds,
+            vec![
+                "/host/data:/data".to_string(),
+                "/host/conf:/conf:ro".to_string(),
+            ],
+            "additional_mounts should be translated into -v bind strings"
+        );
     }
 
     #[tokio::test]

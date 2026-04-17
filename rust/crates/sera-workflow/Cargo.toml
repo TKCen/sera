@@ -7,6 +7,7 @@ description = "Workflow engine for SERA — triggered tasks, dreaming, knowledge
 
 [dependencies]
 sera-types = { workspace = true }
+sera-errors = { workspace = true }
 sera-hitl = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

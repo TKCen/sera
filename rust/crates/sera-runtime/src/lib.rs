@@ -40,7 +40,7 @@ pub mod harness;
 pub mod subagent;
 pub mod turn;
 
-pub use sera_errors;
+pub mod sera_errors;
 
 // Retained modules
 pub mod config;

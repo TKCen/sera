@@ -17,6 +17,7 @@ pub mod docker;
 pub mod enterprise;
 pub mod env;
 pub mod file;
+pub mod sera_errors;
 
 pub use chained::ChainedSecretsProvider;
 pub use docker::DockerSecretsProvider;

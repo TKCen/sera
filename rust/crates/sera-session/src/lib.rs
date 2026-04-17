@@ -10,6 +10,7 @@
 //! - SummarizeMemory: Tier 4 — LLM-driven compaction when budget hit
 
 pub mod memory_wrapper;
+pub mod persistence;
+pub mod sera_errors;
 pub mod state;
 pub mod transcript;
-pub mod persistence;

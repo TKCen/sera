@@ -79,5 +79,7 @@ pub use sleeptime::{
     IdleDetector, SleeptimeConfig, SleeptimeConsolidator,
 };
 
+pub mod sera_errors;
+
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,6 @@
 pub mod registry;
 pub mod sandbox;
+pub mod sera_errors;
 pub mod ssrf;
 pub mod binary_identity;
 pub mod bash_ast;

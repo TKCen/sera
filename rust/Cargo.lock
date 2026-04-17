@@ -4567,6 +4567,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "reqwest 0.12.28",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4668,6 +4669,7 @@ name = "sera-secrets"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "sera-errors",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
@@ -4679,6 +4681,7 @@ name = "sera-session"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4721,6 +4724,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4822,6 +4826,7 @@ dependencies = [
  "chrono",
  "cron",
  "hex",
+ "sera-errors",
  "sera-hitl",
  "sera-types",
  "serde",

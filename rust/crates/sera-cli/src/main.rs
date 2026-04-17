@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use sera_commands::{CommandArgs, CommandContext};
 
 use sera_cli::config::CliConfig;
+use sera_cli::token_store::best_available_store;
 
 /// SERA — Sandboxed Extensible Reasoning Agent CLI
 #[derive(Parser)]
@@ -39,6 +40,32 @@ enum Commands {
         #[arg(long, short = 'e', value_name = "URL")]
         endpoint: Option<String>,
     },
+    /// Manage authentication (login, whoami, logout)
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Authenticate and store a token
+    Login {
+        /// Gateway base URL (overrides config endpoint)
+        #[arg(long, short = 'e', value_name = "URL")]
+        endpoint: Option<String>,
+        /// Supply token non-interactively (for scripts/tests)
+        #[arg(long, value_name = "TOKEN")]
+        token: Option<String>,
+    },
+    /// Print the currently authenticated principal
+    Whoami {
+        /// Gateway base URL (overrides config endpoint)
+        #[arg(long, short = 'e', value_name = "URL")]
+        endpoint: Option<String>,
+    },
+    /// Remove the stored token
+    Logout,
 }
 
 #[tokio::main]
@@ -56,20 +83,35 @@ async fn main() -> Result<()> {
         .init();
 
     // Load config (graceful if file absent).
-    let config_path = cli
-        .config
-        .unwrap_or_else(CliConfig::default_path);
+    let config_path = cli.config.unwrap_or_else(CliConfig::default_path);
     let config = CliConfig::load(&config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
     tracing::debug!(?config_path, "config loaded");
 
+    // Attempt to load the stored token and populate caller_id.
+    let ctx = {
+        let store = best_available_store();
+        match store.load() {
+            Ok(Some(token)) => {
+                tracing::debug!("loaded stored token");
+                // We don't have the sub yet — caller_id will be refined after /api/auth/me
+                // when needed.  For now use a sentinel that indicates "authenticated".
+                let _ = token; // token is threaded into the HTTP client per-command
+                CommandContext::with_caller("authenticated")
+            }
+            Ok(None) => CommandContext::new(),
+            Err(e) => {
+                tracing::debug!("could not load token: {e}");
+                CommandContext::new()
+            }
+        }
+    };
+
     let registry = sera_cli::build_registry();
-    let ctx = CommandContext::new();
 
     match cli.command {
         Commands::Ping { endpoint } => {
             let mut args = CommandArgs::new();
-            // Precedence: --endpoint flag > config.endpoint
             let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
             args.insert("endpoint", resolved);
 
@@ -84,6 +126,56 @@ async fn main() -> Result<()> {
                 std::process::exit(result.exit_code);
             }
         }
+
+        Commands::Auth { command } => match command {
+            AuthCommand::Login { endpoint, token } => {
+                let mut args = CommandArgs::new();
+                let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
+                args.insert("endpoint", resolved);
+                if let Some(t) = token {
+                    args.insert("token", t);
+                }
+                let cmd = registry
+                    .get("auth:login")
+                    .context("auth:login command not registered")?;
+                let result = cmd
+                    .execute(args, &ctx)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if result.exit_code != 0 {
+                    std::process::exit(result.exit_code);
+                }
+            }
+
+            AuthCommand::Whoami { endpoint } => {
+                let mut args = CommandArgs::new();
+                let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
+                args.insert("endpoint", resolved);
+                let cmd = registry
+                    .get("auth:whoami")
+                    .context("auth:whoami command not registered")?;
+                let result = cmd
+                    .execute(args, &ctx)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if result.exit_code != 0 {
+                    std::process::exit(result.exit_code);
+                }
+            }
+
+            AuthCommand::Logout => {
+                let cmd = registry
+                    .get("auth:logout")
+                    .context("auth:logout command not registered")?;
+                let result = cmd
+                    .execute(CommandArgs::new(), &ctx)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if result.exit_code != 0 {
+                    std::process::exit(result.exit_code);
+                }
+            }
+        },
     }
 
     Ok(())

@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod config;
 pub mod http;
+pub mod token_store;
 
 use sera_commands::CommandRegistry;
 
@@ -10,5 +11,8 @@ use sera_commands::CommandRegistry;
 pub fn build_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
     registry.register(commands::PingCommand);
+    registry.register(commands::LoginCommand::new());
+    registry.register(commands::WhoamiCommand::new());
+    registry.register(commands::LogoutCommand::new());
     registry
 }

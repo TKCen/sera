@@ -42,5 +42,6 @@ async fn ping_fails_on_non_success_status() {
 fn registry_contains_ping() {
     let registry = sera_cli::build_registry();
     assert!(registry.get("ping").is_some(), "ping not found in registry");
-    assert_eq!(registry.len(), 1);
+    // Registry also contains auth:login, auth:whoami, auth:logout
+    assert_eq!(registry.len(), 4);
 }

@@ -21,6 +21,8 @@ toml = { workspace = true }
 reqwest = { workspace = true }
 dirs = { workspace = true }
 async-trait = { workspace = true }
+keyring = { workspace = true }
+rpassword = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

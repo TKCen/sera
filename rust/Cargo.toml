@@ -134,6 +134,13 @@ chrono = { version = "0.4", features = ["serde"] }
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
+# Credential storage (sera-cli auth)
+# On Linux we intentionally omit secret-service features (requires libdbus-1-dev
+# which is unavailable in the WSL build environment).  The FileTokenStore fallback
+# is used on Linux automatically.
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+rpassword = "7"
+
 # Platform-appropriate directories (data_root default resolution)
 dirs = "5"
 

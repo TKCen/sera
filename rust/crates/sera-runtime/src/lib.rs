@@ -41,6 +41,7 @@ pub mod subagent;
 pub mod turn;
 
 pub mod sera_errors;
+pub mod shadow;
 
 // Retained modules
 pub mod config;

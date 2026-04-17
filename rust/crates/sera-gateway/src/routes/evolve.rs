@@ -13,15 +13,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use sera_auth::ActingContext;
+use sera_auth::{ActingContext, CapabilityToken, ChangeProposer};
 
 use sera_gateway::evolve_token::EvolveTokenError;
 use sera_meta::artifact_pipeline::{DryRunOutcome, PipelineError};
 use sera_meta::constitutional::ConstitutionalRule;
 use sera_meta::{
-    BlastRadius, ChangeArtifact, ChangeArtifactScope, ChangeArtifactStatus, ChangeProposer,
+    BlastRadius, ChangeArtifact, ChangeArtifactScope, ChangeArtifactStatus,
 };
-use sera_types::evolution::{CapabilityToken, ChangeArtifactId, ConstitutionalEnforcementPoint};
+use sera_types::evolution::{ChangeArtifactId, ConstitutionalEnforcementPoint};
 use sera_types::hook::{HookContext, HookPoint};
 
 use crate::error::AppError;
@@ -32,7 +32,7 @@ use crate::state::AppState;
 /// Request body for `POST /api/evolve/propose`.
 ///
 /// The `capability_token` field carries the signed
-/// [`sera_types::evolution::CapabilityToken`] that authorises the proposer to
+/// [`sera_auth::CapabilityToken`] that authorises the proposer to
 /// attempt a change at `blast_radius`. The gateway verifies the token's
 /// HMAC-SHA-512 signature (see [`sera_gateway::evolve_token`]) before invoking
 /// the pipeline. Requests without a token are rejected with 401; tokens with

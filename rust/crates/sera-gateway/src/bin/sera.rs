@@ -31,6 +31,9 @@ use sera_config::manifest_loader::{
 };
 use sera_config::secrets::SecretResolver;
 use sera_db::lane_queue::{LaneQueue, QueueMode};
+use sera_db::lane_queue_counter::{
+    InMemoryLaneCounter, LaneCounterStoreDyn, PostgresLaneCounter,
+};
 use sera_db::sqlite::SqliteDb;
 use sera_types::event::Event as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
@@ -1702,6 +1705,40 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     let hook_registry = Arc::new(HookRegistry::new());
     let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
 
+    // 3a. Wire the lane-pending counter backend.
+    //
+    // When `DATABASE_URL` is set, the gateway connects to Postgres and mirrors
+    // per-lane pending counts through [`PostgresLaneCounter`] so multiple
+    // gateway pods share a consistent admission-control view. In dev / no-DB
+    // mode we fall back to the in-process [`InMemoryLaneCounter`] — semantics
+    // match the pre-sera-bsq2 behaviour exactly.
+    let lane_counter_store: Arc<dyn LaneCounterStoreDyn> = match std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(url) => match sera_db::DbPool::connect(&url).await {
+            Ok(pool) => {
+                tracing::info!(
+                    "Lane-pending counter backed by PostgresLaneCounter (DATABASE_URL set)"
+                );
+                Arc::new(PostgresLaneCounter::new(pool.inner().clone()))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "DATABASE_URL is set but Postgres connection failed; falling back to InMemoryLaneCounter"
+                );
+                Arc::new(InMemoryLaneCounter::new())
+            }
+        },
+        None => {
+            tracing::info!(
+                "Lane-pending counter backed by InMemoryLaneCounter (DATABASE_URL unset)"
+            );
+            Arc::new(InMemoryLaneCounter::new())
+        }
+    };
+
     // 3b. Spawn a sera-runtime harness for each agent.
     // Use absolute path to the runtime binary (in the same directory as the gateway binary).
     let runtime_bin = std::env::var("SERA_RUNTIME_BIN").unwrap_or_else(|_| {
@@ -1759,7 +1796,11 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         manifests,
         discord: shared_discord,
         api_key,
-        lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+        lane_queue: Mutex::new(LaneQueue::new_with_counter_store(
+            10,
+            QueueMode::Collect,
+            Arc::clone(&lane_counter_store),
+        )),
         hook_registry,
         chain_executor,
         harnesses,

@@ -69,7 +69,7 @@ pub struct AppState {
     pub evolve_token_signer: Arc<EvolveTokenSigner>,
     /// Proposal-usage store tracking how many proposals each capability-token
     /// id has consumed. Enforces
-    /// [`sera_types::evolution::CapabilityToken::max_proposals`] at the gateway
+    /// [`sera_auth::CapabilityToken::max_proposals`] at the gateway
     /// layer. Backed by Postgres in production (restart-safe) and by the
     /// in-memory store in tests.
     pub proposal_usage: Arc<dyn ProposalUsageStore>,

@@ -4565,6 +4565,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "rand 0.8.5",
+ "sera-auth",
  "sera-errors",
  "sera-events",
  "sera-types",

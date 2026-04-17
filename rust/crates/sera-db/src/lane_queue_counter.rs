@@ -65,6 +65,56 @@ pub trait LaneCounterStore: Send + Sync + 'static {
 }
 
 // ---------------------------------------------------------------------------
+// Dyn-compatible wrapper
+// ---------------------------------------------------------------------------
+
+/// Dyn-compatible counter-store trait.
+///
+/// [`LaneCounterStore`] uses async-fn-in-trait (AFIT) for ergonomic in-crate
+/// implementation, but AFIT traits are not `dyn`-compatible — trait objects
+/// (`Arc<dyn LaneCounterStore>`) are rejected by the compiler. For cross-crate
+/// wiring (notably `LaneQueue`'s optional persistent counter and the gateway
+/// `AppState`) we need a dyn-compatible view, so this trait mirrors the same
+/// three operations using `#[async_trait]`, which desugars to `Pin<Box<dyn
+/// Future>>` returns. This mirrors the precedent set by
+/// [`crate::proposal_usage::ProposalUsageStore`].
+///
+/// A blanket impl makes every `T: LaneCounterStore + Send + Sync + 'static`
+/// automatically usable as `Arc<dyn LaneCounterStoreDyn>` without any
+/// per-impl boilerplate.
+#[async_trait::async_trait]
+pub trait LaneCounterStoreDyn: Send + Sync + 'static {
+    /// See [`LaneCounterStore::increment`].
+    async fn increment_dyn(&self, lane_id: &str, delta: i64) -> Result<(), DbError>;
+
+    /// See [`LaneCounterStore::decrement`].
+    async fn decrement_dyn(&self, lane_id: &str, delta: i64) -> Result<(), DbError>;
+
+    /// See [`LaneCounterStore::snapshot`].
+    async fn snapshot_dyn(&self, lane_id: &str) -> Result<i64, DbError>;
+}
+
+// Blanket impl: any `LaneCounterStore` is usable as a `LaneCounterStoreDyn`
+// trait object. The `_dyn` method names avoid ambiguity when both traits are
+// in scope on a concrete type — callers that hold an `Arc<dyn
+// LaneCounterStoreDyn>` only ever see the `_dyn` names, and
+// `LaneQueue::notify_counter_*` is the sole in-crate consumer.
+#[async_trait::async_trait]
+impl<T: LaneCounterStore + Send + Sync + 'static> LaneCounterStoreDyn for T {
+    async fn increment_dyn(&self, lane_id: &str, delta: i64) -> Result<(), DbError> {
+        LaneCounterStore::increment(self, lane_id, delta).await
+    }
+
+    async fn decrement_dyn(&self, lane_id: &str, delta: i64) -> Result<(), DbError> {
+        LaneCounterStore::decrement(self, lane_id, delta).await
+    }
+
+    async fn snapshot_dyn(&self, lane_id: &str) -> Result<i64, DbError> {
+        LaneCounterStore::snapshot(self, lane_id).await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // In-memory implementation
 // ---------------------------------------------------------------------------
 

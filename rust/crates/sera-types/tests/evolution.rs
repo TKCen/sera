@@ -106,21 +106,8 @@ fn change_artifact_id_display_is_hex() {
     assert!(s.chars().all(|c| c == '0'));
 }
 
-#[test]
-fn capability_token_scope_is_set() {
-    let token = CapabilityToken {
-        id: "tok-1".to_string(),
-        scopes: [BlastRadius::AgentMemory, BlastRadius::GlobalConfig]
-            .into_iter()
-            .collect(),
-        expires_at: chrono::Utc::now(),
-        max_proposals: 5,
-        signature: [0u8; 64],
-    };
-
-    assert!(token.scopes.contains(&BlastRadius::AgentMemory));
-    assert!(token.scopes.contains(&BlastRadius::GlobalConfig));
-}
+// capability_token_scope_is_set removed — CapabilityToken moved to
+// sera-auth::capability. See sera-auth tests for its coverage.
 
 #[test]
 fn evolution_tier_non_exhaustive_serde() {

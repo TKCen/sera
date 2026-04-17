@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 sera-types = { workspace = true }
+sera-auth = { workspace = true }
 sera-events = { workspace = true }
 sera-errors = { workspace = true }
 serde = { workspace = true }

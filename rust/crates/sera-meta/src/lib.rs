@@ -49,10 +49,13 @@ pub use validation::{
     ValidationWindow,
 };
 
-// Re-export key types from sera-types for ergonomics
+// Re-export key types for ergonomics. CapabilityToken and ChangeProposer
+// live in sera-auth (the canonical home for capability-related types); the
+// rest remain in sera-types.
+pub use sera_auth::{CapabilityToken, ChangeProposer};
 pub use sera_types::evolution::{
-    AgentCapability, BlastRadius, CapabilityToken, ChangeArtifactId, ChangeProposer,
-    ConstitutionalEnforcementPoint, ConstitutionalRule, EvolutionTier,
+    AgentCapability, BlastRadius, ChangeArtifactId, ConstitutionalEnforcementPoint,
+    ConstitutionalRule, EvolutionTier,
 };
 
 /// Lifecycle status of a change artifact.
@@ -252,7 +255,7 @@ mod tests {
     fn change_artifact_status_transitions() {
         let proposer = ChangeProposer {
             principal_id: "user-1".to_string(),
-            capability_token: sera_types::evolution::CapabilityToken {
+            capability_token: CapabilityToken {
                 id: "tok-1".to_string(),
                 scopes: Default::default(),
                 expires_at: chrono::Utc::now(),
@@ -279,7 +282,7 @@ mod tests {
     fn invalid_status_transition_returns_false() {
         let proposer = ChangeProposer {
             principal_id: "user-1".to_string(),
-            capability_token: sera_types::evolution::CapabilityToken {
+            capability_token: CapabilityToken {
                 id: "tok-1".to_string(),
                 scopes: Default::default(),
                 expires_at: chrono::Utc::now(),

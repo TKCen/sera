@@ -1,35 +1,5 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
 use std::fmt;
-
-mod bytes64 {
-    use super::*;
-
-    pub fn serialize<S: Serializer>(bytes: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_bytes(bytes)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
-        struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = [u8; 64];
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("64 bytes")
-            }
-            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<[u8; 64], E> {
-                v.try_into().map_err(|_| E::invalid_length(v.len(), &self))
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<[u8; 64], A::Error> {
-                let mut arr = [0u8; 64];
-                for (i, slot) in arr.iter_mut().enumerate() {
-                    *slot = seq.next_element()?.ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
-                }
-                Ok(arr)
-            }
-        }
-        d.deserialize_bytes(Visitor)
-    }
-}
 
 /// Content-addressed identity for change artifacts (SHA-256).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -74,15 +44,9 @@ pub enum BlastRadius {
     SelfEvolutionPipeline,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityToken {
-    pub id: String,
-    pub scopes: HashSet<BlastRadius>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub max_proposals: u32,
-    #[serde(with = "bytes64")]
-    pub signature: [u8; 64],
-}
+// CapabilityToken moved to `sera-auth::capability` — the canonical
+// definition lives there so narrowing + issuance + signing can share a type
+// without `sera-types` depending on `sera-auth` (dep-graph: types is a leaf).
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConstitutionalRule {
@@ -110,11 +74,9 @@ pub enum EvolutionTier {
     CodeEvolution,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangeProposer {
-    pub principal_id: String,
-    pub capability_token: CapabilityToken,
-}
+// ChangeProposer moved to `sera-auth::capability` — it carries a
+// CapabilityToken field, so it lives next to the token definition. Keeps
+// sera-types free of an inverted dependency on sera-auth.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

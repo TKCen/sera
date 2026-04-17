@@ -315,7 +315,7 @@ mod tests {
     fn make_proposer(scopes: Vec<BlastRadius>) -> ChangeProposer {
         ChangeProposer {
             principal_id: "agent-1".to_string(),
-            capability_token: sera_types::evolution::CapabilityToken {
+            capability_token: crate::CapabilityToken {
                 id: "tok-1".to_string(),
                 scopes: scopes.into_iter().collect(),
                 expires_at: chrono::Utc::now(),

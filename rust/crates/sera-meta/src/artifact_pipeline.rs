@@ -422,7 +422,7 @@ impl Default for ArtifactPipeline {
 mod tests {
     use super::*;
     use crate::{BlastRadius, ChangeArtifactScope, ChangeProposer};
-    use sera_types::evolution::CapabilityToken;
+    use crate::CapabilityToken;
 
     fn make_proposer(id: &str, scopes: Vec<BlastRadius>) -> ChangeProposer {
         ChangeProposer {

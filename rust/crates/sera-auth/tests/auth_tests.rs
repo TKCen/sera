@@ -1,7 +1,5 @@
 //! Integration tests for sera-auth Phase 0 extensions (P0-7).
 
-use std::collections::HashSet;
-
 use chrono::Utc;
 use sera_auth::{
     authz::{Action, Resource},
@@ -15,19 +13,15 @@ use sera_types::evolution::{AgentCapability, BlastRadius, ChangeArtifactId};
 // ---------------------------------------------------------------------------
 
 fn make_token(
-    caps: impl IntoIterator<Item = AgentCapability>,
-    max_proposals: Option<u32>,
+    scopes: impl IntoIterator<Item = BlastRadius>,
+    max_proposals: u32,
 ) -> CapabilityToken {
     CapabilityToken {
-        token_id: uuid::Uuid::new_v4(),
-        agent_id: "agent-test".to_string(),
-        capabilities: caps.into_iter().collect(),
-        blast_radius: None,
-        proposals_consumed: 0,
+        id: "agent-test".to_string(),
+        scopes: scopes.into_iter().collect(),
+        expires_at: Utc::now() + chrono::Duration::hours(1),
         max_proposals,
-        revocation_check_required: false,
-        issued_at: Utc::now(),
-        expires_at: None,
+        signature: [0u8; 64],
     }
 }
 
@@ -50,16 +44,16 @@ m = r.sub == p.sub && r.obj == p.obj && r.act == p.act
 
 #[test]
 fn capability_token_narrowing_removes_capability() {
-    let token = make_token([AgentCapability::MetaChange, AgentCapability::CodeChange], None);
+    let token = make_token(
+        [BlastRadius::AgentMemory, BlastRadius::SingleHookConfig],
+        10,
+    );
     let narrowed = token
-        .narrow(
-            [AgentCapability::CodeChange].into_iter().collect(),
-            None,
-        )
-        .expect("narrow to CodeChange only should succeed");
+        .narrow([BlastRadius::SingleHookConfig].into_iter().collect())
+        .expect("narrow to SingleHookConfig only should succeed");
 
-    assert!(narrowed.has(AgentCapability::CodeChange));
-    assert!(!narrowed.has(AgentCapability::MetaChange));
+    assert!(narrowed.has(BlastRadius::SingleHookConfig));
+    assert!(!narrowed.has(BlastRadius::AgentMemory));
 }
 
 // ---------------------------------------------------------------------------
@@ -68,12 +62,11 @@ fn capability_token_narrowing_removes_capability() {
 
 #[test]
 fn capability_token_narrowing_widening_denied() {
-    let token = make_token([AgentCapability::CodeChange], None);
+    let token = make_token([BlastRadius::SingleHookConfig], 10);
     let result = token.narrow(
-        [AgentCapability::MetaChange, AgentCapability::CodeChange]
+        [BlastRadius::AgentMemory, BlastRadius::SingleHookConfig]
             .into_iter()
             .collect(),
-        None,
     );
     assert!(
         matches!(result, Err(CapabilityTokenError::WideningAttempt)),
@@ -88,14 +81,13 @@ fn capability_token_narrowing_widening_denied() {
 #[test]
 fn capability_token_has_returns_correct_results() {
     let token = make_token(
-        [AgentCapability::CodeChange, AgentCapability::ConfigRead],
-        None,
+        [BlastRadius::SingleHookConfig, BlastRadius::AgentMemory],
+        10,
     );
-    assert!(token.has(AgentCapability::CodeChange));
-    assert!(token.has(AgentCapability::ConfigRead));
-    assert!(!token.has(AgentCapability::MetaChange));
-    assert!(!token.has(AgentCapability::MetaApprover));
-    assert!(!token.has(AgentCapability::ConfigPropose));
+    assert!(token.has(BlastRadius::SingleHookConfig));
+    assert!(token.has(BlastRadius::AgentMemory));
+    assert!(!token.has(BlastRadius::GatewayCore));
+    assert!(!token.has(BlastRadius::RuntimeCrate));
 }
 
 // ---------------------------------------------------------------------------
@@ -104,16 +96,16 @@ fn capability_token_has_returns_correct_results() {
 
 #[test]
 fn capability_token_proposal_limit_enforced() {
-    let mut token = make_token([AgentCapability::CodeChange], Some(2));
+    let token = make_token([BlastRadius::SingleHookConfig], 2);
 
-    assert!(token.consume_proposal().is_ok(), "first proposal should succeed");
-    assert!(token.consume_proposal().is_ok(), "second proposal should succeed");
+    assert!(token.consume_proposal(0).is_ok(), "used=0 should succeed");
+    assert!(token.consume_proposal(1).is_ok(), "used=1 should succeed");
 
-    let err = token.consume_proposal().expect_err("third proposal must fail");
+    let err = token.consume_proposal(2).expect_err("used=2 must fail");
     assert!(
         matches!(
             err,
-            CapabilityTokenError::ProposalLimitExhausted { limit: 2, consumed: 2 }
+            CapabilityTokenError::ProposalLimitExhausted { limit: 2 }
         ),
         "expected ProposalLimitExhausted, got: {err:?}"
     );
@@ -242,33 +234,27 @@ fn plaintext_comparison_path_absent() {
 
 #[test]
 fn capability_token_serde_roundtrip() {
-    let mut caps = HashSet::new();
-    caps.insert(AgentCapability::CodeChange);
-    caps.insert(AgentCapability::ConfigRead);
+    let scopes: std::collections::HashSet<BlastRadius> =
+        [BlastRadius::SingleToolPolicy, BlastRadius::AgentMemory]
+            .into_iter()
+            .collect();
 
     let token = CapabilityToken {
-        token_id: uuid::Uuid::new_v4(),
-        agent_id: "agent-serde-test".to_string(),
-        capabilities: caps.clone(),
-        blast_radius: Some(BlastRadius::SingleToolPolicy),
-        proposals_consumed: 3,
-        max_proposals: Some(10),
-        revocation_check_required: true,
-        issued_at: Utc::now(),
-        expires_at: None,
+        id: "agent-serde-test".to_string(),
+        scopes: scopes.clone(),
+        expires_at: Utc::now() + chrono::Duration::minutes(15),
+        max_proposals: 10,
+        signature: [0xABu8; 64],
     };
 
     let json = serde_json::to_string(&token).expect("serialize CapabilityToken");
     let parsed: CapabilityToken =
         serde_json::from_str(&json).expect("deserialize CapabilityToken");
 
-    assert_eq!(parsed.token_id, token.token_id);
-    assert_eq!(parsed.agent_id, token.agent_id);
-    assert_eq!(parsed.capabilities, caps);
-    assert_eq!(parsed.blast_radius, Some(BlastRadius::SingleToolPolicy));
-    assert_eq!(parsed.proposals_consumed, 3);
-    assert_eq!(parsed.max_proposals, Some(10));
-    assert!(parsed.revocation_check_required);
+    assert_eq!(parsed.id, token.id);
+    assert_eq!(parsed.scopes, scopes);
+    assert_eq!(parsed.max_proposals, 10);
+    assert_eq!(parsed.signature, [0xABu8; 64]);
 }
 
 // ---------------------------------------------------------------------------

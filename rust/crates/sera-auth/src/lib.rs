@@ -22,7 +22,10 @@ pub use authz::{
     DefaultAuthzProvider, DenyReason, PendingApprovalHint, RbacAuthzProvider, Resource,
     RoleBasedAuthzProvider, RoleBasedAuthzProviderBuilder,
 };
-pub use capability::{CapabilityToken, CapabilityTokenError};
+pub use capability::{
+    CapabilityToken, CapabilityTokenError, CapabilityTokenIssuer, ChangeProposer,
+    DefaultCapabilityTokenIssuer,
+};
 pub use casbin_adapter::{CasbinAuthzAdapter, CasbinError};
 pub use error::AuthError;
 pub use jwt::{JwtClaims, JwtService};

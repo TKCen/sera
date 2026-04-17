@@ -1,7 +1,7 @@
 //! Capability-token signing and verification for `/api/evolve/*` routes.
 //!
-//! The evolve pipeline requires a [`sera_types::evolution::CapabilityToken`] on
-//! every [`sera_meta::ChangeProposer`] so the policy engine can check whether
+//! The evolve pipeline requires a [`sera_auth::CapabilityToken`] on
+//! every [`sera_auth::ChangeProposer`] so the policy engine can check whether
 //! the proposer holds the [`BlastRadius`] scope they are attempting to act on.
 //! Before this module existed, routes synthesised matching-scope tokens with
 //! an all-zero signature so the pipeline would accept any request — a known
@@ -10,21 +10,18 @@
 //!
 //! This module closes that gap with an **HMAC-SHA-512** construction whose
 //! output is exactly 64 bytes, matching the `signature: [u8; 64]` field on
-//! [`sera_types::evolution::CapabilityToken`] with no truncation or padding.
+//! [`sera_auth::CapabilityToken`] with no truncation or padding.
 //! Verification is constant-time and rejects tokens whose canonical bytes do
 //! not match the recomputed MAC, and whose `expires_at` has passed.
 //!
-//! # Design choice — Path C' (gateway-local verifier, sera-auth untouched)
+//! # Signer/issuer split
 //!
-//! The [`sera_auth::CapabilityToken`] type is a *narrowing* token modelled on
-//! [`sera_types::evolution::AgentCapability`] — it has no `signature` field.
-//! The evolve pipeline uses a different token shape, from
-//! [`sera_types::evolution::CapabilityToken`], whose `signature: [u8; 64]` has
-//! no verifier anywhere in the workspace. Modifying `sera-auth`'s public API
-//! to add one is out of scope for this increment; instead we add a gateway-
-//! local signer/verifier so the gateway has a real signature gate for
-//! unsigned and tampered tokens while leaving room for a future sera-auth
-//! integration without a second rewrite of the route layer.
+//! [`CapabilityToken`] values are *issued* by
+//! [`sera_auth::CapabilityTokenIssuer`] (constructs the token value from a
+//! scope set + expiry policy) and *signed* here by [`EvolveTokenSigner`]
+//! (installs the HMAC over the canonical serialisation). Keeping the two
+//! orthogonal lets the issuer live in `sera-auth` while the signer's secret
+//! handling, rotation, and grace-period logic stay gateway-local.
 //!
 //! # Canonical bytes
 //!
@@ -68,7 +65,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use sera_types::evolution::{BlastRadius, CapabilityToken};
+use sera_auth::CapabilityToken;
+use sera_types::evolution::BlastRadius;
 use sha2::{Digest, Sha512};
 
 pub use sera_db::proposal_usage::{

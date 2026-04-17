@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use std::sync::Arc;
+use sera_config::DataRoot;
 use sera_db::{agents::AgentRepository, DbError};
 use sera_tools::sandbox::{SandboxConfig, SandboxHandle, SandboxProvider};
 
@@ -17,6 +18,7 @@ use sera_tools::sandbox::{SandboxConfig, SandboxHandle, SandboxProvider};
 pub struct Orchestrator {
     pool: PgPool,
     sandbox: Arc<dyn SandboxProvider>,
+    data_root: DataRoot,
 }
 
 impl Orchestrator {
@@ -25,8 +27,23 @@ impl Orchestrator {
     /// # Arguments
     /// * `pool` — PostgreSQL connection pool
     /// * `sandbox` — Sandbox provider (Docker, WASM, etc.)
+    ///
+    /// The host-side data root is resolved from `SERA_DATA_ROOT` or the
+    /// platform default via [`DataRoot::from_env`]. Use [`Self::with_data_root`]
+    /// to override in tests or embedded deployments.
     pub fn new(pool: PgPool, sandbox: Arc<dyn SandboxProvider>) -> Self {
-        Self { pool, sandbox }
+        Self {
+            pool,
+            sandbox,
+            data_root: DataRoot::from_env(),
+        }
+    }
+
+    /// Override the data root (builder-style). Used by tests and embedded
+    /// deployments that want to pin workspace paths.
+    pub fn with_data_root(mut self, data_root: DataRoot) -> Self {
+        self.data_root = data_root;
+        self
     }
 
     /// Validate an agent manifest JSON.
@@ -112,7 +129,11 @@ impl Orchestrator {
         }
 
         let instance_id = Uuid::new_v4().to_string();
-        let workspace_path = format!("/tmp/sera/agents/{}", instance_id);
+        let workspace_path = self
+            .data_root
+            .agent_workspace(&instance_id)
+            .to_string_lossy()
+            .into_owned();
         let template_ref = obj
             .get("template_ref")
             .and_then(|v| v.as_str())

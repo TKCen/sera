@@ -5,10 +5,13 @@
 //! - `CoreConfig`: sera-core server config (env vars + providers.json)
 
 pub mod core_config;
+pub mod data_root;
 pub mod manifest_loader;
 pub mod providers;
 pub mod secrets;
 pub mod watchers;
+
+pub use data_root::{DataRoot, DATA_ROOT_ENV};
 
 pub mod config_store;
 pub mod env_override;

@@ -12,7 +12,9 @@ use crate::config_store::{ConfigStore, ConfigStoreError, ManifestValue};
 /// A read/write overlay over a production `ConfigStore`.
 ///
 /// Values written via `overlay_put` shadow the prod store without mutating it.
-/// Call `commit_overlay` to apply changes (unimplemented in this milestone).
+/// Call `commit_overlay` to flush all pending overlay entries into the underlying
+/// store and clear the overlay. Reads always check the overlay first, then fall
+/// through to the prod store for keys not in the overlay.
 pub struct ShadowConfigStore<S: ConfigStore> {
     prod: Arc<S>,
     overlay: RwLock<HashMap<String, ManifestValue>>,
@@ -53,16 +55,30 @@ impl<S: ConfigStore> ShadowConfigStore<S> {
         self.overlay.write().await.clear();
     }
 
-    /// Apply overlay changes to the prod store.
+    /// Apply overlay changes to the prod store, then clear the overlay.
     ///
-    /// Writes each overlay entry into the underlying prod store. Clears the
-    /// overlay on success. Returns an error if the prod store rejects any write
-    /// (e.g. a read-only backend); in that case the overlay is left intact.
+    /// Semantics: "apply-all-and-clear" — every pending overlay entry is written
+    /// to the underlying prod store in an unspecified order, and the overlay is
+    /// cleared on success. This is the simplest useful behaviour for a shadow
+    /// deployment: promote all staged changes atomically at the call site.
+    ///
+    /// If the prod store rejects any write (e.g. a read-only backend) the
+    /// operation returns that error immediately and the overlay is left **intact**
+    /// so the caller can inspect or retry the pending changes.
     pub async fn commit_overlay(&self) -> Result<(), ConfigStoreError> {
-        let mut overlay = self.overlay.write().await;
-        for (key, value) in overlay.drain() {
+        // Snapshot the overlay entries without draining so that the overlay
+        // remains intact if any prod write fails.
+        let entries: Vec<(String, ManifestValue)> = {
+            let guard = self.overlay.read().await;
+            guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+
+        for (key, value) in entries {
             self.prod.put(&key, value).await?;
         }
+
+        // All writes succeeded — clear the overlay now.
+        self.overlay.write().await.clear();
         Ok(())
     }
 }

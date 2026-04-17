@@ -102,3 +102,100 @@ async fn shadow_commit_overlay_persists_to_prod() {
     assert_eq!(prod.get("new_key").await.unwrap(), Some(json!("overlay_new")));
     assert_eq!(prod.get("existing").await.unwrap(), Some(json!("overlay_updated")));
 }
+
+// ── commit_overlay tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn commit_overlay_empty_is_noop() {
+    // Committing an empty overlay must succeed and leave prod unchanged.
+    let prod = Arc::new(MemStore::from_pairs(&[("k", json!(1))]));
+    let shadow = ShadowConfigStore::new(prod.clone());
+
+    shadow.commit_overlay().await.unwrap();
+
+    assert!(!shadow.is_dirty().await);
+    assert_eq!(prod.get("k").await.unwrap(), Some(json!(1)));
+}
+
+#[tokio::test]
+async fn commit_overlay_single_entry_applies_and_clears() {
+    let prod = Arc::new(MemStore::from_pairs(&[]));
+    let shadow = ShadowConfigStore::new(prod.clone());
+
+    shadow.overlay_put("alpha", json!("hello")).await;
+    assert!(shadow.is_dirty().await);
+
+    shadow.commit_overlay().await.unwrap();
+
+    // Overlay must be empty after commit.
+    assert!(!shadow.is_dirty().await);
+    // Value must be in prod.
+    assert_eq!(prod.get("alpha").await.unwrap(), Some(json!("hello")));
+}
+
+#[tokio::test]
+async fn commit_overlay_multi_entry_applies_all() {
+    let prod = Arc::new(MemStore::from_pairs(&[]));
+    let shadow = ShadowConfigStore::new(prod.clone());
+
+    shadow.overlay_put("x", json!(1)).await;
+    shadow.overlay_put("y", json!(2)).await;
+    shadow.overlay_put("z", json!(3)).await;
+
+    shadow.commit_overlay().await.unwrap();
+
+    assert_eq!(prod.get("x").await.unwrap(), Some(json!(1)));
+    assert_eq!(prod.get("y").await.unwrap(), Some(json!(2)));
+    assert_eq!(prod.get("z").await.unwrap(), Some(json!(3)));
+    assert!(!shadow.is_dirty().await);
+}
+
+#[tokio::test]
+async fn commit_then_read_returns_committed_values_from_store() {
+    // After commit, reads should come from prod (overlay is gone).
+    let prod = Arc::new(MemStore::from_pairs(&[]));
+    let shadow = ShadowConfigStore::new(prod.clone());
+
+    shadow.overlay_put("item", json!("committed")).await;
+    shadow.commit_overlay().await.unwrap();
+
+    // Overlay is clear, so get() falls through to prod.
+    let via_shadow = shadow.get("item").await.unwrap();
+    let via_prod   = prod.get("item").await.unwrap();
+    assert_eq!(via_shadow, Some(json!("committed")));
+    assert_eq!(via_shadow, via_prod);
+}
+
+#[tokio::test]
+async fn commit_overlay_leaves_overlay_intact_on_error() {
+    // A read-only store rejects put() — overlay must survive the failure.
+    struct ReadOnly;
+
+    #[async_trait]
+    impl ConfigStore for ReadOnly {
+        async fn get(&self, _key: &str) -> Result<Option<ManifestValue>, ConfigStoreError> {
+            Ok(None)
+        }
+        async fn list(&self, _prefix: &str) -> Result<Vec<(String, ManifestValue)>, ConfigStoreError> {
+            Ok(vec![])
+        }
+        async fn version(&self) -> Result<u64, ConfigStoreError> {
+            Ok(0)
+        }
+        // put() intentionally returns an error — default impl does the same,
+        // but we make it explicit here for clarity.
+        async fn put(&self, _key: &str, _value: ManifestValue) -> Result<(), ConfigStoreError> {
+            Err(ConfigStoreError::Backend("read-only".to_string()))
+        }
+    }
+
+    let shadow = ShadowConfigStore::new(Arc::new(ReadOnly));
+    shadow.overlay_put("pending", json!("value")).await;
+
+    let result = shadow.commit_overlay().await;
+    assert!(result.is_err(), "commit to read-only store should fail");
+
+    // Overlay must still hold the pending change.
+    assert!(shadow.is_dirty().await);
+    assert_eq!(shadow.get("pending").await.unwrap(), Some(json!("value")));
+}

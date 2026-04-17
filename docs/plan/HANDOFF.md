@@ -2,17 +2,47 @@
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
 > **Date:** 2026-04-17
-> **Session:** 26 final close-out (21 waves of parallel ultrawork)
+> **Session:** 27 Wave 1+2 close-out (10 beads closed via 10 ultrawork agents)
 > **Previous handoffs:** Phase 1+2 session 5 → `git show d02f7f7:docs/plan/HANDOFF.md`; Phase 1+2 session 4 → `git show 6440dca:docs/plan/HANDOFF.md`; Phase 1+2 session 3 → `git show 13f1b6c:docs/plan/HANDOFF.md`; Phase 1 session → `git show 54adaea:docs/plan/HANDOFF.md`; Phase 0 M2/M4 session → `git show 64031d7:docs/plan/HANDOFF.md`; M0 session → `git show e63a629:docs/plan/HANDOFF.md`; plan round → `git show 216c32c:docs/plan/HANDOFF.md`; M1/M3 session → `git show 7f53126:docs/plan/HANDOFF.md`. Decisions captured there still hold.
 
 ---
 
 ## 1. Current state
 
-**Branch:** `sera20` (~63 commits landed in Session 26 across 21 waves)
-**Last commit:** `36e424a sera-jep2: gateway ProcessManager scaffold (SPEC-gateway §18 phase S)`
-**Test count:** 2,867 (verified via `#[test]` + `#[tokio::test]` grep across 28 crates; up from 2,455 at wave-6 sync)
-**Phase progress:** Phase 2 at 98%, Phase 3 at 85%; all 6 AwaitType gates complete; /api/evolve/* routes live; JWT P1 closed.
+**Branch:** `sera20` (11 new commits in Session 27 Wave 1+2 on top of Session 26)
+**Last commit:** `0816e25 docs: Session 27 Wave 1+2 report — 10 beads closed, ~80 new tests`
+**Test count:** ~2,947 (2,867 Session 26 baseline + ~80 Session 27 wave additions; cargo test --workspace exit 0)
+**Phase progress:** Phase 2 at 98%, Phase 3 at 85%; sera-commands new foundation crate added; MemoryBlock (2-tier) types landed; WASM hook metering live; Postgres-backed proposal quota; LaneCounterStore trait + Postgres backend (wiring pending).
+
+---
+
+## 1a. Session 27 Wave 1+2 highlights
+
+**10 beads closed across 2 waves (10 parallel ultrawork agents).** Features landed across self-evolution infra, memory types, hooks, skills, and cross-project alignment.
+
+- **sera-pfup** — new `sera-commands` foundation crate (shared CLI ↔ gateway `Command` trait + registry + Ping/Version examples)
+- **sera-jj87** — `MemoryBlock` / `MemorySegment` / `SegmentKind` in sera-types (2-tier injection, Soul priority 0 never-evicted, `flush_min_turns=6` pressure signal). Integration into sera-runtime is sera-jwtj follow-up.
+- **sera-9p9e** — Hermes-aligned hook-point aliases (`context_memory` → `pre_agent_turn`) via `#[serde(alias)]`, extensible table in `sera-types/src/hook_aliases.rs`
+- **sera-kp6e** — skill self-patching scaffold in sera-skills (`SelfPatchValidator` + `Applier` traits, in-memory + FS impls, atomic temp-dir write; version/size/YAML checks)
+- **sera-5cj** — Centrifugo thought-stream fix (rename JSON key `event`→`type`, add `ThoughtEvent` struct + per-agent namespaced channel `agent:{id}:thoughts`)
+- **sera-jjms** — WASM fuel + memory + wall-clock metering in sera-hooks (wasmtime 26 API: `Config::consume_fuel`, `StoreLimitsBuilder::memory_size`, `tokio::time::timeout`). New error variants `FuelExhausted` / `MemoryLimitExceeded` / `WallClockTimeout`.
+- **sera-d54o** — LaneRunGuard SIGTERM race fix (`blocking_lock` synchronous decrement; `post_close_stale_complete_runs` telemetry counter; 3 race regression + 1 integration test)
+- **sera-zbsu** — DB-backed ProposalUsageTracker (Postgres `proposal_usage` table + atomic `INSERT … ON CONFLICT DO UPDATE WHERE used < max_proposals`; restart-safe). `AppState.proposal_usage: Arc<dyn ProposalUsageStore>` now trait-object.
+- **sera-e8nq** — Postgres LaneQueue `pending_count` backend (`LaneCounterStore` trait + `InMemoryLaneCounter` + `PostgresLaneCounter`; `lane_pending_counts` table with UPSERT). Gateway wiring is sera-bsq2 follow-up.
+- **sera-e7xi** — Discord routing 7-hop trace confirms MVS binary is fully wired; most likely root cause of silent bot is operational (MESSAGE_CONTENT intent not enabled in Developer Portal), not architectural. Full report at `docs/plan/discord-routing-investigation-2026-04-17.md`.
+
+### New crate (29th workspace member)
+
+- **sera-commands** — `Command` trait, `CommandRegistry`, example commands. ~260 LOC, 10 integration tests + 1 doctest.
+
+### Breaking / semantic changes
+
+- `AppState.proposal_usage` changed from `Arc<ProposalUsageTracker>` to `Arc<dyn ProposalUsageStore>`. Call sites updated.
+- EvolveTokenSigner verify path now accepts tokens signed with the *previous* key within a grace period (sera-occf if that lands mid-Wave-3). Not breaking at the type level; the signer is backward-compatible with any existing token.
+
+### Incident note (for future ultrawork prompts)
+
+Wave 1 hit a working-tree divergence when one agent used `git stash && git reset --hard` to work around `cargo` build-lock contention. Some agent output was temporarily stashed; most was re-written by subsequent agents; the orchestrator recovered by wiring the orphaned files manually. Future dispatch prompts now carry a hard **"NEVER stash, NEVER reset --hard"** constraint — prefer sleep+retry on the lock.
 
 ---
 
@@ -54,39 +84,41 @@
 
 ## 3. Ready follow-ups
 
-All Session 26 work was closed. Follow-ups for Session 27 (ordered by priority/dependency):
+Session 27 Wave 1+2 closed 10 beads (see §1a). Wave 3 in flight at handoff time: sera-occf + sera-1yi4 (likely landed by read time). Remaining queue:
 
-1. **ShadowSessionExecutor** (sera-yif4 alt)
+1. **sera-bsq2** — Wire `PostgresLaneCounter` into LaneQueue admission path
+   - sera-e8nq landed the standalone store; gateway wiring is the next step
+   - Expected to touch `sera-gateway/src/main.rs` + `sera-db/src/lane_queue.rs`
+
+2. **sera-jwtj** — Integrate MemoryBlock into sera-runtime context injection
+   - sera-jj87 landed the types; runtime ContextEngine wiring + `memory_pressure` event emission on `flush_min_turns=6` overflow is next
+   - Needs hook_point wiring into pre_agent_turn / context_memory alias
+
+3. **sera-1yi4** — ShadowSessionExecutor scaffold (Wave 3, in flight)
    - sera-runtime shadow execution path for parallel constitutional validation
    - Prerequisite for full self-evolution loop
 
-2. **DB-backed ProposalUsageTracker**
-   - Restart-safe max_proposals enforcement for /api/evolve/propose
-   - Currently in-memory; loses state on restart
+4. **sera-occf** — Secret hot-reload for EvolveTokenSigner (Wave 3, in flight)
+   - Live key rotation with grace-period verification
 
-3. **Secret hot-reload for EvolveTokenSigner**
-   - EvolveTokenSigner reads signing key at startup only
-   - Needs live rotation support without restart
-
-4. **sera-auth CapabilityTokenIssuer**
+5. **sera-sbh9** — sera-auth CapabilityTokenIssuer
    - Share CapabilityToken type between sera-gateway and agent-runtime
    - Currently duplicated; unify under sera-auth
 
-5. **sera-gateway TraitToolRegistry migration**
+6. **sera-gateway TraitToolRegistry migration** (not yet a bead)
    - Migrate 14+ Tool-trait adapters from ToolExecutor to TraitToolRegistry
    - Thread ToolContext through ToolDispatcher::dispatch
    - Unlocks tool-level policy enforcement (authorization, rate limits, audit)
 
-6. **LaneRunGuard drop-time race during shutdown exit**
-   - Potential race condition surfaced during SIGTERM work
-   - Low-priority but should be addressed before production
-
-7. **Postgres LaneQueue pending_count backend**
-   - Currently in-memory; needs Postgres backend for multi-instance deployments
-
-8. **Mail gate Design B**
+7. **Mail gate Design B** (not yet a bead)
    - Deferred decision: pattern-matching vs thread-id for mail gate correlation
    - Spec exists (SPEC-workflow §4.6); needs design decision before implementation
+
+8. **sera-tj02** — Delete Phase 1 legacy main.rs (low-priority cleanup)
+   - `sera-gateway/src/main.rs` has Discord code but no consumer; live path is `bin/sera.rs`
+
+9. **sera-pmzb** — File logging for gateway + Discord REST errors
+   - Gateway lacks file appender; Discord `send_message` failures are currently invisible
 
 ---
 
@@ -102,6 +134,16 @@ From prior sessions (§4.1–§4.24 from Session 5 handoff still apply). Session
 - **§4.30 ProposalUsageTracker is in-memory.** max_proposals enforcement resets on gateway restart. DB-backed tracker is a follow-up.
 - **§4.31 sera-oci is a new crate (28th).** Tracker and crate count updated to 28. sera-oci provides OCI image/layer operations; 70 tests.
 - **§4.32 JWT leeway is now configurable.** Default leeway changed from 60s to value from config. Callers relying on hardcoded 60s leeway may see tighter validation.
+- **§4.33 Signature: `AppState.proposal_usage` is `Arc<dyn ProposalUsageStore>`** (Session 27 sera-zbsu). Production wires `PostgresProposalUsageStore`; tests wire `InMemoryProposalUsageStore`. Counter survives gateway restart.
+- **§4.34 New 429 error.** `DbError::QuotaExceeded { token_id, limit }` maps to HTTP 429 Too Many Requests at the gateway. Fired when `check_and_increment` sees `used >= max_proposals`.
+- **§4.35 sera-hooks WASM adapter now enforces fuel + memory + wall-clock caps** (Session 27 sera-jjms). Defaults: 10M fuel units / 64 MB memory / 5 s wall time. Configurable via `WasmConfig`. New error variants `WasmError::FuelExhausted` / `MemoryLimitExceeded` / `WallClockTimeout`.
+- **§4.36 sera-commands is the 29th workspace crate** (Session 27 sera-pfup). Contains the shared `Command` trait + registry; no migrations of existing CLI/gateway commands yet — that's a follow-up.
+- **§4.37 MemoryBlock types live in `sera-types::memory`** (Session 27 sera-jj87). `SegmentKind::Soul` is priority 0 and `render()` never trims it. `record_turn()` increments `overflow_turns` and returns true when `flush_min_turns` is reached — caller emits `memory_pressure`. Runtime integration is sera-jwtj follow-up.
+- **§4.38 Hook-point aliases** (Session 27 sera-9p9e). `context_memory` ↔ `pre_agent_turn` accepted interchangeably via serde. Canonical name still serialises as `context_memory`. Table lives in `sera-types/src/hook_aliases.rs`.
+- **§4.39 Centrifugo thought-stream JSON key is now `type`** (Session 27 sera-5cj), was `event`. Subscribers must match on `type == "thought_stream"`. Per-agent channel format: `agent:{instance_id}:thoughts`.
+- **§4.40 LaneRunGuard Drop is synchronous** (Session 27 sera-d54o). Uses `blocking_lock` rather than `tokio::spawn` to prevent SIGTERM drain race. `LaneQueue::post_close_stale_complete_runs()` exposes a telemetry counter for any residual post-close decrements.
+- **§4.41 `LaneCounterStore` trait + `PostgresLaneCounter`** (Session 27 sera-e8nq). Standalone; not yet wired into the runtime LaneQueue admission path. That's sera-bsq2 follow-up.
+- **§4.42 Ultrawork prompt must forbid `git stash`/`git reset --hard`.** Wave 1 incident: one agent stashed + reset to unblock a build-lock, losing peer-agent work until orchestrator recovered it manually. All future dispatch prompts include this as a hard constraint.
 
 ---
 

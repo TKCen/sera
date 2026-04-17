@@ -123,4 +123,106 @@ mod tests {
         assert_eq!(data.claims.sub, user_id);
         assert_eq!(data.claims.exp, exp);
     }
+
+    // ------------------------------------------------------------------
+    // Token determinism: same inputs → same JWT header+payload (different
+    // signature if secret differs, but same claims structure)
+    // ------------------------------------------------------------------
+    #[test]
+    fn token_is_deterministic_for_same_inputs() {
+        let client = CentrifugoClient::new(
+            "http://localhost:8000".to_string(),
+            "key".to_string(),
+            "secret".to_string(),
+        );
+        let t1 = client.generate_connection_token("u1", 1_000_000).unwrap();
+        let t2 = client.generate_connection_token("u1", 1_000_000).unwrap();
+        assert_eq!(t1, t2);
+    }
+
+    // ------------------------------------------------------------------
+    // Different user IDs produce different tokens
+    // ------------------------------------------------------------------
+    #[test]
+    fn different_users_produce_different_tokens() {
+        let client = CentrifugoClient::new(
+            "http://localhost:8000".to_string(),
+            "key".to_string(),
+            "secret".to_string(),
+        );
+        let t1 = client.generate_connection_token("alice", 9_999_999_999).unwrap();
+        let t2 = client.generate_connection_token("bob", 9_999_999_999).unwrap();
+        assert_ne!(t1, t2);
+    }
+
+    // ------------------------------------------------------------------
+    // Different expiry values produce different tokens
+    // ------------------------------------------------------------------
+    #[test]
+    fn different_expiry_produces_different_token() {
+        let client = CentrifugoClient::new(
+            "http://localhost:8000".to_string(),
+            "key".to_string(),
+            "secret".to_string(),
+        );
+        let t1 = client.generate_connection_token("user", 1_000).unwrap();
+        let t2 = client.generate_connection_token("user", 2_000).unwrap();
+        assert_ne!(t1, t2);
+    }
+
+    // ------------------------------------------------------------------
+    // Token signed with wrong secret fails to decode
+    // ------------------------------------------------------------------
+    #[test]
+    fn token_wrong_secret_fails_decode() {
+        use jsonwebtoken::decode;
+
+        let client = CentrifugoClient::new(
+            "http://localhost:8000".to_string(),
+            "key".to_string(),
+            "correct_secret".to_string(),
+        );
+        let token = client.generate_connection_token("user-1", 9_999_999_999).unwrap();
+
+        let wrong_key = jsonwebtoken::DecodingKey::from_secret(b"wrong_secret");
+        let result = decode::<ConnectionClaims>(
+            &token,
+            &wrong_key,
+            &jsonwebtoken::Validation::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Publish URL is built from api_url + /api/publish
+    // (We can't send HTTP without a server, but we verify the client
+    //  is constructed without panic and the field is accessible via the
+    //  token-generation path which uses the same struct.)
+    // ------------------------------------------------------------------
+    #[test]
+    fn client_construction_does_not_panic() {
+        let client = CentrifugoClient::new(
+            "https://centrifugo.example.com".to_string(),
+            "api-key-xyz".to_string(),
+            "jwt-secret".to_string(),
+        );
+        // Can generate a token — confirms client is fully initialised
+        let token = client.generate_connection_token("u", 9_999_999_999);
+        assert!(token.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // ConnectionClaims serde round-trip
+    // ------------------------------------------------------------------
+    #[test]
+    fn connection_claims_serde_roundtrip() {
+        let claims = ConnectionClaims {
+            sub: "operator-42".to_string(),
+            exp: 1_700_000_000,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        let parsed: ConnectionClaims = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.sub, claims.sub);
+        assert_eq!(parsed.exp, claims.exp);
+    }
 }

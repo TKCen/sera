@@ -771,3 +771,494 @@ sera:
 | Single-node throughput | ≥ 100 concurrent sessions |
 | gRPC adapter latency | < 10ms roundtrip for local connectors |
 | Local startup time | < 2 seconds (Tier 1) |
+
+---
+
+## 17. LSP Routing
+
+> **Status:** DRAFT (fills gap `sera-w3np`)
+
+### 17.1 Motivation
+
+The in-process LSP supervisor in `sera-tools` (`rust/crates/sera-tools/src/lsp/supervisor.rs`) serves agents that run **inside** the gateway process — a tool call arrives at `ToolDispatcher`, which calls `LspToolsState::get_or_spawn`, which manages a child `rust-analyzer` process whose lifetime is tied to the agent turn. This path is intentionally short-lived and per-turn.
+
+The gateway needs a separate, persistent LSP routing layer for three reasons that the in-process path cannot satisfy:
+
+1. **Multi-tenant / multi-workspace isolation.** Different agents and different sera-web users may work on different `workspace_root` directories simultaneously. Each needs an isolated language-server process (separate `rootUri`, separate type-check context). The in-process path spawns per-language, not per-workspace.
+
+2. **External callers.** sera-web, IDE plugins connecting via MCP-over-SSE, and remote agents via A2A all need to issue LSP queries without running inside the gateway process. They require a REST surface that the gateway exposes, not an in-process function call.
+
+3. **Process pool amortisation.** `rust-analyzer` peaks at ~1 GB RSS and takes 10–30 s to fully index a large workspace (see `docs/plan/LSP-TOOLS-DESIGN.md §1`). If every new browser session spawned a fresh process, costs would be prohibitive. A gateway-owned pool shares one warmed process across all sessions attached to the same `(language_id, workspace_root)` pair.
+
+**Tradeoff:** This layer adds a REST round-trip vs. the in-process path. That overhead (~1–5 ms for a local gateway) is irrelevant compared to LSP request latency (typically 50–500 ms). External callers have no alternative.
+
+---
+
+### 17.2 Routing Surface
+
+Five REST endpoints. All require a valid sera-auth session (§17.5). Stubs at `rust/crates/sera-gateway/src/routes/lsp.rs` must be replaced by implementations that delegate to `ProcessManager` (§18).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/lsp/sessions` | Create a scoped LSP session |
+| `POST` | `/api/lsp/sessions/{id}/request` | JSON-RPC pass-through |
+| `GET` | `/api/lsp/sessions/{id}` | Session status + health |
+| `GET` | `/api/lsp/sessions/{id}/events` | SSE stream for notifications |
+| `DELETE` | `/api/lsp/sessions/{id}` | Tear down session |
+| `GET` | `/api/lsp/sessions` | List sessions for authenticated caller |
+
+**Request / response shapes:**
+
+```
+POST /api/lsp/sessions
+Body:  { "language_id": "rust", "workspace_root": "/workspaces/myproject",
+         "initialization_options": { ... } }
+200:   { "session_id": "<uuid>" }
+400:   language_id unknown in LspServerRegistry
+403:   workspace_root outside allowed patterns
+```
+
+```
+POST /api/lsp/sessions/{id}/request
+Body:  <LSP JSON-RPC request object, e.g. textDocument/documentSymbol>
+200:   <LSP JSON-RPC response object, id preserved>
+413:   body > 10 MB
+429:   rate limit exceeded
+```
+
+```
+GET /api/lsp/sessions/{id}
+200:  { "session_id": "...", "language_id": "rust",
+       "status": "running|degraded|exited|restarting",
+       "last_request_at": "<rfc3339>", "restart_count": 0 }
+```
+
+```
+GET /api/lsp/sessions/{id}/events
+200:  text/event-stream — one JSON object per notification
+     ($/progress, textDocument/publishDiagnostics, etc.)
+```
+
+```
+DELETE /api/lsp/sessions/{id}
+204:  session torn down
+404:  session not found or not owned by caller
+```
+
+```
+GET /api/lsp/sessions
+200:  [ { "session_id": "...", "language_id": "...", "status": "..." }, ... ]
+     Filtered to sessions owned by the authenticated principal.
+```
+
+**Stub locations in `rust/crates/sera-gateway/src/routes/lsp.rs`:**
+- Line 42: `Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented...")))` in `definition` — replace with session-based routing once `ProcessManager` exists.
+- Line 66: same pattern in `references`.
+- Line 100: same pattern in `symbols`.
+
+These three handlers are a legacy shape (per-request language dispatch). Phase 1 implementation replaces them with the session-oriented surface above; the old `POST /api/lsp/definition`, `/references`, `/symbols` routes are deprecated in favour of `POST /api/lsp/sessions/{id}/request` with the equivalent LSP method in the body.
+
+---
+
+### 17.3 Session Lifecycle
+
+1. **Create** — `POST /api/lsp/sessions` arrives. Gateway resolves `language_id` against `LspServerRegistry` (the shared type from `sera-tools::lsp::registry::LspServerRegistry`; see §17.7 for the sharing model). If no entry, return 400. If `workspace_root` fails the ACL check (§17.5), return 403.
+
+2. **Spawn or adopt** — Gateway calls `ProcessManager::spawn` (§18.2) or, if a pooled process already covers `(language_id, workspace_root)`, increments its reference count and returns the existing `ProcessId`. The `ProcessManager` spawns via `SandboxProvider::spawn_restricted` (§17.6).
+
+3. **Initialise** — Gateway sends LSP `initialize` with the caller-supplied `initialization_options` merged over the defaults from `LspServerConfig`. Waits for `initialized` notification. Marks the managed process `Running`.
+
+4. **Store** — Session record written to `ProcessManager`'s persistence store (§18.3): `{ session_id, principal_id, language_id, workspace_root, process_id }`.
+
+5. **Ready** — `session_id` returned to caller.
+
+6. **Tear down** — `DELETE /api/lsp/sessions/{id}` triggers `ProcessManager::shutdown(process_id)` (§18.6 graceful sequence). Registry entry removed.
+
+Session ownership: the `principal_id` from the sera-auth token is stored at creation time. All subsequent requests for that `session_id` must present a token matching the same principal, or the admin role (§17.5).
+
+---
+
+### 17.4 JSON-RPC Proxy Semantics
+
+The gateway is a **thin proxy** on the `/request` path:
+
+- The request body is forwarded verbatim to the language server's stdin via the existing `LspClient` (`sera-tools::lsp::client`). The gateway does not parse or validate the LSP method name or params beyond body-size enforcement.
+- The response is read from stdout and returned verbatim with the LSP `id` field intact.
+- **Request body size limit: 10 MB.** Requests exceeding this return HTTP 413 before the body is forwarded.
+- **Large responses (Phase 2).** `workspace/symbol` and similar queries can return hundreds of KB. Phase 1 buffers the full response. Phase 2 adds chunked streaming via `Transfer-Encoding: chunked`.
+
+**Notifications are not returned from `/request`.** LSP servers emit notifications on stdout interleaved with responses (`$/progress`, `textDocument/publishDiagnostics`, `window/logMessage`, etc.). The gateway's stdout reader classifies each message:
+
+- If `"id"` is present → it is a response to a pending request; match by id and return from `/request`.
+- If `"id"` is absent → it is a notification; fan it out to the SSE stream at `GET /api/lsp/sessions/{id}/events`.
+
+The SSE stream carries a JSON object per event line, prefixed `data:`, with `event:` set to the LSP method name (e.g. `event: textDocument/publishDiagnostics`).
+
+**Per-session request serialisation.** LSP servers are single-threaded by design; concurrent requests from multiple callers sharing one process must be serialised. The `ProcessManager` holds a per-process `Arc<Semaphore>` (capacity 1) that `/request` acquires before forwarding and releases after reading the response.
+
+---
+
+### 17.5 Authentication and Authorisation
+
+- All six endpoints require a valid sera-auth bearer token. Unauthenticated requests return 401.
+- **Session ownership check:** `GET`, `POST .../request`, and `DELETE` on `{id}` verify that the token's `principal_id` matches the session's stored `principal_id`. Admin role bypasses this check.
+- **Workspace ACL:** Operators configure an allowlist of `workspace_root` path patterns in gateway config:
+  ```yaml
+  sera:
+    lsp:
+      allowed_workspace_roots:
+        - "/workspaces/**"
+        - "/home/*/projects/**"
+  ```
+  A `POST /api/lsp/sessions` whose `workspace_root` does not match any pattern returns 403. An empty allowlist means all paths are permitted (dev-mode default).
+- **Tier-based capability:**
+  - Tier-1 agents (lowest trust): read-only LSP sessions — `textDocument/documentSymbol`, `textDocument/hover`, `workspace/symbol`. Write-capable methods (`textDocument/rangeFormatting`, `workspace/applyEdit`) are rejected with 403.
+  - Tier-3 agents (highest trust): full method set; sandbox config relaxed to allow write access within `workspace_root` (§17.6).
+
+---
+
+### 17.6 Sandbox Model
+
+Gateway-spawned LSP processes run in Tier-2 sandbox by default. The gateway calls `SandboxProvider::spawn_restricted` from `sera-tools::sandbox` with:
+
+```
+memory_limit:  2 GiB
+cpu_limit:     2 cores
+network:       isolated (no external egress)
+filesystem:    read-only except workspace_root (rw) and /tmp (rw)
+```
+
+For Tier-3 callers, the sandbox config allows write access to `workspace_root` (enabling code-action apply and formatting).
+
+> **Tradeoff:** Sandboxing adds ~200 ms cold-start per LSP process (one-time per session lifetime). For sessions lasting minutes to hours, this is negligible. See `docs/plan/LSP-TOOLS-DESIGN.md §9.1` for the base sandbox rationale.
+
+Operator opt-out: set `sera.lsp.sandbox: false` in gateway config for local dev. A startup warning is emitted.
+
+SPEC-security does not yet define a named "Tier 2 sandbox" concept; when it does, this section should cross-reference it by section number.
+
+---
+
+### 17.7 Differences from the In-Process Path
+
+This section explicitly disambiguates the two LSP paths to prevent confusion during implementation.
+
+| Dimension | In-process path (sera-tools) | Gateway routing (this section) |
+|---|---|---|
+| **Owner** | `LspToolsState` in `sera-tools::lsp::state` | `ProcessManager` in `sera-gateway::process_manager` |
+| **Callers** | Agent ToolDispatcher (in-process tool calls) | sera-web, IDE plugins, remote A2A agents |
+| **Lifetime** | Per-agent-turn; supervisor cached across turns but not across gateway restarts | Explicit session; persisted across gateway restarts (§18) |
+| **Session granularity** | Per language_id | Per (principal_id, language_id, workspace_root) |
+| **Restart policy** | None (Phase 1); crash = LspError::SpawnFailed | Configurable `RestartPolicy` via ProcessManager (§18.2) |
+| **Exposed over REST** | No | Yes |
+
+**Shared artefact:** Both paths use the same `LspServerRegistry` type (`sera-tools::lsp::registry::LspServerRegistry`) as the single source of truth for `language_id → command` mappings. Phase 1 keeps two separate registry instances (one in `LspToolsState`, one in the gateway's `AppState`). Phase 2 (shared-pool mode, §18.5) unifies them behind a single gateway-owned registry consulted by both paths.
+
+**They do NOT share a `ProcessManager` in Phase 1.** The in-process supervisor map (`LspToolsState.supervisors`) and the gateway `ProcessManager.children` are separate. Process pooling across both paths is deferred to Phase 2 (§18.5).
+
+---
+
+### 17.8 Metrics
+
+| Metric | Type | Labels |
+|---|---|---|
+| `lsp_gateway_sessions_active` | Gauge | `language` |
+| `lsp_gateway_request_duration_seconds` | Histogram | `language`, `method` |
+| `lsp_gateway_restarts_total` | Counter | `language`, `reason` |
+| `lsp_gateway_session_creates_total` | Counter | `language`, `result` (`ok`\|`err`) |
+| `lsp_gateway_notification_fan_out_total` | Counter | `language`, `lsp_method` |
+
+All metrics exposed on the gateway's existing `/metrics` endpoint (Prometheus scrape format).
+
+---
+
+### 17.9 Test Strategy
+
+**Unit tests** (no real language server):
+- Route handlers wired against a stub `ProcessManager` (trait object; see §18 for the `ProcessRegistryStore` trait pattern). Assert correct HTTP status codes for ownership violation, missing session, oversized body, and workspace ACL rejection.
+- JSON-RPC proxy: mock stdin/stdout pair; send a `textDocument/documentSymbol` request body, verify the response body is returned verbatim with `id` intact; verify a notification emitted mid-stream is routed to the SSE channel, not the HTTP response.
+
+**Integration tests** (gated on `#[cfg(feature = "integration")]`, require `rust-analyzer` on PATH and Docker):
+- Spin up a real gateway with a real rust-analyzer inside a Docker sandbox.
+- Create a session against `rust/crates/sera-tools/` as the workspace root.
+- Issue three `textDocument/documentSymbol` requests; assert non-empty symbol lists.
+- Tear down; assert process is no longer running.
+
+**Negative tests:**
+- 403 on `POST /api/lsp/sessions` with a `workspace_root` outside the allowlist.
+- 413 on a `/request` body > 10 MB.
+- 403 on a Tier-1 session issuing `workspace/applyEdit`.
+- 404 on `GET /api/lsp/sessions/{id}` with a session_id owned by a different principal.
+
+---
+
+### 17.10 Open Questions
+
+1. **SSE backpressure.** If a caller disconnects from `GET /api/lsp/sessions/{id}/events` while the language server is emitting a burst of `$/progress` notifications, should the gateway buffer them (bounded channel?) or drop them? Bounded channel risks blocking the stdout reader for other in-flight requests.
+
+2. **Session TTL / idle expiry.** Should sessions with no `/request` activity for N minutes be automatically torn down? If so, what is the default TTL and where is it configured? A stuck rust-analyzer at 1 GB for an idle session is expensive.
+
+3. **Multi-instance gateway.** In Tier 2/3 horizontal deployment (§15 open question 5), sessions are pinned to a gateway instance that owns the child process. How should session routing work when the owning instance restarts? Options: sticky sessions via load balancer; migrate session to new instance (requires process hand-off); accept session loss and require client reconnect.
+
+4. **Backwards compatibility of legacy stub routes.** The existing `POST /api/lsp/definition`, `/references`, `/symbols` handlers (lines 42, 66, 100 in `routes/lsp.rs`) have an incompatible shape from the new session model. Should they be removed immediately, shimmed to create ephemeral sessions internally, or kept as a permanent convenience API?
+
+---
+
+## 18. Process Persistence
+
+> **Status:** DRAFT (fills gap `sera-w3np`)
+
+### 18.1 Motivation
+
+Gateway-managed child processes — LSP servers today, with indexers, language-specific runtimes, and custom plugins to follow — accumulate state that is expensive to recreate. Without a registry:
+
+- **Orphan accumulation.** Gateway crash or restart leaves child processes running with no owner. On the next boot, new processes are spawned alongside the orphans. A single `rust-analyzer` peaks at ~1 GB RSS; ten orphans exhaust a developer workstation.
+- **Cold-start tax.** rust-analyzer takes 10–30 s to fully index a large workspace. A registry that allows re-adoption of live processes across gateway restarts eliminates this cost entirely for the common case of a clean gateway restart (e.g. config reload, binary upgrade).
+- **Operator visibility.** Without a registry, there is no answer to "which processes is the gateway managing right now?" The registry is the source of truth for this question.
+
+**Tradeoff:** Persistence adds complexity and a storage dependency. The `InMemoryProcessRegistryStore` (§18.3) trades durability for simplicity and is the default; operators that need restart-survival enable `SqliteProcessRegistryStore`.
+
+---
+
+### 18.2 `ProcessManager` Type
+
+New file: `rust/crates/sera-gateway/src/process_manager.rs`.
+
+```rust
+pub struct ProcessManager {
+    children: Arc<RwLock<HashMap<ProcessId, ManagedProcess>>>,
+    persistence: Arc<dyn ProcessRegistryStore>,
+    restart_policy: RestartPolicy,
+}
+
+pub struct ManagedProcess {
+    pub id: ProcessId,
+    pub kind: ProcessKind,          // LspServer | CustomPlugin | Indexer
+    pub command: String,
+    pub args: Vec<String>,
+    pub workspace_root: PathBuf,
+    pub pid: i32,
+    pub started_at: DateTime<Utc>,
+    pub status: ProcessStatus,      // Running | Degraded | Exited | Restarting
+    pub last_heartbeat: Option<DateTime<Utc>>,
+    pub restart_count: u32,
+}
+
+pub enum ProcessStatus {
+    Running,
+    Degraded,
+    Exited,
+    Restarting,
+}
+
+pub enum ProcessKind {
+    LspServer,
+    Indexer,
+    CustomPlugin,
+}
+
+pub enum RestartPolicy {
+    Never,
+    OnCrash { max_attempts: u32, backoff_secs: u64 },
+    Always  { backoff_secs: u64 },
+}
+
+pub type ProcessId = uuid::Uuid;
+```
+
+**Public API:**
+
+| Method | Signature (sketch) | Notes |
+|---|---|---|
+| `spawn` | `async fn spawn(&self, req: SpawnRequest) -> Result<ProcessId, ProcessError>` | Spawn child, write to store, return id |
+| `adopt_existing` | `async fn adopt_existing(&self, pid: i32, meta: ProcessMeta) -> Result<ProcessId, ProcessError>` | Re-adopt a live PID found during reconcile |
+| `shutdown` | `async fn shutdown(&self, id: ProcessId) -> Result<(), ProcessError>` | Graceful sequence (§18.6) |
+| `list` | `async fn list(&self) -> Vec<ManagedProcess>` | Snapshot of all children |
+| `get` | `async fn get(&self, id: ProcessId) -> Option<ManagedProcess>` | Single entry lookup |
+| `set_restart_policy` | `async fn set_restart_policy(&self, id: ProcessId, policy: RestartPolicy) -> Result<(), ProcessError>` | Override per-process policy |
+
+`ProcessManager` is held in `AppState` as `Arc<ProcessManager>`. Route handlers for §17 receive it via `State<AppState>` in the standard axum pattern — consistent with the existing `ConnectorRegistry` shape in `rust/crates/sera-gateway/src/connector/mod.rs`.
+
+---
+
+### 18.3 Persistence Store
+
+```rust
+#[async_trait]
+pub trait ProcessRegistryStore: Send + Sync + 'static {
+    async fn upsert(&self, p: &ManagedProcess) -> Result<(), ProcessError>;
+    async fn remove(&self, id: ProcessId)     -> Result<(), ProcessError>;
+    async fn list(&self)                      -> Result<Vec<ManagedProcess>, ProcessError>;
+}
+```
+
+Two implementations are specified for Phase 1:
+
+**`InMemoryProcessRegistryStore`** — default, non-persistent. Backed by a `Mutex<HashMap<ProcessId, ManagedProcess>>`. Fast, no I/O, survives nothing across gateway restarts. Used in tests and local dev by default.
+
+**`SqliteProcessRegistryStore`** — persists across gateway restarts. Storage path: `$SERA_DATA_ROOT/process_registry.sqlite`. Uses `rusqlite` (matching the workspace convention for SQLite — see `rust/CLAUDE.md`: "SQLite via rusqlite"). Schema:
+
+```sql
+CREATE TABLE IF NOT EXISTS managed_processes (
+    id            TEXT PRIMARY KEY,   -- ProcessId (UUID)
+    kind          TEXT NOT NULL,
+    command       TEXT NOT NULL,
+    args_json     TEXT NOT NULL,      -- JSON array, never logged raw
+    workspace_root TEXT NOT NULL,
+    pid           INTEGER NOT NULL,
+    started_at    TEXT NOT NULL,      -- RFC 3339
+    status        TEXT NOT NULL,
+    restart_count INTEGER NOT NULL DEFAULT 0,
+    last_heartbeat TEXT              -- RFC 3339, nullable
+);
+```
+
+Storage file permissions: `0600` (owner read-write only). The `SqliteProcessRegistryStore` sets this on creation via `std::fs::set_permissions`. On platforms where `0600` is not enforceable (Windows), a startup warning is emitted.
+
+Selection via gateway config:
+
+```yaml
+sera:
+  lsp:
+    process_registry:
+      backend: sqlite          # "memory" | "sqlite" (default: "memory")
+      sqlite_path: ""          # defaults to $SERA_DATA_ROOT/process_registry.sqlite
+```
+
+---
+
+### 18.4 Reconciliation on Gateway Startup
+
+On gateway boot, `ProcessManager::reconcile()` runs before the HTTP listener opens. Steps:
+
+1. **Load stored entries** from `ProcessRegistryStore::list()`. If the store is empty or unavailable, skip reconcile (log a warning).
+
+2. **Probe each PID.** For each stored entry whose `status` was `Running` or `Restarting`:
+   - **Linux:** `kill(pid, 0)` returns `Ok(())` if the process is alive and the gateway has permission, `ESRCH` if dead, `EPERM` if alive but owned by another UID (treat as alive, skip re-adoption).
+   - **macOS:** same — `kill -0` is POSIX.
+   - **Windows:** `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)` — success means alive.
+
+3. **Verify identity (Linux only).** Read `/proc/{pid}/exe` and compare the resolved path against `ManagedProcess.command`. If they differ, the PID has been recycled by the OS — treat as dead and do not re-adopt.
+
+   > **Tradeoff:** On macOS, `/proc` is unavailable; on Windows the equivalent (`QueryFullProcessImageName`) requires additional privilege. Phase 1 falls back to trusting the PID on non-Linux platforms and logs a warning. Phase 2 can implement platform-specific identity verification.
+
+4. **Alive and identity verified → re-adopt.** Call `ProcessManager::adopt_existing(pid, ...)`. For `LspServer` kind, send a minimal `$/ping` probe (if the server supports it) or a `workspace/symbol` with an empty query and a 2 s timeout. If the probe succeeds, mark `Running`. If the probe fails, mark `Degraded`.
+
+5. **Dead → evict.** Remove from in-memory map and from persistence store. If `restart_policy` is `OnCrash` or `Always`, immediately re-spawn.
+
+6. **Reconcile complete.** Log a summary: N re-adopted, M evicted, K re-spawned.
+
+---
+
+### 18.5 Shared-Pool Mode (Phase 2)
+
+> **This subsection describes Phase 2 only. Phase 1 keeps the in-process and gateway process pools completely separate.**
+
+In Phase 2, multiple consumers — the LSP routing layer (§17) and the agent ToolDispatcher via `LspToolsState` in `sera-tools` — can share a single `ManagedProcess` per `(language_id, workspace_root)` pair to eliminate duplicate processes and avoid duplicate warmup cost.
+
+Sharing requires:
+
+- `ManagedProcess.ref_count: u32` — incremented on each `adopt_existing` call from a new consumer, decremented on each `shutdown` call. Process is actually killed only when `ref_count` reaches zero.
+- A negotiation protocol between `sera-tools` and the gateway: when `LspToolsState::get_or_spawn` is called, it checks whether the gateway's `ProcessManager` already holds a live process for the requested `(language_id, workspace_root)`. If so, it attaches to the existing process rather than spawning a new one. The channel for this check is an in-process function call (both live in the same binary); no IPC is needed.
+- The `LspServerRegistry` is unified: a single instance, owned by `AppState`, shared (as `Arc`) by both `ProcessManager` and `LspToolsState`.
+
+Phase 1 does not implement any of this. The two pools are separate and may hold duplicate processes for the same workspace. This is a known Phase 1 limitation.
+
+---
+
+### 18.6 Cleanup and Shutdown
+
+**Graceful shutdown sequence** (triggered by `ProcessManager::shutdown(id)` or gateway SIGTERM):
+
+1. For `LspServer` kind: send LSP `shutdown` request, wait up to 5 s for response.
+2. Send LSP `exit` notification.
+3. Wait up to 5 s for process to exit voluntarily.
+4. If still alive: send `SIGTERM` (Unix) or `TerminateProcess` (Windows).
+5. Wait up to 5 s.
+6. If still alive: send `SIGKILL` (Unix) or forceful `TerminateProcess` with exit code 1 (Windows).
+7. Remove from `children` map and call `ProcessRegistryStore::remove(id)`.
+
+For `Indexer` and `CustomPlugin` kinds, steps 1–2 are skipped (no LSP protocol); the sequence begins at step 3.
+
+**Orphan detection on startup** (part of reconcile, §18.4):
+
+On Linux, scan `/proc/*/status` for processes whose `PPid` is 1 (reparented to init, i.e. the gateway that spawned them has exited) and whose command matches an entry in the persistence store with `owner: gateway`. Re-adopt or kill per restart_policy.
+
+**`DELETE /api/lsp/sessions/{id}`** calls `ProcessManager::shutdown(process_id)` and then removes the session record from the LSP session store. If the process is shared (`ref_count > 1` in Phase 2), shutdown decrements `ref_count` instead of killing.
+
+---
+
+### 18.7 Error Surface
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessError {
+    #[error("spawn failed: {0}")]
+    SpawnFailed(#[source] std::io::Error),
+
+    #[error("process not found: {0}")]
+    NotFound(ProcessId),
+
+    #[error("process already exists: {0}")]
+    AlreadyExists(ProcessId),
+
+    #[error("store failure: {reason}")]
+    StoreFailure { reason: String },
+
+    #[error("reconciliation failed for pid {pid}: {reason}")]
+    ReconciliationFailed { pid: i32, reason: String },
+
+    #[error("shutdown timed out for process {0}")]
+    ShutdownTimeout(ProcessId),
+}
+```
+
+> **Note:** The `reason` field in `StoreFailure` and `ReconciliationFailed` uses `reason` (not `source`) to avoid the `thiserror` v2 auto-source behaviour for `String` fields (see `rust/CLAUDE.md`: "thiserror v2 auto-detects `source` fields").
+
+---
+
+### 18.8 Metrics
+
+| Metric | Type | Labels |
+|---|---|---|
+| `gateway_managed_processes_total` | Gauge | `kind`, `status` |
+| `gateway_process_spawns_total` | Counter | `kind`, `result` (`ok`\|`err`) |
+| `gateway_process_restarts_total` | Counter | `kind`, `reason` |
+| `gateway_process_reconcile_duration_seconds` | Histogram | — |
+| `gateway_process_shutdown_duration_seconds` | Histogram | `kind`, `outcome` (`clean`\|`sigterm`\|`sigkill`) |
+
+---
+
+### 18.9 Security Considerations
+
+- **Command path logging.** `ManagedProcess.command` is safe to log. `ManagedProcess.args` MUST NOT be logged in full — args may contain secrets (API keys, tokens passed via argv). Log only `command` and `args.len()`.
+- **Reconcile side-effect constraint.** During reconcile (§18.4), the gateway probes PIDs and verifies identity. It MUST NOT re-execute any command as a side effect of reading the persistence store. Reconcile either re-adopts an existing live process or re-spawns using the stored metadata — it does not run arbitrary stored commands without operator-configured restart policy authorising it.
+- **Storage file permissions.** `SqliteProcessRegistryStore` creates `process_registry.sqlite` with mode `0600`. On creation and after each open, the implementation calls `std::fs::set_permissions` to enforce this. A file found with wider permissions at startup emits a warning and optionally aborts (operator-configurable).
+- **Workspace root validation.** `ProcessManager::spawn` validates `workspace_root` against the same allowlist used in §17.5 before spawning any child process. Storing an arbitrary path in the registry is not sufficient to bypass the ACL — the ACL is re-checked at spawn time.
+
+---
+
+### 18.10 Test Strategy
+
+**Unit tests** (no real processes):
+
+- Mock `ProcessRegistryStore` (in-memory); call `spawn → list → shutdown` round-trip; assert store reflects each state transition.
+- `RestartPolicy::OnCrash { max_attempts: 2, backoff_secs: 1 }` — simulate two crashes, assert process re-spawned twice, then marked `Exited` with no further spawns.
+- Reconcile with a known-dead PID: mock `kill -0` returning `ESRCH`; assert entry evicted from store; assert `ProcessStatus::Exited` emitted.
+- Reconcile with a live PID whose `/proc/{pid}/exe` returns a different path: assert re-adoption refused.
+
+**Integration tests** (gated on `#[cfg(feature = "integration")]`):
+
+- Spawn a real `echo` process (harmless); persist via `SqliteProcessRegistryStore`; simulate gateway restart by dropping and recreating `ProcessManager`; call `reconcile()`; assert `echo` is re-adopted (probe: `kill -0` succeeds).
+- Kill the `echo` process externally; call `reconcile()`; assert entry transitions to `Exited`; assert `OnCrash` policy fires and a new `echo` is spawned.
+
+---
+
+### 18.11 Open Questions
+
+1. **Windows process identity verification.** `QueryFullProcessImageName` requires `PROCESS_QUERY_LIMITED_INFORMATION`. If the gateway runs as a non-admin user, this may not be available for processes owned by other users. Should Phase 1 skip identity verification on Windows unconditionally, or require the gateway to run with elevated privileges?
+
+2. **Restart backoff implementation.** `backoff_secs` in `RestartPolicy` is a flat delay. Should Phase 2 use exponential backoff with jitter (standard practice for crash loops) and if so, what are the cap and jitter parameters? The flat value is simpler to reason about but does not protect against tight crash-restart loops.
+
+3. **Multi-instance process ownership.** In Tier 2/3 horizontal gateway deployment, a process is owned by one gateway instance. If that instance dies, orphans accumulate on its host. Should a peer gateway be able to take ownership via a distributed lock (e.g. a PostgreSQL advisory lock), or should processes always be re-spawned from scratch on a new instance?
+
+4. **`$SERA_DATA_ROOT` definition.** The SQLite path `$SERA_DATA_ROOT/process_registry.sqlite` assumes this env var is defined. The gateway config spec (§13) does not yet define a canonical data-root convention. Should this be `sera.gateway.data_dir` in the YAML config, or a dedicated environment variable, and should it default to `$XDG_DATA_HOME/sera` on Linux?

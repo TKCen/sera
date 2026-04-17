@@ -31,6 +31,8 @@ pub enum HookPoint {
     /// During persona assembly — persona switching, mode injection.
     ContextPersona,
     /// During memory injection — tier selection, RAG tuning.
+    /// Hermes alias: `pre_agent_turn` (maps to Hermes `prefetch_all`).
+    #[serde(alias = "pre_agent_turn")]
     ContextMemory,
     /// During skill injection — skill filtering, mode transitions.
     ContextSkill,

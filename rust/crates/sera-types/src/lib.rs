@@ -16,6 +16,7 @@ pub mod chat;
 pub mod config_manifest;
 pub mod event;
 pub mod hook;
+pub mod hook_aliases;
 pub mod intercom;
 pub mod manifest;
 pub mod memory;

@@ -242,7 +242,9 @@ pub async fn get_connection_token(
     let token = state.jwt.issue(sera_auth::JwtClaims {
         sub: params.agent_id.clone(),
         iss: "sera".to_string(),
+        aud: Vec::new(),
         exp: now_secs + 3600, // 1 hour
+        nbf: None,
         agent_id: Some(params.agent_id.clone()),
         instance_id: None,
     }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue Centrifugo token: {e}")))?;
@@ -275,7 +277,9 @@ pub async fn get_subscription_token(
     let token = state.jwt.issue(sera_auth::JwtClaims {
         sub: params.channel.clone(),
         iss: "sera".to_string(),
+        aud: Vec::new(),
         exp: now_secs + 3600,
+        nbf: None,
         agent_id: None,
         instance_id: None,
     }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue subscription token: {e}")))?;

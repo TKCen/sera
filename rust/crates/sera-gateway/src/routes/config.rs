@@ -52,7 +52,9 @@ pub async fn get_rt_token(
     let claims = JwtClaims {
         sub: "web-client".to_string(),
         iss: "sera".to_string(),
+        aud: Vec::new(),
         exp,
+        nbf: None,
         agent_id: None,
         instance_id: None,
     };

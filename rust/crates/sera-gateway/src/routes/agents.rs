@@ -223,7 +223,9 @@ pub async fn start_instance(
     let identity_token = state.jwt.issue(sera_auth::JwtClaims {
         sub: instance.name.clone(),
         iss: "sera".to_string(),
+        aud: Vec::new(),
         exp: now_secs + 86400 * 30, // 30 days
+        nbf: None,
         agent_id: Some(instance.name.clone()),
         instance_id: Some(id.clone()),
     }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;
@@ -403,7 +405,9 @@ pub async fn restart_instance(
     let identity_token = state.jwt.issue(sera_auth::JwtClaims {
         sub: instance.name.clone(),
         iss: "sera".to_string(),
+        aud: Vec::new(),
         exp: now_secs + 86400 * 30,
+        nbf: None,
         agent_id: Some(instance.name.clone()),
         instance_id: Some(id.clone()),
     }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;

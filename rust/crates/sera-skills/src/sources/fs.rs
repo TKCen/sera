@@ -262,4 +262,89 @@ mod tests {
             SkillsError::SkillNotFound(_)
         ));
     }
+
+    // --- additional gap-filling tests ---
+
+    #[tokio::test]
+    async fn resolve_skill_in_subdirectory_pack() {
+        // FileSystemSource also discovers skills nested one level deep as packs.
+        let root = tempdir().unwrap();
+        let pack_dir = root.path().join("infra-pack");
+        tfs::create_dir_all(&pack_dir).await.unwrap();
+        tfs::write(pack_dir.join("triage.md"), SKILL_A).await.unwrap();
+
+        let src = FileSystemSource::new(vec![root.path().to_path_buf()]);
+        let r = SkillRef::parse("triage").unwrap();
+        let resolved = src.resolve(&r).await.unwrap();
+        assert_eq!(resolved.definition.name, "triage");
+    }
+
+    #[tokio::test]
+    async fn search_empty_query_returns_all_skills() {
+        let dir = tempdir().unwrap();
+        tfs::write(dir.path().join("triage.md"), SKILL_A).await.unwrap();
+        tfs::write(dir.path().join("deploy.md"), SKILL_B).await.unwrap();
+        let src = FileSystemSource::new(vec![dir.path().to_path_buf()]);
+        let hits = src.search("").await.unwrap();
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn source_kind_is_fs() {
+        let src = FileSystemSource::new(vec![]);
+        assert_eq!(src.kind(), SkillSourceKind::Fs);
+    }
+
+    #[tokio::test]
+    async fn paths_accessor_returns_configured_paths() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().to_path_buf();
+        let src = FileSystemSource::new(vec![p.clone()]);
+        assert_eq!(src.paths(), &[p]);
+    }
+
+    #[tokio::test]
+    async fn resolve_exact_version_pin_matches() {
+        let dir = tempdir().unwrap();
+        tfs::write(dir.path().join("triage.md"), SKILL_A).await.unwrap();
+        let src = FileSystemSource::new(vec![dir.path().to_path_buf()]);
+        // =1.0.0 is an exact pin — must match 1.0.0.
+        let r = SkillRef::parse("triage@=1.0.0").unwrap();
+        let resolved = src.resolve(&r).await.unwrap();
+        assert_eq!(resolved.definition.name, "triage");
+    }
+
+    #[tokio::test]
+    async fn resolve_skill_without_frontmatter_version_fails_version_constraint() {
+        // A skill file with no version field cannot satisfy any version constraint.
+        let no_version_skill = "---\nname: triage\ndescription: no version\n---\nBody.\n";
+        let dir = tempdir().unwrap();
+        tfs::write(dir.path().join("triage.md"), no_version_skill).await.unwrap();
+        let src = FileSystemSource::new(vec![dir.path().to_path_buf()]);
+        let r = SkillRef::parse("triage@^1").unwrap();
+        assert!(matches!(
+            src.resolve(&r).await.unwrap_err(),
+            SkillsError::SkillNotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn search_no_match_returns_empty() {
+        let dir = tempdir().unwrap();
+        tfs::write(dir.path().join("triage.md"), SKILL_A).await.unwrap();
+        let src = FileSystemSource::new(vec![dir.path().to_path_buf()]);
+        let hits = src.search("zzzzzz-no-match").await.unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_hit_includes_pack_name_and_source() {
+        let dir = tempdir().unwrap();
+        tfs::write(dir.path().join("triage.md"), SKILL_A).await.unwrap();
+        let src = FileSystemSource::new(vec![dir.path().to_path_buf()]);
+        let hits = src.search("triage").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, SkillSourceKind::Fs);
+        assert!(!hits[0].pack_name.is_empty());
+    }
 }

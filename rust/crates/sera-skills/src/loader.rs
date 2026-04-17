@@ -319,4 +319,68 @@ mod tests {
         let legacy = loader.load_legacy("old-pack").await.unwrap();
         assert_eq!(legacy.name(), "old-pack");
     }
+
+    // --- additional gap-filling tests ---
+
+    #[tokio::test]
+    async fn load_legacy_missing_returns_not_found() {
+        let md_dir = tempdir().unwrap();
+        let legacy_dir = tempdir().unwrap();
+        let loader = SkillLoader::with_legacy_fallback(
+            vec![md_dir.path().to_path_buf()],
+            vec![legacy_dir.path().to_path_buf()],
+        );
+        let err = loader.load_legacy("ghost").await.unwrap_err();
+        assert!(matches!(err, SkillsError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn list_packs_nonexistent_paths_skipped() {
+        // Paths that don't exist should not cause an error — they are silently skipped.
+        let loader = SkillLoader::new(vec![
+            PathBuf::from("/tmp/__sera_nonexistent_dir_12345__"),
+        ]);
+        let packs = loader.list_packs().await.unwrap();
+        assert!(packs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_packs_returns_empty_for_empty_dir() {
+        let dir = tempdir().unwrap();
+        let loader = SkillLoader::new(vec![dir.path().to_path_buf()]);
+        let packs = loader.list_packs().await.unwrap();
+        assert!(packs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn markdown_paths_accessor_returns_configured_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let loader = SkillLoader::new(vec![path.clone()]);
+        assert_eq!(loader.markdown_paths(), &[path]);
+        assert!(loader.legacy_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_paths_accessor_returns_configured_paths() {
+        let md_dir = tempdir().unwrap();
+        let legacy_dir = tempdir().unwrap();
+        let loader = SkillLoader::with_legacy_fallback(
+            vec![md_dir.path().to_path_buf()],
+            vec![legacy_dir.path().to_path_buf()],
+        );
+        assert_eq!(loader.legacy_paths(), &[legacy_dir.path().to_path_buf()]);
+    }
+
+    #[tokio::test]
+    async fn list_packs_ignores_non_directory_entries() {
+        let dir = tempdir().unwrap();
+        // Write a plain file — it should NOT appear as a pack.
+        fs::write(dir.path().join("not-a-pack.txt"), "content").await.unwrap();
+        // Write a directory — it SHOULD appear.
+        fs::create_dir_all(dir.path().join("real-pack")).await.unwrap();
+        let loader = SkillLoader::new(vec![dir.path().to_path_buf()]);
+        let packs = loader.list_packs().await.unwrap();
+        assert_eq!(packs, vec!["real-pack".to_string()]);
+    }
 }

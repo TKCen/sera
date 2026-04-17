@@ -230,4 +230,81 @@ mod tests {
         assert!(seen[0].contains("registry.example.com"));
         assert!(seen[0].contains("2.1.3"));
     }
+
+    // --- additional gap-filling tests ---
+
+    #[tokio::test]
+    async fn source_kind_is_registry() {
+        let puller = Arc::new(MockPuller::new(CANNED_SKILL));
+        let src = RegistrySource::new(puller);
+        assert_eq!(src.kind(), SkillSourceKind::Registry);
+    }
+
+    #[tokio::test]
+    async fn non_utf8_bytes_from_puller_yield_error() {
+        // Construct a puller that returns bytes that are not valid UTF-8.
+        struct BadUtf8Puller;
+        #[async_trait]
+        impl OciSkillPuller for BadUtf8Puller {
+            async fn pull_manifest_yaml(
+                &self,
+                _reference: &OciReference,
+            ) -> Result<Vec<u8>, OciError> {
+                // 0xFF 0xFE are not valid UTF-8 continuations.
+                Ok(vec![0xFF, 0xFE, 0x00])
+            }
+        }
+        let src = RegistrySource::new(Arc::new(BadUtf8Puller))
+            .with_template("ghcr.io/org/{name}:{version}");
+        let r = SkillRef::parse("triage@=1.0.0").unwrap();
+        let err = src.resolve(&r).await.unwrap_err();
+        match err {
+            SkillsError::InvalidFormat(msg) => {
+                assert!(msg.contains("UTF-8"), "error should mention UTF-8");
+            }
+            other => panic!("expected InvalidFormat, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn puller_error_is_propagated_as_oci_error() {
+        struct FailingPuller;
+        #[async_trait]
+        impl OciSkillPuller for FailingPuller {
+            async fn pull_manifest_yaml(
+                &self,
+                _reference: &OciReference,
+            ) -> Result<Vec<u8>, OciError> {
+                Err(OciError::NotFound("triage:1.0.0".into()))
+            }
+        }
+        let src = RegistrySource::new(Arc::new(FailingPuller))
+            .with_template("ghcr.io/org/{name}:{version}");
+        let r = SkillRef::parse("triage@=1.0.0").unwrap();
+        let err = src.resolve(&r).await.unwrap_err();
+        assert!(matches!(err, SkillsError::Oci(_)));
+    }
+
+    #[tokio::test]
+    async fn malformed_markdown_from_registry_yields_format_error() {
+        // Puller returns bytes that are valid UTF-8 but not valid skill markdown.
+        let puller = Arc::new(MockPuller::new("not a skill file at all — no frontmatter"));
+        let src = RegistrySource::new(puller).with_template("ghcr.io/org/{name}:{version}");
+        let r = SkillRef::parse("triage@=1.0.0").unwrap();
+        let err = src.resolve(&r).await.unwrap_err();
+        assert!(
+            matches!(err, SkillsError::Format(_)),
+            "expected Format error for missing frontmatter, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolved_skill_pack_name_matches_oci_ref() {
+        let puller = Arc::new(MockPuller::new(CANNED_SKILL));
+        let src = RegistrySource::new(puller).with_template("ghcr.io/org/{name}:{version}");
+        let r = SkillRef::parse("triage@=1.0.0").unwrap();
+        let resolved = src.resolve(&r).await.unwrap();
+        assert!(resolved.pack_name.contains("triage"));
+        assert!(resolved.pack_name.contains("1.0.0"));
+    }
 }

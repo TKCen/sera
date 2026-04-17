@@ -381,4 +381,107 @@ Deploy body.
         let _ = pack.list().await.unwrap();
         assert_eq!(pack.read_count(), 1);
     }
+
+    // --- additional gap-filling tests ---
+
+    #[tokio::test]
+    async fn list_empty_dir_returns_empty_vec() {
+        let dir = tempdir().unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        let list = pack.list().await.unwrap();
+        assert!(list.is_empty());
+        assert_eq!(pack.read_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_skips_non_md_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("readme.txt"), "not a skill").await.unwrap();
+        fs::write(dir.path().join("review-code.md"), SAMPLE_SKILL).await.unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        let list = pack.list().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "review-code");
+    }
+
+    #[tokio::test]
+    async fn corrupted_md_returns_error_not_panic() {
+        let dir = tempdir().unwrap();
+        // Malformed: no frontmatter fence at all.
+        fs::write(dir.path().join("bad.md"), "this is not a skill file").await.unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        let result = pack.list().await;
+        assert!(result.is_err(), "corrupted .md should yield an error");
+    }
+
+    #[tokio::test]
+    async fn get_config_returns_none_for_missing_skill() {
+        let dir = tempdir().unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        assert!(pack.get_config("nonexistent").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_config_returns_config_for_existing_skill() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("review-code.md"), SAMPLE_SKILL).await.unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        let config = pack.get_config("review-code").await.unwrap();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.name, "review-code");
+        assert_eq!(cfg.version, "1.0.0");
+    }
+
+    #[tokio::test]
+    async fn get_state_always_returns_none() {
+        let dir = tempdir().unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        assert!(pack.get_state("anything").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_mode_is_noop_and_succeeds() {
+        use sera_types::skill::SkillMode;
+        let dir = tempdir().unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        // set_mode on a markdown pack must not error.
+        pack.set_mode("anything", SkillMode::OnDemand).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn index_entry_preserves_version_and_description() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("review-code.md"), SAMPLE_SKILL).await.unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        let list = pack.list().await.unwrap();
+        let entry = &list[0];
+        assert_eq!(entry.version.as_deref(), Some("1.0.0"));
+        assert_eq!(entry.description.as_deref(), Some("Sample skill for tests"));
+    }
+
+    #[tokio::test]
+    async fn list_skills_returns_only_names() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("review-code.md"), SAMPLE_SKILL).await.unwrap();
+        fs::write(dir.path().join("deploy-app.md"), SECOND_SKILL).await.unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        let mut names = pack.list_skills().await.unwrap();
+        names.sort();
+        assert_eq!(names, vec!["deploy-app", "review-code"]);
+    }
+
+    #[tokio::test]
+    async fn name_method_returns_pack_name() {
+        let dir = tempdir().unwrap();
+        let pack = MarkdownSkillPack::new("my-pack", dir.path().to_path_buf());
+        assert_eq!(pack.name(), "my-pack");
+    }
+
+    #[tokio::test]
+    async fn path_method_returns_root() {
+        let dir = tempdir().unwrap();
+        let pack = MarkdownSkillPack::new("unit", dir.path().to_path_buf());
+        assert_eq!(pack.path(), dir.path());
+    }
 }

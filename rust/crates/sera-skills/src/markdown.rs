@@ -468,4 +468,132 @@ You are a senior code reviewer. When activated, you systematically examine code.
         let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
         assert!(matches!(err, SkillsError::Format(_)));
     }
+
+    // --- additional gap-filling tests ---
+
+    #[test]
+    fn bom_prefix_stripped_before_parsing() {
+        // UTF-8 BOM (\u{FEFF}) must be silently removed.
+        let raw = "\u{FEFF}---\nname: bom-skill\nversion: 1.0.0\n---\n\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("bom.md")).unwrap();
+        assert_eq!(parsed.definition.name, "bom-skill");
+    }
+
+    #[test]
+    fn name_at_exact_max_length_accepted() {
+        // The regex allows exactly 64 characters.
+        let name = "a".repeat(64);
+        let raw = format!("---\nname: {name}\nversion: 1.0.0\n---\n\nbody\n");
+        let parsed = parse_skill_markdown_str(&raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.name, name);
+    }
+
+    #[test]
+    fn empty_body_accepted() {
+        // A skill with frontmatter but zero body bytes is valid.
+        let raw = "---\nname: empty-body\nversion: 0.1.0\n---\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.body_raw, "");
+        assert_eq!(parsed.definition.body.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn sse_server_decoded() {
+        let raw = "---\nname: sse-skill\nversion: 1.0.0\nmcp_tools:\n  sse_servers:\n    - name: remote\n      url: https://example.com/sse\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.mcp_servers.len(), 1);
+        let s = &parsed.definition.mcp_servers[0];
+        assert_eq!(s.name, "remote");
+        assert_eq!(s.transport, SkillMcpTransport::Sse);
+        assert_eq!(s.url.as_deref(), Some("https://example.com/sse"));
+        assert!(s.command.is_none());
+    }
+
+    #[test]
+    fn streamable_http_server_decoded() {
+        let raw = "---\nname: http-skill\nversion: 1.0.0\nmcp_tools:\n  streamable_http_servers:\n    - name: api\n      url: https://api.example.com/mcp\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.mcp_servers.len(), 1);
+        let s = &parsed.definition.mcp_servers[0];
+        assert_eq!(s.transport, SkillMcpTransport::StreamableHttp);
+        assert_eq!(s.url.as_deref(), Some("https://api.example.com/mcp"));
+    }
+
+    #[test]
+    fn multiple_mcp_transport_types_combined() {
+        let raw = r#"---
+name: multi-mcp
+version: 1.0.0
+mcp_tools:
+  stdio_servers:
+    - name: stdio-one
+      command: npx
+  sse_servers:
+    - name: sse-one
+      url: https://sse.example.com
+  streamable_http_servers:
+    - name: http-one
+      url: https://http.example.com
+---
+body
+"#;
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.mcp_servers.len(), 3);
+    }
+
+    #[test]
+    fn missing_closing_fence_is_error() {
+        let raw = "---\nname: x\nversion: 1.0.0\n\nbody without closing fence\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn empty_string_input_does_not_panic() {
+        let err = parse_skill_markdown_str("", PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn binary_garbage_wrapped_in_utf8_does_not_panic() {
+        // Build a string from ASCII control characters (valid UTF-8, junk content).
+        let garbage: String = (0u8..=31)
+            .filter(|b| *b != b'\n' && *b != b'\r')
+            .map(|b| b as char)
+            .collect::<String>()
+            + " not yaml at all \u{FFFD}";
+        // Just ensure no panic; error is expected.
+        let _ = parse_skill_markdown_str(&garbage, PathBuf::from("garbage.md"));
+    }
+
+    #[test]
+    fn deeply_nested_yaml_does_not_panic() {
+        // Construct deeply nested YAML that serde_yaml must handle.
+        let nested = "a:\n  ".repeat(50) + "b: 1";
+        let raw = format!("---\nname: deep\nversion: 1.0.0\nextra:\n  {nested}\n---\nbody\n");
+        // deny_unknown_fields will reject it; we just want no panic.
+        let _ = parse_skill_markdown_str(&raw, PathBuf::from("deep.md"));
+    }
+
+    #[test]
+    fn config_version_defaults_to_zero_when_absent() {
+        let raw = "---\nname: no-version\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.config.version, "0.0.0");
+        assert!(parsed.definition.version.is_none());
+    }
+
+    #[test]
+    fn source_field_propagated_to_definition() {
+        let raw = "---\nname: sourced\nversion: 1.0.0\nsource: ghcr.io/org/pack\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.source.as_deref(), Some("ghcr.io/org/pack"));
+    }
+
+    #[test]
+    fn context_budget_tokens_propagated() {
+        let raw = "---\nname: budgeted\nversion: 1.0.0\ncontext_budget_tokens: 8192\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.context_budget_tokens, Some(8192));
+    }
 }

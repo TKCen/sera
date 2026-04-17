@@ -502,6 +502,84 @@ mod tests {
 
     // --- full validation scenario ---
 
+    // --- additional gap-filling tests ---
+
+    #[test]
+    fn empty_page_types_schema_unknown_type_violation() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = KnowledgeSchema {
+            name: "empty".to_string(),
+            version: "1.0.0".to_string(),
+            enforcement_mode: EnforcementMode::Enforced,
+            page_types: vec![],
+            categories: vec![],
+            cross_reference_rules: vec![],
+        };
+        let violations = validator.validate_page_name("anything", "decision", &schema);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].rule, "unknown_page_type");
+    }
+
+    #[test]
+    fn slug_pattern_rejects_uppercase() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = make_enforced_schema();
+        // "architecture" type uses "<slug>" pattern — uppercase should fail.
+        let violations = validator.validate_page_name("My-Architecture", "architecture", &schema);
+        assert!(!violations.is_empty(), "uppercase slug should be rejected");
+        assert_eq!(violations[0].rule, "naming_pattern");
+    }
+
+    #[test]
+    fn slug_pattern_rejects_empty_string() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = make_enforced_schema();
+        let violations = validator.validate_page_name("", "architecture", &schema);
+        assert!(!violations.is_empty());
+    }
+
+    #[test]
+    fn slug_pattern_allows_hyphens_and_digits() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = make_enforced_schema();
+        let violations =
+            validator.validate_page_name("my-service-v2", "architecture", &schema);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn validate_required_fields_reports_all_missing_at_once() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = make_enforced_schema();
+        // "decision" requires "title" and "status" — both absent.
+        let fm: HashMap<String, String> = HashMap::new();
+        let violations = validator.validate_required_fields(&fm, "decision", &schema);
+        assert_eq!(violations.len(), 2, "both missing fields must be reported");
+        let rules: Vec<_> = violations.iter().map(|v| v.rule.as_str()).collect();
+        assert!(rules.iter().all(|r| *r == "required_field"));
+    }
+
+    #[test]
+    fn validate_cross_references_non_decision_type_not_affected() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = make_enforced_schema();
+        // Cross-reference rule is "decision -> architecture". "architecture"
+        // pages are not subject to this rule.
+        let violations =
+            validator.validate_cross_references("architecture", &[], &schema);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn naming_pattern_date_slug_requires_full_date() {
+        let validator = KnowledgeSchemaValidator::new();
+        let schema = make_enforced_schema();
+        // Missing DD portion.
+        let violations =
+            validator.validate_page_name("2024-03-my-decision", "decision", &schema);
+        assert!(!violations.is_empty(), "incomplete date should be rejected");
+    }
+
     #[test]
     fn full_validation_advisory_multiple_violations() {
         let validator = KnowledgeSchemaValidator::new();

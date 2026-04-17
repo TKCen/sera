@@ -4302,6 +4302,7 @@ dependencies = [
 name = "sera-agui"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "sera-errors",
  "serde",
  "serde_json",
@@ -4511,6 +4512,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "wasmtime",
  "wasmtime-wasi",

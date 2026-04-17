@@ -10,9 +10,12 @@
 //!
 //! See SPEC-interop §6 for the full protocol specification.
 
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use sera_errors::{SeraError, SeraErrorCode};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 
 // ---------------------------------------------------------------------------
@@ -230,6 +233,109 @@ impl AgUiEvent {
 }
 
 // ---------------------------------------------------------------------------
+// EventSink abstraction
+// ---------------------------------------------------------------------------
+
+/// A sink that accepts AG-UI events. Implementations may buffer them (tests),
+/// forward over a channel (async pipeline), or write SSE bytes (gateway).
+pub trait EventSink: Send {
+    /// Send one event into the sink. Returns `Err(AgUiError::StreamClosed)` if
+    /// the sink can no longer accept events.
+    fn send(&self, event: AgUiEvent) -> Result<(), AgUiError>;
+}
+
+/// A sink backed by a `tokio::sync::mpsc` unbounded sender. Used by the
+/// gateway to push events into an async stream.
+#[derive(Clone)]
+pub struct ChannelSink {
+    tx: mpsc::UnboundedSender<AgUiEvent>,
+}
+
+impl ChannelSink {
+    /// Create a linked `(ChannelSink, UnboundedReceiver)` pair.
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<AgUiEvent>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self { tx }, rx)
+    }
+}
+
+impl EventSink for ChannelSink {
+    fn send(&self, event: AgUiEvent) -> Result<(), AgUiError> {
+        self.tx.send(event).map_err(|_| AgUiError::StreamClosed)
+    }
+}
+
+/// A sink that collects events into an in-memory `Vec`. Intended for tests.
+#[derive(Clone, Default)]
+pub struct InMemorySink {
+    events: Arc<Mutex<Vec<AgUiEvent>>>,
+}
+
+impl InMemorySink {
+    /// Create an empty sink.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return a snapshot of all collected events.
+    pub fn collected(&self) -> Vec<AgUiEvent> {
+        self.events.lock().expect("mutex poisoned").clone()
+    }
+
+    /// Return the number of events collected so far.
+    pub fn len(&self) -> usize {
+        self.events.lock().expect("mutex poisoned").len()
+    }
+
+    /// Returns `true` when no events have been collected.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl EventSink for InMemorySink {
+    fn send(&self, event: AgUiEvent) -> Result<(), AgUiError> {
+        self.events.lock().expect("mutex poisoned").push(event);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SSE adapter
+// ---------------------------------------------------------------------------
+
+/// Format a single AG-UI event as an SSE `data:` frame.
+///
+/// Output: `data: <json>\n\n` — the double newline terminates the SSE event.
+/// Transport-agnostic: callers (axum, actix, …) write the bytes to the HTTP
+/// response body themselves.
+pub fn event_to_sse_frame(event: &AgUiEvent) -> Result<String, AgUiError> {
+    let json = event.to_sse_data()?;
+    Ok(format!("data: {json}\n\n"))
+}
+
+/// Drain a `Stream<Item = AgUiEvent>` into SSE-formatted byte chunks.
+///
+/// Returns a `Stream<Item = Result<String, AgUiError>>` that yields one SSE
+/// frame per event. The adapter is transport-agnostic; wrap the output in an
+/// axum `Sse` response or any other SSE transport.
+pub fn sse_stream(
+    stream: impl Stream<Item = AgUiEvent> + Send + 'static,
+) -> impl Stream<Item = Result<String, AgUiError>> + Send + 'static {
+    use futures_util::StreamExt;
+    stream.map(|event| event_to_sse_frame(&event))
+}
+
+/// Convenience: convert a `tokio::sync::mpsc::UnboundedReceiver` into an SSE
+/// stream. This is the typical pairing with `ChannelSink`.
+pub fn receiver_to_sse_stream(
+    rx: mpsc::UnboundedReceiver<AgUiEvent>,
+) -> impl Stream<Item = Result<String, AgUiError>> + Send + 'static {
+    use tokio_stream::wrappers::UnboundedReceiverStream;
+    sse_stream(UnboundedReceiverStream::new(rx))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -354,5 +460,114 @@ mod tests {
             AgUiEvent::Raw { event: "e".into(), data: "d".into() },
         ];
         assert_eq!(events.len(), 17);
+    }
+
+    // --- EventSink tests ---
+
+    #[test]
+    fn in_memory_sink_collects_events() {
+        let sink = InMemorySink::new();
+        sink.send(AgUiEvent::RunStarted {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+        })
+        .unwrap();
+        sink.send(AgUiEvent::RunFinished {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+        })
+        .unwrap();
+        assert_eq!(sink.len(), 2);
+        let collected = sink.collected();
+        assert_eq!(collected[0].event_type(), "RUN_STARTED");
+        assert_eq!(collected[1].event_type(), "RUN_FINISHED");
+    }
+
+    #[test]
+    fn in_memory_sink_is_empty_initially() {
+        let sink = InMemorySink::new();
+        assert!(sink.is_empty());
+    }
+
+    #[test]
+    fn channel_sink_sends_and_receives() {
+        let (sink, mut rx) = ChannelSink::new();
+        sink.send(AgUiEvent::TextMessageContent {
+            message_id: "m1".into(),
+            delta: "hi".into(),
+        })
+        .unwrap();
+        // Drop sender so try_recv doesn't block
+        drop(sink);
+        let evt = rx.try_recv().expect("expected event in channel");
+        assert_eq!(evt.event_type(), "TEXT_MESSAGE_CONTENT");
+    }
+
+    #[test]
+    fn channel_sink_closed_returns_error() {
+        let (sink, rx) = ChannelSink::new();
+        // Drop the receiver — sender should now report StreamClosed.
+        drop(rx);
+        let result = sink.send(AgUiEvent::RunFinished {
+            thread_id: "t".into(),
+            run_id: "r".into(),
+        });
+        assert!(matches!(result, Err(AgUiError::StreamClosed)));
+    }
+
+    // --- SSE adapter tests ---
+
+    #[test]
+    fn event_to_sse_frame_format() {
+        let evt = AgUiEvent::RunStarted {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+        };
+        let frame = event_to_sse_frame(&evt).unwrap();
+        assert!(frame.starts_with("data: "), "frame must start with 'data: '");
+        assert!(frame.ends_with("\n\n"), "frame must end with double newline");
+        assert!(frame.contains("RUN_STARTED"));
+    }
+
+    #[test]
+    fn sse_frame_contains_valid_json() {
+        let evt = AgUiEvent::ToolCallArgs {
+            tool_call_id: "tc42".into(),
+            delta: r#"{"key":"val"}"#.into(),
+        };
+        let frame = event_to_sse_frame(&evt).unwrap();
+        // Strip "data: " prefix and trailing "\n\n"
+        let json_str = frame
+            .strip_prefix("data: ")
+            .unwrap()
+            .trim_end_matches('\n');
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed["type"], "TOOL_CALL_ARGS");
+        assert_eq!(parsed["tool_call_id"], "tc42");
+    }
+
+    #[tokio::test]
+    async fn receiver_to_sse_stream_yields_frames() {
+        use futures_util::StreamExt;
+
+        let (sink, rx) = ChannelSink::new();
+        sink.send(AgUiEvent::RunStarted {
+            thread_id: "t".into(),
+            run_id: "r".into(),
+        })
+        .unwrap();
+        sink.send(AgUiEvent::RunFinished {
+            thread_id: "t".into(),
+            run_id: "r".into(),
+        })
+        .unwrap();
+        drop(sink); // close the sender so the stream terminates
+
+        let mut stream = receiver_to_sse_stream(rx);
+        let first = stream.next().await.unwrap().unwrap();
+        assert!(first.contains("RUN_STARTED"));
+        let second = stream.next().await.unwrap().unwrap();
+        assert!(second.contains("RUN_FINISHED"));
+        assert!(stream.next().await.is_none());
     }
 }

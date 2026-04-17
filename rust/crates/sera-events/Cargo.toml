@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 sera-types.workspace = true
+sera-errors.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

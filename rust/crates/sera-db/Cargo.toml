@@ -8,6 +8,7 @@ integration = []
 
 [dependencies]
 sera-types.workspace = true
+sera-errors.workspace = true
 rusqlite.workspace = true
 sqlx.workspace = true
 serde.workspace = true

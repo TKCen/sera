@@ -1,5 +1,7 @@
 //! Database error types.
 
+use sera_errors::{SeraError, SeraErrorCode};
+
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     #[error("database error: {0}")]
@@ -14,6 +16,18 @@ pub enum DbError {
     Conflict(String),
     #[error("integrity error: {0}")]
     Integrity(String),
+}
+
+impl From<DbError> for SeraError {
+    fn from(err: DbError) -> Self {
+        let code = match &err {
+            DbError::Sqlx(_) => SeraErrorCode::Internal,
+            DbError::NotFound { .. } => SeraErrorCode::NotFound,
+            DbError::Conflict(_) => SeraErrorCode::AlreadyExists,
+            DbError::Integrity(_) => SeraErrorCode::InvalidInput,
+        };
+        SeraError::with_source(code, err.to_string(), err)
+    }
 }
 
 #[cfg(test)]
@@ -115,5 +129,33 @@ mod tests {
         };
         let debug_str = format!("{err:?}");
         assert!(debug_str.contains("NotFound"));
+    }
+
+    #[test]
+    fn db_error_not_found_maps_to_not_found() {
+        let err = DbError::NotFound { entity: "Agent", key: "id", value: "x".to_string() };
+        let e: SeraError = err.into();
+        assert_eq!(e.code, SeraErrorCode::NotFound);
+    }
+
+    #[test]
+    fn db_error_conflict_maps_to_already_exists() {
+        let err = DbError::Conflict("dup key".to_string());
+        let e: SeraError = err.into();
+        assert_eq!(e.code, SeraErrorCode::AlreadyExists);
+    }
+
+    #[test]
+    fn db_error_integrity_maps_to_invalid_input() {
+        let err = DbError::Integrity("fk violation".to_string());
+        let e: SeraError = err.into();
+        assert_eq!(e.code, SeraErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn db_error_message_preserved_in_sera_error() {
+        let err = DbError::Conflict("unique constraint on (name)".to_string());
+        let e: SeraError = err.into();
+        assert!(e.message.contains("unique constraint on (name)"));
     }
 }

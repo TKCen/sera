@@ -4326,6 +4326,7 @@ dependencies = [
  "jsonwebtoken",
  "rand 0.8.5",
  "sera-db",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4396,6 +4397,7 @@ dependencies = [
  "hex",
  "rand 0.8.5",
  "rusqlite",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4423,6 +4425,7 @@ version = "0.1.0"
 dependencies = [
  "jsonwebtoken",
  "reqwest 0.12.28",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",

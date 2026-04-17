@@ -709,6 +709,58 @@ async fn transcript_handler(
     Ok(Json(entries))
 }
 
+async fn auth_me_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // In autonomous mode (no api_key configured) return a static principal.
+    // In keyed mode, validate and return the same static shape with the key as sub.
+    if let Some(ref expected) = state.api_key {
+        let header_val = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+        match header_val {
+            Some(token) if token == expected => {}
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "id": "autonomous",
+        "principal_id": "autonomous",
+        "sub": "autonomous",
+        "roles": ["admin"],
+        "mode": "autonomous"
+    })))
+}
+
+async fn agent_by_id_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    // `id` may be a name (autonomous mode has no UUIDs).
+    let agent_names = state.manifests.agent_names();
+    let name: &str = agent_names
+        .iter()
+        .copied()
+        .find(|n| *n == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let spec = state.manifests.agent_spec(name).ok().flatten();
+    let info = serde_json::json!({
+        "name": name,
+        "provider": spec.as_ref().map(|s| s.provider.as_str()).unwrap_or(""),
+        "model": spec.as_ref().and_then(|s| s.model.as_deref()),
+        "has_tools": spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
+    });
+
+    Ok(Json(info))
+}
+
 /// Internal state machine for SSE streaming.
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
@@ -2001,8 +2053,11 @@ async fn shutdown_signal() {
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
+        .route("/api/health", get(health_handler))
+        .route("/api/auth/me", get(auth_me_handler))
         .route("/api/chat", post(chat_handler))
         .route("/api/agents", get(agents_handler))
+        .route("/api/agents/{id}", get(agent_by_id_handler))
         .route("/api/sessions", get(sessions_handler))
         .route("/api/sessions/{id}/transcript", get(transcript_handler))
         .with_state(state)

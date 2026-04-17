@@ -392,6 +392,104 @@ async fn agent_run_401_gives_meaningful_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Autonomous gateway shape tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn agent_list_autonomous_shape_renders_table() {
+    // The autonomous gateway returns {name, provider, model, has_tools} — no id/template_ref/status.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/agents"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "name": "sera",
+                "provider": "lm-studio",
+                "model": "qwen/qwen3.6-35b-a3b",
+                "has_tools": true
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let store = seeded_store("test-token");
+    let cmd = AgentListCommand::with_store(store);
+    let a = args(&[("endpoint", &server.uri())]);
+    let result = cmd.execute(a, &CommandContext::new()).await;
+    assert!(result.is_ok(), "agent list (autonomous shape) should succeed: {:?}", result);
+
+    let data = result.unwrap().data;
+    let arr = data.as_array().expect("data should be array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["name"], "sera");
+    assert_eq!(arr[0]["provider"], "lm-studio");
+    assert_eq!(arr[0]["has_tools"], true);
+}
+
+#[tokio::test]
+async fn agent_show_autonomous_shape_renders_detail() {
+    // GET /api/agents/sera returns autonomous shape.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/agents/sera"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "name": "sera",
+            "provider": "lm-studio",
+            "model": "qwen/qwen3.6-35b-a3b",
+            "has_tools": true
+        })))
+        .mount(&server)
+        .await;
+
+    let store = seeded_store("test-token");
+    let cmd = AgentShowCommand::with_store(store);
+    let a = args(&[("endpoint", &server.uri()), ("id", "sera")]);
+    let result = cmd.execute(a, &CommandContext::new()).await;
+    assert!(result.is_ok(), "agent show (autonomous shape) should succeed: {:?}", result);
+
+    let data = result.unwrap().data;
+    assert_eq!(data["name"], "sera");
+    assert_eq!(data["provider"], "lm-studio");
+    assert_eq!(data["has_tools"], true);
+}
+
+#[tokio::test]
+async fn agent_run_autonomous_response_shape() {
+    // Autonomous gateway returns {response, session_id, usage} — not {reply, ...}.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "response": "Hello from autonomous mode!",
+            "session_id": "sess-auto-001",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let store = seeded_store("test-token");
+    let cmd = AgentRunCommand::with_store(store);
+    let a = args(&[
+        ("endpoint", &server.uri()),
+        ("id", "sera"),
+        ("prompt", "hello"),
+    ]);
+    let result = cmd.execute(a, &CommandContext::new()).await;
+    assert!(result.is_ok(), "agent run (autonomous response shape) should succeed: {:?}", result);
+
+    let data = result.unwrap().data;
+    assert_eq!(data["response"], "Hello from autonomous mode!");
+    assert_eq!(data["session_id"], "sess-auto-001");
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 

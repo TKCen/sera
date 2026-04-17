@@ -175,17 +175,32 @@ fn print_agents_table(agents: &serde_json::Value) {
 
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
-    table.set_header(["ID", "NAME", "TEMPLATE", "STATUS", "CIRCLE"]);
+    table.set_header(["NAME", "PROVIDER/TEMPLATE", "MODEL/STATUS", "TOOLS/CIRCLE"]);
 
     if let Some(arr) = agents.as_array() {
         for agent in arr {
-            table.add_row([
-                field_str(agent, "id"),
-                field_str(agent, "name"),
-                field_str(agent, "template_ref"),
-                field_str(agent, "status"),
-                field_str(agent, "circle"),
-            ]);
+            // Support both the autonomous gateway shape {name, provider, model, has_tools}
+            // and the full gateway shape {id, name, template_ref, status, circle}.
+            let name = field_str(agent, "name");
+            let provider_or_template = if !field_str(agent, "provider").is_empty() {
+                field_str(agent, "provider")
+            } else {
+                field_str(agent, "template_ref")
+            };
+            let model_or_status = if !field_str(agent, "model").is_empty() {
+                field_str(agent, "model")
+            } else {
+                field_str(agent, "status")
+            };
+            let tools_or_circle = {
+                // has_tools is a bool — convert to "yes"/"no" if present.
+                if let Some(ht) = agent.get("has_tools") {
+                    if ht.as_bool().unwrap_or(false) { "yes" } else { "no" }
+                } else {
+                    field_str(agent, "circle")
+                }
+            };
+            table.add_row([name, provider_or_template, model_or_status, tools_or_circle]);
         }
     }
 
@@ -327,33 +342,68 @@ impl Command for AgentShowCommand {
 }
 
 fn print_agent_detail(agent: &serde_json::Value) {
-    println!("ID:             {}", field_str(agent, "id"));
     println!("Name:           {}", field_str(agent, "name"));
-    println!(
-        "Display name:   {}",
-        field_str(agent, "display_name")
-    );
-    println!("Template:       {}", field_str(agent, "template_ref"));
-    println!("Status:         {}", field_str(agent, "status"));
-    println!(
-        "Lifecycle mode: {}",
-        field_str(agent, "lifecycle_mode")
-    );
-    println!("Circle:         {}", field_str(agent, "circle"));
-    println!(
-        "Workspace:      {}",
-        field_str(agent, "workspace_path")
-    );
-    println!(
-        "Container:      {}",
-        field_str(agent, "container_id")
-    );
-    println!(
-        "Last heartbeat: {}",
-        field_str(agent, "last_heartbeat_at")
-    );
-    println!("Created:        {}", field_str(agent, "created_at"));
-    println!("Updated:        {}", field_str(agent, "updated_at"));
+
+    // Full gateway shape fields (may be absent in autonomous mode).
+    let id = field_str(agent, "id");
+    if !id.is_empty() {
+        println!("ID:             {id}");
+    }
+    let display_name = field_str(agent, "display_name");
+    if !display_name.is_empty() {
+        println!("Display name:   {display_name}");
+    }
+    let template_ref = field_str(agent, "template_ref");
+    if !template_ref.is_empty() {
+        println!("Template:       {template_ref}");
+    }
+    let status = field_str(agent, "status");
+    if !status.is_empty() {
+        println!("Status:         {status}");
+    }
+
+    // Autonomous gateway shape fields.
+    let provider = field_str(agent, "provider");
+    if !provider.is_empty() {
+        println!("Provider:       {provider}");
+    }
+    let model = field_str(agent, "model");
+    if !model.is_empty() {
+        println!("Model:          {model}");
+    }
+    if let Some(ht) = agent.get("has_tools") {
+        println!("Has tools:      {}", if ht.as_bool().unwrap_or(false) { "yes" } else { "no" });
+    }
+
+    // Remaining full gateway fields.
+    let lifecycle_mode = field_str(agent, "lifecycle_mode");
+    if !lifecycle_mode.is_empty() {
+        println!("Lifecycle mode: {lifecycle_mode}");
+    }
+    let circle = field_str(agent, "circle");
+    if !circle.is_empty() {
+        println!("Circle:         {circle}");
+    }
+    let workspace_path = field_str(agent, "workspace_path");
+    if !workspace_path.is_empty() {
+        println!("Workspace:      {workspace_path}");
+    }
+    let container_id = field_str(agent, "container_id");
+    if !container_id.is_empty() {
+        println!("Container:      {container_id}");
+    }
+    let last_heartbeat_at = field_str(agent, "last_heartbeat_at");
+    if !last_heartbeat_at.is_empty() {
+        println!("Last heartbeat: {last_heartbeat_at}");
+    }
+    let created_at = field_str(agent, "created_at");
+    if !created_at.is_empty() {
+        println!("Created:        {created_at}");
+    }
+    let updated_at = field_str(agent, "updated_at");
+    if !updated_at.is_empty() {
+        println!("Updated:        {updated_at}");
+    }
 
     if let Some(cfg) = agent.get("resolved_config").filter(|v| !v.is_null()) {
         println!(
@@ -475,9 +525,10 @@ impl Command for AgentRunCommand {
         let client = build_client_with_token(&token)
             .map_err(|e| CommandError::Execution(e.to_string()))?;
 
-        // POST /api/chat — use agentInstanceId; gateway falls back to agentName
-        // if the id is not a UUID.
+        // POST /api/chat — send both `agent` (autonomous gateway) and
+        // `agentInstanceId` (full gateway) so the payload works against either.
         let payload = json!({
+            "agent": id,
             "agentInstanceId": id,
             "message": prompt,
             "stream": false,
@@ -536,8 +587,11 @@ fn print_run_output(body: &serde_json::Value) {
         println!("--- end thoughts ---");
     }
 
-    // Print the assistant reply
-    if let Some(reply) = body.get("reply").and_then(|r| r.as_str()) {
+    // Print the assistant reply — support both full gateway (`reply`) and
+    // autonomous gateway (`response`) field names.
+    if let Some(reply) = body.get("reply").and_then(|r| r.as_str())
+        .or_else(|| body.get("response").and_then(|r| r.as_str()))
+    {
         println!("{reply}");
     } else if let Some(thought) = body.get("thought").and_then(|t| t.as_str()) {
         // May be a status message (e.g. "queued behind active turn")

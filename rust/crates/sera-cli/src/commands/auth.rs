@@ -145,8 +145,11 @@ impl Command for LoginCommand {
             .save(&token)
             .map_err(|e| CommandError::Execution(format!("failed to store token: {e}")))?;
 
-        let sub = body
-            .get("sub")
+        // Support both the full gateway shape (`sub`) and the autonomous shape
+        // (`id`, `principal_id`). Use the first non-empty value found.
+        let sub = body.get("sub")
+            .or_else(|| body.get("id"))
+            .or_else(|| body.get("principal_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         println!("Logged in as: {sub}");
@@ -262,8 +265,11 @@ impl Command for WhoamiCommand {
             .await
             .map_err(|e| CommandError::Execution(format!("failed to parse response: {e}")))?;
 
-        let sub = body
-            .get("sub")
+        // Support both the full gateway shape (`sub`) and the autonomous shape
+        // (`id`, `principal_id`). Use the first non-empty value found.
+        let sub = body.get("sub")
+            .or_else(|| body.get("id"))
+            .or_else(|| body.get("principal_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         let roles = body

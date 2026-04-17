@@ -157,6 +157,70 @@ async fn whoami_errors_on_401() {
 }
 
 // ---------------------------------------------------------------------------
+// Autonomous gateway shape tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn whoami_autonomous_shape_returns_principal() {
+    // Autonomous gateway returns {id, principal_id, sub, roles, mode} — not just {sub}.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/auth/me"))
+        .and(header("authorization", "Bearer dev-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "autonomous",
+            "principal_id": "autonomous",
+            "sub": "autonomous",
+            "roles": ["admin"],
+            "mode": "autonomous"
+        })))
+        .mount(&server)
+        .await;
+
+    let store = Arc::new(MockTokenStore::new());
+    store.save("dev-key").unwrap();
+
+    let cmd = WhoamiCommand::with_store(store.clone());
+    let a = args(&[("endpoint", &server.uri())]);
+    let result = cmd.execute(a, &CommandContext::new()).await;
+    assert!(result.is_ok(), "whoami (autonomous shape) should succeed: {:?}", result);
+    let data = result.unwrap().data;
+    // sub field must be present (extracted from id/principal_id/sub fallback chain)
+    assert_eq!(data["sub"], "autonomous");
+    assert_eq!(data["mode"], "autonomous");
+}
+
+#[tokio::test]
+async fn login_autonomous_shape_stores_token_and_extracts_id() {
+    // Autonomous gateway returns id instead of sub.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/auth/me"))
+        .and(header("authorization", "Bearer sera_bootstrap_dev_123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "autonomous",
+            "principal_id": "autonomous",
+            "roles": ["admin"],
+            "mode": "autonomous"
+        })))
+        .mount(&server)
+        .await;
+
+    let store = Arc::new(MockTokenStore::new());
+    let cmd = LoginCommand::with_store(store.clone());
+    let a = args(&[
+        ("endpoint", &server.uri()),
+        ("token", "sera_bootstrap_dev_123"),
+    ]);
+    let result = cmd.execute(a, &CommandContext::new()).await;
+    assert!(result.is_ok(), "login (autonomous shape) should succeed: {:?}", result);
+    assert_eq!(store.peek().as_deref(), Some("sera_bootstrap_dev_123"));
+    // sub in result should be extracted from id field
+    let data = result.unwrap().data;
+    assert_eq!(data["sub"], "autonomous");
+}
+
+// ---------------------------------------------------------------------------
 // LogoutCommand tests
 // ---------------------------------------------------------------------------
 

@@ -8,10 +8,6 @@ name = "sera_gateway"
 path = "src/lib.rs"
 
 [[bin]]
-name = "sera-gateway"
-path = "src/main.rs"
-
-[[bin]]
 name = "sera"
 path = "src/bin/sera.rs"
 
@@ -42,6 +38,7 @@ reqwest.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
@@ -81,3 +78,5 @@ sera-testing.workspace = true
 insta.workspace = true
 tempfile.workspace = true
 async-stream.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true

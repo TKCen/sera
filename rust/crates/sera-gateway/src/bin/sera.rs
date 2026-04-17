@@ -23,6 +23,8 @@ use futures_util::stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 use sera_config::manifest_loader::{
@@ -922,7 +924,7 @@ async fn send_error_to_discord(state: &AppState, channel_id: &str, error: &str) 
     if let Some(ref dc) = state.discord
         && let Err(e) = dc.send_message(channel_id, &formatted).await
     {
-        tracing::error!("Failed to send error to Discord: {e}");
+        tracing::error!(error = ?e, channel_id = %channel_id, "Discord send_message failed");
     }
 }
 
@@ -1264,7 +1266,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     // Send the reply back to Discord via the shared connector.
     if let Some(ref dc) = state.discord {
         if let Err(e) = dc.send_message(&msg.channel_id, &result.reply).await {
-            tracing::error!("Failed to send Discord reply: {e}");
+            tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
         }
     } else {
         tracing::warn!("No Discord connector available to send reply");
@@ -1328,7 +1330,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             if let Some(ref dc) = state.discord
                 && let Err(e) = dc.send_message(&msg.channel_id, &follow_up.reply).await
             {
-                tracing::error!("Failed to send Discord steer response: {e}");
+                tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
             }
             continue;
         }
@@ -1365,7 +1367,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         if let Some(ref dc) = state.discord
             && let Err(e) = dc.send_message(&msg.channel_id, &follow_up.reply).await
         {
-            tracing::error!("Failed to send Discord follow-up reply: {e}");
+            tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
         }
     }
 
@@ -1562,16 +1564,62 @@ spec:
     Ok(())
 }
 
+// ── Logging initialisation ───────────────────────────────────────────────────
+
+/// Result of `init_file_logging` — keeps the non-blocking writer guard alive
+/// so the background flusher thread is not dropped until the process exits.
+pub struct LogGuard {
+    /// Dropping this flushes and shuts down the background log-writer thread.
+    _file_guard: tracing_appender::non_blocking::WorkerGuard,
+}
+
+/// Initialise tracing with **both** a stdout layer and a rolling daily file
+/// appender.
+///
+/// Environment variables:
+/// - `SERA_LOG_DIR`   — directory for log files (default: `./logs`)
+/// - `SERA_LOG_LEVEL` — tracing filter string (default: `info`)
+///
+/// Returns a [`LogGuard`] that **must be held** in the caller's scope (typically
+/// `main`) until the process exits.  Dropping it early will cause log lines to
+/// be discarded silently.
+///
+/// # Panics
+///
+/// Panics only if the global tracing subscriber has already been set (i.e. this
+/// is called twice in the same process).  Tests must not call this function;
+/// use `tracing_subscriber::fmt().try_init()` in test harnesses instead.
+pub fn init_file_logging() -> LogGuard {
+    let log_dir = std::env::var("SERA_LOG_DIR").unwrap_or_else(|_| "./logs".to_owned());
+    let log_level = std::env::var("SERA_LOG_LEVEL").unwrap_or_else(|_| "info".to_owned());
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "sera.log");
+    let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&log_level));
+
+    let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(non_blocking);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+
+    LogGuard { _file_guard: file_guard }
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // Initialize tracing — stdout + rolling daily file appender.
+    // The guard must stay alive until the process exits so logs are flushed.
+    let _log_guard = init_file_logging();
 
     let cli = Cli::parse();
 

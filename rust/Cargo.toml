@@ -65,6 +65,7 @@ bollard = "0.18"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # WASM runtime
 wasmtime = "26"

@@ -318,5 +318,118 @@ mod tests {
         assert_eq!(b.as_bytes(), &[1, 2, 3]);
         assert_eq!(b.clone().into_vec(), vec![1, 2, 3]);
     }
+
+    // --- classify_oci_error tests ---
+
+    #[test]
+    fn classify_authentication_failure() {
+        use oci_distribution::errors::OciDistributionError;
+        let err = classify_oci_error(OciDistributionError::AuthenticationFailure(
+            "token expired".into(),
+        ));
+        assert!(matches!(err, OciError::Unauthorized(_)));
+    }
+
+    #[test]
+    fn classify_image_manifest_not_found() {
+        use oci_distribution::errors::OciDistributionError;
+        let err = classify_oci_error(OciDistributionError::ImageManifestNotFoundError(
+            "ghcr.io/x/y:1".into(),
+        ));
+        assert!(matches!(err, OciError::NotFound(_)));
+    }
+
+    #[test]
+    fn classify_io_error() {
+        use oci_distribution::errors::OciDistributionError;
+        let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe");
+        let err = classify_oci_error(OciDistributionError::IoError(io_err));
+        assert!(matches!(err, OciError::Io(_)));
+    }
+
+    #[test]
+    fn classify_heuristic_not_found_message() {
+        use oci_distribution::errors::OciDistributionError;
+        // A generic error whose message contains "not found" → NotFound.
+        let err = classify_oci_error(OciDistributionError::GenericError(Some(
+            "repository not found".into(),
+        )));
+        assert!(matches!(err, OciError::NotFound(_)));
+    }
+
+    #[test]
+    fn classify_heuristic_404_message() {
+        use oci_distribution::errors::OciDistributionError;
+        let err = classify_oci_error(OciDistributionError::GenericError(Some(
+            "HTTP 404 from registry".into(),
+        )));
+        assert!(matches!(err, OciError::NotFound(_)));
+    }
+
+    #[test]
+    fn classify_heuristic_unauthorized_message() {
+        use oci_distribution::errors::OciDistributionError;
+        let err = classify_oci_error(OciDistributionError::GenericError(Some(
+            "unauthorized: access denied".into(),
+        )));
+        assert!(matches!(err, OciError::Unauthorized(_)));
+    }
+
+    #[test]
+    fn classify_heuristic_denied_message() {
+        use oci_distribution::errors::OciDistributionError;
+        let err = classify_oci_error(OciDistributionError::GenericError(Some(
+            "denied: requested access to resource is denied".into(),
+        )));
+        assert!(matches!(err, OciError::Unauthorized(_)));
+    }
+
+    #[test]
+    fn classify_generic_transport_fallback() {
+        use oci_distribution::errors::OciDistributionError;
+        let err = classify_oci_error(OciDistributionError::GenericError(Some(
+            "connection reset by peer".into(),
+        )));
+        assert!(matches!(err, OciError::Transport(_)));
+    }
+
+    // --- multi-layer manifest: correct layer is selected ---
+
+    #[test]
+    fn finds_correct_layer_among_multiple() {
+        use oci_distribution::manifest::OciImageManifest;
+        let manifest = OciManifest::Image(OciImageManifest {
+            schema_version: 2,
+            media_type: Some("application/vnd.oci.image.manifest.v1+json".into()),
+            config: descriptor("application/vnd.oci.image.config.v1+json"),
+            layers: vec![
+                descriptor("application/vnd.oci.image.layer.v1.tar"),
+                descriptor(PLUGIN_MANIFEST_V1_YAML),
+                descriptor("application/vnd.sera.plugin.binary"),
+            ],
+            artifact_type: None,
+            annotations: None,
+        });
+        let layer = find_plugin_manifest_layer(&manifest).unwrap();
+        assert_eq!(layer.media_type, PLUGIN_MANIFEST_V1_YAML);
+    }
+
+    // --- OciPuller::default() ---
+
+    #[test]
+    fn default_puller_equals_new() {
+        // Default::default() should behave the same as new().
+        let p = OciPuller::default();
+        assert!(matches!(p.registry_auth(), RegistryAuth::Anonymous));
+    }
+
+    // --- PluginManifestBytes equality ---
+
+    #[test]
+    fn plugin_manifest_bytes_eq() {
+        let a = PluginManifestBytes(vec![10, 20]);
+        let b = PluginManifestBytes(vec![10, 20]);
+        assert_eq!(a, b);
+    }
 }
 

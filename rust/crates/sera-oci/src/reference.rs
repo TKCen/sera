@@ -276,4 +276,90 @@ mod tests {
         let r = OciReference::parse("my-plugin:1.0").unwrap();
         assert_eq!(r.to_string(), format!("{DEFAULT_REGISTRY}/my-plugin:1.0"));
     }
+
+    // --- additional reference parsing tests ---
+
+    #[test]
+    fn parses_host_name_no_dot_uses_default_registry() {
+        // A single segment without `.` or `:` is treated as a repository name,
+        // not a registry, so DEFAULT_REGISTRY is prepended.
+        let r = OciReference::parse("myname:latest").unwrap();
+        assert_eq!(r.registry, DEFAULT_REGISTRY);
+        assert_eq!(r.repository, "myname");
+        assert_eq!(r.tag.as_deref(), Some("latest"));
+    }
+
+    #[test]
+    fn parses_host_slash_name_without_dot_uses_default_registry() {
+        // "org/name" — "org" has no dot/colon, so it's treated as part of the
+        // repository path under DEFAULT_REGISTRY.
+        let r = OciReference::parse("org/name:v2").unwrap();
+        assert_eq!(r.registry, DEFAULT_REGISTRY);
+        assert_eq!(r.repository, "org/name");
+        assert_eq!(r.tag.as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn parses_localhost_with_port() {
+        let r = OciReference::parse("localhost:5000/myapp:beta").unwrap();
+        assert_eq!(r.registry, "localhost:5000");
+        assert_eq!(r.repository, "myapp");
+        assert_eq!(r.tag.as_deref(), Some("beta"));
+    }
+
+    #[test]
+    fn parses_tag_with_underscores_and_dots() {
+        let r = OciReference::parse("ghcr.io/org/app:1.2.3_rc1").unwrap();
+        assert_eq!(r.tag.as_deref(), Some("1.2.3_rc1"));
+    }
+
+    #[test]
+    fn parses_non_sha256_digest_algorithm() {
+        // The spec allows any algorithm in the `algo:hex` form; we only
+        // validate the structure, not the algorithm name.
+        let r = OciReference::parse("ghcr.io/org/app@sha512:abcd1234").unwrap();
+        assert_eq!(r.digest.as_deref(), Some("sha512:abcd1234"));
+        assert!(r.tag.is_none());
+    }
+
+    #[test]
+    fn bare_ref_without_tag_or_digest_succeeds() {
+        // Allowed — callers pulling a tagless ref see the registry's default.
+        let r = OciReference::parse("ghcr.io/org/app").unwrap();
+        assert_eq!(r.registry, "ghcr.io");
+        assert_eq!(r.repository, "org/app");
+        assert!(r.tag.is_none());
+        assert!(r.digest.is_none());
+    }
+
+    #[test]
+    fn digest_missing_algo_is_rejected() {
+        // `@:hex` — empty algorithm segment.
+        let err = OciReference::parse("ghcr.io/org/app@:deadbeef").unwrap_err();
+        assert!(matches!(err, OciError::InvalidReference(_)));
+    }
+
+    #[test]
+    fn digest_missing_hex_is_rejected() {
+        // `@sha256:` — empty hex segment.
+        let err = OciReference::parse("ghcr.io/org/app@sha256:").unwrap_err();
+        assert!(matches!(err, OciError::InvalidReference(_)));
+    }
+
+    #[test]
+    fn registry_with_port_and_digest() {
+        let r = OciReference::parse("registry.local:5000/team/app@sha256:cafebabe").unwrap();
+        assert_eq!(r.registry, "registry.local:5000");
+        assert_eq!(r.repository, "team/app");
+        assert!(r.tag.is_none());
+        assert_eq!(r.digest.as_deref(), Some("sha256:cafebabe"));
+    }
+
+    #[test]
+    fn canonical_output_includes_both_tag_and_digest() {
+        let r = OciReference::parse("ghcr.io/a/b:1.0@sha256:deadbeef").unwrap();
+        let c = r.to_canonical();
+        assert!(c.contains(":1.0"), "tag missing from canonical");
+        assert!(c.contains("@sha256:deadbeef"), "digest missing from canonical");
+    }
 }

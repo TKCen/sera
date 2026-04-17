@@ -84,4 +84,27 @@ mod tests {
         let err: SeraError = OciError::MissingManifestLayer.into();
         assert_eq!(err.code, SeraErrorCode::NotFound);
     }
+
+    #[test]
+    fn auth_maps_to_unauthorized() {
+        let err: SeraError = OciError::Auth("bad config".into()).into();
+        assert_eq!(err.code, SeraErrorCode::Unauthorized);
+    }
+
+    #[test]
+    fn io_maps_to_internal() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let err: SeraError = OciError::Io(io_err).into();
+        assert_eq!(err.code, SeraErrorCode::Internal);
+    }
+
+    #[test]
+    fn display_messages_are_meaningful() {
+        assert!(OciError::InvalidReference("x".into()).to_string().contains("x"));
+        assert!(OciError::Transport("net".into()).to_string().contains("net"));
+        assert!(OciError::NotFound("img".into()).to_string().contains("img"));
+        assert!(OciError::Unauthorized("tok".into()).to_string().contains("tok"));
+        assert!(!OciError::MissingManifestLayer.to_string().is_empty());
+        assert!(OciError::Auth("cfg".into()).to_string().contains("cfg"));
+    }
 }

@@ -303,4 +303,121 @@ mod tests {
         let out = base64_decode_standard("aGVsbG86d29ybGQ=").unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "hello:world");
     }
+
+    // --- additional auth tests ---
+
+    #[test]
+    fn resolves_credential_via_https_prefixed_key() {
+        // Some docker configs store keys as "https://ghcr.io".
+        let body = r#"{
+          "auths": {
+            "https://ghcr.io": {
+              "username": "dave",
+              "password": "pass123"
+            }
+          }
+        }"#;
+        let cfg = load_docker_config_from_str(body).unwrap();
+        let cred = credential_for("ghcr.io", &cfg).expect("should resolve via https prefix");
+        assert_eq!(cred.username, "dave");
+    }
+
+    #[test]
+    fn resolves_credential_via_https_slash_prefixed_key() {
+        // Keys stored as "https://ghcr.io/".
+        let body = r#"{
+          "auths": {
+            "https://ghcr.io/": {
+              "username": "eve",
+              "password": "secret"
+            }
+          }
+        }"#;
+        let cfg = load_docker_config_from_str(body).unwrap();
+        let cred = credential_for("ghcr.io", &cfg).expect("should resolve via https/ prefix");
+        assert_eq!(cred.username, "eve");
+    }
+
+    #[test]
+    fn resolves_index_docker_io_alias_for_index_docker_io_key() {
+        // When the key is already "index.docker.io" it should be found via verbatim match.
+        let body = r#"{
+          "auths": {
+            "index.docker.io": {
+              "username": "frank",
+              "password": "pw"
+            }
+          }
+        }"#;
+        let cfg = load_docker_config_from_str(body).unwrap();
+        let cred = credential_for("index.docker.io", &cfg).expect("verbatim match");
+        assert_eq!(cred.username, "frank");
+    }
+
+    #[test]
+    fn entry_with_only_username_no_password_returns_none() {
+        // An entry with username but no password cannot produce a credential.
+        let body = r#"{
+          "auths": {
+            "example.com": {
+              "username": "alice"
+            }
+          }
+        }"#;
+        let cfg = load_docker_config_from_str(body).unwrap();
+        assert!(credential_for("example.com", &cfg).is_none());
+    }
+
+    #[test]
+    fn entry_with_only_password_no_username_returns_none() {
+        // An entry with password but no username cannot produce a credential.
+        let body = r#"{
+          "auths": {
+            "example.com": {
+              "password": "hunter2"
+            }
+          }
+        }"#;
+        let cfg = load_docker_config_from_str(body).unwrap();
+        assert!(credential_for("example.com", &cfg).is_none());
+    }
+
+    #[test]
+    fn base64_decode_rejects_invalid_character() {
+        // `!` is not in the RFC 4648 alphabet.
+        assert!(base64_decode_standard("YWxp!2U=").is_none());
+    }
+
+    #[test]
+    fn base64_decode_rejects_wrong_padding_length() {
+        // Input not a multiple of 4 characters is invalid.
+        assert!(base64_decode_standard("abc").is_none());
+    }
+
+    #[test]
+    fn auth_blob_without_colon_returns_none_credential() {
+        // A base64 blob that decodes to a string with no `:` cannot be split
+        // into user:password, so no credential should be returned.
+        // base64("nocolon") = "bm9jb2xvbg=="
+        let body = r#"{
+          "auths": {
+            "example.com": {
+              "auth": "bm9jb2xvbg=="
+            }
+          }
+        }"#;
+        let cfg = load_docker_config_from_str(body).unwrap();
+        assert!(credential_for("example.com", &cfg).is_none());
+    }
+
+    #[test]
+    fn registry_credential_eq() {
+        let a = RegistryCredential {
+            username: "u".into(),
+            password: "p".into(),
+            identitytoken: None,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
 }

@@ -36,6 +36,20 @@ pub struct RuntimeConfig {
     /// milliseconds. Past this budget the enricher degrades silently to an
     /// empty segment list.
     pub semantic_enrichment_timeout_ms: u64,
+    /// When `true`, `TraitToolRegistry::execute` runs a per-tool PDP check via
+    /// `ToolContext::authz` before the `ToolPolicy` check.
+    ///
+    /// Defaults to `false` — safe rollout kill-switch.  Set
+    /// `TOOL_AUTHZ_ENABLED=true` (or `=1`) to enable enforcement.
+    pub tool_authz_enabled: bool,
+    /// Optional inline role → action-kind grants for `RoleBasedAuthzProvider`.
+    ///
+    /// Format: `TOOL_AUTHZ_ROLES=<role>:<action_kind>[,<action_kind>...][;<role>:...]`
+    ///
+    /// Example: `TOOL_AUTHZ_ROLES=operator:tool_call,read;admin:tool_call,read,write,admin`
+    ///
+    /// When absent, an allow-all `DefaultAuthzProvider` stub is installed.
+    pub tool_authz_roles: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -85,6 +99,10 @@ impl RuntimeConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(150),
+            tool_authz_enabled: std::env::var("TOOL_AUTHZ_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            tool_authz_roles: std::env::var("TOOL_AUTHZ_ROLES").ok(),
         }
     }
 }

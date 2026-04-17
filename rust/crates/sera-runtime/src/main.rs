@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use clap::Parser;
+use sera_auth::authz::{ActionKind, AuthzProviderAdapter, RoleBasedAuthzProvider};
 use sera_runtime::config::RuntimeConfig;
 use sera_runtime::context_engine::pipeline::ContextPipeline;
 use sera_runtime::default_runtime::DefaultRuntime;
@@ -19,7 +20,9 @@ use sera_runtime::health;
 use sera_runtime::llm_client::LlmClient;
 use sera_runtime::tools::TraitToolRegistry;
 use sera_runtime::tools::dispatcher::RegistryDispatcher;
+use sera_types::principal::PrincipalId;
 use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
+use sera_types::tool::AuthzProviderHandle;
 use serde::{Deserialize, Serialize};
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -173,6 +176,90 @@ enum EventMsg {
     Error { code: String, message: String },
 }
 
+// ── Authz provider construction ──────────────────────────────────────────────
+
+/// Build an [`AuthzProviderHandle`] from config.
+///
+/// When `config.tool_authz_roles` is set, parses a compact role definition
+/// string and constructs a [`RoleBasedAuthzProvider`] wrapped in an
+/// [`AuthzProviderAdapter`]. Format:
+///
+/// ```text
+/// <role>:<kind>[,<kind>...][;<role>:...]
+/// ```
+///
+/// Supported `<kind>` names (case-insensitive): `read`, `write`, `execute`,
+/// `admin`, `tool_call`, `session_op`, `memory_access`, `config_change`,
+/// `propose_change`, `approve_change`.
+///
+/// Principal assignments are not parsed here — they are set per-agent via
+/// `TOOL_AUTHZ_PRINCIPALS` (future bead). For now the provider is useful for
+/// role-grant inspection and tests that inject principals directly.
+///
+/// When `tool_authz_roles` is `None`, returns the allow-all default stub.
+fn build_authz_provider(config: &RuntimeConfig) -> Arc<dyn AuthzProviderHandle> {
+    let Some(roles_str) = &config.tool_authz_roles else {
+        return Arc::new(sera_types::tool::DefaultAuthzProviderStub);
+    };
+
+    let mut builder = RoleBasedAuthzProvider::builder();
+
+    for role_clause in roles_str.split(';') {
+        let role_clause = role_clause.trim();
+        if role_clause.is_empty() {
+            continue;
+        }
+        let Some((role, kinds_str)) = role_clause.split_once(':') else {
+            tracing::warn!(
+                "TOOL_AUTHZ_ROLES: skipping malformed clause (no ':'): {role_clause}"
+            );
+            continue;
+        };
+        let role = role.trim();
+        let kinds: Vec<ActionKind> = kinds_str
+            .split(',')
+            .filter_map(|k| parse_action_kind(k.trim()))
+            .collect();
+        builder = builder.grant(role, kinds);
+    }
+
+    // If no agent-id is available here we still produce a valid provider;
+    // principal assignments are wired at call time or via future config.
+    //
+    // Assign the runtime's own agent-id as a full-access principal so the
+    // default single-agent deployment works without additional config.
+    if let Ok(agent_id) = std::env::var("AGENT_ID")
+        && !agent_id.is_empty()
+    {
+        builder = builder.assign(
+            PrincipalId::new(format!("agent:{agent_id}")),
+            ["operator"],
+        );
+    }
+
+    Arc::new(AuthzProviderAdapter::new(builder.build()))
+}
+
+/// Parse a single action-kind name (case-insensitive).
+fn parse_action_kind(s: &str) -> Option<ActionKind> {
+    match s.to_ascii_lowercase().as_str() {
+        "read" => Some(ActionKind::Read),
+        "write" => Some(ActionKind::Write),
+        "execute" => Some(ActionKind::Execute),
+        "admin" => Some(ActionKind::Admin),
+        "tool_call" => Some(ActionKind::ToolCall),
+        "session_op" => Some(ActionKind::SessionOp),
+        "memory_access" => Some(ActionKind::MemoryAccess),
+        "config_change" => Some(ActionKind::ConfigChange),
+        "propose_change" => Some(ActionKind::ProposeChange),
+        "approve_change" => Some(ActionKind::ApproveChange),
+        other => {
+            tracing::warn!("TOOL_AUTHZ_ROLES: unknown action kind '{other}', skipping");
+            None
+        }
+    }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -210,8 +297,34 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Build tool registry and dispatcher
-    let registry = Arc::new(TraitToolRegistry::with_builtins());
+    // Build authz provider from config (allow-all stub when tool_authz_roles unset).
+    let authz_provider = build_authz_provider(&config);
+
+    // Build tool registry with authz kill-switch flag, and dispatcher.
+    let mut registry = TraitToolRegistry::new_with_authz(config.tool_authz_enabled);
+    // Re-populate builtins (new_with_authz starts empty).
+    {
+        use sera_runtime::tools::ToolExecutorAdapter;
+        use sera_runtime::tools::{
+            file_ops, file_edit, shell_exec, http_request, knowledge,
+            web_fetch, glob, grep, spawn, tool_search,
+        };
+        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileRead)));
+        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileWrite)));
+        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileList)));
+        registry.register(Box::new(ToolExecutorAdapter::new(file_edit::FileEdit)));
+        registry.register(Box::new(ToolExecutorAdapter::new(shell_exec::ShellExec)));
+        registry.register(Box::new(ToolExecutorAdapter::new(http_request::HttpRequest)));
+        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeStore)));
+        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeQuery)));
+        registry.register(Box::new(ToolExecutorAdapter::new(web_fetch::WebFetch)));
+        registry.register(Box::new(ToolExecutorAdapter::new(glob::Glob)));
+        registry.register(Box::new(ToolExecutorAdapter::new(grep::Grep)));
+        registry.register(Box::new(ToolExecutorAdapter::new(spawn::SpawnEphemeral)));
+        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::ToolSearch)));
+        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::SkillSearch)));
+    }
+    let registry = Arc::new(registry);
     let dispatcher = RegistryDispatcher::new(Arc::clone(&registry));
 
     // Pre-compute tool definitions for the LLM via serde round-trip
@@ -229,7 +342,8 @@ async fn main() -> anyhow::Result<()> {
     let llm_client = Box::new(LlmClient::new(&config));
     let runtime = DefaultRuntime::new(context_engine)
         .with_llm(llm_client)
-        .with_tool_dispatcher(Box::new(dispatcher));
+        .with_tool_dispatcher(Box::new(dispatcher))
+        .with_authz_provider(authz_provider);
 
     if interactive {
         run_interactive(&config, &runtime, &tool_defs, system_prompt.as_deref()).await

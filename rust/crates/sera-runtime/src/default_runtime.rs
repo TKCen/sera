@@ -14,6 +14,8 @@ use sera_types::runtime::{
     TurnOutcome,
 };
 
+use sera_types::tool::AuthzProviderHandle;
+
 use crate::context_engine::ContextEnricher;
 use crate::memory_assembler::MemoryBlockAssembler;
 use crate::turn::{self, LlmProvider, ReactMode, ToolDispatcher};
@@ -71,6 +73,11 @@ pub struct DefaultRuntime {
     /// over the user message. Failures degrade silently per SPEC-memory §13.6
     /// so the turn continues when the embedding service or store is down.
     enricher: Option<Arc<ContextEnricher>>,
+    /// Authorization provider threaded into every `ToolContext` built by
+    /// `execute_turn`. Defaults to the allow-all `DefaultAuthzProviderStub`
+    /// from `sera-types`; replaced with a `RoleBasedAuthzProvider` wrapped in
+    /// `AuthzProviderAdapter` when `tool_authz_enabled = true` in config.
+    authz_provider: Arc<dyn AuthzProviderHandle>,
 }
 
 impl std::fmt::Debug for DefaultRuntime {
@@ -100,7 +107,19 @@ impl DefaultRuntime {
             failure_threshold: 3,
             memory_assembler: None,
             enricher: None,
+            authz_provider: Arc::new(sera_types::tool::DefaultAuthzProviderStub),
         }
+    }
+
+    /// Install an authorization provider that will be threaded into every
+    /// `ToolContext` constructed during `execute_turn`.
+    ///
+    /// Use this to wire a `RoleBasedAuthzProvider` (wrapped in
+    /// `sera_auth::authz::AuthzProviderAdapter`) when `tool_authz_enabled`
+    /// is set in config. When not called the default allow-all stub is used.
+    pub fn with_authz_provider(mut self, provider: Arc<dyn AuthzProviderHandle>) -> Self {
+        self.authz_provider = provider;
+        self
     }
 
     /// Install the Tier-2 semantic enricher.
@@ -197,6 +216,7 @@ impl AgentRuntime for DefaultRuntime {
                 )),
                 kind: sera_types::principal::PrincipalKind::Agent,
             },
+            authz: Arc::clone(&self.authz_provider),
             ..sera_types::tool::ToolContext::default()
         };
 

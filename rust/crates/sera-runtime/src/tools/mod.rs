@@ -44,13 +44,26 @@ use sera_types::tool::{Tool, ToolInput, ToolOutput, ToolError, ToolContext, Tool
 /// Spec-aligned tool registry using the Tool trait.
 pub struct TraitToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
+    /// When `true`, a PDP check via `ToolContext::authz` is performed in
+    /// `execute` before the `ToolPolicy` check. Defaults to `false`.
+    /// Controlled by `RuntimeConfig::tool_authz_enabled`.
+    tool_authz_enabled: bool,
 }
 
 impl TraitToolRegistry {
-    /// Create an empty registry.
+    /// Create an empty registry with authz enforcement disabled.
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            tool_authz_enabled: false,
+        }
+    }
+
+    /// Create an empty registry with the given authz enforcement flag.
+    pub fn new_with_authz(tool_authz_enabled: bool) -> Self {
+        Self {
+            tools: HashMap::new(),
+            tool_authz_enabled,
         }
     }
 
@@ -119,15 +132,41 @@ impl TraitToolRegistry {
             .collect()
     }
 
-    /// Execute a tool by name, checking policy first.
+    /// Execute a tool by name.
+    ///
+    /// Check order:
+    /// 1. If `tool_authz_enabled`, run a PDP check via `ctx.authz`. Denial
+    ///    surfaces as [`ToolError::Unauthorized`].
+    /// 2. Check `ctx.policy`. Denial surfaces as [`ToolError::PolicyDenied`].
+    /// 3. Dispatch to the concrete tool impl.
     pub async fn execute(
         &self,
         input: ToolInput,
         ctx: ToolContext,
     ) -> Result<ToolOutput, ToolError> {
+        // Step 1 — per-tool PDP check (kill-switch gated).
+        if self.tool_authz_enabled {
+            use sera_types::tool::AuthzDecisionKind;
+            let decision = ctx.authz.check(&ctx.principal, &input.name, &input.name).await;
+            match decision {
+                AuthzDecisionKind::Allow => {}
+                AuthzDecisionKind::Deny(reason) => {
+                    return Err(ToolError::Unauthorized(reason));
+                }
+                AuthzDecisionKind::NeedsApproval(hint) => {
+                    return Err(ToolError::Unauthorized(format!(
+                        "needs_approval:{hint}"
+                    )));
+                }
+            }
+        }
+
+        // Step 2 — policy check.
         if !ctx.policy.allows(&input.name) {
             return Err(ToolError::PolicyDenied(input.name.clone()));
         }
+
+        // Step 3 — dispatch.
         let tool = self
             .tools
             .get(&input.name)
@@ -282,6 +321,71 @@ mod trait_registry_tests {
         registry.register(Box::new(EchoTool));
         assert!(registry.get("echo").is_some());
         assert!(registry.get("missing").is_none());
+    }
+
+    // ── Authz tests ───────────────────────────────────────────────────────
+
+    /// A deny-all authz stub that rejects every check.
+    #[derive(Debug)]
+    struct DenyAllAuthz;
+
+    #[async_trait::async_trait]
+    impl sera_types::tool::AuthzProviderHandle for DenyAllAuthz {
+        async fn check(
+            &self,
+            _principal: &sera_types::principal::PrincipalRef,
+            _action: &str,
+            _resource: &str,
+        ) -> sera_types::tool::AuthzDecisionKind {
+            sera_types::tool::AuthzDecisionKind::Deny("test_deny".to_string())
+        }
+    }
+
+    /// When `tool_authz_enabled = true` and the authz provider denies, execute
+    /// must return `ToolError::Unauthorized`.
+    #[tokio::test]
+    async fn denied_tool_returns_unauthorized() {
+        let mut registry = TraitToolRegistry::new_with_authz(true);
+        registry.register(Box::new(EchoTool));
+
+        let input = ToolInput {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+            call_id: "call-authz-1".to_string(),
+        };
+        let ctx = ToolContext {
+            authz: std::sync::Arc::new(DenyAllAuthz),
+            ..make_ctx(ToolPolicy::from_profile(ToolProfile::Full))
+        };
+        let err = registry.execute(input, ctx).await.unwrap_err();
+        assert!(
+            matches!(err, ToolError::Unauthorized(_)),
+            "expected Unauthorized, got {err:?}"
+        );
+        if let ToolError::Unauthorized(reason) = err {
+            assert_eq!(reason, "test_deny");
+        }
+    }
+
+    /// When `tool_authz_enabled = false` (kill-switch off), a deny-all authz
+    /// provider must NOT prevent execution — the tool succeeds.
+    #[tokio::test]
+    async fn authz_killswitch_disabled_allows_execution() {
+        let mut registry = TraitToolRegistry::new_with_authz(false);
+        registry.register(Box::new(EchoTool));
+
+        let input = ToolInput {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({"msg": "hi"}),
+            call_id: "call-authz-2".to_string(),
+        };
+        let ctx = ToolContext {
+            authz: std::sync::Arc::new(DenyAllAuthz),
+            ..make_ctx(ToolPolicy::from_profile(ToolProfile::Full))
+        };
+        // With kill-switch off, deny-all authz is bypassed → tool succeeds.
+        let output = registry.execute(input, ctx).await.unwrap();
+        assert!(!output.is_error);
     }
 
     #[test]

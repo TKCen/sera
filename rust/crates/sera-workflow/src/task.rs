@@ -8,6 +8,79 @@ use sha2::{Digest, Sha256};
 use sera_hitl::ApprovalId;
 use sera_types::evolution::{BlastRadius, ChangeArtifactId};
 
+/// Workflow-local identifier for a GitHub Actions workflow run.
+///
+/// Intentionally a newtype in `sera-workflow` (not `sera-types`) — the id is a
+/// scheduler-side handle used only for [`AwaitType::GhRun`] gate lookups. Real
+/// GitHub run ids are `u64`, but we carry the string form so the scheduler
+/// doesn't couple to `octocrab`'s numeric type and so opaque synthetic ids
+/// (e.g. from tests or dry-run fixtures) round-trip cleanly.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct GhRunId(pub String);
+
+impl GhRunId {
+    /// Construct a [`GhRunId`] from anything that can be turned into a `String`.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Borrow the underlying id as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GhRunId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Terminal / non-terminal status of a GitHub Actions workflow run.
+///
+/// Mirrors the GitHub API `status` + `conclusion` surface, collapsed into a
+/// single enum the ready-queue cares about. The scheduler only needs a
+/// binary signal (terminal vs not), so non-terminal transient states
+/// (`Queued`, `InProgress`) and the catch-all [`GhRunStatus::Unknown`] map to
+/// not-ready; every terminal state maps to ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GhRunStatus {
+    /// Run is queued but not yet executing.
+    Queued,
+    /// Run is currently executing.
+    InProgress,
+    /// Run finished successfully.
+    Completed,
+    /// Run finished with a failure.
+    Failed,
+    /// Run was cancelled before completion.
+    Cancelled,
+    /// Run was skipped (e.g. conditional `if:` false).
+    Skipped,
+    /// Run completed with a neutral conclusion (neither success nor failure).
+    Neutral,
+    /// Status cannot be determined from the GitHub API response — treated as
+    /// not-ready so the scheduler falls back to conservative behaviour.
+    Unknown,
+}
+
+impl GhRunStatus {
+    /// Returns `true` iff the run has reached a terminal state the scheduler
+    /// should treat as "resolved". The workflow proceeds on any terminal
+    /// conclusion — the downstream handler branches on success/failure itself,
+    /// mirroring the [`AwaitType::Human`] contract.
+    ///
+    /// `Unknown` is deliberately non-terminal: we prefer to keep the task
+    /// pending over waking it on an ambiguous signal.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Skipped | Self::Neutral
+        )
+    }
+}
+
 /// Content-addressed identifier for a [`WorkflowTask`] — SHA-256 of canonical fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct WorkflowTaskId {
@@ -94,7 +167,17 @@ pub enum WorkflowTaskType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AwaitType {
-    GhRun,
+    /// GitHub Actions workflow-run gate — task is not ready until the run
+    /// referenced by `run_id` reaches a terminal [`GhRunStatus`]
+    /// (Completed/Failed/Cancelled/Skipped/Neutral) via a
+    /// [`GhRunLookup`](crate::ready::GhRunLookup) during scheduling.
+    ///
+    /// `repo` is carried alongside the id purely for operator debugging and
+    /// audit trails — the gate logic itself keys only on `run_id`.
+    GhRun {
+        run_id: GhRunId,
+        repo: String,
+    },
     GhPr,
     /// Time-based gate — task is not ready until `now >= not_before`.
     ///

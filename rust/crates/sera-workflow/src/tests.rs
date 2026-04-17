@@ -532,12 +532,11 @@ fn ready_queue_surfaces_elapsed_timer_and_hides_pending_timer() {
 
 #[test]
 fn non_timer_await_still_blocks() {
-    // Regression: other AwaitType variants must still block until their
-    // integrations land. GhRun is not yet implemented, so it remains
-    // pending regardless of any lookup.
+    // Regression: await variants without an integration (GhPr, Mail, Change)
+    // must still block. Pick GhPr as the surviving unit variant sentinel.
     let now = base_instant();
     let mut t = make_task(1, vec![]);
-    t.await_type = Some(AwaitType::GhRun);
+    t.await_type = Some(AwaitType::GhPr);
 
     let tasks = vec![t.clone()];
     let ready = ready_tasks(&tasks, now);
@@ -729,4 +728,245 @@ fn human_gate_serde_roundtrip() {
     assert!(json.contains("human"));
     assert!(json.contains("approval_id"));
     assert!(json.contains("ticket-xyz"));
+}
+
+// ---------------------------------------------------------------------------
+// AwaitType::GhRun gate (GhRunLookup) + ReadyContext bundle
+// ---------------------------------------------------------------------------
+
+use crate::ready::{
+    is_gh_run_ready, ready_tasks_with_context, GhRunLookup, NoopGhRunLookup, ReadyContext,
+};
+use crate::task::{GhRunId, GhRunStatus};
+
+/// In-memory [`GhRunLookup`] used exclusively in tests to stand in for a
+/// real GitHub polling source. Keys on the inner string of [`GhRunId`] so
+/// tests can push opaque synthetic ids.
+#[derive(Debug, Default)]
+struct MapGhRunLookup {
+    by_id: HashMap<String, GhRunStatus>,
+}
+
+impl MapGhRunLookup {
+    fn new() -> Self {
+        Self { by_id: HashMap::new() }
+    }
+
+    fn insert(&mut self, id: impl Into<String>, status: GhRunStatus) {
+        self.by_id.insert(id.into(), status);
+    }
+}
+
+impl GhRunLookup for MapGhRunLookup {
+    fn run_status(&self, id: &GhRunId) -> Option<GhRunStatus> {
+        self.by_id.get(id.as_str()).copied()
+    }
+}
+
+fn gh_run_gate(id: &str) -> AwaitType {
+    AwaitType::GhRun {
+        run_id: GhRunId::new(id),
+        repo: "acme/example".to_string(),
+    }
+}
+
+fn ctx_with_gh_run<'a>(lookup: &'a dyn GhRunLookup) -> ReadyContext<'a> {
+    ReadyContext {
+        hitl: &NoopHitlLookup,
+        gh_run: lookup,
+    }
+}
+
+#[test]
+fn gh_run_missing_run_is_not_ready() {
+    // Run not present in the lookup → treat as not ready. Mirrors the
+    // HitlLookup "unknown ticket" contract.
+    let gate = gh_run_gate("run-missing");
+    let lookup = MapGhRunLookup::new();
+    assert!(!is_gh_run_ready(&gate, &lookup));
+}
+
+#[test]
+fn gh_run_queued_is_not_ready() {
+    let gate = gh_run_gate("run-queued");
+    let mut lookup = MapGhRunLookup::new();
+    lookup.insert("run-queued", GhRunStatus::Queued);
+    assert!(!is_gh_run_ready(&gate, &lookup));
+}
+
+#[test]
+fn gh_run_in_progress_is_not_ready() {
+    let gate = gh_run_gate("run-inprogress");
+    let mut lookup = MapGhRunLookup::new();
+    lookup.insert("run-inprogress", GhRunStatus::InProgress);
+    assert!(!is_gh_run_ready(&gate, &lookup));
+}
+
+#[test]
+fn gh_run_completed_is_ready() {
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(gh_run_gate("run-completed"));
+
+    let mut lookup = MapGhRunLookup::new();
+    lookup.insert("run-completed", GhRunStatus::Completed);
+    let ctx = ctx_with_gh_run(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn gh_run_failed_is_ready() {
+    // Failure is terminal — the task must wake up so its handler can branch
+    // on the failure. Mirrors Rejected in the Human gate.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(gh_run_gate("run-failed"));
+
+    let mut lookup = MapGhRunLookup::new();
+    lookup.insert("run-failed", GhRunStatus::Failed);
+    let ctx = ctx_with_gh_run(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn gh_run_cancelled_skipped_neutral_are_ready() {
+    // Each of these terminal conclusions must wake the task. Exercise them
+    // in a single test via the pure gate function.
+    for status in [
+        GhRunStatus::Cancelled,
+        GhRunStatus::Skipped,
+        GhRunStatus::Neutral,
+    ] {
+        let id_str = format!("run-{status:?}").to_lowercase();
+        let gate = gh_run_gate(&id_str);
+        let mut lookup = MapGhRunLookup::new();
+        lookup.insert(id_str.clone(), status);
+        assert!(
+            is_gh_run_ready(&gate, &lookup),
+            "{status:?} must be terminal and therefore ready"
+        );
+        assert!(status.is_terminal(), "{status:?} must report is_terminal()");
+    }
+}
+
+#[test]
+fn gh_run_unknown_is_not_ready() {
+    // Unknown is a deliberately conservative non-terminal state — we never
+    // wake a task on an ambiguous signal.
+    let gate = gh_run_gate("run-unknown");
+    let mut lookup = MapGhRunLookup::new();
+    lookup.insert("run-unknown", GhRunStatus::Unknown);
+    assert!(!is_gh_run_ready(&gate, &lookup));
+    assert!(!GhRunStatus::Unknown.is_terminal());
+}
+
+#[test]
+fn gh_run_ready_but_blocks_open_still_blocks() {
+    // Combined gate: run is Completed, but the task still has an unsatisfied
+    // Blocks dep. The Blocks gate must win — a terminal run does not bypass
+    // other gates, matching the Human+Blocks test.
+    let now = base_instant();
+
+    let blocker = make_task(1, vec![]);
+    let mut blocked = make_task(2, vec![]);
+    blocked.dependencies = vec![WorkflowTaskDependency {
+        from: blocker.id,
+        to: blocked.id,
+        kind: crate::task::DependencyType::Blocks,
+    }];
+    blocked.await_type = Some(gh_run_gate("run-completed-but-blocked"));
+
+    let mut lookup = MapGhRunLookup::new();
+    lookup.insert("run-completed-but-blocked", GhRunStatus::Completed);
+    let ctx = ctx_with_gh_run(&lookup);
+
+    let tasks = vec![blocker, blocked.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(!ready.iter().any(|t| t.id == blocked.id));
+}
+
+#[test]
+fn default_noop_context_blocks_human_and_gh_run() {
+    // ReadyContext::default_noop() must leave both external-signal gates
+    // pending — it preserves the pre-integration behaviour when callers have
+    // not yet wired into real lookup sources.
+    let now = base_instant();
+
+    let mut human_task = make_task(1, vec![]);
+    human_task.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("whatever"),
+    });
+
+    let mut gh_run_task = make_task(2, vec![]);
+    gh_run_task.await_type = Some(gh_run_gate("whatever"));
+
+    let tasks = vec![human_task.clone(), gh_run_task.clone()];
+    let ctx = ReadyContext::default_noop();
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+
+    assert!(!ready.iter().any(|r| r.id == human_task.id));
+    assert!(!ready.iter().any(|r| r.id == gh_run_task.id));
+
+    // NoopGhRunLookup explicitly reports "unknown".
+    let noop = NoopGhRunLookup;
+    assert!(noop.run_status(&GhRunId::new("x")).is_none());
+}
+
+#[test]
+fn gh_run_gate_serde_roundtrip() {
+    let gate = AwaitType::GhRun {
+        run_id: GhRunId::new("12345678"),
+        repo: "acme/example".to_string(),
+    };
+    let json = serde_json::to_string(&gate).unwrap();
+    let back: AwaitType = serde_json::from_str(&json).unwrap();
+    assert_eq!(gate, back);
+    // Sanity: struct-variant serializes with discriminant, id, and repo.
+    assert!(json.contains("gh_run"));
+    assert!(json.contains("run_id"));
+    assert!(json.contains("12345678"));
+    assert!(json.contains("repo"));
+    assert!(json.contains("acme/example"));
+}
+
+#[test]
+fn gh_run_status_serde_roundtrip() {
+    for status in [
+        GhRunStatus::Queued,
+        GhRunStatus::InProgress,
+        GhRunStatus::Completed,
+        GhRunStatus::Failed,
+        GhRunStatus::Cancelled,
+        GhRunStatus::Skipped,
+        GhRunStatus::Neutral,
+        GhRunStatus::Unknown,
+    ] {
+        let json = serde_json::to_string(&status).unwrap();
+        let back: GhRunStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, back);
+    }
+}
+
+#[test]
+fn ready_tasks_with_hitl_shim_still_works() {
+    // Guard the deprecated shim — sera-gj93 callers must keep compiling until
+    // they migrate. The shim builds a ReadyContext with NoopGhRunLookup and
+    // delegates to ready_tasks_with_context.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("ticket-approved-shim"),
+    });
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-approved-shim", TicketStatus::Approved);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(ready.iter().any(|r| r.id == t.id));
 }

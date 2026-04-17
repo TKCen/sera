@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 
 use sera_hitl::{ApprovalId, TicketStatus};
 
-use crate::task::{AwaitType, DependencyType, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus};
+use crate::task::{
+    AwaitType, DependencyType, GhRunId, GhRunStatus, WorkflowTask, WorkflowTaskId,
+    WorkflowTaskStatus,
+};
 
 /// Pure-function gate for [`AwaitType::Timer`].
 ///
@@ -74,21 +77,137 @@ pub fn is_human_ready(await_type: &AwaitType, lookup: &dyn HitlLookup) -> bool {
     }
 }
 
+/// Pull-based lookup into a GitHub Actions status source for
+/// [`AwaitType::GhRun`].
+///
+/// Mirrors the shape of [`HitlLookup`]: the ready-queue is synchronous, so the
+/// implementor must snapshot the current state of relevant runs into an
+/// in-memory map (or equivalent) and answer synchronously. Any network I/O
+/// lives one layer up.
+///
+/// Returning `None` means the run is not known to the lookup (never seen, or
+/// evicted). The ready-queue treats unknown runs as not-ready — we never
+/// self-satisfy on unknown state, matching the [`HitlLookup`] contract.
+pub trait GhRunLookup: Send + Sync {
+    /// Return the current status of the run identified by `id`, or `None`
+    /// when the run is not known to the lookup source.
+    fn run_status(&self, run_id: &GhRunId) -> Option<GhRunStatus>;
+}
+
+/// A trivial [`GhRunLookup`] that reports every run as unknown.
+///
+/// Useful as a default for callers that are not yet wired into a GitHub
+/// polling source — preserves the pre-GhRun behaviour where GhRun-await
+/// tasks always block.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopGhRunLookup;
+
+impl GhRunLookup for NoopGhRunLookup {
+    fn run_status(&self, _id: &GhRunId) -> Option<GhRunStatus> {
+        None
+    }
+}
+
+/// Pure-function gate for [`AwaitType::GhRun`].
+///
+/// Returns `true` iff `await_type` is `Some(AwaitType::GhRun { run_id, .. })`
+/// and the referenced run resolves to a terminal [`GhRunStatus`]
+/// (Completed / Failed / Cancelled / Skipped / Neutral) via `lookup`. A run
+/// reported as `None` (unknown) or in a non-terminal state (Queued /
+/// InProgress / Unknown) is treated as not ready.
+///
+/// Workflows deliberately proceed on Failed / Cancelled / Neutral too — the
+/// task itself needs to wake up so its handler can branch on the outcome.
+/// Gating on Completed-only would strand failed runs indefinitely.
+///
+/// Returns `false` for non-GhRun await types.
+pub fn is_gh_run_ready(await_type: &AwaitType, lookup: &dyn GhRunLookup) -> bool {
+    match await_type {
+        AwaitType::GhRun { run_id, .. } => lookup
+            .run_status(run_id)
+            .map(|s| s.is_terminal())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Bundle of lookup dependencies consulted by [`ready_tasks_with_context`].
+///
+/// Exists to keep gate signatures small as we add per-await-variant lookups
+/// (GhPr / Mail / Change land in follow-up beads). Instead of threading a
+/// growing list of `&dyn XLookup` positional args through `ready_tasks_with_…`
+/// and `is_ready`, callers build one [`ReadyContext`] and pass it by reference.
+///
+/// Use [`ReadyContext::default_noop`] for callers that are not yet wired into
+/// any real lookup source — every gate reports unknown, matching the
+/// pre-integration behaviour (all non-Timer awaits block).
+pub struct ReadyContext<'a> {
+    /// Lookup consulted for [`AwaitType::Human`] gates.
+    pub hitl: &'a dyn HitlLookup,
+    /// Lookup consulted for [`AwaitType::GhRun`] gates.
+    pub gh_run: &'a dyn GhRunLookup,
+    // Future: pub gh_pr: &'a dyn GhPrLookup,
+    // Future: pub mail:  &'a dyn MailLookup,
+    // Future: pub change: &'a dyn ChangeLookup,
+}
+
+impl<'a> ReadyContext<'a> {
+    /// Build a [`ReadyContext`] backed entirely by no-op lookups.
+    ///
+    /// Every gate that requires an external signal (Human, GhRun, …) reports
+    /// "unknown" and therefore resolves to not-ready. Useful as the default
+    /// for callers that have not yet wired into real lookup sources, and for
+    /// unit tests exercising purely time/dependency-based gates.
+    pub fn default_noop() -> ReadyContext<'static> {
+        ReadyContext {
+            hitl: &NoopHitlLookup,
+            gh_run: &NoopGhRunLookup,
+        }
+    }
+}
+
 /// Return all tasks that are ready to be claimed right now.
 ///
-/// Equivalent to [`ready_tasks_with_hitl`] with a [`NoopHitlLookup`] — every
-/// [`AwaitType::Human`] gate is treated as still pending. Callers that want
-/// to surface approval-gated tasks must use [`ready_tasks_with_hitl`].
+/// Equivalent to [`ready_tasks_with_context`] with a
+/// [`ReadyContext::default_noop`] — every external-signal gate
+/// ([`AwaitType::Human`], [`AwaitType::GhRun`], …) is treated as still
+/// pending. Callers that want to surface externally-gated tasks must use
+/// [`ready_tasks_with_context`].
 ///
-/// Five gates must all pass — see [`ready_tasks_with_hitl`] for the full list.
+/// Five gates must all pass — see [`ready_tasks_with_context`] for the full
+/// list.
 ///
 /// Results are sorted by `(priority ASC, id bytes)` for determinism.
 pub fn ready_tasks(tasks: &[WorkflowTask], now: DateTime<Utc>) -> Vec<&WorkflowTask> {
-    ready_tasks_with_hitl(tasks, now, &NoopHitlLookup)
+    ready_tasks_with_context(tasks, now, &ReadyContext::default_noop())
 }
 
-/// Return all tasks that are ready to be claimed right now, consulting
-/// `hitl` for [`AwaitType::Human`] gates.
+/// Deprecated shim kept for source compatibility with sera-gj93 callers.
+///
+/// Constructs a [`ReadyContext`] from the supplied [`HitlLookup`] and
+/// [`NoopGhRunLookup`], then delegates to [`ready_tasks_with_context`]. New
+/// callers should build a [`ReadyContext`] directly so they can also opt into
+/// non-Hitl lookups ([`GhRunLookup`], and future GhPr / Mail / Change).
+#[deprecated(
+    since = "0.1.0",
+    note = "build a ReadyContext and call ready_tasks_with_context instead; \
+            this shim will be removed once all external callers migrate"
+)]
+pub fn ready_tasks_with_hitl<'a>(
+    tasks: &'a [WorkflowTask],
+    now: DateTime<Utc>,
+    hitl: &dyn HitlLookup,
+) -> Vec<&'a WorkflowTask> {
+    let ctx = ReadyContext {
+        hitl,
+        gh_run: &NoopGhRunLookup,
+    };
+    ready_tasks_with_context(tasks, now, &ctx)
+}
+
+/// Return all tasks that are ready to be claimed right now, consulting `ctx`
+/// for any external-signal gates ([`AwaitType::Human`], [`AwaitType::GhRun`],
+/// …).
 ///
 /// Five gates must all pass:
 /// 1. `status == Open`
@@ -99,23 +218,25 @@ pub fn ready_tasks(tasks: &[WorkflowTask], now: DateTime<Utc>) -> Vec<&WorkflowT
 /// 3. `defer_until <= now` or `None`.
 /// 4. `await_type.is_none()` — OR — one of:
 ///      - `Timer { not_before }` and `now >= not_before`;
-///      - `Human { approval_id }` and `hitl.ticket_status(approval_id)`
-///        reports a terminal status.
+///      - `Human { approval_id }` and `ctx.hitl.ticket_status(approval_id)`
+///        reports a terminal status;
+///      - `GhRun { run_id, .. }` and `ctx.gh_run.run_status(run_id)` reports a
+///        terminal status.
 ///
-///    All other `AwaitType` variants (GhRun/GhPr/Mail/Change) still block —
-///    their integrations are tracked in follow-up beads.
-/// 5. Not `(ephemeral && status == Closed)` — ephemeral tasks are never surfaced
-///    once closed (redundant given gate 1, but kept for clarity).
+///    All other `AwaitType` variants (GhPr/Mail/Change) still block — their
+///    integrations are tracked in follow-up beads.
+/// 5. Not `(ephemeral && status == Closed)` — ephemeral tasks are never
+///    surfaced once closed (redundant given gate 1, but kept for clarity).
 ///
 /// Results are sorted by `(priority ASC, id bytes)` for determinism.
-pub fn ready_tasks_with_hitl<'a>(
+pub fn ready_tasks_with_context<'a>(
     tasks: &'a [WorkflowTask],
     now: DateTime<Utc>,
-    hitl: &dyn HitlLookup,
+    ctx: &ReadyContext<'_>,
 ) -> Vec<&'a WorkflowTask> {
     let mut ready: Vec<&WorkflowTask> = tasks
         .iter()
-        .filter(|t| is_ready(t, tasks, now, hitl))
+        .filter(|t| is_ready(t, tasks, now, ctx))
         .collect();
 
     ready.sort_by_key(|t| (t.priority, t.id.hash));
@@ -126,7 +247,7 @@ fn is_ready(
     task: &WorkflowTask,
     all: &[WorkflowTask],
     now: DateTime<Utc>,
-    hitl: &dyn HitlLookup,
+    ctx: &ReadyContext<'_>,
 ) -> bool {
     // Gate 1 — must be Open.
     if task.status != WorkflowTaskStatus::Open {
@@ -186,10 +307,16 @@ fn is_ready(
                 // Timer elapsed — gate passes.
             }
             AwaitType::Human { .. } => {
-                if !is_human_ready(await_type, hitl) {
+                if !is_human_ready(await_type, ctx.hitl) {
                     return false;
                 }
                 // Ticket reached a terminal state — gate passes.
+            }
+            AwaitType::GhRun { .. } => {
+                if !is_gh_run_ready(await_type, ctx.gh_run) {
+                    return false;
+                }
+                // GitHub run reached a terminal state — gate passes.
             }
             // Other await variants remain pending until their integrations land.
             _ => return false,

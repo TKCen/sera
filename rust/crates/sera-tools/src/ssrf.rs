@@ -11,8 +11,8 @@ pub enum SsrfError {
     LinkLocal,
     #[error("address is a cloud metadata endpoint")]
     CloudMetadata,
-    #[error("address is not allowed")]
-    NotAllowed,
+    #[error("address is not allowed: {reason}")]
+    NotAllowed { reason: String },
     #[error("parse error: {reason}")]
     ParseError { reason: String },
 }
@@ -41,9 +41,35 @@ impl SsrfValidator {
             addr.split(':').next().unwrap_or(addr)
         };
 
+        // Distinguish hostname inputs from malformed-IP inputs.
+        // An IP address contains only: digits, hex letters a-f/A-F, colons,
+        // dots, and (for bracketed IPv6) brackets. Anything else is a hostname.
+        // Heuristic: an input "looks like an IP" if every character is one that
+        // could appear in an IP address or a common IP-bypass encoding attempt
+        // (digits, hex letters a-f, dots, colons, percent sign).
+        // Inputs with letters outside a-f (e.g. "localhost", "example.com")
+        // are classified as hostnames and get NotAllowed.
+        // Percent-encoded bypass attempts (e.g. "169.254.169%2E254") still
+        // get ParseError so callers know the input was IP-shaped but malformed.
+        let looks_like_ip = !host.is_empty()
+            && host.bytes().all(|b| {
+                b.is_ascii_digit()
+                    || b == b'.'
+                    || b == b':'
+                    || b == b'%'
+                    || matches!(b, b'a'..=b'f' | b'A'..=b'F')
+            });
+
         let ip: IpAddr = host.parse().map_err(|e: std::net::AddrParseError| {
-            SsrfError::ParseError {
-                reason: e.to_string(),
+            if looks_like_ip {
+                SsrfError::ParseError {
+                    reason: e.to_string(),
+                }
+            } else {
+                SsrfError::NotAllowed {
+                    reason: "hostname inputs are not supported — resolve to IP and re-validate"
+                        .to_string(),
+                }
             }
         })?;
 
@@ -263,22 +289,73 @@ mod tests {
     }
 
     #[test]
-    fn rejects_hostname_as_parse_error() {
-        // Hostnames (which could resolve to private IPs) are not IPs —
-        // validator must return ParseError, not silently allow them.
+    fn rejects_hostname_as_not_allowed() {
+        // Hostnames are not IPs — validator returns NotAllowed so callers can
+        // distinguish "bad input type" from "malformed IP".
         let result = SsrfValidator::validate("localhost");
         assert!(
-            matches!(result, Err(SsrfError::ParseError { .. })),
-            "expected ParseError for hostname, got {result:?}"
+            matches!(result, Err(SsrfError::NotAllowed { .. })),
+            "expected NotAllowed for hostname, got {result:?}"
         );
     }
 
     #[test]
-    fn rejects_empty_string_as_parse_error() {
+    fn rejects_empty_string_as_not_allowed() {
+        // Empty string is not an IP address — treated as non-IP input.
         let result = SsrfValidator::validate("");
         assert!(
+            matches!(result, Err(SsrfError::NotAllowed { .. })),
+            "expected NotAllowed for empty string, got {result:?}"
+        );
+    }
+
+    // --- Hostname / input-type classification (G2) ---
+
+    #[test]
+    fn rejects_hostname_example_com_as_not_allowed() {
+        let result = SsrfValidator::validate("example.com");
+        assert!(
+            matches!(result, Err(SsrfError::NotAllowed { .. })),
+            "expected NotAllowed for hostname, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn not_allowed_reason_is_populated() {
+        let err = SsrfValidator::validate("evil.internal").unwrap_err();
+        if let SsrfError::NotAllowed { reason } = err {
+            assert!(!reason.is_empty(), "reason must not be empty");
+        } else {
+            panic!("expected NotAllowed, got something else");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_ip_like_input_as_parse_error() {
+        // 192.168.1.999 looks like an IP (only digits and dots) but is invalid.
+        let result = SsrfValidator::validate("192.168.1.999");
+        assert!(
             matches!(result, Err(SsrfError::ParseError { .. })),
-            "expected ParseError for empty string, got {result:?}"
+            "expected ParseError for malformed IP-like input, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_localhost_hostname_as_not_allowed() {
+        // "localhost" is a hostname, not an IP — must be NotAllowed.
+        let result = SsrfValidator::validate("localhost");
+        assert!(
+            matches!(result, Err(SsrfError::NotAllowed { .. })),
+            "expected NotAllowed for localhost, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_dotted_hostname_as_not_allowed() {
+        let result = SsrfValidator::validate("metadata.internal");
+        assert!(
+            matches!(result, Err(SsrfError::NotAllowed { .. })),
+            "expected NotAllowed for dotted hostname, got {result:?}"
         );
     }
 

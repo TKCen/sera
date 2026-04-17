@@ -7,6 +7,8 @@ pub enum BashAstError {
     BacktickSubstitution,
     #[error("process substitution $() is not allowed")]
     ProcessSubstitution,
+    #[error("process substitution <() or >() is not allowed")]
+    FdProcessSubstitution,
     #[error("unsafe metacharacter injection detected")]
     MetacharInjection,
     #[error("out-of-sandbox filesystem access detected")]
@@ -67,6 +69,15 @@ impl BashAstChecker {
             // Process substitution $(...)
             if ch == b'$' && i + 1 < len && bytes[i + 1] == b'(' {
                 return Err(BashAstError::ProcessSubstitution);
+            }
+
+            // fd-based process substitution <(...) and >(...) — dangerous in both
+            // unquoted and double-quoted contexts (bash expands these inside double
+            // quotes only in some versions; the syntax is also technically invalid
+            // there, so we treat double-quoted occurrences as allowed to avoid false
+            // positives on literal strings).
+            if !in_double_quote && i + 1 < len && bytes[i + 1] == b'(' && (ch == b'<' || ch == b'>') {
+                return Err(BashAstError::FdProcessSubstitution);
             }
 
             // Unsafe metacharacters outside quotes
@@ -277,6 +288,68 @@ mod tests {
         assert_eq!(
             BashAstError::MetacharInjection.to_string(),
             "unsafe metacharacter injection detected"
+        );
+    }
+
+    // --- fd-based process substitution <(...) / >(...) ---
+
+    #[test]
+    fn blocks_fd_process_substitution_input() {
+        // <(cmd) — unquoted input process substitution
+        let err = BashAstChecker::check("cat <(echo hello)").unwrap_err();
+        assert_eq!(err, BashAstError::FdProcessSubstitution);
+    }
+
+    #[test]
+    fn blocks_fd_process_substitution_output() {
+        // >(cmd) — unquoted output process substitution
+        let err = BashAstChecker::check("tee >(cat)").unwrap_err();
+        assert_eq!(err, BashAstError::FdProcessSubstitution);
+    }
+
+    #[test]
+    fn blocks_fd_process_substitution_redirect_form() {
+        // < <(cmd) — common redirect-plus-process-substitution form
+        let err = BashAstChecker::check("sort < <(find /)").unwrap_err();
+        // The bare `<` hits MetacharInjection first; that is acceptable — the
+        // input is still blocked. Either error variant is correct here.
+        assert!(matches!(
+            err,
+            BashAstError::FdProcessSubstitution | BashAstError::MetacharInjection
+        ));
+    }
+
+    #[test]
+    fn blocks_fd_process_substitution_nested() {
+        // <(cat <(cmd)) — nested fd substitution; outer <( triggers first
+        let err = BashAstChecker::check("diff <(cat <(echo a)) /dev/null").unwrap_err();
+        assert_eq!(err, BashAstError::FdProcessSubstitution);
+    }
+
+    #[test]
+    fn allows_fd_process_substitution_in_single_quotes() {
+        // Single-quoted: <( is literal text, not a substitution
+        assert!(BashAstChecker::check("echo '<(cmd)'").is_ok());
+    }
+
+    #[test]
+    fn allows_fd_process_substitution_in_double_quotes() {
+        // Double-quoted: bash does not expand <() inside double quotes (and the
+        // syntax is invalid there), so we treat it as allowed to avoid false positives.
+        assert!(BashAstChecker::check("echo \"<(cmd)\"").is_ok());
+    }
+
+    #[test]
+    fn allows_escaped_fd_process_substitution() {
+        // \<( — the backslash escapes <, so the ( is a standalone literal
+        assert!(BashAstChecker::check("echo \\<(not-subst)").is_ok());
+    }
+
+    #[test]
+    fn error_display_fd_process_substitution() {
+        assert_eq!(
+            BashAstError::FdProcessSubstitution.to_string(),
+            "process substitution <() or >() is not allowed"
         );
     }
 }

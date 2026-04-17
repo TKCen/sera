@@ -9,6 +9,8 @@ use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
 use sera_db::lane_queue::LaneQueue;
 use sera_events::CentrifugoClient;
+use sera_hooks::{ChainExecutor, HookRegistry};
+use sera_meta::artifact_pipeline::ArtifactPipeline;
 use sera_tools::sandbox::SandboxProvider;
 
 use sera_gateway::envelope::GenerationMarker;
@@ -40,4 +42,14 @@ pub struct AppState {
     /// (Discord, HTTP chat, API). Wraps [`LaneQueue`] in a tokio [`Mutex`] so
     /// async handlers can mutate the shared state.
     pub lane_queue: Arc<Mutex<LaneQueue>>,
+    /// Self-evolution pipeline — backs the `/api/evolve/*` route handlers so
+    /// propose → evaluate → approve → apply transitions are executed end to
+    /// end against [`sera_meta::artifact_pipeline::ArtifactPipeline`].
+    pub evolution_pipeline: Arc<ArtifactPipeline>,
+    /// Registry of in-process hook modules shared with the chain executor.
+    pub hook_registry: Arc<HookRegistry>,
+    /// Chain executor used by evolve route handlers to fire
+    /// [`sera_types::hook::HookPoint::OnChangeArtifactProposed`] hook chains
+    /// with `HookContext.change_artifact` populated end-to-end.
+    pub chain_executor: Arc<ChainExecutor>,
 }

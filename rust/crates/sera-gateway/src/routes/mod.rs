@@ -22,6 +22,7 @@ pub mod circles;
 pub mod config;
 pub mod delegation;
 pub mod embedding;
+pub mod evolve;
 pub mod heartbeat;
 pub mod intercom;
 pub mod knowledge;

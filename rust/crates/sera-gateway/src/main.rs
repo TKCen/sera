@@ -91,6 +91,15 @@ async fn main() -> anyhow::Result<()> {
     let session_persist = Arc::new(sera_gateway::session_persist::SqlxSessionPersist::from_db_pool(&db));
     let transcript_persistence = Arc::new(sera_gateway::transcript_persist::TranscriptPersistence::new(session_persist));
 
+    // Self-evolution pipeline + hook chain executor — feed one another through
+    // route handlers so evolve transitions fire `OnChangeArtifactProposed`
+    // hooks with `HookContext.change_artifact` populated.
+    let hook_registry = Arc::new(sera_hooks::HookRegistry::new());
+    let chain_executor = Arc::new(sera_hooks::ChainExecutor::new(Arc::clone(&hook_registry)));
+    let evolution_pipeline = Arc::new(
+        sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+    );
+
     let app_state = AppState {
         db,
         config: config.clone(),
@@ -110,6 +119,9 @@ async fn main() -> anyhow::Result<()> {
         lane_queue: std::sync::Arc::new(tokio::sync::Mutex::new(
             sera_db::lane_queue::LaneQueue::new(10, sera_db::lane_queue::QueueMode::Collect),
         )),
+        evolution_pipeline,
+        hook_registry,
+        chain_executor,
     };
 
     // Extract queue backend before app_state is moved into the router.
@@ -426,6 +438,14 @@ fn build_router(
         .route("/api/permission-requests", get(routes::permission_requests::list_requests).post(routes::permission_requests::create_request))
         .route("/api/permission-requests/{id}/approve", post(routes::permission_requests::approve_request))
         .route("/api/permission-requests/{id}/deny", post(routes::permission_requests::deny_request))
+        // Self-evolution pipeline (SPEC-self-evolution §16): propose →
+        // evaluate → approve → apply. Every transition fires the
+        // `on_change_artifact_proposed` hook chain with `HookContext.change_artifact` populated.
+        .route("/api/evolve/propose", post(routes::evolve::propose))
+        .route("/api/evolve/evaluate/{id}", post(routes::evolve::evaluate))
+        .route("/api/evolve/approve/{id}", post(routes::evolve::approve))
+        .route("/api/evolve/apply/{id}", post(routes::evolve::apply))
+        .route("/api/evolve/{id}", get(routes::evolve::get))
         // Service identities
         .route("/api/agents/{agent_id}/service-identities", get(routes::service_identities::list_identities).post(routes::service_identities::create_identity))
         .route("/api/agents/{agent_id}/service-identities/{identity_id}", delete(routes::service_identities::delete_identity))

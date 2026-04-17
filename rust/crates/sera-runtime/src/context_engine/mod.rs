@@ -1,5 +1,6 @@
 //! Context engine — pluggable context assembly and compaction.
 
+pub mod hybrid;
 pub mod kvcache;
 pub mod pipeline;
 

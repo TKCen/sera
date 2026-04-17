@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(ticket.status, TicketStatus::Pending);
         assert!(!ticket.is_fully_approved());
 
-        let status = ticket.approve(human_ref(), Some("lgtm".to_string()));
+        let status = ticket.approve(human_ref(), Some("lgtm".to_string())).unwrap();
         assert_eq!(status, TicketStatus::Approved);
         assert!(ticket.is_fully_approved());
     }
@@ -90,12 +90,12 @@ mod tests {
         let mut ticket = ApprovalTicket::new(spec, "session-2");
 
         // First approval — not yet satisfied.
-        ticket.approve(human_ref(), None);
+        ticket.approve(human_ref(), None).unwrap();
         assert!(!ticket.is_fully_approved());
         assert_eq!(ticket.status, TicketStatus::Pending);
 
         // Second approval — now satisfied.
-        ticket.approve(agent_ref(), None);
+        ticket.approve(agent_ref(), None).unwrap();
         assert!(ticket.is_fully_approved());
         assert_eq!(ticket.status, TicketStatus::Approved);
     }
@@ -105,7 +105,7 @@ mod tests {
         let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-3");
 
-        let status = ticket.reject(human_ref(), Some("too risky".to_string()));
+        let status = ticket.reject(human_ref(), Some("too risky".to_string())).unwrap();
         assert_eq!(status, TicketStatus::Rejected);
         assert_eq!(ticket.status, TicketStatus::Rejected);
         assert!(!ticket.is_fully_approved());
@@ -123,7 +123,7 @@ mod tests {
         let mut ticket = ApprovalTicket::new(spec, "session-4");
 
         assert_eq!(ticket.current_target_index, 0);
-        ticket.escalate();
+        ticket.escalate().unwrap();
         assert_eq!(ticket.current_target_index, 1);
         assert_eq!(ticket.status, TicketStatus::Escalated);
     }
@@ -351,7 +351,7 @@ mod tests {
         };
         let spec = basic_spec(routing, 1, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-ct-3");
-        ticket.escalate();
+        ticket.escalate().unwrap();
         let targets = ticket.current_targets();
         assert_eq!(targets.len(), 1);
         if let ApprovalTarget::Role { name } = targets[0] {
@@ -368,8 +368,13 @@ mod tests {
         };
         let spec = basic_spec(routing, 1, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-ct-4");
-        // Escalate past the only target.
-        ticket.escalate();
+        // Escalate past the only target — the single-target chain has no room
+        // to advance, so escalate() now reports EscalationExhausted. We force
+        // the index past the end manually to exercise current_targets()' empty
+        // result path (the behaviour this test documents).
+        let err = ticket.escalate().unwrap_err();
+        assert!(matches!(err, HitlError::EscalationExhausted { .. }));
+        ticket.current_target_index = 1;
         assert!(ticket.current_targets().is_empty());
     }
 
@@ -471,15 +476,16 @@ mod tests {
         let mut ticket = ApprovalTicket::new(spec, "session-esc-1");
 
         assert_eq!(ticket.current_target_index, 0);
-        ticket.escalate();
+        ticket.escalate().unwrap();
         assert_eq!(ticket.current_target_index, 1);
         assert_eq!(ticket.status, TicketStatus::Escalated);
-        ticket.escalate();
+        ticket.escalate().unwrap();
         assert_eq!(ticket.current_target_index, 2);
-        // After escalating past the last target the index is out of range.
-        ticket.escalate();
-        assert_eq!(ticket.current_target_index, 3);
-        assert!(ticket.current_targets().is_empty());
+        // Escalating past the last target now returns EscalationExhausted
+        // instead of silently advancing the index.
+        let err = ticket.escalate().unwrap_err();
+        assert!(matches!(err, HitlError::EscalationExhausted { .. }));
+        assert_eq!(ticket.current_target_index, 2);
     }
 
     #[test]
@@ -493,11 +499,13 @@ mod tests {
         let spec = basic_spec(routing, 1, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-esc-2");
 
-        ticket.escalate();
+        ticket.escalate().unwrap();
         assert_eq!(ticket.status, TicketStatus::Escalated);
 
         // Approver at the escalated level approves.
-        let status = ticket.approve(human_ref(), Some("approved after escalation".to_string()));
+        let status = ticket
+            .approve(human_ref(), Some("approved after escalation".to_string()))
+            .unwrap();
         assert_eq!(status, TicketStatus::Approved);
         assert!(ticket.is_fully_approved());
     }
@@ -509,12 +517,12 @@ mod tests {
         let spec = basic_spec(static_routing(), 3, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-edge-1");
 
-        ticket.approve(human_ref(), None);
-        ticket.approve(agent_ref(), None);
+        ticket.approve(human_ref(), None).unwrap();
+        ticket.approve(agent_ref(), None).unwrap();
         // Still pending — only 2 of 3 collected.
         assert_eq!(ticket.status, TicketStatus::Pending);
 
-        let status = ticket.reject(human_ref(), Some("changed mind".to_string()));
+        let status = ticket.reject(human_ref(), Some("changed mind".to_string())).unwrap();
         assert_eq!(status, TicketStatus::Rejected);
         assert!(!ticket.is_fully_approved());
         // Two approve decisions + one reject decision recorded.
@@ -522,28 +530,29 @@ mod tests {
     }
 
     #[test]
-    fn approve_after_rejection_does_not_override_rejected_status() {
-        // The state machine rejects immediately on any rejection.
-        // A subsequent approve call still adds a decision but the ticket
-        // stays Rejected because approve() only transitions to Approved
-        // — it never clears a Rejected state.
+    fn approve_after_rejection_returns_invalid_transition() {
+        // Previously the state machine silently allowed approve() to flip a
+        // Rejected ticket back to Approved once the count was met. That hole
+        // is now closed: approve() on any terminal-state ticket returns
+        // HitlError::InvalidTransition and does NOT record a decision.
         let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-edge-2");
 
-        ticket.reject(human_ref(), None);
+        ticket.reject(human_ref(), None).unwrap();
         assert_eq!(ticket.status, TicketStatus::Rejected);
+        let decisions_before = ticket.decisions.len();
 
-        // Calling approve after rejection — the approval count now satisfies
-        // required_approvals so is_fully_approved() returns true, which means
-        // approve() will flip status back to Approved. This is a known
-        // behaviour worth documenting: the state machine has no guard against
-        // approving an already-rejected ticket. Test records the actual
-        // behaviour so any future change is visible.
-        ticket.approve(agent_ref(), None);
-        // is_fully_approved counts only Approved decisions (1 >= 1 → true).
-        // approve() sets status = Approved when fully approved.
-        assert_eq!(ticket.status, TicketStatus::Approved);
-        assert!(ticket.is_fully_approved());
+        let err = ticket.approve(agent_ref(), None).unwrap_err();
+        match err {
+            HitlError::InvalidTransition { from, action } => {
+                assert_eq!(from, TicketStatus::Rejected);
+                assert_eq!(action, "approve");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+        // Status stays Rejected and the rejected decision count is unchanged.
+        assert_eq!(ticket.status, TicketStatus::Rejected);
+        assert_eq!(ticket.decisions.len(), decisions_before);
     }
 
     #[test]
@@ -556,15 +565,19 @@ mod tests {
 
     #[test]
     fn duplicate_approver_counts_each_decision_separately() {
-        // The same principal can approve multiple times; each counts toward the quota.
+        // Design choice: the same principal can approve multiple times and
+        // every decision counts toward `required_approvals`. Dedupe is left
+        // to the router layer so the ticket state machine stays auditable —
+        // every call produces a recorded decision. If dedupe is ever needed
+        // here it must be opt-in to preserve backwards compatibility.
         let spec = basic_spec(static_routing(), 2, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-edge-4");
 
-        ticket.approve(human_ref(), None);
+        ticket.approve(human_ref(), None).unwrap();
         assert!(!ticket.is_fully_approved());
 
         // Same approver again — second decision fulfils the requirement.
-        ticket.approve(human_ref(), None);
+        ticket.approve(human_ref(), None).unwrap();
         assert!(ticket.is_fully_approved());
         assert_eq!(ticket.status, TicketStatus::Approved);
         assert_eq!(ticket.decisions.len(), 2);
@@ -576,7 +589,7 @@ mod tests {
         let mut ticket = ApprovalTicket::new(spec, "session-edge-5");
         let approver = human_ref();
 
-        ticket.approve(approver.clone(), Some("looks good".to_string()));
+        ticket.approve(approver.clone(), Some("looks good".to_string())).unwrap();
 
         assert_eq!(ticket.decisions.len(), 1);
         let decision = &ticket.decisions[0];
@@ -591,7 +604,7 @@ mod tests {
         let mut ticket = ApprovalTicket::new(spec, "session-edge-6");
         let approver = agent_ref();
 
-        ticket.reject(approver.clone(), Some("too dangerous".to_string()));
+        ticket.reject(approver.clone(), Some("too dangerous".to_string())).unwrap();
 
         assert_eq!(ticket.decisions.len(), 1);
         let decision = &ticket.decisions[0];
@@ -773,7 +786,7 @@ mod tests {
     fn approval_ticket_serde_roundtrip() {
         let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
         let mut ticket = ApprovalTicket::new(spec, "session-serde-1");
-        ticket.approve(human_ref(), Some("ok".to_string()));
+        ticket.approve(human_ref(), Some("ok".to_string())).unwrap();
 
         let json = serde_json::to_string(&ticket).unwrap();
         let parsed: ApprovalTicket = serde_json::from_str(&json).unwrap();
@@ -826,5 +839,163 @@ mod tests {
         if let ApprovalTarget::Role { name } = &chain[0] {
             assert_eq!(name, "low");
         }
+    }
+
+    // ── Terminal-state / expiry / escalation guards (Session 26 follow-ups) ──
+
+    #[test]
+    fn approve_on_approved_ticket_returns_invalid_transition() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-1");
+        ticket.approve(human_ref(), None).unwrap();
+        assert_eq!(ticket.status, TicketStatus::Approved);
+        let decisions_before = ticket.decisions.len();
+
+        let err = ticket.approve(agent_ref(), None).unwrap_err();
+        match err {
+            HitlError::InvalidTransition { from, action } => {
+                assert_eq!(from, TicketStatus::Approved);
+                assert_eq!(action, "approve");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+        // No decision recorded — guard fired before the push.
+        assert_eq!(ticket.decisions.len(), decisions_before);
+        assert_eq!(ticket.status, TicketStatus::Approved);
+    }
+
+    #[test]
+    fn reject_on_approved_ticket_returns_invalid_transition() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-2");
+        ticket.approve(human_ref(), None).unwrap();
+        assert_eq!(ticket.status, TicketStatus::Approved);
+
+        let err = ticket.reject(agent_ref(), Some("reconsidered".to_string())).unwrap_err();
+        match err {
+            HitlError::InvalidTransition { from, action } => {
+                assert_eq!(from, TicketStatus::Approved);
+                assert_eq!(action, "reject");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+        // Status stays Approved; no new decision recorded.
+        assert_eq!(ticket.status, TicketStatus::Approved);
+        assert_eq!(ticket.decisions.len(), 1);
+    }
+
+    #[test]
+    fn reject_on_rejected_ticket_returns_invalid_transition() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-3");
+        ticket.reject(human_ref(), None).unwrap();
+
+        let err = ticket.reject(agent_ref(), None).unwrap_err();
+        assert!(matches!(
+            err,
+            HitlError::InvalidTransition { from: TicketStatus::Rejected, .. }
+        ));
+        assert_eq!(ticket.status, TicketStatus::Rejected);
+        assert_eq!(ticket.decisions.len(), 1);
+    }
+
+    #[test]
+    fn approve_on_expired_ticket_flips_status_and_errors() {
+        // 1ns timeout guarantees the deadline has passed by the time we call
+        // approve. The guard should flip status to Expired and return
+        // HitlError::TicketExpired without recording the decision.
+        let spec = basic_spec(static_routing(), 1, Duration::from_nanos(1));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-4");
+        assert!(ticket.is_expired());
+        assert_eq!(ticket.status, TicketStatus::Pending);
+
+        let err = ticket.approve(human_ref(), None).unwrap_err();
+        match err {
+            HitlError::TicketExpired { id } => assert_eq!(id, ticket.id),
+            other => panic!("expected TicketExpired, got {other:?}"),
+        }
+        assert_eq!(ticket.status, TicketStatus::Expired);
+        assert!(ticket.decisions.is_empty());
+
+        // A second approve call now hits the terminal-state guard.
+        let err2 = ticket.approve(agent_ref(), None).unwrap_err();
+        assert!(matches!(
+            err2,
+            HitlError::InvalidTransition { from: TicketStatus::Expired, .. }
+        ));
+    }
+
+    #[test]
+    fn reject_on_expired_ticket_flips_status_and_errors() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_nanos(1));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-5");
+        assert!(ticket.is_expired());
+
+        let err = ticket.reject(human_ref(), None).unwrap_err();
+        assert!(matches!(err, HitlError::TicketExpired { .. }));
+        assert_eq!(ticket.status, TicketStatus::Expired);
+        assert!(ticket.decisions.is_empty());
+    }
+
+    #[test]
+    fn escalate_at_chain_end_returns_exhausted() {
+        // Chain length 2 → valid indices {0, 1}. After one escalate() the
+        // index is 1; a second escalate() has nowhere to go.
+        let routing = ApprovalRouting::Static {
+            targets: vec![
+                ApprovalTarget::Agent { id: "tier-1".to_string() },
+                ApprovalTarget::Role { name: "tier-2".to_string() },
+            ],
+        };
+        let spec = basic_spec(routing, 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-6");
+
+        ticket.escalate().unwrap();
+        assert_eq!(ticket.current_target_index, 1);
+
+        let err = ticket.escalate().unwrap_err();
+        match err {
+            HitlError::EscalationExhausted { ticket_id } => {
+                assert_eq!(ticket_id, ticket.id);
+            }
+            other => panic!("expected EscalationExhausted, got {other:?}"),
+        }
+        // Index unchanged — no silent advance.
+        assert_eq!(ticket.current_target_index, 1);
+    }
+
+    #[test]
+    fn escalate_succeeds_when_chain_has_room() {
+        // Three-target chain supports two escalate calls.
+        let routing = ApprovalRouting::Static {
+            targets: vec![
+                ApprovalTarget::Agent { id: "tier-1".to_string() },
+                ApprovalTarget::Role { name: "tier-2".to_string() },
+                ApprovalTarget::Role { name: "tier-3".to_string() },
+            ],
+        };
+        let spec = basic_spec(routing, 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-7");
+
+        assert!(ticket.escalate().is_ok());
+        assert_eq!(ticket.current_target_index, 1);
+        assert!(ticket.escalate().is_ok());
+        assert_eq!(ticket.current_target_index, 2);
+        // Now at the end — next call must fail.
+        assert!(matches!(
+            ticket.escalate().unwrap_err(),
+            HitlError::EscalationExhausted { .. }
+        ));
+    }
+
+    #[test]
+    fn escalate_on_autonomous_routing_is_exhausted() {
+        // Autonomous routing resolves to an empty chain — no index is valid.
+        let spec = basic_spec(ApprovalRouting::Autonomous, 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-guard-8");
+        assert!(matches!(
+            ticket.escalate().unwrap_err(),
+            HitlError::EscalationExhausted { .. }
+        ));
     }
 }

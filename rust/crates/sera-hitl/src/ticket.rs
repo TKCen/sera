@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sera_types::principal::PrincipalRef;
 use uuid::Uuid;
 
+use crate::error::HitlError;
 use crate::types::{ApprovalSpec, ApprovalTarget, ApprovalRouting};
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -26,6 +27,15 @@ pub enum TicketStatus {
     Escalated,
     /// No decision was reached before the deadline.
     Expired,
+}
+
+impl TicketStatus {
+    /// Returns `true` when the status represents a terminal state — one from
+    /// which no further transitions are allowed. A ticket in a terminal state
+    /// rejects further `approve`/`reject` calls.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Approved | Self::Rejected | Self::Expired)
+    }
 }
 
 // ── Decision ──────────────────────────────────────────────────────────────────
@@ -88,9 +98,25 @@ impl ApprovalTicket {
 
     /// Record an approval decision from `approver`.
     ///
-    /// The ticket moves to `Approved` once `required_approvals` have been collected.
-    /// Returns the new status.
-    pub fn approve(&mut self, approver: PrincipalRef, reason: Option<String>) -> TicketStatus {
+    /// Returns [`HitlError::InvalidTransition`] if the ticket is already in a
+    /// terminal state (Approved or Rejected). If the ticket's deadline has
+    /// passed, the status is flipped to `Expired` and
+    /// [`HitlError::TicketExpired`] is returned — no decision is recorded.
+    ///
+    /// On success the new status is returned. The ticket moves to `Approved`
+    /// once `required_approvals` have been collected.
+    ///
+    /// Duplicate-approver policy: the same principal can approve multiple
+    /// times and every decision counts toward `required_approvals`. This is
+    /// intentional — the state machine treats each call as a distinct vote
+    /// to avoid implicitly dropping decisions that audit logs should capture.
+    /// Callers that need dedupe must enforce it at the router layer.
+    pub fn approve(
+        &mut self,
+        approver: PrincipalRef,
+        reason: Option<String>,
+    ) -> Result<TicketStatus, HitlError> {
+        self.guard_transition("approve")?;
         self.decisions.push(ApprovalDecision {
             approver,
             status: TicketStatus::Approved,
@@ -100,13 +126,24 @@ impl ApprovalTicket {
         if self.is_fully_approved() {
             self.status = TicketStatus::Approved;
         }
-        self.status
+        Ok(self.status)
     }
 
     /// Record a rejection decision from `approver`.
     ///
-    /// A single rejection immediately moves the ticket to `Rejected`.
-    pub fn reject(&mut self, approver: PrincipalRef, reason: Option<String>) -> TicketStatus {
+    /// Returns [`HitlError::InvalidTransition`] if the ticket is already in a
+    /// terminal state (Approved, Rejected, Expired). If the ticket's deadline
+    /// has passed, the status is flipped to `Expired` and
+    /// [`HitlError::TicketExpired`] is returned — no decision is recorded.
+    ///
+    /// On success, a single rejection immediately moves the ticket to
+    /// `Rejected`.
+    pub fn reject(
+        &mut self,
+        approver: PrincipalRef,
+        reason: Option<String>,
+    ) -> Result<TicketStatus, HitlError> {
+        self.guard_transition("reject")?;
         self.decisions.push(ApprovalDecision {
             approver,
             status: TicketStatus::Rejected,
@@ -114,15 +151,28 @@ impl ApprovalTicket {
             decided_at: Utc::now(),
         });
         self.status = TicketStatus::Rejected;
-        self.status
+        Ok(self.status)
     }
 
     /// Advance to the next target in the escalation chain.
     ///
-    /// Sets status to `Escalated` and increments `current_target_index`.
-    pub fn escalate(&mut self) {
+    /// Returns [`HitlError::EscalationExhausted`] when the current position
+    /// already sits at (or past) the end of the resolved chain — i.e. there
+    /// is no further target to advance to. On success sets status to
+    /// `Escalated` and increments `current_target_index`.
+    pub fn escalate(&mut self) -> Result<(), HitlError> {
+        let chain_len = self.resolved_chain_len();
+        // `current_target_index` points at the currently-active target.
+        // After `escalate` it must still point at a valid target, so the
+        // caller can only escalate while `index + 1 < chain_len`.
+        if self.current_target_index + 1 >= chain_len {
+            return Err(HitlError::EscalationExhausted {
+                ticket_id: self.id.clone(),
+            });
+        }
         self.current_target_index += 1;
         self.status = TicketStatus::Escalated;
+        Ok(())
     }
 
     /// Returns `true` when the number of approval decisions meets or exceeds
@@ -162,6 +212,40 @@ impl ApprovalTicket {
                 } else {
                     vec![]
                 }
+            }
+        }
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────
+
+    /// Shared guard for `approve`/`reject`. Flips the ticket to `Expired`
+    /// if the deadline has passed, then rejects any transition originating
+    /// from a terminal state.
+    fn guard_transition(&mut self, action: &'static str) -> Result<(), HitlError> {
+        // Expiry check first: a pending ticket past its deadline is considered
+        // Expired regardless of what the caller is trying to do.
+        if !self.status.is_terminal() && self.is_expired() {
+            self.status = TicketStatus::Expired;
+            return Err(HitlError::TicketExpired { id: self.id.clone() });
+        }
+        if self.status.is_terminal() {
+            return Err(HitlError::InvalidTransition {
+                from: self.status,
+                action: action.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Length of the escalation chain resolved from the current routing mode.
+    /// Used by `escalate` to bound-check the advance.
+    fn resolved_chain_len(&self) -> usize {
+        match &self.spec.routing {
+            ApprovalRouting::Autonomous => 0,
+            ApprovalRouting::Static { targets } => targets.len(),
+            ApprovalRouting::Dynamic(policy) => {
+                let risk_score = self.spec.evidence.risk_score;
+                crate::router::ApprovalRouter::best_chain(policy, risk_score).len()
             }
         }
     }

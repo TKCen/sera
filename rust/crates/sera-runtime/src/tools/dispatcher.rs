@@ -3,7 +3,27 @@
 //! Translates OpenAI-format tool_call JSON into ToolRegistry::execute() calls
 //! and formats the results back into tool result messages.
 //!
-//! TODO(sera-kjf9-followup): Migrate to TraitToolRegistry for policy enforcement.
+//! # Policy enforcement — current state
+//!
+//! `RegistryDispatcher` uses `ToolRegistry` (executor-based, no per-call policy).
+//! `TraitToolRegistry` (same module) provides full policy enforcement via
+//! `ToolContext` + `ToolPolicy`, but migrating to it requires:
+//!
+//! 1. **Trait signature change** — `ToolDispatcher::dispatch` must accept a
+//!    `ToolContext` parameter so that `TraitToolRegistry::execute(input, ctx)` can
+//!    be called.  That propagates through `turn.rs`, `default_runtime.rs`, and
+//!    every downstream caller.
+//!
+//! 2. **Tool re-implementation** — all 14+ `ToolExecutor` impls must be wrapped
+//!    or re-written as `Tool`-trait impls so they can be registered in
+//!    `TraitToolRegistry`.
+//!
+//! Track this as a dedicated bead:
+//! > "Thread `ToolContext` through `ToolDispatcher::dispatch`, update all
+//! > callers in `default_runtime.rs`, and wrap existing `ToolExecutor` impls
+//! > as `Tool`-trait adapters so `RegistryDispatcher` can delegate to
+//! > `TraitToolRegistry::execute`.  Tests must verify `ToolPolicy::allows`
+//! > rejects denied tools and passes allowed ones."
 
 use std::sync::Arc;
 

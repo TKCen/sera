@@ -119,7 +119,7 @@ impl DelegationProtocol for DelegationOrchestrator {
         let timeout = request
             .timeout
             .or(self.config.default_timeout)
-            .unwrap_or(std::time::Duration::from_secs(300));
+            .unwrap_or(std::time::Duration::from_secs(crate::llm_client::DEFAULT_LLM_TIMEOUT_SECS));
 
         let start = Instant::now();
         let mut status_rx = handle.status_rx;

@@ -115,7 +115,7 @@ impl Default for DelegationConfig {
     fn default() -> Self {
         Self {
             max_depth: Self::DEFAULT_MAX_DEPTH,
-            default_timeout: Some(Duration::from_secs(300)),
+            default_timeout: Some(Duration::from_secs(crate::llm_client::DEFAULT_LLM_TIMEOUT_SECS)),
             allowed_targets: None,
         }
     }

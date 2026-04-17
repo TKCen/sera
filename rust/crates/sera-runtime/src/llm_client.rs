@@ -15,6 +15,16 @@ use std::collections::HashMap;
 use tokio::time::Duration;
 
 // ---------------------------------------------------------------------------
+// Module-level constants
+// ---------------------------------------------------------------------------
+
+/// Default LLM request timeout (5 minutes), shared across client, delegation, and HITL.
+pub const DEFAULT_LLM_TIMEOUT_SECS: u64 = 300;
+
+/// Default max-tokens for LLM responses when none is specified by the caller.
+pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
@@ -104,6 +114,7 @@ struct ToolCallAccumulator {
 
 // ---------------------------------------------------------------------------
 // Non-streaming response types (internal)
+// Fields are populated by serde deserialization and read selectively.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -115,28 +126,24 @@ struct NonStreamingResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct NonStreamingChoice {
     message: NonStreamingMessage,
     finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct NonStreamingMessage {
     content: Option<String>,
     tool_calls: Option<Vec<NonStreamingToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct NonStreamingToolCall {
     id: String,
     function: NonStreamingFunction,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct NonStreamingFunction {
     name: String,
     arguments: String,
@@ -158,7 +165,7 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: &RuntimeConfig) -> Self {
-        let timeout = Duration::from_secs(300);
+        let timeout = Duration::from_secs(DEFAULT_LLM_TIMEOUT_SECS);
         Self {
             client: reqwest::Client::builder()
                 .timeout(timeout)
@@ -189,7 +196,7 @@ impl LlmClient {
             base_url: base_url.to_string(),
             model: model.to_string(),
             api_key: api_key.unwrap_or_default().to_string(),
-            max_tokens: 4096,
+            max_tokens: DEFAULT_MAX_TOKENS,
             timeout,
         }
     }

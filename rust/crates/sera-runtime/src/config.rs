@@ -46,7 +46,7 @@ impl RuntimeConfig {
             max_tokens: std::env::var("MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(4096),
+                .unwrap_or(crate::llm_client::DEFAULT_MAX_TOKENS),
         }
     }
 }

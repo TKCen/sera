@@ -266,7 +266,7 @@ pub async fn act(
                 description: format!("Tool call: {tool_name}"),
                 urgency: sera_hitl::ApprovalUrgency::Medium,
                 routing: ctx.approval_routing.clone(),
-                timeout: std::time::Duration::from_secs(300),
+                timeout: std::time::Duration::from_secs(crate::llm_client::DEFAULT_LLM_TIMEOUT_SECS),
                 required_approvals: 1,
                 evidence: sera_hitl::ApprovalEvidence {
                     tool_args: tc.get("function").and_then(|f| f.get("arguments")).cloned(),

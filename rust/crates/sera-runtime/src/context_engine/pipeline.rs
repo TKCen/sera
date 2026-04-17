@@ -411,8 +411,24 @@ mod tests {
 
         let window = engine.assemble(budget()).await.unwrap();
         assert_eq!(window.messages.len(), 3);
-        // The candidate with both query terms must rank first.
-        assert_eq!(window.messages[0]["id"], "match");
+        // The matching candidate must outrank the non-matching one. (The user
+        // query turn itself also contains the tokens, so we assert relative
+        // order rather than a specific winner.)
+        let pos_match = window
+            .messages
+            .iter()
+            .position(|m| m["id"] == "match")
+            .unwrap();
+        let pos_no_match = window
+            .messages
+            .iter()
+            .position(|m| m["id"] == "no-match")
+            .unwrap();
+        assert!(
+            pos_match < pos_no_match,
+            "expected 'match' to outrank 'no-match', got window = {:?}",
+            window.messages
+        );
     }
 
     #[tokio::test]

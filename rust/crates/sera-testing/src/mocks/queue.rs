@@ -130,4 +130,103 @@ mod tests {
         assert!(q.pull("lane-a").await.unwrap().is_none());
         assert!(q.pull("lane-b").await.unwrap().is_none());
     }
+
+    #[tokio::test]
+    async fn mock_queue_len_and_is_empty() {
+        let q = MockQueueBackend::new();
+
+        // Unknown lane reports 0 / empty
+        assert_eq!(q.len("x").await, 0);
+        assert!(q.is_empty("x").await);
+
+        q.push("x", json!(1)).await.unwrap();
+        assert_eq!(q.len("x").await, 1);
+        assert!(!q.is_empty("x").await);
+
+        q.push("x", json!(2)).await.unwrap();
+        assert_eq!(q.len("x").await, 2);
+
+        q.pull("x").await.unwrap();
+        assert_eq!(q.len("x").await, 1);
+
+        q.pull("x").await.unwrap();
+        assert_eq!(q.len("x").await, 0);
+        assert!(q.is_empty("x").await);
+    }
+
+    #[tokio::test]
+    async fn mock_queue_job_ids_are_unique_and_monotone() {
+        let q = MockQueueBackend::new();
+        let id1 = q.push("lane", json!(null)).await.unwrap();
+        let id2 = q.push("lane", json!(null)).await.unwrap();
+        let id3 = q.push("lane", json!(null)).await.unwrap();
+
+        // All distinct
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+
+        // Pulled IDs match push IDs in order
+        let (pulled_id1, _) = q.pull("lane").await.unwrap().unwrap();
+        let (pulled_id2, _) = q.pull("lane").await.unwrap().unwrap();
+        let (pulled_id3, _) = q.pull("lane").await.unwrap().unwrap();
+        assert_eq!(pulled_id1, id1);
+        assert_eq!(pulled_id2, id2);
+        assert_eq!(pulled_id3, id3);
+    }
+
+    #[tokio::test]
+    async fn mock_queue_ack_nack_recover_are_noops() {
+        let q = MockQueueBackend::new();
+        let job_id = q.push("lane", json!(42)).await.unwrap();
+
+        // ack and nack always succeed and do not remove items from the queue
+        q.ack(&job_id).await.unwrap();
+        q.nack(&job_id).await.unwrap();
+        // recover_orphans always returns 0
+        let recovered = q
+            .recover_orphans(std::time::Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(recovered, 0);
+    }
+
+    #[tokio::test]
+    async fn mock_queue_default_is_empty_queue() {
+        let q = MockQueueBackend::default();
+        assert!(q.pull("any").await.unwrap().is_none());
+        assert_eq!(q.len("any").await, 0);
+    }
+
+    #[tokio::test]
+    async fn mock_queue_clone_shares_state() {
+        let q1 = MockQueueBackend::new();
+        let q2 = q1.clone();
+
+        // Push via q1, pull via q2 — they share the same Arc
+        let id = q1.push("shared", json!("value")).await.unwrap();
+        let (pulled_id, pulled_val) = q2.pull("shared").await.unwrap().unwrap();
+        assert_eq!(pulled_id, id);
+        assert_eq!(pulled_val, json!("value"));
+
+        // Now empty for both
+        assert!(q1.pull("shared").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn mock_queue_drain_to_empty() {
+        let q = MockQueueBackend::new();
+        for i in 0..5u32 {
+            q.push("drain", json!(i)).await.unwrap();
+        }
+        assert_eq!(q.len("drain").await, 5);
+
+        // Drain all items
+        let mut count = 0u32;
+        while q.pull("drain").await.unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 5);
+        assert!(q.is_empty("drain").await);
+    }
 }

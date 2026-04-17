@@ -179,4 +179,114 @@ mod tests {
         let err = provider.status(&bogus).await.unwrap_err();
         assert!(matches!(err, SandboxError::NotFound));
     }
+
+    #[tokio::test]
+    async fn mock_sandbox_provider_name() {
+        let provider = MockSandboxProvider::new();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_default_is_empty() {
+        let provider = MockSandboxProvider::default();
+        let bogus = SandboxHandle("x".to_string());
+        let err = provider.status(&bogus).await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_multiple_independent_sandboxes() {
+        let provider = MockSandboxProvider::new();
+        let h1 = provider.create(&SandboxConfig::default()).await.unwrap();
+        let h2 = provider.create(&SandboxConfig::default()).await.unwrap();
+
+        // Handles are distinct
+        assert_ne!(h1, h2);
+
+        // Files written to h1 are not visible via h2
+        provider
+            .write_file(&h1, "/tmp/a.txt", b"from-h1")
+            .await
+            .unwrap();
+        let err = provider.read_file(&h2, "/tmp/a.txt").await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+
+        // Destroying h1 does not affect h2
+        provider.destroy(&h1).await.unwrap();
+        let status = provider.status(&h2).await.unwrap();
+        assert_eq!(status, "running");
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_execute_after_destroy_fails() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+        provider.destroy(&handle).await.unwrap();
+
+        let err = provider
+            .execute(&handle, "ls", &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_file_overwrite() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+
+        provider
+            .write_file(&handle, "/tmp/f.txt", b"v1")
+            .await
+            .unwrap();
+        provider
+            .write_file(&handle, "/tmp/f.txt", b"v2-updated")
+            .await
+            .unwrap();
+
+        let content = provider.read_file(&handle, "/tmp/f.txt").await.unwrap();
+        assert_eq!(content, b"v2-updated");
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_read_missing_file_in_live_sandbox() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+
+        let err = provider
+            .read_file(&handle, "/tmp/no-such-file.txt")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_clone_shares_state() {
+        let p1 = MockSandboxProvider::new();
+        let p2 = MockSandboxProvider {
+            sandboxes: p1.sandboxes.clone(),
+            next_id: p1.next_id.clone(),
+        };
+
+        let handle = p1.create(&SandboxConfig::default()).await.unwrap();
+        // p2 should see the sandbox created via p1
+        let status = p2.status(&handle).await.unwrap();
+        assert_eq!(status, "running");
+
+        // Destroying via p2 is visible from p1
+        p2.destroy(&handle).await.unwrap();
+        let err = p1.status(&handle).await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mock_sandbox_destroy_is_idempotent_on_missing() {
+        let provider = MockSandboxProvider::new();
+        let handle = provider.create(&SandboxConfig::default()).await.unwrap();
+        provider.destroy(&handle).await.unwrap();
+
+        // Second destroy returns NotFound — caller must handle this
+        let err = provider.destroy(&handle).await.unwrap_err();
+        assert!(matches!(err, SandboxError::NotFound));
+    }
 }

@@ -673,6 +673,304 @@ agents:
 4. **Cross-agent memory sharing** — How does the `Shared` memory tier work? Separate workspace? Shared files?
 5. **Memory retention policies** — Are there configurable TTLs or retention policies per tier?
 6. **Memory export/import** — Can an agent's memory be exported and imported to another instance?
-7. **Embedding model deployment** — How is the local embedding model deployed alongside the primary model? Separate process? In-process?
+7. ~~**Embedding model deployment**~~ — Resolved: See §13.3. Local provider uses `fastembed` (in-process ONNX); remote provider uses `async-openai` or `genai`. No separate sidecar process required for local embeddings.
 8. **Skill auto-creation from memory pressure** — When `flush_min_turns` fires, should the system auto-create skill drafts or only notify? Hermes auto-patches via `skill_manage`; SERA should at minimum prompt the agent.
 9. **MemoryBlock segment priority tuning** — Should priority values be operator-configurable per agent, or auto-tuned based on recall signals from the dreaming system?
+
+---
+
+## 13. Embedding Service & RAG
+
+> **Status:** DRAFT (fills gap `sera-ifue`)
+
+### 13.1 Motivation
+
+The hybrid scorer in `rust/crates/sera-runtime/src/context_engine/hybrid.rs` already computes a weighted sum of BM25, cosine similarity, and recency decay (see §2a). However, the `ContextPipeline` (`pipeline.rs`, line ~207) currently passes an empty `Vec<f32>` as the query embedding and relies on whatever embedding vectors happen to be serialised onto messages — when none are present the vector component silently collapses to `0.0` for every candidate, making the system purely lexical. This means semantically similar but lexically distant history (e.g., "speed up the ingestion loop" vs. "optimise throughput") is never retrieved, regardless of how relevant it actually is. A real embedding service is needed so that `HybridScorer` can distinguish between genuinely related history and unrelated noise, and so that the Tier B semantic search described in §2.1 can fire with non-trivial results. Without it, the gateway backend's Qdrant index (§1a) is also effectively inert — it would be seeded only with zero vectors and return arbitrary results. This section specifies the `EmbeddingService` trait, concrete provider implementations, the wire-up point in `ContextPipeline`, and the failure/degradation contract that keeps the system usable when the embedding service is unavailable.
+
+### 13.2 `EmbeddingService` Trait
+
+```rust
+use async_trait::async_trait;
+
+/// A batch embedding service. Implementations must be `Send + Sync + 'static`
+/// so they can be held behind `Arc` and shared across async tasks.
+#[async_trait]
+pub trait EmbeddingService: Send + Sync + 'static {
+    /// Provider-assigned model identifier (e.g. `"text-embedding-3-small"`).
+    /// Used as the first component of the embedding cache key.
+    fn model_id(&self) -> &str;
+
+    /// Fixed output dimension for this model/provider combination.
+    /// All vectors returned by `embed` have exactly this length.
+    fn dimensions(&self) -> usize;
+
+    /// Embed a batch of texts. Returns one `Embedding` per input, in the same
+    /// order. Empty input returns `Ok(vec![])` without making an API call.
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Embedding>, EmbeddingError>;
+
+    /// Liveness check — resolves `Ok(())` if the provider is reachable and
+    /// the configured model is available. Called at pipeline startup and by
+    /// the SERA health check subsystem.
+    async fn health(&self) -> Result<(), EmbeddingError>;
+}
+
+/// A single embedding vector. Newtype keeps the inner `Vec<f32>` from being
+/// confused with other float vecs in scope.
+#[derive(Debug, Clone)]
+pub struct Embedding(pub Vec<f32>);
+
+/// Typed errors from an embedding provider.
+#[derive(Debug, thiserror::Error)]
+pub enum EmbeddingError {
+    /// The remote provider returned a non-retryable error.
+    #[error("embedding provider error: {0}")]
+    Provider(String),
+
+    /// The request timed out before a response was received.
+    #[error("embedding request timed out")]
+    Timeout,
+
+    /// The provider rate-limited the request.
+    /// `retry_after` is the minimum wait in seconds, when the provider
+    /// supplies a `Retry-After` header; `None` means unknown.
+    #[error("embedding rate limited (retry_after={retry_after:?}s)")]
+    RateLimited { retry_after: Option<u64> },
+
+    /// The returned vector length does not match `dimensions()`.
+    /// Should never fire against a well-behaved provider but is surfaced
+    /// explicitly so callers can distinguish it from `Provider`.
+    #[error("embedding dimension mismatch: expected {expected}, got {actual}")]
+    DimensionMismatch { expected: usize, actual: usize },
+
+    /// The input text was rejected before it was sent (e.g., empty after
+    /// redaction, or exceeded the model's token limit).
+    #[error("invalid embedding input: {0}")]
+    InvalidInput(String),
+}
+```
+
+**Trait contracts:**
+
+- `embed` is **batch-first**: the caller passes a `&[String]` slice; the implementation is expected to make a single API call (or one call per provider batch limit) rather than one call per text.
+- The returned `Vec<Embedding>` is **1:1 ordered** with the input slice — `result[i]` is always the embedding for `texts[i]`.
+- Every returned `Embedding` vector has length exactly equal to `dimensions()`. A provider that violates this must return `EmbeddingError::DimensionMismatch`.
+- An empty input slice (`texts.is_empty()`) returns `Ok(vec![])` **without any network call**.
+
+> **Tradeoff:** Requiring a fixed `dimensions()` at construction time (rather than inferring it from the first response) enables dimension-compatibility checks at pipeline startup (§13.5) and avoids lazy errors during scoring.
+
+### 13.3 Provider Implementations
+
+Three concrete providers are required. Each is a struct with an associated configuration struct; full implementation is deferred to the implementor bead.
+
+#### `OpenAIEmbeddingService`
+
+| Field | Value |
+|---|---|
+| Config struct | `OpenAIEmbeddingConfig` |
+| Default `model_id` | `"text-embedding-3-small"` |
+| Default dimensions | `1536` (must match the model; configurable for `text-embedding-3-large` at 3072) |
+| Auth | API key read from `sera-secrets` via the existing `SecretsProvider` trait (key name: `OPENAI_API_KEY`) |
+| HTTP client | `async-openai ^0.28` (already listed in [SPEC-dependencies](SPEC-dependencies.md) §9.1) |
+| Rate limiting | Reads `Retry-After` header on HTTP 429; returns `EmbeddingError::RateLimited { retry_after }` rather than blocking the caller — callers decide whether to wait or degrade |
+| Batch size | Configurable via `OpenAIEmbeddingConfig::batch_size` (default: `100`); texts exceeding this are split into multiple sequential calls |
+
+```rust
+pub struct OpenAIEmbeddingConfig {
+    pub model_id: String,          // default: "text-embedding-3-small"
+    pub dimensions: usize,         // default: 1536
+    pub batch_size: usize,         // default: 100
+    pub timeout_secs: u64,         // default: 30
+    /// Secret key name resolved via SecretsProvider. Default: "OPENAI_API_KEY".
+    pub api_key_secret: String,
+}
+```
+
+#### `OllamaEmbeddingService`
+
+| Field | Value |
+|---|---|
+| Config struct | `OllamaEmbeddingConfig` |
+| Default `model_id` | `"nomic-embed-text"` |
+| Default dimensions | `768` |
+| Base URL | `OLLAMA_BASE_URL` env var (default: `http://localhost:11434`) |
+| Auth | None — local service, no API key |
+| HTTP client | `async-openai` with a custom `base_url` (Ollama exposes an OpenAI-compatible `/api/embeddings` endpoint), or direct `reqwest` call |
+
+```rust
+pub struct OllamaEmbeddingConfig {
+    pub model_id: String,          // default: "nomic-embed-text"
+    pub dimensions: usize,         // default: 768
+    pub base_url: String,          // default: "http://localhost:11434"
+    pub timeout_secs: u64,         // default: 30
+}
+```
+
+> **Tradeoff:** Ollama is zero-cost for local development and CI but unavailable in cloud deployments without a sidecar. The tier policy (§13.7) gates OpenAI use to agents where `allow_external_embedding: true`; Ollama is always permitted regardless of tier.
+
+#### `StubEmbeddingService`
+
+The existing zero-vector behavior is extracted into an explicit stub, available **only** behind the `cfg(test)` attribute or the `testing` Cargo feature. It must be removed from the default build path — no production `ContextPipeline` should silently use it.
+
+```rust
+#[cfg(any(test, feature = "testing"))]
+pub struct StubEmbeddingService {
+    pub dimensions: usize,
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl EmbeddingService for StubEmbeddingService {
+    fn model_id(&self) -> &str { "stub" }
+    fn dimensions(&self) -> usize { self.dimensions }
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Embedding>, EmbeddingError> {
+        Ok(texts.iter().map(|_| Embedding(vec![0.0; self.dimensions])).collect())
+    }
+    async fn health(&self) -> Result<(), EmbeddingError> { Ok(()) }
+}
+```
+
+### 13.4 `ContextPipeline` Integration
+
+**Wire-up point:** `pipeline.rs` around line 207, where `let query_embedding: Vec<f32> = Vec::new()` is the current placeholder (documented in the source as "no embedding service wired in yet").
+
+The fix replaces the hardcoded empty vector with a call to a `Box<dyn EmbeddingService>` held on `ContextPipeline`:
+
+```rust
+pub struct ContextPipeline {
+    messages: Vec<serde_json::Value>,
+    condensers: Vec<Box<dyn Condenser>>,
+    session_key: String,
+    model_id: String,
+    hybrid_config: Option<HybridRetrievalConfig>,
+    /// Optional embedding service. When `None`, the pipeline degrades to
+    /// lexical + recency scoring (vector component is zero). When `Some`,
+    /// the query is embedded and all uncached candidates are embedded in
+    /// one batch call before scoring.
+    embedding_service: Option<Arc<dyn EmbeddingService>>,
+}
+```
+
+**Builder method:**
+
+```rust
+impl ContextPipeline {
+    pub fn with_embedding_service(mut self, svc: Arc<dyn EmbeddingService>) -> Self {
+        self.embedding_service = Some(svc);
+        self
+    }
+}
+```
+
+**Injection at pipeline construction** is the responsibility of the caller (typically the agent harness or `DefaultRuntime`) — the pipeline does not construct a provider itself.
+
+**Embedding call in `assemble`:** When `embedding_service` is `Some` and hybrid retrieval is enabled, the pipeline:
+
+1. Derives the query text from the last user turn (as `derive_query_tokens` already does, but as raw text, not tokenised).
+2. Calls `embed(&[query_text])` to get the query embedding.
+3. For each candidate message that lacks a cached embedding, collects its `content` field.
+4. Calls `embed(&uncached_texts)` in one batch.
+5. Stores results back onto the candidate's `embedding` field (in-memory only, not persisted to the JSON message).
+
+**Embedding cache** — per message, keyed by `(model_id, content_hash)`:
+
+- `content_hash` is the SHA-256 of the message content string (the `MemoryId::from_entry` pattern already established in §2 applies here).
+- The cache store reuses whatever in-process store is present on the `ContextPipeline` session — specifically the existing `KvCache` abstraction in `context_engine/kvcache.rs`. The implementor should check that module for the available API before introducing a new cache type.
+- Cache entries are session-scoped and dropped when the pipeline is dropped. Cross-session persistence of embeddings belongs to the gateway backend's Qdrant index, not to this cache.
+
+> **Tradeoff:** Session-scoped cache avoids stale embeddings when the model changes mid-session while keeping the common case (repeated assembly calls within a session) allocation-free after the first pass.
+
+### 13.5 Dimension Handling
+
+The `HybridScorer` currently assumes both the query embedding and candidate embeddings have a consistent length (it returns `0.0` silently when lengths differ — see `hybrid.rs::cosine`). With a real embedding service this silent fallback is not sufficient because a dimension mismatch indicates a misconfiguration, not a missing embedding.
+
+**Rule:** At pipeline construction time, if `embedding_service` is `Some` and `hybrid_config` is `Some`, the pipeline calls `embedding_service.dimensions()` and stores the value. Any candidate embedding on an ingested message whose length does not match this stored dimension is treated as a cache miss — the candidate is re-embedded rather than used as-is. Mixing two different-dimension services in one pipeline is rejected at startup with `EmbeddingError::DimensionMismatch { expected, actual }` logged as an error and causing pipeline construction to fail.
+
+**Re-embedding policy when switching models (e.g., operator changes `model_id` in config):**
+
+- **Phase 1 (this spec):** Lazy. Existing cached embeddings are considered stale whenever `model_id` changes. On the next `assemble` call the stale entries are detected (model_id component of cache key does not match) and re-embedded on demand. No background work.
+- **Phase 2 (future):** Eager background reindex — a maintenance task triggered on model change that re-embeds all messages in parallel before the next user turn. Noted here for future implementors; not part of this bead's scope.
+
+> **Tradeoff:** Lazy re-embedding adds latency to the first `assemble` call after a model switch but avoids background task complexity and race conditions in Phase 1. Most model switches happen at restart time when the message history is empty anyway.
+
+### 13.6 Failure & Degradation
+
+The pipeline must remain usable when the embedding service fails. Degradation is always logged and metriced (§13.8).
+
+| Failure mode | Behaviour |
+|---|---|
+| `EmbeddingError::Provider` | Fall back to **lexical-only scoring**: set `vector_weight = 0.0`, redistribute to `index_weight` and `recency_weight` proportionally so they still sum to `1.0`. Log `warn!` with provider name and error. Increment `embedding_service_failures_total`. |
+| `EmbeddingError::Timeout` | Return **partial scoring**: candidates that were embedded before the timeout get their real vector score; the slow candidate gets `vector_score = 0.0`. Emit `debug!` per skipped candidate. Do not increment failure counter (timeouts are expected under load). |
+| `EmbeddingError::RateLimited { retry_after }` | Honor `retry_after` if the caller can tolerate the wait (e.g., a background indexing job). If the caller is on the hot path (`assemble`), degrade the same as `Provider` error — do not block the turn. Increment `embedding_service_failures_total`. |
+| `EmbeddingError::DimensionMismatch` | Hard error at pipeline construction (§13.5). At runtime (unexpected provider response) treat as `Provider` error and degrade to lexical-only. |
+| `EmbeddingError::InvalidInput` | Drop the affected candidate from the embedding batch; assign `vector_score = 0.0` for that candidate. Log `debug!`. |
+
+**Proportional rescaling formula for lexical-only fallback:**
+
+```
+total_remaining = index_weight + recency_weight
+index_weight'   = index_weight   / total_remaining
+recency_weight' = recency_weight / total_remaining
+vector_weight'  = 0.0
+```
+
+This preserves the relative balance between BM25 and recency that the operator configured.
+
+### 13.7 Security & Data Handling
+
+**External embedding flag:**
+
+```yaml
+agents:
+  - name: "my-agent"
+    tier: 3                    # Tier-3 is the most restrictive
+    memory:
+      embedding:
+        allow_external_embedding: false   # default for Tier-3; must be explicit true to use OpenAI
+```
+
+- `allow_external_embedding: false` (default for Tier-3) means the pipeline resolver rejects any provider whose `model_id` is served by a remote API at startup. Only providers whose HTTP client points to a local address (loopback or internal network) are permitted. `OllamaEmbeddingService` always passes; `OpenAIEmbeddingService` is rejected.
+- `allow_external_embedding: true` must be explicit in the agent manifest. It is not inheritable from parent config — it must be set per agent.
+- Tier-1 and Tier-2 agents default `allow_external_embedding: true` (these tiers are presumed to be less sensitive workloads).
+
+**Redaction before embedding:** `sera-secrets` does not currently expose a `Redactor` type (confirmed by inspection of `rust/crates/sera-secrets/src/lib.rs` — only `SecretsProvider` implementations are exported). Until a `Redactor` is added to that crate, the embedding pipeline applies a **best-effort pattern redaction** inline: before passing content to `embed`, it replaces strings matching the patterns configured under `sera.secrets.redact_patterns[]` (a new config key to be added in the config spec) with the placeholder `[REDACTED]`. This is not cryptographically guaranteed — full redaction support is a follow-on task.
+
+> **Tradeoff:** Inline pattern redaction is imperfect but provides a safety net for the common cases (API keys, tokens) without blocking this bead on a `Redactor` trait that does not yet exist.
+
+### 13.8 Metrics
+
+The following counters and histograms are **named but not implemented** here — they are registered during the implementation bead and emitted by the embedding service wrapper:
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `embedding_requests_total` | Counter | `provider`, `model`, `result` (`ok`\|`error`\|`timeout`\|`rate_limited`) | Total embedding API calls, by outcome |
+| `embedding_latency_seconds` | Histogram | `provider`, `model` | End-to-end latency per batch call (not per text) |
+| `embedding_cache_hit_ratio` | Gauge | `provider`, `model` | Ratio of cache hits to total embedding lookups in the current session |
+| `embedding_batch_size` | Histogram | `provider`, `model` | Number of texts per `embed` call — tracks batching efficiency |
+
+All metrics follow the existing `sera-telemetry` OTel conventions. The `provider` label is derived from the `EmbeddingService` implementation's type name (e.g., `"openai"`, `"ollama"`, `"stub"`).
+
+### 13.9 Test Strategy
+
+**Unit tests** (no network, no Docker):
+
+- Trait mock: a `MockEmbeddingService` in `sera-testing` (behind `feature = "testing"`) that returns deterministic embeddings derived from a hash of the input text (e.g., hash the first 4 bytes of SHA-256 into a normalised `f32` vector of the configured `dimensions`). Non-zero and deterministic, unlike the stub.
+- Dimension-mismatch path: construct a pipeline where the service reports `dimensions() = 768` but inject a message with a 1536-dim embedding; assert that the pipeline re-embeds rather than using the stale vector.
+- Rate-limit retry accounting: `MockEmbeddingService` configured to return `EmbeddingError::RateLimited { retry_after: Some(1) }` on the first call and `Ok` on the second; assert that hot-path `assemble` degrades rather than blocking, and that the background path retries.
+- Lexical fallback weight rescaling: configure `index_weight = 0.6, vector_weight = 0.3, recency_weight = 0.1`; trigger a `Provider` error; assert `index_weight' ≈ 0.857`, `recency_weight' ≈ 0.143`, `vector_weight' = 0.0`.
+
+**Integration tests** (gated behind `--features integration`, require a running Ollama instance):
+
+- `OllamaEmbeddingService::embed(&["hello world"])` returns a vector of length 768 with at least one non-zero element.
+- `health()` resolves `Ok(())` when Ollama is reachable.
+
+**Property-based tests** (using `proptest` or equivalent):
+
+- `embed(empty) == Ok(vec![])` — for any provider configuration.
+- `len(result) == len(input)` — returned slice length always equals input slice length.
+- `len(result[i]) == dimensions()` — every returned embedding has the declared length.
+
+### 13.10 Open Questions
+
+1. **`text-embedding-3-large` as a tier upgrade:** Should `OpenAIEmbeddingService` support `text-embedding-3-large` (3072 dims) as a configurable alternative to the 1536-dim default? The cost is approximately 2× per token. This is a human decision about cost vs. retrieval quality — if it should be supported, the `OpenAIEmbeddingConfig::dimensions` field already allows it, but the default and any guardrails need operator sign-off.
+2. **No embedding service configured at all:** When neither an OpenAI key nor an Ollama URL is provided, should `ContextPipeline` refuse to start (forcing the operator to acknowledge the degraded mode) or silently fall back to lexical scoring with a startup warning? The current stub behavior is silent fallback, but making it explicit opt-in (`hybrid_config.require_embedding: false`) would prevent surprise degradation in production.
+3. **Cross-session embedding persistence:** Session-scoped cache means every new session re-embeds the entire history on first `assemble`. For long-lived agents with large histories this is expensive. Should the implementor wire `EmbeddingService` into the gateway backend's Qdrant index so that embeddings computed during one session are reused in the next? This would require the `(model_id, content_hash)` cache key to be stored in Qdrant alongside the vector, and is likely a Phase 2 concern — but the implementor should confirm scope with the architect.

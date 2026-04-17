@@ -331,6 +331,33 @@ pub async fn act(
     // This implements the "Steer Contract" from SPEC-gateway §5.2:
     // Check for steer after each tool call; if present, inject into transcript and signal RunAgain.
     if let Some(steer_content) = ctx.pending_steer.take() {
+        // Validate steer content: must be a non-empty string within size limits.
+        const MAX_STEER_BYTES: usize = 64 * 1024; // 64 KB
+        let steer_text = match steer_content.as_str() {
+            Some("") => {
+                tracing::warn!(session_key = %ctx.session_key, "Steer injection rejected: empty message");
+                return act_result_inner;
+            }
+            Some(s) if s.len() > MAX_STEER_BYTES => {
+                tracing::warn!(
+                    session_key = %ctx.session_key,
+                    len = s.len(),
+                    max = MAX_STEER_BYTES,
+                    "Steer injection rejected: message exceeds size limit"
+                );
+                return act_result_inner;
+            }
+            Some(s) if s.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t') => {
+                tracing::warn!(session_key = %ctx.session_key, "Steer injection rejected: message contains invalid control characters");
+                return act_result_inner;
+            }
+            Some(s) => s,
+            None => {
+                tracing::warn!(session_key = %ctx.session_key, "Steer injection rejected: content is not a string");
+                return act_result_inner;
+            }
+        };
+
         tracing::info!(
             session_key = %ctx.session_key,
             "Steer injection at tool boundary"
@@ -338,11 +365,11 @@ pub async fn act(
         // Convert steer content to a user message and prepend to results
         let steer_message = serde_json::json!({
             "role": "user",
-            "content": steer_content
+            "content": steer_text
         });
         // Return a special result that signals to the runtime to re-enter think with the steer message
         return ActResult::SteerInjected {
-            steer_message,
+            steer_message: steer_message.clone(),
             tool_results: match act_result_inner {
                 ActResult::ToolResults(r) => r,
                 _ => vec![],
@@ -432,10 +459,15 @@ pub async fn react(
             tokens_used: tokens.clone(),
             duration_ms: elapsed_ms,
         },
-        ActResult::SteerInjected { steer_message: _, tool_results: _ } => {
-            // Steer injection at tool boundary: return RunAgain with steer message prepended
-            // The tool results are already included in the act step, we add the steer message
-            // to prompt the model to respond to the user's new input
+        ActResult::SteerInjected { steer_message, tool_results: _ } => {
+            // Steer injection at tool boundary: return RunAgain with the steer content embedded
+            // so downstream observers and the audit chain can record what was injected.
+            let steer_text = steer_message
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            tracing::debug!(steer_content = %steer_text, "SteerInjected propagated to RunAgain");
             TurnOutcome::RunAgain {
                 tool_calls: vec![],
                 tokens_used: tokens.clone(),
@@ -795,6 +827,75 @@ mod tests {
                 );
             }
             other => panic!("expected WaitingForApproval, got {:?}", other),
+        }
+    }
+
+    // ── Steer validation tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn act_steer_empty_message_is_dropped() {
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.pending_steer = Some(serde_json::json!(""));
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_1",
+                "type": "function",
+                "function": { "name": "noop", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        // Empty steer must be dropped — result is ToolResults not SteerInjected.
+        assert!(
+            matches!(result, ActResult::ToolResults(_)),
+            "expected ToolResults after empty steer drop, got {:?}", result
+        );
+    }
+
+    #[tokio::test]
+    async fn act_steer_oversized_message_is_dropped() {
+        let mut ctx = make_turn_ctx(vec![]);
+        let big = "x".repeat(64 * 1024 + 1);
+        ctx.pending_steer = Some(serde_json::json!(big));
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_2",
+                "type": "function",
+                "function": { "name": "noop", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        assert!(
+            matches!(result, ActResult::ToolResults(_)),
+            "expected ToolResults after oversized steer drop, got {:?}", result
+        );
+    }
+
+    #[tokio::test]
+    async fn act_steer_valid_message_is_injected() {
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.pending_steer = Some(serde_json::json!("please focus on task B"));
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_3",
+                "type": "function",
+                "function": { "name": "noop", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        match result {
+            ActResult::SteerInjected { steer_message, .. } => {
+                assert_eq!(
+                    steer_message.get("content").and_then(|c| c.as_str()),
+                    Some("please focus on task B")
+                );
+            }
+            other => panic!("expected SteerInjected, got {:?}", other),
         }
     }
 

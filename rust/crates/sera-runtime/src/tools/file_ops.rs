@@ -22,10 +22,7 @@ impl ToolExecutor for FileRead {
 
     async fn execute(&self, args: &serde_json::Value) -> anyhow::Result<String> {
         let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'path'"))?;
-        match tokio::fs::read_to_string(path).await {
-            Ok(content) => Ok(content),
-            Err(e) => Ok(format!("Error reading {path}: {e}")),
-        }
+        tokio::fs::read_to_string(path).await.map_err(|e| anyhow::anyhow!("Error reading {path}: {e}"))
     }
 }
 
@@ -91,5 +88,21 @@ impl ToolExecutor for FileList {
         }
 
         Ok(result.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::ToolExecutor;
+
+    #[tokio::test]
+    async fn file_read_nonexistent_path_returns_err() {
+        let tool = FileRead;
+        let args = serde_json::json!({ "path": "/nonexistent/path/that/does/not/exist.txt" });
+        let result = tool.execute(&args).await;
+        assert!(result.is_err(), "expected Err for nonexistent file, got Ok");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Error reading"), "unexpected error message: {msg}");
     }
 }

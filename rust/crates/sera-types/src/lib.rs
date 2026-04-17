@@ -30,6 +30,7 @@ pub mod secrets;
 pub mod session;
 pub mod skill;
 pub mod tool;
+pub mod training_export;
 
 pub use evolution::*;
 pub use versioning::BuildIdentity;

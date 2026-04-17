@@ -109,6 +109,25 @@ impl SqliteDb {
                 details     TEXT,
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS training_exports (
+                id                  TEXT PRIMARY KEY,
+                format              TEXT NOT NULL CHECK (format IN ('openai_jsonl', 'alpaca', 'share_gpt')),
+                filter_min_score    REAL,
+                filter_date_from    TEXT,
+                filter_date_to      TEXT,
+                filter_trigger_type TEXT,
+                pii_redaction       INTEGER NOT NULL DEFAULT 1,
+                status              TEXT NOT NULL CHECK (status IN ('queued', 'running', 'complete', 'failed')) DEFAULT 'queued',
+                total_records       INTEGER,
+                output_path         TEXT,
+                error               TEXT,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                started_at          TEXT,
+                finished_at         TEXT
+            );
+            CREATE INDEX IF NOT EXISTS training_exports_status_idx ON training_exports(status);
+            CREATE INDEX IF NOT EXISTS training_exports_created_at_idx ON training_exports(created_at DESC);
             ",
         )?;
         Ok(())

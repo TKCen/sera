@@ -90,3 +90,14 @@ Legend: Effort S (< 1h) / M (1-4h) / L (1+ day). Ready = landable in current ses
 1. **HookAbortSignal** — add typed abort to `sera-hooks` + unit test.
 2. **HarnessSupportContext** — extend fields and wire real predicate + tests.
 3. **Secrets enterprise contract** — compile-time doc-test proving stubs cannot be used as providers.
+
+## Follow-up beads (L-effort gaps)
+
+| Bead        | Gap                                           |
+| ----------- | --------------------------------------------- |
+| `sera-lel6` | SPEC-runtime: ToolUseBehavior (M, threading)  |
+| `sera-taso` | SPEC-runtime: PlanAndAct multi-phase loop     |
+| `sera-w3np` | SPEC-gateway: LSP routing + process persistence |
+| `sera-az1x` | SPEC-hooks: WASM fuel metering                |
+| `sera-61ao` | SPEC-hooks: two-tier bus                      |
+| `sera-ifue` | SPEC-memory: RAG / embedding search           |

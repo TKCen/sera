@@ -37,6 +37,7 @@ pub mod context_engine;
 pub mod delegation;
 pub mod handoff;
 pub mod harness;
+pub mod memory_assembler;
 pub mod subagent;
 pub mod turn;
 

@@ -5,6 +5,7 @@
 //! See SPEC-runtime §3 for the complete turn loop design.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use sera_hitl;
@@ -13,6 +14,7 @@ use sera_types::runtime::{
     TurnOutcome,
 };
 
+use crate::memory_assembler::MemoryBlockAssembler;
 use crate::turn::{self, LlmProvider, ReactMode, ToolDispatcher};
 
 // ── TurnTimer ────────────────────────────────────────────────────────────────
@@ -56,6 +58,11 @@ pub struct DefaultRuntime {
     /// Number of consecutive failures per tool before injecting a "Recent Issues" context block.
     /// Defaults to 3. Set to 0 to disable injection.
     pub failure_threshold: u32,
+    /// Tier-1 compact memory block assembler.
+    ///
+    /// If `None`, memory block injection is skipped (backward-compatible default).
+    /// Use `with_memory_assembler` to enable.
+    memory_assembler: Option<Mutex<MemoryBlockAssembler>>,
 }
 
 impl std::fmt::Debug for DefaultRuntime {
@@ -66,6 +73,7 @@ impl std::fmt::Debug for DefaultRuntime {
             .field("has_tool_dispatcher", &self.tool_dispatcher.is_some())
             .field("max_tool_iterations", &self.max_tool_iterations)
             .field("failure_threshold", &self.failure_threshold)
+            .field("has_memory_assembler", &self.memory_assembler.is_some())
             .finish()
     }
 }
@@ -81,7 +89,20 @@ impl DefaultRuntime {
             tool_dispatcher: None,
             max_tool_iterations: 10,
             failure_threshold: 3,
+            memory_assembler: None,
         }
+    }
+
+    /// Set the Tier-1 memory block assembler.
+    ///
+    /// When set, `execute_turn` prepends the rendered memory block as a system
+    /// message before every LLM call. When `record_turn` returns `true`
+    /// (overflow_turns >= flush_min_turns), a `memory_pressure` signal is
+    /// returned via `TurnOutcome::MemoryPressure` so the caller can emit the
+    /// corresponding event.
+    pub fn with_memory_assembler(mut self, assembler: MemoryBlockAssembler) -> Self {
+        self.memory_assembler = Some(Mutex::new(assembler));
+        self
     }
 
     /// Set the LLM provider for the think step.
@@ -109,6 +130,13 @@ impl DefaultRuntime {
     pub fn with_failure_threshold(mut self, threshold: u32) -> Self {
         self.failure_threshold = threshold;
         self
+    }
+
+    /// Return a reference to the memory assembler mutex, if one was set.
+    ///
+    /// Primarily used by tests to inspect assembler state after turn execution.
+    pub fn memory_assembler(&self) -> Option<&Mutex<MemoryBlockAssembler>> {
+        self.memory_assembler.as_ref()
     }
 }
 
@@ -159,6 +187,37 @@ impl AgentRuntime for DefaultRuntime {
                 Ok(msgs) => msgs,
                 Err(interruption) => return Ok(interruption),
             };
+
+            // Inject Tier-1 memory block (Architecture Addendum 2026-04-16 §1).
+            // Prepend a system message containing the rendered block before the
+            // LLM call. When record_turn returns true (overflow_turns reaches
+            // flush_min_turns), surface did_trigger_pressure via return value so
+            // the gateway can emit memory_pressure without a cross-crate dep.
+            let (observed, memory_pressure_triggered) =
+                if let Some(ref asm_mutex) = self.memory_assembler {
+                    let result = asm_mutex.lock().unwrap().assemble();
+                    if result.rendered.is_empty() {
+                        (observed, false)
+                    } else {
+                        let memory_msg = serde_json::json!({
+                            "role": "system",
+                            "content": result.rendered,
+                        });
+                        let mut with_memory = Vec::with_capacity(observed.len() + 1);
+                        with_memory.push(memory_msg);
+                        with_memory.extend(observed);
+                        (with_memory, result.did_trigger_pressure)
+                    }
+                } else {
+                    (observed, false)
+                };
+
+            if memory_pressure_triggered {
+                tracing::info!(
+                    session_key = %turn_ctx.session_key,
+                    "memory_pressure: overflow_turns reached flush_min_turns threshold"
+                );
+            }
 
             // Inject "Recent Issues" block when any tool has hit the failure threshold.
             // Positioned as the last message before the user turn so the model sees it immediately.
@@ -1171,7 +1230,7 @@ mod tests {
     async fn failure_threshold_zero_disables_injection() {
         // Even with many failures, threshold=0 must never inject Recent Issues.
         // We use a capturing LLM to verify no "## Recent Issues" block appears.
-        let llm = ToolCallingLlm::new(vec![
+        let _llm = ToolCallingLlm::new(vec![
             vec![tool_call("c1", "flaky")],
             vec![tool_call("c2", "flaky")],
             vec![tool_call("c3", "flaky")],

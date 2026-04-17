@@ -3,6 +3,7 @@
 //! This binary replaces the TypeScript sera-core Express server.
 //! Built on axum + tokio + sqlx.
 
+pub mod constitutional_config;
 pub mod discord;
 mod error;
 mod middleware;
@@ -100,12 +101,16 @@ async fn main() -> anyhow::Result<()> {
         sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
     );
     // Constitutional-rule registry consulted at `PreApproval` inside the
-    // evolve `/evaluate` route. Starts empty — rules are seeded at startup in
-    // a follow-up; with no rules present the dry-run passes unconditionally,
-    // preserving today's behaviour while giving operators a real gate point.
+    // evolve `/evaluate` route. Seeded from the rules file at startup; if the
+    // file is absent the registry stays empty (backward-compat). A parse error
+    // is fatal — a misconfigured rule file is a security concern.
     let constitutional_registry = Arc::new(
         sera_meta::constitutional::ConstitutionalRegistry::new(),
     );
+    if let Err(e) = constitutional_config::seed_registry_from_env(&constitutional_registry).await {
+        tracing::error!("Failed to load constitutional rules: {e}");
+        std::process::exit(1);
+    }
 
     // Signer for /api/evolve/* CapabilityTokens. Prefer the dedicated
     // SERA_EVOLVE_TOKEN_SECRET so operators can rotate it independently of
@@ -470,6 +475,7 @@ fn build_router(
         .route("/api/evolve/evaluate/{id}", post(routes::evolve::evaluate))
         .route("/api/evolve/approve/{id}", post(routes::evolve::approve))
         .route("/api/evolve/apply/{id}", post(routes::evolve::apply))
+        .route("/api/evolve/operator-key/{id}", post(routes::evolve::supply_operator_key))
         .route("/api/evolve/{id}", get(routes::evolve::get))
         // Service identities
         .route("/api/agents/{agent_id}/service-identities", get(routes::service_identities::list_identities).post(routes::service_identities::create_identity))

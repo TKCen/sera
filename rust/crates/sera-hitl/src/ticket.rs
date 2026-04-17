@@ -11,6 +11,54 @@ use uuid::Uuid;
 use crate::error::HitlError;
 use crate::types::{ApprovalSpec, ApprovalTarget, ApprovalRouting};
 
+// ── ApprovalId ────────────────────────────────────────────────────────────────
+
+/// Strongly-typed identifier for an [`ApprovalTicket`].
+///
+/// Wraps the ticket's string ID (currently a UUID v4) so callers can pass it
+/// across crate boundaries without losing type information. The [`From`]/
+/// [`Into`] impls make interop with `String`/`&str` frictionless for call
+/// sites that already keep the raw ID (e.g. log lines, persistence layers).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ApprovalId(pub String);
+
+impl ApprovalId {
+    /// Construct from anything that can be turned into a `String`.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Borrow the inner string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ApprovalId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for ApprovalId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ApprovalId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<ApprovalId> for String {
+    fn from(id: ApprovalId) -> String {
+        id.0
+    }
+}
+
 // ── Status ────────────────────────────────────────────────────────────────────
 
 /// The current lifecycle state of an approval ticket.

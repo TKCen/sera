@@ -533,12 +533,200 @@ fn ready_queue_surfaces_elapsed_timer_and_hides_pending_timer() {
 #[test]
 fn non_timer_await_still_blocks() {
     // Regression: other AwaitType variants must still block until their
-    // integrations (GhRun/GhPr/Human/Mail/Change) land.
+    // integrations land. GhRun is not yet implemented, so it remains
+    // pending regardless of any lookup.
     let now = base_instant();
     let mut t = make_task(1, vec![]);
-    t.await_type = Some(AwaitType::Human);
+    t.await_type = Some(AwaitType::GhRun);
 
     let tasks = vec![t.clone()];
     let ready = ready_tasks(&tasks, now);
     assert!(!ready.iter().any(|r| r.id == t.id));
+}
+
+// ---------------------------------------------------------------------------
+// AwaitType::Human gate (HitlLookup)
+// ---------------------------------------------------------------------------
+
+use sera_hitl::{ApprovalId, TicketStatus};
+
+use crate::ready::{is_human_ready, ready_tasks_with_hitl, HitlLookup, NoopHitlLookup};
+
+/// In-memory [`HitlLookup`] used exclusively in tests to stand in for a
+/// real sera-hitl repository. Holds a tiny `ApprovalId -> TicketStatus`
+/// table and returns `None` for any id that was never inserted.
+#[derive(Debug, Default)]
+struct MapHitlLookup {
+    by_id: HashMap<String, TicketStatus>,
+}
+
+impl MapHitlLookup {
+    fn new() -> Self {
+        Self { by_id: HashMap::new() }
+    }
+
+    fn insert(&mut self, id: impl Into<String>, status: TicketStatus) {
+        self.by_id.insert(id.into(), status);
+    }
+}
+
+impl HitlLookup for MapHitlLookup {
+    fn ticket_status(&self, id: &ApprovalId) -> Option<TicketStatus> {
+        self.by_id.get(id.as_str()).copied()
+    }
+}
+
+#[test]
+fn human_missing_ticket_is_not_ready() {
+    // Ticket not present in the lookup → treat as not ready. The gate must
+    // never self-satisfy on unknown IDs, otherwise a stale workflow task
+    // referencing a purged ticket would be surfaced forever.
+    let gate = AwaitType::Human { approval_id: ApprovalId::new("ticket-missing") };
+    let lookup = MapHitlLookup::new();
+    assert!(!is_human_ready(&gate, &lookup));
+}
+
+#[test]
+fn human_pending_ticket_is_not_ready() {
+    // Pending is a non-terminal status — still waiting on the approver.
+    let now = base_instant();
+    let gate = AwaitType::Human { approval_id: ApprovalId::new("ticket-pending") };
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-pending", TicketStatus::Pending);
+    assert!(!is_human_ready(&gate, &lookup));
+    // Also exercise the gate through ready_tasks_with_hitl to cover the
+    // scheduler path.
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(gate);
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(!ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn human_approved_ticket_is_ready() {
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("ticket-approved"),
+    });
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-approved", TicketStatus::Approved);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn human_rejected_ticket_is_ready() {
+    // Rejection is terminal — the task must wake up so its handler can
+    // branch on the denial. Gating only on Approved would strand the task.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("ticket-rejected"),
+    });
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-rejected", TicketStatus::Rejected);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn human_expired_ticket_is_ready() {
+    // Expiry is terminal too — the workflow should progress and record the
+    // expiration rather than idle forever.
+    let now = base_instant();
+    let gate = AwaitType::Human { approval_id: ApprovalId::new("ticket-expired") };
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-expired", TicketStatus::Expired);
+    assert!(is_human_ready(&gate, &lookup));
+
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(gate);
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn human_escalated_ticket_is_not_ready() {
+    // Escalated is non-terminal — the chain is still waiting on the next
+    // approver. Important edge case since Escalated is neither Pending nor
+    // a terminal state.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("ticket-escalated"),
+    });
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-escalated", TicketStatus::Escalated);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(!ready.iter().any(|r| r.id == t.id));
+}
+
+#[test]
+fn human_ready_but_blocks_open_still_blocks() {
+    // Combined gate: the Human ticket is Approved, but the task also has an
+    // open Blocks dependency. The blocks gate must still win — a terminal
+    // ticket does NOT bypass other gates.
+    let now = base_instant();
+
+    let blocker = make_task(1, vec![]);
+    let mut blocked = make_task(2, vec![]);
+    blocked.dependencies = vec![WorkflowTaskDependency {
+        from: blocker.id,
+        to: blocked.id,
+        kind: crate::task::DependencyType::Blocks,
+    }];
+    blocked.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("ticket-approved-but-blocked"),
+    });
+
+    let mut lookup = MapHitlLookup::new();
+    lookup.insert("ticket-approved-but-blocked", TicketStatus::Approved);
+
+    let tasks = vec![blocker, blocked.clone()];
+    let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
+    assert!(!ready.iter().any(|t| t.id == blocked.id));
+}
+
+#[test]
+fn ready_tasks_uses_noop_lookup_for_human_gates() {
+    // The pre-existing `ready_tasks` entry point must preserve its old
+    // behaviour: Human gates block unless the caller opts in to a real
+    // lookup via `ready_tasks_with_hitl`. This guards against accidentally
+    // surfacing approval-gated tasks to legacy callers.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(AwaitType::Human {
+        approval_id: ApprovalId::new("whatever"),
+    });
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks(&tasks, now);
+    assert!(!ready.iter().any(|r| r.id == t.id));
+
+    // And NoopHitlLookup explicitly reports "unknown".
+    let noop = NoopHitlLookup;
+    assert!(noop.ticket_status(&ApprovalId::new("x")).is_none());
+}
+
+#[test]
+fn human_gate_serde_roundtrip() {
+    let gate = AwaitType::Human {
+        approval_id: ApprovalId::new("ticket-xyz"),
+    };
+    let json = serde_json::to_string(&gate).unwrap();
+    let back: AwaitType = serde_json::from_str(&json).unwrap();
+    assert_eq!(gate, back);
+    // Sanity: struct-variant serializes with discriminant and field.
+    assert!(json.contains("human"));
+    assert!(json.contains("approval_id"));
+    assert!(json.contains("ticket-xyz"));
 }

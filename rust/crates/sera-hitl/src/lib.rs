@@ -13,7 +13,7 @@ pub mod types;
 pub use error::HitlError;
 pub use mode::EnforcementMode;
 pub use router::ApprovalRouter;
-pub use ticket::{ApprovalDecision, ApprovalTicket, TicketStatus};
+pub use ticket::{ApprovalDecision, ApprovalId, ApprovalTicket, TicketStatus};
 pub use types::{
     ApprovalEvidence, ApprovalPolicy, ApprovalRouting, ApprovalScope, ApprovalSpec,
     ApprovalTarget, ApprovalUrgency, RiskThreshold,

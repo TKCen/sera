@@ -4356,6 +4356,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "moka",
+ "sera-errors",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -4607,6 +4608,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4689,6 +4691,7 @@ dependencies = [
  "pulldown-cmark",
  "regex",
  "semver",
+ "sera-errors",
  "sera-oci",
  "sera-plugins",
  "sera-types",
@@ -4812,6 +4815,7 @@ dependencies = [
  "chrono",
  "cron",
  "hex",
+ "sera-hitl",
  "sera-types",
  "serde",
  "serde_json",

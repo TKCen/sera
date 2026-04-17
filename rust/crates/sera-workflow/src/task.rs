@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use sera_hitl::ApprovalId;
 use sera_types::evolution::{BlastRadius, ChangeArtifactId};
 
 /// Content-addressed identifier for a [`WorkflowTask`] — SHA-256 of canonical fields.
@@ -103,7 +104,17 @@ pub enum AwaitType {
     Timer {
         not_before: DateTime<Utc>,
     },
-    Human,
+    /// Human-in-the-loop gate — task is not ready until the referenced
+    /// [`ApprovalId`] resolves to a terminal [`TicketStatus`]
+    /// (Approved / Rejected / Expired) in sera-hitl.
+    ///
+    /// Pull-based integration: the ready-queue polls via a
+    /// [`HitlLookup`](crate::ready::HitlLookup) during scheduling.
+    /// Workflows proceed regardless of the terminal outcome — callers branch
+    /// on the ticket status themselves after the task is claimed.
+    Human {
+        approval_id: ApprovalId,
+    },
     Mail,
     Change,
 }

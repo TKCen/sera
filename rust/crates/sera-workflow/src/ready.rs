@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+use sera_hitl::{ApprovalId, TicketStatus};
+
 use crate::task::{AwaitType, DependencyType, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus};
 
 /// Pure-function gate for [`AwaitType::Timer`].
@@ -10,12 +12,83 @@ use crate::task::{AwaitType, DependencyType, WorkflowTask, WorkflowTaskId, Workf
 /// Returns `false` for `None` — callers should use this only when the task
 /// has an active await gate. Also returns `false` for non-Timer await types,
 /// which remain blocking pending their respective integrations
-/// (GhRun/GhPr/Human/Mail/Change).
+/// (GhRun/GhPr/Mail/Change).
 pub fn is_timer_ready(await_type: &AwaitType, now: DateTime<Utc>) -> bool {
     await_type.is_timer_ready(now)
 }
 
+/// Pull-based lookup into sera-hitl for [`AwaitType::Human`].
+///
+/// The ready-queue polls this trait to decide whether a human-approval gate
+/// has resolved. Implementors look up the ticket by [`ApprovalId`] and return
+/// its current [`TicketStatus`], or `None` if the ticket does not exist in
+/// the backing store (e.g. it was never created, or was evicted).
+///
+/// The trait is synchronous on purpose: the ready-queue itself is a pure
+/// scheduling function called under a lock — any async I/O lives one layer
+/// up (the caller snapshots the hitl state into an in-memory [`HashMap`] or
+/// equivalent and hands it to [`ready_tasks_with_hitl`]). A synchronous
+/// signature keeps the gate logic testable without a Tokio runtime and
+/// matches the shape of [`is_timer_ready`].
+///
+/// [`HashMap`]: std::collections::HashMap
+pub trait HitlLookup: Send + Sync {
+    /// Return the current status of the ticket identified by `id`, or
+    /// `None` when the ticket is not known to the lookup source.
+    fn ticket_status(&self, id: &ApprovalId) -> Option<TicketStatus>;
+}
+
+/// A trivial [`HitlLookup`] that reports every ticket as unknown.
+///
+/// Useful as a default for callers that are not yet wired into sera-hitl —
+/// it preserves the pre-Human behaviour where human-await tasks always block.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopHitlLookup;
+
+impl HitlLookup for NoopHitlLookup {
+    fn ticket_status(&self, _id: &ApprovalId) -> Option<TicketStatus> {
+        None
+    }
+}
+
+/// Pure-function gate for [`AwaitType::Human`].
+///
+/// Returns `true` iff `await_type` is `Some(AwaitType::Human { approval_id })`
+/// and the referenced ticket resolves to a terminal [`TicketStatus`]
+/// (Approved / Rejected / Expired) via `lookup`. A ticket reported as `None`
+/// (unknown) or in a non-terminal state (Pending / Escalated) is treated as
+/// not ready.
+///
+/// Workflows deliberately proceed on Rejected and Expired too — the task
+/// itself needs to wake up so its handler can branch on the outcome. Gating
+/// on Approved-only would strand rejected tickets indefinitely.
+///
+/// Returns `false` for non-Human await types.
+pub fn is_human_ready(await_type: &AwaitType, lookup: &dyn HitlLookup) -> bool {
+    match await_type {
+        AwaitType::Human { approval_id } => lookup
+            .ticket_status(approval_id)
+            .map(TicketStatus::is_terminal)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// Return all tasks that are ready to be claimed right now.
+///
+/// Equivalent to [`ready_tasks_with_hitl`] with a [`NoopHitlLookup`] — every
+/// [`AwaitType::Human`] gate is treated as still pending. Callers that want
+/// to surface approval-gated tasks must use [`ready_tasks_with_hitl`].
+///
+/// Five gates must all pass — see [`ready_tasks_with_hitl`] for the full list.
+///
+/// Results are sorted by `(priority ASC, id bytes)` for determinism.
+pub fn ready_tasks(tasks: &[WorkflowTask], now: DateTime<Utc>) -> Vec<&WorkflowTask> {
+    ready_tasks_with_hitl(tasks, now, &NoopHitlLookup)
+}
+
+/// Return all tasks that are ready to be claimed right now, consulting
+/// `hitl` for [`AwaitType::Human`] gates.
 ///
 /// Five gates must all pass:
 /// 1. `status == Open`
@@ -24,24 +97,37 @@ pub fn is_timer_ready(await_type: &AwaitType, now: DateTime<Utc>) -> bool {
 ///    Exception: a `ConditionalBlocks` edge is satisfied (does NOT block) when
 ///    the blocker is `Closed`.
 /// 3. `defer_until <= now` or `None`.
-/// 4. `await_type.is_none()` — OR — the await is `Timer { not_before }` and
-///    `now >= not_before`. All other `AwaitType` variants still block (their
-///    external integrations are tracked in follow-up beads).
+/// 4. `await_type.is_none()` — OR — one of:
+///      - `Timer { not_before }` and `now >= not_before`;
+///      - `Human { approval_id }` and `hitl.ticket_status(approval_id)`
+///        reports a terminal status.
+///
+///    All other `AwaitType` variants (GhRun/GhPr/Mail/Change) still block —
+///    their integrations are tracked in follow-up beads.
 /// 5. Not `(ephemeral && status == Closed)` — ephemeral tasks are never surfaced
 ///    once closed (redundant given gate 1, but kept for clarity).
 ///
 /// Results are sorted by `(priority ASC, id bytes)` for determinism.
-pub fn ready_tasks(tasks: &[WorkflowTask], now: DateTime<Utc>) -> Vec<&WorkflowTask> {
+pub fn ready_tasks_with_hitl<'a>(
+    tasks: &'a [WorkflowTask],
+    now: DateTime<Utc>,
+    hitl: &dyn HitlLookup,
+) -> Vec<&'a WorkflowTask> {
     let mut ready: Vec<&WorkflowTask> = tasks
         .iter()
-        .filter(|t| is_ready(t, tasks, now))
+        .filter(|t| is_ready(t, tasks, now, hitl))
         .collect();
 
     ready.sort_by_key(|t| (t.priority, t.id.hash));
     ready
 }
 
-fn is_ready(task: &WorkflowTask, all: &[WorkflowTask], now: DateTime<Utc>) -> bool {
+fn is_ready(
+    task: &WorkflowTask,
+    all: &[WorkflowTask],
+    now: DateTime<Utc>,
+    hitl: &dyn HitlLookup,
+) -> bool {
     // Gate 1 — must be Open.
     if task.status != WorkflowTaskStatus::Open {
         return false;
@@ -89,7 +175,8 @@ fn is_ready(task: &WorkflowTask, all: &[WorkflowTask], now: DateTime<Utc>) -> bo
         return false;
     }
 
-    // Gate 4 — not awaiting an external signal (Timer gate may self-satisfy).
+    // Gate 4 — not awaiting an external signal (Timer and Human gates may
+    // self-satisfy).
     if let Some(await_type) = &task.await_type {
         match await_type {
             AwaitType::Timer { .. } => {
@@ -97,6 +184,12 @@ fn is_ready(task: &WorkflowTask, all: &[WorkflowTask], now: DateTime<Utc>) -> bo
                     return false;
                 }
                 // Timer elapsed — gate passes.
+            }
+            AwaitType::Human { .. } => {
+                if !is_human_ready(await_type, hitl) {
+                    return false;
+                }
+                // Ticket reached a terminal state — gate passes.
             }
             // Other await variants remain pending until their integrations land.
             _ => return false,

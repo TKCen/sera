@@ -123,4 +123,116 @@ mod tests {
         assert!(matches!(result, Err(AuthError::Unauthorized)));
     }
 
+    // ── Security-edge API key tests ───────────────────────────────────────────
+
+    /// A key that is a prefix of the correct key must not match.
+    /// Argon2 hashes the full byte sequence; truncated input must fail.
+    #[cfg(feature = "basic-auth")]
+    #[test]
+    fn test_prefix_of_correct_key_rejected() {
+        let raw = "my-secret-key-abc";
+        let hash = hash_key(raw);
+        let stored_keys = vec![StoredApiKey {
+            key_hash_argon2: hash,
+            operator_id: "op-1".to_string(),
+            key_id: "key-1".to_string(),
+        }];
+
+        // Provide only the first half of the correct key.
+        let prefix = &raw[..raw.len() / 2];
+        let result = ApiKeyValidator::validate(prefix, &stored_keys);
+        assert!(
+            matches!(result, Err(AuthError::Unauthorized)),
+            "prefix of correct key must not authenticate"
+        );
+    }
+
+    /// A key that is a superstring of the correct key (correct + extra bytes)
+    /// must not match.
+    #[cfg(feature = "basic-auth")]
+    #[test]
+    fn test_extended_key_rejected() {
+        let raw = "my-secret-key-abc";
+        let hash = hash_key(raw);
+        let stored_keys = vec![StoredApiKey {
+            key_hash_argon2: hash,
+            operator_id: "op-1".to_string(),
+            key_id: "key-1".to_string(),
+        }];
+
+        let extended = format!("{raw}-extra");
+        let result = ApiKeyValidator::validate(&extended, &stored_keys);
+        assert!(
+            matches!(result, Err(AuthError::Unauthorized)),
+            "extended key (correct + suffix) must not authenticate"
+        );
+    }
+
+    /// An empty string as a token must not match any stored key.
+    #[cfg(feature = "basic-auth")]
+    #[test]
+    fn test_empty_token_rejected() {
+        let hash = hash_key("real-key");
+        let stored_keys = vec![StoredApiKey {
+            key_hash_argon2: hash,
+            operator_id: "op-1".to_string(),
+            key_id: "key-1".to_string(),
+        }];
+
+        let result = ApiKeyValidator::validate("", &stored_keys);
+        assert!(
+            matches!(result, Err(AuthError::Unauthorized)),
+            "empty token must not authenticate"
+        );
+    }
+
+    /// A stored key with a malformed (non-PHC) hash string must be skipped
+    /// gracefully — the validator must not panic, and must return Unauthorized
+    /// rather than propagating an internal error.
+    #[cfg(feature = "basic-auth")]
+    #[test]
+    fn test_malformed_stored_hash_skipped_gracefully() {
+        let stored_keys = vec![StoredApiKey {
+            key_hash_argon2: "not-a-valid-phc-string".to_string(),
+            operator_id: "op-1".to_string(),
+            key_id: "key-bad".to_string(),
+        }];
+
+        // Should not panic; must return Unauthorized (malformed hash is skipped).
+        let result = ApiKeyValidator::validate("some-key", &stored_keys);
+        assert!(
+            matches!(result, Err(AuthError::Unauthorized)),
+            "malformed stored hash must be skipped and return Unauthorized"
+        );
+    }
+
+    /// Validate returns the context for the *first* matching key when multiple
+    /// keys are stored. The key_id in the returned context must correspond to
+    /// the matching entry, not a different one.
+    #[cfg(feature = "basic-auth")]
+    #[test]
+    fn test_correct_key_id_returned_when_multiple_keys_stored() {
+        let raw_a = "key-alpha";
+        let raw_b = "key-beta";
+        let stored_keys = vec![
+            StoredApiKey {
+                key_hash_argon2: hash_key(raw_a),
+                operator_id: "op-1".to_string(),
+                key_id: "id-alpha".to_string(),
+            },
+            StoredApiKey {
+                key_hash_argon2: hash_key(raw_b),
+                operator_id: "op-2".to_string(),
+                key_id: "id-beta".to_string(),
+            },
+        ];
+
+        let ctx = ApiKeyValidator::validate(raw_b, &stored_keys)
+            .expect("second key must validate");
+        assert_eq!(
+            ctx.api_key_id.as_deref(), Some("id-beta"),
+            "returned context must identify the matching key, not the first stored key"
+        );
+        assert_eq!(ctx.operator_id, Some("op-2".to_string()));
+    }
 }

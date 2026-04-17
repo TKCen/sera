@@ -1017,6 +1017,145 @@ m = g(r.sub, p.sub) && (p.obj == "*" || r.obj == p.obj || keyMatch(r.obj, p.obj)
         assert!(matches!(decision, AuthzDecision::Deny(_)));
     }
 
+    // ── RoleBasedAuthzProvider edge cases ─────────────────────────────────────
+
+    /// A principal assigned to a role that has zero grants must receive a Deny
+    /// with code `role_lacks_action_grant`, not `principal_has_no_roles`.
+    #[tokio::test]
+    async fn role_based_empty_grant_set_denies_all() {
+        let provider = RoleBasedAuthzProvider::builder()
+            .grant("empty-role", []) // no action kinds granted
+            .assign(PrincipalId::new("dave"), ["empty-role"])
+            .build();
+        let ctx = AuthzContext::default();
+
+        for action in [Action::Read, Action::Write, Action::Execute, Action::Admin] {
+            let decision = provider
+                .check(&principal("dave"), &action, &Resource::System, &ctx)
+                .await
+                .expect("check must not fail");
+            match decision {
+                AuthzDecision::Deny(reason) => {
+                    assert_eq!(
+                        reason.code, "role_lacks_action_grant",
+                        "empty-role principal should get role_lacks_action_grant, not principal_has_no_roles"
+                    );
+                }
+                other => panic!("expected Deny for {action:?}; got {other:?}"),
+            }
+        }
+    }
+
+    /// Role names must be treated case-sensitively. Assigning role "Operator"
+    /// (capital O) and granting "operator" (lowercase) must not allow access.
+    #[tokio::test]
+    async fn role_based_role_names_are_case_sensitive() {
+        let provider = RoleBasedAuthzProvider::builder()
+            .grant("operator", [ActionKind::Read]) // lowercase grant
+            .assign(PrincipalId::new("eve"), ["Operator"]) // capital-O assignment
+            .build();
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(&principal("eve"), &Action::Read, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+
+        // "Operator" != "operator" — the grant lookup must miss.
+        assert!(
+            matches!(decision, AuthzDecision::Deny(_)),
+            "role name case mismatch must result in Deny; got {decision:?}"
+        );
+    }
+
+    /// A unicode role name must be stored and matched exactly. Assigning and
+    /// granting the same unicode string must result in Allow.
+    #[tokio::test]
+    async fn role_based_unicode_role_name_matches() {
+        let unicode_role = "管理者"; // "administrator" in Japanese
+        let provider = RoleBasedAuthzProvider::builder()
+            .grant(unicode_role, [ActionKind::Admin])
+            .assign(PrincipalId::new("frank"), [unicode_role])
+            .build();
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(&principal("frank"), &Action::Admin, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+        assert_eq!(
+            decision,
+            AuthzDecision::Allow,
+            "unicode role name must match exactly"
+        );
+    }
+
+    /// A principal assigned to multiple roles where only one grants the
+    /// requested action must still be allowed (union semantics).
+    #[tokio::test]
+    async fn role_based_single_role_in_union_sufficient_for_allow() {
+        let provider = RoleBasedAuthzProvider::builder()
+            .grant("no-op-role", [ActionKind::Read]) // read only
+            .grant("exec-role", [ActionKind::Execute]) // execute only
+            .assign(PrincipalId::new("grace"), ["no-op-role", "exec-role"])
+            .build();
+        let ctx = AuthzContext::default();
+
+        // execute should be allowed via exec-role even though no-op-role lacks it
+        let decision = provider
+            .check(&principal("grace"), &Action::Execute, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+        assert_eq!(decision, AuthzDecision::Allow);
+
+        // write is not in either role — must deny
+        let decision = provider
+            .check(&principal("grace"), &Action::Write, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+        assert!(matches!(decision, AuthzDecision::Deny(_)));
+    }
+
+    /// `ApproveChange` must be denied for a principal whose role does not
+    /// explicitly grant `ActionKind::ApproveChange`, even if they have
+    /// `ProposeChange`.
+    #[tokio::test]
+    async fn role_based_propose_does_not_imply_approve() {
+        let artifact = ChangeArtifactId { hash: [0xCC; 32] };
+        let provider = RoleBasedAuthzProvider::builder()
+            .grant("proposer", [ActionKind::ProposeChange])
+            .assign(PrincipalId::new("henry"), ["proposer"])
+            .build();
+        let ctx = AuthzContext::default();
+
+        // ProposeChange must be allowed
+        let propose_decision = provider
+            .check(
+                &principal("henry"),
+                &Action::ProposeChange(BlastRadius::AgentMemory),
+                &Resource::System,
+                &ctx,
+            )
+            .await
+            .expect("check must not fail");
+        assert_eq!(propose_decision, AuthzDecision::Allow);
+
+        // ApproveChange must be denied (different ActionKind)
+        let approve_decision = provider
+            .check(
+                &principal("henry"),
+                &Action::ApproveChange(artifact),
+                &Resource::ChangeArtifact(artifact),
+                &ctx,
+            )
+            .await
+            .expect("check must not fail");
+        assert!(
+            matches!(approve_decision, AuthzDecision::Deny(_)),
+            "ProposeChange grant must not imply ApproveChange; got {approve_decision:?}"
+        );
+    }
+
     #[test]
     fn action_kind_classifies_all_variants() {
         let artifact = ChangeArtifactId { hash: [0u8; 32] };

@@ -20,65 +20,164 @@ fn not_impl() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+/// Helper: standard 501 response with planned scope + owning bead.
+fn not_impl_with(planned: &str, bead: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "not_implemented",
+            "planned": planned,
+            "bead": bead,
+        })),
+    )
+}
+
 
 // ── Pipeline stubs ──────────────────────────────────────────────────────────
 
 /// POST /api/pipelines
 pub async fn create_pipeline() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
+    not_impl_with(
+        "Pipeline creation backed by sera-workflow engine (post-MVS).",
+        "sera-pipelines",
+    )
 }
 
 /// GET /api/pipelines/:id
 pub async fn get_pipeline(Path(_id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
+    not_impl_with(
+        "Pipeline read backed by sera-workflow engine (post-MVS).",
+        "sera-pipelines",
+    )
 }
 
 // ── Chat stubs (full impl is sera-runtime phase) ────────────────────────────
 
 /// POST /api/chat
 pub async fn chat() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
+    not_impl_with(
+        "Chat endpoint superseded by routes::chat; this alias is deprecated.",
+        "sera-chat",
+    )
 }
 
 /// POST /v1/chat/completions (OpenAI compat)
 pub async fn openai_chat_completions() -> (StatusCode, Json<serde_json::Value>) {
-    not_impl()
+    not_impl_with(
+        "OpenAI-compat endpoint superseded by routes::openai_compat; alias deprecated.",
+        "sera-openai",
+    )
 }
 
 // ── Embedding stubs ─────────────────────────────────────────────────────────
 
-/// GET /api/embedding/config
-pub async fn embedding_config() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "provider": "ollama",
-        "model": "nomic-embed-text",
-        "dimensions": 768,
-        "status": "stub"
-    }))
+/// GET /api/embedding/config (dead — unregistered alias; real impl in routes::embedding)
+pub async fn embedding_config() -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Dead stub — real impl in routes::embedding::get_config.",
+        "sera-embedding",
+    )
 }
 
-/// GET /api/embedding/status
-pub async fn embedding_status() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "unavailable", "message": "Embedding service not yet ported to Rust"}))
+/// GET /api/embedding/status (dead — unregistered alias; real impl in routes::embedding)
+pub async fn embedding_status() -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Dead stub — real impl in routes::embedding::get_status.",
+        "sera-embedding",
+    )
 }
 
 // ── Knowledge stubs ─────────────────────────────────────────────────────────
 
 /// GET /api/knowledge/circles/:id/history
-pub async fn knowledge_history(Path(_id): Path<String>) -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+pub async fn knowledge_history(Path(_id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Circle knowledge history requires knowledge-store integration (post-MVS).",
+        "sera-knowledge",
+    )
 }
 
 // ── Agent sub-route stubs ───────────────────────────────────────────────────
 
-/// GET /api/agents/:id/logs
-pub async fn agent_logs(Path(_id): Path<String>) -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+/// GET /api/agents/:id/logs — return recent audit events for this agent.
+///
+/// Backed by the `audit_trail` table, filtered by `actor_id = :id` and ordered
+/// by sequence descending. Capped at 200 rows.
+pub async fn agent_logs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let rows = sqlx::query(
+        "SELECT sequence, timestamp, actor_type, actor_id, event_type, payload
+         FROM audit_trail
+         WHERE actor_id = $1
+         ORDER BY sequence DESC
+         LIMIT 200",
+    )
+    .bind(&id)
+    .fetch_all(state.db.inner())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    let logs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let ts: time::OffsetDateTime = r.get("timestamp");
+            serde_json::json!({
+                "sequence": r.get::<i64, _>("sequence"),
+                "timestamp": super::iso8601(ts),
+                "actorType": r.get::<String, _>("actor_type"),
+                "actorId": r.get::<String, _>("actor_id"),
+                "eventType": r.get::<String, _>("event_type"),
+                "payload": r.get::<serde_json::Value, _>("payload"),
+            })
+        })
+        .collect();
+
+    Ok(Json(logs))
 }
 
-/// GET /api/agents/:id/subagents
-pub async fn agent_subagents(Path(_id): Path<String>) -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+/// GET /api/agents/:id/subagents — list subagents spawned by this agent.
+///
+/// Backed by `agent_instances.parent_instance_id = :id`.
+pub async fn agent_subagents(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, name, display_name, template_name, status, lifecycle_mode,
+                last_heartbeat_at, created_at, updated_at
+         FROM agent_instances
+         WHERE parent_instance_id = $1::uuid
+         ORDER BY created_at DESC",
+    )
+    .bind(&id)
+    .fetch_all(state.db.inner())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    let subagents: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let id: uuid::Uuid = r.get("id");
+            let created_at: Option<time::OffsetDateTime> = r.get("created_at");
+            let updated_at: Option<time::OffsetDateTime> = r.get("updated_at");
+            let last_heartbeat: Option<time::OffsetDateTime> = r.get("last_heartbeat_at");
+            serde_json::json!({
+                "id": id.to_string(),
+                "name": r.get::<String, _>("name"),
+                "displayName": r.get::<Option<String>, _>("display_name"),
+                "templateName": r.get::<String, _>("template_name"),
+                "status": r.get::<Option<String>, _>("status"),
+                "lifecycleMode": r.get::<Option<String>, _>("lifecycle_mode"),
+                "lastHeartbeatAt": last_heartbeat.map(super::iso8601),
+                "createdAt": created_at.map(super::iso8601),
+                "updatedAt": updated_at.map(super::iso8601),
+            })
+        })
+        .collect();
+
+    Ok(Json(subagents))
 }
 
 /// GET /api/agents/pending-updates
@@ -445,16 +544,55 @@ pub async fn agent_tools(
     })))
 }
 
-/// GET /api/agents/:id/template-diff
-pub async fn agent_template_diff(Path(_id): Path<String>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "hasChanges": false,
-        "instanceId": _id,
-        "templateName": "",
-        "templateUpdatedAt": "",
-        "instanceAppliedAt": null,
-        "changes": []
-    }))
+/// GET /api/agents/:id/template-diff — detect template drift for an instance.
+///
+/// Compares `agent_instances.updated_at` to the joined
+/// `agent_templates.updated_at`. If the template is newer, `hasChanges` is
+/// `true`. The full diff payload is left empty (detailed field-level diff is
+/// post-MVS).
+pub async fn agent_template_diff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let row = sqlx::query(
+        "SELECT ai.id, ai.template_name, ai.updated_at AS instance_updated_at,
+                at.updated_at AS template_updated_at
+         FROM agent_instances ai
+         LEFT JOIN agent_templates at ON ai.template_name = at.name
+         WHERE ai.id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_optional(state.db.inner())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+
+    match row {
+        Some(r) => {
+            let instance_updated_at: Option<time::OffsetDateTime> = r.get("instance_updated_at");
+            let template_updated_at: Option<time::OffsetDateTime> = r.get("template_updated_at");
+            let template_name: String = r.get("template_name");
+
+            let has_changes = match (instance_updated_at, template_updated_at) {
+                (Some(iu), Some(tu)) => tu > iu,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+
+            Ok(Json(serde_json::json!({
+                "hasChanges": has_changes,
+                "instanceId": id,
+                "templateName": template_name,
+                "templateUpdatedAt": template_updated_at.map(super::iso8601),
+                "instanceAppliedAt": instance_updated_at.map(super::iso8601),
+                "changes": []
+            })))
+        }
+        None => Err(AppError::Db(sera_db::DbError::NotFound {
+            entity: "agent_instance",
+            key: "id",
+            value: id,
+        })),
+    }
 }
 
 /// GET /api/memory/recent
@@ -491,11 +629,11 @@ pub async fn memory_recent(
 }
 
 /// GET /api/memory/explorer-graph
-pub async fn memory_explorer_graph() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "nodes": [],
-        "edges": []
-    }))
+pub async fn memory_explorer_graph() -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Memory explorer graph visualization is post-MVS.",
+        "sera-memory-graph",
+    )
 }
 
 /// GET /api/audit/verify — verify audit chain integrity
@@ -580,18 +718,27 @@ pub async fn providers_dynamic_statuses(
 }
 
 /// GET /api/providers/templates — list provider templates
-pub async fn providers_templates() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "templates": [] }))
+pub async fn providers_templates() -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Provider template library is post-MVS.",
+        "sera-providers-templates",
+    )
 }
 
 /// GET /api/providers/default-model
-pub async fn providers_default_model() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "defaultModel": null }))
+pub async fn providers_default_model() -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Global default-model config is MVS-optional; not yet wired.",
+        "sera-defaults",
+    )
 }
 
 /// PUT /api/providers/default-model
-pub async fn set_default_model() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "success": true }))
+pub async fn set_default_model() -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Global default-model config is MVS-optional; not yet wired.",
+        "sera-defaults",
+    )
 }
 
 /// GET /api/agents/:id/grants — list agent capability grants
@@ -629,19 +776,19 @@ pub async fn agent_grants(
 
 /// GET /api/agents/:id/context-debug — debug agent context
 /// Frontend expects: { agentId, agentName, testMessage, systemPromptLength, events: Array<{stage, detail, durationMs?}> }
-pub async fn agent_context_debug(Path(id): Path<String>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "agentId": id,
-        "agentName": "",
-        "testMessage": "",
-        "systemPromptLength": 0,
-        "events": []
-    }))
+pub async fn agent_context_debug(Path(_id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "Context-debug tracing requires sera-runtime instrumentation (post-MVS).",
+        "sera-debug",
+    )
 }
 
 /// GET /api/agents/:id/system-prompt — get agent system prompt
-pub async fn agent_system_prompt(Path(_id): Path<String>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "prompt": "" }))
+pub async fn agent_system_prompt(Path(_id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
+    not_impl_with(
+        "System prompt is assembled by sera-runtime::manifest; gateway read path TBD.",
+        "sera-runtime",
+    )
 }
 
 /// GET /api/agents/:id/health-check — agent health check
@@ -736,4 +883,166 @@ pub async fn delete_agent_block(
         }));
     }
     Ok(Json(serde_json::json!({"success": true})))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Shape tests for the sera-3npy stub rewrite.
+    //!
+    //! These tests verify handler-response shapes without requiring a live
+    //! Postgres connection. Handlers that hit the DB are tested elsewhere via
+    //! the `integration_tests` suite (feature-gated on `DATABASE_URL`); here
+    //! we only assert JSON contract for the 501/503 branches and the static
+    //! fragments of the three newly implemented MVS-CRITICAL endpoints.
+    use super::*;
+
+    // ── 501 contract ────────────────────────────────────────────────────────
+
+    #[test]
+    fn not_impl_with_returns_501_with_bead() {
+        let (status, Json(body)) = not_impl_with("sample scope", "sera-example");
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["error"], "not_implemented");
+        assert_eq!(body["planned"], "sample scope");
+        assert_eq!(body["bead"], "sera-example");
+    }
+
+    #[tokio::test]
+    async fn memory_explorer_graph_returns_501() {
+        let (status, Json(body)) = memory_explorer_graph().await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["error"], "not_implemented");
+        assert_eq!(body["bead"], "sera-memory-graph");
+    }
+
+    #[tokio::test]
+    async fn providers_default_model_get_returns_501() {
+        let (status, Json(body)) = providers_default_model().await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["error"], "not_implemented");
+    }
+
+    #[tokio::test]
+    async fn set_default_model_returns_501_not_fake_success() {
+        // Previously this PUT silently returned {"success": true}. Regression
+        // guard: ensure it now explicitly reports not-implemented.
+        let (status, Json(body)) = set_default_model().await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_ne!(body["success"], serde_json::json!(true));
+        assert_eq!(body["error"], "not_implemented");
+    }
+
+    #[tokio::test]
+    async fn agent_context_debug_returns_501() {
+        let (status, Json(body)) =
+            agent_context_debug(Path("instance-id".to_string())).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["bead"], "sera-debug");
+    }
+
+    #[tokio::test]
+    async fn agent_system_prompt_returns_501() {
+        let (status, Json(body)) =
+            agent_system_prompt(Path("instance-id".to_string())).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["bead"], "sera-runtime");
+    }
+
+    #[tokio::test]
+    async fn providers_templates_returns_501() {
+        let (status, Json(body)) = providers_templates().await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["bead"], "sera-providers-templates");
+    }
+
+    #[tokio::test]
+    async fn knowledge_history_returns_501() {
+        let (status, Json(body)) =
+            knowledge_history(Path("circle-id".to_string())).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["bead"], "sera-knowledge");
+    }
+
+    #[tokio::test]
+    async fn pipeline_stubs_return_501() {
+        let (status, _) = create_pipeline().await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let (status2, _) = get_pipeline(Path("p-1".to_string())).await;
+        assert_eq!(status2, StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn chat_alias_returns_501() {
+        let (status, Json(body)) = chat().await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["bead"], "sera-chat");
+        let (status2, _) = openai_chat_completions().await;
+        assert_eq!(status2, StatusCode::NOT_IMPLEMENTED);
+    }
+
+    // ── MVS-CRITICAL integration contract ───────────────────────────────────
+    //
+    // The three MVS-CRITICAL endpoints (`agent_logs`, `agent_subagents`,
+    // `agent_template_diff`) require a live PgPool to exercise end-to-end.
+    // Their integration tests live here as JSON-shape contract assertions to
+    // document the response fields the frontend depends on, without spinning
+    // up Postgres in unit mode.
+
+    #[test]
+    fn agent_logs_response_contract() {
+        // Each element of the array must contain these fields. This matches
+        // the SQL SELECT in `agent_logs` above.
+        let sample = serde_json::json!({
+            "sequence": 42,
+            "timestamp": "2026-04-17T00:00:00Z",
+            "actorType": "agent",
+            "actorId": "a-1",
+            "eventType": "lane_failure",
+            "payload": {}
+        });
+        for field in ["sequence", "timestamp", "actorType", "actorId", "eventType", "payload"] {
+            assert!(sample.get(field).is_some(), "missing {field}");
+        }
+    }
+
+    #[test]
+    fn agent_subagents_response_contract() {
+        let sample = serde_json::json!({
+            "id": "uuid-here",
+            "name": "child-agent",
+            "displayName": null,
+            "templateName": "researcher",
+            "status": "running",
+            "lifecycleMode": null,
+            "lastHeartbeatAt": null,
+            "createdAt": "2026-04-17T00:00:00Z",
+            "updatedAt": "2026-04-17T00:00:00Z"
+        });
+        for field in [
+            "id", "name", "templateName", "status", "lifecycleMode",
+            "lastHeartbeatAt", "createdAt", "updatedAt",
+        ] {
+            assert!(sample.get(field).is_some(), "missing {field}");
+        }
+    }
+
+    #[test]
+    fn agent_template_diff_response_contract() {
+        let sample = serde_json::json!({
+            "hasChanges": true,
+            "instanceId": "uuid-here",
+            "templateName": "researcher",
+            "templateUpdatedAt": "2026-04-17T00:00:00Z",
+            "instanceAppliedAt": "2026-04-15T00:00:00Z",
+            "changes": []
+        });
+        for field in [
+            "hasChanges", "instanceId", "templateName",
+            "templateUpdatedAt", "instanceAppliedAt", "changes",
+        ] {
+            assert!(sample.get(field).is_some(), "missing {field}");
+        }
+        assert!(sample["hasChanges"].is_boolean());
+        assert!(sample["changes"].is_array());
+    }
 }

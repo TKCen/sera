@@ -467,42 +467,64 @@ pub async fn test_embedding_config(
     Ok(Json(result.unwrap_or_else(|e| e)))
 }
 
-/// POST /api/embedding/embed — embed a single text (stub: zero-vector)
+/// POST /api/embedding/embed — embed a single text.
+///
+/// No real embedding provider is wired into the Rust gateway yet (the prior
+/// implementation silently returned a 1536-dim zero vector, which is worse
+/// than useless: it looks valid to callers but corrupts any downstream
+/// similarity search). Until a provider is wired through
+/// `state.config.ollama`/OpenAI, this endpoint returns `503 Service
+/// Unavailable`.
 pub async fn embed_text(
     Json(body): Json<EmbedRequest>,
-) -> Json<EmbedResponse> {
-    let _ = body.text; // stub implementation
-    Json(EmbedResponse {
-        vector: vec![0.0; 1536],
-        dimensions: 1536,
-    })
+) -> (StatusCode, Json<serde_json::Value>) {
+    let _ = body.text;
+    tracing::warn!(
+        "POST /api/embedding/embed called but no embedding provider is configured in sera-gateway"
+    );
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "service_unavailable",
+            "planned": "Wire an embedding provider (Ollama/OpenAI) through state; previous stub returned zero-vectors silently.",
+            "bead": "sera-embedding",
+        })),
+    )
 }
 
-/// POST /api/embedding/batch — embed multiple texts (stub: zero-vectors)
+/// POST /api/embedding/batch — embed multiple texts.
+///
+/// Same story as `embed_text`: returns `503 Service Unavailable` until a real
+/// provider is wired. Never silently return zero-vectors for batches.
 pub async fn embed_batch(
     Json(body): Json<BatchEmbedRequest>,
-) -> Json<BatchEmbedResponse> {
-    let embeddings = body
-        .texts
-        .into_iter()
-        .map(|text| EmbeddingResult {
-            text,
-            vector: vec![0.0; 1536],
-        })
-        .collect();
-
-    Json(BatchEmbedResponse { embeddings })
+) -> (StatusCode, Json<serde_json::Value>) {
+    let _ = body.texts;
+    tracing::warn!(
+        "POST /api/embedding/batch called but no embedding provider is configured in sera-gateway"
+    );
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "service_unavailable",
+            "planned": "Wire an embedding provider (Ollama/OpenAI) through state; previous stub returned zero-vectors silently.",
+            "bead": "sera-embedding",
+        })),
+    )
 }
 
-/// GET /api/knowledge/{agent_id} — get agent knowledge (stub: empty)
+/// GET /api/knowledge/{agent_id} — get agent knowledge.
 pub async fn get_knowledge(
-    Path(agent_id): axum::extract::Path<String>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "agent_id": agent_id,
-        "content": "",
-        "updated_at": serde_json::Value::Null,
-    }))
+    Path(_agent_id): axum::extract::Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "not_implemented",
+            "planned": "Agent knowledge store (git-backed) is post-MVS.",
+            "bead": "sera-knowledge",
+        })),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -511,32 +533,36 @@ pub struct UpdateKnowledgeRequest {
     pub content: String,
 }
 
-/// POST /api/knowledge/{agent_id} — update agent knowledge (stub)
+/// POST /api/knowledge/{agent_id} — update agent knowledge.
+///
+/// Previously echoed the request body back with a fake success timestamp —
+/// callers saw success even though nothing was persisted. Now returns 501.
 pub async fn update_knowledge(
-    Path(agent_id): Path<String>,
-    Json(body): Json<UpdateKnowledgeRequest>,
+    Path(_agent_id): Path<String>,
+    Json(_body): Json<UpdateKnowledgeRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let now = OffsetDateTime::now_utc();
-    let timestamp = super::iso8601(now);
-
     (
-        StatusCode::OK,
+        StatusCode::NOT_IMPLEMENTED,
         Json(serde_json::json!({
-            "agent_id": agent_id,
-            "content": body.content,
-            "updated_at": timestamp,
+            "error": "not_implemented",
+            "planned": "Agent knowledge store write-path (git-backed) is post-MVS.",
+            "bead": "sera-knowledge",
         })),
     )
 }
 
-/// GET /api/knowledge/{agent_id}/history — get knowledge history (stub: empty)
+/// GET /api/knowledge/{agent_id}/history — get knowledge history.
 pub async fn get_knowledge_history(
-    Path(agent_id): axum::extract::Path<String>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "agent_id": agent_id,
-        "versions": [],
-    }))
+    Path(_agent_id): axum::extract::Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "not_implemented",
+            "planned": "Knowledge history requires git-log over the knowledge store (post-MVS).",
+            "bead": "sera-knowledge",
+        })),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -545,15 +571,19 @@ pub struct DiffQuery {
     pub v2: Option<String>,
 }
 
-/// GET /api/knowledge/{agent_id}/diff — get knowledge diff (stub: empty)
+/// GET /api/knowledge/{agent_id}/diff — get knowledge diff.
 pub async fn get_knowledge_diff(
-    Path(agent_id): axum::extract::Path<String>,
+    Path(_agent_id): axum::extract::Path<String>,
     Query(_query): axum::extract::Query<DiffQuery>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "agent_id": agent_id,
-        "diff": "",
-    }))
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "not_implemented",
+            "planned": "Knowledge diff requires git-diff over the knowledge store (post-MVS).",
+            "bead": "sera-knowledge",
+        })),
+    )
 }
 
 /// POST /api/embedding/test — test embedding generation

@@ -1,46 +1,32 @@
 //! Tool registry and dispatcher for the SERA runtime.
 //!
-//! All built-in tools are registered as `ToolExecutorAdapter<T>` wrappers in
-//! `TraitToolRegistry::with_builtins()`. The legacy `ToolExecutor` trait and
-//! `ToolRegistry` struct have been removed — use `TraitToolRegistry` directly.
+//! Every production tool implements the spec-aligned [`sera_types::tool::Tool`]
+//! trait directly (bead sera-ttrm-5). The adapter-first migration chain
+//! (beads ilk2 → 26me → h7dn → sebr → ttrm-5) is complete: the legacy
+//! `ToolExecutor` trait and `ToolExecutorAdapter` have been removed entirely.
+//! New tools should implement `Tool` directly and be registered via
+//! [`TraitToolRegistry::register`].
 
-pub mod adapter;
+pub mod centrifugo;
+pub mod dispatcher;
+pub mod file_edit;
 pub mod file_ops;
 pub mod file_write;
-pub mod file_edit;
-pub mod http_request;
-pub mod shell_exec;
-pub mod knowledge;
-pub mod web_fetch;
 pub mod glob;
 pub mod grep;
-pub mod spawn;
-pub mod tool_search;
-pub mod centrifugo;
+pub mod http_request;
+pub mod knowledge;
 pub mod memory_search;
 pub mod mvs_tools;
-pub mod dispatcher;
-
-pub use adapter::ToolExecutorAdapter;
-
-/// Trait for tool executors — used by `ToolExecutorAdapter` to bridge concrete
-/// tool implementations into the spec-aligned `Tool` trait surface.
-///
-/// The 14 built-in tools implement this trait. `ToolExecutorAdapter<T>` wraps
-/// any `ToolExecutor` as a `Tool`. Direct `Tool` impls will replace these
-/// adapters in a later bead (sera-cdan).
-#[async_trait::async_trait]
-pub trait ToolExecutor: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn parameters(&self) -> serde_json::Value;
-    async fn execute(&self, args: &serde_json::Value) -> anyhow::Result<String>;
-}
+pub mod shell_exec;
+pub mod spawn;
+pub mod tool_search;
+pub mod web_fetch;
 
 // ── Trait-based registry (SPEC-tools aligned) ────────────────────────────────
 
 use std::collections::HashMap;
-use sera_types::tool::{Tool, ToolInput, ToolOutput, ToolError, ToolContext, ToolMetadata};
+use sera_types::tool::{Tool, ToolContext, ToolError, ToolInput, ToolMetadata, ToolOutput};
 
 /// Spec-aligned tool registry using the Tool trait.
 pub struct TraitToolRegistry {
@@ -68,32 +54,47 @@ impl TraitToolRegistry {
         }
     }
 
-    /// Create a registry populated with the 14 built-in tools via
-    /// [`ToolExecutorAdapter`].
+    /// Populate the registry with the 14 built-in production tools — each
+    /// registered as a native [`Tool`] impl with a per-tool [`sera_types::tool::RiskLevel`]:
+    /// - `Read`: file-read, file-list, glob, grep, knowledge-query, web-fetch,
+    ///   tool-search, skill-search
+    /// - `Write`: file-write, file-edit, knowledge-store
+    /// - `Execute`: shell-exec, http-request, spawn-ephemeral
     ///
-    /// Every tool flows through the adapter with conservative defaults
-    /// (`RiskLevel::Execute`, `ExecutionTarget::InProcess`). Bead 5
-    /// (sera-cdan) replaces selected wrappers with direct `Tool` impls and
-    /// refines risk levels.
-    ///
-    /// Note: `centrifugo::CentrifugoPublisher` is a publisher helper used
+    /// Note: `memory_search` is NOT included here — it needs an embedding
+    /// service + semantic store injected via [`Self::with_memory_search`].
+    /// `centrifugo::CentrifugoPublisher` is a publisher helper used
     /// elsewhere in the runtime and is not registered here.
+    fn register_builtins(&mut self) {
+        self.register(Box::new(file_ops::FileRead));
+        self.register(Box::new(file_ops::FileWrite));
+        self.register(Box::new(file_ops::FileList));
+        self.register(Box::new(file_edit::FileEdit));
+        self.register(Box::new(shell_exec::ShellExec));
+        self.register(Box::new(http_request::HttpRequest));
+        self.register(Box::new(knowledge::KnowledgeStore));
+        self.register(Box::new(knowledge::KnowledgeQuery));
+        self.register(Box::new(web_fetch::WebFetch));
+        self.register(Box::new(glob::Glob));
+        self.register(Box::new(grep::Grep));
+        self.register(Box::new(spawn::SpawnEphemeral));
+        self.register(Box::new(tool_search::ToolSearch));
+        self.register(Box::new(tool_search::SkillSearch));
+    }
+
+    /// Create a registry populated with the 14 built-in tools (authz
+    /// disabled).
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
-        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileRead)));
-        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileWrite)));
-        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileList)));
-        registry.register(Box::new(ToolExecutorAdapter::new(file_edit::FileEdit)));
-        registry.register(Box::new(ToolExecutorAdapter::new(shell_exec::ShellExec)));
-        registry.register(Box::new(ToolExecutorAdapter::new(http_request::HttpRequest)));
-        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeStore)));
-        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeQuery)));
-        registry.register(Box::new(ToolExecutorAdapter::new(web_fetch::WebFetch)));
-        registry.register(Box::new(ToolExecutorAdapter::new(glob::Glob)));
-        registry.register(Box::new(ToolExecutorAdapter::new(grep::Grep)));
-        registry.register(Box::new(ToolExecutorAdapter::new(spawn::SpawnEphemeral)));
-        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::ToolSearch)));
-        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::SkillSearch)));
+        registry.register_builtins();
+        registry
+    }
+
+    /// Create a registry populated with the 14 built-in tools and the
+    /// supplied authz kill-switch flag.
+    pub fn with_builtins_and_authz(tool_authz_enabled: bool) -> Self {
+        let mut registry = Self::new_with_authz(tool_authz_enabled);
+        registry.register_builtins();
         registry
     }
 
@@ -420,7 +421,7 @@ mod trait_registry_tests {
             list.iter().map(|m| &m.name).collect::<Vec<_>>()
         );
 
-        // Every adapter-wrapped tool must be reachable by its ToolExecutor name.
+        // Every built-in tool must be reachable by its registered name.
         let expected = [
             "file-read",
             "file-write",
@@ -443,5 +444,50 @@ mod trait_registry_tests {
                 "built-in tool '{name}' not found in TraitToolRegistry::with_builtins()"
             );
         }
+    }
+
+    /// Per-tool risk level assignments (bead sera-ttrm-5). This test is the
+    /// contract: if someone changes a built-in's risk class, they must
+    /// update this assertion AND the policy routing that depends on it.
+    #[test]
+    fn with_builtins_risk_levels_are_correct() {
+        let registry = TraitToolRegistry::with_builtins();
+
+        let expected: &[(&str, RiskLevel)] = &[
+            ("file-read", RiskLevel::Read),
+            ("file-list", RiskLevel::Read),
+            ("glob", RiskLevel::Read),
+            ("grep", RiskLevel::Read),
+            ("knowledge-query", RiskLevel::Read),
+            ("web-fetch", RiskLevel::Read),
+            ("tool-search", RiskLevel::Read),
+            ("skill-search", RiskLevel::Read),
+            ("file-write", RiskLevel::Write),
+            ("file-edit", RiskLevel::Write),
+            ("knowledge-store", RiskLevel::Write),
+            ("shell-exec", RiskLevel::Execute),
+            ("http-request", RiskLevel::Execute),
+            ("spawn-ephemeral", RiskLevel::Execute),
+        ];
+        for (name, expected_risk) in expected {
+            let tool = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("built-in tool '{name}' missing"));
+            assert_eq!(
+                tool.metadata().risk_level,
+                *expected_risk,
+                "risk_level mismatch for tool '{name}'"
+            );
+        }
+    }
+
+    /// `with_builtins_and_authz` must produce the same set of tools as
+    /// `with_builtins`, only toggling the authz kill-switch.
+    #[test]
+    fn with_builtins_and_authz_parity() {
+        let off = TraitToolRegistry::with_builtins_and_authz(false);
+        let on = TraitToolRegistry::with_builtins_and_authz(true);
+        assert_eq!(off.list().len(), 14);
+        assert_eq!(on.list().len(), 14);
     }
 }

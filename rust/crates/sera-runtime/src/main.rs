@@ -301,29 +301,8 @@ async fn main() -> anyhow::Result<()> {
     let authz_provider = build_authz_provider(&config);
 
     // Build tool registry with authz kill-switch flag, and dispatcher.
-    let mut registry = TraitToolRegistry::new_with_authz(config.tool_authz_enabled);
-    // Re-populate builtins (new_with_authz starts empty).
-    {
-        use sera_runtime::tools::ToolExecutorAdapter;
-        use sera_runtime::tools::{
-            file_ops, file_edit, shell_exec, http_request, knowledge,
-            web_fetch, glob, grep, spawn, tool_search,
-        };
-        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileRead)));
-        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileWrite)));
-        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileList)));
-        registry.register(Box::new(ToolExecutorAdapter::new(file_edit::FileEdit)));
-        registry.register(Box::new(ToolExecutorAdapter::new(shell_exec::ShellExec)));
-        registry.register(Box::new(ToolExecutorAdapter::new(http_request::HttpRequest)));
-        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeStore)));
-        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeQuery)));
-        registry.register(Box::new(ToolExecutorAdapter::new(web_fetch::WebFetch)));
-        registry.register(Box::new(ToolExecutorAdapter::new(glob::Glob)));
-        registry.register(Box::new(ToolExecutorAdapter::new(grep::Grep)));
-        registry.register(Box::new(ToolExecutorAdapter::new(spawn::SpawnEphemeral)));
-        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::ToolSearch)));
-        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::SkillSearch)));
-    }
+    // All builtins are native `Tool` impls post bead sera-ttrm-5.
+    let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled);
     let registry = Arc::new(registry);
     let dispatcher = RegistryDispatcher::new(Arc::clone(&registry));
 

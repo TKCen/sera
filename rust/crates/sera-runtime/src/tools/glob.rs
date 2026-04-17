@@ -1,38 +1,85 @@
 //! Glob file pattern matching tool.
+//!
+//! Native `Tool` trait implementation (bead sera-ttrm-5) with
+//! [`RiskLevel::Read`] — glob is a pure directory traversal.
 
-use super::ToolExecutor;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use async_trait::async_trait;
+use sera_types::tool::{
+    ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+};
+
 pub struct Glob;
 
-#[async_trait::async_trait]
-impl ToolExecutor for Glob {
-    fn name(&self) -> &str { "glob" }
-    fn description(&self) -> &str { "Find files matching a glob pattern" }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string", "description": "Glob pattern (e.g., **/*.rs)" },
-                "path": { "type": "string", "description": "Base directory path (default: current working directory)" }
-            },
-            "required": ["pattern"]
-        })
+#[async_trait]
+impl Tool for Glob {
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "glob".to_string(),
+            description: "Find files matching a glob pattern".to_string(),
+            version: "1.0.0".to_string(),
+            author: None,
+            risk_level: RiskLevel::Read,
+            execution_target: ExecutionTarget::Local,
+            tags: vec!["fs".to_string()],
+        }
     }
 
-    async fn execute(&self, args: &serde_json::Value) -> anyhow::Result<String> {
-        let pattern = args["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("Missing 'pattern'"))?;
+    fn schema(&self) -> ToolSchema {
+        let mut properties: HashMap<String, ParameterSchema> = HashMap::new();
+        properties.insert(
+            "pattern".to_string(),
+            ParameterSchema {
+                schema_type: "string".to_string(),
+                description: Some("Glob pattern (e.g., **/*.rs)".to_string()),
+                enum_values: None,
+                default: None,
+            },
+        );
+        properties.insert(
+            "path".to_string(),
+            ParameterSchema {
+                schema_type: "string".to_string(),
+                description: Some(
+                    "Base directory path (default: current working directory)".to_string(),
+                ),
+                enum_values: None,
+                default: None,
+            },
+        );
+        ToolSchema {
+            parameters: FunctionParameters {
+                schema_type: "object".to_string(),
+                properties,
+                required: vec!["pattern".to_string()],
+            },
+        }
+    }
+
+    async fn execute(
+        &self,
+        input: ToolInput,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let args = &input.arguments;
+        let pattern = args["pattern"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidInput("Missing 'pattern'".to_string()))?;
         let base_path = args["path"].as_str().unwrap_or(".");
 
         let mut results = Vec::new();
-        glob_search(base_path, pattern, &mut results)?;
+        glob_search(base_path, pattern, &mut results)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         if results.is_empty() {
-            Ok("No files matched the pattern".to_string())
+            Ok(ToolOutput::success("No files matched the pattern".to_string()))
         } else {
             results.sort();
-            Ok(results.join("\n"))
+            Ok(ToolOutput::success(results.join("\n")))
         }
     }
 }
@@ -82,7 +129,8 @@ fn matches_pattern(file_path: &str, pattern: &str) -> bool {
         let parts: Vec<&str> = normalized_pattern.split("**/").collect();
         if parts.len() > 1 {
             let suffix = parts[parts.len() - 1];
-            return normalized_path.ends_with(suffix) || normalized_path.contains(&format!("/{}/", suffix));
+            return normalized_path.ends_with(suffix)
+                || normalized_path.contains(&format!("/{}/", suffix));
         }
     }
 
@@ -113,5 +161,17 @@ fn matches_pattern(file_path: &str, pattern: &str) -> bool {
         return true;
     }
 
-    normalized_path == normalized_pattern || normalized_path.ends_with(&format!("/{}", normalized_pattern))
+    normalized_path == normalized_pattern
+        || normalized_path.ends_with(&format!("/{}", normalized_pattern))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_risk_level_is_read() {
+        assert_eq!(Glob.metadata().risk_level, RiskLevel::Read);
+        assert_eq!(Glob.metadata().name, "glob");
+    }
 }

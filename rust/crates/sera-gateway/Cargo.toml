@@ -8,7 +8,7 @@ name = "sera_gateway"
 path = "src/lib.rs"
 
 [[bin]]
-name = "sera"
+name = "sera-gateway"
 path = "src/bin/sera.rs"
 
 [dependencies]

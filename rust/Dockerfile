@@ -21,8 +21,9 @@ RUN apt-get update && \
 # Copy full workspace source (build context = rust/)
 COPY . .
 
-# Build release binary — target the `sera` bin in sera-gateway crate
-RUN cargo build --release --bin sera -p sera-gateway
+# Build release binary — target the `sera-gateway` bin in sera-gateway crate
+# (renamed from `sera` to avoid a workspace collision with the sera-cli `sera` binary)
+RUN cargo build --release --bin sera-gateway -p sera-gateway
 
 # ── Stage 2: Runner ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runner
@@ -34,7 +35,7 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Copy only the compiled binary
-COPY --from=builder /build/target/release/sera /app/sera
+COPY --from=builder /build/target/release/sera-gateway /app/sera-gateway
 
 # Create log directory
 RUN mkdir -p /app/logs
@@ -44,4 +45,4 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=30s \
     CMD curl -f http://localhost:3001/api/health || exit 1
 
-ENTRYPOINT ["/app/sera"]
+ENTRYPOINT ["/app/sera-gateway"]

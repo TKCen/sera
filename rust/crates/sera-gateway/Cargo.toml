@@ -65,6 +65,7 @@ chrono.workspace = true
 regex.workspace = true
 async-trait.workspace = true
 sera-queue.workspace = true
+sera-secrets.workspace = true
 
 [features]
 default = ["in-process"]

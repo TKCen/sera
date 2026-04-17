@@ -127,6 +127,31 @@ async fn main() -> anyhow::Result<()> {
     let evolve_token_signer = Arc::new(
         sera_gateway::evolve_token::EvolveTokenSigner::new(evolve_token_secret.into_bytes()),
     );
+
+    // Optionally spawn a background task that polls the secrets provider for
+    // SERA_EVOLVE_TOKEN_SECRET and rotates the signer when the value changes.
+    // Controlled by SERA_EVOLVE_TOKEN_ROTATION_POLL_SECS (0 = disabled, default).
+    let rotation_poll_secs: u64 = std::env::var("SERA_EVOLVE_TOKEN_ROTATION_POLL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if rotation_poll_secs > 0 {
+        let secrets_provider: Arc<dyn sera_secrets::SecretsProvider> =
+            Arc::new(sera_secrets::EnvSecretsProvider);
+        if let Some(_handle) = evolve_token_signer.spawn_rotation_poll(
+            secrets_provider,
+            std::time::Duration::from_secs(rotation_poll_secs),
+            // EnvSecretsProvider reads SERA_SECRET_<key>, so the key here is
+            // "EVOLVE_TOKEN_SECRET" → env var "SERA_SECRET_EVOLVE_TOKEN_SECRET".
+            "EVOLVE_TOKEN_SECRET".to_string(),
+        ) {
+            tracing::info!(
+                interval_secs = rotation_poll_secs,
+                "evolve-token rotation poll spawned"
+            );
+        }
+    }
+
     let proposal_usage: std::sync::Arc<dyn sera_gateway::evolve_token::ProposalUsageStore> =
         std::sync::Arc::new(
             sera_gateway::evolve_token::PostgresProposalUsageStore::from_db_pool(&db),

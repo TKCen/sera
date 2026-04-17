@@ -4483,6 +4483,7 @@ dependencies = [
  "sera-meta",
  "sera-queue",
  "sera-runtime",
+ "sera-secrets",
  "sera-session",
  "sera-testing",
  "sera-tools",

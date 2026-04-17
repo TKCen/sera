@@ -42,10 +42,31 @@
 //! Sorting the scope indices makes the canonical form insensitive to
 //! `HashSet<BlastRadius>` iteration order. Encoding lengths explicitly keeps
 //! the bytes unambiguous even if a future `BlastRadius` variant is added.
+//!
+//! # Live key rotation
+//!
+//! [`EvolveTokenSigner`] now holds its signing key behind an
+//! `Arc<RwLock<SigningKey>>` (std, not tokio — critical sections are short,
+//! no `.await` inside) and keeps a bounded [`RotationHistory`] (capacity 2)
+//! of previous keys with their rotation timestamps.
+//!
+//! * [`EvolveTokenSigner::rotate`] — swap to a new key in-process (sync).
+//! * [`EvolveTokenSigner::spawn_rotation_poll`] — launch a Tokio background
+//!   task that polls a [`sera_secrets::SecretsProvider`] every `interval` and
+//!   calls `rotate` when the secret value changes.
+//!
+//! During verification, if the signature does not match the current key, the
+//! verifier tries each history entry whose `rotated_at` is within the
+//! configurable grace period (default [`ROTATION_GRACE_SECS`] = 60 s). This
+//! prevents in-flight tokens from receiving a 401 immediately after a key
+//! swap.
+//!
+//! The public `sign` and `verify` methods remain **synchronous** so existing
+//! route handlers and tests require no changes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sera_types::evolution::{BlastRadius, CapabilityToken};
 use sha2::{Digest, Sha512};
@@ -53,6 +74,11 @@ use sha2::{Digest, Sha512};
 pub use sera_db::proposal_usage::{
     InMemoryProposalUsageStore, PostgresProposalUsageStore, ProposalUsageStore,
 };
+
+/// Grace period (seconds) during which a rotated-out key is still accepted for
+/// verification. Tokens signed with an old key that arrive within this window
+/// will verify successfully; after it expires they are rejected.
+pub const ROTATION_GRACE_SECS: u64 = 60;
 
 /// Errors surfaced by evolve-token verification. Callers map these to HTTP
 /// status codes in the route layer (401 for signature/expiry failures, 403
@@ -74,6 +100,48 @@ pub enum EvolveTokenError {
     EmptySecret,
 }
 
+// ── Key and rotation history ───────────────────────────────────────────────
+
+/// A single signing key held in the rotation slot.
+#[derive(Clone)]
+struct SigningKey {
+    secret: Vec<u8>,
+}
+
+/// One entry in the rotation history — the key that was **replaced** by a
+/// rotation, together with the [`Instant`] at which it was replaced.
+struct HistoryEntry {
+    key: SigningKey,
+    rotated_at: Instant,
+}
+
+/// Bounded ring of previously-active keys retained for the grace period.
+/// Capacity is fixed at 2: the two most recent former keys.
+#[derive(Default)]
+struct RotationHistory {
+    entries: Vec<HistoryEntry>,
+}
+
+impl RotationHistory {
+    /// Maximum number of history slots (2 = two previous keys kept).
+    const CAPACITY: usize = 2;
+
+    fn push(&mut self, entry: HistoryEntry) {
+        if self.entries.len() >= Self::CAPACITY {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+
+    /// Iterate over keys that are still within the grace period.
+    fn active_grace_keys(&self, grace: Duration) -> impl Iterator<Item = &SigningKey> {
+        self.entries
+            .iter()
+            .filter(move |e| e.rotated_at.elapsed() <= grace)
+            .map(|e| &e.key)
+    }
+}
+
 /// HMAC-SHA-512 signer for [`CapabilityToken`]s.
 ///
 /// Tokens are signed against a shared secret held by the gateway. In
@@ -81,16 +149,106 @@ pub enum EvolveTokenError {
 /// secrets so compromise of one auth surface does not enable minting evolve
 /// tokens. During dev, operators can re-use `SERA_JWT_SECRET` if
 /// `SERA_EVOLVE_TOKEN_SECRET` is unset.
+///
+/// The active signing key is stored behind an `Arc<RwLock<…>>` (std) so live
+/// key rotation is possible without a process restart. `sign` and `verify`
+/// remain synchronous; the rotation API is async only at the background-task
+/// boundary.  See [`EvolveTokenSigner::rotate`] and
+/// [`EvolveTokenSigner::spawn_rotation_poll`].
 #[derive(Clone)]
 pub struct EvolveTokenSigner {
-    secret: Vec<u8>,
+    current: Arc<RwLock<SigningKey>>,
+    history: Arc<RwLock<RotationHistory>>,
+    grace: Duration,
 }
 
 impl EvolveTokenSigner {
     /// Create a new signer from a raw secret. An empty secret produces a
     /// signer that always fails verification with [`EvolveTokenError::EmptySecret`].
     pub fn new(secret: impl Into<Vec<u8>>) -> Self {
-        Self { secret: secret.into() }
+        Self {
+            current: Arc::new(RwLock::new(SigningKey { secret: secret.into() })),
+            history: Arc::new(RwLock::new(RotationHistory::default())),
+            grace: Duration::from_secs(ROTATION_GRACE_SECS),
+        }
+    }
+
+    /// Create a signer with a custom grace period. Primarily for tests.
+    pub fn with_grace(secret: impl Into<Vec<u8>>, grace: Duration) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(SigningKey { secret: secret.into() })),
+            history: Arc::new(RwLock::new(RotationHistory::default())),
+            grace,
+        }
+    }
+
+    /// Rotate to a new signing key. The previous key is archived in the
+    /// rotation history for the configured grace period.
+    ///
+    /// If `new_secret` is identical to the current secret, the rotation is
+    /// treated as a no-op: the history is not updated and the key is not
+    /// swapped. This is important when a background poll re-reads an unchanged
+    /// secret — repeated no-op calls should not accumulate stale history
+    /// entries.
+    pub fn rotate(&self, new_secret: Vec<u8>) {
+        // Acquire write lock — history first, then current (consistent order).
+        let mut history_guard = self.history.write().expect("history RwLock poisoned");
+        let mut current_guard = self.current.write().expect("current RwLock poisoned");
+
+        // No-op if secret unchanged.
+        if current_guard.secret == new_secret {
+            return;
+        }
+
+        // Archive the old key.
+        history_guard.push(HistoryEntry {
+            key: SigningKey { secret: current_guard.secret.clone() },
+            rotated_at: Instant::now(),
+        });
+
+        // Install new key.
+        current_guard.secret = new_secret;
+    }
+
+    /// Spawn a Tokio background task that polls `provider` for `secret_name`
+    /// every `interval` and calls [`Self::rotate`] when the value changes.
+    ///
+    /// The spawned task runs until the process exits (there is no explicit
+    /// cancellation handle — the task will be dropped when the tokio runtime
+    /// shuts down). Errors from the provider are logged at `warn` level and
+    /// do not stop the poll loop.
+    ///
+    /// Returns `None` if `interval` is zero (polling disabled).
+    pub fn spawn_rotation_poll(
+        &self,
+        provider: Arc<dyn sera_secrets::SecretsProvider>,
+        interval: Duration,
+        secret_name: String,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if interval.is_zero() {
+            return None;
+        }
+
+        let signer = self.clone();
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                match provider.get_secret(&secret_name).await {
+                    Ok(val) => {
+                        signer.rotate(val.into_bytes());
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            secret = %secret_name,
+                            error = %e,
+                            "evolve-token rotation poll: failed to read secret"
+                        );
+                    }
+                }
+            }
+        });
+        Some(handle)
     }
 
     /// Compute the canonical bytes for a token (everything except the
@@ -132,14 +290,20 @@ impl EvolveTokenSigner {
         out
     }
 
+    /// Compute the HMAC-SHA-512 of the canonical bytes under the given secret.
+    fn mac_with_key(secret: &[u8], token: &CapabilityToken) -> [u8; 64] {
+        let canon = Self::canonical_bytes(token);
+        hmac_sha512(secret, &canon)
+    }
+
     /// Compute the HMAC-SHA-512 of the canonical bytes under the signer's
-    /// secret. Returns a 64-byte array that can be dropped straight into
+    /// current key. Returns a 64-byte array that can be dropped straight into
     /// [`CapabilityToken::signature`].
     ///
     /// Implements HMAC per RFC 2104 with SHA-512's 128-byte block size.
     pub fn mac(&self, token: &CapabilityToken) -> [u8; 64] {
-        let canon = Self::canonical_bytes(token);
-        hmac_sha512(&self.secret, &canon)
+        let guard = self.current.read().expect("current RwLock poisoned");
+        Self::mac_with_key(&guard.secret, token)
     }
 
     /// Mint a new signature for `token` and install it. Any previous
@@ -157,20 +321,44 @@ impl EvolveTokenSigner {
     ///    the required one unless the signature is legitimate.
     /// 2. Expiry → [`EvolveTokenError::Expired`] (401).
     /// 3. Scope membership → [`EvolveTokenError::MissingScope`] (403).
+    ///
+    /// If the current key does not verify the signature, the verifier
+    /// additionally checks any grace-period keys from the rotation history
+    /// before returning [`EvolveTokenError::InvalidSignature`]. This allows
+    /// in-flight tokens to survive a key rotation for up to
+    /// [`ROTATION_GRACE_SECS`] seconds.
     pub fn verify(
         &self,
         token: &CapabilityToken,
         required: BlastRadius,
     ) -> Result<(), EvolveTokenError> {
-        if self.secret.is_empty() {
-            return Err(EvolveTokenError::EmptySecret);
-        }
+        // ── 1. Signature check (current key, then grace-period keys) ──
+        let sig_ok = {
+            let current_guard = self.current.read().expect("current RwLock poisoned");
+            if current_guard.secret.is_empty() {
+                return Err(EvolveTokenError::EmptySecret);
+            }
 
-        let expected = self.mac(token);
-        if !constant_time_eq_64(&expected, &token.signature) {
+            let expected = Self::mac_with_key(&current_guard.secret, token);
+            if constant_time_eq_64(&expected, &token.signature) {
+                true
+            } else {
+                // Try grace-period keys from history.
+                let history_guard = self.history.read().expect("history RwLock poisoned");
+                history_guard
+                    .active_grace_keys(self.grace)
+                    .any(|k| {
+                        let exp = Self::mac_with_key(&k.secret, token);
+                        constant_time_eq_64(&exp, &token.signature)
+                    })
+            }
+        };
+
+        if !sig_ok {
             return Err(EvolveTokenError::InvalidSignature);
         }
 
+        // ── 2. Expiry check ──
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -179,6 +367,7 @@ impl EvolveTokenSigner {
             return Err(EvolveTokenError::Expired);
         }
 
+        // ── 3. Scope check ──
         if !token.scopes.contains(&required) {
             return Err(EvolveTokenError::MissingScope(required));
         }
@@ -440,6 +629,87 @@ mod tests {
         let mut long_b = long_a.clone();
         long_b[150] ^= 0xff; // differ past byte 128
         assert_ne!(hmac_sha512(&long_a, b"msg"), hmac_sha512(&long_b, b"msg"));
+    }
+
+    // ── Rotation tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn rotate_to_same_key_is_noop() {
+        // Rotating to the same secret must not add a history entry.
+        let signer = EvolveTokenSigner::new(b"key-a".to_vec());
+        signer.rotate(b"key-a".to_vec());
+        // The history should be empty — no entry should have been pushed.
+        let history = signer.history.read().expect("poisoned");
+        assert_eq!(history.entries.len(), 0, "same-key rotate must not push history");
+    }
+
+    #[test]
+    fn sign_rotate_verify_within_grace() {
+        // Sign with key A, rotate to key B, verify immediately — should pass
+        // because key A is still in the grace-period history.
+        let signer = EvolveTokenSigner::new(b"key-a".to_vec());
+        let mut tok = test_token(&[BlastRadius::SingleHookConfig], 3600);
+        signer.sign(&mut tok);
+
+        signer.rotate(b"key-b".to_vec());
+
+        // Verify must succeed because key A is in history and within grace.
+        assert_eq!(
+            signer.verify(&tok, BlastRadius::SingleHookConfig),
+            Ok(()),
+            "token signed with old key must verify within grace period"
+        );
+    }
+
+    #[test]
+    fn sign_rotate_verify_after_grace_fails() {
+        // Sign with key A, rotate to key B with a zero grace period — the
+        // history entry is immediately expired, so old-key tokens must fail.
+        let signer = EvolveTokenSigner::with_grace(b"key-a".to_vec(), Duration::from_secs(0));
+        let mut tok = test_token(&[BlastRadius::SingleHookConfig], 3600);
+        signer.sign(&mut tok);
+
+        signer.rotate(b"key-b".to_vec());
+
+        // With zero grace, the history entry is already expired.
+        assert_eq!(
+            signer.verify(&tok, BlastRadius::SingleHookConfig),
+            Err(EvolveTokenError::InvalidSignature),
+            "token signed with old key must be rejected after grace expires"
+        );
+    }
+
+    #[test]
+    fn concurrent_sign_and_rotate_no_panic() {
+        // Spawn N signer threads + M rotator threads; no panics or data races.
+        use std::thread;
+
+        let signer = Arc::new(EvolveTokenSigner::new(b"initial".to_vec()));
+        let mut handles = vec![];
+
+        // 8 signer threads
+        for i in 0..8u32 {
+            let s = Arc::clone(&signer);
+            handles.push(thread::spawn(move || {
+                let mut tok = test_token(&[BlastRadius::SingleHookConfig], 3600);
+                tok.id = format!("tok-{i}");
+                s.sign(&mut tok);
+                // Either Ok or InvalidSignature is acceptable — we just must not panic.
+                let _ = s.verify(&tok, BlastRadius::SingleHookConfig);
+            }));
+        }
+
+        // 4 rotator threads
+        for i in 0..4u8 {
+            let s = Arc::clone(&signer);
+            handles.push(thread::spawn(move || {
+                s.rotate(vec![i; 32]);
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
     }
 
     // ── ProposalUsageTracker tests ────────────────────────────────────────

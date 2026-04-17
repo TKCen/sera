@@ -21,6 +21,7 @@
 //!   gateway core, protocol schemas, and constitutional rule sets.
 
 pub mod approval_matrix;
+pub mod sera_errors;
 pub mod artifact_pipeline;
 pub mod constitutional;
 pub mod interaction_scoring;

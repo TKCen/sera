@@ -15,6 +15,7 @@ pub use data_root::{DataRoot, DATA_ROOT_ENV};
 
 pub mod config_store;
 pub mod env_override;
+pub mod sera_errors;
 pub mod layer_merge;
 pub mod schema_registry;
 pub mod shadow_store;

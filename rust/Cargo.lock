@@ -4377,6 +4377,7 @@ dependencies = [
  "notify-debouncer-mini",
  "once_cell",
  "schemars 1.2.1",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4497,6 +4498,7 @@ name = "sera-hitl"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4511,6 +4513,7 @@ name = "sera-hooks"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
@@ -4546,6 +4549,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "rand 0.8.5",
+ "sera-errors",
  "sera-events",
  "sera-types",
  "serde",

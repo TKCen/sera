@@ -28,6 +28,7 @@
 
 pub mod cancel;
 pub mod error;
+pub mod sera_errors;
 pub mod executor;
 pub mod hook_trait;
 pub mod registry;

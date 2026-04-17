@@ -13,6 +13,7 @@ notify.workspace = true
 notify-debouncer-mini.workspace = true
 tracing.workspace = true
 sera-types.workspace = true
+sera-errors.workspace = true
 sha2.workspace = true
 async-trait.workspace = true
 once_cell.workspace = true

@@ -5,6 +5,7 @@
 
 pub mod error;
 pub mod mode;
+pub mod sera_errors;
 pub mod router;
 pub mod ticket;
 pub mod types;

@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use moka::future::Cache as MokaCache;
+use sera_errors::{IntoSeraError, SeraError, SeraErrorCode};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -13,6 +14,17 @@ pub enum CacheError {
     Miss { key: String },
     #[error("backend error: {reason}")]
     Backend { reason: String },
+}
+
+impl CacheError {
+    /// Convert to [`SeraError`] with the canonical code for this variant.
+    pub fn into_sera_error(self) -> SeraError {
+        let code = match &self {
+            CacheError::Miss { .. } => SeraErrorCode::NotFound,
+            CacheError::Backend { .. } => SeraErrorCode::Unavailable,
+        };
+        self.into_sera(code)
+    }
 }
 
 /// Minimal async cache interface.
@@ -62,6 +74,42 @@ impl CacheBackend for MokaBackend {
     async fn delete(&self, key: &str) -> Result<(), CacheError> {
         self.cache.invalidate(key).await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod into_sera_tests {
+    use super::*;
+    use sera_errors::SeraErrorCode;
+
+    #[test]
+    fn miss_maps_to_not_found() {
+        let err = CacheError::Miss { key: "mykey".into() };
+        let sera = err.into_sera_error();
+        assert_eq!(sera.code, SeraErrorCode::NotFound);
+        assert!(sera.message.contains("mykey"));
+    }
+
+    #[test]
+    fn backend_maps_to_unavailable() {
+        let err = CacheError::Backend { reason: "redis down".into() };
+        let sera = err.into_sera_error();
+        assert_eq!(sera.code, SeraErrorCode::Unavailable);
+        assert!(sera.message.contains("redis down"));
+    }
+
+    #[test]
+    fn miss_message_preserved() {
+        let err = CacheError::Miss { key: "agent:42".into() };
+        let sera = err.into_sera_error();
+        assert!(sera.message.contains("agent:42"));
+    }
+
+    #[test]
+    fn backend_message_preserved() {
+        let err = CacheError::Backend { reason: "connection timeout".into() };
+        let sera = err.into_sera_error();
+        assert!(sera.message.contains("connection timeout"));
     }
 }
 

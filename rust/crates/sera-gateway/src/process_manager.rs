@@ -586,3 +586,85 @@ mod tests {
         assert!(!rendered.contains("--foo"), "leaked non-secret arg: {rendered}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// sera-errors interop
+// ---------------------------------------------------------------------------
+
+impl From<ProcessError> for sera_errors::SeraError {
+    fn from(err: ProcessError) -> Self {
+        use sera_errors::SeraErrorCode;
+        match &err {
+            ProcessError::SpawnFailed(_) => {
+                sera_errors::SeraError::with_source(SeraErrorCode::Internal, "spawn failed", err)
+            }
+            ProcessError::NotFound(pid) => sera_errors::SeraError::new(
+                SeraErrorCode::NotFound,
+                format!("process {pid} not found"),
+            ),
+            ProcessError::AlreadyExists => {
+                sera_errors::SeraError::new(SeraErrorCode::AlreadyExists, "process already exists")
+            }
+            ProcessError::StoreFailure(msg) => {
+                sera_errors::SeraError::new(SeraErrorCode::Internal, format!("store failure: {msg}"))
+            }
+            ProcessError::ReconciliationFailed { pid, reason } => sera_errors::SeraError::new(
+                SeraErrorCode::Internal,
+                format!("reconciliation failed for pid {pid}: {reason}"),
+            ),
+            ProcessError::ShutdownTimeout { secs } => sera_errors::SeraError::new(
+                SeraErrorCode::Timeout,
+                format!("shutdown timed out after {secs}s"),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod sera_errors_tests {
+    use super::*;
+    use sera_errors::SeraErrorCode;
+
+    #[test]
+    fn process_not_found_maps_to_not_found() {
+        let id = ProcessId(Uuid::nil());
+        let err = ProcessError::NotFound(id);
+        let sera: sera_errors::SeraError = err.into();
+        assert_eq!(sera.code, SeraErrorCode::NotFound);
+        assert!(sera.message.contains("not found"));
+    }
+
+    #[test]
+    fn process_already_exists_maps_to_already_exists() {
+        let err = ProcessError::AlreadyExists;
+        let sera: sera_errors::SeraError = err.into();
+        assert_eq!(sera.code, SeraErrorCode::AlreadyExists);
+    }
+
+    #[test]
+    fn process_shutdown_timeout_maps_to_timeout() {
+        let err = ProcessError::ShutdownTimeout { secs: 30 };
+        let sera: sera_errors::SeraError = err.into();
+        assert_eq!(sera.code, SeraErrorCode::Timeout);
+        assert!(sera.message.contains("30"));
+    }
+
+    #[test]
+    fn process_store_failure_maps_to_internal() {
+        let err = ProcessError::StoreFailure("disk full".to_string());
+        let sera: sera_errors::SeraError = err.into();
+        assert_eq!(sera.code, SeraErrorCode::Internal);
+        assert!(sera.message.contains("disk full"));
+    }
+
+    #[test]
+    fn process_reconciliation_failed_maps_to_internal() {
+        let err = ProcessError::ReconciliationFailed {
+            pid: 99,
+            reason: "exit code 1".to_string(),
+        };
+        let sera: sera_errors::SeraError = err.into();
+        assert_eq!(sera.code, SeraErrorCode::Internal);
+        assert!(sera.message.contains("99"));
+    }
+}

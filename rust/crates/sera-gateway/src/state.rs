@@ -15,6 +15,7 @@ use sera_meta::constitutional::ConstitutionalRegistry;
 use sera_tools::sandbox::SandboxProvider;
 
 use sera_gateway::envelope::GenerationMarker;
+use sera_gateway::evolve_token::EvolveTokenSigner;
 use sera_gateway::harness_dispatch::HarnessRegistry;
 use sera_gateway::kill_switch::KillSwitch;
 use sera_gateway::transcript_persist::TranscriptPersistence;
@@ -60,4 +61,10 @@ pub struct AppState {
     /// [`sera_types::hook::HookPoint::OnChangeArtifactProposed`] hook chains
     /// with `HookContext.change_artifact` populated end-to-end.
     pub chain_executor: Arc<ChainExecutor>,
+    /// HMAC-SHA-512 signer used by `/api/evolve/propose` to verify the
+    /// capability token submitted with each change-artifact proposal. See
+    /// [`sera_gateway::evolve_token`] for the canonical-byte layout and the
+    /// rationale behind keeping verification gateway-local rather than in
+    /// `sera-auth`.
+    pub evolve_token_signer: Arc<EvolveTokenSigner>,
 }

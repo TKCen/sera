@@ -107,6 +107,22 @@ async fn main() -> anyhow::Result<()> {
         sera_meta::constitutional::ConstitutionalRegistry::new(),
     );
 
+    // Signer for /api/evolve/* CapabilityTokens. Prefer the dedicated
+    // SERA_EVOLVE_TOKEN_SECRET so operators can rotate it independently of
+    // the JWT/API secrets; fall back to SERA_JWT_SECRET and finally to the
+    // centrifugo token secret (already present in CoreConfig). An empty
+    // secret causes verify() to fail with EmptySecret — surfaced as 401 by
+    // the route layer — which is the intended behaviour when no secret is
+    // configured.
+    let evolve_token_secret = std::env::var("SERA_EVOLVE_TOKEN_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("SERA_JWT_SECRET").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| config.centrifugo.token_secret.clone());
+    let evolve_token_signer = Arc::new(
+        sera_gateway::evolve_token::EvolveTokenSigner::new(evolve_token_secret.into_bytes()),
+    );
+
     let app_state = AppState {
         db,
         config: config.clone(),
@@ -130,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         constitutional_registry,
         hook_registry,
         chain_executor,
+        evolve_token_signer,
     };
 
     // Extract queue backend before app_state is moved into the router.

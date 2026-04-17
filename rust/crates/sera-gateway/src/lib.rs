@@ -2,6 +2,7 @@
 
 pub mod connector;
 pub mod envelope;
+pub mod evolve_token;
 pub mod generation;
 pub mod harness_dispatch;
 pub mod kill_switch;
@@ -10,6 +11,8 @@ pub mod process_manager;
 pub mod session_persist;
 pub mod transcript_persist;
 pub mod transport;
+
+pub use evolve_token::{EvolveTokenError, EvolveTokenSigner};
 
 pub use process_manager::{
     InMemoryProcessRegistryStore, ManagedProcess, ProcessError, ProcessId, ProcessKind,

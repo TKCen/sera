@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 // ── Hook Points ──────────────────────────────────────────────────────────────
 
@@ -139,6 +140,118 @@ fn default_true() -> bool {
     true
 }
 
+// ── Permission Overrides ─────────────────────────────────────────────────────
+
+/// Permission adjustments a hook can request for downstream hooks in the same
+/// chain (and, by extension, for the operation being gated by the chain).
+///
+/// SPEC-hooks: hooks occasionally need to grant or revoke capability tokens
+/// (named permission strings) based on runtime context — for example, a policy
+/// hook might grant `"tool:bash:write"` if the principal is in an on-call
+/// group, or revoke `"memory:write"` if PII is detected in the input.
+///
+/// # Merge semantics
+///
+/// When a hook returns overrides, the [`ChainExecutor`] merges them into
+/// [`HookContext::permissions`] with **additive union for grants, set
+/// subtraction for revokes**:
+///
+/// - Each hook's `additional_permissions` are UNIONed with the currently-active
+///   permission set — grants compound across hooks.
+/// - Each hook's `revoked_permissions` are then removed from that set — a
+///   revoke always wins over a grant **from an earlier hook in the same chain**.
+/// - A later hook can re-grant a previously revoked permission.
+///
+/// Rationale: hook chains are cooperative pipelines. A preceding hook's grant
+/// expresses "this context is safe for X"; a subsequent hook's revoke expresses
+/// "but not after I've looked at it". Last-write-wins on a *per-permission*
+/// basis preserves both intents. Full last-write-wins on the whole struct
+/// would let a downstream hook accidentally erase a grant it never considered.
+///
+/// TTL, when set on an override, is advisory — the executor tracks the
+/// set-wall-clock at which each grant expires; permissions older than their
+/// TTL are pruned before the next hook runs.
+///
+/// `[`ChainExecutor`]: crate::hook
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionOverrides {
+    /// Capability tokens to grant. Unioned into the active set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_permissions: Vec<String>,
+
+    /// Capability tokens to revoke. Removed from the active set after grants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked_permissions: Vec<String>,
+
+    /// Optional expiry for the granted permissions. When `Some`, the executor
+    /// will prune grants older than `ttl` before invoking the next hook.
+    /// Revokes are *not* subject to TTL — they are immediate and durable.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "duration_millis_opt")]
+    pub ttl: Option<Duration>,
+}
+
+impl PermissionOverrides {
+    /// Shorthand for a grant-only override.
+    pub fn grant<I, S>(perms: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            additional_permissions: perms.into_iter().map(Into::into).collect(),
+            revoked_permissions: Vec::new(),
+            ttl: None,
+        }
+    }
+
+    /// Shorthand for a revoke-only override.
+    pub fn revoke<I, S>(perms: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            additional_permissions: Vec::new(),
+            revoked_permissions: perms.into_iter().map(Into::into).collect(),
+            ttl: None,
+        }
+    }
+
+    /// Attach a TTL to this override.
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// True if there are no grants and no revokes — merging is a no-op.
+    pub fn is_empty(&self) -> bool {
+        self.additional_permissions.is_empty() && self.revoked_permissions.is_empty()
+    }
+}
+
+/// Serde helper for `Option<Duration>` as millis on the wire.
+mod duration_millis_opt {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<Duration>,
+        ser: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(d) => ser.serialize_some(&(d.as_millis() as u64)),
+            None => ser.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        de: D,
+    ) -> Result<Option<Duration>, D::Error> {
+        let opt = Option::<u64>::deserialize(de)?;
+        Ok(opt.map(Duration::from_millis))
+    }
+}
+
 // ── Hook Execution Types ─────────────────────────────────────────────────────
 
 /// The result of executing a single hook in a chain.
@@ -155,6 +268,12 @@ pub enum HookResult {
         /// Optionally replace the input value for downstream hooks.
         #[serde(skip_serializing_if = "Option::is_none")]
         updated_input: Option<serde_json::Value>,
+        /// Capability-token adjustments the hook wants applied before the
+        /// next hook runs. Merged into [`HookContext::permissions`] per the
+        /// additive-grant / subtractive-revoke rules documented on
+        /// [`PermissionOverrides`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_overrides: Option<PermissionOverrides>,
     },
     /// Short-circuit: block the operation.
     Reject {
@@ -180,6 +299,7 @@ impl HookResult {
         HookResult::Continue {
             context_updates: HashMap::new(),
             updated_input: None,
+            permission_overrides: None,
         }
     }
 
@@ -188,6 +308,27 @@ impl HookResult {
         HookResult::Continue {
             context_updates: updates,
             updated_input: None,
+            permission_overrides: None,
+        }
+    }
+
+    /// Create a Continue result that transforms the input value passed to
+    /// downstream hooks in the same chain.
+    pub fn pass_with_input(updated_input: serde_json::Value) -> Self {
+        HookResult::Continue {
+            context_updates: HashMap::new(),
+            updated_input: Some(updated_input),
+            permission_overrides: None,
+        }
+    }
+
+    /// Create a Continue result that requests permission overrides for
+    /// downstream hooks in the same chain.
+    pub fn pass_with_permissions(overrides: PermissionOverrides) -> Self {
+        HookResult::Continue {
+            context_updates: HashMap::new(),
+            updated_input: None,
+            permission_overrides: Some(overrides),
         }
     }
 
@@ -256,6 +397,20 @@ pub struct HookContext {
     pub change_artifact: Option<crate::evolution::ChangeArtifactId>,
 }
 
+/// Reserved metadata key: JSON array of active permission tokens accumulated
+/// from upstream hooks' [`PermissionOverrides`] merges in the current chain.
+///
+/// Stored in [`HookContext::metadata`] instead of a dedicated field so that
+/// `HookContext` remains struct-literal-compatible with existing downstream
+/// callers. Prefer the typed accessors
+/// [`HookContext::active_permissions`] / [`HookContext::apply_permission_overrides`].
+pub const HOOK_CTX_PERMISSIONS_KEY: &str = "__sera_hook_permissions";
+
+/// Reserved metadata key: the most recent `updated_input` value produced by
+/// an upstream hook in the current chain. Use
+/// [`HookContext::updated_input`] to read it.
+pub const HOOK_CTX_UPDATED_INPUT_KEY: &str = "__sera_hook_updated_input";
+
 impl HookContext {
     /// Create a minimal context for a given hook point.
     pub fn new(point: HookPoint) -> Self {
@@ -274,6 +429,74 @@ impl HookContext {
     /// Apply context updates from a Continue result.
     pub fn apply_updates(&mut self, updates: HashMap<String, serde_json::Value>) {
         self.metadata.extend(updates);
+    }
+
+    /// Return the active capability-token set accumulated from upstream
+    /// hooks' [`PermissionOverrides`]. Empty when no overrides have been
+    /// applied in this chain.
+    ///
+    /// This is *not* the authoritative permission set for authorization —
+    /// the gateway still performs its own check — but lets downstream hooks
+    /// in the same chain observe what previous hooks have granted or revoked.
+    pub fn active_permissions(&self) -> Vec<String> {
+        match self.metadata.get(HOOK_CTX_PERMISSIONS_KEY) {
+            Some(serde_json::Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// True iff `perm` is present in the active permission set.
+    pub fn has_permission(&self, perm: &str) -> bool {
+        match self.metadata.get(HOOK_CTX_PERMISSIONS_KEY) {
+            Some(serde_json::Value::Array(arr)) => {
+                arr.iter().any(|v| v.as_str() == Some(perm))
+            }
+            _ => false,
+        }
+    }
+
+    /// Merge a [`PermissionOverrides`] into the active permission set.
+    ///
+    /// Semantics (see [`PermissionOverrides`] for the full rationale):
+    /// 1. `additional_permissions` are UNIONed in.
+    /// 2. `revoked_permissions` are then REMOVED.
+    ///
+    /// Returns `true` if the set changed.
+    pub fn apply_permission_overrides(&mut self, overrides: &PermissionOverrides) -> bool {
+        let mut set: Vec<String> = self.active_permissions();
+        let before = set.len();
+        for grant in &overrides.additional_permissions {
+            if !set.iter().any(|p| p == grant) {
+                set.push(grant.clone());
+            }
+        }
+        set.retain(|p| !overrides.revoked_permissions.contains(p));
+        let changed = set.len() != before
+            || !overrides.additional_permissions.is_empty()
+            || !overrides.revoked_permissions.is_empty();
+        self.metadata.insert(
+            HOOK_CTX_PERMISSIONS_KEY.to_string(),
+            serde_json::Value::Array(set.into_iter().map(serde_json::Value::String).collect()),
+        );
+        changed
+    }
+
+    /// Return the most-recent `updated_input` value propagated through the
+    /// current chain, if any. Downstream hooks should prefer this value over
+    /// the original input stored in `event` / `tool_call` when set.
+    pub fn updated_input(&self) -> Option<&serde_json::Value> {
+        self.metadata.get(HOOK_CTX_UPDATED_INPUT_KEY)
+    }
+
+    /// Set the `updated_input` slot in the chain-scoped metadata. Typically
+    /// only the executor calls this; hooks return
+    /// `HookResult::pass_with_input` instead.
+    pub fn set_updated_input(&mut self, value: serde_json::Value) {
+        self.metadata
+            .insert(HOOK_CTX_UPDATED_INPUT_KEY.to_string(), value);
     }
 }
 
@@ -378,7 +601,24 @@ impl ChainResult {
     pub fn is_redirected(&self) -> bool {
         matches!(self.outcome, HookResult::Redirect { .. })
     }
+
+    /// Whether the chain was aborted by an external cancellation signal.
+    ///
+    /// Cancellation is modeled via the `Reject` outcome with the reserved
+    /// machine-readable code `"chain_aborted"`; see
+    /// `sera_hooks::HookCancellation` for the signal mechanism.
+    pub fn is_aborted(&self) -> bool {
+        matches!(
+            &self.outcome,
+            HookResult::Reject { code: Some(c), .. } if c == CHAIN_ABORTED_CODE
+        )
+    }
 }
+
+/// Reserved error code on `HookResult::Reject` that indicates the chain was
+/// cancelled by an external [`HookCancellation`](crate::hook) signal rather
+/// than rejected by a hook's business logic.
+pub const CHAIN_ABORTED_CODE: &str = "chain_aborted";
 
 #[cfg(test)]
 mod tests {

@@ -26,6 +26,7 @@
 //! let result = executor.execute_at_point(HookPoint::PreRoute, &chains, ctx).await?;
 //! ```
 
+pub mod cancel;
 pub mod error;
 pub mod executor;
 pub mod hook_trait;
@@ -36,6 +37,7 @@ pub mod registry;
 pub mod wasm_adapter;
 
 // Convenient re-exports.
+pub use cancel::HookCancellation;
 pub use error::{HookAbortSignal, HookError};
 pub use executor::ChainExecutor;
 pub use hook_trait::Hook;

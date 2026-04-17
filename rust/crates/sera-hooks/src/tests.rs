@@ -10,9 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sera_types::hook::{
-    HookChain, HookContext, HookInstance, HookMetadata, HookPoint, HookResult,
+    CHAIN_ABORTED_CODE, HookChain, HookContext, HookInstance, HookMetadata, HookPoint, HookResult,
+    PermissionOverrides,
 };
 
+use crate::cancel::HookCancellation;
 use crate::error::HookError;
 use crate::executor::ChainExecutor;
 use crate::hook_trait::Hook;
@@ -581,4 +583,467 @@ fn hook_abort_signal_constructors() {
     let coded = HookAbortSignal::with_code("stop", "E_STOP");
     assert_eq!(coded.reason, "stop");
     assert_eq!(coded.code.as_deref(), Some("E_STOP"));
+}
+
+// ── PermissionOverrides tests ────────────────────────────────────────────────
+
+/// A hook that grants a fixed set of permissions.
+struct GrantingHook {
+    grants: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl Hook for GrantingHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "granting".to_string(),
+            description: "Grants permissions".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _config: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
+        Ok(HookResult::pass_with_permissions(
+            PermissionOverrides::grant(self.grants.clone()),
+        ))
+    }
+}
+
+/// A hook that revokes a fixed set of permissions.
+struct RevokingHook {
+    revokes: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl Hook for RevokingHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "revoking".to_string(),
+            description: "Revokes permissions".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _config: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
+        Ok(HookResult::pass_with_permissions(
+            PermissionOverrides::revoke(self.revokes.clone()),
+        ))
+    }
+}
+
+/// Asserts that a specific set of permissions is present and returns a
+/// passthrough result. Used to verify that downstream hooks see merged grants.
+struct AssertPermissionsHook {
+    expected_present: Vec<String>,
+    expected_absent: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl Hook for AssertPermissionsHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "assert-permissions".to_string(),
+            description: "Asserts expected permissions are active".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _config: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, ctx: &HookContext) -> Result<HookResult, HookError> {
+        for p in &self.expected_present {
+            if !ctx.has_permission(p) {
+                return Err(HookError::ExecutionFailed {
+                    hook: "assert-permissions".to_string(),
+                    reason: format!(
+                        "expected permission '{p}' to be present; active: {:?}",
+                        ctx.active_permissions()
+                    ),
+                });
+            }
+        }
+        for p in &self.expected_absent {
+            if ctx.has_permission(p) {
+                return Err(HookError::ExecutionFailed {
+                    hook: "assert-permissions".to_string(),
+                    reason: format!("expected permission '{p}' to be absent but was present"),
+                });
+            }
+        }
+        Ok(HookResult::pass())
+    }
+}
+
+#[tokio::test]
+async fn permission_overrides_merge_into_downstream_context() {
+    // Chain: grant [a,b] -> assert [a,b] present -> revoke [a] -> assert a absent, b present
+    let mut r = HookRegistry::new();
+    r.register(Box::new(GrantingHook {
+        grants: vec!["tool:bash:read".to_string(), "tool:bash:write".to_string()],
+    }));
+    // register the assert hooks under distinct names
+    struct AssertPresentAB;
+    #[async_trait::async_trait]
+    impl Hook for AssertPresentAB {
+        fn metadata(&self) -> HookMetadata {
+            HookMetadata {
+                name: "assert-present-ab".to_string(),
+                description: "Assert grants a and b".to_string(),
+                version: "0.1.0".to_string(),
+                supported_points: HookPoint::ALL.to_vec(),
+                author: None,
+            }
+        }
+        async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> {
+            Ok(())
+        }
+        async fn execute(&self, ctx: &HookContext) -> Result<HookResult, HookError> {
+            assert!(ctx.has_permission("tool:bash:read"));
+            assert!(ctx.has_permission("tool:bash:write"));
+            Ok(HookResult::pass())
+        }
+    }
+    r.register(Box::new(AssertPresentAB));
+    r.register(Box::new(RevokingHook {
+        revokes: vec!["tool:bash:read".to_string()],
+    }));
+    r.register(Box::new(AssertPermissionsHook {
+        expected_present: vec!["tool:bash:write".to_string()],
+        expected_absent: vec!["tool:bash:read".to_string()],
+    }));
+
+    let executor = ChainExecutor::new(Arc::new(r));
+    let c = chain(
+        "perm-merge",
+        HookPoint::PreRoute,
+        vec![
+            instance("granting"),
+            instance("assert-present-ab"),
+            instance("revoking"),
+            instance("assert-permissions"),
+        ],
+    );
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor.execute_chain(&c, ctx).await.unwrap();
+    assert!(result.is_success());
+    assert_eq!(result.hooks_executed, 4);
+    assert!(result.context.has_permission("tool:bash:write"));
+    assert!(!result.context.has_permission("tool:bash:read"));
+}
+
+#[tokio::test]
+async fn permission_overrides_no_op_when_absent() {
+    // Passthrough hook returns no overrides — context.permissions should
+    // remain empty and untouched.
+    let executor = ChainExecutor::new(Arc::new(make_registry()));
+    let c = chain(
+        "perm-noop",
+        HookPoint::PreRoute,
+        vec![instance("passthrough"), instance("modifying")],
+    );
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor.execute_chain(&c, ctx).await.unwrap();
+    assert!(result.is_success());
+    assert!(
+        result.context.active_permissions().is_empty(),
+        "permissions should remain empty, got {:?}",
+        result.context.active_permissions()
+    );
+}
+
+#[tokio::test]
+async fn permission_overrides_with_ttl_tracked() {
+    // The executor exposes ttl via PermissionOverrides but does not yet
+    // prune expired entries (documented behaviour). Verify that a hook
+    // returning a TTL'd grant results in the permission being active after
+    // the hook runs — TTL expiry is a downstream pruning concern.
+    use std::time::Duration;
+
+    struct GrantingWithTtl;
+    #[async_trait::async_trait]
+    impl Hook for GrantingWithTtl {
+        fn metadata(&self) -> HookMetadata {
+            HookMetadata {
+                name: "granting-ttl".to_string(),
+                description: "Grants with TTL".to_string(),
+                version: "0.1.0".to_string(),
+                supported_points: HookPoint::ALL.to_vec(),
+                author: None,
+            }
+        }
+        async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> {
+            Ok(())
+        }
+        async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
+            Ok(HookResult::pass_with_permissions(
+                PermissionOverrides::grant(["ephemeral:token"])
+                    .with_ttl(Duration::from_millis(50)),
+            ))
+        }
+    }
+
+    let mut r = HookRegistry::new();
+    r.register(Box::new(GrantingWithTtl));
+    r.register(Box::new(PassthroughHook));
+    let executor = ChainExecutor::new(Arc::new(r));
+    let c = chain(
+        "ttl-chain",
+        HookPoint::PreRoute,
+        vec![instance("granting-ttl"), instance("passthrough")],
+    );
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor.execute_chain(&c, ctx).await.unwrap();
+    assert!(result.is_success());
+    // The grant is active after the hook ran.
+    assert!(result.context.has_permission("ephemeral:token"));
+}
+
+// ── updated_input propagation tests ──────────────────────────────────────────
+
+struct InputSetterHook {
+    value: serde_json::Value,
+}
+
+#[async_trait::async_trait]
+impl Hook for InputSetterHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "input-setter".to_string(),
+            description: "Sets updated_input".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
+        Ok(HookResult::pass_with_input(self.value.clone()))
+    }
+}
+
+struct InputAssertHook {
+    expected: serde_json::Value,
+}
+
+#[async_trait::async_trait]
+impl Hook for InputAssertHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "input-assert".to_string(),
+            description: "Asserts updated_input".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, ctx: &HookContext) -> Result<HookResult, HookError> {
+        match ctx.updated_input() {
+            Some(v) if v == &self.expected => Ok(HookResult::pass()),
+            other => Err(HookError::ExecutionFailed {
+                hook: "input-assert".to_string(),
+                reason: format!("expected updated_input={:?}, got {:?}", self.expected, other),
+            }),
+        }
+    }
+}
+
+#[tokio::test]
+async fn updated_input_flows_from_hook_n_to_hook_n_plus_one() {
+    let mut r = HookRegistry::new();
+    r.register(Box::new(InputSetterHook {
+        value: serde_json::json!({"transformed": true, "count": 1}),
+    }));
+    r.register(Box::new(InputAssertHook {
+        expected: serde_json::json!({"transformed": true, "count": 1}),
+    }));
+    let executor = ChainExecutor::new(Arc::new(r));
+    let c = chain(
+        "input-chain",
+        HookPoint::PreRoute,
+        vec![instance("input-setter"), instance("input-assert")],
+    );
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor.execute_chain(&c, ctx).await.unwrap();
+    assert!(result.is_success());
+    assert_eq!(result.hooks_executed, 2);
+    assert_eq!(
+        result.updated_input,
+        Some(serde_json::json!({"transformed": true, "count": 1}))
+    );
+    assert_eq!(
+        result.context.updated_input().cloned(),
+        Some(serde_json::json!({"transformed": true, "count": 1}))
+    );
+}
+
+// ── HookCancellation tests ───────────────────────────────────────────────────
+
+/// A hook that sleeps long enough to reliably observe a cancellation.
+struct SleepyHook;
+
+#[async_trait::async_trait]
+impl Hook for SleepyHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "sleepy".to_string(),
+            description: "Sleeps for 2s".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        Ok(HookResult::pass())
+    }
+}
+
+#[tokio::test]
+async fn cancellation_fires_mid_chain_returns_aborted_outcome() {
+    let mut r = HookRegistry::new();
+    r.register(Box::new(SleepyHook));
+    let executor = ChainExecutor::new(Arc::new(r));
+
+    let c = HookChain {
+        name: "mid-cancel".to_string(),
+        point: HookPoint::PreRoute,
+        hooks: vec![instance("sleepy")],
+        timeout_ms: 10_000, // long enough that cancellation wins over timeout
+        fail_open: false,
+    };
+
+    let cancel = HookCancellation::new();
+    let cancel_handle = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        cancel_handle.cancel();
+    });
+
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let start = std::time::Instant::now();
+    let result = executor
+        .execute_chain_cancellable(&c, ctx, cancel)
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(result.is_aborted(), "expected aborted, got {:?}", result.outcome);
+    // The in-flight hook never completed, so hooks_executed stays at 0.
+    assert_eq!(result.hooks_executed, 0);
+    // Sanity: we did not wait for the 2s sleep.
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "cancellation should abort promptly, took {:?}",
+        elapsed
+    );
+
+    // Confirm the reject carries the reserved code.
+    if let HookResult::Reject { code, .. } = &result.outcome {
+        assert_eq!(code.as_deref(), Some(CHAIN_ABORTED_CODE));
+    } else {
+        panic!("expected Reject outcome, got {:?}", result.outcome);
+    }
+}
+
+#[tokio::test]
+async fn cancellation_fires_before_first_hook_exits_cleanly() {
+    let executor = ChainExecutor::new(Arc::new(make_registry()));
+    let c = chain(
+        "pre-cancel",
+        HookPoint::PreRoute,
+        vec![instance("passthrough"), instance("passthrough")],
+    );
+
+    // Already-cancelled signal.
+    let cancel = HookCancellation::already_cancelled();
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor
+        .execute_chain_cancellable(&c, ctx, cancel)
+        .await
+        .unwrap();
+
+    assert!(result.is_aborted());
+    assert_eq!(result.hooks_executed, 0, "no hook should run");
+}
+
+#[tokio::test]
+async fn cancellation_uncancelled_behaves_like_normal_execute() {
+    // Passing an un-cancelled signal into the cancellable API must behave
+    // exactly like the regular execute_chain.
+    let executor = ChainExecutor::new(Arc::new(make_registry()));
+    let c = chain(
+        "no-cancel",
+        HookPoint::PreRoute,
+        vec![instance("modifying"), instance("passthrough")],
+    );
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor
+        .execute_chain_cancellable(&c, ctx, HookCancellation::new())
+        .await
+        .unwrap();
+
+    assert!(result.is_success());
+    assert_eq!(result.hooks_executed, 2);
+    assert_eq!(
+        result.context.metadata.get("modified"),
+        Some(&serde_json::json!(true))
+    );
+}
+
+#[tokio::test]
+async fn execute_at_point_cancellable_propagates_abort() {
+    // Covers the multi-chain cancellation path in execute_at_point_cancellable.
+    let mut r = HookRegistry::new();
+    r.register(Box::new(SleepyHook));
+    r.register(Box::new(PassthroughHook));
+    let executor = ChainExecutor::new(Arc::new(r));
+
+    let chains = vec![
+        HookChain {
+            name: "slow".to_string(),
+            point: HookPoint::PreRoute,
+            hooks: vec![instance("sleepy")],
+            timeout_ms: 10_000,
+            fail_open: false,
+        },
+        HookChain {
+            name: "unreached".to_string(),
+            point: HookPoint::PreRoute,
+            hooks: vec![instance("passthrough")],
+            timeout_ms: 1_000,
+            fail_open: false,
+        },
+    ];
+
+    let cancel = HookCancellation::new();
+    let handle = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        handle.cancel();
+    });
+
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let result = executor
+        .execute_at_point_cancellable(HookPoint::PreRoute, &chains, ctx, cancel)
+        .await
+        .unwrap();
+    assert!(result.is_aborted());
 }

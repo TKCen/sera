@@ -28,6 +28,7 @@ fn hook_result_updated_input_roundtrip() {
     let result = HookResult::Continue {
         context_updates: Default::default(),
         updated_input: Some(serde_json::json!({"key": "value"})),
+        permission_overrides: None,
     };
     let json = serde_json::to_string(&result).unwrap();
     let parsed: HookResult = serde_json::from_str(&json).unwrap();

@@ -112,7 +112,7 @@ impl InMemoryCircleActivityLog {
             .collect();
 
         // Sort newest-first.
-        matching.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        matching.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
         matching.into_iter().take(limit).cloned().collect()
     }
 

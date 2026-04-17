@@ -87,3 +87,7 @@ site/
 # Untracked directories to ignore
 artifacts/
 secrets/
+
+# Architecture visualization tool artifact
+sera_arch_config.json
+

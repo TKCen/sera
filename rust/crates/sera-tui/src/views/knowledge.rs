@@ -206,10 +206,12 @@ impl KnowledgeView {
                     .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
             }
             KnowledgeSortField::ByRecallCount => {
-                self.entries.sort_by(|a, b| b.recall_count.cmp(&a.recall_count));
+                self.entries
+                    .sort_by_key(|e| std::cmp::Reverse(e.recall_count));
             }
             KnowledgeSortField::BySize => {
-                self.entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+                self.entries
+                    .sort_by_key(|e| std::cmp::Reverse(e.size_bytes));
             }
         }
     }

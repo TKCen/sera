@@ -49,8 +49,11 @@ pub trait LlmProvider: Send + Sync {
 
     /// Like `chat`, but also forwards the tool-use policy to the provider.
     ///
-    /// The default implementation delegates to `chat`, ignoring the behavior.
-    /// Provider adapters that support `tool_choice` should override this method.
+    /// The default implementation delegates to `chat`, intentionally discarding
+    /// the behavior — it is for providers that don't support a `tool_choice`
+    /// wire field. Providers that do support it (e.g. `LlmClient`) override
+    /// this method. Runtime-level enforcement against a non-compliant model
+    /// response happens later in [`act`] regardless of which path ran here.
     async fn chat_with_behavior(
         &self,
         messages: &[serde_json::Value],
@@ -233,6 +236,14 @@ pub struct ThinkResult {
 /// When a `ToolDispatcher` is provided, tool calls from the LLM are dispatched
 /// and their results collected. Without a dispatcher, tool calls are acknowledged
 /// but return empty results (useful for tests).
+///
+/// Enforces [`ToolUseBehavior`] as a runtime defense-in-depth check against
+/// non-compliant model responses (SPEC-runtime §6.3):
+/// - `None`: any tool call is rejected with an [`ActResult::Interruption`].
+/// - `Specific { name }`: tool calls whose name differs from `name` are
+///   rejected with an [`ActResult::Interruption`].
+/// - `Auto` / `Required`: no runtime gate — the wire-level `tool_choice` is
+///   the only enforcement.
 pub async fn act(
     ctx: &mut TurnContext,
     think_result: &ThinkResult,
@@ -246,6 +257,36 @@ pub async fn act(
                 ctx.doom_loop_count
             ),
         };
+    }
+
+    // Tool-use-behavior enforcement — reject disallowed tool calls before
+    // any other processing (handoff, HITL, dispatch). This is the runtime
+    // backstop when the model ignores the wire-level tool_choice directive.
+    if !think_result.tool_calls.is_empty() {
+        if ctx.tool_use_behavior.forbids_tools() {
+            return ActResult::Interruption {
+                reason: format!(
+                    "tool_use_behavior=None forbids tool calls, but model emitted {} call(s)",
+                    think_result.tool_calls.len()
+                ),
+            };
+        }
+        if let Some(required_name) = ctx.tool_use_behavior.forced_name() {
+            for tc in &think_result.tool_calls {
+                let name = tc
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                if name != required_name {
+                    return ActResult::Interruption {
+                        reason: format!(
+                            "tool_use_behavior=Specific{{{required_name}}} but model called '{name}'"
+                        ),
+                    };
+                }
+            }
+        }
     }
 
     // Check for handoff tool calls
@@ -919,6 +960,131 @@ mod tests {
                 );
             }
             other => panic!("expected SteerInjected, got {:?}", other),
+        }
+    }
+
+    // ── ToolUseBehavior enforcement tests (SPEC-runtime §6.3) ─────────────────
+
+    fn make_tool_call(name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("call_{name}"),
+            "type": "function",
+            "function": { "name": name, "arguments": "{}" }
+        })
+    }
+
+    #[tokio::test]
+    async fn act_tool_use_behavior_auto_allows_any_tool_call() {
+        // Baseline: Auto (the default) imposes no runtime gate.
+        let mut ctx = make_turn_ctx(vec![]);
+        assert_eq!(ctx.tool_use_behavior, ToolUseBehavior::Auto);
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![make_tool_call("any_tool")],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        match result {
+            ActResult::ToolResults(_) => {}
+            other => panic!("expected ToolResults under Auto, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_tool_use_behavior_none_rejects_tool_call() {
+        // None forbids any tool call — runtime must short-circuit with Interruption.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.tool_use_behavior = ToolUseBehavior::None;
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![make_tool_call("shell")],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        match result {
+            ActResult::Interruption { reason } => {
+                assert!(
+                    reason.contains("tool_use_behavior=None"),
+                    "reason missing policy name: {reason}"
+                );
+            }
+            other => panic!("expected Interruption under None, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_tool_use_behavior_specific_rejects_other_tool() {
+        // Specific{read_file} with a call to `shell` must be rejected.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.tool_use_behavior = ToolUseBehavior::Specific {
+            name: "read_file".to_string(),
+        };
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![make_tool_call("shell")],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        match result {
+            ActResult::Interruption { reason } => {
+                assert!(
+                    reason.contains("Specific") && reason.contains("read_file"),
+                    "reason missing policy detail: {reason}"
+                );
+                assert!(reason.contains("shell"), "reason missing offending tool: {reason}");
+            }
+            other => panic!("expected Interruption under Specific, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_tool_use_behavior_specific_allows_matching_tool() {
+        // Specific{read_file} with a call to `read_file` must pass through.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.tool_use_behavior = ToolUseBehavior::Specific {
+            name: "read_file".to_string(),
+        };
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "ok"}),
+            tool_calls: vec![make_tool_call("read_file")],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        match result {
+            ActResult::ToolResults(_) => {}
+            other => panic!(
+                "expected ToolResults when tool name matches Specific, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_tool_use_behavior_default_is_auto() {
+        // The default path (no explicit override) maps to Auto.
+        let ctx = make_turn_ctx(vec![]);
+        assert_eq!(ctx.tool_use_behavior, ToolUseBehavior::Auto);
+        // And ToolUseBehavior::default() itself is Auto.
+        assert_eq!(ToolUseBehavior::default(), ToolUseBehavior::Auto);
+    }
+
+    #[tokio::test]
+    async fn act_tool_use_behavior_none_with_no_tool_calls_passes() {
+        // Round-trip: None is observed at the wiring site; empty tool_calls is not a violation.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.tool_use_behavior = ToolUseBehavior::None;
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "plain text"}),
+            tool_calls: vec![],
+            tokens: TokenUsage::default(),
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        match result {
+            ActResult::ToolResults(results) if results.is_empty() => {}
+            other => panic!(
+                "expected empty ToolResults when None + no tool_calls, got {:?}",
+                other
+            ),
         }
     }
 

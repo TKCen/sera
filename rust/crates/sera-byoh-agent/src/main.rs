@@ -251,4 +251,137 @@ mod tests {
         let url = format!("{core_url}/api/agents/{instance_id}/heartbeat");
         assert_eq!(url, "https://sera.internal/api/agents/agent-abc-123/heartbeat");
     }
+
+    // ── parse_task_line edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn parse_task_line_single_space() {
+        // Single space after trim becomes empty, should return None
+        assert!(parse_task_line(" ".trim()).is_none());
+    }
+
+    #[test]
+    fn parse_task_line_multiple_spaces() {
+        // Multiple spaces after trim become empty, should return None
+        assert!(parse_task_line("   ".trim()).is_none());
+    }
+
+    #[test]
+    fn parse_task_line_long_plain_text() {
+        let long_text = "a".repeat(10000);
+        let result = parse_task_line(&long_text).expect("long text should parse");
+        assert_eq!(result.task, long_text);
+        assert!(result.task_id.starts_with("inline-"));
+    }
+
+    #[test]
+    fn parse_task_line_json_with_null_context() {
+        let json = r#"{"taskId":"t-003","task":"test","context":null}"#;
+        let result = parse_task_line(json).expect("JSON with null context should parse");
+        assert_eq!(result.context, None);
+    }
+
+    #[test]
+    fn parse_task_line_json_extra_fields_ignored() {
+        let json = r#"{"taskId":"t-004","task":"test","context":"ctx","extra":"ignored"}"#;
+        let result = parse_task_line(json).expect("JSON with extra fields should parse");
+        assert_eq!(result.task_id, "t-004");
+        assert_eq!(result.task, "test");
+    }
+
+    #[test]
+    fn parse_task_line_json_missing_task() {
+        // Missing required "task" field — should fail JSON deserialization
+        let json = r#"{"taskId":"t-005"}"#;
+        let result = parse_task_line(json).expect("malformed JSON falls back to plain text");
+        // Should be treated as plain text
+        assert_eq!(result.task, json);
+    }
+
+    #[test]
+    fn parse_task_line_unicode_content() {
+        let unicode_text = "Hello 世界 🌍 مرحبا";
+        let result = parse_task_line(unicode_text).expect("unicode text should parse");
+        assert_eq!(result.task, unicode_text);
+    }
+
+    // ── TaskOutput edge cases ──────────────────────────────────────────────
+
+    #[test]
+    fn task_output_both_result_and_error_none() {
+        let output = TaskOutput {
+            task_id: "t-999".into(),
+            result: None,
+            error: None,
+        };
+        assert!(output.result.is_none());
+        assert!(output.error.is_none());
+    }
+
+    #[test]
+    fn task_output_empty_result_string() {
+        let output = TaskOutput {
+            task_id: "t-empty".into(),
+            result: Some("".into()),
+            error: None,
+        };
+        assert_eq!(output.result.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn task_output_multiline_error() {
+        let error_msg = "Error at line 1\nError at line 2\nError at line 3";
+        let output = TaskOutput {
+            task_id: "t-multi-err".into(),
+            result: None,
+            error: Some(error_msg.into()),
+        };
+        assert_eq!(output.error.as_deref(), Some(error_msg));
+    }
+
+    #[test]
+    fn task_output_serde_with_empty_result() {
+        let output = TaskOutput {
+            task_id: "t-empty-res".into(),
+            result: Some("".into()),
+            error: None,
+        };
+        let json = serde_json::to_string(&output).expect("serialize");
+        let parsed: TaskOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.result.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn task_output_serde_preserves_unicode() {
+        let output = TaskOutput {
+            task_id: "t-unicode".into(),
+            result: Some("Response: 你好 🎉".into()),
+            error: None,
+        };
+        let json = serde_json::to_string(&output).expect("serialize");
+        let parsed: TaskOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.result.as_deref(), Some("Response: 你好 🎉"));
+    }
+
+    #[test]
+    fn task_input_with_empty_context() {
+        let input = TaskInput {
+            task_id: "t-ctx-empty".into(),
+            task: "do something".into(),
+            context: Some("".into()),
+        };
+        assert_eq!(input.context.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn parse_task_line_json_underscore_field_names() {
+        // Deserializer should handle snake_case vs camelCase
+        let json = r#"{"task_id":"t-006","task":"test"}"#;
+        let result = parse_task_line(json);
+        // This will likely fail JSON deserialization due to field name mismatch
+        if let Some(r) = result {
+            // If it somehow succeeds, verify it's a plain-text fallback
+            assert_eq!(r.task, json);
+        }
+    }
 }

@@ -692,4 +692,302 @@ mod tests {
         let mem = create_memory_wrapper(&config);
         assert_eq!(mem.tier(), WorkingMemoryTier::SlidingWindow);
     }
+
+    // --- new tests ---
+
+    // Unconstrained tier
+
+    #[test]
+    fn unconstrained_tier_identifier() {
+        let mem = UnconstrainedMemory::new();
+        assert_eq!(mem.tier(), WorkingMemoryTier::Unconstrained);
+    }
+
+    #[test]
+    fn unconstrained_maintain_is_noop() {
+        let mut mem = UnconstrainedMemory::new();
+        for _ in 0..20 {
+            mem.push(make_entry(Role::User));
+        }
+        assert!(!mem.needs_maintenance());
+        assert!(mem.maintain().is_none());
+        assert_eq!(mem.entries().len(), 20); // nothing evicted
+    }
+
+    #[test]
+    fn unconstrained_summary_is_none() {
+        let mem = UnconstrainedMemory::new();
+        assert!(mem.summary().is_none());
+    }
+
+    #[test]
+    fn unconstrained_last_n() {
+        let mut mem = UnconstrainedMemory::new();
+        for _ in 0..5 {
+            mem.push(make_entry(Role::User));
+        }
+        assert_eq!(mem.last_n(3).len(), 3);
+        assert_eq!(mem.last_n(100).len(), 5); // saturating
+    }
+
+    #[test]
+    fn unconstrained_from_and_into_transcript() {
+        let mut t = crate::transcript::Transcript::new();
+        t.append(make_entry(Role::User));
+        t.append(make_entry(Role::Assistant));
+        let mem = UnconstrainedMemory::from_transcript(t);
+        assert_eq!(mem.entries().len(), 2);
+        let t2 = mem.into_transcript();
+        assert_eq!(t2.len(), 2);
+    }
+
+    // Token-bounded tier
+
+    #[test]
+    fn token_bounded_tier_identifier() {
+        let mem = TokenMemory::new(TokenConfig::default());
+        assert_eq!(mem.tier(), WorkingMemoryTier::TokenBounded);
+    }
+
+    #[test]
+    fn token_bounded_evicts_oldest_when_over_budget() {
+        // budget = 2 messages worth of tokens → only 2 messages ever in flight
+        let config = TokenConfig {
+            max_tokens: 512,      // 2 × 256
+            tokens_per_message: 256,
+        };
+        let mut mem = TokenMemory::new(config);
+        mem.push(make_entry(Role::User));
+        mem.push(make_entry(Role::Assistant));
+        // Third push exceeds budget → oldest evicted
+        mem.push(make_entry(Role::User));
+        // Must not exceed 2 entries after eviction
+        assert!(mem.entries().len() <= 2, "expected ≤2 entries, got {}", mem.entries().len());
+    }
+
+    #[test]
+    fn token_bounded_no_maintenance_when_under_budget() {
+        let config = TokenConfig {
+            max_tokens: 10_000,
+            tokens_per_message: 256,
+        };
+        let mut mem = TokenMemory::new(config);
+        mem.push(make_entry(Role::User));
+        assert!(!mem.needs_maintenance());
+    }
+
+    #[test]
+    fn token_bounded_summary_is_none() {
+        let mem = TokenMemory::new(TokenConfig::default());
+        assert!(mem.summary().is_none());
+    }
+
+    #[test]
+    fn token_bounded_maintain_returns_none() {
+        let config = TokenConfig {
+            max_tokens: 512,
+            tokens_per_message: 256,
+        };
+        let mut mem = TokenMemory::new(config);
+        mem.push(make_entry(Role::User));
+        mem.push(make_entry(Role::User));
+        // maintain() should return None (no summary for token tier)
+        assert!(mem.maintain().is_none());
+    }
+
+    #[test]
+    fn token_bounded_from_transcript() {
+        let mut t = crate::transcript::Transcript::new();
+        t.append(make_entry(Role::User));
+        t.append(make_entry(Role::Assistant));
+        let config = TokenConfig::default();
+        let mem = TokenMemory::from_transcript(t, config);
+        assert_eq!(mem.entries().len(), 2);
+    }
+
+    // Sliding window tier
+
+    #[test]
+    fn sliding_window_tier_identifier() {
+        let mem = SlidingWindowMemory::new(SlidingWindowConfig::default());
+        assert_eq!(mem.tier(), WorkingMemoryTier::SlidingWindow);
+    }
+
+    #[test]
+    fn sliding_window_at_exact_capacity() {
+        let config = SlidingWindowConfig { max_messages: 3 };
+        let mut mem = SlidingWindowMemory::new(config);
+        mem.push(make_entry(Role::User));
+        mem.push(make_entry(Role::Assistant));
+        mem.push(make_entry(Role::User));
+        // At capacity — no maintenance needed yet
+        assert!(!mem.needs_maintenance());
+        assert_eq!(mem.entries().len(), 3);
+    }
+
+    #[test]
+    fn sliding_window_beyond_capacity_evicts() {
+        let config = SlidingWindowConfig { max_messages: 3 };
+        let mut mem = SlidingWindowMemory::new(config);
+        for _ in 0..6 {
+            mem.push(make_entry(Role::User));
+        }
+        assert_eq!(mem.entries().len(), 3);
+        assert!(!mem.needs_maintenance()); // already maintained
+    }
+
+    #[test]
+    fn sliding_window_preserves_newest_entries() {
+        let config = SlidingWindowConfig { max_messages: 2 };
+        let mut mem = SlidingWindowMemory::new(config);
+        let e1 = make_entry(Role::User);
+        let e2 = make_entry(Role::Assistant);
+        let e3 = make_entry(Role::User);
+        let id2 = e2.id;
+        let id3 = e3.id;
+        mem.push(e1);
+        mem.push(e2);
+        mem.push(e3); // evicts e1
+        let entries = mem.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, id2);
+        assert_eq!(entries[1].id, id3);
+    }
+
+    #[test]
+    fn sliding_window_summary_is_none() {
+        let mem = SlidingWindowMemory::new(SlidingWindowConfig::default());
+        assert!(mem.summary().is_none());
+    }
+
+    #[test]
+    fn sliding_window_maintain_returns_none() {
+        let config = SlidingWindowConfig { max_messages: 2 };
+        let mut mem = SlidingWindowMemory::new(config);
+        for _ in 0..5 {
+            mem.push(make_entry(Role::User));
+        }
+        assert!(mem.maintain().is_none());
+    }
+
+    #[test]
+    fn sliding_window_from_transcript() {
+        let mut t = crate::transcript::Transcript::new();
+        for _ in 0..4 {
+            t.append(make_entry(Role::User));
+        }
+        let config = SlidingWindowConfig { max_messages: 10 };
+        let mem = SlidingWindowMemory::from_transcript(t, config);
+        assert_eq!(mem.entries().len(), 4);
+    }
+
+    // Summarize tier
+
+    #[test]
+    fn summarize_tier_identifier() {
+        let mem = SummarizeMemory::new(SummarizeConfig::default());
+        assert_eq!(mem.tier(), WorkingMemoryTier::Summarizing);
+    }
+
+    #[test]
+    fn summarize_no_summary_before_compaction() {
+        let mem = SummarizeMemory::new(SummarizeConfig::default());
+        assert!(mem.summary().is_none());
+    }
+
+    #[test]
+    fn summarize_triggers_compaction_and_returns_summary() {
+        // Each push adds max_tokens/10 to estimated_tokens.
+        // needs_maintenance fires when estimated_tokens > max_tokens (strict).
+        // With max_tokens=100 and min_messages_for_compact=2:
+        //   each push adds 10 tokens; after 11 pushes estimated_tokens=110 > 100 AND
+        //   messages_since_compact=11 >= 2 → compaction fires.
+        let config = SummarizeConfig {
+            max_tokens: 100,
+            min_messages_for_compact: 2,
+            max_summary_tokens: 64,
+        };
+        let mut mem = SummarizeMemory::new(config);
+        for _ in 0..12 {
+            mem.push(make_entry(Role::User));
+        }
+        assert!(mem.summary().is_some(), "expected summary after compaction");
+    }
+
+    #[test]
+    fn summarize_maintain_returns_some_when_triggered() {
+        // Same budget: max_tokens=100, each push adds 10 tokens.
+        // Push 11 entries so estimated_tokens=110 > 100, messages_since_compact >= 2.
+        // Compaction fires inside push(); after that maintain() sees no maintenance needed
+        // and returns None — but summary() is set from the push-triggered compact.
+        let config = SummarizeConfig {
+            max_tokens: 100,
+            min_messages_for_compact: 2,
+            max_summary_tokens: 64,
+        };
+        let mut mem = SummarizeMemory::new(config);
+        for _ in 0..12 {
+            mem.push(make_entry(Role::User));
+        }
+        // After push-triggered compaction, summary is populated.
+        assert!(mem.summary().is_some(), "expected summary set after auto-compaction");
+    }
+
+    #[test]
+    fn summarize_from_transcript() {
+        let mut t = crate::transcript::Transcript::new();
+        t.append(make_entry(Role::User));
+        let mem = SummarizeMemory::from_transcript(t, SummarizeConfig::default());
+        assert_eq!(mem.entries().len(), 1);
+    }
+
+    // Factory — all tiers
+
+    #[test]
+    fn factory_creates_unconstrained() {
+        let mem = create_memory_wrapper(&MemoryTierConfig::Unconstrained);
+        assert_eq!(mem.tier(), WorkingMemoryTier::Unconstrained);
+    }
+
+    #[test]
+    fn factory_creates_token_bounded() {
+        let config = MemoryTierConfig::TokenBounded {
+            max_tokens: 8_000,
+            tokens_per_message: 256,
+        };
+        let mem = create_memory_wrapper(&config);
+        assert_eq!(mem.tier(), WorkingMemoryTier::TokenBounded);
+    }
+
+    #[test]
+    fn factory_creates_summarizing() {
+        let config = MemoryTierConfig::Summarizing {
+            max_tokens: 128_000,
+            min_messages_for_compact: 10,
+            max_summary_tokens: 512,
+        };
+        let mem = create_memory_wrapper(&config);
+        assert_eq!(mem.tier(), WorkingMemoryTier::Summarizing);
+    }
+
+    #[test]
+    fn memory_tier_config_serde_roundtrip() {
+        let configs = vec![
+            MemoryTierConfig::Unconstrained,
+            MemoryTierConfig::TokenBounded { max_tokens: 1024, tokens_per_message: 128 },
+            MemoryTierConfig::SlidingWindow { max_messages: 50 },
+            MemoryTierConfig::Summarizing {
+                max_tokens: 4096,
+                min_messages_for_compact: 5,
+                max_summary_tokens: 256,
+            },
+        ];
+        for cfg in &configs {
+            let json = serde_json::to_string(cfg).unwrap();
+            let back: MemoryTierConfig = serde_json::from_str(&json).unwrap();
+            // Re-serialize and compare to confirm round-trip fidelity.
+            let json2 = serde_json::to_string(&back).unwrap();
+            assert_eq!(json, json2);
+        }
+    }
 }

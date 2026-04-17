@@ -221,4 +221,117 @@ mod tests {
         let back: Transcript = serde_json::from_str(&json).unwrap();
         assert_eq!(back.len(), 2);
     }
+
+    // --- new tests ---
+
+    #[test]
+    fn persisted_transcript_empty_session() {
+        let transcript = Transcript::new();
+        let persisted = PersistedTranscript::from_transcript("empty-session", &transcript);
+        assert_eq!(persisted.session_id, "empty-session");
+        assert_eq!(persisted.entries.len(), 0);
+        assert_eq!(persisted.metadata.entry_count, 0);
+        assert_eq!(persisted.metadata.estimated_tokens, 0);
+        let back = persisted.into_transcript();
+        assert!(back.is_empty());
+    }
+
+    #[test]
+    fn persisted_transcript_version_field() {
+        let transcript = Transcript::new();
+        let persisted = PersistedTranscript::from_transcript("v-test", &transcript);
+        assert!(!persisted.version.is_empty());
+    }
+
+    #[test]
+    fn session_manager_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("sera-session-test-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+
+        let mut transcript = Transcript::new();
+        transcript.append(make_entry(Role::User, "hello"));
+        transcript.append(make_entry(Role::Assistant, "world"));
+
+        manager.save_transcript("sess-abc", &transcript).unwrap();
+        let loaded = manager.load_transcript("sess-abc").unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        // cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_manager_load_missing_returns_none() {
+        let dir = std::env::temp_dir().join(format!("sera-session-test-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+        let result = manager.load_transcript("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn session_manager_delete_transcript() {
+        let dir = std::env::temp_dir().join(format!("sera-session-test-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+
+        let transcript = Transcript::new();
+        manager.save_transcript("sess-del", &transcript).unwrap();
+        assert!(manager.load_transcript("sess-del").unwrap().is_some());
+
+        manager.delete_transcript("sess-del").unwrap();
+        assert!(manager.load_transcript("sess-del").unwrap().is_none());
+
+        // Deleting non-existent should not error
+        manager.delete_transcript("sess-del").unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_manager_list_sessions() {
+        let dir = std::env::temp_dir().join(format!("sera-session-test-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+
+        // Empty dir — no sessions yet (dir may not exist)
+        let sessions = manager.list_sessions().unwrap();
+        assert!(sessions.is_empty());
+
+        let t = Transcript::new();
+        manager.save_transcript("alpha", &t).unwrap();
+        manager.save_transcript("beta", &t).unwrap();
+        manager.save_transcript("gamma", &t).unwrap();
+
+        let mut sessions = manager.list_sessions().unwrap();
+        sessions.sort();
+        assert_eq!(sessions, vec!["alpha", "beta", "gamma"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persisted_transcript_load_from_file_not_found() {
+        let path = std::path::PathBuf::from("/tmp/nonexistent-sera-session-xyz.json");
+        let result = PersistedTranscript::load_from_file(&path);
+        assert!(matches!(result, Err(PersistenceError::NotFound(_))));
+    }
+
+    #[test]
+    fn persisted_transcript_file_roundtrip() {
+        let path = std::env::temp_dir()
+            .join(format!("sera-pt-roundtrip-{}.json", Uuid::new_v4()));
+
+        let mut transcript = Transcript::new();
+        transcript.append(make_entry(Role::User, "ping"));
+        transcript.append(make_entry(Role::Assistant, "pong"));
+
+        let persisted = PersistedTranscript::from_transcript("rt-session", &transcript);
+        persisted.save_to_file(&path).unwrap();
+
+        let loaded = PersistedTranscript::load_from_file(&path).unwrap();
+        assert_eq!(loaded.session_id, "rt-session");
+        assert_eq!(loaded.entries.len(), 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

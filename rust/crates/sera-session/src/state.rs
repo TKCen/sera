@@ -262,4 +262,124 @@ mod tests {
             assert_eq!(state, back);
         }
     }
+
+    // --- new tests ---
+
+    #[test]
+    fn session_key_accessor() {
+        let m = SessionStateMachine::new("my-key".to_string());
+        assert_eq!(m.session_key(), "my-key");
+    }
+
+    #[test]
+    fn created_cannot_go_to_idle() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        assert!(!m.is_valid_transition(SessionState::Idle));
+        assert!(m.transition(SessionState::Idle).is_err());
+    }
+
+    #[test]
+    fn created_cannot_go_to_suspended() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        assert!(!m.is_valid_transition(SessionState::Suspended));
+        assert!(m.transition(SessionState::Suspended).is_err());
+    }
+
+    #[test]
+    fn created_cannot_go_to_compacting() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        assert!(!m.is_valid_transition(SessionState::Compacting));
+        assert!(m.transition(SessionState::Compacting).is_err());
+    }
+
+    #[test]
+    fn suspended_cannot_go_to_idle() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Active).unwrap();
+        m.transition(SessionState::Suspended).unwrap();
+        assert!(!m.is_valid_transition(SessionState::Idle));
+        assert!(m.transition(SessionState::Idle).is_err());
+    }
+
+    #[test]
+    fn suspended_cannot_go_to_compacting() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Active).unwrap();
+        m.transition(SessionState::Suspended).unwrap();
+        assert!(!m.is_valid_transition(SessionState::Compacting));
+        assert!(m.transition(SessionState::Compacting).is_err());
+    }
+
+    #[test]
+    fn compacting_cannot_go_to_suspended() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Active).unwrap();
+        m.transition(SessionState::Compacting).unwrap();
+        assert!(!m.is_valid_transition(SessionState::Suspended));
+        assert!(m.transition(SessionState::Suspended).is_err());
+    }
+
+    #[test]
+    fn closed_cannot_go_to_closed() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Closed).unwrap();
+        // Closed → Closed is also invalid (self-transition not listed)
+        assert!(!m.is_valid_transition(SessionState::Closed));
+        assert!(m.transition(SessionState::Closed).is_err());
+    }
+
+    #[test]
+    fn error_message_contains_states() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        let err = m.transition(SessionState::Idle).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Created") || msg.contains("created"), "msg={msg}");
+        assert!(msg.contains("Idle") || msg.contains("idle"), "msg={msg}");
+    }
+
+    #[test]
+    fn compacting_state_not_input_accepting() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Active).unwrap();
+        m.transition(SessionState::Compacting).unwrap();
+        assert!(!m.can_accept_input());
+    }
+
+    #[test]
+    fn suspended_state_not_input_accepting() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Active).unwrap();
+        m.transition(SessionState::Suspended).unwrap();
+        assert!(!m.can_accept_input());
+    }
+
+    #[test]
+    fn closed_state_not_input_accepting() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        m.transition(SessionState::Closed).unwrap();
+        assert!(!m.can_accept_input());
+    }
+
+    #[test]
+    fn transition_count_not_incremented_on_failure() {
+        let mut m = SessionStateMachine::new("k".to_string());
+        // Attempt invalid transitions — count must stay 0.
+        let _ = m.transition(SessionState::Idle);
+        let _ = m.transition(SessionState::Suspended);
+        assert_eq!(m.transition_count(), 0);
+        // Now do one valid transition.
+        m.transition(SessionState::Active).unwrap();
+        assert_eq!(m.transition_count(), 1);
+    }
+
+    #[test]
+    fn serde_state_snake_case() {
+        // Verify JSON representation uses snake_case per `#[serde(rename_all = "snake_case")]`.
+        assert_eq!(serde_json::to_string(&SessionState::Created).unwrap(), "\"created\"");
+        assert_eq!(serde_json::to_string(&SessionState::Active).unwrap(), "\"active\"");
+        assert_eq!(serde_json::to_string(&SessionState::Idle).unwrap(), "\"idle\"");
+        assert_eq!(serde_json::to_string(&SessionState::Suspended).unwrap(), "\"suspended\"");
+        assert_eq!(serde_json::to_string(&SessionState::Compacting).unwrap(), "\"compacting\"");
+        assert_eq!(serde_json::to_string(&SessionState::Closed).unwrap(), "\"closed\"");
+    }
 }

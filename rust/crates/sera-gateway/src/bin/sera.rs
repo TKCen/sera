@@ -328,6 +328,11 @@ struct AppState {
     chain_executor: Arc<ChainExecutor>,
     /// Pre-connected runtime harnesses keyed by agent name.
     harnesses: std::collections::HashMap<String, Arc<StdioHarness>>,
+    /// Self-evolution pipeline — propose/evaluate/approve/apply ChangeArtifacts.
+    /// Wired from `sera-meta::artifact_pipeline::ArtifactPipeline` so hooks and
+    /// workflow tasks can submit evolution proposals.
+    #[allow(dead_code)]
+    evolution_pipeline: Arc<sera_meta::artifact_pipeline::ArtifactPipeline>,
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -1700,6 +1705,9 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         hook_registry,
         chain_executor,
         harnesses,
+        evolution_pipeline: Arc::new(
+            sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+        ),
     });
 
     // 4. Start event processing loop.
@@ -1787,6 +1795,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: test_harnesses().await,
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         })
     }
 
@@ -1802,6 +1813,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         })
     }
 
@@ -1817,6 +1831,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: test_harnesses().await,
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         })
     }
 
@@ -1832,7 +1849,32 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         })
+    }
+
+    // -- Self-evolution pipeline wiring --
+
+    /// Verify that [`AppState`] constructed via the shared test builder has the
+    /// self-evolution `ArtifactPipeline` wired from `sera-meta`. This is the
+    /// gateway-side contract for sera-k2gw: the pipeline must be present and
+    /// usable, not `None`/unset.
+    #[tokio::test]
+    async fn app_state_wires_evolution_pipeline() {
+        let state = test_state_async().await;
+        // The pipeline is an Arc; we should be able to clone it cheaply.
+        let pipeline = Arc::clone(&state.evolution_pipeline);
+
+        // Exercise the wired pipeline without starting the shadow execution
+        // loop: `get` on an unknown id must return `None`, proving the
+        // pipeline is live and queryable.
+        let unknown = sera_meta::ChangeArtifactId { hash: [0u8; 32] };
+        assert!(
+            pipeline.get(&unknown).await.is_none(),
+            "freshly wired pipeline should not contain any artifacts yet"
+        );
     }
 
     // -- CLI parsing --
@@ -2295,6 +2337,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -2313,6 +2358,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -2332,6 +2380,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -2351,6 +2402,9 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            evolution_pipeline: Arc::new(
+                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
+            ),
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));

@@ -3910,6 +3910,7 @@ dependencies = [
  "sera-events",
  "sera-hitl",
  "sera-hooks",
+ "sera-meta",
  "sera-queue",
  "sera-runtime",
  "sera-session",

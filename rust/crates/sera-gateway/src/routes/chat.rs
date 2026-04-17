@@ -28,6 +28,8 @@ use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 enum LaneAction {
     Dispatch,
     Queued,
+    /// The queue has been closed for shutdown; reject with 503.
+    Rejected,
 }
 
 /// RAII guard that calls `complete_run` on the shared [`LaneQueue`] when
@@ -229,8 +231,28 @@ pub async fn chat(
                 let _ = lq.dequeue(&session_key);
                 LaneAction::Dispatch
             }
+            EnqueueResult::Closed => {
+                tracing::warn!(session_key = %session_key, "Chat rejected: lane queue is closed for shutdown");
+                LaneAction::Rejected
+            }
         }
     };
+
+    if matches!(lane_action, LaneAction::Rejected) {
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ChatResponse {
+                reply: None,
+                thought: Some("gateway shutting down".to_string()),
+                thoughts: None,
+                citations: None,
+                session_id: session_id.clone(),
+                message_id: None,
+                usage: None,
+            }),
+        )
+            .into_response());
+    }
 
     if matches!(lane_action, LaneAction::Queued) {
         return Ok((

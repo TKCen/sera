@@ -5,9 +5,12 @@
 //! This is the Tier-1 (local/embedded) implementation — no database required.
 
 use std::collections::{HashMap, VecDeque};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sera_types::event::Event;
+
+use crate::error::DbError;
 
 /// How queued messages are handled while a run is active for this session.
 ///
@@ -39,6 +42,8 @@ pub enum EnqueueResult {
     Steer,
     /// Active run should be interrupted with this event.
     Interrupt,
+    /// Queue is closed (graceful shutdown in progress); the event was rejected.
+    Closed,
 }
 
 /// An event wrapped with queue-level metadata.
@@ -89,6 +94,21 @@ impl Lane {
     }
 }
 
+/// Outcome of a [`LaneQueue::drain`] call.
+///
+/// * `drained` — the number of queued/in-flight jobs present when drain started
+///   that had been released by the time drain returned.
+/// * `remaining` — the number of queued/in-flight jobs still outstanding at
+///   return time. `0` on a clean drain; positive when `timed_out` is `true`.
+/// * `timed_out` — `true` if the drain deadline elapsed before the queue
+///   reached zero pending jobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrainOutcome {
+    pub drained: usize,
+    pub remaining: usize,
+    pub timed_out: bool,
+}
+
 /// The main lane-aware queue manager.
 ///
 /// Keyed by `session_key`; enforces a global concurrency cap across all lanes.
@@ -97,6 +117,9 @@ pub struct LaneQueue {
     max_concurrent_runs: usize,
     active_run_count: usize,
     default_mode: QueueMode,
+    /// When `true`, [`LaneQueue::enqueue`] refuses new jobs. Flipped by
+    /// [`LaneQueue::close`] during graceful shutdown.
+    closed: bool,
 }
 
 impl LaneQueue {
@@ -110,6 +133,7 @@ impl LaneQueue {
             max_concurrent_runs,
             active_run_count: 0,
             default_mode,
+            closed: false,
         }
     }
 
@@ -133,6 +157,11 @@ impl LaneQueue {
     /// * [`EnqueueResult::Steer`] — the event has been stored as a steer injection.
     /// * [`EnqueueResult::Interrupt`] — the caller should abort the active run.
     pub fn enqueue(&mut self, event: Event) -> EnqueueResult {
+        // Reject new jobs once the queue has been closed for shutdown.
+        if self.closed {
+            return EnqueueResult::Closed;
+        }
+
         let session_key = event.session_key.clone();
         let lane = self.get_or_create_lane(&session_key);
 
@@ -254,6 +283,130 @@ impl LaneQueue {
             .get(session_key)
             .map(|l| !l.queue.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Total number of jobs currently waiting in any lane **plus** jobs that
+    /// have been dequeued but whose `complete_run` has not yet fired.
+    ///
+    /// Returned as a `Result` so future Postgres-backed implementations of the
+    /// same API shape can surface database errors without breaking callers.
+    pub fn pending_count(&self) -> Result<usize, DbError> {
+        let queued: usize = self.lanes.values().map(|l| l.queue.len()).sum();
+        // Each active run represents one in-flight job that has been dequeued
+        // but not yet acked via `complete_run`.
+        Ok(queued + self.active_run_count)
+    }
+
+    /// Mark the queue as closed so that subsequent [`LaneQueue::enqueue`]
+    /// calls return [`EnqueueResult::Closed`]. Idempotent.
+    pub fn close(&mut self) {
+        self.closed = true;
+    }
+
+    /// Whether the queue has been closed via [`LaneQueue::close`].
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Poll [`LaneQueue::pending_count`] until it reaches zero or `deadline`
+    /// elapses, returning a [`DrainOutcome`] that summarises the outcome.
+    ///
+    /// This does **not** cancel or abort in-flight jobs — higher-level
+    /// shutdown code is responsible for that. `drain` only waits for already
+    /// accepted jobs to finish.
+    ///
+    /// **Locking note:** when a `LaneQueue` is shared behind a
+    /// `tokio::sync::Mutex` (as in the gateway), calling `drain(&self)` from a
+    /// held mutex guard blocks every other task that wants to call
+    /// `complete_run` — which means pending jobs can never finish. Prefer
+    /// [`LaneQueue::drain_shared`] for the mutex-wrapped case; `drain(&self)`
+    /// is intended for owning callers and for tests.
+    pub async fn drain(&self, deadline: Duration) -> Result<DrainOutcome, DbError> {
+        let start_count = self.pending_count()?;
+        let wall_clock_start = std::time::Instant::now();
+        let poll_interval = Duration::from_millis(100);
+
+        loop {
+            let remaining = self.pending_count()?;
+            if remaining == 0 {
+                return Ok(DrainOutcome {
+                    drained: start_count,
+                    remaining: 0,
+                    timed_out: false,
+                });
+            }
+
+            if wall_clock_start.elapsed() >= deadline {
+                return Ok(DrainOutcome {
+                    drained: start_count.saturating_sub(remaining),
+                    remaining,
+                    timed_out: true,
+                });
+            }
+
+            // Sleep for whichever is shorter: the poll interval, or the time
+            // left until the deadline.
+            let left = deadline.saturating_sub(wall_clock_start.elapsed());
+            let sleep_for = std::cmp::min(poll_interval, left);
+            if sleep_for.is_zero() {
+                // deadline has just elapsed; loop back to emit timed_out.
+                continue;
+            }
+            tokio::time::sleep(sleep_for).await;
+        }
+    }
+
+    /// Graceful-shutdown drain for a [`LaneQueue`] wrapped in a
+    /// [`tokio::sync::Mutex`]. This is the variant used by the gateway.
+    ///
+    /// Unlike [`LaneQueue::drain`], this helper flips the closed flag up-front
+    /// (so no new jobs enter while draining) and **releases the mutex between
+    /// polls**, so other tasks (e.g. the `event_loop` calling `complete_run`)
+    /// can make progress during the wait.
+    pub async fn drain_shared(
+        queue: &tokio::sync::Mutex<LaneQueue>,
+        deadline: Duration,
+    ) -> Result<DrainOutcome, DbError> {
+        // Flip the closed flag and snapshot the starting pending count under
+        // the lock, then drop the guard before any await.
+        let start_count = {
+            let mut q = queue.lock().await;
+            q.close();
+            q.pending_count()?
+        };
+
+        let wall_clock_start = std::time::Instant::now();
+        let poll_interval = Duration::from_millis(100);
+
+        loop {
+            let remaining = {
+                let q = queue.lock().await;
+                q.pending_count()?
+            };
+
+            if remaining == 0 {
+                return Ok(DrainOutcome {
+                    drained: start_count,
+                    remaining: 0,
+                    timed_out: false,
+                });
+            }
+
+            if wall_clock_start.elapsed() >= deadline {
+                return Ok(DrainOutcome {
+                    drained: start_count.saturating_sub(remaining),
+                    remaining,
+                    timed_out: true,
+                });
+            }
+
+            let left = deadline.saturating_sub(wall_clock_start.elapsed());
+            let sleep_for = std::cmp::min(poll_interval, left);
+            if sleep_for.is_zero() {
+                continue;
+            }
+            tokio::time::sleep(sleep_for).await;
+        }
     }
 }
 
@@ -571,6 +724,7 @@ mod tests {
             (EnqueueResult::Queued, "\"queued\""),
             (EnqueueResult::Steer, "\"steer\""),
             (EnqueueResult::Interrupt, "\"interrupt\""),
+            (EnqueueResult::Closed, "\"closed\""),
         ];
         for (result, expected) in results {
             let json = serde_json::to_string(&result).unwrap();
@@ -578,6 +732,166 @@ mod tests {
             let parsed: EnqueueResult = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, result);
         }
+    }
+
+    // --- pending_count ------------------------------------------------------
+
+    #[test]
+    fn pending_count_empty_queue_is_zero() {
+        let q = LaneQueue::new(4, QueueMode::Followup);
+        assert_eq!(q.pending_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn pending_count_matches_total_queued_jobs() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.enqueue(make_event("s1"));
+        q.enqueue(make_event("s1"));
+        q.enqueue(make_event("s2"));
+        assert_eq!(q.pending_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn pending_count_includes_in_flight_jobs() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.enqueue(make_event("s1"));
+        // Dequeue moves the job from "queued" to "in-flight"; pending_count
+        // must still report it until complete_run is called.
+        let batch = q.dequeue("s1").expect("one item dequeued");
+        assert_eq!(batch.len(), 1);
+        assert_eq!(q.pending_count().unwrap(), 1);
+
+        q.complete_run("s1");
+        assert_eq!(q.pending_count().unwrap(), 0);
+    }
+
+    // --- close / is_closed -------------------------------------------------
+
+    #[test]
+    fn close_blocks_new_enqueues() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        assert!(!q.is_closed());
+        q.close();
+        assert!(q.is_closed());
+        let result = q.enqueue(make_event("s1"));
+        assert_eq!(result, EnqueueResult::Closed);
+        assert_eq!(q.pending_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn close_is_idempotent() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.close();
+        q.close();
+        assert!(q.is_closed());
+    }
+
+    // --- drain -------------------------------------------------------------
+
+    #[tokio::test]
+    async fn drain_empty_queue_returns_immediately() {
+        let q = LaneQueue::new(4, QueueMode::Followup);
+        let outcome = q.drain(Duration::from_millis(50)).await.unwrap();
+        assert_eq!(outcome.drained, 0);
+        assert_eq!(outcome.remaining, 0);
+        assert!(!outcome.timed_out);
+    }
+
+    #[tokio::test]
+    async fn drain_returns_when_jobs_are_acked() {
+        // We cannot mutate `q` concurrently with `q.drain(&self)` from the
+        // same task without extra coordination, so simulate a completed
+        // run by acking _before_ calling drain. That's sufficient to prove
+        // that drain exits when the count reaches zero.
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.enqueue(make_event("s1"));
+        q.dequeue("s1");
+        q.complete_run("s1");
+        assert_eq!(q.pending_count().unwrap(), 0);
+
+        let outcome = q.drain(Duration::from_millis(50)).await.unwrap();
+        assert_eq!(outcome.remaining, 0);
+        assert!(!outcome.timed_out);
+    }
+
+    #[tokio::test]
+    async fn drain_times_out_when_jobs_never_ack() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.enqueue(make_event("s1"));
+        q.enqueue(make_event("s2"));
+        // Two jobs still pending (never dequeued / acked) — drain must time out.
+        let outcome = q.drain(Duration::from_millis(50)).await.unwrap();
+        assert!(outcome.timed_out);
+        assert_eq!(outcome.remaining, 2);
+        assert_eq!(outcome.drained, 0);
+    }
+
+    #[test]
+    fn drain_outcome_serde_round_trip() {
+        let outcome = DrainOutcome {
+            drained: 3,
+            remaining: 1,
+            timed_out: true,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        let parsed: DrainOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, outcome);
+    }
+
+    #[tokio::test]
+    async fn drain_shared_closes_queue_and_waits_for_completion() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let q = Arc::new(Mutex::new(LaneQueue::new(4, QueueMode::Followup)));
+
+        // Preload one in-flight job.
+        {
+            let mut g = q.lock().await;
+            g.enqueue(make_event("s1"));
+            g.dequeue("s1");
+        }
+
+        // Spawn a completer that will ack the in-flight job after a short delay.
+        let completer = {
+            let q = Arc::clone(&q);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let mut g = q.lock().await;
+                g.complete_run("s1");
+            })
+        };
+
+        let outcome = LaneQueue::drain_shared(&q, Duration::from_millis(500))
+            .await
+            .unwrap();
+
+        assert!(!outcome.timed_out, "drain should finish before deadline");
+        assert_eq!(outcome.remaining, 0);
+
+        // drain_shared must have flipped the closed flag.
+        assert!(q.lock().await.is_closed());
+
+        completer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drain_shared_times_out_when_no_completion() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let q = Arc::new(Mutex::new(LaneQueue::new(4, QueueMode::Followup)));
+        {
+            let mut g = q.lock().await;
+            g.enqueue(make_event("s1"));
+        }
+
+        let outcome = LaneQueue::drain_shared(&q, Duration::from_millis(50))
+            .await
+            .unwrap();
+
+        assert!(outcome.timed_out);
+        assert_eq!(outcome.remaining, 1);
     }
 
     // --- source field roundtrip (sanity check Event clone) -----------------

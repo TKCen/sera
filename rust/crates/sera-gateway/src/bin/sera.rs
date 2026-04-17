@@ -1208,6 +1208,10 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
                 // Future: send abort signal to harness. For now, dequeue the interrupt event.
                 let _ = lq.dequeue(&session_key);
             }
+            sera_db::lane_queue::EnqueueResult::Closed => {
+                tracing::warn!(session_key = %session_key, "Lane queue is closed; dropping incoming Discord message");
+                return Ok(());
+            }
         }
     }
 
@@ -1794,16 +1798,17 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     tracing::info!("HTTP server stopped accepting new connections; draining subsystems");
 
     let drain_started = std::time::Instant::now();
-    let drain_result = tokio::time::timeout(SHUTDOWN_DRAIN_DEADLINE, async {
-        // Close the Discord→event_loop channel so the loop exits once its
-        // queue has drained. `discord_tx` is the only sender we hold here;
-        // the Discord connector task keeps its own clone. Dropping ours is
-        // enough for the test-mode path where no connector is running, and
-        // harmless otherwise.
-        drop(discord_tx);
 
-        // Ask every runtime harness to flush and exit. We fire these in
-        // parallel so a slow harness does not serialize the others.
+    // Close the Discord→event_loop channel so the loop exits once its
+    // queue has drained. `discord_tx` is the only sender we hold here;
+    // the Discord connector task keeps its own clone. Dropping ours is
+    // enough for the test-mode path where no connector is running, and
+    // harmless otherwise.
+    drop(discord_tx);
+
+    // Phase B.1 — harness drain. Fire every harness shutdown in parallel so a
+    // slow harness does not serialize the others. Bound by `HARNESS_DRAIN_DEADLINE`.
+    let harness_drain = tokio::time::timeout(HARNESS_DRAIN_DEADLINE, async {
         let harness_shutdowns: Vec<_> = state
             .harnesses
             .iter()
@@ -1818,22 +1823,39 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             })
             .collect();
         futures_util::future::join_all(harness_shutdowns).await;
-
-        tracing::info!("Subsystems drained");
     })
     .await;
-
-    match drain_result {
-        Ok(()) => tracing::info!(
-            drain_ms = drain_started.elapsed().as_millis() as u64,
-            "Drain complete"
-        ),
-        Err(_) => tracing::warn!(
-            drain_ms = drain_started.elapsed().as_millis() as u64,
-            deadline_ms = SHUTDOWN_DRAIN_DEADLINE.as_millis() as u64,
-            "Drain deadline exceeded; forcing shutdown"
-        ),
+    if harness_drain.is_err() {
+        tracing::warn!(
+            deadline_ms = HARNESS_DRAIN_DEADLINE.as_millis() as u64,
+            "Harness drain deadline exceeded"
+        );
     }
+
+    // Phase B.2 — lane queue drain. Wait for enqueued/in-flight jobs to finish
+    // so we don't drop acknowledged work on the floor. `drain_shared` flips the
+    // queue's closed flag as it starts, so no new jobs enter during the wait.
+    let queue_drain_budget = SHUTDOWN_DRAIN_DEADLINE
+        .saturating_sub(drain_started.elapsed())
+        .max(std::time::Duration::from_millis(0));
+    match sera_db::lane_queue::LaneQueue::drain_shared(&state.lane_queue, queue_drain_budget).await
+    {
+        Ok(outcome) if outcome.timed_out => tracing::warn!(
+            remaining = outcome.remaining,
+            drained = outcome.drained,
+            "lane queue drain exceeded deadline"
+        ),
+        Ok(outcome) => tracing::info!(
+            drained = outcome.drained,
+            "lane queue drain complete"
+        ),
+        Err(e) => tracing::error!(error = %e, "lane queue drain failed"),
+    }
+
+    tracing::info!(
+        drain_ms = drain_started.elapsed().as_millis() as u64,
+        "Subsystems drained"
+    );
 
     tracing::info!("SERA gateway shut down");
     Ok(())
@@ -1845,6 +1867,13 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
 /// fitting inside typical container `stop_grace_period` windows (default 10s
 /// on Docker, 30s on Kubernetes — we match the latter).
 const SHUTDOWN_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Share of [`SHUTDOWN_DRAIN_DEADLINE`] reserved for flushing runtime harnesses
+/// (phase B.1). The lane queue drain (phase B.2) gets the remainder of
+/// [`SHUTDOWN_DRAIN_DEADLINE`] after harness drain returns — so in the fast
+/// path the queue can use most of the 30 s budget; in the slow path both
+/// phases still fit inside the total.
+const HARNESS_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Build the shutdown-signal future: resolves on SIGTERM (Unix) or Ctrl+C.
 /// Windows has no SIGTERM, so we only listen for Ctrl+C there.
@@ -1972,9 +2001,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
@@ -2033,28 +2059,6 @@ mod tests {
         assert!(
             iterations.load(Ordering::SeqCst) > 0,
             "loop should have iterated at least once before exiting"
-        );
-    }
-
-    // -- Self-evolution pipeline wiring --
-
-    /// Verify that [`AppState`] constructed via the shared test builder has the
-    /// self-evolution `ArtifactPipeline` wired from `sera-meta`. This is the
-    /// gateway-side contract for sera-k2gw: the pipeline must be present and
-    /// usable, not `None`/unset.
-    #[tokio::test]
-    async fn app_state_wires_evolution_pipeline() {
-        let state = test_state_async().await;
-        // The pipeline is an Arc; we should be able to clone it cheaply.
-        let pipeline = Arc::clone(&state.evolution_pipeline);
-
-        // Exercise the wired pipeline without starting the shadow execution
-        // loop: `get` on an unknown id must return `None`, proving the
-        // pipeline is live and queryable.
-        let unknown = sera_meta::ChangeArtifactId { hash: [0u8; 32] };
-        assert!(
-            pipeline.get(&unknown).await.is_none(),
-            "freshly wired pipeline should not contain any artifacts yet"
         );
     }
 
@@ -2518,9 +2522,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let headers = HeaderMap::new();
@@ -2540,9 +2541,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let mut headers = HeaderMap::new();
@@ -2563,9 +2561,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let mut headers = HeaderMap::new();
@@ -2586,9 +2581,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let headers = HeaderMap::new();

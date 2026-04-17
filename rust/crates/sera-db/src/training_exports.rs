@@ -288,6 +288,87 @@ mod tests {
         }
     }
 
+    // -- Helper function unit tests (no DB) ------------------------------------
+
+    #[test]
+    fn format_to_str_all_variants() {
+        assert_eq!(format_to_str(TrainingExportFormat::OpenaiJsonl), "openai_jsonl");
+        assert_eq!(format_to_str(TrainingExportFormat::Alpaca), "alpaca");
+        assert_eq!(format_to_str(TrainingExportFormat::ShareGpt), "share_gpt");
+    }
+
+    #[test]
+    fn format_from_str_known_variants() {
+        assert_eq!(format_from_str("alpaca"), TrainingExportFormat::Alpaca);
+        assert_eq!(format_from_str("share_gpt"), TrainingExportFormat::ShareGpt);
+        assert_eq!(format_from_str("openai_jsonl"), TrainingExportFormat::OpenaiJsonl);
+    }
+
+    #[test]
+    fn format_from_str_unknown_defaults_to_openai_jsonl() {
+        assert_eq!(format_from_str("unknown_format"), TrainingExportFormat::OpenaiJsonl);
+        assert_eq!(format_from_str(""), TrainingExportFormat::OpenaiJsonl);
+    }
+
+    #[test]
+    fn status_from_str_all_variants() {
+        use sera_types::training_export::TrainingExportStatus;
+        assert_eq!(status_from_str("running"), TrainingExportStatus::Running);
+        assert_eq!(status_from_str("complete"), TrainingExportStatus::Complete);
+        assert_eq!(status_from_str("failed"), TrainingExportStatus::Failed);
+        assert_eq!(status_from_str("queued"), TrainingExportStatus::Queued);
+    }
+
+    #[test]
+    fn status_from_str_unknown_defaults_to_queued() {
+        use sera_types::training_export::TrainingExportStatus;
+        assert_eq!(status_from_str("anything_else"), TrainingExportStatus::Queued);
+        assert_eq!(status_from_str(""), TrainingExportStatus::Queued);
+    }
+
+    #[test]
+    fn dt_from_str_none_returns_none() {
+        assert!(dt_from_str(None).is_none());
+    }
+
+    #[test]
+    fn dt_from_str_rfc3339_parses() {
+        let s = "2024-01-15T10:30:00+00:00".to_string();
+        let result = dt_from_str(Some(s));
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.format("%Y-%m-%d").to_string(), "2024-01-15");
+    }
+
+    #[test]
+    fn dt_from_str_sqlite_format_parses() {
+        // SQLite datetime('now') produces "YYYY-MM-DD HH:MM:SS" without T or Z.
+        let s = "2024-06-20 14:22:05".to_string();
+        let result = dt_from_str(Some(s));
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.format("%Y-%m-%d").to_string(), "2024-06-20");
+    }
+
+    #[test]
+    fn dt_from_str_invalid_returns_none() {
+        assert!(dt_from_str(Some("not-a-date".to_string())).is_none());
+        assert!(dt_from_str(Some("".to_string())).is_none());
+    }
+
+    #[test]
+    fn dt_to_string_produces_rfc3339() {
+        let dt = chrono::DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let s = dt_to_string(dt);
+        // RFC3339 roundtrip — must parse back cleanly.
+        let parsed = s.parse::<chrono::DateTime<chrono::Utc>>();
+        assert!(parsed.is_ok(), "dt_to_string must produce valid RFC3339: {s}");
+    }
+
+    // -- DB-backed tests -------------------------------------------------------
+
     #[test]
     fn create_returns_uuid_and_get_returns_record() {
         let repo = make_repo();

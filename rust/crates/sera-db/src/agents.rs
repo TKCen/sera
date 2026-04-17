@@ -289,3 +289,123 @@ impl AgentRepository {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_instance_row(status: Option<&str>) -> InstanceRow {
+        InstanceRow {
+            id: uuid::Uuid::nil(),
+            name: "test-agent".to_string(),
+            display_name: Some("Test Agent".to_string()),
+            template_name: "base".to_string(),
+            template_ref: Some("base@v1".to_string()),
+            circle: Some("default".to_string()),
+            status: status.map(str::to_string),
+            lifecycle_mode: None,
+            parent_instance_id: None,
+            workspace_path: "/workspace/test".to_string(),
+            container_id: Some("cnt-abc".to_string()),
+            sandbox_boundary: None,
+            overrides: None,
+            resolved_config: None,
+            resolved_capabilities: None,
+            last_heartbeat_at: None,
+            updated_at: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn into_domain_maps_name_and_template_ref() {
+        let row = make_instance_row(Some("active"));
+        let domain = row.into_domain();
+        assert_eq!(domain.name, "test-agent");
+        assert_eq!(domain.template_ref, "base@v1");
+        assert_eq!(domain.workspace_path, Some("/workspace/test".to_string()));
+        assert_eq!(domain.container_id, Some("cnt-abc".to_string()));
+    }
+
+    #[test]
+    fn into_domain_falls_back_to_template_name_when_ref_absent() {
+        let mut row = make_instance_row(Some("active"));
+        row.template_ref = None;
+        let domain = row.into_domain();
+        assert_eq!(domain.template_ref, "base");
+    }
+
+    #[test]
+    fn into_domain_status_all_variants() {
+        let cases: &[(&str, AgentStatus)] = &[
+            ("created", AgentStatus::Created),
+            ("running", AgentStatus::Running),
+            ("stopped", AgentStatus::Stopped),
+            ("error", AgentStatus::Error),
+            ("unresponsive", AgentStatus::Unresponsive),
+            ("throttled", AgentStatus::Throttled),
+            ("active", AgentStatus::Active),
+            ("inactive", AgentStatus::Inactive),
+        ];
+        for (s, expected) in cases {
+            let row = make_instance_row(Some(s));
+            let domain = row.into_domain();
+            assert_eq!(
+                std::mem::discriminant(&domain.status),
+                std::mem::discriminant(expected),
+                "status string '{}' should map correctly",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn into_domain_unknown_status_defaults_to_created() {
+        let row = make_instance_row(Some("bogus_status"));
+        let domain = row.into_domain();
+        assert_eq!(
+            std::mem::discriminant(&domain.status),
+            std::mem::discriminant(&AgentStatus::Created)
+        );
+    }
+
+    #[test]
+    fn into_domain_none_status_defaults_to_active() {
+        let row = make_instance_row(None);
+        let domain = row.into_domain();
+        assert_eq!(
+            std::mem::discriminant(&domain.status),
+            std::mem::discriminant(&AgentStatus::Active)
+        );
+    }
+
+    #[test]
+    fn into_domain_id_is_stringified_uuid() {
+        let id = uuid::Uuid::new_v4();
+        let mut row = make_instance_row(Some("running"));
+        row.id = id;
+        let domain = row.into_domain();
+        assert_eq!(domain.id, id.to_string());
+    }
+
+    #[test]
+    fn into_domain_circle_propagated() {
+        let row = make_instance_row(Some("active"));
+        let domain = row.into_domain();
+        assert_eq!(domain.circle, Some("default".to_string()));
+    }
+
+    #[test]
+    fn into_domain_workspace_used_gb_is_none() {
+        let row = make_instance_row(Some("active"));
+        let domain = row.into_domain();
+        assert!(domain.workspace_used_gb.is_none());
+    }
+
+    #[test]
+    fn into_domain_circle_id_is_none() {
+        let row = make_instance_row(Some("active"));
+        let domain = row.into_domain();
+        assert!(domain.circle_id.is_none());
+    }
+}

@@ -63,4 +63,57 @@ mod tests {
         assert!(conflict.to_string().contains("conflict"));
         assert!(integrity.to_string().contains("integrity"));
     }
+
+    #[test]
+    fn db_error_not_found_contains_key_and_value() {
+        let err = DbError::NotFound {
+            entity: "session",
+            key: "name",
+            value: "my-session".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("session"));
+        assert!(msg.contains("name"));
+        assert!(msg.contains("my-session"));
+    }
+
+    #[test]
+    fn db_error_conflict_contains_message() {
+        let msg = "unique constraint on (name)";
+        let err = DbError::Conflict(msg.to_string());
+        assert!(err.to_string().contains(msg));
+    }
+
+    #[test]
+    fn db_error_integrity_contains_message() {
+        let msg = "foreign key violation: agent_id";
+        let err = DbError::Integrity(msg.to_string());
+        assert!(err.to_string().contains(msg));
+    }
+
+    #[test]
+    fn db_error_implements_std_error() {
+        // Verify DbError satisfies std::error::Error (used by ? operator and error chains).
+        fn takes_error(_: &dyn std::error::Error) {}
+        let err = DbError::Conflict("test".to_string());
+        takes_error(&err);
+    }
+
+    #[test]
+    fn db_error_conflict_is_debug_printable() {
+        let err = DbError::Conflict("dup".to_string());
+        let debug_str = format!("{err:?}");
+        assert!(debug_str.contains("Conflict"));
+    }
+
+    #[test]
+    fn db_error_not_found_is_debug_printable() {
+        let err = DbError::NotFound {
+            entity: "X",
+            key: "k",
+            value: "v".to_string(),
+        };
+        let debug_str = format!("{err:?}");
+        assert!(debug_str.contains("NotFound"));
+    }
 }

@@ -166,3 +166,78 @@ fn rand_nonce() -> [u8; 12] {
     rand::rngs::OsRng.fill_bytes(&mut buf);
     buf
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        let plaintext = "super-secret-value";
+        let key = "test-encryption-key";
+        let (ciphertext, iv) = SecretsRepository::encrypt(plaintext, key).expect("encrypt");
+        let recovered = SecretsRepository::decrypt(&ciphertext, &iv, key).expect("decrypt");
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[test]
+    fn encrypt_produces_ciphertext_different_from_plaintext() {
+        let plaintext = "my secret";
+        let key = "key123";
+        let (ciphertext, _iv) = SecretsRepository::encrypt(plaintext, key).expect("encrypt");
+        assert_ne!(ciphertext, plaintext.as_bytes());
+    }
+
+    #[test]
+    fn encrypt_same_plaintext_different_nonces() {
+        // Two encryptions of the same value should produce different ciphertexts (random nonce).
+        let plaintext = "same-value";
+        let key = "key-abc";
+        let (ct1, _) = SecretsRepository::encrypt(plaintext, key).expect("first");
+        let (ct2, _) = SecretsRepository::encrypt(plaintext, key).expect("second");
+        // Probability of collision is negligible; this guards against static nonce bugs.
+        assert_ne!(ct1, ct2, "two encryptions should use different nonces");
+    }
+
+    #[test]
+    fn decrypt_wrong_key_returns_error() {
+        let plaintext = "secret";
+        let (ciphertext, iv) = SecretsRepository::encrypt(plaintext, "correct-key").expect("encrypt");
+        let result = SecretsRepository::decrypt(&ciphertext, &iv, "wrong-key");
+        assert!(result.is_err(), "decryption with wrong key must fail");
+    }
+
+    #[test]
+    fn decrypt_tampered_ciphertext_returns_error() {
+        let (mut ciphertext, iv) =
+            SecretsRepository::encrypt("value", "key").expect("encrypt");
+        // Flip a byte to simulate tampering.
+        if let Some(b) = ciphertext.last_mut() {
+            *b ^= 0xFF;
+        }
+        let result = SecretsRepository::decrypt(&ciphertext, &iv, "key");
+        assert!(result.is_err(), "tampered ciphertext must fail authentication");
+    }
+
+    #[test]
+    fn encrypt_empty_string_roundtrip() {
+        let (ciphertext, iv) = SecretsRepository::encrypt("", "key").expect("encrypt");
+        let recovered = SecretsRepository::decrypt(&ciphertext, &iv, "key").expect("decrypt");
+        assert_eq!(recovered, "");
+    }
+
+    #[test]
+    fn encrypt_unicode_roundtrip() {
+        let plaintext = "こんにちは🔑";
+        let key = "unicode-test-key";
+        let (ciphertext, iv) = SecretsRepository::encrypt(plaintext, key).expect("encrypt");
+        let recovered = SecretsRepository::decrypt(&ciphertext, &iv, key).expect("decrypt");
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[test]
+    fn iv_is_12_bytes() {
+        let (_ct, iv) = SecretsRepository::encrypt("data", "key").expect("encrypt");
+        assert_eq!(iv.len(), 12, "AES-GCM nonce must be 12 bytes");
+    }
+}

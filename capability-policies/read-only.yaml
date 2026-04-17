@@ -1,0 +1,59 @@
+# read-only — Summarizer / Analyzer policy
+#
+# Purpose: Grants filesystem read access only. No writes, no shell execution,
+# no outbound network. Intended for summarizer, analyzer, and code-review
+# agents that must inspect content but must never mutate state or exfiltrate
+# data. Pair with a tier-1 sandbox boundary.
+#
+# Typical use: policyRef: read-only in the agent manifest.
+
+apiVersion: sera/v1
+kind: CapabilityPolicy
+metadata:
+  name: read-only
+  description: Read-only access — no writes, no exec, no network
+
+capabilities:
+  filesystem:
+    read: true
+    write: false
+    delete: false
+    scope:
+      - '/workspace/**'
+
+  network:
+    outbound:
+      allow: []
+      deny: ['*']
+
+  exec:
+    shell: false
+    commands:
+      allow: []
+      deny: ['*']
+
+  llm:
+    models: ['*']
+    budget:
+      hourly: 50000
+      daily: 200000
+    toolCalling: true
+    streaming: true
+
+  memory:
+    read: true
+    write: false
+    delete: false
+    scopes: [own]
+
+  intercom:
+    publish:
+      - 'thoughts:*'
+    subscribe: []
+    directMessage: []
+
+  docker:
+    spawnSubagents: false
+
+  secrets:
+    access: []

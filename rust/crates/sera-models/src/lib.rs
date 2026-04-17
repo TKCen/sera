@@ -26,7 +26,9 @@
 pub mod error;
 pub mod provider;
 pub mod response;
+pub mod routing;
 
 pub use error::ModelError;
 pub use provider::{ModelProvider, ProviderConfig};
 pub use response::ModelResponse;
+pub use routing::{HealthStore, ModelHealth, ModelRef};

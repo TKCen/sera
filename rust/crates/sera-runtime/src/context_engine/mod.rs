@@ -1,8 +1,14 @@
 //! Context engine — pluggable context assembly and compaction.
 
+pub mod enricher;
 pub mod hybrid;
 pub mod kvcache;
 pub mod pipeline;
+
+pub use enricher::{
+    ContextEnricher, ContextEnricherConfig, EnrichmentResult, MAX_RECALL_SEGMENTS,
+    MEMORY_RECALL_PRIORITY,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

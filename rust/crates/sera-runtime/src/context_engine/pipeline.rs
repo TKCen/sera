@@ -1,5 +1,7 @@
 //! ContextPipeline — wraps the old ContextPipeline as a ContextEngine impl.
 
+use std::sync::RwLock;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use once_cell::sync::Lazy;
@@ -45,6 +47,13 @@ pub struct ContextPipeline {
     /// [`HybridRetrievalConfig::hybrid_retrieval`] is `false`, `assemble` falls
     /// back to the existing single-pass pass-through.
     hybrid_config: Option<HybridRetrievalConfig>,
+    /// Pre-computed query embedding for the current turn.
+    ///
+    /// Populated by [`ContextPipeline::set_query_embedding`] just before
+    /// `assemble` runs so the [`HybridScorer`] can use real cosine similarity
+    /// instead of the zero-vector fallback. `None` disables the vector
+    /// component (lexical-only scoring).
+    query_embedding: RwLock<Option<Vec<f32>>>,
 }
 
 impl ContextPipeline {
@@ -55,6 +64,21 @@ impl ContextPipeline {
             session_key: String::new(),
             model_id: String::new(),
             hybrid_config: None,
+            query_embedding: RwLock::new(None),
+        }
+    }
+
+    /// Install the query embedding used by the [`HybridScorer`] on the next
+    /// `assemble` call. Passing `None` clears the embedding and reverts to
+    /// lexical-only scoring.
+    ///
+    /// Typically called by [`crate::context_engine::ContextEnricher`]
+    /// immediately before the turn loop runs `assemble`. Storing the vector
+    /// on the pipeline keeps the `ContextEngine` trait dependency-free while
+    /// still letting the scorer consume a real embedding.
+    pub fn set_query_embedding(&self, embedding: Option<Vec<f32>>) {
+        if let Ok(mut guard) = self.query_embedding.write() {
+            *guard = embedding;
         }
     }
 
@@ -204,12 +228,17 @@ impl ContextEngine for ContextPipeline {
             .map(|(i, m)| message_to_candidate(i, m, now))
             .collect();
         let query_tokens = derive_query_tokens(&self.messages);
-        // No query embedding is available at assemble time (no embedding
-        // service wired in yet — see rust/docs/plan/HYBRID-RETRIEVAL.md
-        // Phase 2). The scorer degrades the vector component to 0.0 when
-        // either side of the comparison is empty, which is the intended
-        // fallback behavior.
-        let query_embedding: Vec<f32> = Vec::new();
+        // Prefer the embedding threaded in from ContextEnricher (sera-0yqq)
+        // so the scorer can use real cosine similarity. When none is set —
+        // disabled flag, backend failure, or tests — fall back to the empty
+        // vector, which the scorer treats as "vector component 0.0" (lexical
+        // + recency only). This preserves the historical fallback path.
+        let query_embedding: Vec<f32> = self
+            .query_embedding
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default();
         let scorer = HybridScorer::new(config, query_tokens, query_embedding, &candidates, now);
         let ranked = scorer.rank();
 

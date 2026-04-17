@@ -5,7 +5,7 @@
 //! See SPEC-runtime §3 for the complete turn loop design.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use sera_hitl;
@@ -14,6 +14,7 @@ use sera_types::runtime::{
     TurnOutcome,
 };
 
+use crate::context_engine::ContextEnricher;
 use crate::memory_assembler::MemoryBlockAssembler;
 use crate::turn::{self, LlmProvider, ReactMode, ToolDispatcher};
 
@@ -63,6 +64,13 @@ pub struct DefaultRuntime {
     /// If `None`, memory block injection is skipped (backward-compatible default).
     /// Use `with_memory_assembler` to enable.
     memory_assembler: Option<Mutex<MemoryBlockAssembler>>,
+    /// Tier-2 semantic enricher (sera-0yqq).
+    ///
+    /// When set, runs before the Tier-1 memory block assembly each turn and
+    /// surfaces up to 3 `MemoryRecall` segments derived from a semantic query
+    /// over the user message. Failures degrade silently per SPEC-memory §13.6
+    /// so the turn continues when the embedding service or store is down.
+    enricher: Option<Arc<ContextEnricher>>,
 }
 
 impl std::fmt::Debug for DefaultRuntime {
@@ -74,6 +82,7 @@ impl std::fmt::Debug for DefaultRuntime {
             .field("max_tool_iterations", &self.max_tool_iterations)
             .field("failure_threshold", &self.failure_threshold)
             .field("has_memory_assembler", &self.memory_assembler.is_some())
+            .field("has_enricher", &self.enricher.is_some())
             .finish()
     }
 }
@@ -90,7 +99,20 @@ impl DefaultRuntime {
             max_tool_iterations: 10,
             failure_threshold: 3,
             memory_assembler: None,
+            enricher: None,
         }
+    }
+
+    /// Install the Tier-2 semantic enricher.
+    ///
+    /// When set, `execute_turn` embeds the latest user message, queries the
+    /// configured semantic-memory store, and promotes up to 3 `MemoryRecall`
+    /// segments into the turn's [`MemoryBlockAssembler`] before rendering.
+    /// If no assembler is configured, the recalls are rendered inline as a
+    /// system message so the LLM still sees them.
+    pub fn with_enricher(mut self, enricher: Arc<ContextEnricher>) -> Self {
+        self.enricher = Some(enricher);
+        self
     }
 
     /// Set the Tier-1 memory block assembler.
@@ -206,6 +228,23 @@ impl AgentRuntime for DefaultRuntime {
                 Err(interruption) => return Ok(interruption),
             };
 
+            // Run Tier-2 semantic enrichment before Tier-1 assembly (sera-0yqq).
+            // The enricher embeds the latest user message, queries the
+            // semantic-memory store, hybrid-reranks, and returns up to 3
+            // MemoryRecall segments. Failures degrade silently per
+            // SPEC-memory §13.6 — the empty return makes the rest of the turn
+            // behave exactly as it did before the enricher was wired in.
+            let enrichment = if let Some(ref enricher) = self.enricher {
+                let last_user = extract_last_user_message(&observed);
+                let budget_remaining = remaining_memory_budget(self.memory_assembler.as_ref());
+                enricher.enrich(&last_user, budget_remaining).await
+            } else {
+                crate::context_engine::EnrichmentResult {
+                    segments: Vec::new(),
+                    query_embedding: None,
+                }
+            };
+
             // Inject Tier-1 memory block (Architecture Addendum 2026-04-16 §1).
             // Prepend a system message containing the rendered block before the
             // LLM call. When record_turn returns true (overflow_turns reaches
@@ -213,19 +252,60 @@ impl AgentRuntime for DefaultRuntime {
             // the gateway can emit memory_pressure without a cross-crate dep.
             let (observed, memory_pressure_triggered) =
                 if let Some(ref asm_mutex) = self.memory_assembler {
-                    let result = asm_mutex.lock().unwrap().assemble();
-                    if result.rendered.is_empty() {
+                    let rendered = {
+                        let mut guard = asm_mutex.lock().unwrap();
+                        // Transiently push Tier-2 recalls into the block so
+                        // the assembler renders them under its normal
+                        // priority/budget rules, then drain them back out so
+                        // the persistent segment list is unchanged between
+                        // turns.
+                        let recall_count = enrichment.segments.len();
+                        for seg in &enrichment.segments {
+                            guard.block_mut().push(seg.clone());
+                        }
+                        let result = guard.assemble();
+                        // Remove the transient recall segments we just
+                        // pushed. They are always the last `recall_count`
+                        // entries because `assemble` does not mutate the
+                        // segment list order.
+                        if recall_count > 0 {
+                            let segs = &mut guard.block_mut().segments;
+                            let truncate_to = segs.len().saturating_sub(recall_count);
+                            segs.truncate(truncate_to);
+                        }
+                        result
+                    };
+                    if rendered.rendered.is_empty() {
                         (observed, false)
                     } else {
                         let memory_msg = serde_json::json!({
                             "role": "system",
-                            "content": result.rendered,
+                            "content": rendered.rendered,
                         });
                         let mut with_memory = Vec::with_capacity(observed.len() + 1);
                         with_memory.push(memory_msg);
                         with_memory.extend(observed);
-                        (with_memory, result.did_trigger_pressure)
+                        (with_memory, rendered.did_trigger_pressure)
                     }
+                } else if !enrichment.segments.is_empty() {
+                    // No Tier-1 assembler but we still have Tier-2 recalls —
+                    // render them directly as a single system message so the
+                    // LLM still sees the retrieved context.
+                    let mut body = String::new();
+                    for seg in &enrichment.segments {
+                        if !body.is_empty() {
+                            body.push_str("\n\n");
+                        }
+                        body.push_str(&seg.content);
+                    }
+                    let memory_msg = serde_json::json!({
+                        "role": "system",
+                        "content": body,
+                    });
+                    let mut with_memory = Vec::with_capacity(observed.len() + 1);
+                    with_memory.push(memory_msg);
+                    with_memory.extend(observed);
+                    (with_memory, false)
                 } else {
                     (observed, false)
                 };
@@ -385,6 +465,40 @@ impl AgentRuntime for DefaultRuntime {
     /// Report runtime health.
     async fn health(&self) -> HealthStatus {
         HealthStatus::Healthy
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Extract the most recent `role=="user"` message's `content` string. Returns
+/// an empty string when no user message is present or `content` is missing.
+fn extract_last_user_message(messages: &[serde_json::Value]) -> String {
+    for msg in messages.iter().rev() {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role == "user"
+            && let Some(content) = msg.get("content").and_then(|v| v.as_str())
+        {
+            return content.to_string();
+        }
+    }
+    String::new()
+}
+
+/// Compute the character budget remaining in the Tier-1 `MemoryBlock` after
+/// existing segments are accounted for. When no assembler is present, returns
+/// a large constant so Tier-2 recalls are not artificially starved — the
+/// runtime caller will still respect [`crate::context_engine::MAX_RECALL_SEGMENTS`].
+fn remaining_memory_budget(assembler: Option<&Mutex<MemoryBlockAssembler>>) -> usize {
+    match assembler {
+        Some(mutex) => {
+            let guard = match mutex.lock() {
+                Ok(g) => g,
+                Err(_) => return 0,
+            };
+            let block = guard.block();
+            block.char_budget.saturating_sub(block.current_chars())
+        }
+        None => 4096,
     }
 }
 

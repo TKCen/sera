@@ -4374,6 +4374,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "dirs 5.0.1",
+ "reqwest 0.12.28",
+ "sera-commands",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "sera-commands"
 version = "0.1.0"
 dependencies = [

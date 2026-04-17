@@ -29,6 +29,7 @@ members = [
   "crates/sera-agui",
   "crates/sera-plugins",
   "crates/sera-oci",
+  "crates/sera-commands",
 ]
 
 [workspace.package]
@@ -197,6 +198,7 @@ sera-a2a = { path = "crates/sera-a2a" }
 sera-agui = { path = "crates/sera-agui" }
 sera-plugins = { path = "crates/sera-plugins" }
 sera-oci = { path = "crates/sera-oci" }
+sera-commands = { path = "crates/sera-commands" }
 
 # OCI distribution client (ecosystem phase S — plugin manifest pull)
 oci-distribution = { version = "0.11", default-features = false, features = ["rustls-tls"] }

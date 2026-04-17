@@ -1,0 +1,16 @@
+[package]
+name = "sera-commands"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sera-types = { workspace = true }
+sera-errors = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

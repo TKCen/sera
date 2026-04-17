@@ -1,14 +1,14 @@
 //! Sleeptime Memory Consolidation — background memory processing during agent idle time.
 //! SPEC-memory §2b / sera-40o.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sera_types::memory::{MemoryBackend, MemoryError, RecallStore};
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -159,6 +159,10 @@ pub enum ConsolidationError {
     /// Invalid or inconsistent configuration.
     #[error("configuration error: {0}")]
     ConfigError(String),
+
+    /// The feature is not yet implemented (POST-MVS stub).
+    #[error("not implemented (post-mvs stub): {feature}")]
+    PostMvsStub { feature: &'static str },
 }
 
 // ── SleeptimeConsolidator ─────────────────────────────────────────────────────
@@ -205,62 +209,97 @@ impl SleeptimeConsolidator {
         };
 
         if self.config.compression_enabled {
-            let result = self.run_compression(agent_id, memory).await?;
-            self.deduct_tokens(&mut report, result.tokens_used);
-            report.phases.push(result);
-            if !self.check_budget(&report) {
-                report.completed_at = Some(Utc::now());
-                return Err(ConsolidationError::BudgetExceeded {
-                    used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
-                    limit_pct: self.config.daily_token_budget_pct,
-                });
+            match self.run_compression(agent_id, memory).await {
+                Ok(result) => {
+                    self.deduct_tokens(&mut report, result.tokens_used);
+                    report.phases.push(result);
+                    if !self.check_budget(&report) {
+                        report.completed_at = Some(Utc::now());
+                        return Err(ConsolidationError::BudgetExceeded {
+                            used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
+                            limit_pct: self.config.daily_token_budget_pct,
+                        });
+                    }
+                }
+                Err(ConsolidationError::PostMvsStub { feature }) => {
+                    warn!(feature, "compression phase skipped: post-mvs stub");
+                }
+                Err(e) => return Err(e),
             }
         }
 
         if self.config.promotion_enabled {
-            let result = self.run_promotion(agent_id, memory, recall_store).await?;
-            self.deduct_tokens(&mut report, result.tokens_used);
-            report.phases.push(result);
-            if !self.check_budget(&report) {
-                report.completed_at = Some(Utc::now());
-                return Err(ConsolidationError::BudgetExceeded {
-                    used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
-                    limit_pct: self.config.daily_token_budget_pct,
-                });
+            match self.run_promotion(agent_id, memory, recall_store).await {
+                Ok(result) => {
+                    self.deduct_tokens(&mut report, result.tokens_used);
+                    report.phases.push(result);
+                    if !self.check_budget(&report) {
+                        report.completed_at = Some(Utc::now());
+                        return Err(ConsolidationError::BudgetExceeded {
+                            used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
+                            limit_pct: self.config.daily_token_budget_pct,
+                        });
+                    }
+                }
+                Err(ConsolidationError::PostMvsStub { feature }) => {
+                    warn!(feature, "promotion phase skipped: post-mvs stub");
+                }
+                Err(e) => return Err(e),
             }
         }
 
         if self.config.gap_detection_enabled {
-            let result = self.run_gap_detection(agent_id, memory).await?;
-            self.deduct_tokens(&mut report, result.tokens_used);
-            report.phases.push(result);
-            if !self.check_budget(&report) {
-                report.completed_at = Some(Utc::now());
-                return Err(ConsolidationError::BudgetExceeded {
-                    used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
-                    limit_pct: self.config.daily_token_budget_pct,
-                });
+            match self.run_gap_detection(agent_id, memory).await {
+                Ok(result) => {
+                    self.deduct_tokens(&mut report, result.tokens_used);
+                    report.phases.push(result);
+                    if !self.check_budget(&report) {
+                        report.completed_at = Some(Utc::now());
+                        return Err(ConsolidationError::BudgetExceeded {
+                            used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
+                            limit_pct: self.config.daily_token_budget_pct,
+                        });
+                    }
+                }
+                Err(ConsolidationError::PostMvsStub { feature }) => {
+                    warn!(feature, "gap detection phase skipped: post-mvs stub");
+                }
+                Err(e) => return Err(e),
             }
         }
 
         // Cross-linking always runs if the budget allows (no separate flag in config).
         {
-            let result = self.run_cross_linking(agent_id, memory).await?;
-            self.deduct_tokens(&mut report, result.tokens_used);
-            report.phases.push(result);
-            if !self.check_budget(&report) {
-                report.completed_at = Some(Utc::now());
-                return Err(ConsolidationError::BudgetExceeded {
-                    used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
-                    limit_pct: self.config.daily_token_budget_pct,
-                });
+            match self.run_cross_linking(agent_id, memory).await {
+                Ok(result) => {
+                    self.deduct_tokens(&mut report, result.tokens_used);
+                    report.phases.push(result);
+                    if !self.check_budget(&report) {
+                        report.completed_at = Some(Utc::now());
+                        return Err(ConsolidationError::BudgetExceeded {
+                            used_pct: self.config.daily_token_budget_pct - report.budget_remaining_pct,
+                            limit_pct: self.config.daily_token_budget_pct,
+                        });
+                    }
+                }
+                Err(ConsolidationError::PostMvsStub { feature }) => {
+                    warn!(feature, "cross-linking phase skipped: post-mvs stub");
+                }
+                Err(e) => return Err(e),
             }
         }
 
         if self.config.decay_enabled {
-            let result = self.run_decay(agent_id, memory).await?;
-            self.deduct_tokens(&mut report, result.tokens_used);
-            report.phases.push(result);
+            match self.run_decay(agent_id, memory).await {
+                Ok(result) => {
+                    self.deduct_tokens(&mut report, result.tokens_used);
+                    report.phases.push(result);
+                }
+                Err(ConsolidationError::PostMvsStub { feature }) => {
+                    warn!(feature, "decay phase skipped: post-mvs stub");
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         report.completed_at = Some(Utc::now());
@@ -290,19 +329,10 @@ impl SleeptimeConsolidator {
         _memory: &dyn MemoryBackend,
     ) -> Result<ConsolidationResult, ConsolidationError> {
         debug!(agent_id, "compression phase: scanning for compaction candidates");
-        let start = Instant::now();
 
         // POST-MVS: query memory for old/low-importance entries and call
         // `memory.compact()` with an appropriate CompactionScope.
-
-        Ok(ConsolidationResult {
-            phase: ConsolidationPhase::Compression,
-            entries_processed: 0,
-            entries_modified: 0,
-            tokens_used: 0,
-            duration: start.elapsed(),
-            details: serde_json::json!({ "status": "stub", "agent_id": agent_id }),
-        })
+        Err(ConsolidationError::PostMvsStub { feature: "sleeptime.compression" })
     }
 
     /// Promotion phase — move entries passing promotion gates to long-term memory.
@@ -313,40 +343,13 @@ impl SleeptimeConsolidator {
         &self,
         agent_id: &str,
         _memory: &dyn MemoryBackend,
-        recall_store: &RecallStore,
+        _recall_store: &RecallStore,
     ) -> Result<ConsolidationResult, ConsolidationError> {
         debug!(agent_id, "promotion phase: evaluating recall signals");
-        let start = Instant::now();
-
-        let candidates = recall_store.all_stats();
-        let eligible: Vec<_> = candidates.iter().filter(|s| {
-            // Uses RecallTracker gates: avgRelevance ≥ 0.8, recall ≥ 3, unique ≥ 3.
-            s.average_score >= 0.8 && s.recall_count >= 3 && s.unique_queries >= 3
-        }).collect();
-
-        debug!(
-            agent_id,
-            candidates = candidates.len(),
-            eligible = eligible.len(),
-            "promotion phase: gate evaluation complete"
-        );
 
         // POST-MVS: for each eligible entry, fetch from memory, update tier to
         // LongTerm, and write back.
-
-        Ok(ConsolidationResult {
-            phase: ConsolidationPhase::Promotion,
-            entries_processed: candidates.len() as u32,
-            entries_modified: 0,
-            tokens_used: 0,
-            duration: start.elapsed(),
-            details: serde_json::json!({
-                "status": "stub",
-                "agent_id": agent_id,
-                "candidates_evaluated": candidates.len(),
-                "eligible_count": eligible.len(),
-            }),
-        })
+        Err(ConsolidationError::PostMvsStub { feature: "sleeptime.promotion" })
     }
 
     /// Gap-detection phase — analyse memory for coverage gaps.
@@ -359,23 +362,10 @@ impl SleeptimeConsolidator {
         _memory: &dyn MemoryBackend,
     ) -> Result<ConsolidationResult, ConsolidationError> {
         debug!(agent_id, "gap detection phase: analysing coverage");
-        let start = Instant::now();
 
         // POST-MVS: cluster existing entries, identify topic areas with thin
         // coverage, return structured gap descriptions.
-
-        Ok(ConsolidationResult {
-            phase: ConsolidationPhase::GapDetection,
-            entries_processed: 0,
-            entries_modified: 0,
-            tokens_used: 0,
-            duration: start.elapsed(),
-            details: serde_json::json!({
-                "status": "stub",
-                "agent_id": agent_id,
-                "gaps_found": [],
-            }),
-        })
+        Err(ConsolidationError::PostMvsStub { feature: "sleeptime.gap_detection" })
     }
 
     /// Cross-linking phase — tag pairs of entries whose similarity exceeds the threshold.
@@ -391,24 +381,10 @@ impl SleeptimeConsolidator {
             threshold = self.config.cross_link_threshold,
             "cross-linking phase: scanning for similar entries"
         );
-        let start = Instant::now();
 
         // POST-MVS: embed all entries, compute pairwise cosine similarity,
         // add cross-reference tags to entries above the threshold.
-
-        Ok(ConsolidationResult {
-            phase: ConsolidationPhase::CrossLinking,
-            entries_processed: 0,
-            entries_modified: 0,
-            tokens_used: 0,
-            duration: start.elapsed(),
-            details: serde_json::json!({
-                "status": "stub",
-                "agent_id": agent_id,
-                "threshold": self.config.cross_link_threshold,
-                "links_added": 0,
-            }),
-        })
+        Err(ConsolidationError::PostMvsStub { feature: "sleeptime.cross_linking" })
     }
 
     /// Decay phase — apply exponential decay and archive entries below threshold.
@@ -424,31 +400,18 @@ impl SleeptimeConsolidator {
             half_life_days = self.config.decay_half_life_days,
             "decay phase: applying exponential decay"
         );
-        let start = Instant::now();
 
         // POST-MVS: for each entry, compute age-adjusted score using:
         //   score * 0.5^(age_days / half_life_days)
         // Entries falling below an archive threshold are marked for archival.
-
-        Ok(ConsolidationResult {
-            phase: ConsolidationPhase::Decay,
-            entries_processed: 0,
-            entries_modified: 0,
-            tokens_used: 0,
-            duration: start.elapsed(),
-            details: serde_json::json!({
-                "status": "stub",
-                "agent_id": agent_id,
-                "half_life_days": self.config.decay_half_life_days,
-                "archived": 0,
-            }),
-        })
+        Err(ConsolidationError::PostMvsStub { feature: "sleeptime.decay" })
     }
 
     /// Subtract `tokens` from the remaining budget in `report`.
     fn deduct_tokens(&self, _report: &mut ConsolidationReport, tokens: u64) {
-        // Budget is tracked as a fraction; real token accounting is POST-MVS.
-        // For now we only deduct when tokens > 0 to allow stubs to pass through.
+        // TODO(post-mvs): real token accounting not yet implemented.
+        // Keeping () return to avoid cascading call-site changes; warn instead.
+        warn!(tokens, "deduct_tokens: post-mvs stub — token budget not deducted");
         let _ = tokens;
     }
 }
@@ -655,8 +618,9 @@ mod tests {
 
         assert_eq!(report.agent_id, "agent-1");
         assert!(report.completed_at.is_some());
-        // All 5 phases should be present with default config.
-        assert_eq!(report.phases.len(), 5);
+        // All 5 phases are POST-MVS stubs — they are skipped (warn-logged) so
+        // no phase results appear in the report.
+        assert_eq!(report.phases.len(), 0);
         assert_eq!(report.total_tokens_used(), 0);
     }
 
@@ -678,9 +642,9 @@ mod tests {
             .await
             .expect("consolidation should succeed");
 
-        // Only cross-linking runs (no separate flag).
-        assert_eq!(report.phases.len(), 1);
-        assert_eq!(report.phases[0].phase, ConsolidationPhase::CrossLinking);
+        // Cross-linking is the only unconditional phase, but it is also a
+        // POST-MVS stub — so the report has no phase results either.
+        assert_eq!(report.phases.len(), 0);
     }
 
     #[tokio::test]
@@ -688,7 +652,6 @@ mod tests {
         use sera_types::memory::{MemoryId, RecallSignal};
 
         let mut store = RecallStore::new();
-        // Three signals with high scores and different query hashes → passes promotion gates.
         for i in 0u64..3 {
             store.record(RecallSignal {
                 memory_id: MemoryId::new("mem-promote"),
@@ -698,7 +661,6 @@ mod tests {
                 timestamp: "2026-04-09T10:00:00Z".to_string(),
             });
         }
-        // One signal with low score → should not qualify.
         store.record(RecallSignal {
             memory_id: MemoryId::new("mem-skip"),
             query_text: "query-low".to_string(),
@@ -711,25 +673,13 @@ mod tests {
         let consolidator = SleeptimeConsolidator::new(cfg, Box::new(AlwaysIdle));
         let memory = NoopMemory;
 
-        let report = consolidator
-            .run_consolidation("agent-1", &memory, &store)
-            .await
-            .expect("consolidation should succeed");
-
-        let promotion = report
-            .phases
-            .iter()
-            .find(|p| p.phase == ConsolidationPhase::Promotion)
-            .expect("promotion phase must be present");
-
-        // 2 entries in store, both evaluated.
-        assert_eq!(promotion.entries_processed, 2);
-        // Stub: no actual writes yet.
-        assert_eq!(promotion.entries_modified, 0);
-
-        // Details should record eligible count.
-        let eligible = promotion.details["eligible_count"].as_u64().unwrap_or(0);
-        assert_eq!(eligible, 1); // only mem-promote qualifies
+        // Promotion phase is a POST-MVS stub — run_consolidation succeeds but
+        // the promotion phase is warn-logged and absent from the report.
+        let result = consolidator.run_promotion("agent-1", &memory, &store).await;
+        assert!(
+            matches!(result, Err(ConsolidationError::PostMvsStub { feature: "sleeptime.promotion" })),
+            "expected PostMvsStub for sleeptime.promotion, got: {result:?}"
+        );
     }
 
     #[test]
@@ -770,5 +720,75 @@ mod tests {
 
         let e = ConsolidationError::ConfigError("bad value".to_string());
         assert!(e.to_string().contains("bad value"));
+    }
+
+    // ── PostMvsStub tests ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn compression_returns_post_mvs_stub() {
+        let cfg = SleeptimeConfig::default();
+        let consolidator = SleeptimeConsolidator::new(cfg, Box::new(AlwaysIdle));
+        let memory = NoopMemory;
+        let result = consolidator.run_compression("agent-x", &memory).await;
+        assert!(
+            matches!(result, Err(ConsolidationError::PostMvsStub { feature: "sleeptime.compression" })),
+            "expected PostMvsStub for sleeptime.compression, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn promotion_returns_post_mvs_stub() {
+        let cfg = SleeptimeConfig::default();
+        let consolidator = SleeptimeConsolidator::new(cfg, Box::new(AlwaysIdle));
+        let memory = NoopMemory;
+        let store = RecallStore::new();
+        let result = consolidator.run_promotion("agent-x", &memory, &store).await;
+        assert!(
+            matches!(result, Err(ConsolidationError::PostMvsStub { feature: "sleeptime.promotion" })),
+            "expected PostMvsStub for sleeptime.promotion, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn gap_detection_returns_post_mvs_stub() {
+        let cfg = SleeptimeConfig::default();
+        let consolidator = SleeptimeConsolidator::new(cfg, Box::new(AlwaysIdle));
+        let memory = NoopMemory;
+        let result = consolidator.run_gap_detection("agent-x", &memory).await;
+        assert!(
+            matches!(result, Err(ConsolidationError::PostMvsStub { feature: "sleeptime.gap_detection" })),
+            "expected PostMvsStub for sleeptime.gap_detection, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_linking_returns_post_mvs_stub() {
+        let cfg = SleeptimeConfig::default();
+        let consolidator = SleeptimeConsolidator::new(cfg, Box::new(AlwaysIdle));
+        let memory = NoopMemory;
+        let result = consolidator.run_cross_linking("agent-x", &memory).await;
+        assert!(
+            matches!(result, Err(ConsolidationError::PostMvsStub { feature: "sleeptime.cross_linking" })),
+            "expected PostMvsStub for sleeptime.cross_linking, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn decay_returns_post_mvs_stub() {
+        let cfg = SleeptimeConfig::default();
+        let consolidator = SleeptimeConsolidator::new(cfg, Box::new(AlwaysIdle));
+        let memory = NoopMemory;
+        let result = consolidator.run_decay("agent-x", &memory).await;
+        assert!(
+            matches!(result, Err(ConsolidationError::PostMvsStub { feature: "sleeptime.decay" })),
+            "expected PostMvsStub for sleeptime.decay, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn post_mvs_stub_error_display() {
+        let e = ConsolidationError::PostMvsStub { feature: "sleeptime.compression" };
+        assert!(e.to_string().contains("post-mvs stub"));
+        assert!(e.to_string().contains("sleeptime.compression"));
     }
 }

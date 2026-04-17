@@ -109,11 +109,17 @@ enum Op {
         /// Session key provided by the gateway for per-session context tracking.
         #[serde(default)]
         session_key: Option<String>,
+        /// Parent session key — set when this turn belongs to a child session.
+        #[serde(default)]
+        parent_session_key: Option<String>,
     },
     Steer {
         items: Vec<serde_json::Value>,
         #[serde(default)]
         session_key: Option<String>,
+        /// Parent session key — propagated from the spawning session.
+        #[serde(default)]
+        parent_session_key: Option<String>,
     },
     Interrupt,
     System(SystemOp),
@@ -130,14 +136,24 @@ enum SystemOp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Event {
     id: uuid::Uuid,
+    /// Nil UUID for handshake frames (no associated submission).
     submission_id: uuid::Uuid,
     msg: EventMsg,
     timestamp: chrono::DateTime<chrono::Utc>,
+    /// Parent session key carried on every frame so consumers can route child events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_session_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum EventMsg {
+    /// First frame — protocol negotiation (OpenClaw handshake).
+    Handshake {
+        protocol_version: String,
+        features: Vec<String>,
+        agent_id: String,
+    },
     TurnStarted { turn_id: uuid::Uuid },
     TurnCompleted { turn_id: uuid::Uuid },
     StreamingDelta { delta: String },
@@ -286,6 +302,7 @@ async fn run_interactive(
             available_tools: tool_defs.to_vec(),
             metadata: HashMap::new(),
             change_artifact: None,
+            parent_session_key: None,
         };
 
         let outcome = runtime.execute_turn(turn_ctx).await;
@@ -332,6 +349,28 @@ async fn run_ndjson_loop(
     let mut stdout = tokio::io::stdout();
     let mut line = String::new();
 
+    // Emit handshake frame — first frame the gateway reads to negotiate protocol.
+    let handshake = Event {
+        id: uuid::Uuid::new_v4(),
+        submission_id: uuid::Uuid::nil(),
+        msg: EventMsg::Handshake {
+            protocol_version: "2.0".to_string(),
+            features: vec![
+                "steer".to_string(),
+                "hitl".to_string(),
+                "hooks@v2".to_string(),
+                "parent_session_key".to_string(),
+            ],
+            agent_id: config.agent_id.clone(),
+        },
+        timestamp: chrono::Utc::now(),
+        parent_session_key: None,
+    };
+    let mut handshake_json = serde_json::to_string(&handshake)?;
+    handshake_json.push('\n');
+    stdout.write_all(handshake_json.as_bytes()).await?;
+    stdout.flush().await?;
+
     loop {
         line.clear();
         let n = reader.read_line(&mut line).await?;
@@ -356,6 +395,7 @@ async fn run_ndjson_loop(
                         message: format!("failed to parse submission: {e}"),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: None,
                 };
                 let mut json = serde_json::to_string(&err_event)?;
                 json.push('\n');
@@ -373,12 +413,20 @@ async fn run_ndjson_loop(
 
         let turn_id = uuid::Uuid::new_v4();
 
+        // Extract parent_session_key from the submission op for propagation.
+        let submission_parent_key = match &submission.op {
+            Op::UserTurn { parent_session_key, .. } => parent_session_key.clone(),
+            Op::Steer { parent_session_key, .. } => parent_session_key.clone(),
+            _ => None,
+        };
+
         // Emit TurnStarted
         let started = Event {
             id: uuid::Uuid::new_v4(),
             submission_id: submission.id,
             msg: EventMsg::TurnStarted { turn_id },
             timestamp: chrono::Utc::now(),
+            parent_session_key: submission_parent_key.clone(),
         };
         let mut json = serde_json::to_string(&started)?;
         json.push('\n');
@@ -421,6 +469,7 @@ async fn run_ndjson_loop(
                                         arguments,
                                     },
                                     timestamp: chrono::Utc::now(),
+                                    parent_session_key: submission_parent_key.clone(),
                                 };
                                 json = serde_json::to_string(&begin_event)?;
                                 json.push('\n');
@@ -439,6 +488,7 @@ async fn run_ndjson_loop(
                                 result: result_content,
                             },
                             timestamp: chrono::Utc::now(),
+                            parent_session_key: submission_parent_key.clone(),
                         };
                         json = serde_json::to_string(&end_event)?;
                         json.push('\n');
@@ -452,6 +502,7 @@ async fn run_ndjson_loop(
                     submission_id: submission.id,
                     msg: EventMsg::StreamingDelta { delta: response },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -465,6 +516,7 @@ async fn run_ndjson_loop(
                         delta: "[run_again — tool calls dispatched]".to_string(),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -478,6 +530,7 @@ async fn run_ndjson_loop(
                         delta: format!("[handoff -> {target_agent_id}]"),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -491,6 +544,7 @@ async fn run_ndjson_loop(
                         delta: "[compact — context condensed]".to_string(),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -504,6 +558,7 @@ async fn run_ndjson_loop(
                         delta: format!("[interrupted: {reason}]"),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -517,6 +572,7 @@ async fn run_ndjson_loop(
                         delta: format!("[stop: {summary}]"),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -530,6 +586,7 @@ async fn run_ndjson_loop(
                         delta: format!("[waiting_for_approval: ticket={ticket_id}]"),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&delta)?;
                 json.push('\n');
@@ -545,6 +602,7 @@ async fn run_ndjson_loop(
                         message: format!("{e:?}"),
                     },
                     timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
                 };
                 json = serde_json::to_string(&err_event)?;
                 json.push('\n');
@@ -558,6 +616,7 @@ async fn run_ndjson_loop(
             submission_id: submission.id,
             msg: EventMsg::TurnCompleted { turn_id },
             timestamp: chrono::Utc::now(),
+            parent_session_key: submission_parent_key,
         };
         json = serde_json::to_string(&completed)?;
         json.push('\n');
@@ -575,10 +634,14 @@ fn submission_to_turn_context(
     turn_id: uuid::Uuid,
     tool_defs: &[sera_types::tool::ToolDefinition],
 ) -> TurnContext {
-    let (messages, session_key_override) = match &submission.op {
-        Op::UserTurn { items, session_key, .. } => (items.clone(), session_key.clone()),
-        Op::Steer { items, session_key } => (items.clone(), session_key.clone()),
-        Op::Interrupt | Op::System(_) => (vec![], None),
+    let (messages, session_key_override, parent_session_key) = match &submission.op {
+        Op::UserTurn { items, session_key, parent_session_key, .. } => {
+            (items.clone(), session_key.clone(), parent_session_key.clone())
+        }
+        Op::Steer { items, session_key, parent_session_key } => {
+            (items.clone(), session_key.clone(), parent_session_key.clone())
+        }
+        Op::Interrupt | Op::System(_) => (vec![], None, None),
     };
 
     // Use gateway-provided session_key when available, otherwise generate one.
@@ -593,6 +656,7 @@ fn submission_to_turn_context(
         available_tools: tool_defs.to_vec(),
         metadata: HashMap::new(),
         change_artifact: None,
+        parent_session_key,
     }
 }
 

@@ -249,6 +249,7 @@ mod tests {
             available_tools: vec![],
             metadata: std::collections::HashMap::new(),
             change_artifact: None,
+            parent_session_key: None,
         }
     }
 

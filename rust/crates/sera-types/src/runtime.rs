@@ -35,6 +35,12 @@ pub struct TurnContext {
     /// The change artifact this turn is associated with, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_artifact: Option<ChangeArtifactId>,
+    /// Parent session key — set when this agent was spawned as a child of another session.
+    ///
+    /// Propagated from the gateway submission through all frames so observers can
+    /// reconstruct the session hierarchy. `None` for root sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_key: Option<String>,
 }
 
 // ── Output types ─────────────────────────────────────────────────────────────
@@ -223,6 +229,7 @@ mod tests {
             available_tools: vec![],
             metadata: HashMap::new(),
             change_artifact: None,
+            parent_session_key: None,
         }
     }
 
@@ -349,6 +356,32 @@ mod tests {
         assert_eq!(parsed.agent_id, ctx.agent_id);
         assert_eq!(parsed.session_key, ctx.session_key);
         assert_eq!(parsed.messages.len(), ctx.messages.len());
+    }
+
+    #[test]
+    fn turn_context_parent_session_key_propagation() {
+        let mut ctx = make_turn_context();
+        ctx.parent_session_key = Some("parent-sess-abc".to_string());
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("parent_session_key"));
+        assert!(json.contains("parent-sess-abc"));
+
+        let parsed: TurnContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.parent_session_key.as_deref(), Some("parent-sess-abc"));
+    }
+
+    #[test]
+    fn turn_context_parent_session_key_absent_when_none() {
+        let ctx = make_turn_context(); // parent_session_key: None
+        let json = serde_json::to_string(&ctx).unwrap();
+        // skip_serializing_if = "Option::is_none" → field omitted from JSON
+        assert!(!json.contains("parent_session_key"));
+
+        // Legacy frames without the field still parse cleanly
+        let legacy = r#"{"event_id":"e1","agent_id":"a1","session_key":"s1","messages":[],"available_tools":[]}"#;
+        let parsed: TurnContext = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.parent_session_key.is_none());
     }
 
 }

@@ -96,15 +96,17 @@ pub async fn record_usage(
 ) -> Result<StatusCode, AppError> {
     MeteringRepository::record_usage(
         state.db.inner(),
-        &body.agent_id,
-        body.circle_id.as_deref(),
-        &body.model,
-        body.prompt_tokens,
-        body.completion_tokens,
-        body.total_tokens,
-        body.cost_usd,
-        body.latency_ms,
-        body.status.as_deref().unwrap_or("success"),
+        sera_db::metering::RecordUsageInput {
+            agent_id: &body.agent_id,
+            circle_id: body.circle_id.as_deref(),
+            model: &body.model,
+            prompt_tokens: body.prompt_tokens,
+            completion_tokens: body.completion_tokens,
+            total_tokens: body.total_tokens,
+            cost_usd: body.cost_usd,
+            latency_ms: body.latency_ms,
+            status: body.status.as_deref().unwrap_or("success"),
+        },
     )
     .await?;
     Ok(StatusCode::CREATED)

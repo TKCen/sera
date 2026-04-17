@@ -19,17 +19,17 @@ fn now() -> DateTime<Utc> {
 }
 
 fn make_task(title: &str, priority: u8) -> WorkflowTask {
-    WorkflowTask::new(
-        title,
-        "description",
-        vec!["ac1".to_string()],
-        WorkflowTaskStatus::Open,
+    WorkflowTask::new(sera_workflow::task::WorkflowTaskInput {
+        title: title.to_string(),
+        description: "description".to_string(),
+        acceptance_criteria: vec!["ac1".to_string()],
+        status: WorkflowTaskStatus::Open,
         priority,
-        WorkflowTaskType::Chore,
-        None,
-        None,
-        now(),
-    )
+        task_type: WorkflowTaskType::Chore,
+        source_formula: None,
+        source_location: None,
+        created_at: now(),
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -80,6 +80,18 @@ impl InstanceRow {
     }
 }
 
+/// Input for creating a new agent instance.
+pub struct CreateInstanceInput<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub template_name: &'a str,
+    pub template_ref: &'a str,
+    pub workspace_path: &'a str,
+    pub display_name: Option<&'a str>,
+    pub circle: Option<&'a str>,
+    pub lifecycle_mode: Option<&'a str>,
+}
+
 /// Agent repository for database operations.
 pub struct AgentRepository;
 
@@ -199,31 +211,23 @@ impl AgentRepository {
     }
 
     /// Create a new agent instance. Returns the new instance ID.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_instance(
         pool: &PgPool,
-        id: &str,
-        name: &str,
-        template_name: &str,
-        template_ref: &str,
-        workspace_path: &str,
-        display_name: Option<&str>,
-        circle: Option<&str>,
-        lifecycle_mode: Option<&str>,
+        input: CreateInstanceInput<'_>,
     ) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO agent_instances (id, name, template_name, template_ref, workspace_path,
                                           display_name, circle, lifecycle_mode, status, created_at, updated_at)
              VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, 'created', NOW(), NOW())"
         )
-        .bind(id)
-        .bind(name)
-        .bind(template_name)
-        .bind(template_ref)
-        .bind(workspace_path)
-        .bind(display_name)
-        .bind(circle)
-        .bind(lifecycle_mode)
+        .bind(input.id)
+        .bind(input.name)
+        .bind(input.template_name)
+        .bind(input.template_ref)
+        .bind(input.workspace_path)
+        .bind(input.display_name)
+        .bind(input.circle)
+        .bind(input.lifecycle_mode)
         .execute(pool)
         .await?;
         Ok(())
@@ -238,43 +242,24 @@ impl AgentRepository {
         circle: Option<&str>,
         lifecycle_mode: Option<&str>,
     ) -> Result<(), DbError> {
-        // Build dynamic SET clause
-        let mut sets = vec!["updated_at = NOW()".to_string()];
-        let mut param_idx = 1;
-        let mut params: Vec<String> = Vec::new();
+        let mut qb = sqlx::QueryBuilder::new("UPDATE agent_instances SET updated_at = NOW()");
 
         if let Some(v) = name {
-            param_idx += 1;
-            sets.push(format!("name = ${param_idx}"));
-            params.push(v.to_string());
+            qb.push(", name = ").push_bind(v);
         }
         if let Some(v) = display_name {
-            param_idx += 1;
-            sets.push(format!("display_name = ${param_idx}"));
-            params.push(v.to_string());
+            qb.push(", display_name = ").push_bind(v);
         }
         if let Some(v) = circle {
-            param_idx += 1;
-            sets.push(format!("circle = ${param_idx}"));
-            params.push(v.to_string());
+            qb.push(", circle = ").push_bind(v);
         }
         if let Some(v) = lifecycle_mode {
-            param_idx += 1;
-            sets.push(format!("lifecycle_mode = ${param_idx}"));
-            params.push(v.to_string());
+            qb.push(", lifecycle_mode = ").push_bind(v);
         }
 
-        let query = format!(
-            "UPDATE agent_instances SET {} WHERE id::text = $1",
-            sets.join(", ")
-        );
+        qb.push(" WHERE id::text = ").push_bind(id);
 
-        let mut q = sqlx::query(&query).bind(id);
-        for p in &params {
-            q = q.bind(p);
-        }
-
-        let result = q.execute(pool).await?;
+        let result = qb.build().execute(pool).await?;
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound {
                 entity: "agent_instance",

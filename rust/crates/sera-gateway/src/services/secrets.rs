@@ -40,14 +40,16 @@ impl SecretsManager {
 
         SecretsRepository::upsert(
             &self.pool,
-            key,
-            &ciphertext,
-            &iv,
-            None,
-            &[],
-            &[],
-            "internal",
-            None,
+            sera_db::secrets::UpsertSecretInput {
+                name: key,
+                encrypted_value: &ciphertext,
+                iv: &iv,
+                description: None,
+                tags: &[],
+                allowed_agents: &[],
+                exposure: "internal",
+                created_by: None,
+            },
         )
         .await
         .map_err(SecretsError::Db)?;

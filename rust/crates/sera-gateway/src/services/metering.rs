@@ -61,15 +61,17 @@ impl MeteringService {
 
         MeteringRepository::record_usage(
             self.pool.as_ref(),
-            agent_id,
-            None,
-            model,
-            input_tokens,
-            output_tokens,
-            total_tokens,
-            Some(cost_usd),
-            None,
-            "success",
+            sera_db::metering::RecordUsageInput {
+                agent_id,
+                circle_id: None,
+                model,
+                prompt_tokens: input_tokens,
+                completion_tokens: output_tokens,
+                total_tokens,
+                cost_usd: Some(cost_usd),
+                latency_ms: None,
+                status: "success",
+            },
         )
         .await
         .map_err(MeteringError::Db)

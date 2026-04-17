@@ -38,6 +38,18 @@ pub struct SecretFullRow {
     pub updated_at: Option<time::OffsetDateTime>,
 }
 
+/// Input for creating or updating a secret.
+pub struct UpsertSecretInput<'a> {
+    pub name: &'a str,
+    pub encrypted_value: &'a [u8],
+    pub iv: &'a [u8],
+    pub description: Option<&'a str>,
+    pub tags: &'a [String],
+    pub allowed_agents: &'a [String],
+    pub exposure: &'a str,
+    pub created_by: Option<&'a str>,
+}
+
 pub struct SecretsRepository;
 
 impl SecretsRepository {
@@ -110,18 +122,7 @@ impl SecretsRepository {
     }
 
     /// Create or update a secret.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn upsert(
-        pool: &PgPool,
-        name: &str,
-        encrypted_value: &[u8],
-        iv: &[u8],
-        description: Option<&str>,
-        tags: &[String],
-        allowed_agents: &[String],
-        exposure: &str,
-        created_by: Option<&str>,
-    ) -> Result<(), DbError> {
+    pub async fn upsert(pool: &PgPool, input: UpsertSecretInput<'_>) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO secrets (name, encrypted_value, iv, description, tags, allowed_agents, exposure, created_by, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
@@ -134,14 +135,14 @@ impl SecretsRepository {
                exposure = $7,
                updated_at = NOW()",
         )
-        .bind(name)
-        .bind(encrypted_value)
-        .bind(iv)
-        .bind(description)
-        .bind(tags)
-        .bind(allowed_agents)
-        .bind(exposure)
-        .bind(created_by)
+        .bind(input.name)
+        .bind(input.encrypted_value)
+        .bind(input.iv)
+        .bind(input.description)
+        .bind(input.tags)
+        .bind(input.allowed_agents)
+        .bind(input.exposure)
+        .bind(input.created_by)
         .execute(pool)
         .await?;
         Ok(())

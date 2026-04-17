@@ -197,39 +197,39 @@ where
     Ok(opt.map(std::time::Duration::from_secs))
 }
 
+/// Input for constructing a new [`WorkflowTask`].
+pub struct WorkflowTaskInput {
+    pub title: String,
+    pub description: String,
+    pub acceptance_criteria: Vec<String>,
+    pub status: WorkflowTaskStatus,
+    pub priority: u8,
+    pub task_type: WorkflowTaskType,
+    pub source_formula: Option<String>,
+    pub source_location: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 impl WorkflowTask {
     /// Construct a new task, computing its content-addressed [`WorkflowTaskId`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        title: impl Into<String>,
-        description: impl Into<String>,
-        acceptance_criteria: Vec<String>,
-        status: WorkflowTaskStatus,
-        priority: u8,
-        task_type: WorkflowTaskType,
-        source_formula: Option<String>,
-        source_location: Option<String>,
-        created_at: DateTime<Utc>,
-    ) -> Self {
-        let title = title.into();
-        let description = description.into();
-        let first_ac = acceptance_criteria.first().map(String::as_str).unwrap_or("");
+    pub fn new(input: WorkflowTaskInput) -> Self {
+        let first_ac = input.acceptance_criteria.first().map(String::as_str).unwrap_or("");
         let id = WorkflowTaskId::from_content(
-            &title,
-            &description,
+            &input.title,
+            &input.description,
             first_ac,
-            source_formula.as_deref().unwrap_or(""),
-            source_location.as_deref().unwrap_or(""),
-            created_at,
+            input.source_formula.as_deref().unwrap_or(""),
+            input.source_location.as_deref().unwrap_or(""),
+            input.created_at,
         );
         Self {
             id,
-            title,
-            description,
-            acceptance_criteria,
-            status,
-            priority,
-            task_type,
+            title: input.title,
+            description: input.description,
+            acceptance_criteria: input.acceptance_criteria,
+            status: input.status,
+            priority: input.priority,
+            task_type: input.task_type,
             assignee: None,
             due_at: None,
             defer_until: None,
@@ -238,9 +238,9 @@ impl WorkflowTask {
             await_id: None,
             timeout: None,
             ephemeral: false,
-            source_formula,
-            source_location,
-            created_at,
+            source_formula: input.source_formula,
+            source_location: input.source_location,
+            created_at: input.created_at,
             meta_scope: None,
             change_artifact_id: None,
             dependencies: Vec::new(),

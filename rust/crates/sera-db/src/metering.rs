@@ -32,35 +32,36 @@ pub struct AgentRankingRow {
     pub total_tokens: i64,
 }
 
+/// Input for recording a token usage event.
+pub struct RecordUsageInput<'a> {
+    pub agent_id: &'a str,
+    pub circle_id: Option<&'a str>,
+    pub model: &'a str,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub cost_usd: Option<f64>,
+    pub latency_ms: Option<i64>,
+    pub status: &'a str,
+}
+
 /// Metering repository for database operations.
 pub struct MeteringRepository;
 
 impl MeteringRepository {
     /// Record a token usage event.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn record_usage(
-        pool: &PgPool,
-        agent_id: &str,
-        circle_id: Option<&str>,
-        model: &str,
-        prompt_tokens: i64,
-        completion_tokens: i64,
-        total_tokens: i64,
-        cost_usd: Option<f64>,
-        latency_ms: Option<i64>,
-        status: &str,
-    ) -> Result<(), DbError> {
+    pub async fn record_usage(pool: &PgPool, input: RecordUsageInput<'_>) -> Result<(), DbError> {
         // Insert into token_usage
         sqlx::query(
             "INSERT INTO token_usage (agent_id, circle_id, model, prompt_tokens, completion_tokens, total_tokens, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, NOW())"
         )
-        .bind(agent_id)
-        .bind(circle_id)
-        .bind(model)
-        .bind(prompt_tokens)
-        .bind(completion_tokens)
-        .bind(total_tokens)
+        .bind(input.agent_id)
+        .bind(input.circle_id)
+        .bind(input.model)
+        .bind(input.prompt_tokens)
+        .bind(input.completion_tokens)
+        .bind(input.total_tokens)
         .execute(pool)
         .await?;
 
@@ -69,14 +70,14 @@ impl MeteringRepository {
             "INSERT INTO usage_events (agent_id, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, status, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())"
         )
-        .bind(agent_id)
-        .bind(model)
-        .bind(prompt_tokens)
-        .bind(completion_tokens)
-        .bind(total_tokens)
-        .bind(cost_usd)
-        .bind(latency_ms)
-        .bind(status)
+        .bind(input.agent_id)
+        .bind(input.model)
+        .bind(input.prompt_tokens)
+        .bind(input.completion_tokens)
+        .bind(input.total_tokens)
+        .bind(input.cost_usd)
+        .bind(input.latency_ms)
+        .bind(input.status)
         .execute(pool)
         .await?;
 

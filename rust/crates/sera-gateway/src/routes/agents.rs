@@ -149,14 +149,16 @@ pub async fn create_instance(
 
     AgentRepository::create_instance(
         state.db.inner(),
-        &id,
-        &body.name,
-        &body.template_ref,
-        &body.template_ref,
-        &workspace_path,
-        body.display_name.as_deref(),
-        body.circle.as_deref(),
-        body.lifecycle_mode.as_deref(),
+        sera_db::agents::CreateInstanceInput {
+            id: &id,
+            name: &body.name,
+            template_name: &body.template_ref,
+            template_ref: &body.template_ref,
+            workspace_path: &workspace_path,
+            display_name: body.display_name.as_deref(),
+            circle: body.circle.as_deref(),
+            lifecycle_mode: body.lifecycle_mode.as_deref(),
+        },
     )
     .await?;
 

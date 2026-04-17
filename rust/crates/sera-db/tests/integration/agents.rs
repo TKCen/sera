@@ -21,14 +21,16 @@ async fn insert_template(db: &TestDb, name: &str) {
 async fn insert_instance(db: &TestDb, id: &str, name: &str, template: &str) {
     AgentRepository::create_instance(
         &db.pool,
-        id,
-        name,
-        template,
-        template,
-        "/workspace",
-        None,
-        None,
-        None,
+        sera_db::agents::CreateInstanceInput {
+            id,
+            name,
+            template_name: template,
+            template_ref: template,
+            workspace_path: "/workspace",
+            display_name: None,
+            circle: None,
+            lifecycle_mode: None,
+        },
     )
     .await
     .expect("create_instance failed");

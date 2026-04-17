@@ -123,14 +123,16 @@ impl Orchestrator {
 
         AgentRepository::create_instance(
             &self.pool,
-            &instance_id,
-            name,
-            template_name,
-            template_ref,
-            &workspace_path,
-            display_name,
-            circle,
-            lifecycle_mode,
+            sera_db::agents::CreateInstanceInput {
+                id: &instance_id,
+                name,
+                template_name,
+                template_ref,
+                workspace_path: &workspace_path,
+                display_name,
+                circle,
+                lifecycle_mode,
+            },
         )
         .await
         .map_err(OrchestratorError::Db)?;

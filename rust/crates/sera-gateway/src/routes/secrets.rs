@@ -111,14 +111,16 @@ pub async fn create_secret(
 
     SecretsRepository::upsert(
         state.db.inner(),
-        &body.key,
-        &encrypted_value,
-        &iv,
-        body.description.as_deref(),
-        &tags,
-        &allowed_agents,
-        exposure,
-        None, // created_by — would come from auth context
+        sera_db::secrets::UpsertSecretInput {
+            name: &body.key,
+            encrypted_value: &encrypted_value,
+            iv: &iv,
+            description: body.description.as_deref(),
+            tags: &tags,
+            allowed_agents: &allowed_agents,
+            exposure,
+            created_by: None, // would come from auth context
+        },
     )
     .await?;
 

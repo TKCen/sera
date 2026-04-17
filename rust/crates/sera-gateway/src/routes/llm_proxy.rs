@@ -213,7 +213,18 @@ pub async fn chat_completions(
         let model = model_name.to_string();
         tokio::spawn(async move {
             let _ = MeteringRepository::record_usage(
-                &pool, &agent, None, &model, prompt, completion, total, None, None, "success",
+                &pool,
+                sera_db::metering::RecordUsageInput {
+                    agent_id: &agent,
+                    circle_id: None,
+                    model: &model,
+                    prompt_tokens: prompt,
+                    completion_tokens: completion,
+                    total_tokens: total,
+                    cost_usd: None,
+                    latency_ms: None,
+                    status: "success",
+                },
             )
             .await;
         });

@@ -314,6 +314,25 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Add circle activity section (peer agent summaries).
+    ///
+    /// Formats entries as `- [agent-id @ timestamp] summary` bullets under
+    /// a `## Circle Activity` heading. No-ops when `entries` is empty.
+    pub fn add_circle_activity(mut self, entries: &[sera_types::circle_activity::CircleActivityEntry]) -> Self {
+        if entries.is_empty() {
+            return self;
+        }
+        let bullets: Vec<String> = entries.iter().map(|e| e.format_for_prompt()).collect();
+        let content = format!("## Circle Activity\n{}", bullets.join("\n"));
+        self.sections.push(PromptSection {
+            id: "circle_activity".to_string(),
+            priority: 65,
+            content,
+            required: false,
+        });
+        self
+    }
+
     /// Add delegation/subagent context section.
     pub fn add_delegation_context(mut self, context: &str) -> Self {
         if !context.is_empty() {
@@ -460,5 +479,59 @@ mod tests {
         assert_eq!(estimate_tokens("hello"), 2); // 5 chars / 4
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("a"), 1);
+    }
+
+    #[test]
+    fn test_circle_activity_section_included_when_non_empty() {
+        use sera_types::circle_activity::CircleActivityEntry;
+
+        let entries = vec![
+            CircleActivityEntry::with_timestamp("peer-a", "circle-1", "ran grep", 100),
+            CircleActivityEntry::with_timestamp("peer-b", "circle-1", "wrote file", 101),
+        ];
+
+        let prompt = SystemPromptBuilder::new(10_000)
+            .add_identity("worker", "")
+            .add_circle_activity(&entries)
+            .build();
+
+        assert!(prompt.contains("## Circle Activity"), "section heading must be present");
+        assert!(prompt.contains("peer-a"), "peer-a must appear");
+        assert!(prompt.contains("peer-b"), "peer-b must appear");
+        assert!(prompt.contains("ran grep"));
+        assert!(prompt.contains("wrote file"));
+    }
+
+    #[test]
+    fn test_circle_activity_section_omitted_when_empty() {
+        use sera_types::circle_activity::CircleActivityEntry;
+        let entries: Vec<CircleActivityEntry> = vec![];
+
+        let prompt = SystemPromptBuilder::new(10_000)
+            .add_identity("worker", "")
+            .add_circle_activity(&entries)
+            .build();
+
+        assert!(!prompt.contains("## Circle Activity"), "section must not appear when entries are empty");
+    }
+
+    #[test]
+    fn test_circle_activity_omitted_when_disabled() {
+        // Simulate the gate: only call add_circle_activity when enabled.
+        use sera_types::circle_activity::CircleActivityEntry;
+
+        let entries = vec![
+            CircleActivityEntry::with_timestamp("peer-x", "circle-1", "some action", 1),
+        ];
+        let circle_activity_enabled = false;
+
+        let mut builder = SystemPromptBuilder::new(10_000).add_identity("worker", "");
+        if circle_activity_enabled {
+            builder = builder.add_circle_activity(&entries);
+        }
+        let prompt = builder.build();
+
+        assert!(!prompt.contains("## Circle Activity"));
+        assert!(!prompt.contains("peer-x"));
     }
 }

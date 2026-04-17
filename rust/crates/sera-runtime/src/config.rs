@@ -15,6 +15,9 @@ pub struct RuntimeConfig {
     pub context_window: usize,
     pub compaction_strategy: String,
     pub max_tokens: u32,
+    /// When `true`, inject a `## Circle Activity` section into the system prompt.
+    /// Defaults to `false` so existing prompts are unchanged.
+    pub circle_activity_enabled: bool,
 }
 
 impl RuntimeConfig {
@@ -47,6 +50,9 @@ impl RuntimeConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(crate::llm_client::DEFAULT_MAX_TOKENS),
+            circle_activity_enabled: std::env::var("CIRCLE_ACTIVITY_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
         }
     }
 }

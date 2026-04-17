@@ -24,6 +24,11 @@ pub use gating::{
     SkillBoundGate, ToolGatingContext,
 };
 
+#[cfg(feature = "rmcp-client")]
+pub mod rmcp_bridge;
+#[cfg(feature = "rmcp-client")]
+pub use rmcp_bridge::RmcpClientBridge;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -36,6 +41,10 @@ pub enum McpError {
     ToolNotFound { name: String },
     #[error("server not found: {name}")]
     ServerNotFound { name: String },
+    #[error("unknown server: {0}")]
+    UnknownServer(String),
+    #[error("not connected")]
+    NotConnected,
     #[error("authorization denied for tool {tool}")]
     Unauthorized { tool: String },
     #[error("serialization error: {reason}")]
@@ -44,12 +53,27 @@ pub enum McpError {
     ConnectionFailed { reason: String },
 }
 
+impl McpError {
+    /// Construct a [`McpError::Transport`] from any `impl Into<String>`.
+    ///
+    /// Prefer this over the struct-literal form so the `rmcp_bridge` module
+    /// (and any future transport backend) doesn't have to know the internal
+    /// field name.
+    pub fn transport(reason: impl Into<String>) -> Self {
+        Self::Transport {
+            reason: reason.into(),
+        }
+    }
+}
+
 impl From<McpError> for SeraError {
     fn from(err: McpError) -> Self {
         let code = match &err {
             McpError::Transport { .. } => SeraErrorCode::Unavailable,
             McpError::ToolNotFound { .. } => SeraErrorCode::NotFound,
             McpError::ServerNotFound { .. } => SeraErrorCode::NotFound,
+            McpError::UnknownServer(_) => SeraErrorCode::NotFound,
+            McpError::NotConnected => SeraErrorCode::Unavailable,
             McpError::Unauthorized { .. } => SeraErrorCode::Unauthorized,
             McpError::Serialization { .. } => SeraErrorCode::Serialization,
             McpError::ConnectionFailed { .. } => SeraErrorCode::Unavailable,
@@ -213,6 +237,32 @@ pub trait McpClientBridge: Send + Sync + 'static {
 }
 
 // ---------------------------------------------------------------------------
+// Namespacing helpers
+// ---------------------------------------------------------------------------
+
+/// Join a server name and a tool name into the SERA-canonical namespaced form
+/// `"{server}.{tool}"`.
+///
+/// The result is what goes on [`McpToolDescriptor::name`] for every tool
+/// returned from a connected MCP server, and what [`AllowedServerGate`]
+/// matches against.
+pub fn namespace(server: &str, tool: &str) -> String {
+    format!("{server}.{tool}")
+}
+
+/// Split a fully-qualified tool name into its `(server, tool)` parts.
+///
+/// Returns `(Some(server), tool)` when a `"."` separator is present (first
+/// dot wins, matching [`AllowedServerGate`] semantics), or `(None, whole)`
+/// for un-namespaced / built-in tools.
+pub fn split_namespace(tool: &str) -> (Option<&str>, &str) {
+    match tool.split_once('.') {
+        Some((server, rest)) => (Some(server), rest),
+        None => (None, tool),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -270,5 +320,59 @@ mod tests {
         let s = McpServerSettings::default();
         assert!(s.enabled);
         assert_eq!(s.port, 50052);
+    }
+
+    #[test]
+    fn namespace_joins_with_dot() {
+        assert_eq!(namespace("github", "create_issue"), "github.create_issue");
+        assert_eq!(namespace("", "tool"), ".tool");
+    }
+
+    #[test]
+    fn split_namespace_first_dot_wins() {
+        assert_eq!(
+            split_namespace("github.create_issue"),
+            (Some("github"), "create_issue"),
+        );
+        // First dot is the separator — nested dots remain in the tool name.
+        assert_eq!(
+            split_namespace("ns.tool.with.dots"),
+            (Some("ns"), "tool.with.dots"),
+        );
+    }
+
+    #[test]
+    fn split_namespace_handles_no_dot() {
+        assert_eq!(split_namespace("bare_tool"), (None, "bare_tool"));
+        assert_eq!(split_namespace(""), (None, ""));
+    }
+
+    #[test]
+    fn namespace_and_split_roundtrip() {
+        let full = namespace("github", "create_issue");
+        let (srv, tool) = split_namespace(&full);
+        assert_eq!(srv, Some("github"));
+        assert_eq!(tool, "create_issue");
+    }
+
+    #[test]
+    fn not_connected_error_maps_to_unavailable() {
+        let sera: SeraError = McpError::NotConnected.into();
+        assert_eq!(sera.code, SeraErrorCode::Unavailable);
+    }
+
+    #[test]
+    fn unknown_server_maps_to_not_found() {
+        let sera: SeraError = McpError::UnknownServer("gh".into()).into();
+        assert_eq!(sera.code, SeraErrorCode::NotFound);
+    }
+
+    #[test]
+    fn transport_helper_builds_variant() {
+        let err = McpError::transport("boom");
+        match err {
+            McpError::Transport { reason } => assert_eq!(reason, "boom"),
+            _ => panic!("expected Transport"),
+        }
     }
 }

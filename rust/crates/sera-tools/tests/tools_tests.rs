@@ -228,6 +228,59 @@ fn tool_registry_register_and_get() {
 }
 
 // ---------------------------------------------------------------------------
+// 15a. Stub providers (wasm/microvm/external/openshell) signal NotImplemented
+// ---------------------------------------------------------------------------
+use sera_tools::sandbox::external::ExternalSandboxProvider;
+use sera_tools::sandbox::microvm::MicroVmSandboxProvider;
+use sera_tools::sandbox::openshell::OpenShellSandboxProvider;
+use sera_tools::sandbox::wasm::WasmSandboxProvider;
+use sera_tools::sandbox::{SandboxConfig, SandboxError};
+
+#[tokio::test]
+async fn wasm_provider_signals_not_implemented() {
+    let provider = WasmSandboxProvider;
+    let err = provider
+        .create(&SandboxConfig::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SandboxError::NotImplemented));
+    assert_eq!(provider.name(), "wasm");
+}
+
+#[tokio::test]
+async fn microvm_provider_signals_not_implemented() {
+    let provider = MicroVmSandboxProvider;
+    let err = provider
+        .create(&SandboxConfig::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SandboxError::NotImplemented));
+    assert_eq!(provider.name(), "microvm");
+}
+
+#[tokio::test]
+async fn external_provider_signals_not_implemented() {
+    let provider = ExternalSandboxProvider;
+    let err = provider
+        .create(&SandboxConfig::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SandboxError::NotImplemented));
+    assert_eq!(provider.name(), "external");
+}
+
+#[tokio::test]
+async fn openshell_provider_signals_not_implemented() {
+    let provider = OpenShellSandboxProvider;
+    let err = provider
+        .create(&SandboxConfig::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SandboxError::NotImplemented));
+    assert_eq!(provider.name(), "openshell");
+}
+
+// ---------------------------------------------------------------------------
 // 15. ExecResult captures output fields correctly
 // ---------------------------------------------------------------------------
 #[test]

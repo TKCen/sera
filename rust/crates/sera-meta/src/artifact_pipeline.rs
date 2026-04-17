@@ -626,4 +626,237 @@ mod tests {
         let artifact = pipeline.get(&id).await.unwrap();
         assert_eq!(artifact.status, ChangeArtifactStatus::RolledBack);
     }
+
+    // ---- New edge-case tests ---------------------------------------------
+
+    /// evaluate on an unknown id returns NotFound.
+    #[tokio::test]
+    async fn evaluate_unknown_id_returns_not_found() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let phantom = ChangeArtifactId { hash: [0u8; 32] };
+        let err = pipeline
+            .evaluate(&phantom, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PipelineError::NotFound(_)));
+    }
+
+    /// rollback on an artifact that has not yet been applied returns WrongState.
+    #[tokio::test]
+    async fn rollback_before_apply_returns_wrong_state() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let id = pipeline
+            .propose(make_tier2_artifact("admin-1"))
+            .await
+            .unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+
+        let err = pipeline.rollback(&id).await.unwrap_err();
+        assert!(matches!(err, PipelineError::WrongState { .. }));
+    }
+
+    /// evaluate called twice on the same artifact returns WrongState on the
+    /// second call (artifact is no longer Proposed).
+    #[tokio::test]
+    async fn evaluate_twice_returns_wrong_state() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let id = pipeline
+            .propose(make_tier2_artifact("admin-1"))
+            .await
+            .unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+        let err = pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PipelineError::WrongState { .. }));
+    }
+
+    /// approve on a Rejected artifact returns WrongState (not Approved).
+    #[tokio::test]
+    async fn approve_on_rejected_artifact_returns_wrong_state() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let id = pipeline
+            .propose(make_tier2_artifact("admin-1"))
+            .await
+            .unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Failed("bad".to_string()))
+            .await
+            .unwrap();
+
+        let err = pipeline.approve(&id, "approver-1").await.unwrap_err();
+        assert!(matches!(err, PipelineError::WrongState { .. }));
+    }
+
+    /// Two distinct approvers can sign the same artifact and the count is correct.
+    #[tokio::test]
+    async fn two_distinct_approvers_accepted() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let id = pipeline
+            .propose(make_tier2_artifact("admin-1"))
+            .await
+            .unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+
+        let count1 = pipeline.approve(&id, "approver-a").await.unwrap();
+        let count2 = pipeline.approve(&id, "approver-b").await.unwrap();
+        assert_eq!(count1, 1);
+        assert_eq!(count2, 2);
+
+        let signers = pipeline.signers(&id).await;
+        assert!(signers.contains("approver-a"));
+        assert!(signers.contains("approver-b"));
+    }
+
+    /// Tier-3 meta-change artifact (ConstitutionalRuleSet) requires the operator
+    /// offline key; apply fails without it and succeeds after supply_operator_key.
+    #[tokio::test]
+    async fn tier3_meta_change_requires_operator_key() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let artifact = ChangeArtifact::new(
+            "amend constitutional rule".to_string(),
+            ChangeArtifactScope::CodeEvolution,
+            BlastRadius::ConstitutionalRuleSet,
+            make_proposer(
+                "admin-1",
+                vec![BlastRadius::RuntimeCrate, BlastRadius::GatewayCore],
+            ),
+            serde_json::json!({ "rule": "no-self-replication" }),
+        );
+
+        let id = pipeline.propose(artifact).await.unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+
+        // Need 3 approvers for ConstitutionalRuleSet.
+        pipeline.approve(&id, "approver-a").await.unwrap();
+        pipeline.approve(&id, "approver-b").await.unwrap();
+        pipeline.approve(&id, "approver-c").await.unwrap();
+
+        // Without operator key → OperatorKeyMissing.
+        let err = pipeline.apply(&id).await.unwrap_err();
+        assert!(matches!(err, PipelineError::OperatorKeyMissing));
+
+        // After supplying the key → apply succeeds.
+        pipeline.supply_operator_key(&id).await.unwrap();
+        let applied = pipeline.apply(&id).await.unwrap();
+        assert_eq!(applied.status, ChangeArtifactStatus::Applied);
+    }
+
+    /// Concurrent proposals for the same logical target (same description but
+    /// distinct `created_at` and hence distinct content-addressed IDs) are
+    /// tracked independently in the pipeline.
+    #[tokio::test]
+    async fn concurrent_proposals_for_same_target_tracked_independently() {
+        let pipeline = ArtifactPipeline::with_defaults();
+
+        // Yield between creations so Utc::now() produces distinct timestamps
+        // and the SHA-256 IDs differ.
+        let a1 = make_artifact("shared-target");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let a2 = make_artifact("shared-target");
+
+        let id1 = pipeline.propose(a1).await.unwrap();
+        let id2 = pipeline.propose(a2).await.unwrap();
+
+        // IDs must differ.
+        assert_ne!(id1.hash, id2.hash);
+
+        // Each lives independently in the pipeline.
+        assert!(pipeline.get(&id1).await.is_some());
+        assert!(pipeline.get(&id2).await.is_some());
+
+        // Evaluating one does not change the other.
+        pipeline
+            .evaluate(&id1, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+        let s2 = pipeline.get(&id2).await.unwrap();
+        assert_eq!(s2.status, ChangeArtifactStatus::Proposed);
+    }
+
+    /// Tier-1 dry-run closure is skipped entirely (requires_shadow_replay is
+    /// false); the outcome is always Passed regardless of what the closure
+    /// would return.
+    #[tokio::test]
+    async fn tier1_dry_run_closure_skipped() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let id = pipeline.propose(make_artifact("skipped-dry-run")).await.unwrap();
+
+        // Even though the closure would return Failed, Tier-1 never runs it.
+        let outcome = pipeline
+            .evaluate(&id, |_| DryRunOutcome::Failed("would fail".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(outcome, DryRunOutcome::Passed);
+
+        let artifact = pipeline.get(&id).await.unwrap();
+        assert_eq!(artifact.status, ChangeArtifactStatus::Approved);
+    }
+
+    /// signers returns an empty set for an artifact with no approvals yet.
+    #[tokio::test]
+    async fn signers_empty_before_any_approval() {
+        let pipeline = ArtifactPipeline::with_defaults();
+        let id = pipeline
+            .propose(make_tier2_artifact("admin-1"))
+            .await
+            .unwrap();
+        assert!(pipeline.signers(&id).await.is_empty());
+    }
+
+    /// Serde round-trip for ChangeArtifactStatus via JSON.
+    #[test]
+    fn change_artifact_status_serde_roundtrip() {
+        use crate::ChangeArtifactStatus;
+        let statuses = [
+            ChangeArtifactStatus::Proposed,
+            ChangeArtifactStatus::Evaluating,
+            ChangeArtifactStatus::Approved,
+            ChangeArtifactStatus::Rejected,
+            ChangeArtifactStatus::Applied,
+            ChangeArtifactStatus::RolledBack,
+        ];
+        for status in statuses {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: ChangeArtifactStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                format!("{status:?}"),
+                format!("{back:?}"),
+                "round-trip failed for {status:?}"
+            );
+        }
+    }
+
+    /// Serde round-trip for ChangeArtifactScope via JSON.
+    #[test]
+    fn change_artifact_scope_serde_roundtrip() {
+        use crate::ChangeArtifactScope;
+        let scopes = [
+            ChangeArtifactScope::AgentImprovement,
+            ChangeArtifactScope::ConfigEvolution,
+            ChangeArtifactScope::CodeEvolution,
+        ];
+        for scope in scopes {
+            let json = serde_json::to_string(&scope).unwrap();
+            let back: ChangeArtifactScope = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                format!("{scope:?}"),
+                format!("{back:?}"),
+                "round-trip failed for {scope:?}"
+            );
+        }
+    }
 }

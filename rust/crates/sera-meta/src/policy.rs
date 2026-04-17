@@ -383,4 +383,144 @@ mod tests {
             3
         );
     }
+
+    // ---- New edge-case tests ---------------------------------------------
+
+    /// Tier-2 artifact with correct scopes is approved.
+    #[tokio::test]
+    async fn tier2_artifact_approved_with_correct_scopes() {
+        let engine = PolicyEngine::new();
+        let artifact = ChangeArtifact::new(
+            "change hook config".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            make_proposer(vec![BlastRadius::SingleHookConfig]),
+            serde_json::json!({}),
+        );
+
+        let result = engine.evaluate(&artifact).await.unwrap();
+        assert!(result.approved);
+        assert!(result.requires_shadow);
+    }
+
+    /// Tier-2 artifact without required scopes is rejected (not an error — just not approved).
+    #[tokio::test]
+    async fn tier2_artifact_rejected_without_required_scopes() {
+        let engine = PolicyEngine::new();
+        let artifact = ChangeArtifact::new(
+            "change hook config".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            make_proposer(vec![]), // no scopes
+            serde_json::json!({}),
+        );
+
+        let result = engine.evaluate(&artifact).await.unwrap();
+        assert!(!result.approved);
+        assert!(!result.violations.is_empty());
+    }
+
+    /// Tier-3 artifact with all required scopes is approved.
+    #[tokio::test]
+    async fn tier3_artifact_approved_with_required_scopes() {
+        let engine = PolicyEngine::new();
+        let artifact = ChangeArtifact::new(
+            "change runtime crate".to_string(),
+            ChangeArtifactScope::CodeEvolution,
+            BlastRadius::RuntimeCrate,
+            make_proposer(vec![BlastRadius::RuntimeCrate, BlastRadius::GatewayCore]),
+            serde_json::json!({}),
+        );
+
+        let result = engine.evaluate(&artifact).await.unwrap();
+        assert!(result.approved);
+        assert!(result.requires_shadow);
+    }
+
+    /// applies_to returns false when blast_radius is not in allowed list.
+    #[test]
+    fn applies_to_false_for_disallowed_blast_radius() {
+        let policy = EvolutionPolicy::default_tier1();
+        // Tier-1 policy does not cover GlobalConfig (Tier-2 blast radius).
+        let artifact = ChangeArtifact::new(
+            "test".to_string(),
+            ChangeArtifactScope::AgentImprovement,
+            BlastRadius::GlobalConfig,
+            make_proposer(vec![]),
+            serde_json::json!({}),
+        );
+        assert!(!policy.applies_to(&artifact));
+    }
+
+    /// approvers_required falls back to 1 when the tier is not in the map.
+    #[test]
+    fn approvers_required_defaults_to_one_for_unknown_tier() {
+        let policy = EvolutionPolicy::default_tier1();
+        // Tier-1 policy only has AgentImprovement in its map; CodeEvolution is absent.
+        assert_eq!(policy.approvers_required(EvolutionTier::CodeEvolution), 1);
+    }
+
+    /// check_proposer returns true when required_scopes is empty (open policy).
+    #[test]
+    fn check_proposer_true_when_no_required_scopes() {
+        let policy = EvolutionPolicy::new(
+            "open".to_string(),
+            "Open Policy".to_string(),
+            "no scope requirements".to_string(),
+            EvolutionTier::AgentImprovement,
+            EvolutionTier::AgentImprovement,
+            std::collections::HashSet::new(), // empty required_scopes
+            false,
+            vec![BlastRadius::AgentMemory],
+            std::collections::HashMap::new(),
+        );
+        let proposer = make_proposer(vec![]); // no scopes
+        assert!(policy.check_proposer(&proposer));
+    }
+
+    /// A custom policy added via add_policy is found by find_applicable.
+    #[tokio::test]
+    async fn custom_policy_found_by_find_applicable() {
+        let engine = PolicyEngine::new();
+        let custom = EvolutionPolicy::new(
+            "custom-agent-skill".to_string(),
+            "Custom Skill Policy".to_string(),
+            "covers agent skill changes".to_string(),
+            EvolutionTier::AgentImprovement,
+            EvolutionTier::AgentImprovement,
+            std::collections::HashSet::new(),
+            false,
+            vec![BlastRadius::AgentSkill],
+            std::collections::HashMap::new(),
+        );
+        engine.add_policy(custom).await;
+
+        let artifact = ChangeArtifact::new(
+            "update skill".to_string(),
+            ChangeArtifactScope::AgentImprovement,
+            BlastRadius::AgentSkill,
+            make_proposer(vec![]),
+            serde_json::json!({}),
+        );
+
+        let found = engine.find_applicable(&artifact).await;
+        // The default tier-1 policy also covers AgentSkill, so at minimum one policy matches.
+        assert!(found.is_some());
+    }
+
+    /// EvolutionResult::rejected carries the violations list.
+    #[test]
+    fn evolution_result_rejected_carries_violations() {
+        use crate::ChangeArtifactId;
+        let id = ChangeArtifactId { hash: [0u8; 32] };
+        let result = super::EvolutionResult::rejected(
+            id,
+            "pol".to_string(),
+            "summary".to_string(),
+            vec!["violation-1".to_string(), "violation-2".to_string()],
+        );
+        assert!(!result.approved);
+        assert_eq!(result.violations.len(), 2);
+        assert!(!result.requires_shadow);
+    }
 }

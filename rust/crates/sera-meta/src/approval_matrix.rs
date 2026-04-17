@@ -284,4 +284,108 @@ mod tests {
         assert!(row.requires_canary);
         assert!(!row.requires_operator_offline_key);
     }
+
+    // ---- New edge-case tests ---------------------------------------------
+
+    /// All four Tier-1 blast radii are tier-1 (zero approvers, no shadow).
+    #[test]
+    fn all_tier1_radii_have_no_approvers() {
+        let tier1 = [
+            BlastRadius::AgentMemory,
+            BlastRadius::AgentPersonaMutable,
+            BlastRadius::AgentSkill,
+            BlastRadius::AgentExperiencePool,
+        ];
+        for br in tier1 {
+            let row = ApprovalRequirements::for_blast_radius(br);
+            assert!(row.is_tier1(), "{br:?} should be Tier 1");
+            assert!(!row.requires_shadow_replay, "{br:?} should not need shadow");
+            assert!(!row.requires_canary, "{br:?} should not need canary");
+            assert!(!row.requires_operator_offline_key, "{br:?} should not need operator key");
+        }
+    }
+
+    /// All four Tier-3 meta-change scopes require the operator offline key.
+    #[test]
+    fn all_tier3_meta_scopes_require_operator_key() {
+        let meta_scopes = [
+            BlastRadius::ConstitutionalRuleSet,
+            BlastRadius::KillSwitchProtocol,
+            BlastRadius::AuditLogBackend,
+            BlastRadius::SelfEvolutionPipeline,
+        ];
+        for br in meta_scopes {
+            let row = ApprovalRequirements::for_blast_radius(br);
+            assert!(row.requires_operator_offline_key, "{br:?} must need operator key");
+            assert_eq!(row.approvers_required, 3, "{br:?} must need 3 approvers");
+            assert!(row.requires_shadow_replay, "{br:?} must need shadow replay");
+        }
+    }
+
+    /// Tier-2 single-approver scopes all require exactly 1 approver with shadow.
+    #[test]
+    fn tier2_single_approver_scopes() {
+        let single = [
+            BlastRadius::SingleHookConfig,
+            BlastRadius::SingleToolPolicy,
+            BlastRadius::SingleConnector,
+            BlastRadius::SingleCircleConfig,
+            BlastRadius::AgentManifest,
+        ];
+        for br in single {
+            let row = ApprovalRequirements::for_blast_radius(br);
+            assert_eq!(row.approvers_required, 1, "{br:?} should need 1 approver");
+            assert!(row.requires_shadow_replay, "{br:?} should need shadow replay");
+            assert!(!row.requires_operator_offline_key, "{br:?} should not need operator key");
+        }
+    }
+
+    /// Tier-2 meta-quorum scopes require 2 approvers.
+    #[test]
+    fn tier2_meta_quorum_scopes_require_two_approvers() {
+        let quorum = [
+            BlastRadius::TierPolicy,
+            BlastRadius::HookChainStructure,
+            BlastRadius::ApprovalPolicy,
+            BlastRadius::SecretProvider,
+            BlastRadius::GlobalConfig,
+        ];
+        for br in quorum {
+            let row = ApprovalRequirements::for_blast_radius(br);
+            assert_eq!(row.approvers_required, 2, "{br:?} should need 2 approvers");
+            assert!(row.requires_shadow_replay, "{br:?} should need shadow replay");
+            assert!(!row.requires_canary, "{br:?} should not need canary");
+        }
+    }
+
+    /// Tier-3 code scopes (RuntimeCrate, GatewayCore, ProtocolSchema, DbMigration)
+    /// require canary but NOT the operator offline key.
+    #[test]
+    fn tier3_code_scopes_require_canary_not_operator_key() {
+        let code_scopes = [
+            BlastRadius::RuntimeCrate,
+            BlastRadius::GatewayCore,
+            BlastRadius::ProtocolSchema,
+            BlastRadius::DbMigration,
+        ];
+        for br in code_scopes {
+            let row = ApprovalRequirements::for_blast_radius(br);
+            assert!(row.requires_canary, "{br:?} must need canary");
+            assert!(!row.requires_operator_offline_key, "{br:?} must NOT need operator key");
+        }
+    }
+
+    /// review_window is zero for all Tier-1 radii.
+    #[test]
+    fn tier1_review_window_is_zero() {
+        let row = ApprovalRequirements::for_blast_radius(BlastRadius::AgentSkill);
+        assert_eq!(row.review_window, std::time::Duration::ZERO);
+    }
+
+    /// is_tier1 returns false for any non-zero-approver row.
+    #[test]
+    fn is_tier1_false_for_tier2_rows() {
+        let row = ApprovalRequirements::for_blast_radius(BlastRadius::SingleHookConfig);
+        assert!(!row.is_tier1());
+    }
 }

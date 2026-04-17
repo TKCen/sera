@@ -330,4 +330,112 @@ mod tests {
         assert!(removed.is_some());
         assert!(registry.get(&id).await.is_none());
     }
+
+    // ---- New edge-case tests ---------------------------------------------
+
+    /// cancel transitions the session to Cancelled and marks is_done true.
+    #[tokio::test]
+    async fn shadow_session_cancel() {
+        let session = ShadowSession::new(make_artifact());
+        let handle = ShadowSessionHandle::new(session);
+
+        handle.start().await;
+        handle.cancel().await;
+
+        let snap = handle.snapshot().await;
+        assert_eq!(snap.status, ShadowSessionStatus::Cancelled);
+        assert!(snap.completed_at.is_some());
+        assert!(snap.is_done());
+    }
+
+    /// Pending session is not done; running session is not done.
+    #[test]
+    fn is_done_only_for_terminal_states() {
+        let mut session = ShadowSession::new(make_artifact());
+        assert!(!session.is_done()); // Pending
+
+        session.start();
+        assert!(!session.is_done()); // Running
+
+        session.pass();
+        assert!(session.is_done()); // Passed
+    }
+
+    /// snapshot_state stores data that is visible in the session snapshot.
+    #[tokio::test]
+    async fn snapshot_state_stored_in_session() {
+        let session = ShadowSession::new(make_artifact());
+        let handle = ShadowSessionHandle::new(session);
+
+        handle
+            .snapshot_state("memory", serde_json::json!({ "key": "value" }))
+            .await;
+
+        let snap = handle.snapshot().await;
+        assert!(snap.state_snapshots.contains_key("memory"));
+        assert_eq!(snap.state_snapshots["memory"]["key"], "value");
+    }
+
+    /// Multiple checkpoints accumulate in order.
+    #[tokio::test]
+    async fn multiple_checkpoints_accumulate() {
+        let session = ShadowSession::new(make_artifact());
+        let handle = ShadowSessionHandle::new(session);
+
+        handle.start().await;
+        handle
+            .checkpoint("step-1", true, "first", serde_json::json!({}))
+            .await;
+        handle
+            .checkpoint("step-2", true, "second", serde_json::json!({}))
+            .await;
+        handle
+            .checkpoint("step-3", false, "third failed", serde_json::json!({}))
+            .await;
+
+        let snap = handle.snapshot().await;
+        assert_eq!(snap.checkpoints.len(), 3);
+        assert_eq!(snap.checkpoints[0].name, "step-1");
+        assert_eq!(snap.checkpoints[2].name, "step-3");
+        assert!(!snap.checkpoints[2].passed);
+    }
+
+    /// get on a missing id returns None.
+    #[tokio::test]
+    async fn registry_get_missing_returns_none() {
+        let registry = ShadowSessionRegistry::new();
+        assert!(registry.get("does-not-exist").await.is_none());
+    }
+
+    /// prune_completed removes finished sessions and returns correct count.
+    #[tokio::test]
+    async fn prune_completed_removes_done_sessions() {
+        let registry = ShadowSessionRegistry::new();
+
+        // Create and finish one session.
+        let h1 = registry.create(make_artifact()).await;
+        h1.start().await;
+        h1.pass().await;
+
+        // Create a session that stays pending.
+        registry.create(make_artifact()).await;
+
+        let pruned = registry.prune_completed().await;
+        assert_eq!(pruned, 1);
+
+        // One session remains (the pending one).
+        assert_eq!(registry.active_ids().await.len(), 1);
+    }
+
+    /// Two independent handles to the same session share the same underlying state.
+    #[tokio::test]
+    async fn handle_clone_shares_state() {
+        let session = ShadowSession::new(make_artifact());
+        let handle1 = ShadowSessionHandle::new(session);
+        let handle2 = handle1.clone();
+
+        handle1.start().await;
+        // Changes made via handle1 are visible through handle2.
+        assert_eq!(handle2.snapshot().await.status, ShadowSessionStatus::Running);
+    }
 }

@@ -279,4 +279,144 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.rule_id, "r1");
     }
+
+    // ---- New edge-case tests ---------------------------------------------
+
+    /// A rule that matches the scope/blast-radius pair is satisfied when the
+    /// proposer already holds all required scopes.
+    #[tokio::test]
+    async fn evaluate_passes_when_proposer_holds_required_scopes() {
+        let reg = ConstitutionalRegistry::new();
+        let mut rule = make_rule("r-pass", ConstitutionalEnforcementPoint::PreApproval);
+        rule.required_scopes.push(BlastRadius::AgentMemory);
+        reg.register(rule).await;
+
+        let result = reg
+            .evaluate(
+                ConstitutionalEnforcementPoint::PreApproval,
+                &ChangeArtifactScope::AgentImprovement,
+                &BlastRadius::AgentMemory,
+                &make_proposer(vec![BlastRadius::AgentMemory]),
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    /// Rules at a different enforcement point are NOT evaluated; a proposer
+    /// missing required scopes passes when evaluated at the other point.
+    #[tokio::test]
+    async fn evaluate_ignores_rules_at_different_enforcement_point() {
+        let reg = ConstitutionalRegistry::new();
+        let mut rule = make_rule("r-pre-apply", ConstitutionalEnforcementPoint::PreApplication);
+        rule.required_scopes.push(BlastRadius::AgentMemory);
+        reg.register(rule).await;
+
+        // Evaluating at PreProposal — the PreApply rule must be invisible here.
+        let result = reg
+            .evaluate(
+                ConstitutionalEnforcementPoint::PreProposal,
+                &ChangeArtifactScope::AgentImprovement,
+                &BlastRadius::AgentMemory,
+                &make_proposer(vec![]),
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    /// When multiple rules apply, the first violation causes evaluate to return Err
+    /// immediately (short-circuit behaviour).
+    #[tokio::test]
+    async fn evaluate_fails_on_first_violation_with_multiple_rules() {
+        let reg = ConstitutionalRegistry::new();
+
+        // Two rules both require scopes; the proposer satisfies neither.
+        let mut r1 = make_rule("r1", ConstitutionalEnforcementPoint::PreApproval);
+        r1.required_scopes.push(BlastRadius::AgentMemory);
+
+        let mut r2 = make_rule("r2", ConstitutionalEnforcementPoint::PreApproval);
+        r2.required_scopes.push(BlastRadius::AgentSkill);
+
+        reg.register(r1).await;
+        reg.register(r2).await;
+
+        let result = reg
+            .evaluate(
+                ConstitutionalEnforcementPoint::PreApproval,
+                &ChangeArtifactScope::AgentImprovement,
+                &BlastRadius::AgentMemory,
+                &make_proposer(vec![]),
+            )
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    /// is_applicable returns false when only the scope matches but the blast
+    /// radius does not.
+    #[test]
+    fn is_applicable_requires_both_scope_and_blast_radius() {
+        let rule = make_rule("r", ConstitutionalEnforcementPoint::PreProposal);
+        // rule.scopes = [AgentImprovement], rule.blast_radii = [AgentMemory]
+        assert!(rule.is_applicable(
+            &ChangeArtifactScope::AgentImprovement,
+            &BlastRadius::AgentMemory
+        ));
+        assert!(!rule.is_applicable(
+            &ChangeArtifactScope::AgentImprovement,
+            &BlastRadius::AgentSkill, // wrong blast radius
+        ));
+        assert!(!rule.is_applicable(
+            &ChangeArtifactScope::ConfigEvolution, // wrong scope
+            &BlastRadius::AgentMemory,
+        ));
+    }
+
+    /// ConstitutionalViolation Display impl includes the rule id and reason.
+    #[test]
+    fn violation_display_contains_rule_id_and_reason() {
+        let v = ConstitutionalViolation {
+            rule_id: "rule-42".to_string(),
+            rule_description: "desc".to_string(),
+            enforcement_point: ConstitutionalEnforcementPoint::PreProposal,
+            reason: "missing scope".to_string(),
+        };
+        let s = v.to_string();
+        assert!(s.contains("rule-42"), "display missing rule_id: {s}");
+        assert!(s.contains("missing scope"), "display missing reason: {s}");
+    }
+
+    /// all_rules returns every registered rule.
+    #[tokio::test]
+    async fn all_rules_returns_all_registered() {
+        let reg = ConstitutionalRegistry::new();
+        reg.register(make_rule("x1", ConstitutionalEnforcementPoint::PreProposal)).await;
+        reg.register(make_rule("x2", ConstitutionalEnforcementPoint::PreApproval)).await;
+        reg.register(make_rule("x3", ConstitutionalEnforcementPoint::PreApplication)).await;
+        assert_eq!(reg.all_rules().await.len(), 3);
+    }
+
+    /// Overwriting a rule with the same id replaces it in the registry.
+    #[tokio::test]
+    async fn register_overwrites_existing_rule() {
+        let reg = ConstitutionalRegistry::new();
+        let mut r = make_rule("dup", ConstitutionalEnforcementPoint::PreProposal);
+        reg.register(r.clone()).await;
+
+        // Change the description and re-register under the same id.
+        r.base.description = "updated".to_string();
+        reg.register(r).await;
+
+        assert_eq!(reg.all_rules().await.len(), 1);
+        let fetched = reg.get("dup").await.unwrap();
+        assert_eq!(fetched.base.description, "updated");
+    }
+
+    /// Unregistering a rule that does not exist returns None without error.
+    #[tokio::test]
+    async fn unregister_missing_rule_returns_none() {
+        let reg = ConstitutionalRegistry::new();
+        assert!(reg.unregister("ghost").await.is_none());
+    }
 }

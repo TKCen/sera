@@ -43,6 +43,7 @@ pub use sera_errors;
 
 // Retained modules
 pub mod config;
+pub mod memory_budget;
 pub mod context;
 pub mod default_runtime;
 pub mod error;

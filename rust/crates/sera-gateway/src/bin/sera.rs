@@ -43,6 +43,10 @@ use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 mod discord;
 use discord::{DiscordConnector, DiscordMessage};
 
+// ── Doctor module ────────────────────────────────────────────────────────────
+#[path = "../doctor.rs"]
+mod doctor;
+
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -74,6 +78,15 @@ enum Commands {
     Secrets {
         #[command(subcommand)]
         command: SecretCommands,
+    },
+    /// Run diagnostic checks on this SERA installation
+    Doctor {
+        /// Path to sera.yaml config file
+        #[arg(short, long, default_value = "sera.yaml")]
+        config: PathBuf,
+        /// Output results as JSON instead of a table
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1551,6 +1564,20 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Start { config, port } => run_start(config, port).await,
+
+        Commands::Doctor { config, json } => {
+            let checks = doctor::build_checks(&config);
+            let result = doctor::run_checks(&checks);
+            if json {
+                doctor::print_json(&result);
+            } else {
+                doctor::print_table(&result);
+            }
+            if result.any_fail {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
 }
 

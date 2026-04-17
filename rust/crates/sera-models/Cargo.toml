@@ -6,6 +6,7 @@ license.workspace = true
 description = "Model provider abstractions for SERA — separates LLM client from specific providers"
 
 [dependencies]
+sera-errors = { workspace = true }
 sera-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

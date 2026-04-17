@@ -14,6 +14,7 @@ pub mod generation;
 pub mod lane_failure;
 pub mod otel;
 pub mod provenance;
+pub mod sera_errors;
 
 pub use audit::{AuditBackend, AuditEntry, AuditError, audit_append, set_audit_backend};
 pub use emitter::{Emitter, EventMeta};

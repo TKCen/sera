@@ -27,6 +27,7 @@ pub mod error;
 pub mod provider;
 pub mod response;
 pub mod routing;
+pub mod sera_errors;
 
 pub use error::ModelError;
 pub use provider::{ModelProvider, ProviderConfig};

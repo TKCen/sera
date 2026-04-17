@@ -1,6 +1,10 @@
 # ── SERA 2.0 Rust Stack ───────────────────────────────────────────────────────
-# Brings up the full Rust-native SERA stack:
-#   postgres (pgvector) + centrifugo + ollama + sera-gateway
+# Brings up ONLY SERA-owned services:
+#   postgres (pgvector) + centrifugo + sera-gateway
+#
+# LLM providers (Ollama, LM Studio, OpenAI, Anthropic, etc.) are EXTERNAL and
+# run wherever the operator chooses — host, remote API, separate compose, etc.
+# Point SERA at them via env vars in .env (see .env.example).
 #
 # Usage:
 #   docker compose -f docker-compose.rust.yaml up --build
@@ -8,8 +12,10 @@
 # Host port assignments (chosen to avoid collisions on dev machine):
 #   5434  → postgres:5432       (5432 = hindsight-db internal, 5433 = radio-player)
 #   8001  → centrifugo:8000     (8000 = portainer internal, 8100 = radio-player centrifugo)
-#   11435 → ollama:11434        (11434 = local ollama on 127.0.0.1)
 #   3001  → sera-gateway:3001
+#
+# Provider endpoints default to host.docker.internal so a locally-running
+# Ollama or LM Studio on the host is reachable from inside the container.
 
 services:
   postgres:
@@ -51,47 +57,25 @@ services:
       retries: 5
       start_period: 10s
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: sera-ollama
-    restart: unless-stopped
-    volumes:
-      - sera_ollama_data:/root/.ollama
-    ports:
-      - "11435:11434"
-    networks:
-      - sera_net
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  ollama-init:
-    image: ollama/ollama:latest
-    container_name: sera-ollama-init
-    restart: "no"
-    entrypoint: ["/bin/sh", "-c", "ollama pull nomic-embed-text && echo 'nomic-embed-text pulled'"]
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    networks:
-      - sera_net
-    depends_on:
-      ollama:
-        condition: service_healthy
-
   sera-gateway:
     build:
       context: ./rust
       dockerfile: Dockerfile
     container_name: sera-gateway
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: postgresql://sera:sera@postgres:5432/sera
       CENTRIFUGO_API_URL: http://centrifugo:8000/api
       CENTRIFUGO_API_KEY: ${CENTRIFUGO_API_KEY:-sera-api-key}
-      OLLAMA_BASE_URL: http://ollama:11434
+      # LLM + embedding providers are EXTERNAL — point at whatever you run.
+      # Defaults target a host-local Ollama/LM Studio via host.docker.internal.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SERA_EMBEDDING_PROVIDER: ${SERA_EMBEDDING_PROVIDER:-ollama}
+      SERA_EMBEDDING_MODEL: ${SERA_EMBEDDING_MODEL:-nomic-embed-text}
       SERA_LOG_DIR: /app/logs
       SERA_BOOTSTRAP_API_KEY: ${SERA_BOOTSTRAP_API_KEY:-sera_bootstrap_dev_123}
       RUST_LOG: ${RUST_LOG:-info}
@@ -115,7 +99,6 @@ services:
 
 volumes:
   sera_pg_data:
-  sera_ollama_data:
   sera_logs:
 
 networks:

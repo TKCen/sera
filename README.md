@@ -14,7 +14,9 @@ For more information on the new architecture and project plan, please refer to:
 docker compose -f docker-compose.rust.yaml up --build
 ```
 
-This starts postgres (pgvector), centrifugo, ollama, and the sera-gateway on port 3001.
+This starts postgres (pgvector), centrifugo, and the sera-gateway on port 3001.
+LLM + embedding providers (Ollama, LM Studio, OpenAI, Anthropic, etc.) are
+external — run them wherever you want and point SERA at them via `.env`.
 
 Check health:
 

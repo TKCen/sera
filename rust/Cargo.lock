@@ -3320,6 +3320,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc58e2d255979a31caa7cabfa7aac654af0354220719ab7a68520ae7a91e8c0b"
+dependencies = [
+ "sqlx",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4411,6 +4420,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hex",
+ "pgvector",
  "rand 0.8.5",
  "rusqlite",
  "sera-errors",
@@ -4760,6 +4770,7 @@ name = "sera-testing"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "insta",
  "sera-db",
  "sera-queue",
@@ -4770,6 +4781,7 @@ dependencies = [
  "serde_yaml",
  "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

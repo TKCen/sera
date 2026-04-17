@@ -30,6 +30,7 @@ pub mod queue;
 pub mod sandbox;
 pub mod secrets;
 pub mod session;
+pub mod semantic_memory;
 pub mod skill;
 pub mod tool;
 pub mod training_export;
@@ -38,6 +39,10 @@ pub use evolution::*;
 pub use versioning::BuildIdentity;
 pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
 pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
+pub use semantic_memory::{
+    EvictionPolicy, MemoryId, ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore,
+    SemanticQuery, SemanticStats,
+};
 
 use serde::{Deserialize, Serialize};
 

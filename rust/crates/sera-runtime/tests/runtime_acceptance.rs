@@ -60,6 +60,7 @@ async fn four_method_lifecycle_callable() {
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         pending_steer: None,
         tool_use_behavior: Default::default(),
+        tool_context: Default::default(),
     };
 
     let observed = turn::observe(&ctx, None, &[]).await.unwrap();
@@ -94,6 +95,7 @@ async fn doom_loop_triggers_interruption() {
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         pending_steer: None,
         tool_use_behavior: Default::default(),
+        tool_context: Default::default(),
     };
 
     let think_result = ThinkResult {
@@ -208,6 +210,7 @@ fn turn_context_has_change_artifact_field() {
         approval_routing: sera_hitl::ApprovalRouting::Autonomous,
         pending_steer: None,
         tool_use_behavior: Default::default(),
+        tool_context: Default::default(),
     };
     assert_eq!(ctx.change_artifact.as_deref(), Some("ca-123"));
 }

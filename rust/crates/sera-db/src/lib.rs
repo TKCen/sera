@@ -19,6 +19,7 @@ pub mod delegations;
 pub mod memory;
 pub mod notifications;
 pub mod operator_requests;
+pub mod pgvector_store;
 pub mod secrets;
 pub mod tasks;
 pub mod webhooks;

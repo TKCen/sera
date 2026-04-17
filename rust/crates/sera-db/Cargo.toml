@@ -25,6 +25,7 @@ zeroize.workspace = true
 rand.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
+pgvector = { version = "0.4", features = ["sqlx"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

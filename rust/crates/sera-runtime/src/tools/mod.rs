@@ -1,5 +1,6 @@
 //! Tool executor framework and registry.
 
+pub mod adapter;
 pub mod file_ops;
 pub mod file_write;
 pub mod file_edit;
@@ -14,6 +15,8 @@ pub mod tool_search;
 pub mod centrifugo;
 pub mod mvs_tools;
 pub mod dispatcher;
+
+pub use adapter::ToolExecutorAdapter;
 
 use crate::types::{FunctionDefinition, ToolDefinition};
 
@@ -107,6 +110,37 @@ impl TraitToolRegistry {
         Self {
             tools: HashMap::new(),
         }
+    }
+
+    /// Create a registry populated with the 14 built-in tools via
+    /// [`ToolExecutorAdapter`]. Mirrors the tool set registered by
+    /// [`ToolRegistry::new`].
+    ///
+    /// Every tool flows through the adapter with conservative defaults
+    /// (`RiskLevel::Execute`, `ExecutionTarget::InProcess`). Bead 5
+    /// (sera-cdan) replaces selected wrappers with direct `Tool` impls and
+    /// refines risk levels.
+    ///
+    /// Note: `centrifugo::CentrifugoPublisher` is **not** a `ToolExecutor`
+    /// — it is a publisher helper used elsewhere in the runtime — so it is
+    /// not registered here. This matches `ToolRegistry::new`.
+    pub fn with_builtins() -> Self {
+        let mut registry = Self::new();
+        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileRead)));
+        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileWrite)));
+        registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileList)));
+        registry.register(Box::new(ToolExecutorAdapter::new(file_edit::FileEdit)));
+        registry.register(Box::new(ToolExecutorAdapter::new(shell_exec::ShellExec)));
+        registry.register(Box::new(ToolExecutorAdapter::new(http_request::HttpRequest)));
+        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeStore)));
+        registry.register(Box::new(ToolExecutorAdapter::new(knowledge::KnowledgeQuery)));
+        registry.register(Box::new(ToolExecutorAdapter::new(web_fetch::WebFetch)));
+        registry.register(Box::new(ToolExecutorAdapter::new(glob::Glob)));
+        registry.register(Box::new(ToolExecutorAdapter::new(grep::Grep)));
+        registry.register(Box::new(ToolExecutorAdapter::new(spawn::SpawnEphemeral)));
+        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::ToolSearch)));
+        registry.register(Box::new(ToolExecutorAdapter::new(tool_search::SkillSearch)));
+        registry
     }
 
     /// Register a tool by its metadata name.
@@ -308,5 +342,43 @@ mod trait_registry_tests {
         registry.register(Box::new(EchoTool));
         assert!(registry.get("echo").is_some());
         assert!(registry.get("missing").is_none());
+    }
+
+    #[test]
+    fn with_builtins_registers_14() {
+        let registry = TraitToolRegistry::with_builtins();
+        let list = registry.list();
+        assert_eq!(
+            list.len(),
+            14,
+            "with_builtins() should register exactly 14 tools; got {}: {:?}",
+            list.len(),
+            list.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+
+        // Every adapter-wrapped tool must be reachable by its ToolExecutor name.
+        // Mirrors the tool set from ToolRegistry::new().
+        let expected = [
+            "file-read",
+            "file-write",
+            "file-list",
+            "file-edit",
+            "shell-exec",
+            "http-request",
+            "knowledge-store",
+            "knowledge-query",
+            "web-fetch",
+            "glob",
+            "grep",
+            "spawn-ephemeral",
+            "tool-search",
+            "skill-search",
+        ];
+        for name in expected {
+            assert!(
+                registry.get(name).is_some(),
+                "built-in tool '{name}' not found in TraitToolRegistry::with_builtins()"
+            );
+        }
     }
 }

@@ -15,3 +15,5 @@ serde_yaml.workspace = true
 tokio.workspace = true
 insta.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true

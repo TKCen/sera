@@ -166,14 +166,16 @@ impl AgentRuntime for DefaultRuntime {
         // yet, so we fall back to a Default-sourced allow-all authz handle and
         // an agent-scoped principal. sera-ttrm-4 will thread a real principal
         // through once auth is wired through the turn context.
-        let mut tool_context = sera_types::tool::ToolContext::default();
-        tool_context.session = sera_types::tool::SessionRef::new(&ctx.session_key);
-        tool_context.principal = sera_types::principal::PrincipalRef {
-            id: sera_types::principal::PrincipalId::new(format!(
-                "agent:{}",
-                ctx.agent_id
-            )),
-            kind: sera_types::principal::PrincipalKind::Agent,
+        let tool_context = sera_types::tool::ToolContext {
+            session: sera_types::tool::SessionRef::new(&ctx.session_key),
+            principal: sera_types::principal::PrincipalRef {
+                id: sera_types::principal::PrincipalId::new(format!(
+                    "agent:{}",
+                    ctx.agent_id
+                )),
+                kind: sera_types::principal::PrincipalKind::Agent,
+            },
+            ..sera_types::tool::ToolContext::default()
         };
 
         let mut turn_ctx = turn::TurnContext {

@@ -8,3 +8,4 @@
 
 pub mod contracts;
 pub mod mocks;
+pub mod semantic_memory;

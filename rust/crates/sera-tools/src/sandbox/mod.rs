@@ -217,4 +217,116 @@ mod tests {
     fn validate_sources_empty_ok() {
         assert!(validate_sources(&[]).is_ok());
     }
+
+    // --- Source mount edge cases ---
+
+    #[test]
+    fn validate_sources_rejects_dotdot_in_middle_of_path() {
+        // Traversal hidden in middle of path
+        let sources = vec![make_mount("/host/a", "/sources/a/../../../etc/passwd")];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+    }
+
+    #[test]
+    fn validate_sources_rejects_dotdot_at_start() {
+        // Path starting with ../
+        let sources = vec![make_mount("/host/a", "../sources/a")];
+        let err = validate_sources(&sources).unwrap_err();
+        // Fails either because of ".." or missing "/sources/" prefix
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+    }
+
+    #[test]
+    fn validate_sources_accepts_deeply_nested_valid_path() {
+        let sources = vec![make_mount(
+            "/host/deep",
+            "/sources/project/src/deeply/nested/dir",
+        )];
+        assert!(validate_sources(&sources).is_ok());
+    }
+
+    #[test]
+    fn validate_sources_rejects_sources_without_leading_slash() {
+        // Must start with /sources/, not sources/
+        let sources = vec![make_mount("/host/a", "sources/a")];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+    }
+
+    #[test]
+    fn validate_sources_rejects_path_containing_sources_not_at_start() {
+        // /data/sources/a — not starting with /sources/
+        let sources = vec![make_mount("/host/a", "/data/sources/a")];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+    }
+
+    #[test]
+    fn validate_sources_rejects_first_bad_in_mixed_list() {
+        // First mount is bad, second is good — should short-circuit on first error
+        let sources = vec![
+            make_mount("/host/bad", "/data/bad"),
+            make_mount("/host/ok", "/sources/ok"),
+        ];
+        let err = validate_sources(&sources).unwrap_err();
+        assert!(matches!(err, SandboxError::InvalidSourceMount { .. }));
+    }
+
+    // --- SandboxConfig additional_mounts ---
+
+    #[test]
+    fn sandbox_config_additional_mounts_default_empty() {
+        let config = SandboxConfig::default();
+        assert!(config.additional_mounts.is_empty());
+    }
+
+    #[test]
+    fn sandbox_config_additional_mount_read_only_flag() {
+        let config = SandboxConfig {
+            additional_mounts: vec![
+                MountSpec {
+                    host_path: "/host/ro".to_string(),
+                    container_path: "/mnt/ro".to_string(),
+                    read_only: true,
+                },
+                MountSpec {
+                    host_path: "/host/rw".to_string(),
+                    container_path: "/mnt/rw".to_string(),
+                    read_only: false,
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(config.additional_mounts[0].read_only);
+        assert!(!config.additional_mounts[1].read_only);
+    }
+
+    // --- SandboxError display ---
+
+    #[test]
+    fn sandbox_error_not_implemented_display() {
+        assert_eq!(SandboxError::NotImplemented.to_string(), "not implemented for this provider");
+    }
+
+    #[test]
+    fn sandbox_error_not_found_display() {
+        assert_eq!(SandboxError::NotFound.to_string(), "sandbox not found");
+    }
+
+    #[test]
+    fn sandbox_error_policy_violation_display() {
+        let err = SandboxError::PolicyViolation {
+            reason: "network denied".to_string(),
+        };
+        assert!(err.to_string().contains("network denied"));
+    }
+
+    #[test]
+    fn sandbox_error_invalid_source_mount_display() {
+        let err = SandboxError::InvalidSourceMount {
+            reason: "bad prefix".to_string(),
+        };
+        assert!(err.to_string().contains("bad prefix"));
+    }
 }

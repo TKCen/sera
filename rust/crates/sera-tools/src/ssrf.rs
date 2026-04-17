@@ -84,3 +84,221 @@ impl SsrfValidator {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Loopback ---
+
+    #[test]
+    fn blocks_loopback_127_0_0_1() {
+        assert_eq!(SsrfValidator::validate("127.0.0.1"), Err(SsrfError::Loopback));
+    }
+
+    #[test]
+    fn blocks_loopback_127_0_0_1_with_port() {
+        assert_eq!(SsrfValidator::validate("127.0.0.1:8080"), Err(SsrfError::Loopback));
+    }
+
+    #[test]
+    fn blocks_loopback_127_255_255_255() {
+        // Entire 127.0.0.0/8 must be blocked, not just .1
+        assert_eq!(SsrfValidator::validate("127.255.255.255"), Err(SsrfError::Loopback));
+    }
+
+    #[test]
+    fn blocks_loopback_127_0_0_2() {
+        assert_eq!(SsrfValidator::validate("127.0.0.2"), Err(SsrfError::Loopback));
+    }
+
+    #[test]
+    fn blocks_ipv6_loopback() {
+        assert_eq!(SsrfValidator::validate("::1"), Err(SsrfError::Loopback));
+    }
+
+    #[test]
+    fn blocks_ipv6_loopback_bracketed_with_port() {
+        assert_eq!(SsrfValidator::validate("[::1]:443"), Err(SsrfError::Loopback));
+    }
+
+    // --- Link-local ---
+
+    #[test]
+    fn blocks_link_local_169_254_0_1() {
+        assert_eq!(SsrfValidator::validate("169.254.0.1"), Err(SsrfError::LinkLocal));
+    }
+
+    #[test]
+    fn blocks_link_local_169_254_255_255() {
+        assert_eq!(SsrfValidator::validate("169.254.255.255"), Err(SsrfError::LinkLocal));
+    }
+
+    #[test]
+    fn blocks_link_local_169_254_with_port() {
+        assert_eq!(SsrfValidator::validate("169.254.1.1:80"), Err(SsrfError::LinkLocal));
+    }
+
+    #[test]
+    fn blocks_ipv6_link_local_fe80() {
+        // fe80::1 — classic link-local
+        assert_eq!(
+            SsrfValidator::validate("fe80::1"),
+            Err(SsrfError::LinkLocal)
+        );
+    }
+
+    #[test]
+    fn blocks_ipv6_link_local_fe80_bracketed() {
+        assert_eq!(
+            SsrfValidator::validate("[fe80::1]:80"),
+            Err(SsrfError::LinkLocal)
+        );
+    }
+
+    #[test]
+    fn blocks_ipv6_link_local_fe8f_boundary() {
+        // fe8f:: is still in fe80::/10 (fe80–febf)
+        assert_eq!(
+            SsrfValidator::validate("fe8f::1"),
+            Err(SsrfError::LinkLocal)
+        );
+    }
+
+    #[test]
+    fn blocks_ipv6_link_local_febf_boundary() {
+        // febf:: is the top of fe80::/10
+        assert_eq!(
+            SsrfValidator::validate("febf::1"),
+            Err(SsrfError::LinkLocal)
+        );
+    }
+
+    #[test]
+    fn allows_ipv6_fec0_not_link_local() {
+        // fec0:: is above fe80::/10 — not link-local, not loopback → should pass
+        assert!(SsrfValidator::validate("fec0::1").is_ok());
+    }
+
+    // --- Cloud metadata ---
+
+    #[test]
+    fn blocks_aws_metadata_169_254_169_254() {
+        assert_eq!(
+            SsrfValidator::validate("169.254.169.254"),
+            Err(SsrfError::CloudMetadata)
+        );
+    }
+
+    #[test]
+    fn blocks_aws_metadata_with_port() {
+        assert_eq!(
+            SsrfValidator::validate("169.254.169.254:80"),
+            Err(SsrfError::CloudMetadata)
+        );
+    }
+
+    #[test]
+    fn blocks_alibaba_metadata_100_100_100_200() {
+        assert_eq!(
+            SsrfValidator::validate("100.100.100.200"),
+            Err(SsrfError::CloudMetadata)
+        );
+    }
+
+    // --- Allowed public IPs ---
+
+    #[test]
+    fn allows_public_ip_1_1_1_1() {
+        assert!(SsrfValidator::validate("1.1.1.1").is_ok());
+    }
+
+    #[test]
+    fn allows_public_ip_with_port() {
+        assert!(SsrfValidator::validate("8.8.8.8:443").is_ok());
+    }
+
+    #[test]
+    fn allows_public_ipv6_2001() {
+        assert!(SsrfValidator::validate("2001:db8::1").is_ok());
+    }
+
+    #[test]
+    fn allows_public_ipv6_bracketed() {
+        assert!(SsrfValidator::validate("[2001:db8::1]:443").is_ok());
+    }
+
+    // --- Percent-encoded / parse bypass attempts ---
+
+    #[test]
+    fn rejects_percent_encoded_ip_as_parse_error() {
+        // Percent-encoding is not valid in a bare IP address; the parser
+        // must return ParseError rather than accidentally resolving it.
+        let result = SsrfValidator::validate("169.254.169%2E254");
+        assert!(
+            matches!(result, Err(SsrfError::ParseError { .. })),
+            "expected ParseError for percent-encoded input, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_decimal_encoded_ip_as_parse_error() {
+        // Integer-form IP (e.g. 2130706433 = 127.0.0.1) is not parsed by
+        // std::net::IpAddr — must surface as ParseError, not pass through.
+        let result = SsrfValidator::validate("2130706433");
+        assert!(
+            matches!(result, Err(SsrfError::ParseError { .. })),
+            "expected ParseError for decimal-form IP, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_octal_encoded_ip_as_parse_error() {
+        // Octal notation (0177.0.0.1) is not valid in std::net::IpAddr.
+        let result = SsrfValidator::validate("0177.0.0.1");
+        assert!(
+            matches!(result, Err(SsrfError::ParseError { .. })),
+            "expected ParseError for octal IP, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_hostname_as_parse_error() {
+        // Hostnames (which could resolve to private IPs) are not IPs —
+        // validator must return ParseError, not silently allow them.
+        let result = SsrfValidator::validate("localhost");
+        assert!(
+            matches!(result, Err(SsrfError::ParseError { .. })),
+            "expected ParseError for hostname, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_string_as_parse_error() {
+        let result = SsrfValidator::validate("");
+        assert!(
+            matches!(result, Err(SsrfError::ParseError { .. })),
+            "expected ParseError for empty string, got {result:?}"
+        );
+    }
+
+    // --- Error trait / display ---
+
+    #[test]
+    fn ssrf_error_display_strings() {
+        assert_eq!(SsrfError::Loopback.to_string(), "address is loopback");
+        assert_eq!(SsrfError::LinkLocal.to_string(), "address is link-local");
+        assert_eq!(
+            SsrfError::CloudMetadata.to_string(),
+            "address is a cloud metadata endpoint"
+        );
+    }
+
+    #[test]
+    fn ssrf_error_parse_error_contains_reason() {
+        let err = SsrfError::ParseError {
+            reason: "invalid octets".to_string(),
+        };
+        assert!(err.to_string().contains("invalid octets"));
+    }
+}

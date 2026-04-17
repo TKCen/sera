@@ -1,19 +1,26 @@
-//! Dynamic model routing primitives — Phase 1: in-memory `HealthStore`.
+//! Dynamic model routing primitives — Phase 1: in-memory `HealthStore`; Phase 2: weighted selection.
 //!
-//! See `docs/plan/DYNAMIC-MODEL-ROUTING.md` §5 (data model) and §13 (phase 1).
+//! See `docs/plan/DYNAMIC-MODEL-ROUTING.md` §5 (data model), §6 (selection), §13 (phases).
 //!
-//! This module provides the observation-side of the dynamic routing design:
-//! a thread-safe, in-memory `HealthStore` that records per-`(provider, model)`
-//! latency, error rate (rolling 10-minute window), cost, and rate-limit events.
+//! This module provides:
 //!
-//! Phase 1 scope is intentionally narrow — this data structure is not yet wired
-//! into the request path. It is populated by gateway observation hooks and read
-//! by metrics exporters. Selection (phase 2) and circuit breakers (phase 3)
-//! build on top of these signals.
+//! - Phase 1 — a thread-safe, in-memory [`HealthStore`] that records
+//!   per-`(provider, model)` latency, error rate (rolling 10-minute window),
+//!   cost, and rate-limit events.
+//! - Phase 2 — a [`RoutingPolicy`] trait plus a default [`WeightedRoutingPolicy`]
+//!   that picks a `ModelRef` from a candidate pool using a configurable weighted
+//!   score over latency / error-rate / cost / recency, with hard-filter
+//!   preferences ([`AgentPreferences`]).
+//!
+//! Phase 2 is not yet wired into the gateway request path — that integration is
+//! tracked separately.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// Length of the rolling latency window used to compute p95.
 const LATENCY_WINDOW: usize = 100;
@@ -273,6 +280,317 @@ const _: fn() = || {
     assert_send_sync::<HealthStore>();
 };
 
+// ---------------------------------------------------------------------------
+// Phase 2 — RoutingPolicy trait + WeightedRoutingPolicy
+// ---------------------------------------------------------------------------
+
+/// Errors produced by policy construction and selection.
+#[derive(Debug, Error, PartialEq)]
+pub enum RoutingError {
+    /// Weighted-score weights did not sum to 1.0 within the allowed epsilon.
+    #[error("weighted-score weights must sum to 1.0 (got {sum}, epsilon {epsilon})")]
+    InvalidWeights { sum: f64, epsilon: f64 },
+    /// A weight was outside the `[0.0, 1.0]` range or non-finite.
+    #[error("weight {name} out of range or non-finite: {value}")]
+    WeightOutOfRange { name: &'static str, value: f64 },
+}
+
+/// Agent-level routing preferences. Hard filters applied before scoring.
+///
+/// Marked `#[non_exhaustive]` so we can grow the preference set in future
+/// phases (e.g. `require_tool_calling`, `tags`) without a breaking change.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AgentPreferences {
+    /// Drop candidates whose `cost_per_1k_tokens` exceeds this cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_per_1k: Option<f64>,
+    /// Drop candidates whose `p95_latency_ms` exceeds this cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_latency_ms_p95: Option<u64>,
+    /// Ordered list of provider names to prefer when scores tie. Earlier wins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prefer_providers: Vec<String>,
+}
+
+impl AgentPreferences {
+    /// Convenience constructor for empty preferences.
+    pub fn none() -> Self {
+        Self::default()
+    }
+}
+
+/// Configurable weights for [`WeightedRoutingPolicy`].
+///
+/// Weights must be non-negative, finite, and sum to 1.0 within [`WeightedScoreConfig::EPSILON`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WeightedScoreConfig {
+    pub w_latency: f64,
+    pub w_err: f64,
+    pub w_cost: f64,
+    pub w_recency: f64,
+}
+
+impl WeightedScoreConfig {
+    /// Tolerance used when validating that the four weights sum to 1.0.
+    pub const EPSILON: f64 = 1e-6;
+
+    /// Default weights from `DYNAMIC-MODEL-ROUTING.md` §10
+    /// (latency 0.5, err 0.35, cost 0.10, recency 0.05).
+    pub const fn defaults() -> Self {
+        Self {
+            w_latency: 0.5,
+            w_err: 0.35,
+            w_cost: 0.10,
+            w_recency: 0.05,
+        }
+    }
+
+    /// Validate that weights are finite, non-negative, and sum to 1.0 within
+    /// [`WeightedScoreConfig::EPSILON`].
+    pub fn validate(&self) -> Result<(), RoutingError> {
+        let weights = [
+            ("w_latency", self.w_latency),
+            ("w_err", self.w_err),
+            ("w_cost", self.w_cost),
+            ("w_recency", self.w_recency),
+        ];
+        for (name, value) in weights {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(RoutingError::WeightOutOfRange { name, value });
+            }
+        }
+        let sum = self.w_latency + self.w_err + self.w_cost + self.w_recency;
+        if (sum - 1.0).abs() > Self::EPSILON {
+            return Err(RoutingError::InvalidWeights {
+                sum,
+                epsilon: Self::EPSILON,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Default for WeightedScoreConfig {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+/// Pluggable selection strategy. Object-safe (no generic methods).
+///
+/// The caller supplies the candidate pool (derived from provider config), the
+/// current [`HealthStore`] to look up observed metrics, and [`AgentPreferences`]
+/// for hard filters. Implementations return a single `ModelRef` (the winning
+/// pick) or `None` if no candidate satisfies the filters.
+pub trait RoutingPolicy: Send + Sync {
+    fn select(
+        &self,
+        candidates: &[ModelRef],
+        store: &HealthStore,
+        prefs: &AgentPreferences,
+    ) -> Option<ModelRef>;
+
+    /// Stable identifier for metrics / logs.
+    fn name(&self) -> &'static str;
+}
+
+/// Weighted-score selection policy. Default implementation of [`RoutingPolicy`].
+///
+/// Algorithm (see `DYNAMIC-MODEL-ROUTING.md` §6):
+///
+/// 1. Apply hard filters from [`AgentPreferences`] (`max_cost_per_1k`,
+///    `max_latency_ms_p95`). Candidates without observed health in the store
+///    are kept (baseline assumption, see below).
+/// 2. For each surviving candidate compute four sub-scores in `[0.0, 1.0]`:
+///    - `latency_score`: min-max normalise `p95_latency_ms` across the surviving
+///      set, then invert (`1.0 - normalised`) so lower latency → higher score.
+///    - `err_score`: min-max normalise `err_rate_10m`, invert.
+///    - `cost_score`: min-max normalise `cost_per_1k_tokens`, invert.
+///    - `recency_score`: `exp(-age_seconds / 3600.0)` based on `last_ok_at`;
+///      `0.0` if never recorded.
+/// 3. Combine: `w_latency*latency + w_err*err + w_cost*cost + w_recency*recency`.
+///    Higher combined score wins.
+/// 4. Tie-break order:
+///    (a) earlier entry in `prefer_providers`,
+///    (b) lexicographic `(provider, model)`.
+///
+/// **Missing in store.** Candidates that have never been observed are assigned
+/// baseline neutral health (`p95=0`, `err_rate=0`, `cost=0`, `last_ok_at=None`).
+/// They therefore score well on latency/err/cost but get `recency_score = 0`.
+/// This is the explicit "unknown, low confidence" treatment: they remain
+/// selectable — important for cold-start and newly-added models — but the
+/// recency term (if weighted) discounts them relative to confirmed-warm peers.
+#[derive(Debug, Clone)]
+pub struct WeightedRoutingPolicy {
+    config: WeightedScoreConfig,
+}
+
+impl WeightedRoutingPolicy {
+    /// Construct and validate the policy's weights.
+    pub fn new(config: WeightedScoreConfig) -> Result<Self, RoutingError> {
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    /// Construct with [`WeightedScoreConfig::defaults`].
+    pub fn with_defaults() -> Self {
+        // Safe: defaults are static and known-valid.
+        Self::new(WeightedScoreConfig::defaults()).expect("default weights are valid")
+    }
+
+    /// The configured weights.
+    pub fn config(&self) -> &WeightedScoreConfig {
+        &self.config
+    }
+
+    fn recency_score(last_ok_at: Option<Instant>, now: Instant) -> f64 {
+        match last_ok_at {
+            Some(t) => {
+                let age_seconds = now.saturating_duration_since(t).as_secs_f64();
+                (-age_seconds / 3600.0).exp()
+            }
+            None => 0.0,
+        }
+    }
+}
+
+/// Internal per-candidate record used during scoring. Raw metrics from the
+/// store plus the candidate reference.
+struct CandidateMetrics {
+    model: ModelRef,
+    p95_latency_ms: f64,
+    err_rate_10m: f64,
+    cost_per_1k_tokens: f64,
+    last_ok_at: Option<Instant>,
+}
+
+/// Min-max normalise `v` into `[0.0, 1.0]` given the set's `(min, max)`.
+///
+/// If `max == min` all members are identical — return `0.0` so the inverted
+/// score becomes `1.0` (everyone is equally good on this axis and the term
+/// drops out of the ranking).
+fn min_max(v: f64, min: f64, max: f64) -> f64 {
+    if (max - min).abs() < f64::EPSILON {
+        0.0
+    } else {
+        ((v - min) / (max - min)).clamp(0.0, 1.0)
+    }
+}
+
+impl RoutingPolicy for WeightedRoutingPolicy {
+    fn select(
+        &self,
+        candidates: &[ModelRef],
+        store: &HealthStore,
+        prefs: &AgentPreferences,
+    ) -> Option<ModelRef> {
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // 1. Build metric records, applying hard filters. Unknown models use
+        //    baseline neutral metrics and are not filtered by cost/latency
+        //    caps (we have no evidence against them).
+        let now = Instant::now();
+        let mut pool: Vec<CandidateMetrics> = Vec::with_capacity(candidates.len());
+        for c in candidates {
+            let (p95, err_rate, cost, last_ok) = match store.snapshot(c) {
+                Some(h) => (
+                    f64::from(h.p95_latency_ms),
+                    f64::from(h.err_rate_10m),
+                    h.cost_per_1k_tokens,
+                    h.last_ok_at,
+                ),
+                None => (0.0, 0.0, 0.0, None),
+            };
+
+            if let Some(cap) = prefs.max_cost_per_1k
+                && cost > cap
+            {
+                continue;
+            }
+            if let Some(cap) = prefs.max_latency_ms_p95
+                && p95 > cap as f64
+            {
+                continue;
+            }
+
+            pool.push(CandidateMetrics {
+                model: c.clone(),
+                p95_latency_ms: p95,
+                err_rate_10m: err_rate,
+                cost_per_1k_tokens: cost,
+                last_ok_at: last_ok,
+            });
+        }
+
+        if pool.is_empty() {
+            return None;
+        }
+
+        // 2. Compute min/max across the surviving pool for each axis.
+        let (mut lat_min, mut lat_max) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut err_min, mut err_max) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut cost_min, mut cost_max) = (f64::INFINITY, f64::NEG_INFINITY);
+        for m in &pool {
+            lat_min = lat_min.min(m.p95_latency_ms);
+            lat_max = lat_max.max(m.p95_latency_ms);
+            err_min = err_min.min(m.err_rate_10m);
+            err_max = err_max.max(m.err_rate_10m);
+            cost_min = cost_min.min(m.cost_per_1k_tokens);
+            cost_max = cost_max.max(m.cost_per_1k_tokens);
+        }
+
+        // 3. Score each candidate. Higher = better.
+        let cfg = &self.config;
+        let mut scored: Vec<(f64, &CandidateMetrics)> = pool
+            .iter()
+            .map(|m| {
+                let latency_score = 1.0 - min_max(m.p95_latency_ms, lat_min, lat_max);
+                let err_score = 1.0 - min_max(m.err_rate_10m, err_min, err_max);
+                let cost_score = 1.0 - min_max(m.cost_per_1k_tokens, cost_min, cost_max);
+                let recency_score = Self::recency_score(m.last_ok_at, now);
+                let combined = cfg.w_latency * latency_score
+                    + cfg.w_err * err_score
+                    + cfg.w_cost * cost_score
+                    + cfg.w_recency * recency_score;
+                (combined, m)
+            })
+            .collect();
+
+        // 4. Rank: higher score wins; tie-break by prefer_providers then lex.
+        let prefer_rank = |provider: &str| -> usize {
+            prefs
+                .prefer_providers
+                .iter()
+                .position(|p| p == provider)
+                .unwrap_or(usize::MAX)
+        };
+
+        scored.sort_by(|(sa, ca), (sb, cb)| {
+            sb.partial_cmp(sa)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| prefer_rank(&ca.model.provider).cmp(&prefer_rank(&cb.model.provider)))
+                .then_with(|| ca.model.provider.cmp(&cb.model.provider))
+                .then_with(|| ca.model.model.cmp(&cb.model.model))
+        });
+
+        scored.first().map(|(_, m)| m.model.clone())
+    }
+
+    fn name(&self) -> &'static str {
+        "weighted"
+    }
+}
+
+// Compile-time check: RoutingPolicy must be object-safe.
+const _: fn() = || {
+    fn assert_object_safe(_: &dyn RoutingPolicy) {}
+    let p = WeightedRoutingPolicy::with_defaults();
+    assert_object_safe(&p);
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +740,263 @@ mod tests {
         assert_eq!(all[1].0.provider, "openai");
         assert!(all[0].1.last_429_at.is_some());
         assert!(all[1].1.last_ok_at.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2 — WeightedRoutingPolicy tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a store pre-loaded with one observation per model.
+    fn store_with(observations: &[(ModelRef, u64, f32, f64)]) -> HealthStore {
+        let store = HealthStore::new();
+        for (key, latency_ms, err_rate, cost_per_1k) in observations {
+            // Record a success so last_ok_at is set and cost_per_1k is seeded.
+            store.record_success(key, Duration::from_millis(*latency_ms), 0, 0, *cost_per_1k);
+            // Inject an error to fake a non-zero error rate: record_error/success
+            // alternation. For the tests we just need the resulting err_rate
+            // to reflect the intent — we do this by padding with extra errors.
+            if *err_rate > 0.0 {
+                // Record enough errors that err_rate approx matches.
+                // For a single success, err_rate = errs / (errs + 1). Solve:
+                //   target = e / (e + 1)  =>  e = target / (1 - target).
+                let e = (*err_rate / (1.0 - *err_rate)).round() as u64;
+                for _ in 0..e {
+                    store.record_error(key, false);
+                }
+            }
+        }
+        store
+    }
+
+    fn weights(lat: f64, err: f64, cost: f64, recency: f64) -> WeightedScoreConfig {
+        WeightedScoreConfig {
+            w_latency: lat,
+            w_err: err,
+            w_cost: cost,
+            w_recency: recency,
+        }
+    }
+
+    #[test]
+    fn policy_empty_candidate_set_returns_none() {
+        let policy = WeightedRoutingPolicy::with_defaults();
+        let store = HealthStore::new();
+        let pick = policy.select(&[], &store, &AgentPreferences::none());
+        assert!(pick.is_none());
+    }
+
+    #[test]
+    fn policy_all_healthy_equal_weights_ranks_obviously() {
+        // Three candidates. Equal weights (0.25 each).
+        // `good` has low latency + low err + low cost + recent success;
+        // `mid` has medium everything; `bad` has high everything.
+        // Expect `good` to win.
+        let good = mref("openai", "good");
+        let mid = mref("openai", "mid");
+        let bad = mref("openai", "bad");
+        let store = store_with(&[
+            (good.clone(), 100, 0.0, 0.001),
+            (mid.clone(), 500, 0.1, 0.005),
+            (bad.clone(), 2000, 0.5, 0.050),
+        ]);
+        let policy = WeightedRoutingPolicy::new(weights(0.25, 0.25, 0.25, 0.25)).unwrap();
+        let pick = policy.select(
+            &[bad.clone(), mid.clone(), good.clone()],
+            &store,
+            &AgentPreferences::none(),
+        );
+        assert_eq!(pick.as_ref(), Some(&good));
+    }
+
+    #[test]
+    fn policy_cost_threshold_filters_candidate() {
+        let cheap = mref("openai", "cheap");
+        let dear = mref("openai", "dear");
+        // `dear` is much faster but over the cost cap — must be filtered.
+        let store = store_with(&[
+            (cheap.clone(), 1000, 0.0, 0.001),
+            (dear.clone(), 50, 0.0, 0.100),
+        ]);
+        let policy = WeightedRoutingPolicy::with_defaults();
+        let prefs = AgentPreferences {
+            max_cost_per_1k: Some(0.010),
+            ..Default::default()
+        };
+        let pick = policy.select(&[cheap.clone(), dear.clone()], &store, &prefs);
+        assert_eq!(pick.as_ref(), Some(&cheap));
+    }
+
+    #[test]
+    fn policy_all_violate_thresholds_returns_none() {
+        let a = mref("openai", "a");
+        let b = mref("anthropic", "b");
+        let store = store_with(&[
+            (a.clone(), 5_000, 0.0, 0.100),
+            (b.clone(), 6_000, 0.0, 0.200),
+        ]);
+        let policy = WeightedRoutingPolicy::with_defaults();
+        let prefs = AgentPreferences {
+            max_cost_per_1k: Some(0.010),
+            max_latency_ms_p95: Some(1_000),
+            ..Default::default()
+        };
+        let pick = policy.select(&[a, b], &store, &prefs);
+        assert!(pick.is_none());
+    }
+
+    #[test]
+    fn policy_recency_dominates_when_only_weight_nonzero() {
+        // `fresh` just got a success. `stale` never has — store has no
+        // entry, so last_ok_at = None and recency_score = 0.
+        // With w_recency = 1.0 (all other weights zero) `fresh` must win.
+        let fresh = mref("openai", "fresh");
+        let stale = mref("openai", "stale");
+        let store = HealthStore::new();
+        store.record_success(&fresh, Duration::from_millis(500), 0, 0, 0.002);
+        // Do NOT record anything for `stale`.
+
+        let policy = WeightedRoutingPolicy::new(weights(0.0, 0.0, 0.0, 1.0)).unwrap();
+        let pick = policy.select(
+            &[stale.clone(), fresh.clone()],
+            &store,
+            &AgentPreferences::none(),
+        );
+        assert_eq!(pick.as_ref(), Some(&fresh));
+    }
+
+    #[test]
+    fn policy_latency_dominates_when_only_weight_nonzero() {
+        let fast = mref("openai", "fast");
+        let slow = mref("openai", "slow");
+        let store = store_with(&[
+            (fast.clone(), 100, 0.5, 0.100), // bad err + cost, great latency
+            (slow.clone(), 5_000, 0.0, 0.001), // good err + cost, awful latency
+        ]);
+
+        let policy = WeightedRoutingPolicy::new(weights(1.0, 0.0, 0.0, 0.0)).unwrap();
+        let pick = policy.select(
+            &[slow.clone(), fast.clone()],
+            &store,
+            &AgentPreferences::none(),
+        );
+        assert_eq!(pick.as_ref(), Some(&fast));
+    }
+
+    #[test]
+    fn policy_missing_in_store_is_selectable_with_baseline() {
+        // Unobserved candidates use baseline neutral metrics. When paired with
+        // an observed-but-worse candidate under equal weights, the unobserved
+        // one should still score well on the normalised axes. The only hit is
+        // `recency_score = 0` vs. observed peers, which at equal weights is
+        // not enough to lose.
+        let observed = mref("openai", "observed");
+        let unknown = mref("anthropic", "unknown");
+        let store = HealthStore::new();
+        // Give observed awful metrics so baseline wins on the normalised axes.
+        store.record_success(&observed, Duration::from_millis(5_000), 0, 0, 0.100);
+        for _ in 0..10 {
+            store.record_error(&observed, false);
+        }
+
+        // Equal weights.
+        let policy = WeightedRoutingPolicy::new(weights(0.25, 0.25, 0.25, 0.25)).unwrap();
+        let pick = policy.select(
+            &[observed.clone(), unknown.clone()],
+            &store,
+            &AgentPreferences::none(),
+        );
+        assert_eq!(
+            pick.as_ref(),
+            Some(&unknown),
+            "baseline metrics should beat a demonstrably-bad observed peer"
+        );
+
+        // But unknown must still be *selectable* on its own — not filtered
+        // out just because it has no health record.
+        let solo_pick = policy.select(
+            &[unknown.clone()],
+            &store,
+            &AgentPreferences::none(),
+        );
+        assert_eq!(solo_pick.as_ref(), Some(&unknown));
+    }
+
+    #[test]
+    fn policy_tie_break_prefers_prefer_providers_order() {
+        // Two candidates with identical baseline health (never observed).
+        // Under defaults every score term resolves to the same value, so
+        // the tie-break logic (prefer_providers then lex) is all that picks.
+        let a = mref("openai", "m");
+        let b = mref("anthropic", "m");
+        let store = HealthStore::new();
+        let policy = WeightedRoutingPolicy::with_defaults();
+
+        let prefs = AgentPreferences {
+            prefer_providers: vec!["anthropic".to_string(), "openai".to_string()],
+            ..Default::default()
+        };
+        let pick = policy.select(&[a.clone(), b.clone()], &store, &prefs);
+        assert_eq!(pick.as_ref(), Some(&b));
+
+        // Swap preference: openai wins.
+        let prefs2 = AgentPreferences {
+            prefer_providers: vec!["openai".to_string(), "anthropic".to_string()],
+            ..Default::default()
+        };
+        let pick2 = policy.select(&[a.clone(), b.clone()], &store, &prefs2);
+        assert_eq!(pick2.as_ref(), Some(&a));
+
+        // No preference: falls through to lexicographic (anthropic < openai).
+        let pick3 = policy.select(
+            &[a.clone(), b.clone()],
+            &store,
+            &AgentPreferences::none(),
+        );
+        assert_eq!(pick3.as_ref(), Some(&b));
+    }
+
+    #[test]
+    fn weighted_config_validate_rejects_bad_sums() {
+        // Too low.
+        let low = weights(0.1, 0.1, 0.1, 0.1);
+        match low.validate() {
+            Err(RoutingError::InvalidWeights { .. }) => {}
+            other => panic!("expected InvalidWeights, got {other:?}"),
+        }
+
+        // Too high.
+        let high = weights(0.5, 0.5, 0.5, 0.5);
+        match high.validate() {
+            Err(RoutingError::InvalidWeights { .. }) => {}
+            other => panic!("expected InvalidWeights, got {other:?}"),
+        }
+
+        // Out-of-range negative.
+        let neg = weights(-0.1, 0.4, 0.4, 0.3);
+        match neg.validate() {
+            Err(RoutingError::WeightOutOfRange { name, .. }) => assert_eq!(name, "w_latency"),
+            other => panic!("expected WeightOutOfRange, got {other:?}"),
+        }
+
+        // NaN.
+        let nan = weights(f64::NAN, 0.4, 0.4, 0.2);
+        assert!(matches!(
+            nan.validate(),
+            Err(RoutingError::WeightOutOfRange { .. })
+        ));
+
+        // Valid sum within epsilon.
+        let ok = WeightedScoreConfig::defaults();
+        ok.validate().expect("defaults must validate");
+
+        // `new()` mirrors `validate()`.
+        assert!(WeightedRoutingPolicy::new(low).is_err());
+        assert!(WeightedRoutingPolicy::new(ok).is_ok());
+    }
+
+    #[test]
+    fn policy_name_is_stable() {
+        let p = WeightedRoutingPolicy::with_defaults();
+        assert_eq!(p.name(), "weighted");
     }
 }

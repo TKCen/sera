@@ -31,4 +31,7 @@ pub mod routing;
 pub use error::ModelError;
 pub use provider::{ModelProvider, ProviderConfig};
 pub use response::ModelResponse;
-pub use routing::{HealthStore, ModelHealth, ModelRef};
+pub use routing::{
+    AgentPreferences, HealthStore, ModelHealth, ModelRef, RoutingError, RoutingPolicy,
+    WeightedRoutingPolicy, WeightedScoreConfig,
+};

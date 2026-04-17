@@ -50,18 +50,21 @@ Session 27 Wave 1 + 2 were coordinated ultrawork dispatches targeting Session 26
 
 ---
 
-## Wave 3 — Queued (not yet dispatched)
+## Wave 3 — Landed (2 agents, committed)
 
-Filed as beads for next dispatch cycle:
+| Bead | Task | Commit | Tests |
+|------|------|--------|-------|
+| sera-1yi4 | ShadowSessionExecutor scaffold in sera-runtime (trait + `InMemoryShadowExecutor` + `diff()` with `TextDiff`/`ToolCallMismatch`/`TerminationMismatch` deltas) | `c4a27a3` | +8 integration +5 unit |
+| sera-occf | EvolveTokenSigner live key rotation (`Arc<std::sync::RwLock<SigningKey>>` + bounded `RotationHistory` + `spawn_rotation_poll` background task + 60s default grace period). sign/verify remain **synchronous** — cleaner than the async-cascade design; no call-site churn. | `df8ef5d` | +4 unit |
 
-- **sera-bsq2** Wire PostgresLaneCounter into LaneQueue admission path (gateway wiring — sera-e8nq is purely additive today)
-- **sera-jwtj** Integrate MemoryBlock into sera-runtime context injection (hook_point fires + memory_pressure event)
-- **sera-1yi4** ShadowSessionExecutor scaffold (HANDOFF §3 follow-up 1)
-- **sera-occf** Secret hot-reload for EvolveTokenSigner (HANDOFF §3 follow-up 3)
-- **sera-sbh9** sera-auth CapabilityTokenIssuer unification (HANDOFF §3 follow-up 4)
+Verification: `cargo test --workspace` exit 0, `cargo clippy --workspace -- -D warnings` exit 0.
 
-Also filed during session:
-- **sera-tj02** Delete Phase 1 legacy main.rs (no Discord consumer)
+## Wave 4 — Queued
+
+- **sera-bsq2** Wire PostgresLaneCounter into LaneQueue admission path
+- **sera-jwtj** Integrate MemoryBlock into sera-runtime context injection
+- **sera-sbh9** sera-auth CapabilityTokenIssuer unification
+- **sera-tj02** Delete Phase 1 legacy main.rs
 - **sera-pmzb** File logging for gateway + Discord REST errors
 
 ---

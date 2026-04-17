@@ -95,60 +95,30 @@ impl ScheduleRepository {
         status: Option<&str>,
         category: Option<&str>,
     ) -> Result<u64, DbError> {
-        let mut sets = vec!["updated_at = NOW()".to_string()];
-        let mut param_idx = 1;
-        let mut str_params: Vec<Option<String>> = Vec::new();
-        let mut task_val: Option<serde_json::Value> = None;
+        let mut qb = sqlx::QueryBuilder::new("UPDATE schedules SET updated_at = NOW()");
 
         if let Some(v) = name {
-            param_idx += 1;
-            sets.push(format!("name = ${param_idx}"));
-            str_params.push(Some(v.to_string()));
+            qb.push(", name = ").push_bind(v);
         }
         if let Some(v) = description {
-            param_idx += 1;
-            sets.push(format!("description = ${param_idx}"));
-            str_params.push(Some(v.to_string()));
+            qb.push(", description = ").push_bind(v);
         }
         if let Some(v) = expression {
-            param_idx += 1;
-            sets.push(format!("expression = ${param_idx}"));
-            str_params.push(Some(v.to_string()));
+            qb.push(", expression = ").push_bind(v);
         }
         if let Some(v) = task {
-            param_idx += 1;
-            sets.push(format!("task = ${param_idx}"));
-            task_val = Some(v.clone());
-            // placeholder in str_params for ordering
+            qb.push(", task = ").push_bind(v.clone());
         }
         if let Some(v) = status {
-            param_idx += 1;
-            sets.push(format!("status = ${param_idx}"));
-            str_params.push(Some(v.to_string()));
+            qb.push(", status = ").push_bind(v);
         }
         if let Some(v) = category {
-            param_idx += 1;
-            sets.push(format!("category = ${param_idx}"));
-            str_params.push(Some(v.to_string()));
+            qb.push(", category = ").push_bind(v);
         }
 
-        let query = format!(
-            "UPDATE schedules SET {} WHERE id::text = $1",
-            sets.join(", ")
-        );
+        qb.push(" WHERE id::text = ").push_bind(id);
 
-        // Build query with binds in order
-        let mut q = sqlx::query(&query).bind(id);
-        // Bind string params first (name, description, expression)
-        let mut str_idx = 0;
-        if name.is_some() { q = q.bind(&str_params[str_idx]); str_idx += 1; }
-        if description.is_some() { q = q.bind(&str_params[str_idx]); str_idx += 1; }
-        if expression.is_some() { q = q.bind(&str_params[str_idx]); str_idx += 1; }
-        if task_val.is_some() { q = q.bind(&task_val); }
-        if status.is_some() { q = q.bind(&str_params[str_idx]); str_idx += 1; }
-        if category.is_some() { q = q.bind(&str_params[str_idx]); }
-
-        let result = q.execute(pool).await?;
+        let result = qb.build().execute(pool).await?;
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound {
                 entity: "schedule",

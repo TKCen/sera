@@ -72,37 +72,23 @@ impl AuditRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<AuditRow>, DbError> {
-        // Build dynamic query based on filters
-        let mut query = String::from(
+        let mut qb = sqlx::QueryBuilder::new(
             "SELECT sequence, timestamp, actor_type, actor_id, acting_context,
                     event_type, payload, prev_hash, hash
-             FROM audit_trail WHERE 1=1"
+             FROM audit_trail WHERE 1=1",
         );
-        let mut param_idx = 1;
 
-        if actor_id.is_some() {
-            query.push_str(&format!(" AND actor_id = ${param_idx}"));
-            param_idx += 1;
-        }
-        if event_type.is_some() {
-            query.push_str(&format!(" AND event_type = ${param_idx}"));
-            param_idx += 1;
-        }
-
-        query.push_str(&format!(" ORDER BY sequence DESC LIMIT ${param_idx}"));
-        param_idx += 1;
-        query.push_str(&format!(" OFFSET ${param_idx}"));
-
-        let mut q = sqlx::query_as::<_, AuditRow>(&query);
         if let Some(aid) = actor_id {
-            q = q.bind(aid);
+            qb.push(" AND actor_id = ").push_bind(aid);
         }
         if let Some(et) = event_type {
-            q = q.bind(et);
+            qb.push(" AND event_type = ").push_bind(et);
         }
-        q = q.bind(limit).bind(offset);
 
-        let rows = q.fetch_all(pool).await?;
+        qb.push(" ORDER BY sequence DESC LIMIT ").push_bind(limit);
+        qb.push(" OFFSET ").push_bind(offset);
+
+        let rows = qb.build_query_as::<AuditRow>().fetch_all(pool).await?;
         Ok(rows)
     }
 
@@ -112,26 +98,16 @@ impl AuditRepository {
         actor_id: Option<&str>,
         event_type: Option<&str>,
     ) -> Result<i64, DbError> {
-        let mut query = String::from("SELECT COUNT(*) FROM audit_trail WHERE 1=1");
-        let mut param_idx = 1;
+        let mut qb = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM audit_trail WHERE 1=1");
 
-        if actor_id.is_some() {
-            query.push_str(&format!(" AND actor_id = ${param_idx}"));
-            param_idx += 1;
-        }
-        if event_type.is_some() {
-            query.push_str(&format!(" AND event_type = ${param_idx}"));
-        }
-
-        let mut q = sqlx::query_as::<_, (i64,)>(&query);
         if let Some(aid) = actor_id {
-            q = q.bind(aid);
+            qb.push(" AND actor_id = ").push_bind(aid);
         }
         if let Some(et) = event_type {
-            q = q.bind(et);
+            qb.push(" AND event_type = ").push_bind(et);
         }
 
-        let (count,) = q.fetch_one(pool).await?;
+        let (count,): (i64,) = qb.build_query_as().fetch_one(pool).await?;
         Ok(count)
     }
 

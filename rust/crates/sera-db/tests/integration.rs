@@ -19,6 +19,8 @@ pub mod api_keys;
 pub mod audit;
 #[path = "integration/proposal_usage.rs"]
 pub mod proposal_usage;
+#[path = "integration/lane_queue_counter.rs"]
+pub mod lane_queue_counter;
 
 use sqlx::{PgPool, Executor};
 use uuid::Uuid;
@@ -194,6 +196,12 @@ async fn run_ddl(pool: &PgPool, schema: &str) {
             payload         JSONB       NOT NULL DEFAULT '{{}}',
             prev_hash       TEXT,
             hash            TEXT        NOT NULL
+        );
+
+        -- ---- lane_pending_counts ------------------------------------------
+        CREATE TABLE IF NOT EXISTS "{schema}".lane_pending_counts (
+            lane_id TEXT    PRIMARY KEY,
+            pending BIGINT  NOT NULL DEFAULT 0
         );
         "#
     );

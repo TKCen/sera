@@ -4365,6 +4365,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-commands"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "sera-errors",
+ "sera-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "sera-config"
 version = "0.1.0"
 dependencies = [
@@ -4394,6 +4408,7 @@ name = "sera-db"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "async-trait",
  "chrono",
  "hex",
  "rand 0.8.5",

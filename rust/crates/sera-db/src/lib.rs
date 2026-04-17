@@ -24,6 +24,7 @@ pub mod tasks;
 pub mod webhooks;
 pub mod job_queue;
 pub mod lane_queue;
+pub mod lane_queue_counter;
 pub mod training_exports;
 pub mod proposal_usage;
 pub mod error;

@@ -18,8 +18,9 @@ pub mod types;
 // Re-export commonly used types
 pub use api_key::{ApiKeyValidator, StoredApiKey};
 pub use authz::{
-    Action, AuthzContext, AuthzDecision, AuthzError, AuthorizationProvider, DefaultAuthzProvider,
-    DenyReason, PendingApprovalHint, RbacAuthzProvider, Resource,
+    Action, ActionKind, AuthorizationProvider, AuthzContext, AuthzDecision, AuthzError,
+    DefaultAuthzProvider, DenyReason, PendingApprovalHint, RbacAuthzProvider, Resource,
+    RoleBasedAuthzProvider, RoleBasedAuthzProviderBuilder,
 };
 pub use capability::{CapabilityToken, CapabilityTokenError};
 pub use casbin_adapter::{CasbinAuthzAdapter, CasbinError};

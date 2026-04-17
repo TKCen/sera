@@ -15,7 +15,7 @@
 //! or [`RbacAuthzProvider::from_files`] to load `rbac.conf` + `rbac.csv` from
 //! `capability-policies/` at startup.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use sera_types::evolution::{BlastRadius, ChangeArtifactId};
-use sera_types::principal::PrincipalRef;
+use sera_types::principal::{PrincipalId, PrincipalRef};
 
 use crate::casbin_adapter::CasbinAuthzAdapter;
 
@@ -206,14 +206,19 @@ pub trait AuthorizationProvider: Send + Sync {
 // DefaultAuthzProvider
 // ---------------------------------------------------------------------------
 
-/// Built-in RBAC authorization provider.
+/// Tier 1 (autonomous/local) authorization provider.
 ///
-/// # Current behaviour
+/// # Behaviour
 ///
-/// TODO: Implement role-based access control using the Principal's group
-/// memberships and the role table from SPEC-identity-authz §5.3.
-/// For now this is a placeholder that always returns `Allow`, which is correct
-/// for Tier 1 (autonomous/local) deployments where all principals are trusted.
+/// - **Change actions** ([`Action::ProposeChange`] / [`Action::ApproveChange`])
+///   are denied by default. A Tier 2+ provider (e.g. [`RbacAuthzProvider`] or
+///   [`RoleBasedAuthzProvider`]) must be configured to grant them explicitly.
+/// - **All other actions** are allowed. In Tier 1 all principals are considered
+///   trusted (single-operator deployment), so no role lookup is performed.
+///
+/// For richer role-based checks without a casbin policy file, prefer
+/// [`RoleBasedAuthzProvider`]. For full policy expressions, use
+/// [`RbacAuthzProvider`].
 #[derive(Debug, Clone, Default)]
 pub struct DefaultAuthzProvider;
 
@@ -236,9 +241,10 @@ impl AuthorizationProvider for DefaultAuthzProvider {
                     "ProposeChange and ApproveChange require explicit policy grant",
                 )))
             }
-            // TODO(sera-32zt): Replace remaining variants with role-based
-            // checks once PrincipalGroup and role tables are available.
-            // Tier 1 default: allow everything else.
+            // Tier 1: single-operator deployment — all non-change actions
+            // are allowed. Deployments that need role-gating should switch to
+            // `RoleBasedAuthzProvider` (in-memory) or `RbacAuthzProvider`
+            // (casbin) at gateway startup.
             _ => Ok(AuthzDecision::Allow),
         }
     }
@@ -373,6 +379,184 @@ impl AuthorizationProvider for RbacAuthzProvider {
                     "principal '{subject}' is not permitted to perform '{act}' on '{object}'"
                 ),
             )))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RoleBasedAuthzProvider — Tier 1.5 lightweight role-based provider
+// ---------------------------------------------------------------------------
+
+/// Coarse-grained classification of an [`Action`] used for role grants.
+///
+/// Dynamic payloads (tool name, memory scope, blast radius, etc.) are
+/// intentionally discarded: `RoleBasedAuthzProvider` matches by action *kind*
+/// only. Deployments that need per-tool or per-scope decisions should use
+/// [`RbacAuthzProvider`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionKind {
+    Read,
+    Write,
+    Execute,
+    Admin,
+    ToolCall,
+    SessionOp,
+    MemoryAccess,
+    ConfigChange,
+    ProposeChange,
+    ApproveChange,
+}
+
+impl ActionKind {
+    /// Classify an [`Action`] into its [`ActionKind`].
+    pub fn of(action: &Action) -> Self {
+        match action {
+            Action::Read => ActionKind::Read,
+            Action::Write => ActionKind::Write,
+            Action::Execute => ActionKind::Execute,
+            Action::Admin => ActionKind::Admin,
+            Action::ToolCall(_) => ActionKind::ToolCall,
+            Action::SessionOp(_) => ActionKind::SessionOp,
+            Action::MemoryAccess(_) => ActionKind::MemoryAccess,
+            Action::ConfigChange(_) => ActionKind::ConfigChange,
+            Action::ProposeChange(_) => ActionKind::ProposeChange,
+            Action::ApproveChange(_) => ActionKind::ApproveChange,
+        }
+    }
+}
+
+/// Tier 1.5 role-based authorization provider backed by an in-memory table.
+///
+/// This is the lightweight middle ground between [`DefaultAuthzProvider`]
+/// (allow-all) and [`RbacAuthzProvider`] (full casbin policy expressions).
+/// It evaluates a decision in two steps:
+///
+/// 1. Resolve the principal's roles from `principal_roles`.
+/// 2. Union the [`ActionKind`] grants across those roles and check whether the
+///    requested action's kind is permitted.
+///
+/// # Tier 1 compatibility
+///
+/// Like [`DefaultAuthzProvider`], change actions
+/// ([`Action::ProposeChange`] / [`Action::ApproveChange`]) must be granted
+/// explicitly via a role — they are never allowed by default.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use sera_auth::authz::{ActionKind, RoleBasedAuthzProvider};
+/// use sera_types::principal::PrincipalId;
+///
+/// let provider = RoleBasedAuthzProvider::builder()
+///     .grant("operator", [ActionKind::Read, ActionKind::Execute])
+///     .grant("admin", [ActionKind::Admin, ActionKind::ProposeChange])
+///     .assign(PrincipalId::new("alice"), ["operator"])
+///     .assign(PrincipalId::new("root"), ["admin"])
+///     .build();
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct RoleBasedAuthzProvider {
+    /// Map of principal id → roles assigned to that principal.
+    principal_roles: HashMap<PrincipalId, HashSet<String>>,
+    /// Map of role name → action kinds granted to that role.
+    role_grants: HashMap<String, HashSet<ActionKind>>,
+}
+
+impl RoleBasedAuthzProvider {
+    /// Start building a new `RoleBasedAuthzProvider`.
+    pub fn builder() -> RoleBasedAuthzProviderBuilder {
+        RoleBasedAuthzProviderBuilder::default()
+    }
+
+    /// Return the set of roles assigned to a principal. Empty if the principal
+    /// has no role assignments.
+    fn roles_of(&self, principal: &PrincipalId) -> Option<&HashSet<String>> {
+        self.principal_roles.get(principal)
+    }
+
+    /// Return true if any of `roles` grants `kind`.
+    fn any_role_grants(&self, roles: &HashSet<String>, kind: ActionKind) -> bool {
+        roles
+            .iter()
+            .filter_map(|role| self.role_grants.get(role))
+            .any(|grants| grants.contains(&kind))
+    }
+}
+
+#[async_trait]
+impl AuthorizationProvider for RoleBasedAuthzProvider {
+    async fn check(
+        &self,
+        principal: &PrincipalRef,
+        action: &Action,
+        _resource: &Resource,
+        _context: &AuthzContext,
+    ) -> Result<AuthzDecision, AuthzError> {
+        let kind = ActionKind::of(action);
+        let Some(roles) = self.roles_of(&principal.id) else {
+            return Ok(AuthzDecision::Deny(DenyReason::new(
+                "principal_has_no_roles",
+                format!(
+                    "principal '{}' has no role assignments",
+                    principal.id
+                ),
+            )));
+        };
+
+        if self.any_role_grants(roles, kind) {
+            Ok(AuthzDecision::Allow)
+        } else {
+            Ok(AuthzDecision::Deny(DenyReason::new(
+                "role_lacks_action_grant",
+                format!(
+                    "principal '{}' has no role granting '{:?}'",
+                    principal.id, kind
+                ),
+            )))
+        }
+    }
+}
+
+/// Fluent builder for [`RoleBasedAuthzProvider`].
+#[derive(Debug, Default)]
+pub struct RoleBasedAuthzProviderBuilder {
+    principal_roles: HashMap<PrincipalId, HashSet<String>>,
+    role_grants: HashMap<String, HashSet<ActionKind>>,
+}
+
+impl RoleBasedAuthzProviderBuilder {
+    /// Grant a role a set of action kinds. Repeated calls merge into the
+    /// existing grant set.
+    pub fn grant<I>(mut self, role: impl Into<String>, kinds: I) -> Self
+    where
+        I: IntoIterator<Item = ActionKind>,
+    {
+        self.role_grants
+            .entry(role.into())
+            .or_default()
+            .extend(kinds);
+        self
+    }
+
+    /// Assign a principal one or more roles. Repeated calls merge.
+    pub fn assign<I, S>(mut self, principal: PrincipalId, roles: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.principal_roles
+            .entry(principal)
+            .or_default()
+            .extend(roles.into_iter().map(Into::into));
+        self
+    }
+
+    /// Finalise the builder into a provider.
+    pub fn build(self) -> RoleBasedAuthzProvider {
+        RoleBasedAuthzProvider {
+            principal_roles: self.principal_roles,
+            role_grants: self.role_grants,
         }
     }
 }
@@ -655,5 +839,208 @@ m = g(r.sub, p.sub) && (p.obj == "*" || r.obj == p.obj || keyMatch(r.obj, p.obj)
             matches!(deny_decision, AuthzDecision::Deny(_)),
             "agent-42 should be denied write on tools; got {deny_decision:?}"
         );
+    }
+
+    // ── DefaultAuthzProvider change-action deny tests ─────────────────────────
+
+    /// DefaultAuthzProvider must deny `ProposeChange` regardless of blast
+    /// radius — the Tier 1 rule is that change proposals require an explicit
+    /// policy grant from a richer provider.
+    #[tokio::test]
+    async fn default_provider_denies_propose_change() {
+        let provider = DefaultAuthzProvider;
+        let principal = make_principal_ref();
+        let ctx = AuthzContext::default();
+
+        for radius in [
+            BlastRadius::AgentMemory,
+            BlastRadius::AgentManifest,
+            BlastRadius::GlobalConfig,
+        ] {
+            let decision = provider
+                .check(
+                    &principal,
+                    &Action::ProposeChange(radius),
+                    &Resource::System,
+                    &ctx,
+                )
+                .await
+                .expect("check must not fail");
+
+            match decision {
+                AuthzDecision::Deny(reason) => {
+                    assert_eq!(reason.code, "change_action_requires_policy");
+                }
+                other => panic!("expected Deny for ProposeChange({radius:?}); got {other:?}"),
+            }
+        }
+    }
+
+    /// DefaultAuthzProvider must deny `ApproveChange` for any artifact id.
+    #[tokio::test]
+    async fn default_provider_denies_approve_change() {
+        let provider = DefaultAuthzProvider;
+        let principal = make_principal_ref();
+        let ctx = AuthzContext::default();
+        let artifact = ChangeArtifactId { hash: [0xAB; 32] };
+
+        let decision = provider
+            .check(
+                &principal,
+                &Action::ApproveChange(artifact),
+                &Resource::ChangeArtifact(artifact),
+                &ctx,
+            )
+            .await
+            .expect("check must not fail");
+
+        assert!(
+            matches!(decision, AuthzDecision::Deny(r) if r.code == "change_action_requires_policy"),
+        );
+    }
+
+    // ── RoleBasedAuthzProvider tests ──────────────────────────────────────────
+
+    /// Build a provider with a small fixture: alice=operator (read/execute),
+    /// root=admin (admin + propose_change), bob has no roles.
+    fn role_based_fixture() -> RoleBasedAuthzProvider {
+        RoleBasedAuthzProvider::builder()
+            .grant("operator", [ActionKind::Read, ActionKind::Execute])
+            .grant(
+                "admin",
+                [ActionKind::Admin, ActionKind::ProposeChange],
+            )
+            .assign(PrincipalId::new("alice"), ["operator"])
+            .assign(PrincipalId::new("root"), ["admin"])
+            .build()
+    }
+
+    #[tokio::test]
+    async fn role_based_allows_when_role_matches() {
+        let provider = role_based_fixture();
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(&principal("alice"), &Action::Read, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+        assert_eq!(decision, AuthzDecision::Allow);
+
+        // Action payloads are ignored — tool_call kind match is enough.
+        let decision = provider
+            .check(
+                &principal("alice"),
+                &Action::Execute,
+                &Resource::Tool("bash".to_string()),
+                &ctx,
+            )
+            .await
+            .expect("check must not fail");
+        assert_eq!(decision, AuthzDecision::Allow);
+    }
+
+    #[tokio::test]
+    async fn role_based_denies_when_role_lacks_grant() {
+        let provider = role_based_fixture();
+        let ctx = AuthzContext::default();
+
+        // alice is operator → no write grant.
+        let decision = provider
+            .check(&principal("alice"), &Action::Write, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+
+        match decision {
+            AuthzDecision::Deny(reason) => assert_eq!(reason.code, "role_lacks_action_grant"),
+            other => panic!("expected role_lacks_action_grant deny; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn role_based_denies_unassigned_principal() {
+        let provider = role_based_fixture();
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(&principal("bob"), &Action::Read, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+
+        match decision {
+            AuthzDecision::Deny(reason) => assert_eq!(reason.code, "principal_has_no_roles"),
+            other => panic!("expected principal_has_no_roles deny; got {other:?}"),
+        }
+    }
+
+    /// Unlike `DefaultAuthzProvider`, `RoleBasedAuthzProvider` *can* grant
+    /// `ProposeChange` — the admin role in the fixture holds that grant.
+    #[tokio::test]
+    async fn role_based_admin_can_propose_change() {
+        let provider = role_based_fixture();
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(
+                &principal("root"),
+                &Action::ProposeChange(BlastRadius::AgentSkill),
+                &Resource::System,
+                &ctx,
+            )
+            .await
+            .expect("check must not fail");
+        assert_eq!(decision, AuthzDecision::Allow);
+    }
+
+    /// Multiple roles union their grants.
+    #[tokio::test]
+    async fn role_based_unions_grants_across_roles() {
+        let provider = RoleBasedAuthzProvider::builder()
+            .grant("reader", [ActionKind::Read])
+            .grant("writer", [ActionKind::Write])
+            .assign(PrincipalId::new("carol"), ["reader", "writer"])
+            .build();
+        let ctx = AuthzContext::default();
+
+        for action in [Action::Read, Action::Write] {
+            let decision = provider
+                .check(&principal("carol"), &action, &Resource::System, &ctx)
+                .await
+                .expect("check must not fail");
+            assert_eq!(decision, AuthzDecision::Allow, "carol should have {action:?}");
+        }
+
+        // But not execute.
+        let decision = provider
+            .check(&principal("carol"), &Action::Execute, &Resource::System, &ctx)
+            .await
+            .expect("check must not fail");
+        assert!(matches!(decision, AuthzDecision::Deny(_)));
+    }
+
+    #[test]
+    fn action_kind_classifies_all_variants() {
+        let artifact = ChangeArtifactId { hash: [0u8; 32] };
+        let cases: Vec<(Action, ActionKind)> = vec![
+            (Action::Read, ActionKind::Read),
+            (Action::Write, ActionKind::Write),
+            (Action::Execute, ActionKind::Execute),
+            (Action::Admin, ActionKind::Admin),
+            (Action::ToolCall("bash".into()), ActionKind::ToolCall),
+            (Action::SessionOp("join".into()), ActionKind::SessionOp),
+            (Action::MemoryAccess("c".into()), ActionKind::MemoryAccess),
+            (Action::ConfigChange("k".into()), ActionKind::ConfigChange),
+            (
+                Action::ProposeChange(BlastRadius::AgentMemory),
+                ActionKind::ProposeChange,
+            ),
+            (
+                Action::ApproveChange(artifact),
+                ActionKind::ApproveChange,
+            ),
+        ];
+
+        for (action, expected) in cases {
+            assert_eq!(ActionKind::of(&action), expected, "classify {action:?}");
+        }
     }
 }

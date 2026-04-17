@@ -17,7 +17,7 @@ use sera_runtime::context_engine::pipeline::ContextPipeline;
 use sera_runtime::default_runtime::DefaultRuntime;
 use sera_runtime::health;
 use sera_runtime::llm_client::LlmClient;
-use sera_runtime::tools::ToolRegistry;
+use sera_runtime::tools::TraitToolRegistry;
 use sera_runtime::tools::dispatcher::RegistryDispatcher;
 use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
 use serde::{Deserialize, Serialize};
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Build tool registry and dispatcher
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(TraitToolRegistry::with_builtins());
     let dispatcher = RegistryDispatcher::new(Arc::clone(&registry));
 
     // Pre-compute tool definitions for the LLM via serde round-trip

@@ -1,46 +1,31 @@
-//! Bridge from the ToolDispatcher trait to the existing ToolRegistry.
+//! Bridge from the ToolDispatcher trait to TraitToolRegistry.
 //!
-//! Translates OpenAI-format tool_call JSON into ToolRegistry::execute() calls
-//! and formats the results back into tool result messages.
+//! Translates OpenAI-format tool_call JSON into `ToolInput` structs and
+//! delegates to `TraitToolRegistry::execute`, which enforces `ToolPolicy`
+//! before calling through to the underlying `Tool` impl.
 //!
-//! # Policy enforcement — current state
+//! # Policy enforcement
 //!
-//! `RegistryDispatcher` uses `ToolRegistry` (executor-based, no per-call policy).
-//! `TraitToolRegistry` (same module) provides full policy enforcement via
-//! `ToolContext` + `ToolPolicy`, but migrating to it requires:
-//!
-//! 1. **Trait signature change** — `ToolDispatcher::dispatch` must accept a
-//!    `ToolContext` parameter so that `TraitToolRegistry::execute(input, ctx)` can
-//!    be called.  That propagates through `turn.rs`, `default_runtime.rs`, and
-//!    every downstream caller.
-//!
-//! 2. **Tool re-implementation** — all 14+ `ToolExecutor` impls must be wrapped
-//!    or re-written as `Tool`-trait impls so they can be registered in
-//!    `TraitToolRegistry`.
-//!
-//! Track this as a dedicated bead:
-//! > "Thread `ToolContext` through `ToolDispatcher::dispatch`, update all
-//! > callers in `default_runtime.rs`, and wrap existing `ToolExecutor` impls
-//! > as `Tool`-trait adapters so `RegistryDispatcher` can delegate to
-//! > `TraitToolRegistry::execute`.  Tests must verify `ToolPolicy::allows`
-//! > rejects denied tools and passes allowed ones."
+//! `RegistryDispatcher` now uses `TraitToolRegistry` (trait-based, full policy
+//! enforcement via `ToolContext` + `ToolPolicy`). The `ToolContext` passed to
+//! `dispatch` is forwarded directly to `TraitToolRegistry::execute`.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sera_types::tool::ToolContext;
+use sera_types::tool::{ToolContext, ToolInput};
 
-use crate::tools::ToolRegistry;
+use crate::tools::TraitToolRegistry;
 use crate::turn::{ToolDispatcher, ToolError};
 
-/// Concrete ToolDispatcher that delegates to the ToolExecutor-based ToolRegistry.
+/// Concrete ToolDispatcher that delegates to the trait-based TraitToolRegistry.
 pub struct RegistryDispatcher {
-    registry: Arc<ToolRegistry>,
+    registry: Arc<TraitToolRegistry>,
 }
 
 impl RegistryDispatcher {
     /// Create a new dispatcher backed by the given registry.
-    pub fn new(registry: Arc<ToolRegistry>) -> Self {
+    pub fn new(registry: Arc<TraitToolRegistry>) -> Self {
         Self { registry }
     }
 }
@@ -61,10 +46,8 @@ impl ToolDispatcher for RegistryDispatcher {
     async fn dispatch(
         &self,
         tool_call: &serde_json::Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Result<serde_json::Value, ToolError> {
-        // TODO(sera-ttrm-2): use `_ctx` to enforce ToolPolicy + authz via
-        // TraitToolRegistry. Today the executor-based registry ignores it.
         // Extract tool_call_id
         let tool_call_id = tool_call
             .get("id")
@@ -81,27 +64,31 @@ impl ToolDispatcher for RegistryDispatcher {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArguments("missing 'function.name' field".to_string()))?;
 
-        // Check tool exists before attempting execution
-        if self.registry.get(name).is_none() {
-            return Err(ToolError::NotFound(name.to_string()));
-        }
-
         // Extract and parse arguments (arguments is a JSON string, not an object)
         let args_str = function
             .get("arguments")
             .and_then(|v| v.as_str())
             .unwrap_or("{}");
 
-        let args: serde_json::Value = serde_json::from_str(args_str)
+        let arguments: serde_json::Value = serde_json::from_str(args_str)
             .map_err(|e| ToolError::InvalidArguments(format!("failed to parse arguments: {e}")))?;
 
-        // Execute via registry
-        match self.registry.execute(name, &args).await {
-            Ok(content) => Ok(serde_json::json!({
+        let input = ToolInput {
+            name: name.to_string(),
+            arguments,
+            call_id: tool_call_id.to_string(),
+        };
+
+        match self.registry.execute(input, ctx.clone()).await {
+            Ok(output) => Ok(serde_json::json!({
                 "tool_call_id": tool_call_id,
                 "role": "tool",
-                "content": content,
+                "content": output.content,
             })),
+            Err(sera_types::tool::ToolError::NotFound(n)) => Err(ToolError::NotFound(n)),
+            Err(sera_types::tool::ToolError::PolicyDenied(n)) => {
+                Err(ToolError::ExecutionFailed(format!("policy denied: {n}")))
+            }
             Err(e) => Err(ToolError::ExecutionFailed(e.to_string())),
         }
     }
@@ -110,9 +97,11 @@ impl ToolDispatcher for RegistryDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::TraitToolRegistry;
+    use sera_types::tool::ToolPolicy;
 
     fn make_dispatcher() -> RegistryDispatcher {
-        RegistryDispatcher::new(Arc::new(ToolRegistry::new()))
+        RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
     }
 
     #[tokio::test]
@@ -186,7 +175,7 @@ mod tests {
 
     #[test]
     fn registry_get_works() {
-        let registry = ToolRegistry::new();
+        let registry = TraitToolRegistry::with_builtins();
         assert!(registry.get("shell-exec").is_some());
         assert!(registry.get("file-read").is_some());
         assert!(registry.get("file-write").is_some());
@@ -198,7 +187,7 @@ mod tests {
     /// This catches schema incompatibilities between the two ToolDefinition types.
     #[test]
     fn all_tool_definitions_round_trip() -> Result<(), String> {
-        let registry = ToolRegistry::new();
+        let registry = TraitToolRegistry::with_builtins();
         let defs = registry.definitions();
         assert!(!defs.is_empty(), "registry should have tools");
 
@@ -209,5 +198,27 @@ mod tests {
                 .map_err(|e| format!("failed to round-trip tool '{}': {e}", def.function.name))?;
         }
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_policy_denied() {
+        let dispatcher = make_dispatcher();
+        let tool_call = serde_json::json!({
+            "id": "call_6",
+            "type": "function",
+            "function": {
+                "name": "file-list",
+                "arguments": "{\"path\":\"/tmp\"}"
+            }
+        });
+        // Build a ctx that denies everything
+        let mut ctx = ToolContext::default();
+        ctx.policy = ToolPolicy {
+            profile: None,
+            allow_patterns: vec![],
+            deny_patterns: vec!["*".to_string()],
+        };
+        let err = dispatcher.dispatch(&tool_call, &ctx).await.unwrap_err();
+        assert!(matches!(err, ToolError::ExecutionFailed(_)));
     }
 }

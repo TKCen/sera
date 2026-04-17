@@ -1,4 +1,8 @@
-//! Tool executor framework and registry.
+//! Tool registry and dispatcher for the SERA runtime.
+//!
+//! All built-in tools are registered as `ToolExecutorAdapter<T>` wrappers in
+//! `TraitToolRegistry::with_builtins()`. The legacy `ToolExecutor` trait and
+//! `ToolRegistry` struct have been removed — use `TraitToolRegistry` directly.
 
 pub mod adapter;
 pub mod file_ops;
@@ -18,9 +22,12 @@ pub mod dispatcher;
 
 pub use adapter::ToolExecutorAdapter;
 
-use crate::types::{FunctionDefinition, ToolDefinition};
-
-/// Trait for tool executors.
+/// Trait for tool executors — used by `ToolExecutorAdapter` to bridge concrete
+/// tool implementations into the spec-aligned `Tool` trait surface.
+///
+/// The 14 built-in tools implement this trait. `ToolExecutorAdapter<T>` wraps
+/// any `ToolExecutor` as a `Tool`. Direct `Tool` impls will replace these
+/// adapters in a later bead (sera-cdan).
 #[async_trait::async_trait]
 pub trait ToolExecutor: Send + Sync {
     fn name(&self) -> &str;
@@ -29,77 +36,12 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, args: &serde_json::Value) -> anyhow::Result<String>;
 }
 
-/// Registry of available tools.
-pub struct ToolRegistry {
-    tools: Vec<Box<dyn ToolExecutor>>,
-}
-
-impl ToolRegistry {
-    /// Create a registry with all built-in tools.
-    pub fn new() -> Self {
-        let tools: Vec<Box<dyn ToolExecutor>> = vec![
-            Box::new(file_ops::FileRead),
-            Box::new(file_ops::FileWrite),
-            Box::new(file_ops::FileList),
-            Box::new(file_edit::FileEdit),
-            Box::new(shell_exec::ShellExec),
-            Box::new(http_request::HttpRequest),
-            Box::new(knowledge::KnowledgeStore),
-            Box::new(knowledge::KnowledgeQuery),
-            Box::new(web_fetch::WebFetch),
-            Box::new(glob::Glob),
-            Box::new(grep::Grep),
-            Box::new(spawn::SpawnEphemeral),
-            Box::new(tool_search::ToolSearch),
-            Box::new(tool_search::SkillSearch),
-        ];
-        Self { tools }
-    }
-
-    /// Get tool definitions for the LLM.
-    pub fn definitions(&self) -> Vec<ToolDefinition> {
-        self.tools
-            .iter()
-            .map(|t| ToolDefinition {
-                tool_type: "function".to_string(),
-                function: FunctionDefinition {
-                    name: t.name().to_string(),
-                    description: t.description().to_string(),
-                    parameters: t.parameters(),
-                },
-            })
-            .collect()
-    }
-
-    /// Execute a tool by name.
-    pub async fn execute(&self, name: &str, args: &serde_json::Value) -> anyhow::Result<String> {
-        let tool = self
-            .tools
-            .iter()
-            .find(|t| t.name() == name)
-            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
-        tool.execute(args).await
-    }
-
-    /// Look up a tool executor by name.
-    pub fn get(&self, name: &str) -> Option<&dyn ToolExecutor> {
-        self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
-    }
-}
-
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ── Trait-based registry (SPEC-tools aligned) ────────────────────────────────
 
 use std::collections::HashMap;
 use sera_types::tool::{Tool, ToolInput, ToolOutput, ToolError, ToolContext, ToolMetadata};
 
 /// Spec-aligned tool registry using the Tool trait.
-#[allow(dead_code)]
 pub struct TraitToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
 }
@@ -113,17 +55,15 @@ impl TraitToolRegistry {
     }
 
     /// Create a registry populated with the 14 built-in tools via
-    /// [`ToolExecutorAdapter`]. Mirrors the tool set registered by
-    /// [`ToolRegistry::new`].
+    /// [`ToolExecutorAdapter`].
     ///
     /// Every tool flows through the adapter with conservative defaults
     /// (`RiskLevel::Execute`, `ExecutionTarget::InProcess`). Bead 5
     /// (sera-cdan) replaces selected wrappers with direct `Tool` impls and
     /// refines risk levels.
     ///
-    /// Note: `centrifugo::CentrifugoPublisher` is **not** a `ToolExecutor`
-    /// — it is a publisher helper used elsewhere in the runtime — so it is
-    /// not registered here. This matches `ToolRegistry::new`.
+    /// Note: `centrifugo::CentrifugoPublisher` is a publisher helper used
+    /// elsewhere in the runtime and is not registered here.
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
         registry.register(Box::new(ToolExecutorAdapter::new(file_ops::FileRead)));
@@ -357,7 +297,6 @@ mod trait_registry_tests {
         );
 
         // Every adapter-wrapped tool must be reachable by its ToolExecutor name.
-        // Mirrors the tool set from ToolRegistry::new().
         let expected = [
             "file-read",
             "file-write",

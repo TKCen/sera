@@ -155,6 +155,161 @@ impl PluginManifest {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Flat plugin manifest (sera/v1) — canonical on-disk format for SERA plugins
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Plugin kind — what role this plugin fulfils in the SERA extension model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PluginKind {
+    /// Exposes callable tools to agents.
+    Tool,
+    /// Provides higher-level skill packs to agents.
+    Skill,
+    /// Implements a backend provider (model, memory, sandbox, …).
+    Provider,
+    /// Participates in the gateway hook chain.
+    Hook,
+}
+
+/// Volume mount definition for a containerised plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginVolume {
+    /// Path on the host (or in the orchestrator namespace).
+    pub host_path: String,
+    /// Mount path inside the plugin container.
+    pub container_path: String,
+    /// When `true` the mount is read-only.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// Flat on-disk manifest for a SERA plugin (`api_version: sera/v1`).
+///
+/// # Example
+///
+/// ```yaml
+/// api_version: sera/v1
+/// name: hello-plugin
+/// version: "1.0.0"
+/// kind: Tool
+/// description: "A minimal hello-world plugin."
+/// entry_point: "bin/hello-plugin"
+/// capabilities:
+///   - "fs:read"
+/// ```
+///
+/// Parse with [`PluginManifestV1::from_yaml`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginManifestV1 {
+    /// Must be exactly `"sera/v1"`.
+    pub api_version: String,
+    /// Plugin name — must match `^[a-z][a-z0-9-]*$`.
+    pub name: String,
+    /// Semantic version string, e.g. `"1.2.3"`.
+    pub version: String,
+    /// Plugin kind.
+    pub kind: PluginKind,
+    /// Human-readable description.
+    pub description: Option<String>,
+    /// Plugin author.
+    pub author: Option<String>,
+    /// SPDX license identifier, e.g. `"Apache-2.0"`.
+    pub license: Option<String>,
+    /// Plugin homepage URL.
+    pub homepage: Option<String>,
+    /// Path relative to the plugin root, or a container image reference.
+    pub entry_point: String,
+    /// Capability strings the plugin requires, e.g. `["fs:read", "net:http"]`.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Minimum sandbox tier required to run this plugin (1–3).
+    pub requires_tier: Option<u8>,
+    /// Environment variables to inject into the plugin process.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// Volume mounts for containerised plugins.
+    #[serde(default)]
+    pub volumes: Vec<PluginVolume>,
+}
+
+impl PluginManifestV1 {
+    /// Parse a YAML string and validate the result.
+    ///
+    /// Validation rules:
+    /// - `api_version` must equal `"sera/v1"`
+    /// - `name` must match `^[a-z][a-z0-9-]*$`
+    ///
+    /// Returns [`PluginError::ManifestInvalid`] for parse or validation errors.
+    pub fn from_yaml(yaml: &str) -> Result<Self, PluginError> {
+        let manifest: Self =
+            serde_yaml::from_str(yaml).map_err(|e| PluginError::ManifestInvalid {
+                reason: e.to_string(),
+            })?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    fn validate(&self) -> Result<(), PluginError> {
+        if self.api_version != "sera/v1" {
+            return Err(PluginError::ManifestInvalid {
+                reason: format!(
+                    "api_version must be 'sera/v1', got '{}'",
+                    self.api_version
+                ),
+            });
+        }
+        if !is_valid_plugin_name(&self.name) {
+            return Err(PluginError::ManifestInvalid {
+                reason: format!(
+                    "name '{}' is invalid — must match ^[a-z][a-z0-9-]*$",
+                    self.name
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Returns `true` if `name` matches `^[a-z][a-z0-9-]*$`.
+fn is_valid_plugin_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PluginService trait
+//
+// gRPC transport (tonic + .proto files in rust/proto/plugin/) is deferred to
+// ecosystem phase S. For now, gateway wiring uses this Rust trait directly.
+// Follow-up bead: sera-ecosystem-phase1-grpc.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sync trait for plugin lifecycle management.
+///
+/// A future phase will generate tonic stubs from `rust/proto/plugin/registry.proto`
+/// and implement this trait over the gRPC channel. Until then, gateway code
+/// targets this trait for testability.
+pub trait PluginService: Send + Sync {
+    /// Return metadata for all registered plugins.
+    fn list_plugins(&self) -> Vec<PluginManifestV1>;
+
+    /// Load (register) a plugin from its manifest.
+    ///
+    /// Returns [`PluginError::RegistrationFailed`] if the name is already taken.
+    fn load_plugin(&self, manifest: PluginManifestV1) -> Result<(), PluginError>;
+
+    /// Unload (deregister) a plugin by name.
+    ///
+    /// Returns [`PluginError::PluginNotFound`] if no such plugin is registered.
+    fn unload_plugin(&self, name: &str) -> Result<(), PluginError>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +422,151 @@ spec:
         let m = PluginManifest::from_yaml(yaml).unwrap();
         let reg = m.into_registration().unwrap();
         assert_eq!(reg.capabilities.len(), 2);
+    }
+
+    // ── PluginManifestV1 tests ────────────────────────────────────────────────
+
+    const MINIMAL_V1_YAML: &str = r#"
+api_version: sera/v1
+name: hello-plugin
+version: "1.0.0"
+kind: Tool
+entry_point: "bin/hello-plugin"
+"#;
+
+    #[test]
+    fn v1_valid_minimal_parses() {
+        let m = PluginManifestV1::from_yaml(MINIMAL_V1_YAML).unwrap();
+        assert_eq!(m.api_version, "sera/v1");
+        assert_eq!(m.name, "hello-plugin");
+        assert_eq!(m.version, "1.0.0");
+        assert_eq!(m.kind, PluginKind::Tool);
+        assert_eq!(m.entry_point, "bin/hello-plugin");
+        assert!(m.capabilities.is_empty());
+        assert!(m.env.is_empty());
+        assert!(m.volumes.is_empty());
+        assert!(m.requires_tier.is_none());
+    }
+
+    #[test]
+    fn v1_invalid_api_version_rejected() {
+        let yaml = MINIMAL_V1_YAML.replace("sera/v1", "sera/v2");
+        let err = PluginManifestV1::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, PluginError::ManifestInvalid { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("api_version"));
+    }
+
+    #[test]
+    fn v1_name_starts_with_digit_rejected() {
+        let yaml = MINIMAL_V1_YAML.replace("name: hello-plugin", "name: 1bad-name");
+        let err = PluginManifestV1::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, PluginError::ManifestInvalid { .. }));
+        assert!(err.to_string().contains("1bad-name"));
+    }
+
+    #[test]
+    fn v1_name_with_uppercase_rejected() {
+        let yaml = MINIMAL_V1_YAML.replace("name: hello-plugin", "name: BadName");
+        let err = PluginManifestV1::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, PluginError::ManifestInvalid { .. }));
+        assert!(err.to_string().contains("BadName"));
+    }
+
+    #[test]
+    fn v1_kind_variants_roundtrip() {
+        for (yaml_kind, expected) in &[
+            ("Tool", PluginKind::Tool),
+            ("Skill", PluginKind::Skill),
+            ("Provider", PluginKind::Provider),
+            ("Hook", PluginKind::Hook),
+        ] {
+            let yaml = format!(
+                "api_version: sera/v1\nname: test\nversion: \"1.0.0\"\nkind: {yaml_kind}\nentry_point: bin/x\n"
+            );
+            let m = PluginManifestV1::from_yaml(&yaml).unwrap();
+            assert_eq!(&m.kind, expected, "kind {yaml_kind} did not roundtrip");
+            // Roundtrip through serde_yaml
+            let reserialized = serde_yaml::to_string(&m).unwrap();
+            let m2: PluginManifestV1 = serde_yaml::from_str(&reserialized).unwrap();
+            assert_eq!(&m2.kind, expected);
+        }
+    }
+
+    #[test]
+    fn v1_missing_required_field_produces_error() {
+        // Missing `entry_point`
+        let yaml = r#"
+api_version: sera/v1
+name: no-entry
+version: "1.0.0"
+kind: Tool
+"#;
+        let err = PluginManifestV1::from_yaml(yaml).unwrap_err();
+        assert!(matches!(err, PluginError::ManifestInvalid { .. }));
+        // serde_yaml error message should mention the missing field
+        assert!(err.to_string().contains("entry_point"));
+    }
+
+    #[test]
+    fn v1_volume_read_only_serializes_correctly() {
+        let yaml = r#"
+api_version: sera/v1
+name: vol-plugin
+version: "1.0.0"
+kind: Provider
+entry_point: "bin/vol-plugin"
+volumes:
+  - host_path: "/data/models"
+    container_path: "/models"
+    read_only: true
+  - host_path: "/tmp/scratch"
+    container_path: "/scratch"
+"#;
+        let m = PluginManifestV1::from_yaml(yaml).unwrap();
+        assert_eq!(m.volumes.len(), 2);
+        let ro = &m.volumes[0];
+        assert_eq!(ro.host_path, "/data/models");
+        assert_eq!(ro.container_path, "/models");
+        assert!(ro.read_only);
+        let rw = &m.volumes[1];
+        assert!(!rw.read_only);
+
+        // Serialise and check read_only appears in output
+        let out = serde_yaml::to_string(&m).unwrap();
+        assert!(out.contains("read_only: true"));
+    }
+
+    #[test]
+    fn v1_full_manifest_parses() {
+        let yaml = r#"
+api_version: sera/v1
+name: full-plugin
+version: "2.1.0"
+kind: Skill
+description: "Full featured plugin"
+author: "SERA Team"
+license: "Apache-2.0"
+homepage: "https://example.com"
+entry_point: "ghcr.io/org/full-plugin:2.1.0"
+capabilities:
+  - "fs:read"
+  - "net:http"
+requires_tier: 2
+env:
+  LOG_LEVEL: debug
+  API_KEY: placeholder
+volumes:
+  - host_path: "/var/data"
+    container_path: "/data"
+    read_only: false
+"#;
+        let m = PluginManifestV1::from_yaml(yaml).unwrap();
+        assert_eq!(m.name, "full-plugin");
+        assert_eq!(m.kind, PluginKind::Skill);
+        assert_eq!(m.capabilities, vec!["fs:read", "net:http"]);
+        assert_eq!(m.requires_tier, Some(2));
+        assert_eq!(m.env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
+        assert_eq!(m.volumes.len(), 1);
     }
 }

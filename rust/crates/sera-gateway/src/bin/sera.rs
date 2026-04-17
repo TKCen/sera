@@ -346,12 +346,6 @@ struct AppState {
     chain_executor: Arc<ChainExecutor>,
     /// Pre-connected runtime harnesses keyed by agent name.
     harnesses: std::collections::HashMap<String, Arc<StdioHarness>>,
-    /// Self-evolution pipeline — propose/evaluate/approve/apply ChangeArtifacts.
-    /// Wired from `sera-meta::artifact_pipeline::ArtifactPipeline` so hooks and
-    /// workflow tasks can submit evolution proposals.
-    // TODO(sera-2q1d): pipeline is wired; route handlers for /evolve endpoints will consume it.
-    #[allow(dead_code)]
-    evolution_pipeline: Arc<sera_meta::artifact_pipeline::ArtifactPipeline>,
     /// Shutdown flag observed by long-running background loops. Flipped to
     /// `true` after a SIGTERM/Ctrl+C signal so loops can exit their next
     /// iteration instead of blocking the drain phase. Written by the
@@ -1765,9 +1759,6 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         hook_registry,
         chain_executor,
         harnesses,
-        evolution_pipeline: Arc::new(
-            sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-        ),
         shutting_down: Arc::clone(&shutting_down),
     });
 
@@ -1933,9 +1924,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: test_harnesses().await,
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
@@ -1952,9 +1940,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
@@ -1971,9 +1956,6 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: test_harnesses().await,
-            evolution_pipeline: Arc::new(
-                sera_meta::artifact_pipeline::ArtifactPipeline::with_defaults(),
-            ),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }

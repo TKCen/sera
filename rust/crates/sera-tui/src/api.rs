@@ -21,6 +21,7 @@ pub struct Agent {
 }
 
 /// Request payload for the chat endpoint.
+// TODO(sera-2q1d): used by send_chat when chat route is wired in the TUI.
 #[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ChatRequest {

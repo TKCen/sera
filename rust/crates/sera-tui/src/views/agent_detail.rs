@@ -7,6 +7,7 @@ use crate::api::Agent;
 use super::View;
 
 /// Displays details for a single agent.
+// TODO(sera-2q1d): view is scaffolded; not yet instantiated in the main app loop.
 #[allow(dead_code)]
 pub struct AgentDetailView {
     agent: Option<Agent>,

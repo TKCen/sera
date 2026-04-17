@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Context manager — tracks message token usage and compacts when needed.
 //!
 //! Ported from the TypeScript implementation in `core/agent-runtime/src/contextManager.ts`.

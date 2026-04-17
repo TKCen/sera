@@ -2,6 +2,8 @@
 //!
 //! Loads AGENT.yaml manifests and assembles system prompts using priority-ordered sections.
 
+// TODO(sera-2q1d): manifest types are used for YAML loading but many fields are
+// not yet consumed by the reasoning loop; suppress until wired end-to-end.
 #![allow(dead_code, non_snake_case)]
 
 use serde::{Deserialize, Serialize};
@@ -196,7 +198,6 @@ pub fn load_manifest<P: AsRef<Path>>(path: P) -> anyhow::Result<RuntimeManifest>
 
 /// A section of the system prompt with priority ordering.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PromptSection {
     pub id: String,
     pub priority: u32,
@@ -205,7 +206,6 @@ pub struct PromptSection {
 }
 
 /// Builds system prompt from manifest with priority-based composition and token budgets.
-#[allow(dead_code)]
 pub struct SystemPromptBuilder {
     sections: Vec<PromptSection>,
     token_budget: usize,

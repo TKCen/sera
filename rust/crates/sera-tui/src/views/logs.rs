@@ -7,6 +7,7 @@ use crate::api::LogEntry;
 use super::View;
 
 /// Displays scrollable log entries.
+// TODO(sera-2q1d): view is scaffolded; not yet instantiated in the main app loop.
 #[allow(dead_code)]
 pub struct LogsView {
     logs: Vec<LogEntry>,

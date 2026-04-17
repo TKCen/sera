@@ -101,7 +101,6 @@ pub struct TraitToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
 }
 
-#[allow(dead_code)]
 impl TraitToolRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {

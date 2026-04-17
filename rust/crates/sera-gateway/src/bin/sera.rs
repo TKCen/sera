@@ -241,6 +241,7 @@ impl StdioHarness {
     }
 
     /// Send a graceful shutdown command to the runtime process.
+    // TODO(sera-2q1d): called during graceful termination once SIGTERM handling is wired.
     #[allow(dead_code)]
     async fn shutdown(&self) -> anyhow::Result<()> {
         use tokio::io::AsyncWriteExt;
@@ -319,9 +320,11 @@ struct AppState {
     /// (autonomous mode — all access allowed per MVS §6.5).
     api_key: Option<String>,
     /// Lane-aware message queue for managing concurrent agent runs.
+    // TODO(sera-2q1d): wired into AppState; route handlers will consume this in a later phase.
     #[allow(dead_code)]
     lane_queue: Mutex<LaneQueue>,
     /// Hook registry for lifecycle event hooks.
+    // TODO(sera-2q1d): wired into AppState; consumed via chain_executor, registry kept for direct lookup.
     #[allow(dead_code)]
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
@@ -331,6 +334,7 @@ struct AppState {
     /// Self-evolution pipeline — propose/evaluate/approve/apply ChangeArtifacts.
     /// Wired from `sera-meta::artifact_pipeline::ArtifactPipeline` so hooks and
     /// workflow tasks can submit evolution proposals.
+    // TODO(sera-2q1d): pipeline is wired; route handlers for /evolve endpoints will consume it.
     #[allow(dead_code)]
     evolution_pipeline: Arc<sera_meta::artifact_pipeline::ArtifactPipeline>,
 }

@@ -1,10 +1,12 @@
 //! Shared UI rendering helpers.
+// TODO(sera-2q1d): helper fns are part of the shared UI library; not all are
+// called by existing views yet but form the intended public API surface.
+#![allow(dead_code)]
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 /// Create a centered block with a title.
-#[allow(dead_code)]
 pub fn centered_block(title: &str) -> ratatui::widgets::Block<'_> {
     ratatui::widgets::Block::default()
         .title(format!(" {} ", title))
@@ -13,19 +15,16 @@ pub fn centered_block(title: &str) -> ratatui::widgets::Block<'_> {
 }
 
 /// Create a styled error message.
-#[allow(dead_code)]
 pub fn error_text(message: &str) -> Paragraph<'_> {
     Paragraph::new(message).style(Style::default().fg(Color::Red).bold())
 }
 
 /// Create a styled info message.
-#[allow(dead_code)]
 pub fn info_text(message: &str) -> Paragraph<'_> {
     Paragraph::new(message).style(Style::default().fg(Color::Green))
 }
 
 /// Create a styled warning message.
-#[allow(dead_code)]
 pub fn warning_text(message: &str) -> Paragraph<'_> {
     Paragraph::new(message).style(Style::default().fg(Color::Yellow))
 }

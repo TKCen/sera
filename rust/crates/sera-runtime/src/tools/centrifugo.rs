@@ -2,6 +2,7 @@
 
 use serde_json::json;
 
+// TODO(sera-2q1d): CentrifugoPublisher is a future-use integration; not yet wired into the runtime.
 #[allow(dead_code)]
 pub struct CentrifugoPublisher {
     base_url: String,
@@ -9,12 +10,10 @@ pub struct CentrifugoPublisher {
 }
 
 impl CentrifugoPublisher {
-    #[allow(dead_code)]
     pub fn new(base_url: String, api_key: String) -> Self {
         Self { base_url, api_key }
     }
 
-    #[allow(dead_code)]
     pub async fn publish_thought(&self, event: &str, data: serde_json::Value) -> anyhow::Result<()> {
         let payload = json!({
             "method": "publish",
@@ -30,7 +29,6 @@ impl CentrifugoPublisher {
         self.send_request(payload).await
     }
 
-    #[allow(dead_code)]
     pub async fn publish_token_chunk(&self, chunk: &str, model: &str) -> anyhow::Result<()> {
         let payload = json!({
             "method": "publish",
@@ -46,7 +44,6 @@ impl CentrifugoPublisher {
         self.send_request(payload).await
     }
 
-    #[allow(dead_code)]
     pub async fn publish_tool_output(&self, tool_name: &str, output: &str) -> anyhow::Result<()> {
         let payload = json!({
             "method": "publish",
@@ -62,7 +59,6 @@ impl CentrifugoPublisher {
         self.send_request(payload).await
     }
 
-    #[allow(dead_code)]
     async fn send_request(&self, payload: serde_json::Value) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         let resp = client

@@ -10,9 +10,7 @@ pub struct TaskInput {
     pub prompt: String,
     #[serde(default)]
     pub context: Vec<ChatMessage>,
-    #[allow(dead_code)]
     pub agent_id: Option<String>,
-    #[allow(dead_code)]
     pub session_id: Option<String>,
     pub max_iterations: Option<u32>,
 }
@@ -83,6 +81,7 @@ pub struct UsageStats {
 }
 
 /// LLM response from the chat completions endpoint.
+// TODO(sera-2q1d): deserialized from LLM API responses; fields read selectively.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct LlmResponse {
@@ -106,13 +105,10 @@ pub struct LlmUsage {
     #[serde(default)]
     pub completion_tokens: u32,
     #[serde(default)]
-    #[allow(dead_code)]
     pub cache_creation_tokens: u32,
     #[serde(default)]
-    #[allow(dead_code)]
     pub cache_read_tokens: u32,
     #[serde(default)]
-    #[allow(dead_code)]
     pub total_tokens: u32,
 }
 

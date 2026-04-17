@@ -21,7 +21,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 #[cfg(test)]
 use crate::lsp::client::LspClient;
 
-use super::{ByteRange, SymbolEntry, SymbolsOverview};
+use super::{ByteRange, SymbolEntry, SymbolKind, SymbolsOverview};
 
 /// Input schema for `get_symbols_overview`.
 ///
@@ -298,7 +298,7 @@ fn convert_symbols(
         .iter()
         .map(|s| SymbolEntry {
             name: s.name.clone(),
-            kind: s.kind,
+            kind: SymbolKind::from(s.kind),
             range: ByteRange {
                 start: position_to_byte(&s.range.start, line_starts, total_len),
                 end: position_to_byte(&s.range.end, line_starts, total_len),
@@ -406,11 +406,11 @@ mod tests {
     fn trim_depth_zero_drops_all_children() {
         let s = SymbolEntry {
             name: "root".into(),
-            kind: lsp_types::SymbolKind::STRUCT,
+            kind: SymbolKind::new(23),
             range: ByteRange { start: 0, end: 1 },
             children: vec![SymbolEntry {
                 name: "child".into(),
-                kind: lsp_types::SymbolKind::FIELD,
+                kind: SymbolKind::new(8),
                 range: ByteRange { start: 2, end: 3 },
                 children: vec![],
             }],
@@ -424,15 +424,15 @@ mod tests {
     fn trim_depth_one_keeps_immediate_children_only() {
         let s = SymbolEntry {
             name: "root".into(),
-            kind: lsp_types::SymbolKind::STRUCT,
+            kind: SymbolKind::new(23),
             range: ByteRange { start: 0, end: 1 },
             children: vec![SymbolEntry {
                 name: "child".into(),
-                kind: lsp_types::SymbolKind::FIELD,
+                kind: SymbolKind::new(8),
                 range: ByteRange { start: 2, end: 3 },
                 children: vec![SymbolEntry {
                     name: "grandchild".into(),
-                    kind: lsp_types::SymbolKind::FIELD,
+                    kind: SymbolKind::new(8),
                     range: ByteRange { start: 4, end: 5 },
                     children: vec![],
                 }],
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(overview.language, "rust");
         assert_eq!(overview.symbols.len(), 2);
         assert_eq!(overview.symbols[0].name, "Foo");
-        assert_eq!(overview.symbols[0].kind, lsp_types::SymbolKind::STRUCT);
+        assert_eq!(overview.symbols[0].kind, SymbolKind::new(23));
         // depth=0 dropped children
         assert!(overview.symbols[0].children.is_empty());
         // Byte ranges computed from line-start table
@@ -642,7 +642,7 @@ mod tests {
         };
         let cached = vec![SymbolEntry {
             name: "CachedHit".into(),
-            kind: lsp_types::SymbolKind::STRUCT,
+            kind: SymbolKind::new(23),
             range: ByteRange { start: 0, end: 5 },
             children: vec![],
         }];

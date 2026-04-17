@@ -35,6 +35,15 @@ pub enum LspError {
     /// Cache miss (consumer should repopulate via an LSP round-trip).
     #[error("symbol cache miss")]
     CacheMiss,
+
+    /// Caller-supplied name-path pattern failed to parse.
+    #[error("invalid name path `{raw}`: {reason}")]
+    InvalidNamePath { raw: String, reason: String },
+
+    /// A `find_referencing_symbols` call could not locate its target symbol
+    /// in the supplied file.
+    #[error("symbol not found: `{name_path}`")]
+    SymbolNotFound { name_path: String },
 }
 
 impl From<LspError> for SeraError {
@@ -46,6 +55,8 @@ impl From<LspError> for SeraError {
             LspError::PathTraversal => SeraErrorCode::InvalidInput,
             LspError::Unsupported { .. } => SeraErrorCode::NotImplemented,
             LspError::CacheMiss => SeraErrorCode::NotFound,
+            LspError::InvalidNamePath { .. } => SeraErrorCode::InvalidInput,
+            LspError::SymbolNotFound { .. } => SeraErrorCode::NotFound,
         };
         let message = err.to_string();
         SeraError::with_source(code, message, err)

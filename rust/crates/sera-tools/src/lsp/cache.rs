@@ -169,7 +169,7 @@ mod tests {
     fn sample_symbol(name: &str) -> SymbolEntry {
         SymbolEntry {
             name: name.to_string(),
-            kind: lsp_types::SymbolKind::STRUCT,
+            kind: crate::lsp::tools::SymbolKind::new(23),
             range: ByteRange { start: 0, end: 10 },
             children: Vec::new(),
         }

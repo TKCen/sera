@@ -32,6 +32,33 @@ impl LspServerConfig {
             initialization_options: serde_json::json!({}),
         }
     }
+
+    /// Default built-in Python entry (`pyright-langserver --stdio`).
+    ///
+    /// Phase 2 ships this as config-only — CI does not exercise Pyright.
+    /// See `docs/plan/LSP-TOOLS-DESIGN.md` §5.
+    pub fn default_python() -> Self {
+        Self {
+            language_id: "python".to_string(),
+            command: "pyright-langserver".to_string(),
+            args: vec!["--stdio".to_string()],
+            extensions: vec![".py".to_string()],
+            initialization_options: serde_json::json!({}),
+        }
+    }
+
+    /// Default built-in TypeScript entry (`typescript-language-server --stdio`).
+    ///
+    /// Covers both `.ts` and `.tsx`. Config-only in Phase 2.
+    pub fn default_typescript() -> Self {
+        Self {
+            language_id: "typescript".to_string(),
+            command: "typescript-language-server".to_string(),
+            args: vec!["--stdio".to_string()],
+            extensions: vec![".ts".to_string(), ".tsx".to_string()],
+            initialization_options: serde_json::json!({}),
+        }
+    }
 }
 
 /// In-memory registry keyed by `language_id`.
@@ -48,10 +75,12 @@ impl LspServerRegistry {
         }
     }
 
-    /// Registry pre-populated with SERA's shipped defaults (currently: Rust only).
+    /// Registry pre-populated with SERA's shipped defaults (Rust, Python, TypeScript).
     pub fn with_defaults() -> Self {
         let mut reg = Self::new();
         reg.register(LspServerConfig::default_rust());
+        reg.register(LspServerConfig::default_python());
+        reg.register(LspServerConfig::default_typescript());
         reg
     }
 
@@ -110,6 +139,24 @@ mod tests {
         let reg = LspServerRegistry::with_defaults();
         assert!(reg.resolve_for_extension(".kt").is_none());
         assert!(reg.resolve_for_extension("rs").is_none()); // missing dot
+    }
+
+    #[test]
+    fn python_default_resolves_for_py() {
+        let reg = LspServerRegistry::with_defaults();
+        let cfg = reg.resolve_for_extension(".py").expect("python entry");
+        assert_eq!(cfg.language_id, "python");
+        assert_eq!(cfg.command, "pyright-langserver");
+        assert_eq!(cfg.args, vec!["--stdio".to_string()]);
+    }
+
+    #[test]
+    fn typescript_default_resolves_for_ts_and_tsx() {
+        let reg = LspServerRegistry::with_defaults();
+        let cfg = reg.resolve_for_extension(".ts").expect("ts entry");
+        assert_eq!(cfg.language_id, "typescript");
+        let tsx = reg.resolve_for_extension(".tsx").expect("tsx entry");
+        assert_eq!(tsx.language_id, "typescript");
     }
 
     #[test]

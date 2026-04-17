@@ -16,7 +16,10 @@ use tokio::sync::Mutex;
 
 use lsp_types::{
     ClientCapabilities, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    InitializeParams, InitializeResult, InitializedParams, TextDocumentIdentifier, Uri,
+    InitializeParams, InitializeResult, InitializedParams, Location, OneOf, PartialResultParams,
+    Position, ReferenceContext, ReferenceParams, SymbolInformation, TextDocumentIdentifier,
+    TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceSymbol,
+    WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 
 use super::error::LspError;
@@ -117,14 +120,64 @@ where
         })
     }
 
-    /// Phase 2 placeholder. Returns `Unsupported` today.
+    /// Send `workspace/symbol` and normalise the response to
+    /// `Vec<SymbolInformation>`.
+    ///
+    /// LSP 3.17 introduced `WorkspaceSymbol` alongside the legacy
+    /// `SymbolInformation`; servers may respond with either shape. rust-analyzer
+    /// emits the flat `SymbolInformation` variant as of this writing. We accept
+    /// both and flatten to the older, location-bearing shape so downstream
+    /// tools always have a concrete `Location`. `WorkspaceSymbol` entries with
+    /// a range-less `WorkspaceLocation` become `SymbolInformation` with a
+    /// zero-width range anchored at `(0, 0)` — the caller will have to issue
+    /// `workspace/symbol/resolve` to fill it in (phase 3).
     pub async fn workspace_symbol(
         &self,
-        _query: &str,
-    ) -> Result<Vec<lsp_types::SymbolInformation>, LspError> {
-        Err(LspError::Unsupported {
-            language: "workspace_symbol (phase 2)".to_string(),
+        query: &str,
+    ) -> Result<Vec<SymbolInformation>, LspError> {
+        let params = WorkspaceSymbolParams {
+            query: query.to_string(),
+            partial_result_params: PartialResultParams::default(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        };
+        let resp = self
+            .request::<_, Option<WorkspaceSymbolResponse>>("workspace/symbol", params)
+            .await?;
+        Ok(match resp {
+            None => Vec::new(),
+            Some(WorkspaceSymbolResponse::Flat(v)) => v,
+            Some(WorkspaceSymbolResponse::Nested(v)) => v
+                .into_iter()
+                .map(workspace_symbol_to_flat)
+                .collect(),
         })
+    }
+
+    /// Send `textDocument/references` and return the list of `Location`s.
+    ///
+    /// Mirrors the LSP method name. `include_declaration = false` matches the
+    /// design-doc default for `find_referencing_symbols`.
+    pub async fn references(
+        &self,
+        uri: Uri,
+        position: Position,
+        include_declaration: bool,
+    ) -> Result<Vec<Location>, LspError> {
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: ReferenceContext {
+                include_declaration,
+            },
+        };
+        let resp = self
+            .request::<_, Option<Vec<Location>>>("textDocument/references", params)
+            .await?;
+        Ok(resp.unwrap_or_default())
     }
 
     /// Issue a typed JSON-RPC request and decode the `result` field.
@@ -182,6 +235,36 @@ where
         };
         let mut w = self.transport.writer.lock().await;
         write_framed(&mut *w, &n).await
+    }
+}
+
+/// Flatten a 3.17 `WorkspaceSymbol` to the older `SymbolInformation` shape
+/// so downstream callers can treat the result uniformly.
+#[allow(deprecated)]
+fn workspace_symbol_to_flat(sym: WorkspaceSymbol) -> SymbolInformation {
+    let location = match sym.location {
+        OneOf::Left(loc) => loc,
+        OneOf::Right(wloc) => Location {
+            uri: wloc.uri,
+            range: lsp_types::Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+        },
+    };
+    SymbolInformation {
+        name: sym.name,
+        kind: sym.kind,
+        tags: sym.tags,
+        deprecated: None,
+        location,
+        container_name: sym.container_name,
     }
 }
 
@@ -337,16 +420,169 @@ mod tests {
         }
     }
 
+    /// Generic one-shot mock — drives the client-side pipes and replies with
+    /// `canned` under the request's own id. Used by the phase 2 workspace
+    /// symbol / references tests so they can share the same pipe plumbing as
+    /// `mock_document_symbol_server`.
+    async fn mock_one_shot(
+        mut client_to_server: tokio::io::DuplexStream,
+        mut server_to_client: tokio::io::DuplexStream,
+        canned: serde_json::Value,
+    ) {
+        let mut reader = BufReader::new(&mut client_to_server);
+        let body = read_framed(&mut reader).await.expect("read request");
+        let req: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = req["id"].as_i64().unwrap();
+        let resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": canned,
+        });
+        write_framed(&mut server_to_client, &resp).await.unwrap();
+    }
+
     #[tokio::test]
-    async fn workspace_symbol_is_phase2() {
-        let (client_w, _server_r) = tokio::io::duplex(64);
-        let (_server_w, client_r) = tokio::io::duplex(64);
+    async fn workspace_symbol_parses_flat_response() {
+        let (client_w, server_r) = tokio::io::duplex(4096);
+        let (server_w, client_r) = tokio::io::duplex(4096);
+
+        // rust-analyzer typically replies with the flat SymbolInformation[] shape.
+        let canned = serde_json::json!([
+            {
+                "name": "Tool",
+                "kind": 11,
+                "location": {
+                    "uri": "file:///tmp/project/src/tool.rs",
+                    "range": {
+                        "start": {"line": 4, "character": 0},
+                        "end": {"line": 4, "character": 14}
+                    }
+                },
+                "containerName": "registry"
+            },
+            {
+                "name": "ToolRegistry",
+                "kind": 23,
+                "location": {
+                    "uri": "file:///tmp/project/src/registry.rs",
+                    "range": {
+                        "start": {"line": 14, "character": 0},
+                        "end": {"line": 42, "character": 1}
+                    }
+                }
+            }
+        ]);
+        tokio::spawn(mock_one_shot(server_r, server_w, canned));
+
         let transport = Arc::new(LspTransport::new(client_w, client_r));
         let client = LspClient::new(transport);
-        let err = client
-            .workspace_symbol("Foo")
+        let syms = client
+            .workspace_symbol("Tool")
             .await
-            .expect_err("phase 1 returns Unsupported");
-        matches!(err, LspError::Unsupported { .. });
+            .expect("workspace_symbol must succeed");
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].name, "Tool");
+        assert_eq!(syms[0].kind, lsp_types::SymbolKind::INTERFACE);
+        assert_eq!(syms[0].container_name.as_deref(), Some("registry"));
+        assert_eq!(syms[1].name, "ToolRegistry");
+    }
+
+    #[tokio::test]
+    async fn workspace_symbol_accepts_nested_3_17_shape() {
+        let (client_w, server_r) = tokio::io::duplex(4096);
+        let (server_w, client_r) = tokio::io::duplex(4096);
+        // 3.17 `WorkspaceSymbol[]` with a real Location.
+        let canned = serde_json::json!([
+            {
+                "name": "Widget",
+                "kind": 23,
+                "location": {
+                    "uri": "file:///tmp/a.rs",
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 0, "character": 6}
+                    }
+                }
+            }
+        ]);
+        tokio::spawn(mock_one_shot(server_r, server_w, canned));
+
+        let transport = Arc::new(LspTransport::new(client_w, client_r));
+        let client = LspClient::new(transport);
+        let syms = client.workspace_symbol("Widget").await.expect("ok");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "Widget");
+    }
+
+    #[tokio::test]
+    async fn workspace_symbol_null_result_is_empty() {
+        let (client_w, server_r) = tokio::io::duplex(1024);
+        let (server_w, client_r) = tokio::io::duplex(1024);
+        tokio::spawn(mock_one_shot(server_r, server_w, serde_json::Value::Null));
+
+        let transport = Arc::new(LspTransport::new(client_w, client_r));
+        let client = LspClient::new(transport);
+        let syms = client.workspace_symbol("nope").await.unwrap();
+        assert!(syms.is_empty());
+    }
+
+    #[tokio::test]
+    async fn references_roundtrips_locations() {
+        let (client_w, server_r) = tokio::io::duplex(4096);
+        let (server_w, client_r) = tokio::io::duplex(4096);
+        let canned = serde_json::json!([
+            {
+                "uri": "file:///tmp/callers.rs",
+                "range": {
+                    "start": {"line": 10, "character": 4},
+                    "end": {"line": 10, "character": 10}
+                }
+            },
+            {
+                "uri": "file:///tmp/other.rs",
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 3}
+                }
+            }
+        ]);
+        tokio::spawn(mock_one_shot(server_r, server_w, canned));
+
+        let transport = Arc::new(LspTransport::new(client_w, client_r));
+        let client = LspClient::new(transport);
+        let locs = client
+            .references(
+                "file:///tmp/target.rs".parse::<Uri>().unwrap(),
+                lsp_types::Position {
+                    line: 5,
+                    character: 4,
+                },
+                false,
+            )
+            .await
+            .expect("references must succeed");
+        assert_eq!(locs.len(), 2);
+        assert_eq!(locs[0].range.start.line, 10);
+    }
+
+    #[tokio::test]
+    async fn references_null_result_is_empty() {
+        let (client_w, server_r) = tokio::io::duplex(512);
+        let (server_w, client_r) = tokio::io::duplex(512);
+        tokio::spawn(mock_one_shot(server_r, server_w, serde_json::Value::Null));
+        let transport = Arc::new(LspTransport::new(client_w, client_r));
+        let client = LspClient::new(transport);
+        let locs = client
+            .references(
+                "file:///tmp/x.rs".parse::<Uri>().unwrap(),
+                lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(locs.is_empty());
     }
 }

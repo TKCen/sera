@@ -43,14 +43,20 @@ struct LaneRunGuard {
 
 impl Drop for LaneRunGuard {
     fn drop(&mut self) {
-        // blocking_lock is safe here: complete_run is synchronous and cheap,
-        // and we're outside the async executor's main path on Drop.
+        // Use blocking_lock rather than spawning a task. Spawning is incorrect
+        // here because the spawned task is scheduled asynchronously — if the
+        // executor processes the spawn *after* `drain_shared` reads
+        // `pending_count()`, the count stays at 1 even though this guard has
+        // semantically released the run. That causes drain to either time out
+        // spuriously or log a false "remaining=1" warning at process exit.
+        //
+        // `blocking_lock` acquires the mutex synchronously on the current
+        // thread, which is safe because `complete_run` is a cheap in-memory
+        // operation (no I/O, no await). This guarantees the decrement is
+        // visible to any subsequent `pending_count()` poll immediately.
         let key = std::mem::take(&mut self.session_key);
-        let lq = self.lane_queue.clone();
-        tokio::spawn(async move {
-            let mut guard = lq.lock().await;
-            guard.complete_run(&key);
-        });
+        let mut guard = self.lane_queue.blocking_lock();
+        guard.complete_run(&key);
     }
 }
 

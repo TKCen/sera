@@ -120,6 +120,13 @@ pub struct LaneQueue {
     /// When `true`, [`LaneQueue::enqueue`] refuses new jobs. Flipped by
     /// [`LaneQueue::close`] during graceful shutdown.
     closed: bool,
+    /// Counts [`LaneQueue::complete_run`] calls that arrived after the queue
+    /// was already closed **and** the lane was no longer processing (i.e. the
+    /// run had already been counted as done). Non-zero values indicate that a
+    /// `complete_run` arrived after [`LaneQueue::drain_shared`] had already
+    /// observed the queue as empty — harmless but useful for diagnosing timing
+    /// of the drop-time race.
+    post_close_stale_complete_runs: usize,
 }
 
 impl LaneQueue {
@@ -134,6 +141,7 @@ impl LaneQueue {
             active_run_count: 0,
             default_mode,
             closed: false,
+            post_close_stale_complete_runs: 0,
         }
     }
 
@@ -246,14 +254,33 @@ impl LaneQueue {
 
     /// Mark the active run for `session_key` as complete and decrement the global counter.
     ///
-    /// Has no effect if the lane does not exist or was not processing.
+    /// **Idempotent / tolerant:** if the lane does not exist, was not
+    /// processing, or the queue is already closed, this is a no-op. The
+    /// `post_close_stale_complete_runs` counter is incremented when a call
+    /// arrives after the queue is closed but the lane is no longer processing —
+    /// this signals the drop-time race (guard dropped after drain saw zero) and
+    /// is safe to ignore.
     pub fn complete_run(&mut self, session_key: &str) {
-        if let Some(lane) = self.lanes.get_mut(session_key)
-            && lane.is_processing
-        {
-            lane.is_processing = false;
-            self.active_run_count = self.active_run_count.saturating_sub(1);
+        if let Some(lane) = self.lanes.get_mut(session_key) {
+            if lane.is_processing {
+                lane.is_processing = false;
+                self.active_run_count = self.active_run_count.saturating_sub(1);
+            } else if self.closed {
+                // The run was already counted as done (drain saw it complete),
+                // but the RAII guard's drop fired after drain exited. Track it
+                // for observability; no state change needed.
+                self.post_close_stale_complete_runs =
+                    self.post_close_stale_complete_runs.saturating_add(1);
+            }
         }
+    }
+
+    /// How many [`LaneQueue::complete_run`] calls arrived after the queue was
+    /// closed and the lane was no longer processing. A non-zero value means a
+    /// `LaneRunGuard` drop raced with the drain window — harmless but
+    /// observable.
+    pub fn post_close_stale_complete_runs(&self) -> usize {
+        self.post_close_stale_complete_runs
     }
 
     /// Change the queue mode for a session.
@@ -892,6 +919,107 @@ mod tests {
 
         assert!(outcome.timed_out);
         assert_eq!(outcome.remaining, 1);
+    }
+
+    // --- drop-time race regression tests -----------------------------------
+
+    /// Regression: `complete_run` called after `drain_shared` has already
+    /// observed the queue as empty (simulating `LaneRunGuard::drop` firing
+    /// after the drain window closes) must be a no-op and must NOT underflow
+    /// `active_run_count`.
+    ///
+    /// Pre-fix, this scenario could produce a spurious "drain timed out with
+    /// remaining=1" because the spawned drop task ran after `drain_shared`
+    /// returned, leaving `active_run_count` incorrectly at 1 during the drain
+    /// poll. The fix (`blocking_lock` in Drop) prevents the task from being
+    /// deferred, but the `complete_run` tolerance is a defence-in-depth guard.
+    #[test]
+    fn complete_run_after_close_is_noop_and_counted() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.enqueue(make_event("s1"));
+        q.dequeue("s1"); // run is now active (active_run_count = 1)
+        q.complete_run("s1"); // normal ack — active_run_count back to 0
+        assert_eq!(q.active_runs(), 0);
+
+        // Simulate drain observing count=0 and then calling close().
+        q.close();
+
+        // Now a stale `complete_run` arrives (as if the drop task was
+        // deferred and runs after drain already exited).
+        q.complete_run("s1");
+
+        // active_run_count must still be 0 — no underflow.
+        assert_eq!(q.active_runs(), 0);
+        // The stale call must be counted for telemetry.
+        assert_eq!(q.post_close_stale_complete_runs(), 1);
+
+        // A second stale call continues to accumulate without underflowing.
+        q.complete_run("s1");
+        assert_eq!(q.active_runs(), 0);
+        assert_eq!(q.post_close_stale_complete_runs(), 2);
+    }
+
+    /// Regression: `drain_shared` must reach zero and return `timed_out=false`
+    /// even when the in-flight guard's `complete_run` fires synchronously (via
+    /// `blocking_lock`) during the poll interval.
+    ///
+    /// This is the happy-path after the fix: `blocking_lock` in Drop ensures
+    /// the decrement happens before any subsequent `pending_count()` poll in
+    /// `drain_shared`, so drain sees zero and exits cleanly.
+    #[tokio::test]
+    async fn drain_shared_sees_zero_after_synchronous_complete_run() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let q = Arc::new(Mutex::new(LaneQueue::new(4, QueueMode::Followup)));
+
+        // Enqueue + dequeue one job (in-flight, active_run_count = 1).
+        {
+            let mut g = q.lock().await;
+            g.enqueue(make_event("s1"));
+            g.dequeue("s1");
+            assert_eq!(g.pending_count().unwrap(), 1);
+        }
+
+        // Simulate the blocking_lock Drop: complete_run fires synchronously
+        // before drain_shared is called, so pending_count is already 0.
+        {
+            let mut g = q.lock().await;
+            g.complete_run("s1");
+            assert_eq!(g.pending_count().unwrap(), 0);
+        }
+
+        // drain_shared should see zero immediately and return without timing out.
+        let outcome = LaneQueue::drain_shared(&q, Duration::from_millis(200))
+            .await
+            .unwrap();
+
+        assert!(
+            !outcome.timed_out,
+            "drain must not time out when count is already 0"
+        );
+        assert_eq!(outcome.remaining, 0);
+        assert_eq!(outcome.drained, 0); // started at 0 after the sync complete_run
+    }
+
+    /// Regression: `complete_run` called while queue is closed but the lane IS
+    /// still marked processing (the normal in-flight completion path during
+    /// drain) must still decrement `active_run_count` correctly — we must not
+    /// accidentally short-circuit the normal path.
+    #[test]
+    fn complete_run_while_closed_and_still_processing_decrements_count() {
+        let mut q = LaneQueue::new(4, QueueMode::Followup);
+        q.enqueue(make_event("s1"));
+        q.dequeue("s1"); // active_run_count = 1
+        q.close(); // queue closed while run is still active
+
+        // complete_run arrives while closed but lane is_processing = true.
+        // This is the normal drain path: run finishes naturally.
+        q.complete_run("s1");
+
+        assert_eq!(q.active_runs(), 0);
+        // This was NOT a stale call — the lane was still processing.
+        assert_eq!(q.post_close_stale_complete_runs(), 0);
     }
 
     // --- source field roundtrip (sanity check Event clone) -----------------

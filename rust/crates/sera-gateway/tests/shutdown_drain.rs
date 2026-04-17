@@ -87,6 +87,61 @@ async fn drain_shared_times_out_on_stuck_jobs() {
     assert!(queue.lock().await.is_closed());
 }
 
+/// Regression test for the LaneRunGuard drop-time race.
+///
+/// Pre-fix: `LaneRunGuard::drop` spawned a `tokio::spawn` task to call
+/// `complete_run`. That task could be scheduled *after* `drain_shared` polled
+/// `pending_count()`, causing drain to see `remaining=1` even though the run
+/// had already semantically completed — producing a spurious timeout or a
+/// false "drain exceeded deadline" log at process exit.
+///
+/// Post-fix: `blocking_lock` in Drop makes the decrement synchronous. This
+/// test simulates the fixed path: complete_run fires synchronously (as if via
+/// blocking_lock) before drain_shared starts, so drain sees zero immediately.
+#[tokio::test]
+async fn lane_run_guard_drop_does_not_race_with_drain() {
+    use sera_db::lane_queue::EnqueueResult;
+
+    let queue = Arc::new(Mutex::new(LaneQueue::new(4, QueueMode::Followup)));
+    let principal = PrincipalRef {
+        id: PrincipalId::new("race-test"),
+        kind: PrincipalKind::Human,
+    };
+    let event = DomainEvent::message("sera", "guard-session", principal, "test");
+
+    // Enqueue + dequeue one job (in-flight, active_run_count = 1).
+    {
+        let mut g = queue.lock().await;
+        let r = g.enqueue(event);
+        assert_eq!(r, EnqueueResult::Ready);
+        g.dequeue("guard-session");
+        assert_eq!(g.pending_count().unwrap(), 1);
+    }
+
+    // Simulate blocking_lock drop: complete_run fires synchronously,
+    // decrementing active_run_count BEFORE drain_shared is invoked.
+    // This is the behaviour guaranteed by the blocking_lock fix.
+    {
+        let mut g = queue.lock().await;
+        g.complete_run("guard-session");
+        assert_eq!(g.pending_count().unwrap(), 0);
+    }
+
+    // drain_shared must observe zero immediately and return timed_out=false.
+    // With the pre-fix spawn-based drop, there would be a window where this
+    // returned timed_out=true or remaining=1.
+    let outcome = LaneQueue::drain_shared(&queue, Duration::from_millis(200))
+        .await
+        .expect("drain_shared must not error");
+
+    assert!(
+        !outcome.timed_out,
+        "drain must not time out after synchronous complete_run"
+    );
+    assert_eq!(outcome.remaining, 0, "no remaining jobs after sync complete_run");
+    assert!(queue.lock().await.is_closed());
+}
+
 /// After `drain_shared` flips the closed flag, subsequent `enqueue` calls must
 /// be rejected with `EnqueueResult::Closed` — the gateway relies on this so
 /// Discord messages / chat submissions that arrive during the drain window do

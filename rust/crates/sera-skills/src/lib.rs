@@ -20,6 +20,7 @@
 //! ```
 
 pub mod error;
+pub mod self_patch;
 pub mod loader;
 pub mod skill_pack;
 pub mod bundle;

@@ -18,6 +18,12 @@ use sera_errors::{SeraError, SeraErrorCode};
 use std::collections::HashMap;
 use thiserror::Error;
 
+pub mod gating;
+pub use gating::{
+    AllowedServerGate, AlwaysVisibleGate, AndGate, GatedMcpClientBridge, McpToolGate, OrGate,
+    SkillBoundGate, ToolGatingContext,
+};
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -140,7 +146,16 @@ pub struct McpToolResult {
 #[async_trait]
 pub trait McpServer: Send + Sync + 'static {
     /// List all tools available to the given caller.
-    async fn list_tools(&self, caller_id: &str) -> Result<Vec<McpToolDescriptor>, McpError>;
+    ///
+    /// `gate_ctx` is an optional [`ToolGatingContext`] — when `Some`, the
+    /// server may filter its tool list to match the active skill bindings,
+    /// allowed server namespaces, or other policy in the context. When `None`,
+    /// the server returns its unfiltered tool list (legacy behavior).
+    async fn list_tools(
+        &self,
+        caller_id: &str,
+        gate_ctx: Option<&ToolGatingContext>,
+    ) -> Result<Vec<McpToolDescriptor>, McpError>;
 
     /// Invoke a tool on behalf of an external caller.
     async fn call_tool(
@@ -182,6 +197,19 @@ pub trait McpClientBridge: Send + Sync + 'static {
         namespaced_tool: &str,
         arguments: serde_json::Value,
     ) -> Result<McpToolResult, McpError>;
+
+    /// List tools filtered for a specific gating context.
+    ///
+    /// Default implementation returns the full unfiltered list from
+    /// [`Self::list_tools`] — existing implementors don't break. Types that
+    /// wrap a bridge with a gate (see [`GatedMcpClientBridge`]) override this
+    /// to apply the filter and truncate to `ctx.max_tools`.
+    async fn list_tools_for_context(
+        &self,
+        _ctx: &ToolGatingContext,
+    ) -> Result<Vec<McpToolDescriptor>, McpError> {
+        self.list_tools().await
+    }
 }
 
 // ---------------------------------------------------------------------------

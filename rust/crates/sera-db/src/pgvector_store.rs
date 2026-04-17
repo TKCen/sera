@@ -454,6 +454,45 @@ impl SemanticMemoryStore for PgVectorStore {
         Ok(removed as usize)
     }
 
+    async fn promote(&self, id: &MemoryId) -> Result<(), SemanticError> {
+        let uuid = Self::parse_id(id)?;
+        let result = sqlx::query(
+            "UPDATE semantic_memory_entries SET promoted = true WHERE id = $1",
+        )
+        .bind(uuid)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SemanticError::Backend(format!("promote: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(SemanticError::NotFound(id.clone()));
+        }
+        Ok(())
+    }
+
+    async fn touch(&self, id: &MemoryId) -> Result<(), SemanticError> {
+        let uuid = Self::parse_id(id)?;
+        // NotFound is tolerated at this seam (row may have been evicted
+        // between query and touch). Surface only hard backend errors.
+        sqlx::query(
+            "UPDATE semantic_memory_entries SET last_accessed_at = now() WHERE id = $1",
+        )
+        .bind(uuid)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SemanticError::Backend(format!("touch: {e}")))?;
+        Ok(())
+    }
+
+    async fn maintenance(&self) -> Result<(), SemanticError> {
+        // REINDEX INDEX CONCURRENTLY cannot run inside a transaction.
+        // sqlx::execute with the default pool handles this correctly.
+        sqlx::query("REINDEX INDEX CONCURRENTLY idx_semantic_memory_embedding")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SemanticError::Backend(format!("reindex: {e}")))?;
+        Ok(())
+    }
+
     async fn stats(&self) -> Result<SemanticStats, SemanticError> {
         let (total,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM semantic_memory_entries")

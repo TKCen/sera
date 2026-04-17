@@ -24,6 +24,7 @@ pub mod ready;
 pub mod registry;
 pub mod scc;
 pub mod schedule;
+pub mod semantic_eviction;
 pub mod session_key;
 pub mod sleeptime;
 pub mod task;
@@ -77,6 +78,13 @@ pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
 pub use sleeptime::{
     ConsolidationError, ConsolidationPhase, ConsolidationReport, ConsolidationResult,
     IdleDetector, SleeptimeConfig, SleeptimeConsolidator,
+};
+
+// Re-exports — Tier-2 semantic-memory maintenance (bead sera-tier2-d).
+pub use semantic_eviction::{
+    DreamingCandidatePicker, SemanticEvictionConfig, SemanticEvictionJob,
+    SemanticEvictionReport, StatsDreamingPicker, DEFAULT_DREAMING_TOP_N,
+    DEFAULT_EVICTION_CRON, DEFAULT_MAX_PER_AGENT, DEFAULT_REINDEX_CRON, DEFAULT_TTL_DAYS,
 };
 
 pub mod sera_errors;

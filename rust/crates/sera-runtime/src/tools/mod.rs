@@ -17,6 +17,7 @@ pub mod grep;
 pub mod spawn;
 pub mod tool_search;
 pub mod centrifugo;
+pub mod memory_search;
 pub mod mvs_tools;
 pub mod dispatcher;
 
@@ -100,6 +101,25 @@ impl TraitToolRegistry {
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         let name = tool.metadata().name.clone();
         self.tools.insert(name, tool);
+    }
+
+    /// Register the [`memory_search::MemorySearchTool`] built on top of
+    /// the given embedding service + semantic store.
+    ///
+    /// Separate from [`Self::with_builtins`] because the tool needs
+    /// runtime-supplied dependencies (`Arc<dyn EmbeddingService>` and
+    /// `Arc<dyn SemanticMemoryStore>`). Call this after
+    /// `with_builtins()` when the runtime has decided which backends to
+    /// wire in. See bead sera-tier2-d for the full Tier-2 story.
+    pub fn with_memory_search(
+        mut self,
+        embedding: std::sync::Arc<dyn sera_types::EmbeddingService>,
+        store: std::sync::Arc<dyn sera_types::SemanticMemoryStore>,
+    ) -> Self {
+        self.register(Box::new(memory_search::MemorySearchTool::new(
+            embedding, store,
+        )));
+        self
     }
 
     /// Look up a tool by name.

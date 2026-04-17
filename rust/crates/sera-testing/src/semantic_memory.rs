@@ -231,6 +231,25 @@ impl SemanticMemoryStore for InMemorySemanticStore {
         Ok(removed)
     }
 
+    async fn promote(&self, id: &MemoryId) -> Result<(), SemanticError> {
+        let mut guard = self.inner.lock().expect("poisoned");
+        match guard.rows.get_mut(id) {
+            Some(row) => {
+                row.promoted = true;
+                Ok(())
+            }
+            None => Err(SemanticError::NotFound(id.clone())),
+        }
+    }
+
+    async fn touch(&self, id: &MemoryId) -> Result<(), SemanticError> {
+        let mut guard = self.inner.lock().expect("poisoned");
+        if let Some(row) = guard.rows.get_mut(id) {
+            row.last_accessed_at = Some(Utc::now());
+        }
+        Ok(())
+    }
+
     async fn stats(&self) -> Result<SemanticStats, SemanticError> {
         let guard = self.inner.lock().expect("poisoned");
         let total_rows = guard.rows.len();

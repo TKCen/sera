@@ -245,6 +245,44 @@ pub trait SemanticMemoryStore: Send + Sync + 'static {
 
     /// Return a fresh aggregate snapshot.
     async fn stats(&self) -> Result<SemanticStats, SemanticError>;
+
+    /// Mark the row identified by `id` as promoted. Promoted rows are
+    /// exempt from eviction policies with `promoted_exempt = true` and
+    /// serve as persistent recall candidates surfaced by the
+    /// dreaming-workflow consolidation pass.
+    ///
+    /// Returns [`SemanticError::NotFound`] if the id is not in the store.
+    ///
+    /// The default implementation is a load-modify-put (not atomic).
+    /// Backends with better primitives (e.g. SQL `UPDATE`) SHOULD override.
+    async fn promote(&self, id: &MemoryId) -> Result<(), SemanticError> {
+        let _ = id;
+        Err(SemanticError::Backend(
+            "promote() not implemented for this backend".into(),
+        ))
+    }
+
+    /// Update `last_accessed_at` for the given row. Called by the
+    /// memory-search tool on every hit.
+    ///
+    /// Default impl returns `Ok(())` — backends that persist access
+    /// timestamps SHOULD override. NotFound is tolerated here (the row
+    /// may have been evicted between query and touch) to keep the tool
+    /// pure-read from the caller's perspective.
+    async fn touch(&self, id: &MemoryId) -> Result<(), SemanticError> {
+        let _ = id;
+        Ok(())
+    }
+
+    /// Perform opportunistic maintenance — e.g. `REINDEX INDEX
+    /// CONCURRENTLY` for pgvector backends. Callers are expected to
+    /// invoke this on a cron schedule (weekly by default).
+    ///
+    /// Default impl is a no-op so in-memory / stub backends don't have
+    /// to override.
+    async fn maintenance(&self) -> Result<(), SemanticError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

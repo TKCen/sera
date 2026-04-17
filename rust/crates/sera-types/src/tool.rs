@@ -572,6 +572,14 @@ pub struct ToolContext {
     /// [`DefaultAuthzProviderStub`] (allow-all) so existing callers keep
     /// working while the TraitToolRegistry migration lands (sera-ttrm-*).
     pub authz: Arc<dyn AuthzProviderHandle>,
+    /// Tier-2 recall IDs already promoted into the current turn's
+    /// `MemoryBlock` by the context enricher. Consumed by the
+    /// `memory_search` tool to dedupe against rows the enricher surfaced
+    /// this turn — see SPEC-memory §13 and bead sera-tier2-d.
+    ///
+    /// Strings are semantic-memory `MemoryId` values (opaque).
+    /// Defaults to empty, meaning "no enricher context; emit all hits".
+    pub active_recall_ids: Vec<String>,
 }
 
 impl Default for ToolContext {
@@ -593,6 +601,7 @@ impl Default for ToolContext {
                 span_id: String::new(),
             },
             authz: Arc::new(DefaultAuthzProviderStub),
+            active_recall_ids: Vec::new(),
         }
     }
 }

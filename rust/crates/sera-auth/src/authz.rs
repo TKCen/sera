@@ -562,6 +562,63 @@ impl RoleBasedAuthzProviderBuilder {
 }
 
 // ---------------------------------------------------------------------------
+// Bridge to sera-types::tool::AuthzProviderHandle
+// ---------------------------------------------------------------------------
+//
+// `sera-types` is a leaf crate and cannot depend on `sera-auth`. To let
+// `ToolContext::authz` carry any provider implemented in this crate,
+// sera-types defines a minimal `AuthzProviderHandle` trait. We implement it
+// here for every concrete `AuthorizationProvider` via a newtype-free blanket
+// impl so sera-runtime can install a real provider without any glue.
+
+use sera_types::tool::{AuthzDecisionKind, AuthzProviderHandle};
+
+/// Adapter that wraps any `AuthorizationProvider` into the leaf-crate-visible
+/// [`AuthzProviderHandle`] trait from `sera-types`.
+///
+/// Usage:
+/// ```rust,ignore
+/// let provider = Arc::new(AuthzProviderAdapter::new(DefaultAuthzProvider));
+/// let ctx = ToolContext { authz: provider, ..Default::default() };
+/// ```
+#[derive(Debug, Clone)]
+pub struct AuthzProviderAdapter<P: AuthorizationProvider + std::fmt::Debug> {
+    inner: P,
+}
+
+impl<P: AuthorizationProvider + std::fmt::Debug> AuthzProviderAdapter<P> {
+    pub fn new(inner: P) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl<P: AuthorizationProvider + std::fmt::Debug> AuthzProviderHandle
+    for AuthzProviderAdapter<P>
+{
+    async fn check(
+        &self,
+        principal: &PrincipalRef,
+        action: &str,
+        resource: &str,
+    ) -> AuthzDecisionKind {
+        // Map opaque strings back to typed Action/Resource using minimal
+        // defaults. Callers that need precise action/resource typing should
+        // invoke the inner provider directly.
+        let typed_action = Action::ToolCall(action.to_string());
+        let typed_resource = Resource::Tool(resource.to_string());
+        let ctx = AuthzContext::default();
+
+        match self.inner.check(principal, &typed_action, &typed_resource, &ctx).await {
+            Ok(AuthzDecision::Allow) => AuthzDecisionKind::Allow,
+            Ok(AuthzDecision::Deny(reason)) => AuthzDecisionKind::Deny(reason.code),
+            Ok(AuthzDecision::NeedsApproval(hint)) => AuthzDecisionKind::NeedsApproval(hint),
+            Err(e) => AuthzDecisionKind::Deny(format!("authz_error:{e}")),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

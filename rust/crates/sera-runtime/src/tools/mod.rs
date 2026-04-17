@@ -232,6 +232,7 @@ mod trait_registry_tests {
                 trace_id: "trace-1".to_string(),
                 span_id: "span-1".to_string(),
             },
+            ..ToolContext::default()
         }
     }
 

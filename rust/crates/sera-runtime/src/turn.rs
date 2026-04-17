@@ -8,7 +8,7 @@ use sera_hitl;
 use sera_hooks::ChainExecutor;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::runtime::{TokenUsage, TurnOutcome};
-use sera_types::tool::ToolUseBehavior;
+use sera_types::tool::{ToolContext, ToolUseBehavior};
 
 use crate::handoff::Handoff;
 
@@ -91,11 +91,21 @@ pub trait ToolDispatcher: Send + Sync {
     /// {"id": "call_xxx", "type": "function", "function": {"name": "...", "arguments": "..."}}
     /// ```
     ///
+    /// `ctx` carries the per-turn [`ToolContext`] (principal, session,
+    /// policy, and authz handle). Implementations built on legacy
+    /// executor-based registries may ignore `ctx` during the adapter-first
+    /// `TraitToolRegistry` migration (see sera-ttrm-*). Once the migration
+    /// lands, `ctx` is used for per-call policy + authz checks.
+    ///
     /// Returns a tool result value:
     /// ```json
     /// {"tool_call_id": "call_xxx", "role": "tool", "content": "..."}
     /// ```
-    async fn dispatch(&self, tool_call: &serde_json::Value) -> Result<serde_json::Value, ToolError>;
+    async fn dispatch(
+        &self,
+        tool_call: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<serde_json::Value, ToolError>;
 }
 
 // ── Turn context ─────────────────────────────────────────────────────────────
@@ -123,6 +133,14 @@ pub struct TurnContext {
     /// The `OnLlmStart` hook may mutate this field before the model call to
     /// enforce per-turn policy gates. Defaults to `ToolUseBehavior::Auto`.
     pub tool_use_behavior: ToolUseBehavior,
+    /// Per-turn [`ToolContext`] threaded into `ToolDispatcher::dispatch`.
+    ///
+    /// Carries the principal, session, credentials, policy, audit handle,
+    /// and authz provider. Built at the turn boundary by the runtime
+    /// (see `DefaultRuntime`) and passed by reference to the dispatcher.
+    /// Legacy executor-based dispatchers ignore this field; the migration
+    /// to `TraitToolRegistry` (sera-ttrm-*) activates the policy gates.
+    pub tool_context: ToolContext,
 }
 
 /// Observe — filter messages by watch signals and run ConstitutionalGate hooks on input.
@@ -357,7 +375,7 @@ pub async fn act(
         Some(dispatcher) => {
             let mut results = Vec::with_capacity(think_result.tool_calls.len());
             for tc in &think_result.tool_calls {
-                match dispatcher.dispatch(tc).await {
+                match dispatcher.dispatch(tc, &ctx.tool_context).await {
                     Ok(result) => results.push(result),
                     Err(e) => {
                         let tool_call_id = tc.get("id")
@@ -631,6 +649,7 @@ mod tests {
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
             pending_steer: None,
             tool_use_behavior: ToolUseBehavior::Auto,
+            tool_context: ToolContext::default(),
         }
     }
 

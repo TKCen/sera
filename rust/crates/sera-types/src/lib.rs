@@ -7,6 +7,7 @@ pub mod harness;
 pub mod evolution;
 pub mod versioning;
 pub mod content_block;
+pub mod embedding;
 pub mod agent;
 pub mod connector;
 pub mod runtime;
@@ -36,6 +37,7 @@ pub mod training_export;
 pub use evolution::*;
 pub use versioning::BuildIdentity;
 pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
+pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
 
 use serde::{Deserialize, Serialize};
 

@@ -44,5 +44,10 @@ tiktoken-rs.workspace = true
 fs2 = "0.4"
 rand.workspace = true
 
+[features]
+# Enable tests that require a live external provider (Ollama, OpenAI).
+# Off by default so `cargo test` passes in hermetic CI.
+integration = []
+
 [dev-dependencies]
 tempfile.workspace = true

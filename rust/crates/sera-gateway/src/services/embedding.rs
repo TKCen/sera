@@ -1,16 +1,22 @@
-//! Embedding service — Ollama for embedding, Qdrant for storage.
+//! Ad-hoc gateway-side embedding + Qdrant client (legacy scaffold).
 //!
-//! Uses reqwest HTTP client to call:
-//! - Ollama: POST /api/embeddings to generate vectors
-//! - Qdrant: REST API for upserting and searching points
+//! This module predates the [`sera_types::EmbeddingService`] trait and the
+//! provider implementations in `sera-runtime::semantic::providers`. It
+//! remains here only until the gateway is fully migrated to the new
+//! trait-driven pipeline (tracked by the Tier-2 memory plan); a future
+//! bead retires it outright.
 //!
-//! Includes LRU cache (10k entries max) to avoid re-embedding identical text.
+//! NOTE: The earlier implementation silently returned a zero-vector
+//! placeholder on any Ollama error, shipping degenerate embeddings into
+//! downstream cosine-similarity calls. Per SPEC-memory §13.3 and bug
+//! `sera-px3w`, that fallback has been removed: every failure now
+//! bubbles as an [`EmbeddingError`] and callers must handle the `Err`
+//! path explicitly (return 500/503, do NOT re-introduce zero-vectors).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::warn;
 
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
@@ -87,15 +93,15 @@ impl EmbeddingCache {
     }
 }
 
-pub struct EmbeddingService {
+pub struct AdHocEmbeddingClient {
     client: reqwest::Client,
     qdrant_url: String,
     ollama_url: String,
     cache: Arc<RwLock<EmbeddingCache>>,
 }
 
-impl EmbeddingService {
-    /// Create a new embedding service with Qdrant and Ollama URLs.
+impl AdHocEmbeddingClient {
+    /// Create a new ad-hoc client with Qdrant and Ollama URLs.
     pub fn new(qdrant_url: String, ollama_url: String) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -106,7 +112,10 @@ impl EmbeddingService {
     }
 
     /// Generate an embedding for the given text.
-    /// Returns a zero-vector (placeholder) if Ollama is unavailable.
+    ///
+    /// Any transport or decode failure is returned as [`EmbeddingError`].
+    /// This method MUST NOT silently fall back to zero-vectors — see
+    /// SPEC-memory §13.3 and bug `sera-px3w` for the rationale.
     pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         // Check cache first
         {
@@ -123,43 +132,38 @@ impl EmbeddingService {
             "prompt": text
         });
 
-        match self.client.post(&url).json(&req_body).send().await {
-            Ok(response) => {
-                match response.json::<serde_json::Value>().await {
-                    Ok(body) => {
-                        let embedding = body
-                            .get("embedding")
-                            .and_then(|e| e.as_array())
-                            .ok_or_else(|| {
-                                EmbeddingError::InvalidResponse(
-                                    "Missing 'embedding' array in Ollama response".to_string(),
-                                )
-                            })?
-                            .iter()
-                            .filter_map(|v| v.as_f64().map(|f| f as f32))
-                            .collect::<Vec<_>>();
+        let response = self
+            .client
+            .post(&url)
+            .json(&req_body)
+            .send()
+            .await
+            .map_err(|e| EmbeddingError::OllamaUnavailable(e.to_string()))?;
 
-                        // Cache the result
-                        {
-                            let mut cache = self.cache.write().await;
-                            cache.insert(text.to_string(), embedding.clone());
-                        }
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| EmbeddingError::InvalidResponse(e.to_string()))?;
 
-                        Ok(embedding)
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse Ollama response: {}", e);
-                        // Return zero-vector placeholder
-                        Ok(vec![0.0; 384]) // nomic-embed-text output size
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Ollama unavailable ({}), returning zero-vector placeholder", e);
-                // Return zero-vector placeholder instead of failing
-                Ok(vec![0.0; 384]) // nomic-embed-text output size
-            }
+        let embedding = body
+            .get("embedding")
+            .and_then(|e| e.as_array())
+            .ok_or_else(|| {
+                EmbeddingError::InvalidResponse(
+                    "Missing 'embedding' array in Ollama response".to_string(),
+                )
+            })?
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect::<Vec<_>>();
+
+        // Cache the result
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(text.to_string(), embedding.clone());
         }
+
+        Ok(embedding)
     }
 
     /// Upsert a point (document) into Qdrant collection.
@@ -341,7 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedding_service_creation() {
-        let service = EmbeddingService::new(
+        let service = AdHocEmbeddingClient::new(
             "http://localhost:6333".to_string(),
             "http://localhost:11434".to_string(),
         );

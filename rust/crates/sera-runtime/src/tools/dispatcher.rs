@@ -28,6 +28,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sera_types::tool::ToolContext;
 
 use crate::tools::ToolRegistry;
 use crate::turn::{ToolDispatcher, ToolError};
@@ -57,7 +58,13 @@ impl ToolDispatcher for RegistryDispatcher {
     /// ```json
     /// {"tool_call_id": "call_xxx", "role": "tool", "content": "..."}
     /// ```
-    async fn dispatch(&self, tool_call: &serde_json::Value) -> Result<serde_json::Value, ToolError> {
+    async fn dispatch(
+        &self,
+        tool_call: &serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<serde_json::Value, ToolError> {
+        // TODO(sera-ttrm-2): use `_ctx` to enforce ToolPolicy + authz via
+        // TraitToolRegistry. Today the executor-based registry ignores it.
         // Extract tool_call_id
         let tool_call_id = tool_call
             .get("id")
@@ -120,7 +127,7 @@ mod tests {
                 "arguments": "{\"path\":\"/tmp\"}"
             }
         });
-        let result = dispatcher.dispatch(&tool_call).await.unwrap();
+        let result = dispatcher.dispatch(&tool_call, &ToolContext::default()).await.unwrap();
         assert_eq!(result["tool_call_id"], "call_1");
         assert_eq!(result["role"], "tool");
         assert!(result["content"].is_string());
@@ -137,7 +144,7 @@ mod tests {
                 "arguments": "{}"
             }
         });
-        let err = dispatcher.dispatch(&tool_call).await.unwrap_err();
+        let err = dispatcher.dispatch(&tool_call, &ToolContext::default()).await.unwrap_err();
         assert!(matches!(err, ToolError::NotFound(_)));
     }
 
@@ -152,7 +159,7 @@ mod tests {
                 "arguments": "not valid json{{"
             }
         });
-        let err = dispatcher.dispatch(&tool_call).await.unwrap_err();
+        let err = dispatcher.dispatch(&tool_call, &ToolContext::default()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)));
     }
 
@@ -163,7 +170,7 @@ mod tests {
             "id": "call_4",
             "type": "function"
         });
-        let err = dispatcher.dispatch(&tool_call).await.unwrap_err();
+        let err = dispatcher.dispatch(&tool_call, &ToolContext::default()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)));
     }
 
@@ -173,7 +180,7 @@ mod tests {
         let tool_call = serde_json::json!({
             "id": "call_5"
         });
-        let err = dispatcher.dispatch(&tool_call).await.unwrap_err();
+        let err = dispatcher.dispatch(&tool_call, &ToolContext::default()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)));
     }
 

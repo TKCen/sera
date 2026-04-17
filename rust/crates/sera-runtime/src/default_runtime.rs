@@ -161,6 +161,21 @@ impl AgentRuntime for DefaultRuntime {
 
         let original_message_count = ctx.messages.len();
 
+        // Build a fresh ToolContext for this turn. Populated from session +
+        // agent identity; no principal is available on `sera_types::TurnContext`
+        // yet, so we fall back to a Default-sourced allow-all authz handle and
+        // an agent-scoped principal. sera-ttrm-4 will thread a real principal
+        // through once auth is wired through the turn context.
+        let mut tool_context = sera_types::tool::ToolContext::default();
+        tool_context.session = sera_types::tool::SessionRef::new(&ctx.session_key);
+        tool_context.principal = sera_types::principal::PrincipalRef {
+            id: sera_types::principal::PrincipalId::new(format!(
+                "agent:{}",
+                ctx.agent_id
+            )),
+            kind: sera_types::principal::PrincipalKind::Agent,
+        };
+
         let mut turn_ctx = turn::TurnContext {
             turn_id: uuid::Uuid::new_v4(),
             session_key: ctx.session_key,
@@ -176,6 +191,7 @@ impl AgentRuntime for DefaultRuntime {
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
             pending_steer: None,
             tool_use_behavior: ctx.tool_use_behavior,
+            tool_context,
         };
 
         // Per-tool failure counter, reset on session end (i.e. when this method returns).
@@ -502,6 +518,7 @@ mod tests {
         async fn dispatch(
             &self,
             tool_call: &serde_json::Value,
+            _ctx: &sera_types::tool::ToolContext,
         ) -> Result<serde_json::Value, turn::ToolError> {
             let id = tool_call
                 .get("id")
@@ -524,6 +541,7 @@ mod tests {
         async fn dispatch(
             &self,
             tool_call: &serde_json::Value,
+            _ctx: &sera_types::tool::ToolContext,
         ) -> Result<serde_json::Value, turn::ToolError> {
             let id = tool_call
                 .get("id")
@@ -564,6 +582,7 @@ mod tests {
             async fn dispatch(
                 &self,
                 tc: &serde_json::Value,
+                _ctx: &sera_types::tool::ToolContext,
             ) -> Result<serde_json::Value, turn::ToolError> {
                 let name = tc
                     .get("function")

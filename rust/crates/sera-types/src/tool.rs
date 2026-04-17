@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A tool definition in OpenAI function-calling format.
 /// This is the schema sent to the LLM so it knows what tools are available.
@@ -483,6 +484,74 @@ impl std::fmt::Display for AgentRef {
     }
 }
 
+// ── Minimal authorization surface available to leaf crates ──────────────────
+//
+// `sera-types` is a leaf crate and must not depend on `sera-auth`. To let
+// `ToolContext` carry an authorization provider without creating a reverse
+// dependency, we define the minimum trait surface here. `sera-auth` provides
+// blanket impls for its concrete providers (e.g. `DefaultAuthzProvider`,
+// `RoleBasedAuthzProvider`) so callers in higher-level crates can inject any
+// policy decision point into `ToolContext`.
+
+/// Lightweight decision returned by an [`AuthzProviderHandle`].
+///
+/// Intentionally narrower than `sera_auth::AuthzDecision` — leaf crates only
+/// need to know whether the action is allowed, denied, or needs approval.
+/// Use the richer `sera_auth::AuthzDecision` type when full reason metadata
+/// is required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthzDecisionKind {
+    /// Action is permitted.
+    Allow,
+    /// Action is denied. Carries a short machine-readable code.
+    Deny(String),
+    /// Action requires human-in-the-loop approval.
+    NeedsApproval(String),
+}
+
+/// Minimal authorization trait exposed to leaf crates.
+///
+/// `sera-types` cannot depend on `sera-auth`, so a small shim trait lives
+/// here. `sera-auth` provides blanket impls bridging its full
+/// `AuthorizationProvider` surface onto this trait, so any rich provider
+/// may be dropped into a [`ToolContext`].
+///
+/// The default impl in [`DefaultAuthzProviderStub`] always allows — suitable
+/// for tests, trivial runtime init paths, and the `ToolContext::default()`
+/// back-compat shim. Production wiring should replace the stub with a proper
+/// `sera-auth` provider via the blanket impl.
+#[async_trait]
+pub trait AuthzProviderHandle: Send + Sync + std::fmt::Debug {
+    /// Evaluate whether the principal may perform the action on the resource.
+    ///
+    /// `action` and `resource` are opaque strings at this layer — higher
+    /// crates (sera-auth, sera-runtime) render their typed actions and
+    /// resources into stable string form before calling through.
+    async fn check(
+        &self,
+        principal: &crate::principal::PrincipalRef,
+        action: &str,
+        resource: &str,
+    ) -> AuthzDecisionKind;
+}
+
+/// Allow-all stub used by `ToolContext::default()` so existing call sites keep
+/// working until a real provider is wired in (see sera-ttrm-4).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefaultAuthzProviderStub;
+
+#[async_trait]
+impl AuthzProviderHandle for DefaultAuthzProviderStub {
+    async fn check(
+        &self,
+        _principal: &crate::principal::PrincipalRef,
+        _action: &str,
+        _resource: &str,
+    ) -> AuthzDecisionKind {
+        AuthzDecisionKind::Allow
+    }
+}
+
 /// Context provided to a tool at execution time.
 /// SPEC-tools §3: session, principal, credentials, policy, and audit handle.
 #[derive(Debug, Clone)]
@@ -497,6 +566,35 @@ pub struct ToolContext {
     pub policy: ToolPolicy,
     /// Distributed tracing handle for audit and observability.
     pub audit_handle: AuditHandle,
+    /// Authorization provider for per-call PDP checks.
+    ///
+    /// Wired by the runtime builder. `ToolContext::default()` installs a
+    /// [`DefaultAuthzProviderStub`] (allow-all) so existing callers keep
+    /// working while the TraitToolRegistry migration lands (sera-ttrm-*).
+    pub authz: Arc<dyn AuthzProviderHandle>,
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            session: SessionRef::new(""),
+            principal: crate::principal::PrincipalRef {
+                id: crate::principal::PrincipalId::new("system"),
+                kind: crate::principal::PrincipalKind::System,
+            },
+            credentials: CredentialBag::new(),
+            policy: ToolPolicy {
+                profile: None,
+                allow_patterns: vec![],
+                deny_patterns: vec![],
+            },
+            audit_handle: AuditHandle {
+                trace_id: String::new(),
+                span_id: String::new(),
+            },
+            authz: Arc::new(DefaultAuthzProviderStub),
+        }
+    }
 }
 
 /// The core tool abstraction. All built-in, plugin, and MCP-bridged tools implement this.

@@ -95,10 +95,32 @@ pub enum WorkflowTaskType {
 pub enum AwaitType {
     GhRun,
     GhPr,
-    Timer,
+    /// Time-based gate — task is not ready until `now >= not_before`.
+    ///
+    /// This gate is pull-based: the ready-queue asks
+    /// [`is_timer_ready`](crate::ready::is_timer_ready) during scheduling.
+    /// No background timer wheel is needed.
+    Timer {
+        not_before: DateTime<Utc>,
+    },
     Human,
     Mail,
     Change,
+}
+
+impl AwaitType {
+    /// Returns true iff this await gate is a Timer whose `not_before` has
+    /// elapsed relative to `now` (inclusive boundary — `not_before == now`
+    /// counts as ready).
+    ///
+    /// Returns false for non-Timer variants — they use other gates
+    /// (GhRun/GhPr/Human/Mail/Change) not yet implemented.
+    pub fn is_timer_ready(&self, now: DateTime<Utc>) -> bool {
+        match self {
+            AwaitType::Timer { not_before } => now >= *not_before,
+            _ => false,
+        }
+    }
 }
 
 /// Semantic relationship between two tasks.

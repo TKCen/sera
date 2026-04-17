@@ -1,6 +1,19 @@
 use chrono::{DateTime, Utc};
 
-use crate::task::{DependencyType, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus};
+use crate::task::{AwaitType, DependencyType, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus};
+
+/// Pure-function gate for [`AwaitType::Timer`].
+///
+/// Returns `true` iff `await_type` is `Some(AwaitType::Timer { not_before })`
+/// and `now >= not_before`. Boundary is inclusive (`>=`, not `>`).
+///
+/// Returns `false` for `None` — callers should use this only when the task
+/// has an active await gate. Also returns `false` for non-Timer await types,
+/// which remain blocking pending their respective integrations
+/// (GhRun/GhPr/Human/Mail/Change).
+pub fn is_timer_ready(await_type: &AwaitType, now: DateTime<Utc>) -> bool {
+    await_type.is_timer_ready(now)
+}
 
 /// Return all tasks that are ready to be claimed right now.
 ///
@@ -11,7 +24,9 @@ use crate::task::{DependencyType, WorkflowTask, WorkflowTaskId, WorkflowTaskStat
 ///    Exception: a `ConditionalBlocks` edge is satisfied (does NOT block) when
 ///    the blocker is `Closed`.
 /// 3. `defer_until <= now` or `None`.
-/// 4. `await_type.is_none()`.
+/// 4. `await_type.is_none()` — OR — the await is `Timer { not_before }` and
+///    `now >= not_before`. All other `AwaitType` variants still block (their
+///    external integrations are tracked in follow-up beads).
 /// 5. Not `(ephemeral && status == Closed)` — ephemeral tasks are never surfaced
 ///    once closed (redundant given gate 1, but kept for clarity).
 ///
@@ -74,9 +89,18 @@ fn is_ready(task: &WorkflowTask, all: &[WorkflowTask], now: DateTime<Utc>) -> bo
         return false;
     }
 
-    // Gate 4 — not awaiting an external signal.
-    if task.await_type.is_some() {
-        return false;
+    // Gate 4 — not awaiting an external signal (Timer gate may self-satisfy).
+    if let Some(await_type) = &task.await_type {
+        match await_type {
+            AwaitType::Timer { .. } => {
+                if !is_timer_ready(await_type, now) {
+                    return false;
+                }
+                // Timer elapsed — gate passes.
+            }
+            // Other await variants remain pending until their integrations land.
+            _ => return false,
+        }
     }
 
     // Gate 5 — ephemeral + Closed never surfaces (redundant with gate 1).

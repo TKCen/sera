@@ -438,3 +438,107 @@ fn topological_sort_ignores_non_blocks() {
     let sorted = topological_sort(&tasks).unwrap();
     assert_eq!(sorted.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// AwaitType::Timer gate
+// ---------------------------------------------------------------------------
+
+use chrono::{Duration as ChronoDuration, TimeZone};
+
+use crate::task::AwaitType;
+use crate::{is_timer_ready, ready_tasks};
+
+fn base_instant() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap()
+}
+
+#[test]
+fn timer_past_not_before_is_ready() {
+    let now = base_instant();
+    let gate = AwaitType::Timer { not_before: now - ChronoDuration::seconds(60) };
+    assert!(is_timer_ready(&gate, now));
+}
+
+#[test]
+fn timer_future_not_before_is_not_ready() {
+    let now = base_instant();
+    let gate = AwaitType::Timer { not_before: now + ChronoDuration::seconds(60) };
+    assert!(!is_timer_ready(&gate, now));
+}
+
+#[test]
+fn timer_boundary_equal_is_ready() {
+    // not_before == now must count as ready (>=, not >).
+    let now = base_instant();
+    let gate = AwaitType::Timer { not_before: now };
+    assert!(is_timer_ready(&gate, now));
+}
+
+#[test]
+fn timer_does_not_bypass_other_gates() {
+    // Even when the Timer is elapsed, the task must also pass other gates
+    // (here: Blocks dependency). Timer does not short-circuit.
+    let now = base_instant();
+
+    let blocker = make_task(1, vec![]);
+    let mut blocked = make_task(2, vec![]);
+    blocked.dependencies = vec![WorkflowTaskDependency {
+        from: blocker.id,
+        to: blocked.id,
+        kind: crate::task::DependencyType::Blocks,
+    }];
+    blocked.await_type = Some(AwaitType::Timer {
+        not_before: now - ChronoDuration::seconds(1),
+    });
+    // blocker is still Open, so Blocks gate must reject `blocked`.
+
+    let tasks = vec![blocker, blocked.clone()];
+    let ready = ready_tasks(&tasks, now);
+    assert!(!ready.iter().any(|t| t.id == blocked.id));
+}
+
+#[test]
+fn timer_serde_roundtrip() {
+    let now = base_instant();
+    let gate = AwaitType::Timer { not_before: now };
+    let json = serde_json::to_string(&gate).unwrap();
+    let back: AwaitType = serde_json::from_str(&json).unwrap();
+    assert_eq!(gate, back);
+    // Sanity: struct-variant serializes with discriminant and field.
+    assert!(json.contains("timer"));
+    assert!(json.contains("not_before"));
+}
+
+#[test]
+fn ready_queue_surfaces_elapsed_timer_and_hides_pending_timer() {
+    let now = base_instant();
+
+    let mut past = make_task(1, vec![]);
+    past.await_type = Some(AwaitType::Timer {
+        not_before: now - ChronoDuration::seconds(5),
+    });
+
+    let mut future = make_task(2, vec![]);
+    future.await_type = Some(AwaitType::Timer {
+        not_before: now + ChronoDuration::seconds(5),
+    });
+
+    let tasks = vec![past.clone(), future.clone()];
+    let ready = ready_tasks(&tasks, now);
+
+    assert!(ready.iter().any(|t| t.id == past.id), "elapsed Timer should be ready");
+    assert!(!ready.iter().any(|t| t.id == future.id), "pending Timer should not be ready");
+}
+
+#[test]
+fn non_timer_await_still_blocks() {
+    // Regression: other AwaitType variants must still block until their
+    // integrations (GhRun/GhPr/Human/Mail/Change) land.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(AwaitType::Human);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks(&tasks, now);
+    assert!(!ready.iter().any(|r| r.id == t.id));
+}

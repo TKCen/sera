@@ -46,7 +46,7 @@ pub use types::{
 
 // Re-exports — new Phase 0 types.
 pub use claim::{claim_task, confirm_claim, ClaimError, ClaimToken, StaleClaimReaper};
-pub use ready::{dependency_closure, ready_tasks, topological_sort, CyclicDependency};
+pub use ready::{dependency_closure, is_timer_ready, ready_tasks, topological_sort, CyclicDependency};
 pub use task::{
     AwaitType, DependencyType, WorkflowSentinel, WorkflowTask, WorkflowTaskDependency,
     WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,

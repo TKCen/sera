@@ -8,6 +8,7 @@
 //! - [`SkillPack`] — trait for skill pack implementations
 //! - [`SkillLoader`] — discovers and loads skill packs from various sources
 //! - [`SkillBundle`] — a loaded collection of skills with metadata
+//! - [`SkillResolver`] — phase-5 multi-source resolver (fs / plugin / OCI)
 //!
 //! # Example
 //!
@@ -27,6 +28,12 @@ pub mod markdown_pack;
 pub mod knowledge_schema;
 pub mod knowledge_activity_log;
 pub mod knowledge_lint;
+pub mod skill_ref;
+pub mod source;
+pub mod sources;
+pub mod resolver;
+pub mod lockfile;
+pub mod cli;
 
 pub use error::SkillsError;
 pub use loader::{SkillLoader, FileSystemSkillPack};
@@ -46,3 +53,8 @@ pub use knowledge_lint::{
     BasicLinter, FindingSeverity, KnowledgeLinter, LintCheckKind, LintConfig, LintError,
     LintFinding, LintReport, PageInfo,
 };
+pub use skill_ref::{SkillRef, SkillSourceKind};
+pub use source::{ResolvedSkill, SkillSearchHit, SkillSource};
+pub use sources::{FileSystemSource, OciSkillPuller, PluginSource, RegistrySource};
+pub use resolver::{ResolvedSkillBundle, SkillResolver, SkillResolverBuilder};
+pub use lockfile::{LockReconciliation, SkillLockEntry, SkillLockFile, LOCKFILE_SCHEMA_VERSION};

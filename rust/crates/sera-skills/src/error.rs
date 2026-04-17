@@ -31,4 +31,34 @@ pub enum SkillsError {
 
     #[error("skill markdown format error: {0}")]
     Format(String),
+
+    /// A `SkillRef` string failed to parse (bad grammar, bad version
+    /// constraint, etc.).
+    #[error("invalid skill reference: {0}")]
+    InvalidReference(String),
+
+    /// A source kind is recognised but not yet wired up (phase-gated).
+    #[error("skill source unavailable ({source_kind:?}): {reason}")]
+    Unavailable {
+        source_kind: crate::skill_ref::SkillSourceKind,
+        reason: String,
+    },
+
+    /// An operation is not supported by this source type.
+    #[error("unsupported operation ({source_kind:?}): {reason}")]
+    Unsupported {
+        source_kind: crate::skill_ref::SkillSourceKind,
+        reason: String,
+    },
+
+    /// TOML (de)serialization for the lock file.
+    #[error("TOML serialize error: {0}")]
+    TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("TOML deserialize error: {0}")]
+    TomlDeserialize(#[from] toml::de::Error),
+
+    /// Propagated OCI client error.
+    #[error("OCI error: {0}")]
+    Oci(String),
 }

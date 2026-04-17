@@ -76,9 +76,16 @@ anyhow = "1"
 # Testing
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
+proptest = "1"
 
 # Crypto
 sha2 = "0.10"
+
+# Semver constraints (sera-skills SkillRef versioning)
+semver = "1"
+
+# TOML config (sera-skills lockfile)
+toml = "0.8"
 aes-gcm = "0.10"
 hex = "0.4"
 base64 = "0.22"

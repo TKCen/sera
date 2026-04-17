@@ -48,13 +48,14 @@ pub use types::{
 pub use claim::{claim_task, confirm_claim, ClaimError, ClaimToken, StaleClaimReaper};
 #[allow(deprecated)]
 pub use ready::{
-    dependency_closure, is_gh_run_ready, is_human_ready, is_timer_ready, ready_tasks,
-    ready_tasks_with_context, ready_tasks_with_hitl, topological_sort, CyclicDependency,
-    GhRunLookup, HitlLookup, NoopGhRunLookup, NoopHitlLookup, ReadyContext,
+    dependency_closure, is_gh_pr_ready, is_gh_run_ready, is_human_ready, is_timer_ready,
+    ready_tasks, ready_tasks_with_context, ready_tasks_with_hitl, topological_sort,
+    CyclicDependency, GhPrLookup, GhRunLookup, HitlLookup, NoopGhPrLookup, NoopGhRunLookup,
+    NoopHitlLookup, ReadyContext,
 };
 pub use task::{
-    AwaitType, DependencyType, GhRunId, GhRunStatus, WorkflowSentinel, WorkflowTask,
-    WorkflowTaskDependency, WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,
+    AwaitType, DependencyType, GhPrId, GhPrState, GhRunId, GhRunStatus, WorkflowSentinel,
+    WorkflowTask, WorkflowTaskDependency, WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,
 };
 pub use termination::{
     check_termination, TerminationConfig, TerminationReason, TerminationState,

@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use sera_hitl::{ApprovalId, TicketStatus};
 
 use crate::task::{
-    AwaitType, DependencyType, GhRunId, GhRunStatus, WorkflowTask, WorkflowTaskId,
-    WorkflowTaskStatus,
+    AwaitType, DependencyType, GhPrId, GhPrState, GhRunId, GhRunStatus, WorkflowTask,
+    WorkflowTaskId, WorkflowTaskStatus,
 };
 
 /// Pure-function gate for [`AwaitType::Timer`].
@@ -131,10 +131,65 @@ pub fn is_gh_run_ready(await_type: &AwaitType, lookup: &dyn GhRunLookup) -> bool
     }
 }
 
+/// Pull-based lookup into a GitHub pull-request state source for
+/// [`AwaitType::GhPr`].
+///
+/// Mirrors the shape of [`GhRunLookup`]: the ready-queue is synchronous, so
+/// the implementor must snapshot the current state of relevant PRs into an
+/// in-memory map (or equivalent) and answer synchronously. Any network I/O
+/// lives one layer up.
+///
+/// Returning `None` means the PR is not known to the lookup (never seen, or
+/// evicted). The ready-queue treats unknown PRs as not-ready — we never
+/// self-satisfy on unknown state, matching the [`HitlLookup`] and
+/// [`GhRunLookup`] contracts.
+pub trait GhPrLookup: Send + Sync {
+    /// Return the current state of the PR identified by `pr_id`, or `None`
+    /// when the PR is not known to the lookup source.
+    fn pr_state(&self, pr_id: &GhPrId) -> Option<GhPrState>;
+}
+
+/// A trivial [`GhPrLookup`] that reports every PR as unknown.
+///
+/// Useful as a default for callers that are not yet wired into a GitHub
+/// polling source — preserves the pre-GhPr behaviour where GhPr-await
+/// tasks always block.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopGhPrLookup;
+
+impl GhPrLookup for NoopGhPrLookup {
+    fn pr_state(&self, _pr_id: &GhPrId) -> Option<GhPrState> {
+        None
+    }
+}
+
+/// Pure-function gate for [`AwaitType::GhPr`].
+///
+/// Returns `true` iff `await_type` is `Some(AwaitType::GhPr { pr_id, .. })`
+/// and the referenced PR resolves to a terminal [`GhPrState`]
+/// (Closed / Merged) via `lookup`. A PR reported as `None` (unknown) or in a
+/// non-terminal state (Open / Draft / Unknown) is treated as not ready.
+///
+/// Workflows deliberately proceed on Closed too — the task itself needs to
+/// wake up so its handler can branch on the outcome (merged vs closed-without-
+/// merge). Gating on Merged-only would strand closed-without-merge PRs
+/// indefinitely.
+///
+/// Returns `false` for non-GhPr await types.
+pub fn is_gh_pr_ready(await_type: &AwaitType, lookup: &dyn GhPrLookup) -> bool {
+    match await_type {
+        AwaitType::GhPr { pr_id, .. } => lookup
+            .pr_state(pr_id)
+            .map(|s| s.is_terminal())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// Bundle of lookup dependencies consulted by [`ready_tasks_with_context`].
 ///
 /// Exists to keep gate signatures small as we add per-await-variant lookups
-/// (GhPr / Mail / Change land in follow-up beads). Instead of threading a
+/// (Mail / Change land in follow-up beads). Instead of threading a
 /// growing list of `&dyn XLookup` positional args through `ready_tasks_with_…`
 /// and `is_ready`, callers build one [`ReadyContext`] and pass it by reference.
 ///
@@ -146,7 +201,8 @@ pub struct ReadyContext<'a> {
     pub hitl: &'a dyn HitlLookup,
     /// Lookup consulted for [`AwaitType::GhRun`] gates.
     pub gh_run: &'a dyn GhRunLookup,
-    // Future: pub gh_pr: &'a dyn GhPrLookup,
+    /// Lookup consulted for [`AwaitType::GhPr`] gates.
+    pub gh_pr: &'a dyn GhPrLookup,
     // Future: pub mail:  &'a dyn MailLookup,
     // Future: pub change: &'a dyn ChangeLookup,
 }
@@ -154,14 +210,15 @@ pub struct ReadyContext<'a> {
 impl<'a> ReadyContext<'a> {
     /// Build a [`ReadyContext`] backed entirely by no-op lookups.
     ///
-    /// Every gate that requires an external signal (Human, GhRun, …) reports
-    /// "unknown" and therefore resolves to not-ready. Useful as the default
-    /// for callers that have not yet wired into real lookup sources, and for
-    /// unit tests exercising purely time/dependency-based gates.
+    /// Every gate that requires an external signal (Human, GhRun, GhPr, …)
+    /// reports "unknown" and therefore resolves to not-ready. Useful as the
+    /// default for callers that have not yet wired into real lookup sources,
+    /// and for unit tests exercising purely time/dependency-based gates.
     pub fn default_noop() -> ReadyContext<'static> {
         ReadyContext {
             hitl: &NoopHitlLookup,
             gh_run: &NoopGhRunLookup,
+            gh_pr: &NoopGhPrLookup,
         }
     }
 }
@@ -201,6 +258,7 @@ pub fn ready_tasks_with_hitl<'a>(
     let ctx = ReadyContext {
         hitl,
         gh_run: &NoopGhRunLookup,
+        gh_pr: &NoopGhPrLookup,
     };
     ready_tasks_with_context(tasks, now, &ctx)
 }
@@ -317,6 +375,12 @@ fn is_ready(
                     return false;
                 }
                 // GitHub run reached a terminal state — gate passes.
+            }
+            AwaitType::GhPr { .. } => {
+                if !is_gh_pr_ready(await_type, ctx.gh_pr) {
+                    return false;
+                }
+                // GitHub PR reached a terminal state — gate passes.
             }
             // Other await variants remain pending until their integrations land.
             _ => return false,

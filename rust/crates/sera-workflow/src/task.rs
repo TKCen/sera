@@ -163,6 +163,67 @@ pub enum WorkflowTaskType {
     Dream,
 }
 
+/// Workflow-local identifier for a GitHub pull request.
+///
+/// Mirrors [`GhRunId`]: a newtype over `String` so the scheduler doesn't
+/// couple to a numeric GitHub PR number type and opaque synthetic ids
+/// (e.g. from tests or fixtures) round-trip cleanly.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct GhPrId(pub String);
+
+impl GhPrId {
+    /// Construct a [`GhPrId`] from anything that can be turned into a `String`.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Borrow the underlying id as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GhPrId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Terminal / non-terminal state of a GitHub pull request.
+///
+/// The scheduler only needs a binary signal (terminal vs not). Non-terminal
+/// transient states ([`GhPrState::Open`], [`GhPrState::Draft`]) and the
+/// conservative catch-all [`GhPrState::Unknown`] map to not-ready; every
+/// terminal state maps to ready.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GhPrState {
+    /// PR is open and ready for review (non-terminal).
+    Open,
+    /// PR has been closed without merging (terminal).
+    Closed,
+    /// PR has been merged (terminal).
+    Merged,
+    /// PR is still being drafted (non-terminal — still being worked on).
+    Draft,
+    /// State cannot be determined from the GitHub API response — treated as
+    /// not-ready so the scheduler falls back to conservative behaviour.
+    Unknown,
+}
+
+impl GhPrState {
+    /// Returns `true` iff the PR has reached a terminal state the scheduler
+    /// should treat as "resolved". The workflow proceeds on any terminal
+    /// conclusion — the downstream handler branches on the outcome itself.
+    ///
+    /// `Draft` is deliberately non-terminal (PR still being worked on).
+    /// `Unknown` is deliberately non-terminal (conservative — don't wake on
+    /// ambiguous lookup).
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Closed | Self::Merged)
+    }
+}
+
 /// The external thing a task is waiting for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,7 +239,16 @@ pub enum AwaitType {
         run_id: GhRunId,
         repo: String,
     },
-    GhPr,
+    /// GitHub pull-request gate — task is not ready until the PR referenced
+    /// by `pr_id` reaches a terminal [`GhPrState`] (Closed / Merged) via a
+    /// [`GhPrLookup`](crate::ready::GhPrLookup) during scheduling.
+    ///
+    /// `repo` is carried purely for operator debugging and audit trails —
+    /// the gate logic itself keys only on `pr_id`.
+    GhPr {
+        pr_id: GhPrId,
+        repo: String,
+    },
     /// Time-based gate — task is not ready until `now >= not_before`.
     ///
     /// This gate is pull-based: the ready-queue asks

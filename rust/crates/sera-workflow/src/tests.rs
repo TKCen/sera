@@ -532,11 +532,12 @@ fn ready_queue_surfaces_elapsed_timer_and_hides_pending_timer() {
 
 #[test]
 fn non_timer_await_still_blocks() {
-    // Regression: await variants without an integration (GhPr, Mail, Change)
-    // must still block. Pick GhPr as the surviving unit variant sentinel.
+    // Regression: await variants without an integration (Mail, Change)
+    // must still block. Use AwaitType::Mail as the unit-variant sentinel
+    // (GhPr is now a struct variant with its own integration).
     let now = base_instant();
     let mut t = make_task(1, vec![]);
-    t.await_type = Some(AwaitType::GhPr);
+    t.await_type = Some(AwaitType::Mail);
 
     let tasks = vec![t.clone()];
     let ready = ready_tasks(&tasks, now);
@@ -735,9 +736,10 @@ fn human_gate_serde_roundtrip() {
 // ---------------------------------------------------------------------------
 
 use crate::ready::{
-    is_gh_run_ready, ready_tasks_with_context, GhRunLookup, NoopGhRunLookup, ReadyContext,
+    is_gh_pr_ready, is_gh_run_ready, ready_tasks_with_context, GhPrLookup, GhRunLookup,
+    NoopGhPrLookup, NoopGhRunLookup, ReadyContext,
 };
-use crate::task::{GhRunId, GhRunStatus};
+use crate::task::{GhPrId, GhPrState, GhRunId, GhRunStatus};
 
 /// In-memory [`GhRunLookup`] used exclusively in tests to stand in for a
 /// real GitHub polling source. Keys on the inner string of [`GhRunId`] so
@@ -774,6 +776,7 @@ fn ctx_with_gh_run<'a>(lookup: &'a dyn GhRunLookup) -> ReadyContext<'a> {
     ReadyContext {
         hitl: &NoopHitlLookup,
         gh_run: lookup,
+        gh_pr: &NoopGhPrLookup,
     }
 }
 
@@ -892,10 +895,10 @@ fn gh_run_ready_but_blocks_open_still_blocks() {
 }
 
 #[test]
-fn default_noop_context_blocks_human_and_gh_run() {
-    // ReadyContext::default_noop() must leave both external-signal gates
-    // pending — it preserves the pre-integration behaviour when callers have
-    // not yet wired into real lookup sources.
+fn default_noop_context_blocks_human_gh_run_and_gh_pr() {
+    // ReadyContext::default_noop() must leave all three integrated external-
+    // signal gates pending — it preserves the pre-integration behaviour when
+    // callers have not yet wired into real lookup sources.
     let now = base_instant();
 
     let mut human_task = make_task(1, vec![]);
@@ -906,16 +909,22 @@ fn default_noop_context_blocks_human_and_gh_run() {
     let mut gh_run_task = make_task(2, vec![]);
     gh_run_task.await_type = Some(gh_run_gate("whatever"));
 
-    let tasks = vec![human_task.clone(), gh_run_task.clone()];
+    let mut gh_pr_task = make_task(3, vec![]);
+    gh_pr_task.await_type = Some(gh_pr_gate("whatever"));
+
+    let tasks = vec![human_task.clone(), gh_run_task.clone(), gh_pr_task.clone()];
     let ctx = ReadyContext::default_noop();
     let ready = ready_tasks_with_context(&tasks, now, &ctx);
 
     assert!(!ready.iter().any(|r| r.id == human_task.id));
     assert!(!ready.iter().any(|r| r.id == gh_run_task.id));
+    assert!(!ready.iter().any(|r| r.id == gh_pr_task.id));
 
-    // NoopGhRunLookup explicitly reports "unknown".
-    let noop = NoopGhRunLookup;
-    assert!(noop.run_status(&GhRunId::new("x")).is_none());
+    // Noop lookups explicitly report "unknown".
+    let noop_run = NoopGhRunLookup;
+    assert!(noop_run.run_status(&GhRunId::new("x")).is_none());
+    let noop_pr = NoopGhPrLookup;
+    assert!(noop_pr.pr_state(&GhPrId::new("x")).is_none());
 }
 
 #[test]
@@ -950,6 +959,178 @@ fn gh_run_status_serde_roundtrip() {
         let json = serde_json::to_string(&status).unwrap();
         let back: GhRunStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AwaitType::GhPr gate (GhPrLookup) + ReadyContext bundle
+// ---------------------------------------------------------------------------
+
+/// In-memory [`GhPrLookup`] used exclusively in tests to stand in for a
+/// real GitHub polling source. Keys on the inner string of [`GhPrId`] so
+/// tests can push opaque synthetic ids.
+#[derive(Debug, Default)]
+struct MapGhPrLookup {
+    by_id: HashMap<String, GhPrState>,
+}
+
+impl MapGhPrLookup {
+    fn new() -> Self {
+        Self { by_id: HashMap::new() }
+    }
+
+    fn insert(&mut self, id: impl Into<String>, state: GhPrState) {
+        self.by_id.insert(id.into(), state);
+    }
+}
+
+impl GhPrLookup for MapGhPrLookup {
+    fn pr_state(&self, id: &GhPrId) -> Option<GhPrState> {
+        self.by_id.get(id.as_str()).cloned()
+    }
+}
+
+fn gh_pr_gate(id: &str) -> AwaitType {
+    AwaitType::GhPr {
+        pr_id: GhPrId::new(id),
+        repo: "acme/example".to_string(),
+    }
+}
+
+fn ctx_with_gh_pr<'a>(lookup: &'a dyn GhPrLookup) -> ReadyContext<'a> {
+    ReadyContext {
+        hitl: &NoopHitlLookup,
+        gh_run: &NoopGhRunLookup,
+        gh_pr: lookup,
+    }
+}
+
+#[test]
+fn gh_pr_missing_is_not_ready() {
+    // PR not present in the lookup → treat as not ready. Mirrors the
+    // GhRunLookup "unknown run" contract.
+    let gate = gh_pr_gate("pr-missing");
+    let lookup = MapGhPrLookup::new();
+    assert!(!is_gh_pr_ready(&gate, &lookup));
+}
+
+#[test]
+fn gh_pr_open_is_not_ready() {
+    let gate = gh_pr_gate("pr-open");
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert("pr-open", GhPrState::Open);
+    assert!(!is_gh_pr_ready(&gate, &lookup));
+    assert!(!GhPrState::Open.is_terminal());
+}
+
+#[test]
+fn gh_pr_draft_is_not_ready() {
+    // Draft is non-terminal — the PR is still being worked on.
+    let gate = gh_pr_gate("pr-draft");
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert("pr-draft", GhPrState::Draft);
+    assert!(!is_gh_pr_ready(&gate, &lookup));
+    assert!(!GhPrState::Draft.is_terminal());
+}
+
+#[test]
+fn gh_pr_closed_is_ready() {
+    // Closed without merging is terminal — the task must wake up so its
+    // handler can branch on the outcome.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(gh_pr_gate("pr-closed"));
+
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert("pr-closed", GhPrState::Closed);
+    let ctx = ctx_with_gh_pr(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+    assert!(GhPrState::Closed.is_terminal());
+}
+
+#[test]
+fn gh_pr_merged_is_ready() {
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(gh_pr_gate("pr-merged"));
+
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert("pr-merged", GhPrState::Merged);
+    let ctx = ctx_with_gh_pr(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+    assert!(GhPrState::Merged.is_terminal());
+}
+
+#[test]
+fn gh_pr_unknown_is_not_ready() {
+    // Unknown is a deliberately conservative non-terminal state — we never
+    // wake a task on an ambiguous signal.
+    let gate = gh_pr_gate("pr-unknown");
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert("pr-unknown", GhPrState::Unknown);
+    assert!(!is_gh_pr_ready(&gate, &lookup));
+    assert!(!GhPrState::Unknown.is_terminal());
+}
+
+#[test]
+fn gh_pr_ready_but_blocks_open_still_blocks() {
+    // Combined gate: PR is Merged, but the task still has an unsatisfied
+    // Blocks dep. The Blocks gate must win — a terminal PR does not bypass
+    // other gates, matching the GhRun+Blocks and Human+Blocks tests.
+    let now = base_instant();
+
+    let blocker = make_task(1, vec![]);
+    let mut blocked = make_task(2, vec![]);
+    blocked.dependencies = vec![WorkflowTaskDependency {
+        from: blocker.id,
+        to: blocked.id,
+        kind: crate::task::DependencyType::Blocks,
+    }];
+    blocked.await_type = Some(gh_pr_gate("pr-merged-but-blocked"));
+
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert("pr-merged-but-blocked", GhPrState::Merged);
+    let ctx = ctx_with_gh_pr(&lookup);
+
+    let tasks = vec![blocker, blocked.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(!ready.iter().any(|t| t.id == blocked.id));
+}
+
+#[test]
+fn gh_pr_gate_serde_roundtrip() {
+    let gate = AwaitType::GhPr {
+        pr_id: GhPrId::new("42"),
+        repo: "acme/example".to_string(),
+    };
+    let json = serde_json::to_string(&gate).unwrap();
+    let back: AwaitType = serde_json::from_str(&json).unwrap();
+    assert_eq!(gate, back);
+    assert!(json.contains("gh_pr"));
+    assert!(json.contains("pr_id"));
+    assert!(json.contains("42"));
+    assert!(json.contains("repo"));
+    assert!(json.contains("acme/example"));
+}
+
+#[test]
+fn gh_pr_state_serde_roundtrip() {
+    for state in [
+        GhPrState::Open,
+        GhPrState::Closed,
+        GhPrState::Merged,
+        GhPrState::Draft,
+        GhPrState::Unknown,
+    ] {
+        let json = serde_json::to_string(&state).unwrap();
+        let back: GhPrState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
     }
 }
 

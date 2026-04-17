@@ -28,4 +28,7 @@ pub enum SkillsError {
 
     #[error("YAML parsing error: {0}")]
     YamlParsing(#[from] serde_yaml::Error),
+
+    #[error("skill markdown format error: {0}")]
+    Format(String),
 }

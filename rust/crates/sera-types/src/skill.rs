@@ -1,9 +1,27 @@
 //! Skill and tool types.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A skill definition (tool available to agents).
 /// Maps from TS: SkillDefinition in skills/types.ts
+///
+/// # AgentSkills markdown extensions
+///
+/// The optional fields `body`, `triggers`, `model_override`,
+/// `context_budget_tokens`, `tool_bindings`, and `mcp_servers` are populated
+/// when a skill is loaded from an AgentSkills-compatible markdown file
+/// (see `sera-skills::markdown`). They are backward-compatible via
+/// `#[serde(default)]` so legacy JSON-sourced definitions still parse.
+///
+/// ```
+/// use sera_types::skill::SkillDefinition;
+/// let json = r#"{ "name": "code-review" }"#;
+/// let def: SkillDefinition = serde_json::from_str(json).unwrap();
+/// assert_eq!(def.name, "code-review");
+/// assert!(def.body.is_none());
+/// assert!(def.triggers.is_empty());
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillDefinition {
     pub name: String,
@@ -15,6 +33,119 @@ pub struct SkillDefinition {
     pub parameters: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+
+    /// Markdown body injected into agent context when this skill is active.
+    /// For markdown-sourced skills this replaces [`SkillConfig::context_injection`].
+    ///
+    /// ```
+    /// use sera_types::skill::SkillDefinition;
+    /// let def = SkillDefinition {
+    ///     name: "x".into(), description: None, version: None, parameters: None,
+    ///     source: None, body: Some("You are a reviewer.".into()),
+    ///     triggers: vec![], model_override: None, context_budget_tokens: None,
+    ///     tool_bindings: vec![], mcp_servers: vec![],
+    /// };
+    /// assert_eq!(def.body.as_deref(), Some("You are a reviewer."));
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+
+    /// Trigger keywords that activate this skill. See AgentSkills `triggers:` frontmatter.
+    ///
+    /// ```
+    /// use sera_types::skill::SkillDefinition;
+    /// let def = SkillDefinition {
+    ///     name: "x".into(), description: None, version: None, parameters: None,
+    ///     source: None, body: None,
+    ///     triggers: vec!["review".into(), "audit".into()],
+    ///     model_override: None, context_budget_tokens: None,
+    ///     tool_bindings: vec![], mcp_servers: vec![],
+    /// };
+    /// assert_eq!(def.triggers.len(), 2);
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<String>,
+
+    /// Optional model override (e.g. `"claude-opus-4"`). Interpreted by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+
+    /// Context budget hint in tokens. Runtime may truncate `body` to fit this budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget_tokens: Option<u32>,
+
+    /// Tool names bound to this skill (moved up from [`SkillConfig`] for
+    /// frontmatter parity). Duplicated access is preserved so existing callers
+    /// reading [`SkillConfig::tools`] continue to work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_bindings: Vec<String>,
+
+    /// Per-skill MCP server declarations. At wire time a runtime adapter maps
+    /// [`SkillMcpServer`] to `sera-mcp::McpServerConfig`; sera-types does not
+    /// depend on sera-mcp to keep the crate graph acyclic.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<SkillMcpServer>,
+}
+
+/// Transport flavour for a per-skill MCP server declaration.
+///
+/// Mirrors the three transport variants used by the MCP ecosystem.
+/// Kept local to `sera-types` so `SkillDefinition` does not require
+/// a dependency on `sera-mcp`; the runtime is responsible for mapping
+/// this enum to the concrete `sera-mcp::McpServerConfig` at wire time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillMcpTransport {
+    /// Stdio subprocess transport (most AgentSkills declarations use this).
+    #[default]
+    Stdio,
+    /// Server-Sent Events transport.
+    Sse,
+    /// Streamable HTTP transport.
+    StreamableHttp,
+}
+
+/// A per-skill MCP server declaration.
+///
+/// ```
+/// use sera_types::skill::{SkillMcpServer, SkillMcpTransport};
+/// let server = SkillMcpServer {
+///     name: "github".into(),
+///     transport: SkillMcpTransport::Stdio,
+///     command: Some("npx".into()),
+///     args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+///     url: None,
+///     env: Default::default(),
+/// };
+/// let json = serde_json::to_string(&server).unwrap();
+/// let back: SkillMcpServer = serde_json::from_str(&json).unwrap();
+/// assert_eq!(back.name, "github");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillMcpServer {
+    /// Server nickname (unique within the declaring skill).
+    pub name: String,
+
+    /// Transport flavour. Defaults to `stdio` for backward compat with
+    /// AgentSkills frontmatter that omits the field.
+    #[serde(default)]
+    pub transport: SkillMcpTransport,
+
+    /// Subprocess command (for stdio transports).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+
+    /// Command-line arguments for the subprocess.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+
+    /// Endpoint URL (for SSE / streamable HTTP transports).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// Extra environment variables to inject when launching the server.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
 }
 
 /// Operating mode for a skill.
@@ -233,15 +364,25 @@ pub enum EnforcementMode {
 mod tests {
     use super::*;
 
-    #[test]
-    fn skill_definition_minimal() {
-        let skill = SkillDefinition {
-            name: "shell-exec".to_string(),
+    fn empty_skill_def(name: &str) -> SkillDefinition {
+        SkillDefinition {
+            name: name.to_string(),
             description: None,
             version: None,
             parameters: None,
             source: None,
-        };
+            body: None,
+            triggers: vec![],
+            model_override: None,
+            context_budget_tokens: None,
+            tool_bindings: vec![],
+            mcp_servers: vec![],
+        }
+    }
+
+    #[test]
+    fn skill_definition_minimal() {
+        let skill = empty_skill_def("shell-exec");
         let json = serde_json::to_string(&skill).unwrap();
         assert!(json.contains("\"name\":\"shell-exec\""));
         assert!(!json.contains("description"));
@@ -251,16 +392,14 @@ mod tests {
 
     #[test]
     fn skill_definition_full() {
-        let skill = SkillDefinition {
-            name: "file-manager".to_string(),
-            description: Some("Manage files on the filesystem".to_string()),
-            version: Some("1.0.0".to_string()),
-            parameters: Some(serde_json::json!({
-                "operations": ["read", "write", "delete"],
-                "max_file_size_mb": 100
-            })),
-            source: Some("builtin".to_string()),
-        };
+        let mut skill = empty_skill_def("file-manager");
+        skill.description = Some("Manage files on the filesystem".to_string());
+        skill.version = Some("1.0.0".to_string());
+        skill.parameters = Some(serde_json::json!({
+            "operations": ["read", "write", "delete"],
+            "max_file_size_mb": 100
+        }));
+        skill.source = Some("builtin".to_string());
         let json = serde_json::to_string(&skill).unwrap();
         let parsed: SkillDefinition = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "file-manager");
@@ -271,18 +410,55 @@ mod tests {
 
     #[test]
     fn skill_definition_json_roundtrip() {
-        let skill = SkillDefinition {
-            name: "network-request".to_string(),
-            description: Some("Make HTTP requests".to_string()),
-            version: Some("2.0.0".to_string()),
-            parameters: None,
-            source: Some("custom".to_string()),
-        };
+        let mut skill = empty_skill_def("network-request");
+        skill.description = Some("Make HTTP requests".to_string());
+        skill.version = Some("2.0.0".to_string());
+        skill.source = Some("custom".to_string());
         let json = serde_json::to_string(&skill).unwrap();
         let parsed: SkillDefinition = serde_json::from_str(&json).unwrap();
         assert_eq!(skill.name, parsed.name);
         assert_eq!(skill.description, parsed.description);
         assert_eq!(skill.version, parsed.version);
+    }
+
+    #[test]
+    fn skill_definition_markdown_extensions() {
+        let mut skill = empty_skill_def("code-review");
+        skill.body = Some("You are a reviewer.".to_string());
+        skill.triggers = vec!["review".into(), "audit".into()];
+        skill.model_override = Some("claude-opus-4".into());
+        skill.context_budget_tokens = Some(4096);
+        skill.tool_bindings = vec!["read_file".into()];
+        skill.mcp_servers = vec![SkillMcpServer {
+            name: "github".into(),
+            transport: SkillMcpTransport::Stdio,
+            command: Some("npx".into()),
+            args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+            url: None,
+            env: HashMap::new(),
+        }];
+        let json = serde_json::to_string(&skill).unwrap();
+        let parsed: SkillDefinition = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.body.as_deref(), Some("You are a reviewer."));
+        assert_eq!(parsed.triggers, vec!["review", "audit"]);
+        assert_eq!(parsed.model_override.as_deref(), Some("claude-opus-4"));
+        assert_eq!(parsed.context_budget_tokens, Some(4096));
+        assert_eq!(parsed.tool_bindings, vec!["read_file"]);
+        assert_eq!(parsed.mcp_servers.len(), 1);
+        assert_eq!(parsed.mcp_servers[0].name, "github");
+        assert_eq!(parsed.mcp_servers[0].transport, SkillMcpTransport::Stdio);
+    }
+
+    #[test]
+    fn skill_definition_legacy_json_back_compat() {
+        // Legacy JSON without any markdown extensions must still parse.
+        let legacy = r#"{"name":"legacy","version":"1.0.0"}"#;
+        let parsed: SkillDefinition = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.name, "legacy");
+        assert!(parsed.body.is_none());
+        assert!(parsed.triggers.is_empty());
+        assert!(parsed.tool_bindings.is_empty());
+        assert!(parsed.mcp_servers.is_empty());
     }
 
     #[test]

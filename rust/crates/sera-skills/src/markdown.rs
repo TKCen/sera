@@ -1,0 +1,471 @@
+//! AgentSkills markdown skill file parser.
+//!
+//! Parses single-file `.md` skill definitions with YAML frontmatter. The
+//! frontmatter describes skill metadata (name, version, triggers, tools,
+//! MCP servers, etc.); the body is the raw prompt text injected into the
+//! agent's context window when the skill is active.
+//!
+//! # Example input
+//!
+//! ```markdown
+//! ---
+//! name: code-review
+//! version: 1.0.0
+//! description: Review code for correctness and style
+//! triggers: [review, audit]
+//! tools: [read_file, search_code]
+//! ---
+//!
+//! You are a senior code reviewer...
+//! ```
+//!
+//! See `docs/skill-format.md` for the full schema.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use pulldown_cmark::{Options, Parser};
+use regex::Regex;
+use serde::Deserialize;
+use tokio::fs;
+
+use sera_types::skill::{
+    SkillConfig, SkillDefinition, SkillMcpServer, SkillMcpTransport, SkillMode, SkillTrigger,
+};
+
+use crate::error::SkillsError;
+
+/// Parsed representation of a single AgentSkills markdown file.
+///
+/// The caller receives both a `SkillDefinition` (with the markdown body
+/// attached) and a derived `SkillConfig` suitable for registration in
+/// `SkillRegistry`. `body_raw` preserves the exact markdown bytes after
+/// frontmatter for downstream rendering.
+#[derive(Debug, Clone)]
+pub struct ParsedSkillMarkdown {
+    pub definition: SkillDefinition,
+    pub config: SkillConfig,
+    pub body_raw: String,
+    pub path: PathBuf,
+}
+
+/// Intermediate frontmatter shape mirroring the AgentSkills YAML schema.
+///
+/// All fields except `name` are optional — absent fields map to `None`
+/// or empty collections on the produced `SkillDefinition`.
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Frontmatter {
+    name: String,
+
+    #[serde(default)]
+    version: Option<String>,
+
+    #[serde(default)]
+    description: Option<String>,
+
+    #[serde(default)]
+    triggers: Vec<String>,
+
+    #[serde(default)]
+    tools: Vec<String>,
+
+    #[serde(default)]
+    mcp_tools: Option<McpToolsFrontmatter>,
+
+    #[serde(default)]
+    model: Option<String>,
+
+    #[serde(default)]
+    context_budget_tokens: Option<u32>,
+
+    #[serde(default)]
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct McpToolsFrontmatter {
+    #[serde(default)]
+    stdio_servers: Vec<StdioServerFrontmatter>,
+    #[serde(default)]
+    sse_servers: Vec<UrlServerFrontmatter>,
+    #[serde(default)]
+    streamable_http_servers: Vec<UrlServerFrontmatter>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct StdioServerFrontmatter {
+    name: String,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct UrlServerFrontmatter {
+    name: String,
+    url: String,
+    #[serde(default)]
+    env: HashMap<String, String>,
+}
+
+fn name_regex() -> &'static Regex {
+    use std::sync::OnceLock;
+    static NAME_RE: OnceLock<Regex> = OnceLock::new();
+    NAME_RE.get_or_init(|| Regex::new(r"^[a-z0-9-]{1,64}$").unwrap())
+}
+
+fn version_regex() -> &'static Regex {
+    use std::sync::OnceLock;
+    static VERSION_RE: OnceLock<Regex> = OnceLock::new();
+    // Semver-lite: MAJOR.MINOR.PATCH with optional prerelease / build metadata.
+    VERSION_RE.get_or_init(|| {
+        Regex::new(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$").unwrap()
+    })
+}
+
+/// Split a raw file into `(yaml_frontmatter, body)`.
+///
+/// The file MUST start with a `---` line, followed by YAML, a closing
+/// `---` line, and then the body. Either `\n` or `\r\n` line endings work.
+fn split_frontmatter(raw: &str) -> Result<(&str, &str), SkillsError> {
+    // Strip BOM if present.
+    let trimmed = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
+
+    // Accept both "---\n" and "---\r\n".
+    let after_open = trimmed
+        .strip_prefix("---\n")
+        .or_else(|| trimmed.strip_prefix("---\r\n"))
+        .ok_or_else(|| {
+            SkillsError::Format(
+                "skill markdown must start with `---` frontmatter fence".to_string(),
+            )
+        })?;
+
+    // Find the closing fence on its own line.
+    let mut search_start = 0usize;
+    loop {
+        let slice = &after_open[search_start..];
+        let idx = slice.find("---").ok_or_else(|| {
+            SkillsError::Format(
+                "skill markdown frontmatter missing closing `---` fence".to_string(),
+            )
+        })?;
+        let absolute = search_start + idx;
+        let at_line_start = absolute == 0 || after_open.as_bytes()[absolute - 1] == b'\n';
+        // Require fence to terminate with \n or \r\n or EOF.
+        let after_fence = absolute + 3;
+        let terminates = after_open.len() == after_fence
+            || after_open.as_bytes()[after_fence] == b'\n'
+            || (after_open.as_bytes()[after_fence] == b'\r'
+                && after_open.len() > after_fence + 1
+                && after_open.as_bytes()[after_fence + 1] == b'\n');
+
+        if at_line_start && terminates {
+            let yaml = &after_open[..absolute];
+            // Skip past the fence line terminator.
+            let body_start = if after_open.len() == after_fence {
+                after_fence
+            } else if after_open.as_bytes()[after_fence] == b'\n' {
+                after_fence + 1
+            } else {
+                after_fence + 2
+            };
+            return Ok((yaml, &after_open[body_start..]));
+        }
+        search_start = absolute + 3;
+    }
+}
+
+/// Parse a skill markdown string. `source_path` is used for error messages
+/// and to populate [`ParsedSkillMarkdown::path`].
+pub fn parse_skill_markdown_str(
+    raw: &str,
+    source_path: PathBuf,
+) -> Result<ParsedSkillMarkdown, SkillsError> {
+    let (yaml_section, body) = split_frontmatter(raw)?;
+
+    let fm: Frontmatter = serde_yaml::from_str(yaml_section).map_err(|e| {
+        SkillsError::Format(format!(
+            "invalid YAML frontmatter in {}: {}",
+            source_path.display(),
+            e
+        ))
+    })?;
+
+    // Validate name.
+    if !name_regex().is_match(&fm.name) {
+        return Err(SkillsError::Format(format!(
+            "invalid skill name `{}` in {}: must match [a-z0-9-]{{1,64}}",
+            fm.name,
+            source_path.display()
+        )));
+    }
+
+    // Validate version if present (semver-lite). Missing version is allowed
+    // for now; a follow-up bead can raise this to required.
+    if let Some(ref v) = fm.version
+        && !version_regex().is_match(v)
+    {
+        return Err(SkillsError::Format(format!(
+            "invalid version `{}` in {}: expected MAJOR.MINOR.PATCH",
+            v,
+            source_path.display()
+        )));
+    }
+
+    // Validate body is syntactically valid markdown. We only scan (and drop)
+    // the events; the raw body text is what the LLM will see.
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_FOOTNOTES);
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    for _event in Parser::new_ext(body, opts) {
+        // Scanning is enough: pulldown-cmark is infallible in that it does
+        // not return Result; a panic-free iteration is our validation.
+    }
+
+    // Assemble MCP server list from the three transport buckets.
+    let mut mcp_servers: Vec<SkillMcpServer> = Vec::new();
+    if let Some(mcp) = fm.mcp_tools.as_ref() {
+        for s in &mcp.stdio_servers {
+            mcp_servers.push(SkillMcpServer {
+                name: s.name.clone(),
+                transport: SkillMcpTransport::Stdio,
+                command: s.command.clone(),
+                args: s.args.clone(),
+                url: None,
+                env: s.env.clone(),
+            });
+        }
+        for s in &mcp.sse_servers {
+            mcp_servers.push(SkillMcpServer {
+                name: s.name.clone(),
+                transport: SkillMcpTransport::Sse,
+                command: None,
+                args: vec![],
+                url: Some(s.url.clone()),
+                env: s.env.clone(),
+            });
+        }
+        for s in &mcp.streamable_http_servers {
+            mcp_servers.push(SkillMcpServer {
+                name: s.name.clone(),
+                transport: SkillMcpTransport::StreamableHttp,
+                command: None,
+                args: vec![],
+                url: Some(s.url.clone()),
+                env: s.env.clone(),
+            });
+        }
+    }
+
+    let definition = SkillDefinition {
+        name: fm.name.clone(),
+        description: fm.description.clone(),
+        version: fm.version.clone(),
+        parameters: None,
+        source: fm.source.clone(),
+        body: Some(body.to_string()),
+        triggers: fm.triggers.clone(),
+        model_override: fm.model.clone(),
+        context_budget_tokens: fm.context_budget_tokens,
+        tool_bindings: fm.tools.clone(),
+        mcp_servers,
+    };
+
+    // Derive a SkillConfig. Defaults for markdown skills:
+    //   mode    = OnDemand (activation decided at runtime)
+    //   trigger = Always if any keyword triggers are declared, else Manual
+    //   tools   = frontmatter tools
+    //   context_injection = None (body lives on the definition)
+    let trigger = if fm.triggers.is_empty() {
+        SkillTrigger::Manual
+    } else {
+        SkillTrigger::Always
+    };
+
+    let config = SkillConfig {
+        name: fm.name.clone(),
+        version: fm.version.clone().unwrap_or_else(|| "0.0.0".to_string()),
+        description: fm.description.clone().unwrap_or_default(),
+        mode: SkillMode::OnDemand,
+        trigger,
+        tools: fm.tools.clone(),
+        context_injection: None,
+        config: serde_json::json!({}),
+    };
+
+    Ok(ParsedSkillMarkdown {
+        definition,
+        config,
+        body_raw: body.to_string(),
+        path: source_path,
+    })
+}
+
+/// Parse a skill markdown file from disk.
+pub async fn parse_skill_markdown_file(path: &Path) -> Result<ParsedSkillMarkdown, SkillsError> {
+    let raw = fs::read_to_string(path).await?;
+    parse_skill_markdown_str(&raw, path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_SKILL: &str = r#"---
+name: code-review
+version: 1.0.0
+description: Review code for correctness, style, and security issues
+triggers:
+  - review
+  - audit
+tools:
+  - read_file
+  - search_code
+mcp_tools:
+  stdio_servers:
+    - name: github
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+model: claude-opus-4
+context_budget_tokens: 4096
+---
+
+You are a senior code reviewer. When activated, you systematically examine code.
+
+## Checklist
+
+- Correctness
+- Style
+- Security
+"#;
+
+    #[test]
+    fn parses_valid_frontmatter_and_body() {
+        let parsed =
+            parse_skill_markdown_str(VALID_SKILL, PathBuf::from("code-review.md")).unwrap();
+        assert_eq!(parsed.definition.name, "code-review");
+        assert_eq!(parsed.definition.version.as_deref(), Some("1.0.0"));
+        assert_eq!(parsed.definition.triggers, vec!["review", "audit"]);
+        assert_eq!(parsed.definition.tool_bindings, vec!["read_file", "search_code"]);
+        assert_eq!(parsed.definition.model_override.as_deref(), Some("claude-opus-4"));
+        assert_eq!(parsed.definition.context_budget_tokens, Some(4096));
+
+        // MCP server decoded.
+        assert_eq!(parsed.definition.mcp_servers.len(), 1);
+        let server = &parsed.definition.mcp_servers[0];
+        assert_eq!(server.name, "github");
+        assert_eq!(server.transport, SkillMcpTransport::Stdio);
+        assert_eq!(server.command.as_deref(), Some("npx"));
+        assert_eq!(server.args, vec!["-y", "@modelcontextprotocol/server-github"]);
+
+        // Body preserved byte-for-byte.
+        assert!(parsed.body_raw.starts_with("\nYou are a senior code reviewer."));
+        assert_eq!(parsed.definition.body.as_deref(), Some(parsed.body_raw.as_str()));
+
+        // Derived config.
+        assert_eq!(parsed.config.name, "code-review");
+        assert_eq!(parsed.config.mode, SkillMode::OnDemand);
+        assert_eq!(parsed.config.trigger, SkillTrigger::Always);
+        assert_eq!(parsed.config.tools, vec!["read_file", "search_code"]);
+    }
+
+    #[test]
+    fn missing_frontmatter_fails() {
+        let err = parse_skill_markdown_str(
+            "Just markdown without frontmatter.\n",
+            PathBuf::from("x.md"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn bad_name_rejected() {
+        let raw = "---\nname: Invalid Name!\nversion: 1.0.0\n---\n\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => assert!(msg.contains("invalid skill name")),
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bad_version_rejected() {
+        let raw = "---\nname: ok-name\nversion: not-semver\n---\n\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => assert!(msg.contains("invalid version")),
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_version_allowed() {
+        let raw = "---\nname: ok-name\n---\n\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert!(parsed.definition.version.is_none());
+        assert_eq!(parsed.config.version, "0.0.0");
+    }
+
+    #[test]
+    fn manual_trigger_when_no_keywords() {
+        let raw = "---\nname: manual-skill\nversion: 0.1.0\n---\n\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.config.trigger, SkillTrigger::Manual);
+    }
+
+    #[test]
+    fn mcp_server_populated() {
+        let parsed =
+            parse_skill_markdown_str(VALID_SKILL, PathBuf::from("code-review.md")).unwrap();
+        let servers = &parsed.definition.mcp_servers;
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "github");
+    }
+
+    #[test]
+    fn tool_bindings_populated() {
+        let parsed =
+            parse_skill_markdown_str(VALID_SKILL, PathBuf::from("code-review.md")).unwrap();
+        assert_eq!(parsed.definition.tool_bindings.len(), 2);
+    }
+
+    #[test]
+    fn body_preserved_byte_for_byte() {
+        let raw = "---\nname: x\nversion: 1.0.0\n---\nExact\nbody\nbytes\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.body_raw, "Exact\nbody\nbytes\n");
+    }
+
+    #[test]
+    fn crlf_frontmatter_supported() {
+        let raw = "---\r\nname: crlf-ok\r\nversion: 1.0.0\r\n---\r\nbody\r\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.name, "crlf-ok");
+    }
+
+    #[test]
+    fn name_length_limit_enforced() {
+        let long = "a".repeat(65);
+        let raw = format!("---\nname: {long}\nversion: 1.0.0\n---\n\nbody\n");
+        let err = parse_skill_markdown_str(&raw, PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn unknown_frontmatter_field_rejected() {
+        let raw = "---\nname: x\nversion: 1.0.0\nunknown_field: 42\n---\n\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+}

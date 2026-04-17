@@ -22,14 +22,18 @@ pub mod error;
 pub mod loader;
 pub mod skill_pack;
 pub mod bundle;
+pub mod markdown;
+pub mod markdown_pack;
 pub mod knowledge_schema;
 pub mod knowledge_activity_log;
 pub mod knowledge_lint;
 
 pub use error::SkillsError;
-pub use loader::SkillLoader;
+pub use loader::{SkillLoader, FileSystemSkillPack};
 pub use skill_pack::SkillPack;
 pub use bundle::SkillBundle;
+pub use markdown::{parse_skill_markdown_file, parse_skill_markdown_str, ParsedSkillMarkdown};
+pub use markdown_pack::MarkdownSkillPack;
 pub use knowledge_schema::{KnowledgeSchemaValidator, SchemaViolation, ViolationSeverity, default_schema};
 pub use knowledge_activity_log::{
     KnowledgeOp,

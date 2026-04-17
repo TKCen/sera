@@ -144,4 +144,66 @@ mod tests {
         let err = p.delete("K").await.unwrap_err();
         assert!(matches!(err, SecretsError::ReadOnly));
     }
+
+    #[tokio::test]
+    async fn test_provider_name() {
+        let p = DockerSecretsProvider::new();
+        assert_eq!(p.provider_name(), "docker");
+    }
+
+    #[tokio::test]
+    async fn test_default_path_is_run_secrets() {
+        let p = DockerSecretsProvider::default();
+        assert_eq!(p.secrets_dir, std::path::PathBuf::from("/run/secrets"));
+    }
+
+    #[tokio::test]
+    async fn test_get_secret_empty_file() {
+        // An empty secret file should return Ok("") after trim_end
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("EMPTY_SECRET"), "").unwrap();
+        let p = DockerSecretsProvider::with_path(dir.path());
+        let val = p.get_secret("EMPTY_SECRET").await.unwrap();
+        assert_eq!(val, "");
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_missing_dir_returns_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nonexistent_subdir");
+        let p = DockerSecretsProvider::with_path(&missing);
+        let err = p.list_keys().await.unwrap_err();
+        assert!(matches!(err, SecretsError::Io { .. }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_get_secret_permission_denied_returns_io_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secret_path = dir.path().join("LOCKED_SECRET");
+        std::fs::write(&secret_path, "classified").unwrap();
+        // Remove all read permissions
+        std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let p = DockerSecretsProvider::with_path(dir.path());
+        let err = p.get_secret("LOCKED_SECRET").await.unwrap_err();
+        // Restore permissions so tempdir cleanup can delete the file
+        std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            matches!(err, SecretsError::Io { .. }),
+            "permission denied should map to SecretsError::Io, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_excludes_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("SECRET_FILE"), "val").unwrap();
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        let p = DockerSecretsProvider::with_path(dir.path());
+        let keys = p.list_keys().await.unwrap();
+        assert!(keys.contains(&"SECRET_FILE".to_string()));
+        assert!(!keys.contains(&"subdir".to_string()), "subdirs must not appear in list_keys");
+    }
 }

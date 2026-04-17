@@ -150,4 +150,69 @@ mod tests {
         let keys = p.list_keys().await.unwrap();
         assert!(keys.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_provider_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        assert_eq!(p.provider_name(), "file");
+    }
+
+    #[tokio::test]
+    async fn test_get_secret_does_not_trim() {
+        // FileSecretsProvider returns raw content without trimming (unlike docker)
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("RAW_SECRET"), "value\n").unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        let val = p.get_secret("RAW_SECRET").await.unwrap();
+        // file provider returns raw content — trailing newline is preserved
+        assert_eq!(val, "value\n");
+    }
+
+    #[tokio::test]
+    async fn test_get_secret_missing_returns_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        let err = p.get_secret("NO_SUCH_KEY").await.unwrap_err();
+        assert!(matches!(err, SecretsError::NotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_store_overwrites_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        p.store("OVERWRITE_KEY", "first").await.unwrap();
+        p.store("OVERWRITE_KEY", "second").await.unwrap();
+        let val = p.get_secret("OVERWRITE_KEY").await.unwrap();
+        assert_eq!(val, "second");
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_missing_dir_returns_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does_not_exist");
+        let p = FileSecretsProvider::new(&missing);
+        let err = p.list_keys().await.unwrap_err();
+        assert!(matches!(err, SecretsError::Io { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_excludes_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        p.store("FILE_SECRET", "val").await.unwrap();
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        let keys = p.list_keys().await.unwrap();
+        assert!(keys.contains(&"FILE_SECRET".to_string()));
+        assert!(!keys.contains(&"subdir".to_string()), "subdirs must not appear in list_keys");
+    }
+
+    #[tokio::test]
+    async fn test_get_secret_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("EMPTY"), "").unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        let val = p.get_secret("EMPTY").await.unwrap();
+        assert_eq!(val, "");
+    }
 }

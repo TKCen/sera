@@ -94,4 +94,21 @@ mod tests {
             TypeId::of::<AzureSecretsProvider>()
         );
     }
+
+    #[test]
+    fn stubs_have_expected_type_names() {
+        // Guard against accidental renames that would break external docs/links
+        assert_eq!(
+            std::any::type_name::<VaultSecretsProvider>(),
+            "sera_secrets::enterprise::VaultSecretsProvider"
+        );
+        assert_eq!(
+            std::any::type_name::<AwsSecretsProvider>(),
+            "sera_secrets::enterprise::AwsSecretsProvider"
+        );
+        assert_eq!(
+            std::any::type_name::<AzureSecretsProvider>(),
+            "sera_secrets::enterprise::AzureSecretsProvider"
+        );
+    }
 }

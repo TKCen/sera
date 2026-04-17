@@ -83,4 +83,64 @@ mod tests {
         let err = p.delete("FOO").await.unwrap_err();
         assert!(matches!(err, SecretsError::ReadOnly));
     }
+
+    #[tokio::test]
+    async fn test_provider_name() {
+        let p = EnvSecretsProvider;
+        assert_eq!(p.provider_name(), "env");
+    }
+
+    #[tokio::test]
+    async fn test_get_secret_empty_value() {
+        // An env var set to "" is present but empty — should return Ok("") not NotFound
+        // SAFETY: single-threaded test, no concurrent env access
+        unsafe { std::env::set_var("SERA_SECRET_TEST_ENV_EMPTY_42", "") };
+        let p = EnvSecretsProvider;
+        let val = p.get_secret("TEST_ENV_EMPTY_42").await.unwrap();
+        assert_eq!(val, "");
+        unsafe { std::env::remove_var("SERA_SECRET_TEST_ENV_EMPTY_42") };
+    }
+
+    #[tokio::test]
+    async fn test_get_secret_whitespace_value_preserved() {
+        // Env provider does NOT trim — that is file/docker's responsibility
+        // SAFETY: single-threaded test, no concurrent env access
+        unsafe { std::env::set_var("SERA_SECRET_TEST_ENV_WS_77", "  value  ") };
+        let p = EnvSecretsProvider;
+        let val = p.get_secret("TEST_ENV_WS_77").await.unwrap();
+        assert_eq!(val, "  value  ");
+        unsafe { std::env::remove_var("SERA_SECRET_TEST_ENV_WS_77") };
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_excludes_non_prefixed_vars() {
+        // Set a var WITHOUT the SERA_SECRET_ prefix — should never appear in list_keys
+        // SAFETY: single-threaded test, no concurrent env access
+        unsafe { std::env::set_var("NOT_A_SERA_SECRET_TEST_88", "x") };
+        let p = EnvSecretsProvider;
+        let keys = p.list_keys().await.unwrap();
+        assert!(
+            !keys.contains(&"NOT_A_SERA_SECRET_TEST_88".to_string()),
+            "non-prefixed vars must not appear in list_keys"
+        );
+        unsafe { std::env::remove_var("NOT_A_SERA_SECRET_TEST_88") };
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_strips_prefix_correctly() {
+        // SAFETY: single-threaded test, no concurrent env access
+        unsafe { std::env::set_var("SERA_SECRET_MYAPP_TOKEN_55", "tok") };
+        let p = EnvSecretsProvider;
+        let keys = p.list_keys().await.unwrap();
+        // Should appear as "MYAPP_TOKEN_55", not "SERA_SECRET_MYAPP_TOKEN_55"
+        assert!(
+            keys.contains(&"MYAPP_TOKEN_55".to_string()),
+            "list_keys should strip the SERA_SECRET_ prefix"
+        );
+        assert!(
+            !keys.contains(&"SERA_SECRET_MYAPP_TOKEN_55".to_string()),
+            "list_keys should not include the full env var name"
+        );
+        unsafe { std::env::remove_var("SERA_SECRET_MYAPP_TOKEN_55") };
+    }
 }

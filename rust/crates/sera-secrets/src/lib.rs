@@ -57,3 +57,41 @@ pub trait SecretsProvider: Send + Sync + 'static {
     /// or [`SecretsError::NotFound`] if the key does not exist.
     async fn delete(&self, key: &str) -> Result<(), SecretsError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_display_not_found() {
+        let e = SecretsError::NotFound { key: "MY_KEY".to_owned() };
+        assert_eq!(e.to_string(), "secret not found: MY_KEY");
+    }
+
+    #[test]
+    fn error_display_provider() {
+        let e = SecretsError::Provider { reason: "connection refused".to_owned() };
+        assert_eq!(e.to_string(), "provider error: connection refused");
+    }
+
+    #[test]
+    fn error_display_read_only() {
+        let e = SecretsError::ReadOnly;
+        assert_eq!(e.to_string(), "provider is read-only");
+    }
+
+    #[test]
+    fn error_display_io() {
+        let e = SecretsError::Io { reason: "disk full".to_owned() };
+        assert_eq!(e.to_string(), "I/O error: disk full");
+    }
+
+    #[test]
+    fn error_variants_are_debug() {
+        // Ensures all variants implement Debug (required for unwrap_err usage in tests)
+        let _ = format!("{:?}", SecretsError::NotFound { key: "k".to_owned() });
+        let _ = format!("{:?}", SecretsError::Provider { reason: "r".to_owned() });
+        let _ = format!("{:?}", SecretsError::ReadOnly);
+        let _ = format!("{:?}", SecretsError::Io { reason: "r".to_owned() });
+    }
+}

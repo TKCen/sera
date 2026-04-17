@@ -157,4 +157,74 @@ mod tests {
         let err = chain.get_secret("DEFINITELY_NOT_SET_XYZ_999").await.unwrap_err();
         assert!(matches!(err, SecretsError::NotFound { .. }));
     }
+
+    #[tokio::test]
+    async fn test_provider_name() {
+        let chain = ChainedSecretsProvider::new(vec![]);
+        assert_eq!(chain.provider_name(), "chained");
+    }
+
+    #[tokio::test]
+    async fn test_get_empty_chain_returns_not_found() {
+        let chain = ChainedSecretsProvider::new(vec![]);
+        let err = chain.get_secret("ANY_KEY").await.unwrap_err();
+        assert!(matches!(err, SecretsError::NotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_store_all_read_only_returns_read_only() {
+        // Both env providers are read-only — chained store should propagate ReadOnly
+        let chain = ChainedSecretsProvider::new(vec![
+            Box::new(EnvSecretsProvider),
+            Box::new(EnvSecretsProvider),
+        ]);
+        let err = chain.store("KEY", "val").await.unwrap_err();
+        assert!(matches!(err, SecretsError::ReadOnly));
+    }
+
+    #[tokio::test]
+    async fn test_delete_falls_back_to_second_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        p.store("DELETE_FALLBACK_KEY", "v").await.unwrap();
+
+        // First provider (env) is read-only — delete falls through to file provider
+        let chain = ChainedSecretsProvider::new(vec![
+            Box::new(EnvSecretsProvider),
+            Box::new(FileSecretsProvider::new(dir.path())),
+        ]);
+        chain.delete("DELETE_FALLBACK_KEY").await.unwrap();
+        assert!(!dir.path().join("DELETE_FALLBACK_KEY").exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_empty_chain_returns_not_found() {
+        let chain = ChainedSecretsProvider::new(vec![]);
+        let err = chain.delete("ANY_KEY").await.unwrap_err();
+        assert!(matches!(err, SecretsError::NotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_empty_chain_returns_empty() {
+        let chain = ChainedSecretsProvider::new(vec![]);
+        let keys = chain.list_keys().await.unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_ignores_provider_errors() {
+        // A provider pointing at a missing dir will error on list_keys;
+        // chained should skip it and return keys from the working provider.
+        let dir = tempfile::tempdir().unwrap();
+        let p = FileSecretsProvider::new(dir.path());
+        p.store("GOOD_KEY", "v").await.unwrap();
+
+        let missing_dir = dir.path().join("nonexistent");
+        let chain = ChainedSecretsProvider::new(vec![
+            Box::new(FileSecretsProvider::new(&missing_dir)), // will error
+            Box::new(FileSecretsProvider::new(dir.path())),   // has GOOD_KEY
+        ]);
+        let keys = chain.list_keys().await.unwrap();
+        assert!(keys.contains(&"GOOD_KEY".to_string()));
+    }
 }

@@ -36,7 +36,7 @@ pub mod registry;
 pub mod wasm_adapter;
 
 // Convenient re-exports.
-pub use error::HookError;
+pub use error::{HookAbortSignal, HookError};
 pub use executor::ChainExecutor;
 pub use hook_trait::Hook;
 pub use registry::HookRegistry;

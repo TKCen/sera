@@ -81,6 +81,11 @@ impl ChainExecutor {
             let hook_result = match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
+                    // A pipeline-abort signal always propagates — fail_open
+                    // must not swallow it, by contract.
+                    if matches!(e, HookError::Aborted { .. }) {
+                        return Err(e);
+                    }
                     if chain.fail_open {
                         warn!(
                             hook = %instance.hook_ref,

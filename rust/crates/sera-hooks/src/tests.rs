@@ -511,3 +511,74 @@ async fn execute_at_point_stops_on_reject() {
     assert!(result.is_rejected());
     assert_eq!(result.hooks_executed, 1);
 }
+
+// ── HookAbortSignal tests ────────────────────────────────────────────────────
+
+use crate::HookAbortSignal;
+
+struct AbortingHook;
+
+#[async_trait::async_trait]
+impl Hook for AbortingHook {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "aborting".to_string(),
+            description: "Raises a pipeline abort".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _config: serde_json::Value) -> Result<(), HookError> {
+        Ok(())
+    }
+    async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
+        Err(HookError::Aborted {
+            hook: "aborting".to_string(),
+            reason: "policy violation".to_string(),
+            signal: HookAbortSignal::with_code("policy violation", "policy_violation"),
+        })
+    }
+}
+
+#[tokio::test]
+async fn hook_abort_signal_propagates_even_with_fail_open() {
+    // A normal execution error would be swallowed by fail_open, but
+    // HookError::Aborted is a pipeline-abort signal that must propagate.
+    let mut r = HookRegistry::new();
+    r.register(Box::new(AbortingHook));
+    r.register(Box::new(PassthroughHook));
+    let executor = ChainExecutor::new(Arc::new(r));
+
+    let chain = chain_fail_open(
+        "abort-chain",
+        HookPoint::PreRoute,
+        vec![instance("aborting"), instance("passthrough")],
+    );
+
+    let ctx = HookContext::new(HookPoint::PreRoute);
+    let err = executor.execute_chain(&chain, ctx).await.unwrap_err();
+    match err {
+        HookError::Aborted {
+            hook,
+            reason,
+            signal,
+        } => {
+            assert_eq!(hook, "aborting");
+            assert_eq!(reason, "policy violation");
+            assert_eq!(signal.code.as_deref(), Some("policy_violation"));
+        }
+        other => panic!("expected HookError::Aborted, got {:?}", other),
+    }
+}
+
+#[test]
+fn hook_abort_signal_constructors() {
+    let plain = HookAbortSignal::new("stop");
+    assert_eq!(plain.reason, "stop");
+    assert!(plain.code.is_none());
+
+    let coded = HookAbortSignal::with_code("stop", "E_STOP");
+    assert_eq!(coded.reason, "stop");
+    assert_eq!(coded.code.as_deref(), Some("E_STOP"));
+}

@@ -31,4 +31,49 @@ pub enum HookError {
         point: HookPoint,
         supported: Vec<HookPoint>,
     },
+
+    /// A hook raised a [`HookAbortSignal`] — the entire pipeline must abort,
+    /// not just the current chain. Distinct from `HookResult::Reject`, which
+    /// only short-circuits the current chain.
+    #[error("hook '{hook}' aborted pipeline: {reason}")]
+    Aborted {
+        hook: String,
+        reason: String,
+        #[source]
+        signal: HookAbortSignal,
+    },
+}
+
+/// Signal raised from inside a hook to abort the entire hook pipeline.
+///
+/// A `Reject` `HookResult` short-circuits one chain but leaves subsequent
+/// chains at other points free to run. `HookAbortSignal` propagates out as
+/// [`HookError::Aborted`] and must be treated as a terminal pipeline failure
+/// by the caller (e.g. the runtime should not keep dispatching downstream
+/// hook points).
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[error("hook abort: {reason} (code: {code:?})")]
+pub struct HookAbortSignal {
+    /// Human-readable reason.
+    pub reason: String,
+    /// Optional machine-readable code (e.g. `"policy_violation"`).
+    pub code: Option<String>,
+}
+
+impl HookAbortSignal {
+    /// Create a new abort signal with a reason.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            code: None,
+        }
+    }
+
+    /// Create an abort signal with a machine-readable code.
+    pub fn with_code(reason: impl Into<String>, code: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            code: Some(code.into()),
+        }
+    }
 }

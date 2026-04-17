@@ -651,6 +651,369 @@ impl RecallStore {
     }
 }
 
+// ── 2-Tier Memory Injection Model (Architecture Addendum 2026-04-16 §1) ──────
+
+/// What produced a `MemorySegment` — drives eviction policy and rendering order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentKind {
+    /// Agent soul — never evicted.
+    Soul,
+    /// System-level prompt fragment.
+    SystemPrompt,
+    /// Persona definition.
+    Persona,
+    /// Injected skill context; carries the skill id.
+    Skill(String),
+    /// Recalled memory entry; carries the recall event id.
+    MemoryRecall(String),
+    /// Caller-defined segment type.
+    Custom(String),
+}
+
+/// A unit of injectable context. Priority-ordered, budget-constrained.
+///
+/// Lower `priority` value = more important (priority 0 = Soul, never evicted).
+/// `recency_boost` is a multiplier applied during priority sort for tiebreaking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySegment {
+    /// Stable identifier for dedup / updates.
+    pub id: String,
+    /// Rendered text that will be injected.
+    pub content: String,
+    /// 0 = never evicted (Soul); higher values are evicted first.
+    pub priority: u8,
+    /// Multiplier applied during priority sort; higher boost = treated as more important.
+    pub recency_boost: f32,
+    /// Segment-specific soft cap (may be truncated during assembly).
+    pub char_budget: usize,
+    /// What produced this segment.
+    pub kind: SegmentKind,
+}
+
+/// The compact Tier-1 memory block injected every turn.
+///
+/// Assembles `MemorySegment`s into a single string, respecting `char_budget`.
+/// Soul segments (`SegmentKind::Soul`, `priority == 0`) are **never** trimmed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryBlock {
+    pub segments: Vec<MemorySegment>,
+    /// Total character budget for the assembled block.
+    pub char_budget: usize,
+    /// Consecutive-overflow threshold before `record_turn` returns `true`.
+    /// Default: 6.
+    pub flush_min_turns: u8,
+    /// Incremented each turn the block exceeds `char_budget`.
+    pub overflow_turns: u8,
+}
+
+impl MemoryBlock {
+    /// Create a new `MemoryBlock` with the given `char_budget` and the default
+    /// `flush_min_turns` of 6.
+    pub fn new(char_budget: usize) -> Self {
+        Self::with_flush_min_turns(char_budget, 6)
+    }
+
+    /// Create a new `MemoryBlock` with a custom `flush_min_turns`.
+    pub fn with_flush_min_turns(char_budget: usize, flush_min_turns: u8) -> Self {
+        Self {
+            segments: Vec::new(),
+            char_budget,
+            flush_min_turns,
+            overflow_turns: 0,
+        }
+    }
+
+    /// Append a segment. Duplicate `id`s are not deduplicated here; callers
+    /// are responsible for managing identity.
+    pub fn push(&mut self, segment: MemorySegment) {
+        self.segments.push(segment);
+    }
+
+    /// Render the block to a string.
+    ///
+    /// Algorithm:
+    /// 1. Separate Soul segments (priority == 0) from evictable ones.
+    /// 2. Sort evictable segments by effective priority ascending
+    ///    (lower effective priority = rendered first / kept longer):
+    ///    `effective = priority as f32 / recency_boost.max(f32::EPSILON)`
+    ///    (higher recency_boost lowers effective priority → kept longer).
+    /// 3. Walk segments in render order (Soul first, then evictable by
+    ///    ascending effective priority), concatenating content.
+    ///    Respect per-segment `char_budget` soft cap and the block's total
+    ///    `char_budget`.  Soul segments are **never** truncated.
+    pub fn render(&self) -> String {
+        let mut soul_parts: Vec<&MemorySegment> =
+            self.segments.iter().filter(|s| s.priority == 0).collect();
+
+        let mut evictable: Vec<&MemorySegment> =
+            self.segments.iter().filter(|s| s.priority != 0).collect();
+
+        // Sort souls by id for determinism.
+        soul_parts.sort_by(|a, b| a.id.cmp(&b.id));
+
+        // Sort evictable: lower effective_priority = rendered first (kept longer).
+        // effective_priority = priority / recency_boost  (higher boost → lower effective)
+        evictable.sort_by(|a, b| {
+            let eff_a = a.priority as f32 / a.recency_boost.max(f32::EPSILON);
+            let eff_b = b.priority as f32 / b.recency_boost.max(f32::EPSILON);
+            eff_a.partial_cmp(&eff_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut output = String::new();
+
+        // Soul segments always included — not subject to char_budget trimming.
+        for seg in &soul_parts {
+            output.push_str(&seg.content);
+            output.push('\n');
+        }
+
+        // Remaining budget for evictable segments.
+        let mut remaining = self.char_budget.saturating_sub(output.len());
+
+        for seg in &evictable {
+            if remaining == 0 {
+                break;
+            }
+            // Apply per-segment soft cap, then block budget.
+            let allowed = seg.char_budget.min(remaining);
+            let text = if seg.content.len() > allowed {
+                &seg.content[..allowed]
+            } else {
+                seg.content.as_str()
+            };
+            output.push_str(text);
+            output.push('\n');
+            remaining = remaining.saturating_sub(text.len() + 1);
+        }
+
+        // Trim trailing newline added after the last segment.
+        if output.ends_with('\n') {
+            output.pop();
+        }
+
+        output
+    }
+
+    /// Total character count across all segments' content (unrendered).
+    pub fn current_chars(&self) -> usize {
+        self.segments.iter().map(|s| s.content.len()).sum()
+    }
+
+    /// Returns `true` if the rendered block exceeds `char_budget`.
+    pub fn is_over_budget(&self) -> bool {
+        self.render().len() > self.char_budget
+    }
+
+    /// Record one completed turn.
+    ///
+    /// If the block is currently over budget, increments `overflow_turns`.
+    /// Otherwise resets it to 0.
+    ///
+    /// Returns `true` when `overflow_turns` reaches `flush_min_turns`,
+    /// signalling that a `memory_pressure` event should fire.
+    pub fn record_turn(&mut self) -> bool {
+        if self.is_over_budget() {
+            self.overflow_turns = self.overflow_turns.saturating_add(1);
+        } else {
+            self.overflow_turns = 0;
+        }
+        self.overflow_turns >= self.flush_min_turns
+    }
+}
+
+#[cfg(test)]
+mod memory_block_tests {
+    use super::*;
+
+    fn soul_seg(id: &str, content: &str) -> MemorySegment {
+        MemorySegment {
+            id: id.to_string(),
+            content: content.to_string(),
+            priority: 0,
+            recency_boost: 1.0,
+            char_budget: usize::MAX,
+            kind: SegmentKind::Soul,
+        }
+    }
+
+    fn evictable_seg(id: &str, content: &str, priority: u8, recency_boost: f32) -> MemorySegment {
+        MemorySegment {
+            id: id.to_string(),
+            content: content.to_string(),
+            priority,
+            recency_boost,
+            char_budget: usize::MAX,
+            kind: SegmentKind::Custom("test".to_string()),
+        }
+    }
+
+    // ── basic push + render ──────────────────────────────────────────────────
+
+    #[test]
+    fn push_and_render_basic() {
+        let mut block = MemoryBlock::new(1000);
+        block.push(soul_seg("soul-1", "You are a helpful assistant."));
+        block.push(evictable_seg("seg-1", "Context A.", 1, 1.0));
+        let rendered = block.render();
+        assert!(rendered.contains("You are a helpful assistant."));
+        assert!(rendered.contains("Context A."));
+    }
+
+    // ── budget truncation drops low-priority segments ────────────────────────
+
+    #[test]
+    fn budget_truncation_drops_low_priority() {
+        // Budget: 30 chars. Soul = "Soul." (5+\n=6), high-priority = "Important." (10),
+        // low-priority = "Expendable." (11) — should be dropped or truncated.
+        let mut block = MemoryBlock::new(30);
+        block.push(soul_seg("soul", "Soul."));
+        block.push(evictable_seg("hi", "Important.", 1, 1.0));
+        block.push(evictable_seg("lo", "Expendable.", 10, 1.0));
+        let rendered = block.render();
+        assert!(rendered.contains("Soul."), "soul must be present");
+        assert!(rendered.contains("Important."), "high-priority must be present");
+    }
+
+    // ── soul is never trimmed even if oversized ──────────────────────────────
+
+    #[test]
+    fn soul_is_never_trimmed() {
+        let long_soul = "S".repeat(500);
+        let mut block = MemoryBlock::new(10); // tiny budget
+        block.push(soul_seg("soul", &long_soul));
+        let rendered = block.render();
+        assert_eq!(rendered, long_soul, "Soul content must be fully preserved");
+    }
+
+    #[test]
+    fn soul_over_budget_does_not_evict_soul() {
+        let mut block = MemoryBlock::new(20);
+        block.push(soul_seg("soul", "This is the soul content.")); // 25 chars
+        block.push(evictable_seg("x", "Extra.", 5, 1.0));
+        let rendered = block.render();
+        assert!(rendered.contains("This is the soul content."));
+    }
+
+    // ── recency_boost shifts render order ────────────────────────────────────
+
+    #[test]
+    fn recency_boost_shifts_render_order() {
+        // Two segments with same priority but different recency_boost.
+        // Higher boost → lower effective priority → rendered first (kept longer).
+        let mut block = MemoryBlock::new(1000);
+        let low_boost = evictable_seg("low", "LowBoost.", 2, 1.0);
+        let high_boost = evictable_seg("high", "HighBoost.", 2, 10.0);
+        block.push(low_boost);
+        block.push(high_boost);
+        let rendered = block.render();
+        let pos_high = rendered.find("HighBoost.").unwrap();
+        let pos_low = rendered.find("LowBoost.").unwrap();
+        assert!(pos_high < pos_low, "higher recency_boost should appear earlier");
+    }
+
+    // ── record_turn returns true at flush_min_turns ──────────────────────────
+
+    #[test]
+    fn record_turn_returns_true_at_flush_min_turns() {
+        let mut block = MemoryBlock::with_flush_min_turns(5, 3); // budget=5, flush at 3
+        // Soul segments are never truncated, so a long soul reliably forces is_over_budget.
+        block.push(soul_seg("soul", "This soul content is way too long for the budget."));
+        assert!(!block.record_turn()); // overflow_turns = 1
+        assert!(!block.record_turn()); // overflow_turns = 2
+        assert!(block.record_turn()); // overflow_turns = 3 = flush_min_turns → true
+    }
+
+    #[test]
+    fn record_turn_resets_when_under_budget() {
+        let mut block = MemoryBlock::with_flush_min_turns(5, 3);
+        block.push(soul_seg("soul", "Too long soul content."));
+        block.record_turn();
+        block.record_turn();
+        // Clear segments so block is under budget.
+        block.segments.clear();
+        assert!(!block.record_turn()); // resets to 0
+        assert_eq!(block.overflow_turns, 0);
+    }
+
+    // ── JSON roundtrip (serde) ───────────────────────────────────────────────
+
+    #[test]
+    fn memory_segment_json_roundtrip() {
+        let seg = MemorySegment {
+            id: "seg-abc".to_string(),
+            content: "Test content".to_string(),
+            priority: 3,
+            recency_boost: 1.5,
+            char_budget: 500,
+            kind: SegmentKind::MemoryRecall("recall-123".to_string()),
+        };
+        let json = serde_json::to_string(&seg).unwrap();
+        let parsed: MemorySegment = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "seg-abc");
+        assert_eq!(parsed.priority, 3);
+        assert!((parsed.recency_boost - 1.5).abs() < f32::EPSILON);
+        assert!(
+            matches!(parsed.kind, SegmentKind::MemoryRecall(ref id) if id == "recall-123")
+        );
+    }
+
+    #[test]
+    fn memory_block_json_roundtrip() {
+        let mut block = MemoryBlock::new(2000);
+        block.push(soul_seg("soul-1", "I am SERA."));
+        block.push(evictable_seg("ctx-1", "Relevant context.", 2, 1.0));
+        let json = serde_json::to_string(&block).unwrap();
+        let parsed: MemoryBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.segments.len(), 2);
+        assert_eq!(parsed.char_budget, 2000);
+        assert_eq!(parsed.flush_min_turns, 6);
+        assert_eq!(parsed.overflow_turns, 0);
+    }
+
+    #[test]
+    fn segment_kind_all_variants_roundtrip() {
+        let kinds = vec![
+            SegmentKind::Soul,
+            SegmentKind::SystemPrompt,
+            SegmentKind::Persona,
+            SegmentKind::Skill("skill-42".to_string()),
+            SegmentKind::MemoryRecall("recall-7".to_string()),
+            SegmentKind::Custom("my-custom".to_string()),
+        ];
+        for kind in kinds {
+            let json = serde_json::to_string(&kind).unwrap();
+            let parsed: SegmentKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, kind);
+        }
+    }
+
+    // ── current_chars and is_over_budget ─────────────────────────────────────
+
+    #[test]
+    fn current_chars_sums_all_content() {
+        let mut block = MemoryBlock::new(100);
+        block.push(soul_seg("s", "abc")); // 3
+        block.push(evictable_seg("e", "de", 1, 1.0)); // 2
+        assert_eq!(block.current_chars(), 5);
+    }
+
+    #[test]
+    fn is_over_budget_respects_soul_exemption() {
+        let mut block = MemoryBlock::new(10);
+        // Soul content alone is 20 chars — rendered exceeds budget.
+        block.push(soul_seg("s", "12345678901234567890"));
+        assert!(block.is_over_budget());
+    }
+
+    #[test]
+    fn is_over_budget_false_when_fits() {
+        let mut block = MemoryBlock::new(100);
+        block.push(evictable_seg("e", "short", 1, 1.0));
+        assert!(!block.is_over_budget());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

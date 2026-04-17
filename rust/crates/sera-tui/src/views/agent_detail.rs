@@ -32,6 +32,45 @@ impl Default for AgentDetailView {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_agent(id: &str, name: &str) -> Agent {
+        Agent {
+            id: id.to_string(),
+            name: name.to_string(),
+            display_name: None,
+            template_ref: "tpl".to_string(),
+            status: "running".to_string(),
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            updated_at: "2026-04-10T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn new_view_has_no_agent() {
+        let view = AgentDetailView::new();
+        assert!(view.agent.is_none());
+    }
+
+    #[test]
+    fn set_agent_stores_agent() {
+        let mut view = AgentDetailView::new();
+        view.set_agent(make_agent("id-1", "my-agent"));
+        assert!(view.agent.is_some());
+        assert_eq!(view.agent.as_ref().unwrap().id, "id-1");
+    }
+
+    #[test]
+    fn set_agent_replaces_previous() {
+        let mut view = AgentDetailView::new();
+        view.set_agent(make_agent("old-id", "old"));
+        view.set_agent(make_agent("new-id", "new"));
+        assert_eq!(view.agent.as_ref().unwrap().id, "new-id");
+    }
+}
+
 impl View for AgentDetailView {
     fn render(&self, frame: &mut Frame, area: Rect) {
         match &self.agent {

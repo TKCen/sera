@@ -199,3 +199,147 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{Agent, ApiClient};
+
+    fn make_client() -> ApiClient {
+        ApiClient::new("http://localhost:3001".to_string(), "test-key".to_string())
+    }
+
+    fn make_agent(id: &str) -> Agent {
+        Agent {
+            id: id.to_string(),
+            name: format!("agent-{id}"),
+            display_name: None,
+            template_ref: "tpl".to_string(),
+            status: "running".to_string(),
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            updated_at: "2026-04-01T00:00:00Z".to_string(),
+        }
+    }
+
+    // --- Initial state ---
+
+    #[test]
+    fn new_app_starts_on_agents_view() {
+        let app = App::new(make_client());
+        assert_eq!(app.active_view, ActiveView::Agents);
+    }
+
+    #[test]
+    fn new_app_has_non_empty_status_message() {
+        let app = App::new(make_client());
+        assert!(!app.status_message.is_empty());
+    }
+
+    // --- ActiveView equality ---
+
+    #[test]
+    fn active_view_variants_compare_correctly() {
+        assert_eq!(ActiveView::Agents, ActiveView::Agents);
+        assert_eq!(ActiveView::Knowledge, ActiveView::Knowledge);
+        assert_eq!(
+            ActiveView::AgentDetail("x".to_string()),
+            ActiveView::AgentDetail("x".to_string())
+        );
+        assert_ne!(
+            ActiveView::AgentDetail("x".to_string()),
+            ActiveView::AgentDetail("y".to_string())
+        );
+        assert_ne!(ActiveView::Agents, ActiveView::Knowledge);
+    }
+
+    // --- handle_key: navigation in Agents view ---
+
+    #[tokio::test]
+    async fn key_j_moves_selection_down() {
+        let mut app = App::new(make_client());
+        app.agents_view.set_agents(vec![make_agent("a"), make_agent("b")]);
+        app.handle_key(KeyCode::Char('j')).await;
+        assert_eq!(app.agents_view.selected_id(), Some(&"b".to_string()));
+    }
+
+    #[tokio::test]
+    async fn key_k_moves_selection_up() {
+        let mut app = App::new(make_client());
+        app.agents_view.set_agents(vec![make_agent("a"), make_agent("b")]);
+        app.handle_key(KeyCode::Char('j')).await;
+        app.handle_key(KeyCode::Char('k')).await;
+        assert_eq!(app.agents_view.selected_id(), Some(&"a".to_string()));
+    }
+
+    #[tokio::test]
+    async fn key_up_moves_selection_up() {
+        let mut app = App::new(make_client());
+        app.agents_view.set_agents(vec![make_agent("a"), make_agent("b")]);
+        app.handle_key(KeyCode::Down).await;
+        app.handle_key(KeyCode::Up).await;
+        assert_eq!(app.agents_view.selected_id(), Some(&"a".to_string()));
+    }
+
+    // --- handle_key: view transitions ---
+
+    #[tokio::test]
+    async fn key_m_switches_to_knowledge_view() {
+        let mut app = App::new(make_client());
+        app.handle_key(KeyCode::Char('m')).await;
+        assert_eq!(app.active_view, ActiveView::Knowledge);
+    }
+
+    #[tokio::test]
+    async fn esc_from_knowledge_returns_to_agents() {
+        let mut app = App::new(make_client());
+        app.active_view = ActiveView::Knowledge;
+        app.handle_key(KeyCode::Esc).await;
+        assert_eq!(app.active_view, ActiveView::Agents);
+    }
+
+    #[tokio::test]
+    async fn backspace_from_agent_detail_returns_to_agents() {
+        let mut app = App::new(make_client());
+        app.active_view = ActiveView::AgentDetail("some-id".to_string());
+        app.handle_key(KeyCode::Backspace).await;
+        assert_eq!(app.active_view, ActiveView::Agents);
+    }
+
+    #[tokio::test]
+    async fn esc_from_logs_returns_to_agents() {
+        let mut app = App::new(make_client());
+        app.active_view = ActiveView::Logs("some-id".to_string());
+        app.handle_key(KeyCode::Esc).await;
+        assert_eq!(app.active_view, ActiveView::Agents);
+    }
+
+    // --- handle_key: Enter with no agents selected does not change view ---
+
+    #[tokio::test]
+    async fn enter_on_empty_agents_view_stays_on_agents() {
+        let mut app = App::new(make_client());
+        // No agents loaded — selected_id() returns None
+        app.handle_key(KeyCode::Enter).await;
+        assert_eq!(app.active_view, ActiveView::Agents);
+    }
+
+    // --- handle_key: 'l' with no selection stays on agents ---
+
+    #[tokio::test]
+    async fn key_l_on_empty_agents_view_stays_on_agents() {
+        let mut app = App::new(make_client());
+        app.handle_key(KeyCode::Char('l')).await;
+        assert_eq!(app.active_view, ActiveView::Agents);
+    }
+
+    // --- handle_key: knowledge view navigation ---
+
+    #[tokio::test]
+    async fn knowledge_view_key_s_cycles_sort() {
+        let mut app = App::new(make_client());
+        app.active_view = ActiveView::Knowledge;
+        // Just verify it doesn't panic and stays in Knowledge view
+        app.handle_key(KeyCode::Char('s')).await;
+        assert_eq!(app.active_view, ActiveView::Knowledge);
+    }
+}

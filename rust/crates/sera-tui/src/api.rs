@@ -151,3 +151,134 @@ impl ApiClient {
         self.post("/api/chat", body).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Agent deserialization ---
+
+    #[test]
+    fn agent_deserializes_full_fields() {
+        let json = r#"{
+            "id": "abc-123",
+            "name": "my-agent",
+            "display_name": "My Agent",
+            "template_ref": "gpt4-template",
+            "status": "running",
+            "created_at": "2026-04-01T00:00:00Z",
+            "updated_at": "2026-04-10T00:00:00Z"
+        }"#;
+        let agent: Agent = serde_json::from_str(json).unwrap();
+        assert_eq!(agent.id, "abc-123");
+        assert_eq!(agent.name, "my-agent");
+        assert_eq!(agent.display_name, Some("My Agent".to_string()));
+        assert_eq!(agent.template_ref, "gpt4-template");
+        assert_eq!(agent.status, "running");
+    }
+
+    #[test]
+    fn agent_deserializes_missing_optional_fields() {
+        let json = r#"{
+            "id": "xyz",
+            "name": "minimal",
+            "template_ref": "t1",
+            "status": "stopped"
+        }"#;
+        let agent: Agent = serde_json::from_str(json).unwrap();
+        assert_eq!(agent.display_name, None);
+        assert_eq!(agent.created_at, "");
+        assert_eq!(agent.updated_at, "");
+    }
+
+    #[test]
+    fn agent_serializes_round_trips() {
+        let agent = Agent {
+            id: "id1".to_string(),
+            name: "agent1".to_string(),
+            display_name: Some("Agent One".to_string()),
+            template_ref: "tpl".to_string(),
+            status: "idle".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-02T00:00:00Z".to_string(),
+        };
+        let serialized = serde_json::to_string(&agent).unwrap();
+        let round_tripped: Agent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(round_tripped.id, agent.id);
+        assert_eq!(round_tripped.display_name, agent.display_name);
+    }
+
+    // --- ChatRequest serialization ---
+
+    #[test]
+    fn chat_request_skips_none_fields() {
+        let req = ChatRequest {
+            message: "hello".to_string(),
+            session_id: None,
+            agent_instance_id: None,
+            stream: false,
+        };
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("session_id"));
+        assert!(!json.as_object().unwrap().contains_key("agent_instance_id"));
+        assert_eq!(json["message"], "hello");
+        assert_eq!(json["stream"], false);
+    }
+
+    #[test]
+    fn chat_request_includes_some_fields() {
+        let req = ChatRequest {
+            message: "ping".to_string(),
+            session_id: Some("sess-1".to_string()),
+            agent_instance_id: Some("agent-1".to_string()),
+            stream: true,
+        };
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["session_id"], "sess-1");
+        assert_eq!(json["agent_instance_id"], "agent-1");
+        assert_eq!(json["stream"], true);
+    }
+
+    // --- ChatResponse deserialization ---
+
+    #[test]
+    fn chat_response_deserializes() {
+        let json = r#"{"session_id": "s1", "message_id": "m1"}"#;
+        let resp: ChatResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.session_id, "s1");
+        assert_eq!(resp.message_id, "m1");
+    }
+
+    // --- LogEntry deserialization ---
+
+    #[test]
+    fn log_entry_deserializes() {
+        let json = r#"{"timestamp": "2026-04-01T10:00:00Z", "level": "INFO", "message": "Agent started"}"#;
+        let entry: LogEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.level, "INFO");
+        assert_eq!(entry.message, "Agent started");
+    }
+
+    #[test]
+    fn log_entry_serializes_round_trips() {
+        let entry = LogEntry {
+            timestamp: "2026-04-01T10:00:00Z".to_string(),
+            level: "WARN".to_string(),
+            message: "Low memory".to_string(),
+        };
+        let serialized = serde_json::to_string(&entry).unwrap();
+        let rt: LogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(rt.level, "WARN");
+        assert_eq!(rt.message, "Low memory");
+    }
+
+    // --- ApiClient construction ---
+
+    #[test]
+    fn api_client_new_does_not_panic() {
+        let _client = ApiClient::new(
+            "http://localhost:3001".to_string(),
+            "test-key".to_string(),
+        );
+    }
+}

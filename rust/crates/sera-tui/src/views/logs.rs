@@ -49,6 +49,55 @@ impl Default for LogsView {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(level: &str, msg: &str) -> LogEntry {
+        LogEntry {
+            timestamp: "2026-04-01T10:00:00Z".to_string(),
+            level: level.to_string(),
+            message: msg.to_string(),
+        }
+    }
+
+    #[test]
+    fn new_view_starts_empty() {
+        let view = LogsView::new();
+        assert!(view.logs.is_empty());
+        assert_eq!(view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn set_logs_resets_scroll() {
+        let mut view = LogsView::new();
+        view.scroll_down();
+        view.scroll_down();
+        assert_eq!(view.scroll_offset, 2);
+        view.set_logs(vec![make_entry("INFO", "started")]);
+        assert_eq!(view.scroll_offset, 0);
+        assert_eq!(view.logs.len(), 1);
+    }
+
+    #[test]
+    fn scroll_down_increments() {
+        let mut view = LogsView::new();
+        view.scroll_down();
+        view.scroll_down();
+        assert_eq!(view.scroll_offset, 2);
+    }
+
+    #[test]
+    fn scroll_up_clamps_at_zero() {
+        let mut view = LogsView::new();
+        view.scroll_up();
+        assert_eq!(view.scroll_offset, 0);
+        view.scroll_down();
+        view.scroll_up();
+        assert_eq!(view.scroll_offset, 0);
+    }
+}
+
 impl View for LogsView {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let content = if self.logs.is_empty() {

@@ -1115,6 +1115,293 @@ Rules:
 
 ---
 
+## 15. PlanAndAct Multi-Phase Reasoning
+
+> **Status:** DRAFT (fills gap `sera-taso`)
+
+### 15.1 Motivation
+
+The current single-phase turn loop in `turn.rs` conflates planning and action in a single LLM call: the model simultaneously reasons about what to do and emits tool calls to do it. For short-horizon tasks this is adequate, but for multi-step engineering work (refactors, migrations, codebase-wide changes) the model silently interleaves strategy and execution — meaning the plan is never recorded as a first-class artifact and is lost if an action step fails. A separated `Plan → Act → Observe → Replan` loop keeps the plan as a durable, inspectable artifact, allows HITL operators to review and veto plans before the first action fires, and enables individual `Act` steps to be retried against the same plan without forcing the model to rebuild its strategy from scratch. The `ReactMode::PlanAndAct` variant is already declared in §2.1 (sourced from SPEC-dependencies §10.15 MetaGPT) — this section fully specifies its behaviour.
+
+**Tradeoff:** PlanAndAct adds latency (at minimum one extra LLM call for the Plan phase before the first action) and requires durable plan storage. It is opt-in per agent and not appropriate for single-turn or low-latency workloads.
+
+---
+
+### 15.2 Phase Model
+
+PlanAndAct defines four distinct phases executed in sequence. Each phase is a separate turn in the SERA turn loop — the phase progression is **internal** to `plan_and_act.rs` and invisible to callers of `AgentRuntime::execute_turn`.
+
+#### Phase definitions
+
+| Phase | LLM call | `ToolUseBehavior` | Description |
+|---|---|---|---|
+| `Plan` | Yes | `None` (forced) | Produces a structured `Plan`; no tool calls permitted. Parse failure → `PlanParseFailed`. |
+| `Act` | Yes | `Auto` (default) | Executes the current `PlanStep` via existing `turn::act` / `turn::react`. |
+| `Observe` | No | N/A | Deterministic pass: collects tool outputs, advances `PlanStep::status` to `Completed` or `Failed`. |
+| `Replan` | Yes | `None` (forced) | Receives plan state + observation; returns `ReplanDecision`. |
+
+#### Rust type sketches (design — no `impl` blocks)
+
+```rust
+pub type PlanId = Uuid;
+
+pub struct Plan {
+    pub id: PlanId,
+    pub steps: Vec<PlanStep>,
+    pub rationale: String,
+    pub estimated_turns: u32,
+    pub created_at: chrono::DateTime<Utc>,
+    pub status: PlanStatus,          // draft | active | completed | aborted
+    pub parent_plan_id: Option<PlanId>,
+}
+
+pub struct PlanStep {
+    pub idx: u32,
+    pub description: String,
+    pub expected_tools: Vec<String>, // used for enforce_step_tool (§15.8)
+    pub acceptance: String,
+    pub status: StepStatus,          // Pending | InProgress | Completed | Failed | Skipped
+}
+
+pub enum ReplanDecision {
+    Continue,
+    ReplanFrom { step_idx: u32, reason: String },
+    Abort { reason: String },
+}
+```
+
+**Tradeoff:** Structured `Plan` JSON is machine-parseable and enables reliable step tracking, but it constrains the LLM's output format and may require retries on parse failure. Free-form markdown plans are more flexible but fragile to parse — see §15.12 open question 1.
+
+---
+
+### 15.3 Persistence
+
+Plans are stored in a dedicated `plan` table in the memory store. This table is owned by `sera-db` and follows the same migration pattern used by all other SERA tables (append-only, timestamped, no destructive updates).
+
+#### Schema
+
+```sql
+CREATE TABLE plan (
+    plan_id        UUID        PRIMARY KEY,
+    agent_id       TEXT        NOT NULL,
+    session_id     TEXT        NOT NULL,
+    payload        JSONB       NOT NULL,       -- serialized Plan struct
+    status         TEXT        NOT NULL        -- 'draft' | 'active' | 'completed' | 'aborted'
+                   CHECK (status IN ('draft', 'active', 'completed', 'aborted')),
+    parent_plan_id UUID        REFERENCES plan(plan_id),   -- NULL for initial plans
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+```
+
+Plans are **append-only**: a `Replan` decision does not mutate the existing row. Instead a new row is inserted with `parent_plan_id` pointing to the superseded plan. The superseded plan's `status` is updated to `aborted`. This gives a full replan audit trail queryable by following `parent_plan_id` chains.
+
+Cross-reference: SPEC-memory.md §3 (Built-in Backends) for the PostgreSQL backend that hosts this table. The migration file follows the naming convention already established in `sera-db` (`V<n>__add_plan_table.sql`).
+
+**Tradeoff:** Append-only rows provide full auditability; add a GC policy (archive completed plans after N days) in Phase 4+.
+
+---
+
+### 15.4 Integration with `turn.rs` and `default_runtime.rs`
+
+PlanAndAct extends the existing turn infrastructure at two points, leaving the public `AgentRuntime::execute_turn` signature unchanged.
+
+#### Extension points
+
+`turn::TurnContext` gains `pub active_plan: Option<Plan>` (`None` for all single-phase turns). `DefaultRuntime::execute_turn` branches before the existing loop:
+
+```rust
+if turn_ctx.active_plan.is_some() {
+    return plan_and_act::run_turn(turn_ctx, self.llm.as_deref(), self.tool_dispatcher.as_deref()).await
+        .map_err(RuntimeError::from);
+}
+// existing single-phase loop unchanged
+```
+
+#### `plan_and_act.rs` module — phase dispatcher
+
+```rust
+async fn run_turn(ctx: TurnContext, llm, dispatcher) -> Result<TurnOutcome, PlanAndActError> {
+    match ctx.active_plan.as_ref().unwrap().current_phase() {
+        Phase::Plan    => run_plan_phase(&ctx, llm).await,
+        Phase::Act     => run_act_phase(&ctx, plan.current_step(), llm, dispatcher).await,
+        Phase::Observe => run_observe_phase(&ctx).await,
+        Phase::Replan  => run_replan_phase(&ctx, llm).await,
+    }
+}
+```
+
+**One phase per turn.** `execute_turn` is called once per phase; the phase state machine lives in the gateway session loop, not inside `execute_turn`. This keeps the runtime stateless between calls (§1a) and allows HITL insertion between phases.
+
+**Tradeoff:** The gateway must understand PlanAndAct phase transitions. An internal multi-phase loop inside a single `execute_turn` call would be simpler but breaks the stateless contract.
+
+---
+
+### 15.5 HITL on Plans
+
+Plan approval integrates with the existing HITL approval machinery (SPEC-hitl-approval.md §3, §7).
+
+#### Configuration
+
+```yaml
+agents:
+  - name: "sera"
+    runtime:
+      plan_and_act:
+        plan_approval_required: true  # default: false
+        replan_policy: auto           # auto | manual | never
+        enforce_step_tool: false
+        replan_loop_limit: 10
+```
+
+#### Approval flow
+
+When `plan_approval_required: true`: plan is persisted with `status = 'draft'`; `execute_turn` returns `TurnOutcome::Interruption` with `hook_point = "plan_approval"`; a `PlanApprovalRequired` event is emitted (§15.7); the system waits for `POST /api/plans/{plan_id}/approve` or `/reject`, re-using the `ApprovalTicket` state machine from SPEC-hitl-approval.md §7. On approval, plan → `active` and the Act phase proceeds. On rejection, plan → `aborted` and the rejection reason is delivered to the agent as a user-role message.
+
+When `plan_approval_required: false` (default), the plan transitions `draft → active` immediately.
+
+**Tradeoff:** Approval adds latency proportional to operator response time. Default `false`; enable for high-impact tasks (production deploys, schema migrations).
+
+---
+
+### 15.6 Replanning Triggers
+
+Three conditions trigger the Replan phase:
+
+1. **Step failure** — `StepStatus::Failed` after Observe. Auto-replan fires unless `replan_policy: never`; `manual` freezes the loop and waits for operator instruction.
+2. **Operator steer** — A steer message (§3 steer queue) while a plan is active forces replan regardless of `replan_policy`; steer content is included in the Replan context.
+3. **Precondition violation** — Observe detects an environmental change invalidating a step (deleted file, changed dependency). Sets `StepStatus::Failed { reason: "precondition_violated" }` → triggers step-failure path.
+
+#### `replan_policy` enum
+
+```rust
+pub enum ReplanPolicy {
+    Auto,    // default — enter Replan phase on step failure
+    Manual,  // freeze turn loop; wait for operator instruction
+    Never,   // abort on first step failure
+}
+```
+
+The default is `Auto`. `Never` is appropriate when partial execution is worse than no execution (e.g., a schema migration that must be atomic).
+
+**Tradeoff:** `Auto` may loop if the model repeatedly produces bad plans for the same step. The `replan_loop_limit` (default 10, §15.9) is the safety valve.
+
+---
+
+### 15.7 Streaming and UX
+
+Plans and phase transitions are streamed to connected clients via the existing event channel in `sera-events` / Centrifugo (SPEC-observability.md §2.1a, SPEC-gateway for the Centrifugo publish path).
+
+#### Typed events emitted per phase transition
+
+| Event | When emitted |
+|---|---|
+| `PlanCreated` | Plan phase complete |
+| `PlanApprovalRequired` | Draft awaiting operator sign-off |
+| `StepStarted` | Act phase begins for step N |
+| `StepCompleted` | Observe marks step Completed |
+| `StepFailed` | Observe marks step Failed |
+| `Replanned` | Replan phase produces new plan |
+| `PlanCompleted` | All steps Completed |
+| `PlanAborted` | Abort decision or approval rejected |
+
+All events carry `plan_id`, `agent_id`, `session_id`, and a W3C trace context (SPEC-observability.md §2.1).
+
+UIs receiving these events can render a step-by-step progress tracker without polling.
+
+---
+
+### 15.8 Interaction with ToolUseBehavior
+
+PlanAndAct overrides `ToolUseBehavior` per phase, taking precedence over any session-level or hook-set value. The interaction is:
+
+| Phase | `ToolUseBehavior` | Rationale |
+|---|---|---|
+| `Plan` | `None` (forced) | Planning is pure reasoning; tool calls in this phase indicate prompt leakage and must be rejected |
+| `Act` | `Auto` (default) | Agent executes freely; individual step overrides possible (see below) |
+| `Observe` | N/A — no LLM call | Deterministic system pass |
+| `Replan` | `None` (forced) | Decision reasoning; no tool calls permitted |
+
+#### Per-step tool enforcement
+
+When `enforce_step_tool: true` and a `PlanStep` lists exactly one `expected_tools` entry, the Act phase sets `ToolUseBehavior::Specific { name }` for that LLM call (catching plan/execution divergence). Otherwise `Auto` is used. The override is applied at the `OnLlmStart` hook point (§10, §13a.4).
+
+Cross-reference: `ToolUseBehavior` type definition and provider wire mapping at §13a.
+
+---
+
+### 15.9 Error Surface
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum PlanAndActError {
+    #[error("plan parse failed: {reason}")]
+    PlanParseFailed { reason: String },
+    #[error("step {step_idx} failed: {reason}")]
+    StepFailed { step_idx: u32, reason: String },
+    #[error("replan loop limit reached after {hits} replans")]
+    ReplanLoopLimit { hits: u32 },
+    #[error("plan approval timed out for plan {plan_id}")]
+    ApprovalTimeout { plan_id: PlanId },
+    #[error("invalid phase transition from {from:?} to {to:?}")]
+    InvalidTransition { from: Phase, to: Phase },
+}
+```
+
+`StepFailed` / `ReplanLoopLimit` → `TurnOutcome::Stop`; `ApprovalTimeout` / `InvalidTransition` → `TurnOutcome::Interruption`; `PlanParseFailed` → retry up to `structured_output.retry_on_failure` (§11) then `Stop`. Default `replan_loop_limit`: **10** (hard cap).
+
+---
+
+### 15.10 Metrics and Observability
+
+The following Prometheus-style counters and histograms are emitted by `plan_and_act.rs` via `sera-telemetry` (SPEC-observability.md §2.2). These are named here for the implementor; metric registration is not part of this spec.
+
+| Metric name | Type | Labels | Description |
+|---|---|---|---|
+| `plan_created_total` | Counter | `agent` | Plans produced by the Plan phase |
+| `plan_steps_completed_total` | Counter | `agent` | Individual steps successfully completed |
+| `plan_steps_failed_total` | Counter | `agent`, `step_idx` | Individual step failures |
+| `plan_replans_total` | Counter | `agent`, `trigger` | Replan decisions, labelled by trigger (`step_failure`, `operator_steer`, `precondition_violated`) |
+| `plan_approval_latency_seconds` | Histogram | `agent` | Time from `PlanApprovalRequired` event to operator decision |
+| `plan_duration_seconds` | Histogram | `agent` | End-to-end wall time from Plan phase start to `PlanCompleted` or `PlanAborted` |
+
+The `trigger` label values (`step_failure`, `operator_steer`, `precondition_violated`) map directly to the three triggers in §15.6.
+
+---
+
+### 15.11 Test Strategy
+
+#### Unit tests
+
+- Phase transitions: every valid `(from, to)` pair passes; every invalid pair returns `InvalidTransition`. Valid sequence: `Plan → Act → Observe → Replan → Act → ...`
+- `StepStatus` DAG: `Pending → InProgress → {Completed, Failed, Skipped}`; backwards moves rejected.
+- `ToolUseBehavior` override: each phase sets the expected value on `TurnContext::tool_use_behavior` before the LLM call.
+- `ReplanPolicy::Never` + `StepFailed` → `TurnOutcome::Stop` without entering Replan.
+
+#### Integration test (end-to-end)
+
+Mock `LlmProvider` returns canned Plan JSON (Plan phase), then a tool call (Act phase), then `ReplanDecision::Continue` (Replan phase). Mock `ToolDispatcher` fails once then succeeds. Assertions: plan row persisted after Plan phase; `StepFailed` event emitted; new plan row written with `parent_plan_id` set; second Act phase emits `PlanCompleted`.
+
+#### Property tests (`proptest` / `quickcheck`)
+
+- `StepStatus` DAG: transition validator rejects all backwards moves (`Completed → Pending`, etc.) and accepts all forward moves (`Pending → InProgress → {Completed, Failed, Skipped}`).
+- `Plan` serde round-trip: `from_str(to_string(&plan)?) == plan` for any generated `Plan`.
+
+---
+
+### 15.12 Open Questions
+
+- **Plan serialization format** — JSON schema via `StructuredOutputConfig::JsonSchema` (§5.1) is preferred (reliable, parseable) but not all providers support it. Should a markdown fallback parser be required for providers without structured output?
+
+- **Plan visibility to sub-agents** — When a planner spawns sub-agents via handoff (§9b) or circles (SPEC-circles.md), should the active plan be forwarded as read-only context? The `HandoffInputFilter` (§9b) could strip or include it per-handoff.
+
+- **Replan budget — hard cap vs. adaptive escalation** — The current hard `replan_loop_limit` (default 10) aborts on exhaustion. An adaptive policy could escalate to HITL after N replans instead of aborting. Threshold needs human input.
+
+- **Partial plan execution and rollback** — Aborted plans leave completed-step side effects in place. Should `PlanStep` carry an optional `rollback_description` for compensating actions? Interacts with §6.1 idempotency; likely Phase 4+.
+
+---
+
 ## 14. Open Questions
 
 1. ~~**Skill system definition**~~ — Resolved: See §13.

@@ -440,6 +440,50 @@ mod tests {
         assert!(matches!(err, McpError::Serialization { .. }));
     }
 
+    #[tokio::test]
+    async fn call_tool_rejects_array_arguments() {
+        let bridge = RmcpClientBridge::new(stdio_cfg("srv"));
+        let err = bridge
+            .call_tool("srv.tool", serde_json::json!([1, 2, 3]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpError::Serialization { .. }));
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_number_arguments() {
+        let bridge = RmcpClientBridge::new(stdio_cfg("srv"));
+        let err = bridge
+            .call_tool("srv.tool", serde_json::json!(42))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpError::Serialization { .. }));
+    }
+
+    #[tokio::test]
+    async fn call_tool_null_arguments_reaches_not_connected() {
+        // Null args are valid per MCP spec — the shape-check passes and
+        // the error comes from the not-connected check instead.
+        let bridge = RmcpClientBridge::new(stdio_cfg("srv"));
+        let err = bridge
+            .call_tool("srv.tool", serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpError::NotConnected));
+    }
+
+    #[tokio::test]
+    async fn call_tool_bare_name_no_namespace_reaches_not_connected() {
+        // A bare tool name (no ".") has no server prefix to validate,
+        // so the check passes and we fall through to NotConnected.
+        let bridge = RmcpClientBridge::new(stdio_cfg("srv"));
+        let err = bridge
+            .call_tool("bare_tool", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpError::NotConnected));
+    }
+
     // ---- Disconnect semantics --------------------------------------------
 
     #[tokio::test]
@@ -518,6 +562,56 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].get("type").and_then(|v| v.as_str()), Some("text"));
         assert_eq!(arr[0].get("text").and_then(|v| v.as_str()), Some("hello"));
+    }
+
+    #[test]
+    fn call_result_to_mcp_empty_content_renders_empty_array() {
+        let raw = CallToolResult {
+            content: vec![],
+            is_error: Some(false),
+            structured_content: None,
+            meta: None,
+        };
+        let mapped = call_result_to_mcp(raw);
+        assert!(!mapped.is_error);
+        let arr = mapped.content.as_array().expect("should be array");
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn call_result_to_mcp_renders_multiple_text_items() {
+        use rmcp::model::Content;
+        let raw = CallToolResult::success(vec![
+            Content::text("line one"),
+            Content::text("line two"),
+        ]);
+        let mapped = call_result_to_mcp(raw);
+        assert!(!mapped.is_error);
+        let arr = mapped.content.as_array().expect("array rendering");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[1].get("text").and_then(|v| v.as_str()), Some("line two"));
+    }
+
+    #[test]
+    fn call_result_to_mcp_is_error_none_defaults_false() {
+        let raw = CallToolResult {
+            content: vec![],
+            is_error: None,
+            structured_content: None,
+            meta: None,
+        };
+        let mapped = call_result_to_mcp(raw);
+        assert!(!mapped.is_error);
+    }
+
+    #[test]
+    fn tool_to_descriptor_empty_description() {
+        let schema = serde_json::Map::new();
+        // Tool with no description — should map to empty string, not panic.
+        let tool = Tool::new("bare_tool", None::<&str>, Arc::new(schema));
+        let desc = tool_to_descriptor("srv", &tool);
+        assert_eq!(desc.name, "srv.bare_tool");
+        assert_eq!(desc.description, "");
     }
 
     // ---- Integration (gated) ---------------------------------------------

@@ -375,4 +375,125 @@ mod tests {
             _ => panic!("expected Transport"),
         }
     }
+
+    // --- McpError → SeraError for remaining variants ----------------------
+
+    #[test]
+    fn unauthorized_error_maps_to_unauthorized() {
+        let sera: SeraError = McpError::Unauthorized {
+            tool: "github.delete_repo".into(),
+        }
+        .into();
+        assert_eq!(sera.code, SeraErrorCode::Unauthorized);
+        assert!(sera.message.contains("github.delete_repo"));
+    }
+
+    #[test]
+    fn serialization_error_maps_to_serialization() {
+        let sera: SeraError = McpError::Serialization {
+            reason: "not an object".into(),
+        }
+        .into();
+        assert_eq!(sera.code, SeraErrorCode::Serialization);
+    }
+
+    #[test]
+    fn connection_failed_error_maps_to_unavailable() {
+        let sera: SeraError = McpError::ConnectionFailed {
+            reason: "refused".into(),
+        }
+        .into();
+        assert_eq!(sera.code, SeraErrorCode::Unavailable);
+    }
+
+    #[test]
+    fn server_not_found_error_maps_to_not_found() {
+        let sera: SeraError = McpError::ServerNotFound {
+            name: "missing-server".into(),
+        }
+        .into();
+        assert_eq!(sera.code, SeraErrorCode::NotFound);
+    }
+
+    // --- McpServerConfig: env vars and transport variants -----------------
+
+    #[test]
+    fn mcp_server_config_with_env_vars() {
+        let yaml = r#"
+            name: github
+            url: "http://localhost:3000"
+            transport: sse
+            env:
+              GITHUB_TOKEN: secret123
+              LOG_LEVEL: debug
+        "#;
+        let config: McpServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.env.get("GITHUB_TOKEN").map(String::as_str), Some("secret123"));
+        assert_eq!(config.env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
+    }
+
+    #[test]
+    fn mcp_server_config_streamable_http() {
+        let yaml = r#"
+            name: myserver
+            url: "http://localhost:8080/mcp"
+            transport: streamable-http
+        "#;
+        let config: McpServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.transport, McpTransport::StreamableHttp);
+        assert_eq!(config.url.as_deref(), Some("http://localhost:8080/mcp"));
+    }
+
+    #[test]
+    fn mcp_server_settings_custom_port_deserializes() {
+        let json = r#"{"enabled": false, "port": 9090}"#;
+        let s: McpServerSettings = serde_json::from_str(json).unwrap();
+        assert!(!s.enabled);
+        assert_eq!(s.port, 9090);
+    }
+
+    #[test]
+    fn mcp_server_settings_default_port_used_when_absent() {
+        let json = r#"{"enabled": true}"#;
+        let s: McpServerSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.port, 50052);
+    }
+
+    // --- McpToolDescriptor and McpToolResult serde -----------------------
+
+    #[test]
+    fn mcp_tool_descriptor_serde_roundtrip() {
+        let desc = McpToolDescriptor {
+            name: "github.create_issue".into(),
+            description: "Create a GitHub issue".into(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        };
+        let json = serde_json::to_string(&desc).unwrap();
+        let back: McpToolDescriptor = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, desc.name);
+        assert_eq!(back.description, desc.description);
+    }
+
+    #[test]
+    fn mcp_tool_result_serde_roundtrip() {
+        let result = McpToolResult {
+            content: serde_json::json!({"output": "hello"}),
+            is_error: false,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: McpToolResult = serde_json::from_str(&json).unwrap();
+        assert!(!back.is_error);
+        assert_eq!(back.content.get("output").and_then(|v| v.as_str()), Some("hello"));
+    }
+
+    #[test]
+    fn mcp_tool_result_error_flag_roundtrips() {
+        let result = McpToolResult {
+            content: serde_json::json!({"error": "timeout"}),
+            is_error: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: McpToolResult = serde_json::from_str(&json).unwrap();
+        assert!(back.is_error);
+    }
 }

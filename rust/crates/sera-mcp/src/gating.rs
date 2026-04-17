@@ -469,4 +469,135 @@ mod tests {
         let out = gated.list_tools().await.unwrap();
         assert_eq!(out.len(), 2);
     }
+
+    // --- Error propagation through GatedMcpClientBridge ------------------
+
+    struct ErrorBridge;
+
+    #[async_trait]
+    impl McpClientBridge for ErrorBridge {
+        async fn connect(&self, _config: &McpServerConfig) -> Result<(), McpError> {
+            Err(McpError::ConnectionFailed {
+                reason: "injected".into(),
+            })
+        }
+        async fn disconnect(&self, _server_name: &str) -> Result<(), McpError> {
+            Err(McpError::UnknownServer("injected".into()))
+        }
+        async fn list_tools(&self) -> Result<Vec<McpToolDescriptor>, McpError> {
+            Err(McpError::NotConnected)
+        }
+        async fn list_server_tools(
+            &self,
+            _server_name: &str,
+        ) -> Result<Vec<McpToolDescriptor>, McpError> {
+            Err(McpError::NotConnected)
+        }
+        async fn call_tool(
+            &self,
+            _namespaced_tool: &str,
+            _arguments: serde_json::Value,
+        ) -> Result<McpToolResult, McpError> {
+            Err(McpError::Transport {
+                reason: "injected".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn gated_bridge_propagates_list_tools_error() {
+        let gated = GatedMcpClientBridge::new(ErrorBridge, AlwaysVisibleGate);
+        let ctx = ctx_with(vec![], usize::MAX);
+        let err = gated.list_tools_for_context(&ctx).await.unwrap_err();
+        assert!(matches!(err, McpError::NotConnected));
+    }
+
+    #[tokio::test]
+    async fn gated_bridge_propagates_connect_error() {
+        let gated = GatedMcpClientBridge::new(
+            ErrorBridge,
+            AlwaysVisibleGate,
+        );
+        use crate::{McpTransport, McpServerConfig};
+        use std::collections::HashMap;
+        let cfg = McpServerConfig {
+            name: "x".into(),
+            url: None,
+            command: Some("true".into()),
+            args: vec![],
+            transport: McpTransport::Stdio,
+            env: HashMap::new(),
+        };
+        let err = gated.connect(&cfg).await.unwrap_err();
+        assert!(matches!(err, McpError::ConnectionFailed { .. }));
+    }
+
+    #[tokio::test]
+    async fn gated_bridge_propagates_call_tool_error() {
+        let gated = GatedMcpClientBridge::new(ErrorBridge, AlwaysVisibleGate);
+        let err = gated
+            .call_tool("srv.tool", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpError::Transport { .. }));
+    }
+
+    // --- ToolGatingContext fields ----------------------------------------
+
+    #[test]
+    fn tool_gating_context_task_class_field() {
+        let ctx = ToolGatingContext {
+            agent_id: "a1".into(),
+            active_skills: vec!["code-review".into()],
+            skill_tool_bindings: vec!["github".into()],
+            task_class: Some("code-review".into()),
+            max_tools: 10,
+        };
+        assert_eq!(ctx.task_class.as_deref(), Some("code-review"));
+        assert_eq!(ctx.active_skills.len(), 1);
+    }
+
+    #[test]
+    fn tool_gating_context_default_is_empty() {
+        let ctx = ToolGatingContext::default();
+        assert!(ctx.agent_id.is_empty());
+        assert!(ctx.active_skills.is_empty());
+        assert!(ctx.skill_tool_bindings.is_empty());
+        assert!(ctx.task_class.is_none());
+        assert_eq!(ctx.max_tools, 0);
+    }
+
+    // --- AndGate / OrGate Default impls ----------------------------------
+
+    #[test]
+    fn and_gate_default_two_always_visible_passes_all() {
+        let gate: AndGate<AlwaysVisibleGate, AlwaysVisibleGate> = AndGate::default();
+        let ctx = ctx_with(vec![], usize::MAX);
+        assert!(gate.is_visible(&tool("anything"), &ctx));
+    }
+
+    #[test]
+    fn skill_bound_gate_exact_match_and_prefix_overlap() {
+        // Verify both exact and prefix bindings coexist correctly in a single
+        // context: "github.create_issue" (exact) + "slack" (prefix).
+        let gate = SkillBoundGate;
+        let ctx = ctx_with(vec!["github.create_issue", "slack"], usize::MAX);
+        assert!(gate.is_visible(&tool("github.create_issue"), &ctx));
+        assert!(!gate.is_visible(&tool("github.list_issues"), &ctx));
+        assert!(gate.is_visible(&tool("slack.send"), &ctx));
+        assert!(gate.is_visible(&tool("slack.dm"), &ctx));
+        assert!(!gate.is_visible(&tool("filesystem.read"), &ctx));
+    }
+
+    #[test]
+    fn allowed_server_gate_empty_allowed_list_blocks_all_namespaced() {
+        let gate = AllowedServerGate {
+            allowed_servers: vec![],
+        };
+        let ctx = ctx_with(vec![], usize::MAX);
+        // Namespaced tools are blocked when allowed list is empty.
+        assert!(!gate.is_visible(&tool("github.create_issue"), &ctx));
+        // Un-namespaced tools still pass through.
+        assert!(gate.is_visible(&tool("builtin"), &ctx));
+    }
 }

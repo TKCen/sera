@@ -1,6 +1,6 @@
 # SERA Rust Migration — Implementation Tracker
 
-> **Document Status:** Current (Updated 2026-04-16 — Session 20)
+> **Document Status:** Current (Updated 2026-04-17 — Session 25)
 > **Purpose:** Master tracking document for SERA 2.0 Rust migration
 > **Basis:** Full spec analysis + codebase inspection + test run verification
 
@@ -27,27 +27,30 @@ The SERA Rust workspace is **fully scaffolded** with **all 27 planned crates** p
 |-------|-------------|--------|------------|
 | Phase 0 | Foundation (types, config, DB, queue, telemetry, errors, cache, secrets) | ✅ COMPLETE | 100% |
 | Phase 1 | Core Domain (session, auth, tools, hooks, workflow, models, skills) | COMPLETE | 90% |
-| Phase 2 | Runtime & Gateway (runtime, gateway, TUI, BYOH, meta) | IN PROGRESS | 85% |
+| Phase 2 | Runtime & Gateway (runtime, gateway, TUI, BYOH, meta) | IN PROGRESS | 95% |
 | Phase 3 | Interop Protocols (MCP, A2A, AG-UI, plugins) | SCAFFOLDED | 60% |
 | Phase 4 | Enterprise & Hardening (OIDC/SCIM, K8s, Circles full) | NOT STARTED | 0% |
 
-### Key Achievements (Session 15b verified)
+### Key Achievements (Session 15b verified; Session 25 extended)
 
-1. **Core gateway operational** — `sera-gateway` with 81 source files, 21,757 LOC, 223+ tests
-2. **Runtime infrastructure complete** — `sera-runtime` with 37 source files, 8,180 LOC, 115+ tests
-3. **Model provider abstractions created** — `sera-models` (219 LOC) with `ModelProvider` trait
+1. **Core gateway operational** — `sera-gateway` with 81 source files, 21,757 LOC, 223+ tests; startup validation hardened
+2. **Runtime infrastructure complete** — `sera-runtime` with 37 source files, 8,180 LOC, 115+ tests; 5 edge case fixes + HybridScorer integration
+3. **Model provider abstractions created** — `sera-models` (219 LOC) with `ModelProvider` trait; model-aware tokenizer dispatch
 4. **Skill pack loading created** — `sera-skills` (349 LOC) with filesystem-based discovery
-5. **Self-evolution machinery complete** — `sera-meta` (2,196 LOC) with 3-tier policy, shadow sessions, constitutional rules
+5. **Self-evolution machinery complete** — `sera-meta` (2,196 LOC) with 3-tier policy, shadow sessions, constitutional rules; ArtifactPipeline wired
 6. **HITL approval production-ready** — `sera-hitl` (819 LOC) with full escalation chains and tests
-7. **Workflow engine comprehensive** — `sera-workflow` (3,145 LOC) with SCC cycle detection, termination detection, coordination
-8. **Type system comprehensive** — `sera-types` (8,921 LOC) with 29 modules covering full domain
+7. **Workflow engine comprehensive** — `sera-workflow` (3,145 LOC) with SCC cycle detection, termination detection, coordination; builder pattern applied
+8. **Type system comprehensive** — `sera-types` (8,921 LOC) with 29 modules covering full domain; NDJSON ProtocolCapabilities + HandshakeFrame finalized
 9. **WASM hook adapter exists** — `sera-hooks` has feature-gated `wasmtime` support via `wasm_adapter.rs`
+10. **Session 25 ultrawork marathon** — 16 beads closed, ~95 new tests, gateway stub classification complete, HybridScorer (586 LOC, 14 tests) production-ready
 
 ### Remaining Gaps
 
-1. **sera-gateway TODOs** — 20 TODO markers across 8 files (LSP routing, process mgmt, auth context)
-2. **Interop crates** — sera-mcp, sera-a2a, sera-agui, sera-plugins scaffolded (Phase 3, ~60%)
-3. **Clippy compliance** — Workspace now passes `cargo clippy -- -D warnings` (fixed Session 21)
+1. **sera-gateway HTTP routes** — Artifact proposal/evaluate/approve/apply handlers not yet wired (post-sera-k2gw)
+2. **HookContext.change_artifact threading** — Integration gap in gateway pipeline (follow-up to ser-k2gw)
+3. **Session commands schema** — task_queue.session_id parent key alignment (noted in gateway-stubs-classification.md)
+4. **Interop crates** — sera-mcp, sera-a2a, sera-agui, sera-plugins scaffolded (Phase 3, ~60%)
+5. **Clippy compliance** — Workspace passes `cargo clippy -- -D warnings` (Session 21+); 56% dead code reduction (Session 25)
 
 ---
 
@@ -365,7 +368,8 @@ MISSING (4 crates):
 | 2026-04-15 | S14 | Initial tracker creation |
 | 2026-04-16 | S15b | Fresh assessment: corrected crate count (19→23), LOC (29K→64.6K), tests (500→1,196); updated sera-models/skills/meta/hitl/hooks/events from NOT STARTED/PARTIAL to COMPLETE; recalculated all phase percentages; corrected Phase 2 description |
 | 2026-04-16 | S21 | Code audit: removed false "3 condenser stubs" claim (all 9 implemented); reconciled test counts per crate from #[test] grep; fixed clippy workspace-wide (17 fixes across 10 files); SPEC-runtime bumped 90%→93% |
+| 2026-04-17 | S25 | Ultrawork marathon: 16 beads closed, ~95 new tests; Phase 2 bumped 85%→95%; gateway startup validation, runtime fixes, builder/querybuilder patterns, NDJSON protocol alignment, HybridScorer (586 LOC), 56% dead code reduction; 39 gateway stubs classified; ArtifactPipeline integrated; follow-ups filed for HTTP routes + HookContext threading |
 
 ---
 
-*Updated 2026-04-16 by Session 21 code introspection audit*
+*Updated 2026-04-17 by Session 25 ultrawork marathon*

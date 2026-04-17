@@ -264,6 +264,238 @@ mod tests {
         assert!(result.is_err(), "invalid blast_radius should propagate as error");
     }
 
+    // ---- large rule sets ---------------------------------------------------
+
+    #[test]
+    fn large_rule_set_100_rules_no_panic() {
+        let mut yaml = String::new();
+        for i in 0..100u32 {
+            yaml.push_str(&format!(
+                "- id: rule-{i}\n  description: \"Rule number {i}\"\n  enforcement_point: pre_approval\n  blast_radii: [gateway_core]\n  required_scopes: []\n"
+            ));
+        }
+        let entries = parse_rules(&yaml).expect("100 rules should parse without panic");
+        assert_eq!(entries.len(), 100);
+        // Convert all to rules without panic
+        for entry in entries {
+            let _rule = entry.into_rule();
+        }
+    }
+
+    #[tokio::test]
+    async fn large_rule_set_100_rules_register_without_panic() {
+        let mut yaml = String::new();
+        for i in 0..100u32 {
+            yaml.push_str(&format!(
+                "- id: stress-rule-{i}\n  description: \"Stress rule {i}\"\n  enforcement_point: pre_approval\n  blast_radii: [runtime_crate]\n  required_scopes: []\n"
+            ));
+        }
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(yaml.as_bytes()).unwrap();
+        let registry = ConstitutionalRegistry::new();
+        let count = seed_registry_from_file(&registry, tmp.path().to_str().unwrap())
+            .await
+            .expect("100-rule seed should succeed");
+        assert_eq!(count, 100);
+        assert_eq!(registry.all_rules().await.len(), 100);
+    }
+
+    // ---- unicode in rule fields --------------------------------------------
+
+    #[test]
+    fn unicode_emoji_cjk_rtl_roundtrip() {
+        let yaml = r#"
+- id: "rule-emoji-🚀"
+  description: "Emoji rule: enforce 🔒 before 🚀"
+  enforcement_point: pre_approval
+- id: "rule-cjk-规则"
+  description: "中文描述：确保变更经过审批"
+  enforcement_point: pre_proposal
+- id: "rule-rtl-قاعدة"
+  description: "وصف باللغة العربية"
+  enforcement_point: pre_application
+"#;
+        let entries = parse_rules(yaml).expect("unicode fields should parse");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id, "rule-emoji-🚀");
+        assert_eq!(entries[0].description, "Emoji rule: enforce 🔒 before 🚀");
+        assert_eq!(entries[1].id, "rule-cjk-规则");
+        assert_eq!(entries[1].description, "中文描述：确保变更经过审批");
+        assert_eq!(entries[2].id, "rule-rtl-قاعدة");
+        // Hashes are computed without panic for multibyte content
+        for entry in entries {
+            let _rule = entry.into_rule();
+        }
+    }
+
+    // ---- duplicate rule ids -----------------------------------------------
+
+    /// Registry contract: register() uses HashMap::insert, so a second rule
+    /// with the same id OVERWRITES the first. Document this behaviour.
+    #[tokio::test]
+    async fn duplicate_ids_last_writer_wins() {
+        let yaml = r#"
+- id: dup-rule
+  description: "First version"
+  enforcement_point: pre_approval
+- id: dup-rule
+  description: "Second version (overwrites first)"
+  enforcement_point: pre_proposal
+"#;
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(yaml.as_bytes()).unwrap();
+
+        let registry = ConstitutionalRegistry::new();
+        // seed_registry_from_file registers them in order; second call wins
+        let count = seed_registry_from_file(&registry, tmp.path().to_str().unwrap())
+            .await
+            .expect("duplicate-id yaml should be accepted by the loader");
+
+        // count reflects YAML entries parsed, not unique registered rules
+        assert_eq!(count, 2, "loader returns count of entries parsed, not unique ids");
+
+        // Only one rule survives in the registry — the second one
+        let all = registry.all_rules().await;
+        assert_eq!(all.len(), 1, "registry deduplicates by id: last writer wins");
+        let surviving = registry.get("dup-rule").await.expect("dup-rule must exist");
+        assert_eq!(
+            surviving.base.description,
+            "Second version (overwrites first)",
+            "the second registration should overwrite the first"
+        );
+    }
+
+    // ---- all enforcement_point variants -----------------------------------
+
+    #[test]
+    fn all_enforcement_point_variants_parse() {
+        let cases = [
+            ("pre_proposal", ConstitutionalEnforcementPoint::PreProposal),
+            ("pre_approval", ConstitutionalEnforcementPoint::PreApproval),
+            ("pre_application", ConstitutionalEnforcementPoint::PreApplication),
+            ("post_application", ConstitutionalEnforcementPoint::PostApplication),
+        ];
+        for (yaml_str, expected) in cases {
+            let yaml = format!(
+                "- id: ep-test\n  description: \"ep test\"\n  enforcement_point: {yaml_str}\n"
+            );
+            let entries = parse_rules(&yaml)
+                .unwrap_or_else(|e| panic!("enforcement_point '{yaml_str}' should parse: {e}"));
+            assert_eq!(
+                entries[0].enforcement_point, expected,
+                "enforcement_point '{yaml_str}' mismatch"
+            );
+        }
+    }
+
+    // ---- all blast_radius variants ----------------------------------------
+
+    #[test]
+    fn all_blast_radius_variants_parse() {
+        let all_variants = [
+            "agent_memory",
+            "agent_persona_mutable",
+            "agent_skill",
+            "agent_experience_pool",
+            "single_hook_config",
+            "single_tool_policy",
+            "single_connector",
+            "single_circle_config",
+            "agent_manifest",
+            "tier_policy",
+            "hook_chain_structure",
+            "approval_policy",
+            "secret_provider",
+            "global_config",
+            "runtime_crate",
+            "gateway_core",
+            "protocol_schema",
+            "db_migration",
+            "constitutional_rule_set",
+            "kill_switch_protocol",
+            "audit_log_backend",
+            "self_evolution_pipeline",
+        ];
+        // Build a single rule with all blast radii listed
+        let radii_list = all_variants.join(", ");
+        let yaml = format!(
+            "- id: br-test\n  description: \"blast radius test\"\n  enforcement_point: pre_approval\n  blast_radii: [{radii_list}]\n"
+        );
+        let entries = parse_rules(&yaml).expect("all blast_radius variants should parse");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].blast_radii.len(),
+            all_variants.len(),
+            "all blast_radius variants should deserialize"
+        );
+    }
+
+    // ---- empty string in rule fields --------------------------------------
+
+    /// Empty id and description are currently accepted by the loader (no
+    /// validation layer). This test documents the current behaviour.
+    /// See follow-up: tighten validation to reject empty id.
+    #[test]
+    fn empty_id_and_description_accepted_by_parser() {
+        let yaml = r#"
+- id: ""
+  description: ""
+  enforcement_point: pre_approval
+"#;
+        let entries = parse_rules(yaml).expect("empty strings currently accepted by serde");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "");
+        assert_eq!(entries[0].description, "");
+        // into_rule does not panic on empty strings
+        let rule = entries.into_iter().next().unwrap().into_rule();
+        assert_eq!(rule.base.id, "");
+    }
+
+    // ---- YAML alias/anchor (billion-laughs style) -------------------------
+
+    /// serde_yaml 0.9 does not support YAML aliases/anchors — they produce a
+    /// parse error rather than exponential expansion. Verify no OOM/panic.
+    #[test]
+    fn yaml_alias_bomb_returns_error_not_oom() {
+        // Classic billion-laughs attempt using YAML anchors
+        let yaml = r#"
+lol1: &lol1 "lol"
+lol2: &lol2 [*lol1, *lol1, *lol1, *lol1, *lol1, *lol1, *lol1, *lol1, *lol1]
+lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
+"#;
+        // This is not a valid rule list — either a parse error OR empty vec.
+        // What matters is: no panic, no OOM.
+        let _result = parse_rules(yaml);
+        // We don't assert Ok/Err since the shape mismatch will cause an error
+        // either way — the important invariant is the process is still alive here.
+    }
+
+    // ---- relative path env var --------------------------------------------
+
+    #[tokio::test]
+    async fn relative_path_env_var_resolves_from_cwd() {
+        use std::env;
+
+        let mut tmp = NamedTempFile::new().unwrap();
+        let yaml = b"- id: rel-path-rule\n  description: \"relative path test\"\n  enforcement_point: pre_approval\n";
+        tmp.write_all(yaml).unwrap();
+
+        // Build a relative path from the current working directory
+        let tmp_path = tmp.path().to_path_buf();
+        let cwd = env::current_dir().expect("cwd must be accessible");
+        let relative = tmp_path
+            .strip_prefix(&cwd)
+            .unwrap_or(tmp_path.as_path()); // fall back to abs if not under cwd
+
+        let path_str = relative.to_str().unwrap();
+        let registry = ConstitutionalRegistry::new();
+        // seed_registry_from_file takes the path string as-is; relative paths
+        // resolve against the process cwd (tokio::fs::read_to_string behaviour)
+        let result = seed_registry_from_file(&registry, path_str).await;
+        assert!(result.is_ok(), "relative path should resolve: {result:?}");
+        assert_eq!(result.unwrap(), 1);
+    }
+
     // ---- content_hash is deterministic -------------------------------------
 
     #[test]

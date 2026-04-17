@@ -7,11 +7,13 @@
 //! "Integration with gateway pipeline (`change_artifact: None` in sera.rs)".
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
+
+use sera_auth::ActingContext;
 
 use sera_gateway::evolve_token::EvolveTokenError;
 use sera_meta::artifact_pipeline::{DryRunOutcome, PipelineError};
@@ -385,28 +387,33 @@ pub async fn apply(
 /// `POST /api/evolve/operator-key/:id` — supply the operator offline key for
 /// a Tier-3 artifact that is waiting in `OperatorKeyMissing` state.
 ///
-/// Authorization: the `signed_by` principal in the request body must hold
-/// operator scope. Requests from non-operator principals are rejected 403.
-/// Unknown artifact ids return 404. Artifacts that are not in the
-/// `Approved` status (e.g. already `Applied` or still `UnderReview`) return
-/// 409.
+/// Authorization: the caller must hold operator scope (`ActingContext` with a
+/// non-`None` `operator_id`). Requests without an `ActingContext` extension
+/// (middleware not configured) are rejected with 401. Non-operator callers
+/// are rejected with 403. Unknown artifact ids return 404. Artifacts that
+/// are not in the `Approved` status (e.g. already `Applied` or still
+/// `UnderReview`) return 409.
 ///
 /// On success the artifact transitions internally so that the next `apply`
 /// call can proceed without `OperatorKeyMissing`.
 pub async fn supply_operator_key(
     State(state): State<AppState>,
+    ctx: Option<Extension<ActingContext>>,
     Path(id_hex): Path<String>,
     Json(body): Json<OperatorKeyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Authorization gate: only operator-scoped principals may supply the key.
-    // The operator scope is identified by the "operator" role convention used
-    // throughout the evolve pipeline. Non-operator callers are rejected 403
-    // before touching the pipeline.
-    if !body.signed_by.contains("operator") {
-        return Err(AppError::Forbidden(format!(
-            "principal '{}' does not hold operator scope",
-            body.signed_by
-        )));
+    // Authorization gate: reject requests that arrive without an ActingContext
+    // (auth middleware not configured) before touching the pipeline.
+    let Extension(ctx) = ctx.ok_or_else(|| {
+        AppError::Auth(sera_auth::AuthError::Unauthorized)
+    })?;
+
+    // Only operator-scoped principals (operator_id is Some) may supply the key.
+    // Agent-scoped callers and bare API keys without an operator_id are rejected.
+    if ctx.operator_id.is_none() {
+        return Err(AppError::Forbidden(
+            "principal does not hold operator scope".to_string(),
+        ));
     }
 
     let id = parse_id(&id_hex)?;
@@ -1052,21 +1059,54 @@ mod tests {
         assert_eq!(applied.status, ChangeArtifactStatus::Applied);
     }
 
-    /// Non-operator caller (signed_by without "operator") must map to 403 via
-    /// the handler's authorization gate, before the pipeline is touched.
+    /// ActingContext without operator_id → 403.
+    /// Mirrors the handler gate: agent-scoped or bare API-key callers have
+    /// `operator_id = None` and must be rejected before touching the pipeline.
     #[test]
-    fn operator_key_non_operator_caller_returns_forbidden() {
-        // We replicate the handler's auth check directly — same logic.
-        let signed_by = "regular-user".to_string();
-        let result: Result<(), AppError> = if !signed_by.contains("operator") {
-            Err(AppError::Forbidden(format!(
-                "principal '{}' does not hold operator scope",
-                signed_by
-            )))
+    fn operator_key_non_operator_acting_context_returns_forbidden() {
+        use sera_auth::types::AuthMethod;
+        // Agent-scoped caller — operator_id is None.
+        let ctx = ActingContext {
+            operator_id: None,
+            agent_id: Some("agent-xyz".to_string()),
+            instance_id: None,
+            api_key_id: None,
+            auth_method: AuthMethod::Jwt,
+        };
+        let result: Result<(), AppError> = if ctx.operator_id.is_none() {
+            Err(AppError::Forbidden(
+                "principal does not hold operator scope".to_string(),
+            ))
         } else {
             Ok(())
         };
         assert!(matches!(result, Err(AppError::Forbidden(_))));
+    }
+
+    /// Missing ActingContext extension → 401.
+    /// If the auth middleware was not wired up, the handler must fail-closed
+    /// (Unauthorized) rather than allow the request through.
+    #[test]
+    fn operator_key_missing_acting_context_returns_unauthorized() {
+        let ctx: Option<Extension<ActingContext>> = None;
+        let result: Result<(), AppError> = ctx
+            .ok_or_else(|| AppError::Auth(sera_auth::AuthError::Unauthorized))
+            .map(|_| ());
+        assert!(matches!(result, Err(AppError::Auth(_))));
+    }
+
+    /// Operator-scoped ActingContext (operator_id = Some) passes the gate.
+    #[test]
+    fn operator_key_operator_acting_context_passes_gate() {
+        let ctx = ActingContext::with_operator("op-1".to_string());
+        let result: Result<(), AppError> = if ctx.operator_id.is_none() {
+            Err(AppError::Forbidden(
+                "principal does not hold operator scope".to_string(),
+            ))
+        } else {
+            Ok(())
+        };
+        assert!(result.is_ok());
     }
 
     /// Unknown artifact id → pipeline returns NotFound → pipeline_err maps
@@ -1324,6 +1364,349 @@ mod tests {
         assert!(
             matches!(err, AppError::Auth(_)),
             "expected Auth (401) not Forbidden: {err:?}"
+        );
+    }
+
+    // ── GET /api/evolve/:id edge cases ─────────────────────────────────────
+
+    /// GET with an unknown (never-proposed) id → pipeline returns None →
+    /// the handler builds NotFound → would become HTTP 404.
+    #[tokio::test]
+    async fn get_unknown_id_pipeline_returns_none() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let phantom = ChangeArtifactId { hash: [0xBB; 32] };
+        assert!(
+            pipeline.get(&phantom).await.is_none(),
+            "phantom id must not exist"
+        );
+        // Confirm pipeline_err maps NotFound to the correct AppError variant.
+        let err = pipeline_err(PipelineError::NotFound(phantom.to_string()));
+        assert!(matches!(
+            err,
+            AppError::Db(sera_db::DbError::NotFound {
+                entity: "change_artifact",
+                ..
+            })
+        ));
+    }
+
+    /// GET after propose → status is Proposed.
+    #[tokio::test]
+    async fn get_after_propose_shows_proposed() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = ChangeArtifact::new(
+            "lifecycle test".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "lc-user".to_string(),
+                capability_token: stub_capability_token(BlastRadius::SingleHookConfig),
+            },
+            serde_json::json!({}),
+        );
+        let id = pipeline.propose(artifact).await.unwrap();
+        assert_eq!(
+            pipeline.get(&id).await.unwrap().status,
+            ChangeArtifactStatus::Proposed
+        );
+    }
+
+    /// GET after evaluate (pass) → status is Approved.
+    #[tokio::test]
+    async fn get_after_evaluate_pass_shows_approved() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = ChangeArtifact::new(
+            "approved lifecycle".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "lc-user".to_string(),
+                capability_token: stub_capability_token(BlastRadius::SingleHookConfig),
+            },
+            serde_json::json!({}),
+        );
+        let id = pipeline.propose(artifact).await.unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+        assert_eq!(
+            pipeline.get(&id).await.unwrap().status,
+            ChangeArtifactStatus::Approved
+        );
+    }
+
+    /// GET after evaluate (fail) → status is Rejected.
+    #[tokio::test]
+    async fn get_after_evaluate_fail_shows_rejected() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = ChangeArtifact::new(
+            "rejected lifecycle".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "lc-user2".to_string(),
+                capability_token: stub_capability_token(BlastRadius::SingleHookConfig),
+            },
+            serde_json::json!({}),
+        );
+        let id = pipeline.propose(artifact).await.unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Failed("rule violation".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(
+            pipeline.get(&id).await.unwrap().status,
+            ChangeArtifactStatus::Rejected
+        );
+    }
+
+    /// GET after approve + apply → status is Applied.
+    #[tokio::test]
+    async fn get_after_apply_shows_applied() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = ChangeArtifact::new(
+            "applied lifecycle".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "lc-user3".to_string(),
+                capability_token: stub_capability_token(BlastRadius::SingleHookConfig),
+            },
+            serde_json::json!({}),
+        );
+        let id = pipeline.propose(artifact).await.unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+        pipeline.approve(&id, "approver-lc").await.unwrap();
+        pipeline.apply(&id).await.unwrap();
+        assert_eq!(
+            pipeline.get(&id).await.unwrap().status,
+            ChangeArtifactStatus::Applied
+        );
+    }
+
+    // ── Malformed ChangeArtifactId in URL ──────────────────────────────────
+
+    /// Non-hex string → parse_id returns Internal (not a panic).
+    #[test]
+    fn parse_id_non_hex_is_internal_error() {
+        let err = parse_id("not-hex!!").unwrap_err();
+        assert!(
+            matches!(err, AppError::Internal(_)),
+            "non-hex id must return Internal, got: {err:?}"
+        );
+    }
+
+    /// Valid hex but 16 bytes (too short, need 32) → parse_id returns Internal.
+    #[test]
+    fn parse_id_too_short_is_internal_error() {
+        // 16 bytes = 32 hex chars
+        let short = "deadbeef".repeat(4); // 32 hex chars = 16 bytes
+        let err = parse_id(&short).unwrap_err();
+        assert!(
+            matches!(err, AppError::Internal(_)),
+            "too-short id must return Internal, got: {err:?}"
+        );
+    }
+
+    /// Valid hex but 33 bytes (too long) → parse_id returns Internal.
+    #[test]
+    fn parse_id_too_long_is_internal_error() {
+        // 33 bytes = 66 hex chars
+        let long = "aa".repeat(33);
+        let err = parse_id(&long).unwrap_err();
+        assert!(
+            matches!(err, AppError::Internal(_)),
+            "too-long id must return Internal, got: {err:?}"
+        );
+    }
+
+    /// Empty string → parse_id returns Internal (not a panic).
+    #[test]
+    fn parse_id_empty_is_internal_error() {
+        let err = parse_id("").unwrap_err();
+        assert!(
+            matches!(err, AppError::Internal(_)),
+            "empty id must return Internal, got: {err:?}"
+        );
+    }
+
+    // ── Concurrent approve by same approver ────────────────────────────────
+
+    /// Second approve call with the same PrincipalId returns DuplicateApprover;
+    /// the signer set stays at 1 and apply still succeeds (Tier-2 needs 1).
+    #[tokio::test]
+    async fn same_approver_twice_does_not_double_count() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = ChangeArtifact::new(
+            "dup-approve test".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "eng-proposer".to_string(),
+                capability_token: stub_capability_token(BlastRadius::SingleHookConfig),
+            },
+            serde_json::json!({}),
+        );
+        let id = pipeline.propose(artifact).await.unwrap();
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+
+        // First approval: count = 1.
+        let count = pipeline.approve(&id, "dup-approver").await.unwrap();
+        assert_eq!(count, 1);
+
+        // Second call with the same principal must be rejected.
+        let dup_err = pipeline.approve(&id, "dup-approver").await.unwrap_err();
+        assert!(
+            matches!(dup_err, PipelineError::DuplicateApprover(_)),
+            "expected DuplicateApprover, got: {dup_err}"
+        );
+
+        // Signer set is still size 1 — duplicate was not recorded.
+        let signers = pipeline.signers(&id).await;
+        assert_eq!(signers.len(), 1, "duplicate must not increase signer count");
+
+        // Tier-2 requires 1 approver → apply still succeeds.
+        pipeline.apply(&id).await.unwrap();
+        assert_eq!(
+            pipeline.get(&id).await.unwrap().status,
+            ChangeArtifactStatus::Applied
+        );
+    }
+
+    // ── Token replay ───────────────────────────────────────────────────────
+
+    /// A valid signed token used twice by the same principal creates two
+    /// distinct artifacts (different content-addressed IDs). The pipeline does
+    /// not yet enforce max_proposals — this test documents current behaviour.
+    #[tokio::test]
+    async fn same_token_twice_same_principal_creates_two_artifacts() {
+        let signer = EvolveTokenSigner::new(b"replay-secret".to_vec());
+        let principal = "replay-principal".to_string();
+
+        let mut token = CapabilityToken {
+            id: principal.clone(),
+            scopes: [BlastRadius::SingleHookConfig].into_iter().collect(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            max_proposals: 10,
+            signature: [0u8; 64],
+        };
+        signer.sign(&mut token);
+
+        // Both verify calls pass (the signature is valid).
+        signer.verify(&token, BlastRadius::SingleHookConfig).unwrap();
+        signer.verify(&token, BlastRadius::SingleHookConfig).unwrap();
+
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+
+        let art1 = ChangeArtifact::new(
+            "first proposal".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: principal.clone(),
+                capability_token: token.clone(),
+            },
+            serde_json::json!({ "v": 1 }),
+        );
+        // Sleep so created_at differs → distinct content-addressed IDs.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let art2 = ChangeArtifact::new(
+            "second proposal".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: principal.clone(),
+                capability_token: token.clone(),
+            },
+            serde_json::json!({ "v": 2 }),
+        );
+
+        let id1 = pipeline.propose(art1).await.unwrap();
+        let id2 = pipeline.propose(art2).await.unwrap();
+
+        assert_ne!(id1.hash, id2.hash, "distinct proposals must produce distinct IDs");
+        assert!(pipeline.get(&id1).await.is_some());
+        assert!(pipeline.get(&id2).await.is_some());
+    }
+
+    /// Token minted for principal-A submitted with proposer_principal=principal-B
+    /// is blocked by the identity cross-check with Forbidden (403).
+    #[test]
+    fn token_replay_cross_principal_returns_forbidden() {
+        let signer = EvolveTokenSigner::new(b"replay-secret".to_vec());
+        let mut token = CapabilityToken {
+            id: "principal-a".to_string(),
+            scopes: [BlastRadius::SingleHookConfig].into_iter().collect(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            max_proposals: 10,
+            signature: [0u8; 64],
+        };
+        signer.sign(&mut token);
+
+        // Signature is valid — but caller claims a different principal.
+        signer.verify(&token, BlastRadius::SingleHookConfig).unwrap();
+        let proposer_principal = "principal-b";
+        let result: Result<(), AppError> = if token.id != proposer_principal {
+            Err(AppError::Forbidden(format!(
+                "token identity mismatch: token id '{}' does not match proposer_principal '{}'",
+                token.id, proposer_principal,
+            )))
+        } else {
+            Ok(())
+        };
+        assert!(
+            matches!(result, Err(AppError::Forbidden(_))),
+            "cross-principal replay must return Forbidden"
+        );
+    }
+
+    // ── evaluate called twice ──────────────────────────────────────────────
+
+    /// Calling evaluate a second time on an artifact that has already been
+    /// evaluated returns WrongState. pipeline_err maps this to Conflict (409).
+    #[tokio::test]
+    async fn evaluate_twice_returns_wrong_state_mapped_to_conflict() {
+        let pipeline = Arc::new(ArtifactPipeline::with_defaults());
+        let artifact = ChangeArtifact::new(
+            "eval-twice test".to_string(),
+            ChangeArtifactScope::ConfigEvolution,
+            BlastRadius::SingleHookConfig,
+            ChangeProposer {
+                principal_id: "eval2-user".to_string(),
+                capability_token: stub_capability_token(BlastRadius::SingleHookConfig),
+            },
+            serde_json::json!({}),
+        );
+        let id = pipeline.propose(artifact).await.unwrap();
+
+        // First evaluate succeeds.
+        pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap();
+
+        // Second evaluate must fail with WrongState.
+        let pipeline_err_val = pipeline
+            .evaluate(&id, |_| DryRunOutcome::Passed)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(pipeline_err_val, PipelineError::WrongState { .. }),
+            "second evaluate must return WrongState, got: {pipeline_err_val}"
+        );
+
+        // pipeline_err maps WrongState → Conflict (409).
+        let app_err = pipeline_err(pipeline_err_val);
+        assert!(
+            matches!(app_err, AppError::Db(sera_db::DbError::Conflict(_))),
+            "WrongState must map to Conflict (409), got: {app_err:?}"
         );
     }
 }

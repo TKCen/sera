@@ -520,7 +520,372 @@ Individual hook chains are defined as separate `HookChain` manifests (see §4 ab
 
 ---
 
-## 10. Open Questions
+## 10. Two-Tier Hook Bus (Fast / Slow Execution Lanes)
+
+> **Status:** DRAFT (fills gap `sera-61ao`)
+> **Not to be confused with §2.5**, which splits the bus by *event access control* (`InternalHookBus` vs `PluginHookBus`). This section splits by *execution lane* — synchronous in-process dispatch vs asynchronous durable fanout. The two axes are orthogonal: an event on the `PluginHookBus` may travel the fast or slow lane depending on its hook kind.
+
+The single-tier `ChainExecutor` in `rust/crates/sera-hooks/src/executor.rs` executes every chain inline on the caller's task. That is correct for decisions the caller must see before proceeding (authZ, secret injection, constitutional gating), but wrong for fanout work that is append-only (audit, training-data emission, metric scrape). Putting audit in the same lane as authZ makes p99 tool-call latency hostage to Postgres commit latency. The two-tier bus separates them.
+
+### 10.1 Lane Definitions
+
+| Lane | Transport | Ordering | Durability | Tail-latency target | Typical consumers |
+|---|---|---|---|---|---|
+| **Fast** | `Arc<HookBus>` per process, synchronous `.await` | Strict in-chain order | None (best-effort; lost on crash) | **< 1 ms p95** per chain | `pre_tool`, `pre_route`, `constitutional_gate`, `on_llm_start`, any hook whose `HookResult` can short-circuit |
+| **Slow** | Tokio `mpsc` → persistent FIFO | Per-event FIFO, parallel across consumers | At-least-once | < 100 ms p95 emit (consumption may lag) | `post_tool` audit, `post_deliver` analytics, training-data emission, metric fanout, replayable observability |
+
+> **Tradeoff:** splitting lanes doubles the number of code paths a hook author must reason about, but the alternative (one lane for everything) means the slowest consumer sets the latency floor for every decision hook. The split is load-bearing for `pre_tool` p95 ≤ 1 ms under audit log backpressure.
+
+### 10.2 Fast Path API
+
+Fast-path publish is synchronous and returns the final `HookResult` — callers block on the decision because they cannot proceed without it.
+
+```rust
+impl HookBus {
+    /// Dispatch all chains wired to `point` on the fast lane and return the
+    /// merged result. Blocks the caller's task until the chain completes or
+    /// times out.
+    pub async fn publish_fast(
+        &self,
+        point: HookPoint,
+        ctx: HookContext,
+    ) -> Result<FastResult, HookError>;
+}
+
+pub struct FastResult {
+    pub outcome: HookResult,                  // Continue | Reject | Redirect
+    pub updated_input: Option<serde_json::Value>,
+    pub hooks_executed: usize,
+    pub duration_ms: u64,
+}
+```
+
+This API is a thin renaming of the existing `ChainExecutor::execute_at_point` — the function's signature matches today's behavior. The only semantic change is that `publish_fast` is the *only* way to run chains whose result the caller needs.
+
+> **Tradeoff:** keeping `FastResult` isomorphic to today's `ChainResult` means the migration is a rename, not a rewrite. But it also means the fast path inherits `ChainExecutor`'s current timeout model (per-chain deadline, cooperative). That is intentional — deterministic termination on the fast lane is more important than expressiveness.
+
+### 10.3 Slow Path API
+
+Slow-path publish returns immediately with a `PublishReceipt`; the caller never blocks on consumers.
+
+```rust
+impl HookBus {
+    /// Enqueue an event for the slow lane. Returns as soon as the event is
+    /// accepted into the in-memory queue (and, for durable configs, persisted).
+    pub async fn publish_slow(
+        &self,
+        event: PluginEvent,
+    ) -> Result<PublishReceipt, HookError>;
+}
+
+pub struct PublishReceipt {
+    pub event_id: EventId,
+    pub queued_at: DateTime<Utc>,
+    pub queue_depth_after: u32,           // Observability signal for producers
+}
+```
+
+The slow lane consumes from the queue on a dedicated Tokio runtime task (or task pool), each consumer driving its own independent chain. Consumers do not share state across events — fanout is strictly per-event.
+
+### 10.4 Slow-Path Persistence Options
+
+Two backends are in scope for Phase 1; the choice is per-deployment via `HookBusConfig::slow_backend`.
+
+| Backend | Model | Pros | Cons |
+|---|---|---|---|
+| `sled`-backed FIFO | Embedded, single-process B-tree queue | Zero ops, fast local commit (~µs), no network | Not visible to other processes; replicas cannot share the queue |
+| Postgres outbox | Single `hook_outbox` table, consumers `SELECT ... FOR UPDATE SKIP LOCKED` | Shared across all gateway replicas, survives restarts, aligns with existing Postgres infra (§SPEC-db) | Commit latency dominates (~1–5 ms); ops burden on shared DB |
+
+> **Tradeoff:** `sled` is faster and zero-ops but single-process, so multi-gateway deployments must use Postgres outbox. We ship both and default to Postgres on HA deployments, `sled` on single-node ones. See also the SERA deployment tiers defined in [SPEC-deploy](SPEC-deploy.md) §3 if such a spec exists; otherwise the operator chooses.
+
+Both backends satisfy the at-least-once guarantee defined in §10.6. Neither provides exactly-once — consumers must be idempotent. This is consistent with the audit store's own idempotency (see [SPEC-events](SPEC-events.md)).
+
+### 10.5 Routing Matrix
+
+The classification rule is mechanical — it does not require per-hook-point tuning.
+
+> **Rule:** A chain runs on the fast lane iff its `HookResult` can short-circuit the caller (`Reject` or `Redirect` is meaningful to the caller at that point). Otherwise it runs on the slow lane.
+
+Applying this rule to the hook points in §3:
+
+| Hook Point | Lane | Why |
+|---|---|---|
+| `constitutional_gate` | Fast | Must reject before dispatch |
+| `pre_route`, `post_route` | Fast | Can reject or redirect the event |
+| `pre_tool` | Fast | AuthZ, secret injection — caller must see result |
+| `on_llm_start`, `on_llm_end` | Fast | Budget checks short-circuit model call |
+| `pre_deliver` | Fast | Last-line content filter |
+| `pre_memory_write` | Fast | Policy decision gates the write |
+| `on_approval_request` | Fast | Routes the approval synchronously |
+| `post_tool` | **Slow** | Audit, risk scoring, training-data emission; caller has already moved on |
+| `post_turn` | **Slow** | Post-hoc compliance scan; result is not consumed by the caller |
+| `post_deliver` | Slow | Analytics, notification triggers |
+| `session_start`, `on_session_transition` | Slow | Observability, lifecycle notification |
+| `on_workflow_trigger` | Slow | Fanout to schedulers; no caller blocks on it |
+| `on_change_artifact_proposed` | Slow | Meta-approval routing is async by nature (SPEC-self-evolution §5.3) |
+| `subagent_delivery_target` | Fast | Transforms the result before it reaches the parent — must be synchronous |
+| `context_*` | Fast | Inline context assembly steps |
+
+Hooks that short-circuit (`HookOutcome::Reject` / `Redirect`) **must never** be placed on the slow lane — the short-circuit would have no caller to act on. The config loader (§4) validates this at manifest load time and refuses to wire a chain with short-circuiting potential onto a slow-lane point.
+
+> **Tradeoff:** the classification is static (per hook point) rather than dynamic (per chain instance). A dynamic policy would let operators put the same chain on either lane, but it would also let them misroute a security-critical hook onto the slow lane by mistake. Static wins by default; per-chain override is an open question.
+
+### 10.6 Backpressure & Overflow
+
+The slow-path in-memory queue is bounded. When full, SERA uses **drop-oldest with a counter bump**:
+
+1. The newest event is always accepted.
+2. The oldest queued event is dropped to make room.
+3. The counter `bus_slow_drops_total{reason="overflow"}` is incremented.
+4. A `tracing::warn!` is emitted at most once per 10 s (rate-limited to avoid log flooding).
+
+> **Tradeoff: drop-oldest vs block-producer.** Blocking the producer would give back-pressure and zero loss, but it would also let a slow audit sink stall `pre_tool` callers — defeating the whole point of splitting lanes. Drop-oldest preserves the fast-lane latency contract; operators accept bounded loss during saturation. This choice is also consistent with the hypothesis that overflow is a configuration bug (undersized queue, stuck consumer) that must be surfaced loudly by the counter.
+
+The durable backends (sled / Postgres outbox) have a second guarantee: once an event crosses the in-memory queue into the durable backend, it cannot be dropped except by explicit operator action. The drop window is strictly the in-memory hop.
+
+### 10.7 Persistence Guarantees
+
+| Lane | Guarantee | Loss scenarios |
+|---|---|---|
+| Fast | **Best-effort.** Events lost on process crash mid-chain are acceptable because they were pre-call filters — the caller will retry or fail-closed | Process crash, OOM |
+| Slow | **At-least-once** once the `PublishReceipt` is returned | None after receipt; drop-oldest can drop before receipt if the caller is racing saturation (rare — `publish_slow` awaits commit) |
+
+Slow-path consumers must be idempotent. Every `PluginEvent` carries an `event_id` (§2.5); consumers dedupe on `(event_id, consumer_id)` in their own storage.
+
+### 10.8 Metrics Contract
+
+All metrics are exposed via `sera-telemetry` (see [SPEC-telemetry](SPEC-telemetry.md) if present) with the standard `{instance, circle, chain}` label set.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `bus_fast_publish_total` | counter | Chains executed on the fast lane |
+| `bus_fast_publish_duration_seconds` | histogram | Fast-lane chain wall-clock duration |
+| `bus_fast_short_circuit_total{outcome}` | counter | Count of fast-lane `Reject` / `Redirect` outcomes |
+| `bus_slow_queue_depth` | gauge | Current depth of the in-memory slow queue |
+| `bus_slow_drops_total{reason}` | counter | Events dropped on slow-lane overflow |
+| `bus_slow_consumer_lag_seconds` | gauge | Wall-clock delay between `queued_at` and consumer start |
+| `bus_slow_replay_lag_seconds` | gauge | Only meaningful on durable backends — replay cursor lag after restart |
+
+The names and labels are fixed by this spec; emitters (§SPEC-telemetry) may add additional ones but may not rename these.
+
+### 10.9 Migration Path
+
+The current `ChainExecutor` becomes the fast-lane implementation verbatim: rename `ChainExecutor` → `FastLaneExecutor`, add a new `SlowLaneDispatcher` behind the same crate, and re-export both through a `HookBus` facade that owns one of each. `execute_at_point` keeps working as an alias for `publish_fast` during the deprecation window (one release). The registry (`HookRegistry`) is shared between lanes — a hook does not know which lane it runs on. Only the chain manifest decides.
+
+### 10.10 Open Questions
+
+1. **Per-chain lane override.** Should operators be allowed to explicitly opt a slow-lane-default hook point into the fast lane (for a deployment where they accept the latency to gain the short-circuit capability)? Current answer: no. Revisit if observability use cases demand it.
+2. **Cross-process slow-lane fanout.** If we deploy Postgres outbox, should we also expose the outbox to external subscribers (webhooks, gRPC stream)? That overlaps with SPEC-plugins; deferred.
+3. **Replay semantics on durable restart.** When a gateway starts up and reads the outbox, should it replay from last-committed cursor or skip all un-consumed events older than N seconds? Hard durability vs "fresh-start" operator preference.
+
+---
+
+## 11. WASM Fuel Metering and Budgets
+
+> **Status:** DRAFT (fills gap `sera-az1x`)
+> **Scope:** formalizes the fuel/OOM discipline that §5.2 gestures at but does not specify.
+
+Today `WasmHookAdapter::from_bytes` in `rust/crates/sera-hooks/src/wasm_adapter.rs` constructs a `wasmtime::Store` with neither `consume_fuel(true)` nor a `ResourceLimiter`. A malicious or buggy WASM hook can therefore loop forever or allocate unbounded memory — the timeout in §5.2 catches wall-clock forever-loops only at chain granularity, not per-instruction, and it does not bound memory at all. This section closes that gap.
+
+### 11.1 Fuel Model
+
+Wasmtime's fuel metering is the primary defense. The runtime enables it via `wasmtime::Config::consume_fuel(true)`; before each invocation the adapter calls `Store::set_fuel(initial_budget)`; each executed Wasm instruction decrements the store's fuel counter; when fuel reaches zero the engine traps with a fuel-exhaustion trap. The trap is caught by the adapter and converted to a typed error (§11.4).
+
+```rust
+// Conceptual — not implementation code.
+let mut config = wasmtime::Config::new();
+config.consume_fuel(true);
+// ... rest of engine config
+let engine = Engine::new(&config)?;
+
+let mut store = Store::new(&engine, host_state);
+store.set_fuel(budget.fuel_limit)?;           // per-invocation
+// invoke hook; trap on exhaustion
+```
+
+The fuel ↔ time mapping is **workload-dependent** and **not deterministic across hosts**. Wasmtime documents fuel as roughly proportional to Wasm instructions executed (one fuel unit per instruction on the default configuration), not CPU cycles. Budget values below are starter guesses based on rough benchmarks (~100 MHz sustained Wasm instruction throughput ≈ 10M fuel ≈ ~100 ms wall on a modern desktop). Operators must re-tune in their deployment.
+
+> **Tradeoff:** fuel is bytecode-only. A hook that spends most of its time in a host call (e.g. `wasi:http/outgoing-handler.handle`) does not consume fuel while blocked. That is acceptable because §5.5 already requires host calls to be wrapped in `tokio::time::timeout`. Fuel bounds *computation*; timeout bounds *blocking*. They are complementary, not substitutes.
+
+### 11.2 Budget Sources (Precedence Order)
+
+Effective budget for one hook invocation is resolved by the first source that sets a value:
+
+1. **Per-hook override in the hook instance config** (`HookInstance.config.budget`).
+2. **Per-chain budget in the `HookChain` manifest** (`HookChain.budget`).
+3. **Per-agent-tier default** from the tier policy (tier-1 / tier-2 / tier-3 YAML in `sandbox-boundaries/`).
+4. **Workspace-wide fallback** from the root `Instance` manifest (`spec.hooks.wasm.budget`).
+
+Concrete examples of each layer:
+
+```yaml
+# 1) Per-hook override — narrowest scope
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: "pre-tool-risk"
+spec:
+  hook_point: "pre_tool"
+  hooks:
+    - hook: "pii-deep-scan"
+      config:
+        budget:
+          fuel_limit: 50_000_000       # Expensive regex engine, explicit override
+          memory_limit_bytes: 134_217_728   # 128 MiB
+```
+
+```yaml
+# 2) Per-chain budget — default for every hook in this chain
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: "post-turn-compliance"
+spec:
+  hook_point: "post_turn"
+  budget:
+    fuel_limit: 20_000_000
+    memory_limit_bytes: 67_108_864   # 64 MiB
+  hooks:
+    - hook: "compliance-scanner"
+```
+
+```yaml
+# 3) Per-agent-tier default — sandbox-boundaries/tier-1.yaml
+apiVersion: sera.dev/v1
+kind: SandboxBoundary
+metadata:
+  name: "tier-1"
+spec:
+  hooks:
+    budget:
+      fuel_limit: 10_000_000
+      memory_limit_bytes: 33_554_432   # 32 MiB
+```
+
+```yaml
+# 4) Workspace-wide fallback
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: "my-sera"
+spec:
+  hooks:
+    wasm:
+      budget:
+        fuel_limit: 5_000_000           # Conservative floor
+        memory_limit_bytes: 16_777_216  # 16 MiB
+```
+
+> **Tradeoff:** a 4-level precedence ladder is more config surface than a flat per-hook value, but it is the minimum to let operators set a safe default *and* let individual hooks opt out when they genuinely need more. The alternative — requiring every hook to set its own budget — would push the decision onto hook authors, who do not know the deployment's total CPU budget.
+
+### 11.3 Starter Budget Values
+
+These are the values shipped in the default manifests. Each is expressed as `(fuel_limit, memory_limit_bytes)`:
+
+| Scope | Fuel limit | Memory limit | Approx. wall time |
+|---|---|---|---|
+| Tier-1 (untrusted third-party) | 10_000_000 | 32 MiB | ~10 ms |
+| Tier-2 (operator-authored) | 50_000_000 | 64 MiB | ~50 ms |
+| Tier-3 (privileged integrations) | 100_000_000 | 128 MiB | ~100 ms |
+| Workspace fallback | 5_000_000 | 16 MiB | ~5 ms |
+
+Wasmtime documents the ~1-fuel-per-instruction mapping; see the upstream reference for `wasmtime::Config::consume_fuel` and `Store::set_fuel`. The mapping is imprecise (§5.5 caveat: fuel counted per basic block, slight overshoot possible) but adequate for budget enforcement.
+
+### 11.4 Error Surface
+
+When fuel exhausts, the wasmtime trap is converted by the adapter into a new typed variant on `HookError`:
+
+```rust
+// Addition to `rust/crates/sera-hooks/src/error.rs`
+#[error("hook '{hook_name}' exhausted fuel: consumed {budget_consumed}/{budget_limit}")]
+FuelExhausted {
+    hook_name: String,
+    budget_consumed: u64,   // fuel actually burned (budget_limit - Store::get_fuel())
+    budget_limit: u64,
+},
+
+#[error("hook '{hook_name}' exceeded memory limit: {bytes_requested} > {bytes_limit}")]
+MemoryExhausted {
+    hook_name: String,
+    bytes_requested: usize,
+    bytes_limit: usize,
+},
+```
+
+Both variants are terminal for the chain regardless of `fail_open`. The rationale: a hook that runs out of fuel or memory is likely malicious or broken; silently skipping it on `fail_open: true` would let an attacker bypass security hooks by crafting inputs that exhaust fuel. Treat fuel/memory exhaustion as a security signal, not as a transient failure.
+
+> **Tradeoff:** making exhaustion terminal even under `fail_open: true` contradicts the general fail-open contract in §5.3. The exception is deliberate — fail-open exists for *transient* failures (network blips on host calls, temporary allocator pressure). Exhaustion is not transient, it is a budget violation by this specific hook invocation, and the correct response is to refuse the invocation.
+
+### 11.5 Async Yield (Phase 2 deferred)
+
+Wasmtime supports `Store::fuel_async_yield_interval(Some(N))` which turns fuel exhaustion into a cooperative yield instead of a trap — useful for running many WASM tasks on a single Tokio runtime without starving them of each other. **This is NOT used in Phase 1.** Phase 1 uses blocking exhaustion: fuel runs out → trap → `FuelExhausted`. Phase 2 may adopt yielding as part of a broader cooperative scheduling redesign when we have more than one hook concurrently per process, but it is not required for correctness and adds nontrivial complexity to the adapter (yields must be async-compatible with host call plumbing).
+
+> **Tradeoff:** blocking exhaustion is simpler to reason about — the budget strictly bounds each invocation. Yielding would let a hook survive past its initial budget by cooperating, which complicates both the budget math and the telemetry.
+
+### 11.6 OOM Metering (Memory Limit)
+
+Memory is bounded separately from fuel, via `wasmtime::ResourceLimiter` installed on the `Store`. The limiter rejects memory growth requests beyond `memory_limit_bytes` and the WASM allocator receives a growth failure, which typically traps (same conversion path as fuel — caught and mapped to `HookError::MemoryExhausted`).
+
+The budget struct pairs both limits so operators cannot accidentally set one without the other:
+
+```rust
+// In sera-types::hook or a new sera-hooks::budget module
+pub struct HookBudget {
+    pub fuel_limit: u64,
+    pub memory_limit_bytes: usize,
+}
+```
+
+> **Tradeoff:** a single `HookBudget` struct forces both fields to be set together. An alternative (separate optional `FuelBudget` and `MemoryBudget`) would let operators override only one, but experience in other Wasm hosts (Envoy, Fastly) shows that half-set budgets are a recurring foot-gun.
+
+### 11.7 Integration Point
+
+All fuel/memory bookkeeping lives in the WASM adapter, not in the registry or the executor. Specifically:
+
+- **File:** `rust/crates/sera-hooks/src/wasm_adapter.rs`.
+- **Callsite:** the adapter's `async fn execute(&self, ctx: &HookContext) -> Result<HookResult, HookError>` implementation of the `Hook` trait (currently line ~280).
+- **Sequence:** before calling `hook_execute` inside the store:
+  1. Compute `HookBudget` from the precedence ladder (§11.2) — this is passed through from the chain executor, not resolved inside the adapter.
+  2. `store.set_fuel(budget.fuel_limit)`.
+  3. Install the `ResourceLimiter` with `budget.memory_limit_bytes`.
+  4. Invoke.
+  5. On success: read residual fuel via `Store::get_fuel()`, compute consumed, emit `hook_fuel_consumed_total`.
+  6. On trap: inspect trap reason; if fuel exhaustion → `FuelExhausted`; if resource-limit growth failure → `MemoryExhausted`; else map to existing `HookError::ExecutionFailed`.
+
+Native (non-WASM) hooks do not participate in fuel metering — they are compiled into the gateway binary and trusted. See §1b for the native-first design decision.
+
+### 11.8 Telemetry
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `hook_fuel_consumed_total` | counter | `hook_name` | Total fuel units consumed across all invocations (quantile via PromQL `rate`) |
+| `hook_fuel_exhausted_total` | counter | `hook_name` | Count of `FuelExhausted` errors |
+| `hook_memory_peak_bytes` | histogram | `hook_name` | Peak memory per invocation (observed from the `ResourceLimiter`) |
+| `hook_memory_exhausted_total` | counter | `hook_name` | Count of `MemoryExhausted` errors |
+
+These complement the chain-level metrics in §10.8. Together they let operators distinguish "chain is slow" from "one WASM hook in the chain is spending its entire budget".
+
+### 11.9 Testing Strategy
+
+Three test categories are required:
+
+1. **Unit — exhaustion maps to typed error.** Load a hand-written WASM module that runs a tight loop; configure `fuel_limit: 1000`; assert `execute` returns `HookError::FuelExhausted { hook_name, budget_consumed, budget_limit }` with `budget_consumed == budget_limit`.
+2. **Unit — residual fuel reported correctly.** Load a hook that does a known small amount of work; after a successful invocation, assert `Store::get_fuel()` was read and the metric `hook_fuel_consumed_total` incremented by the expected delta.
+3. **Property — `fuel_consumed ≤ fuel_limit` always holds.** Using `proptest`, generate random (short) WASM programs and random budgets; assert the invariant across all invocations. This is the single most important property because it encodes the security contract: no hook runs past its budget.
+
+Memory exhaustion tests mirror fuel tests: a hook that deliberately `memory.grow`s past the limit must produce `MemoryExhausted`.
+
+> **Tradeoff:** the property test requires a tiny Wasm codegen helper, which adds test-time complexity. The alternative (exhaustive hand-written cases) would be less thorough. Adopt `proptest` + a minimal Wat template and keep the generator under 50 LOC.
+
+### 11.10 Open Questions
+
+1. **Global fuel budget per chain.** Should the chain as a whole have a fuel ceiling (sum of per-hook fuel), or is per-hook enforcement sufficient? A global ceiling would catch chains padded with many small-budget hooks that collectively DoS the caller. Revisit after we see chain authoring patterns.
+2. **Fuel budget refunding.** If a hook short-circuits with `Reject` after consuming a fraction of its budget, should the residual fuel be credited to a downstream operation? Probably no — fuel is per-invocation, not a shared pool. Call out explicitly so nobody tries it.
+3. **Cross-host fuel portability.** Wasmtime's fuel mapping is not deterministic across CPUs/architectures. Do we need to pin fuel budgets to a reference hardware class, or accept per-deployment tuning as the operator's job? Leaning toward the latter, but worth calling out.
+
+---
+
+## 12. Open Questions
 
 1. **Hook-to-hook state passing** — Can hooks pass state to subsequent hooks in the chain beyond modifying HookContext? Is the `metadata` HashMap sufficient?
 2. **Hook capabilities (WASM component model)** — Which host capabilities can be granted to hooks? Network? File system? Specific APIs?
@@ -530,7 +895,7 @@ Individual hook chains are defined as separate `HookChain` manifests (see §4 ab
 
 ---
 
-## 11. Success Criteria
+## 13. Success Criteria
 
 | Metric | Target |
 |---|---|

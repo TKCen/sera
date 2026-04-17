@@ -530,19 +530,10 @@ fn ready_queue_surfaces_elapsed_timer_and_hides_pending_timer() {
     assert!(!ready.iter().any(|t| t.id == future.id), "pending Timer should not be ready");
 }
 
-#[test]
-fn non_timer_await_still_blocks() {
-    // Regression: await variants without an integration (Mail, Change)
-    // must still block. Use AwaitType::Mail as the unit-variant sentinel
-    // (GhPr is now a struct variant with its own integration).
-    let now = base_instant();
-    let mut t = make_task(1, vec![]);
-    t.await_type = Some(AwaitType::Mail);
-
-    let tasks = vec![t.clone()];
-    let ready = ready_tasks(&tasks, now);
-    assert!(!ready.iter().any(|r| r.id == t.id));
-}
+// non_timer_await_still_blocks was removed: every AwaitType variant now has a
+// concrete shape and a dedicated integration test. See the AwaitType::Mail gate
+// section below for the equivalent "noop blocks mail" coverage, and the
+// Human / GhRun / GhPr / Change sections above for their respective gates.
 
 // ---------------------------------------------------------------------------
 // AwaitType::Human gate (HitlLookup)
@@ -736,10 +727,11 @@ fn human_gate_serde_roundtrip() {
 // ---------------------------------------------------------------------------
 
 use crate::ready::{
-    is_gh_pr_ready, is_gh_run_ready, ready_tasks_with_context, GhPrLookup, GhRunLookup,
-    NoopGhPrLookup, NoopGhRunLookup, ReadyContext,
+    is_gh_pr_ready, is_gh_run_ready, is_mail_ready, ready_tasks_with_context, ChangeLookup,
+    GhPrLookup, GhRunLookup, MailLookup, NoopChangeLookup, NoopGhPrLookup, NoopGhRunLookup,
+    ReadyContext,
 };
-use crate::task::{GhPrId, GhPrState, GhRunId, GhRunStatus};
+use crate::task::{GhPrId, GhPrState, GhRunId, GhRunStatus, MailEvent, MailThreadId};
 
 /// In-memory [`GhRunLookup`] used exclusively in tests to stand in for a
 /// real GitHub polling source. Keys on the inner string of [`GhRunId`] so
@@ -777,6 +769,8 @@ fn ctx_with_gh_run<'a>(lookup: &'a dyn GhRunLookup) -> ReadyContext<'a> {
         hitl: &NoopHitlLookup,
         gh_run: lookup,
         gh_pr: &NoopGhPrLookup,
+        change: &NoopChangeLookup,
+        mail: &crate::ready::NoopMailLookup,
     }
 }
 
@@ -895,8 +889,8 @@ fn gh_run_ready_but_blocks_open_still_blocks() {
 }
 
 #[test]
-fn default_noop_context_blocks_human_gh_run_and_gh_pr() {
-    // ReadyContext::default_noop() must leave all three integrated external-
+fn default_noop_context_blocks_all_five_gates() {
+    // ReadyContext::default_noop() must leave all five integrated external-
     // signal gates pending — it preserves the pre-integration behaviour when
     // callers have not yet wired into real lookup sources.
     let now = base_instant();
@@ -912,19 +906,41 @@ fn default_noop_context_blocks_human_gh_run_and_gh_pr() {
     let mut gh_pr_task = make_task(3, vec![]);
     gh_pr_task.await_type = Some(gh_pr_gate("whatever"));
 
-    let tasks = vec![human_task.clone(), gh_run_task.clone(), gh_pr_task.clone()];
+    let mut change_task = make_task(4, vec![]);
+    change_task.await_type = Some(AwaitType::Change {
+        artifact_id: sera_types::evolution::ChangeArtifactId { hash: [0u8; 32] },
+    });
+
+    let mut mail_task = make_task(5, vec![]);
+    mail_task.await_type = Some(AwaitType::Mail {
+        thread_id: MailThreadId::new("thread-whatever"),
+    });
+
+    let tasks = vec![
+        human_task.clone(),
+        gh_run_task.clone(),
+        gh_pr_task.clone(),
+        change_task.clone(),
+        mail_task.clone(),
+    ];
     let ctx = ReadyContext::default_noop();
     let ready = ready_tasks_with_context(&tasks, now, &ctx);
 
     assert!(!ready.iter().any(|r| r.id == human_task.id));
     assert!(!ready.iter().any(|r| r.id == gh_run_task.id));
     assert!(!ready.iter().any(|r| r.id == gh_pr_task.id));
+    assert!(!ready.iter().any(|r| r.id == change_task.id));
+    assert!(!ready.iter().any(|r| r.id == mail_task.id));
 
     // Noop lookups explicitly report "unknown".
     let noop_run = NoopGhRunLookup;
     assert!(noop_run.run_status(&GhRunId::new("x")).is_none());
     let noop_pr = NoopGhPrLookup;
     assert!(noop_pr.pr_state(&GhPrId::new("x")).is_none());
+    let noop_change = NoopChangeLookup;
+    assert!(noop_change.change_state(&sera_types::evolution::ChangeArtifactId { hash: [0u8; 32] }).is_none());
+    let noop_mail = crate::ready::NoopMailLookup;
+    assert!(noop_mail.thread_event(&MailThreadId::new("x")).is_none());
 }
 
 #[test]
@@ -1002,6 +1018,8 @@ fn ctx_with_gh_pr<'a>(lookup: &'a dyn GhPrLookup) -> ReadyContext<'a> {
         hitl: &NoopHitlLookup,
         gh_run: &NoopGhRunLookup,
         gh_pr: lookup,
+        change: &NoopChangeLookup,
+        mail: &crate::ready::NoopMailLookup,
     }
 }
 
@@ -1150,4 +1168,360 @@ fn ready_tasks_with_hitl_shim_still_works() {
     let tasks = vec![t.clone()];
     let ready = ready_tasks_with_hitl(&tasks, now, &lookup);
     assert!(ready.iter().any(|r| r.id == t.id));
+}
+
+// ---------------------------------------------------------------------------
+// AwaitType::Mail gate (MailLookup)
+// ---------------------------------------------------------------------------
+
+/// In-memory [`MailLookup`] used exclusively in tests to stand in for a
+/// real mail backend. Keys on the inner string of [`MailThreadId`] so tests
+/// can push opaque synthetic ids.
+#[derive(Debug, Default)]
+struct MapMailLookup {
+    by_id: HashMap<String, MailEvent>,
+}
+
+impl MapMailLookup {
+    fn new() -> Self {
+        Self { by_id: HashMap::new() }
+    }
+
+    fn insert(&mut self, id: impl Into<String>, event: MailEvent) {
+        self.by_id.insert(id.into(), event);
+    }
+}
+
+impl MailLookup for MapMailLookup {
+    fn thread_event(&self, id: &MailThreadId) -> Option<MailEvent> {
+        self.by_id.get(id.as_str()).cloned()
+    }
+}
+
+fn mail_gate(id: &str) -> AwaitType {
+    AwaitType::Mail { thread_id: MailThreadId::new(id) }
+}
+
+fn ctx_with_mail<'a>(lookup: &'a dyn MailLookup) -> ReadyContext<'a> {
+    ReadyContext {
+        hitl: &NoopHitlLookup,
+        gh_run: &NoopGhRunLookup,
+        gh_pr: &NoopGhPrLookup,
+        change: &NoopChangeLookup,
+        mail: lookup,
+    }
+}
+
+#[test]
+fn mail_missing_thread_is_not_ready() {
+    // Thread not present in the lookup → treat as not ready. Mirrors the
+    // other lookup "unknown" contracts.
+    let gate = mail_gate("thread-missing");
+    let lookup = MapMailLookup::new();
+    assert!(!is_mail_ready(&gate, &lookup));
+}
+
+#[test]
+fn mail_pending_is_not_ready() {
+    // Pending is a non-terminal state — still waiting for a reply.
+    let gate = mail_gate("thread-pending");
+    let mut lookup = MapMailLookup::new();
+    lookup.insert("thread-pending", MailEvent::Pending);
+    assert!(!is_mail_ready(&gate, &lookup));
+    assert!(!MailEvent::Pending.is_terminal());
+}
+
+#[test]
+fn mail_unknown_is_not_ready() {
+    // Unknown is a deliberately conservative non-terminal state — we never
+    // wake a task on an ambiguous signal.
+    let gate = mail_gate("thread-unknown");
+    let mut lookup = MapMailLookup::new();
+    lookup.insert("thread-unknown", MailEvent::Unknown);
+    assert!(!is_mail_ready(&gate, &lookup));
+    assert!(!MailEvent::Unknown.is_terminal());
+}
+
+#[test]
+fn mail_reply_received_is_ready() {
+    // ReplyReceived is terminal — the task must wake up to process the reply.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(mail_gate("thread-reply"));
+
+    let mut lookup = MapMailLookup::new();
+    lookup.insert("thread-reply", MailEvent::ReplyReceived);
+    let ctx = ctx_with_mail(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+    assert!(MailEvent::ReplyReceived.is_terminal());
+}
+
+#[test]
+fn mail_closed_is_ready() {
+    // Closed is terminal — the task must wake up so its handler can record
+    // the closure rather than waiting indefinitely.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(mail_gate("thread-closed"));
+
+    let mut lookup = MapMailLookup::new();
+    lookup.insert("thread-closed", MailEvent::Closed);
+    let ctx = ctx_with_mail(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+    assert!(MailEvent::Closed.is_terminal());
+}
+
+#[test]
+fn mail_ready_but_blocks_open_still_blocks() {
+    // Combined gate: thread has a reply, but the task still has an unsatisfied
+    // Blocks dep. The Blocks gate must win — a terminal mail event does not
+    // bypass other gates, matching the GhRun/GhPr/Human+Blocks tests.
+    let now = base_instant();
+
+    let blocker = make_task(1, vec![]);
+    let mut blocked = make_task(2, vec![]);
+    blocked.dependencies = vec![WorkflowTaskDependency {
+        from: blocker.id,
+        to: blocked.id,
+        kind: crate::task::DependencyType::Blocks,
+    }];
+    blocked.await_type = Some(mail_gate("thread-reply-but-blocked"));
+
+    let mut lookup = MapMailLookup::new();
+    lookup.insert("thread-reply-but-blocked", MailEvent::ReplyReceived);
+    let ctx = ctx_with_mail(&lookup);
+
+    let tasks = vec![blocker, blocked.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(!ready.iter().any(|t| t.id == blocked.id));
+}
+
+#[test]
+fn mail_gate_serde_roundtrip() {
+    let gate = AwaitType::Mail { thread_id: MailThreadId::new("thread-xyz") };
+    let json = serde_json::to_string(&gate).unwrap();
+    let back: AwaitType = serde_json::from_str(&json).unwrap();
+    assert_eq!(gate, back);
+    assert!(json.contains("mail"));
+    assert!(json.contains("thread_id"));
+    assert!(json.contains("thread-xyz"));
+}
+
+#[test]
+fn mail_event_serde_roundtrip() {
+    for event in [
+        MailEvent::Pending,
+        MailEvent::ReplyReceived,
+        MailEvent::Closed,
+        MailEvent::Unknown,
+    ] {
+        let json = serde_json::to_string(&event).unwrap();
+        let back: MailEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AwaitType::Change gate (ChangeLookup)
+// ---------------------------------------------------------------------------
+
+use crate::ready::is_change_ready;
+use crate::task::ChangeState;
+use sera_types::evolution::ChangeArtifactId;
+
+/// In-memory [`ChangeLookup`] used exclusively in tests.
+#[derive(Debug, Default)]
+struct MapChangeLookup {
+    by_id: std::collections::HashMap<[u8; 32], ChangeState>,
+}
+
+impl MapChangeLookup {
+    fn new() -> Self {
+        Self { by_id: std::collections::HashMap::new() }
+    }
+
+    fn insert(&mut self, hash: [u8; 32], state: ChangeState) {
+        self.by_id.insert(hash, state);
+    }
+}
+
+impl ChangeLookup for MapChangeLookup {
+    fn change_state(&self, id: &ChangeArtifactId) -> Option<ChangeState> {
+        self.by_id.get(&id.hash).cloned()
+    }
+}
+
+fn change_gate(hash: [u8; 32]) -> AwaitType {
+    AwaitType::Change { artifact_id: ChangeArtifactId { hash } }
+}
+
+fn ctx_with_change<'a>(lookup: &'a dyn ChangeLookup) -> ReadyContext<'a> {
+    ReadyContext {
+        hitl: &NoopHitlLookup,
+        gh_run: &NoopGhRunLookup,
+        gh_pr: &NoopGhPrLookup,
+        change: lookup,
+        mail: &crate::ready::NoopMailLookup,
+    }
+}
+
+#[test]
+fn change_missing_artifact_is_not_ready() {
+    let gate = change_gate([1u8; 32]);
+    let lookup = MapChangeLookup::new();
+    assert!(!is_change_ready(&gate, &lookup));
+}
+
+#[test]
+fn change_proposed_is_not_ready() {
+    let gate = change_gate([2u8; 32]);
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([2u8; 32], ChangeState::Proposed);
+    assert!(!is_change_ready(&gate, &lookup));
+    assert!(!ChangeState::Proposed.is_terminal());
+}
+
+#[test]
+fn change_under_review_is_not_ready() {
+    let gate = change_gate([3u8; 32]);
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([3u8; 32], ChangeState::UnderReview);
+    assert!(!is_change_ready(&gate, &lookup));
+    assert!(!ChangeState::UnderReview.is_terminal());
+}
+
+#[test]
+fn change_approved_is_not_ready() {
+    // Approved is deliberately non-terminal: the apply step has not run yet.
+    // Waking on Approved would race against the apply worker.
+    let gate = change_gate([4u8; 32]);
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([4u8; 32], ChangeState::Approved);
+    assert!(!is_change_ready(&gate, &lookup));
+    assert!(!ChangeState::Approved.is_terminal());
+}
+
+#[test]
+fn change_unknown_is_not_ready() {
+    // Unknown is conservative — never wake on ambiguous lookup.
+    let gate = change_gate([5u8; 32]);
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([5u8; 32], ChangeState::Unknown);
+    assert!(!is_change_ready(&gate, &lookup));
+    assert!(!ChangeState::Unknown.is_terminal());
+}
+
+#[test]
+fn change_applied_is_ready() {
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(change_gate([10u8; 32]));
+
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([10u8; 32], ChangeState::Applied);
+    let ctx = ctx_with_change(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+    assert!(ChangeState::Applied.is_terminal());
+}
+
+#[test]
+fn change_rejected_is_ready() {
+    // Rejection is terminal — the task must wake so its handler can record
+    // the denial. Gating only on Applied would strand rejected artifacts.
+    let now = base_instant();
+    let mut t = make_task(1, vec![]);
+    t.await_type = Some(change_gate([11u8; 32]));
+
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([11u8; 32], ChangeState::Rejected);
+    let ctx = ctx_with_change(&lookup);
+
+    let tasks = vec![t.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(ready.iter().any(|r| r.id == t.id));
+    assert!(ChangeState::Rejected.is_terminal());
+}
+
+#[test]
+fn change_failed_and_superseded_are_ready() {
+    // Both Failed and Superseded are terminal conclusions that must wake the
+    // task. Exercise them via the pure gate function.
+    for state in [ChangeState::Failed, ChangeState::Superseded] {
+        let hash = match state {
+            ChangeState::Failed => [12u8; 32],
+            ChangeState::Superseded => [13u8; 32],
+            _ => unreachable!(),
+        };
+        let gate = change_gate(hash);
+        let mut lookup = MapChangeLookup::new();
+        lookup.insert(hash, state.clone());
+        assert!(
+            is_change_ready(&gate, &lookup),
+            "{state:?} must be terminal and therefore ready"
+        );
+        assert!(state.is_terminal(), "{state:?} must report is_terminal()");
+    }
+}
+
+#[test]
+fn change_ready_but_blocks_open_still_blocks() {
+    // Combined gate: change is Applied, but the task still has an unsatisfied
+    // Blocks dep. The Blocks gate must win.
+    let now = base_instant();
+
+    let blocker = make_task(1, vec![]);
+    let mut blocked = make_task(2, vec![]);
+    blocked.dependencies = vec![WorkflowTaskDependency {
+        from: blocker.id,
+        to: blocked.id,
+        kind: crate::task::DependencyType::Blocks,
+    }];
+    blocked.await_type = Some(change_gate([20u8; 32]));
+
+    let mut lookup = MapChangeLookup::new();
+    lookup.insert([20u8; 32], ChangeState::Applied);
+    let ctx = ctx_with_change(&lookup);
+
+    let tasks = vec![blocker, blocked.clone()];
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(!ready.iter().any(|t| t.id == blocked.id));
+}
+
+#[test]
+fn change_gate_serde_roundtrip() {
+    let gate = AwaitType::Change {
+        artifact_id: ChangeArtifactId { hash: [0xab; 32] },
+    };
+    let json = serde_json::to_string(&gate).unwrap();
+    let back: AwaitType = serde_json::from_str(&json).unwrap();
+    assert_eq!(gate, back);
+    assert!(json.contains("change"));
+    assert!(json.contains("artifact_id"));
+}
+
+#[test]
+fn change_state_serde_roundtrip() {
+    for state in [
+        ChangeState::Proposed,
+        ChangeState::UnderReview,
+        ChangeState::Approved,
+        ChangeState::Applied,
+        ChangeState::Rejected,
+        ChangeState::Failed,
+        ChangeState::Superseded,
+        ChangeState::Unknown,
+    ] {
+        let json = serde_json::to_string(&state).unwrap();
+        let back: ChangeState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
+    }
 }

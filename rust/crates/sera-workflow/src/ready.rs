@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 
 use sera_hitl::{ApprovalId, TicketStatus};
+use sera_types::evolution::ChangeArtifactId;
 
 use crate::task::{
-    AwaitType, DependencyType, GhPrId, GhPrState, GhRunId, GhRunStatus, WorkflowTask,
-    WorkflowTaskId, WorkflowTaskStatus,
+    AwaitType, ChangeState, DependencyType, GhPrId, GhPrState, GhRunId, GhRunStatus, MailEvent,
+    MailThreadId, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
 };
 
 /// Pure-function gate for [`AwaitType::Timer`].
@@ -186,12 +187,119 @@ pub fn is_gh_pr_ready(await_type: &AwaitType, lookup: &dyn GhPrLookup) -> bool {
     }
 }
 
+/// Pull-based lookup into a SERA change-artifact state source for
+/// [`AwaitType::Change`].
+///
+/// Mirrors the shape of [`GhPrLookup`]: the ready-queue is synchronous, so the
+/// implementor must snapshot the current state of relevant change artifacts into
+/// an in-memory map (or equivalent) and answer synchronously. Any network I/O
+/// lives one layer up.
+///
+/// Returning `None` means the artifact is not known to the lookup (never seen,
+/// or evicted). The ready-queue treats unknown artifacts as not-ready — we
+/// never self-satisfy on unknown state, matching the other lookup contracts.
+pub trait ChangeLookup: Send + Sync {
+    /// Return the current state of the change artifact identified by `id`, or
+    /// `None` when the artifact is not known to the lookup source.
+    fn change_state(&self, id: &ChangeArtifactId) -> Option<ChangeState>;
+}
+
+/// A trivial [`ChangeLookup`] that reports every change artifact as unknown.
+///
+/// Useful as a default for callers that are not yet wired into a change-artifact
+/// polling source — preserves the pre-Change behaviour where Change-await tasks
+/// always block.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopChangeLookup;
+
+impl ChangeLookup for NoopChangeLookup {
+    fn change_state(&self, _id: &ChangeArtifactId) -> Option<ChangeState> {
+        None
+    }
+}
+
+/// Pure-function gate for [`AwaitType::Change`].
+///
+/// Returns `true` iff `await_type` is `Some(AwaitType::Change { artifact_id })`
+/// and the referenced artifact resolves to a terminal [`ChangeState`]
+/// (Applied / Rejected / Failed / Superseded) via `lookup`. An artifact
+/// reported as `None` (unknown) or in a non-terminal state (Proposed /
+/// UnderReview / Approved / Unknown) is treated as not ready.
+///
+/// Workflows deliberately proceed on Rejected / Failed / Superseded too — the
+/// task itself needs to wake up so its handler can branch on the outcome.
+/// Gating on Applied-only would strand artifacts that fail or get superseded.
+///
+/// Returns `false` for non-Change await types.
+pub fn is_change_ready(await_type: &AwaitType, lookup: &dyn ChangeLookup) -> bool {
+    match await_type {
+        AwaitType::Change { artifact_id } => lookup
+            .change_state(artifact_id)
+            .map(|s| s.is_terminal())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Pull-based lookup into a mail backend for [`AwaitType::Mail`].
+///
+/// Mirrors the shape of [`ChangeLookup`]: the ready-queue is synchronous, so
+/// the implementor must snapshot the current event state of relevant threads
+/// into an in-memory map (or equivalent) and answer synchronously. Any network
+/// I/O lives one layer up.
+///
+/// Returning `None` means the thread is not known to the lookup (never seen, or
+/// evicted). The ready-queue treats unknown threads as not-ready — we never
+/// self-satisfy on unknown state, matching the other lookup contracts.
+pub trait MailLookup: Send + Sync {
+    /// Return the current event state of the thread identified by `id`, or
+    /// `None` when the thread is not known to the lookup source.
+    fn thread_event(&self, id: &MailThreadId) -> Option<MailEvent>;
+}
+
+/// A trivial [`MailLookup`] that reports every thread as unknown.
+///
+/// Useful as a default for callers that are not yet wired into a mail backend —
+/// preserves the pre-Mail behaviour where Mail-await tasks always block.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopMailLookup;
+
+impl MailLookup for NoopMailLookup {
+    fn thread_event(&self, _id: &MailThreadId) -> Option<MailEvent> {
+        None
+    }
+}
+
+/// Pure-function gate for [`AwaitType::Mail`].
+///
+/// Returns `true` iff `await_type` is `Some(AwaitType::Mail { thread_id })`
+/// and the referenced thread resolves to a terminal [`MailEvent`]
+/// (ReplyReceived / Closed) via `lookup`. A thread reported as `None`
+/// (unknown) or in a non-terminal state (Pending / Unknown) is treated as not
+/// ready.
+///
+/// Workflows deliberately proceed on Closed too — the task itself needs to
+/// wake up so its handler can branch on the outcome (reply received vs closed).
+/// Gating on ReplyReceived-only would strand administratively-closed threads
+/// indefinitely.
+///
+/// Returns `false` for non-Mail await types.
+pub fn is_mail_ready(await_type: &AwaitType, lookup: &dyn MailLookup) -> bool {
+    match await_type {
+        AwaitType::Mail { thread_id } => lookup
+            .thread_event(thread_id)
+            .map(|e| e.is_terminal())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// Bundle of lookup dependencies consulted by [`ready_tasks_with_context`].
 ///
-/// Exists to keep gate signatures small as we add per-await-variant lookups
-/// (Mail / Change land in follow-up beads). Instead of threading a
-/// growing list of `&dyn XLookup` positional args through `ready_tasks_with_…`
-/// and `is_ready`, callers build one [`ReadyContext`] and pass it by reference.
+/// Exists to keep gate signatures small as new per-await-variant lookups are
+/// added. Instead of threading a growing list of `&dyn XLookup` positional args
+/// through `ready_tasks_with_…` and `is_ready`, callers build one
+/// [`ReadyContext`] and pass it by reference.
 ///
 /// Use [`ReadyContext::default_noop`] for callers that are not yet wired into
 /// any real lookup source — every gate reports unknown, matching the
@@ -203,8 +311,10 @@ pub struct ReadyContext<'a> {
     pub gh_run: &'a dyn GhRunLookup,
     /// Lookup consulted for [`AwaitType::GhPr`] gates.
     pub gh_pr: &'a dyn GhPrLookup,
-    // Future: pub mail:  &'a dyn MailLookup,
-    // Future: pub change: &'a dyn ChangeLookup,
+    /// Lookup consulted for [`AwaitType::Change`] gates.
+    pub change: &'a dyn ChangeLookup,
+    /// Lookup consulted for [`AwaitType::Mail`] gates.
+    pub mail: &'a dyn MailLookup,
 }
 
 impl<'a> ReadyContext<'a> {
@@ -219,6 +329,8 @@ impl<'a> ReadyContext<'a> {
             hitl: &NoopHitlLookup,
             gh_run: &NoopGhRunLookup,
             gh_pr: &NoopGhPrLookup,
+            change: &NoopChangeLookup,
+            mail: &NoopMailLookup,
         }
     }
 }
@@ -259,6 +371,8 @@ pub fn ready_tasks_with_hitl<'a>(
         hitl,
         gh_run: &NoopGhRunLookup,
         gh_pr: &NoopGhPrLookup,
+        change: &NoopChangeLookup,
+        mail: &NoopMailLookup,
     };
     ready_tasks_with_context(tasks, now, &ctx)
 }
@@ -279,10 +393,13 @@ pub fn ready_tasks_with_hitl<'a>(
 ///      - `Human { approval_id }` and `ctx.hitl.ticket_status(approval_id)`
 ///        reports a terminal status;
 ///      - `GhRun { run_id, .. }` and `ctx.gh_run.run_status(run_id)` reports a
-///        terminal status.
-///
-///    All other `AwaitType` variants (GhPr/Mail/Change) still block — their
-///    integrations are tracked in follow-up beads.
+///        terminal status;
+///      - `GhPr { pr_id, .. }` and `ctx.gh_pr.pr_state(pr_id)` reports a
+///        terminal status;
+///      - `Change { artifact_id }` and `ctx.change.change_state(artifact_id)`
+///        reports a terminal status;
+///      - `Mail { thread_id }` and `ctx.mail.thread_event(thread_id)` reports a
+///        terminal event (ReplyReceived / Closed).
 /// 5. Not `(ephemeral && status == Closed)` — ephemeral tasks are never
 ///    surfaced once closed (redundant given gate 1, but kept for clarity).
 ///
@@ -382,8 +499,18 @@ fn is_ready(
                 }
                 // GitHub PR reached a terminal state — gate passes.
             }
-            // Other await variants remain pending until their integrations land.
-            _ => return false,
+            AwaitType::Change { .. } => {
+                if !is_change_ready(await_type, ctx.change) {
+                    return false;
+                }
+                // Change artifact reached a terminal state — gate passes.
+            }
+            AwaitType::Mail { .. } => {
+                if !is_mail_ready(await_type, ctx.mail) {
+                    return false;
+                }
+                // Thread received a reply or was closed — gate passes.
+            }
         }
     }
 

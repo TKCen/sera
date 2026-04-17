@@ -189,6 +189,81 @@ impl fmt::Display for GhPrId {
     }
 }
 
+/// Workflow-local identifier for an email thread.
+///
+/// Intentionally a newtype in `sera-workflow` (not `sera-types`) — the id is a
+/// scheduler-side handle used only for [`AwaitType::Mail`] gate lookups.
+/// Thread ids are opaque strings; implementations may map to RFC 2822
+/// Message-IDs, provider-specific thread handles, or synthetic test fixtures.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct MailThreadId(pub String);
+
+impl MailThreadId {
+    /// Construct a [`MailThreadId`] from anything that can be turned into a `String`.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Borrow the underlying id as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for MailThreadId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Observable event state for an email thread gate ([`AwaitType::Mail`]).
+///
+/// The scheduler only needs a binary signal (terminal vs not). Non-terminal
+/// states ([`MailEvent::Pending`]) and the conservative catch-all
+/// [`MailEvent::Unknown`] map to not-ready; every terminal state maps to ready.
+///
+/// Design A (MVS): gate resolves when the identified thread has received at
+/// least one reply since task creation, or when the thread is administratively
+/// closed. Pattern-based inbox-wide matching is deferred to a post-MVS
+/// refinement.
+///
+// TODO(post-MVS): consider AwaitType::Mail { pattern: MailPattern } for richer
+// inbox-wide event matching (Design B). File a follow-up bead before removing
+// this comment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailEvent {
+    /// Thread exists but no reply has arrived yet (non-terminal).
+    Pending,
+    /// At least one reply has been received on the thread (terminal).
+    ReplyReceived,
+    /// Thread was administratively closed (terminal — no further replies
+    /// expected; the task must wake up so its handler can record the closure).
+    Closed,
+    /// Event state cannot be determined from the mail backend — treated as
+    /// not-ready so the scheduler falls back to conservative behaviour.
+    Unknown,
+}
+
+impl MailEvent {
+    /// Returns `true` iff this event represents a terminal state.
+    ///
+    /// [`MailEvent::ReplyReceived`] is terminal because a reply is the primary
+    /// expected resolution of a mail gate — the task should wake up to process
+    /// the incoming message.
+    ///
+    /// [`MailEvent::Closed`] is terminal because waiting indefinitely on a
+    /// closed thread would strand the task; the handler can branch on
+    /// [`MailEvent::Closed`] vs [`MailEvent::ReplyReceived`] after waking.
+    ///
+    /// [`MailEvent::Pending`] and [`MailEvent::Unknown`] are non-terminal:
+    /// `Pending` means we are still waiting, and `Unknown` is deliberately
+    /// conservative — we never self-satisfy on an ambiguous signal.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::ReplyReceived | Self::Closed)
+    }
+}
+
 /// Terminal / non-terminal state of a GitHub pull request.
 ///
 /// The scheduler only needs a binary signal (terminal vs not). Non-terminal
@@ -268,8 +343,73 @@ pub enum AwaitType {
     Human {
         approval_id: ApprovalId,
     },
-    Mail,
-    Change,
+    /// Inbound-email gate — task is not ready until the thread referenced by
+    /// `thread_id` receives a reply or is administratively closed. The event
+    /// is surfaced via a [`MailLookup`](crate::ready::MailLookup) during
+    /// scheduling.
+    ///
+    /// Pull-based integration: the ready-queue polls `thread_event` and
+    /// resolves when [`MailEvent::is_terminal`] returns `true`.
+    /// Workflows proceed on both [`MailEvent::ReplyReceived`] and
+    /// [`MailEvent::Closed`] — the downstream handler branches on the outcome.
+    Mail {
+        thread_id: MailThreadId,
+    },
+    /// Change-artifact gate — task is not ready until the change artifact
+    /// referenced by `artifact_id` reaches a terminal [`ChangeState`]
+    /// (Applied / Rejected / Failed / Superseded) via a
+    /// [`ChangeLookup`](crate::ready::ChangeLookup) during scheduling.
+    ///
+    /// The id is hash-derived and self-identifying — no `repo` field is needed.
+    Change {
+        artifact_id: ChangeArtifactId,
+    },
+}
+
+/// Terminal / non-terminal state of a SERA change artifact.
+///
+/// Mirrors the `ChangeArtifactStatus` surface from sera-meta, collapsed into a
+/// single enum the ready-queue cares about. Non-terminal states
+/// ([`ChangeState::Proposed`], [`ChangeState::UnderReview`],
+/// [`ChangeState::Approved`]) and the conservative catch-all
+/// [`ChangeState::Unknown`] map to not-ready; every terminal state maps to ready.
+///
+/// [`ChangeState::Approved`] is deliberately **non-terminal**: an approved
+/// change may still be queued for apply — the task must not wake until the
+/// apply itself completes (or fails).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeState {
+    /// Change has been proposed but not yet reviewed (non-terminal).
+    Proposed,
+    /// Change is actively under review (non-terminal).
+    UnderReview,
+    /// Change has been approved but not yet applied (non-terminal — apply still
+    /// pending).
+    Approved,
+    /// Change was successfully applied (terminal).
+    Applied,
+    /// Change was rejected during review (terminal).
+    Rejected,
+    /// Apply attempt failed (terminal).
+    Failed,
+    /// Change was superseded by a newer artifact (terminal).
+    Superseded,
+    /// State cannot be determined — treated as not-ready (conservative).
+    Unknown,
+}
+
+impl ChangeState {
+    /// Returns `true` iff the change has reached a terminal state the scheduler
+    /// should treat as "resolved". The workflow proceeds on any terminal
+    /// conclusion — the downstream handler branches on the outcome itself.
+    ///
+    /// `Approved` is deliberately non-terminal: the apply step has not run yet.
+    /// `Unknown` is deliberately non-terminal: conservative — don't wake on
+    /// ambiguous lookup.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Applied | Self::Rejected | Self::Failed | Self::Superseded)
+    }
 }
 
 impl AwaitType {

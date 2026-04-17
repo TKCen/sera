@@ -48,14 +48,16 @@ pub use types::{
 pub use claim::{claim_task, confirm_claim, ClaimError, ClaimToken, StaleClaimReaper};
 #[allow(deprecated)]
 pub use ready::{
-    dependency_closure, is_gh_pr_ready, is_gh_run_ready, is_human_ready, is_timer_ready,
-    ready_tasks, ready_tasks_with_context, ready_tasks_with_hitl, topological_sort,
-    CyclicDependency, GhPrLookup, GhRunLookup, HitlLookup, NoopGhPrLookup, NoopGhRunLookup,
-    NoopHitlLookup, ReadyContext,
+    dependency_closure, is_change_ready, is_gh_pr_ready, is_gh_run_ready, is_human_ready,
+    is_mail_ready, is_timer_ready, ready_tasks, ready_tasks_with_context, ready_tasks_with_hitl,
+    topological_sort, ChangeLookup, CyclicDependency, GhPrLookup, GhRunLookup, HitlLookup,
+    MailLookup, NoopChangeLookup, NoopGhPrLookup, NoopGhRunLookup, NoopHitlLookup, NoopMailLookup,
+    ReadyContext,
 };
 pub use task::{
-    AwaitType, DependencyType, GhPrId, GhPrState, GhRunId, GhRunStatus, WorkflowSentinel,
-    WorkflowTask, WorkflowTaskDependency, WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,
+    AwaitType, ChangeState, DependencyType, GhPrId, GhPrState, GhRunId, GhRunStatus, MailEvent,
+    MailThreadId, WorkflowSentinel, WorkflowTask, WorkflowTaskDependency, WorkflowTaskId,
+    WorkflowTaskStatus, WorkflowTaskType,
 };
 pub use termination::{
     check_termination, TerminationConfig, TerminationReason, TerminationState,

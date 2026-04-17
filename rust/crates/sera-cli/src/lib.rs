@@ -14,5 +14,8 @@ pub fn build_registry() -> CommandRegistry {
     registry.register(commands::LoginCommand::new());
     registry.register(commands::WhoamiCommand::new());
     registry.register(commands::LogoutCommand::new());
+    registry.register(commands::AgentListCommand::new());
+    registry.register(commands::AgentShowCommand::new());
+    registry.register(commands::AgentRunCommand::new());
     registry
 }

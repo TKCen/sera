@@ -144,6 +144,9 @@ rpassword = "7"
 # Platform-appropriate directories (data_root default resolution)
 dirs = "5"
 
+# Tabular CLI output
+comfy-table = "7"
+
 # Async trait support
 async-trait = "0.1"
 

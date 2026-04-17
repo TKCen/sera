@@ -45,6 +45,48 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Manage and run agent instances
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentCommand {
+    /// List all agent instances (GET /api/agents)
+    List {
+        /// Gateway base URL (overrides config endpoint)
+        #[arg(long, short = 'e', value_name = "URL")]
+        endpoint: Option<String>,
+        /// Output raw JSON array
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show full detail for an agent instance (GET /api/agents/:id)
+    Show {
+        /// Agent instance ID
+        id: String,
+        /// Gateway base URL (overrides config endpoint)
+        #[arg(long, short = 'e', value_name = "URL")]
+        endpoint: Option<String>,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Post a prompt to an agent and print the reply (POST /api/chat)
+    Run {
+        /// Agent instance ID or name
+        id: String,
+        /// Prompt to send to the agent
+        prompt: String,
+        /// Gateway base URL (overrides config endpoint)
+        #[arg(long, short = 'e', value_name = "URL")]
+        endpoint: Option<String>,
+        /// Output raw JSON response for debugging
+        #[arg(long)]
+        raw: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -169,6 +211,68 @@ async fn main() -> Result<()> {
                     .context("auth:logout command not registered")?;
                 let result = cmd
                     .execute(CommandArgs::new(), &ctx)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if result.exit_code != 0 {
+                    std::process::exit(result.exit_code);
+                }
+            }
+        },
+
+        Commands::Agent { command } => match command {
+            AgentCommand::List { endpoint, json } => {
+                let mut args = CommandArgs::new();
+                let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
+                args.insert("endpoint", resolved);
+                if json {
+                    args.insert("json", "true".to_string());
+                }
+                let cmd = registry
+                    .get("agent:list")
+                    .context("agent:list command not registered")?;
+                let result = cmd
+                    .execute(args, &ctx)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if result.exit_code != 0 {
+                    std::process::exit(result.exit_code);
+                }
+            }
+
+            AgentCommand::Show { id, endpoint, json } => {
+                let mut args = CommandArgs::new();
+                let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
+                args.insert("endpoint", resolved);
+                args.insert("id", id);
+                if json {
+                    args.insert("json", "true".to_string());
+                }
+                let cmd = registry
+                    .get("agent:show")
+                    .context("agent:show command not registered")?;
+                let result = cmd
+                    .execute(args, &ctx)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if result.exit_code != 0 {
+                    std::process::exit(result.exit_code);
+                }
+            }
+
+            AgentCommand::Run { id, prompt, endpoint, raw } => {
+                let mut args = CommandArgs::new();
+                let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
+                args.insert("endpoint", resolved);
+                args.insert("id", id);
+                args.insert("prompt", prompt);
+                if raw {
+                    args.insert("raw", "true".to_string());
+                }
+                let cmd = registry
+                    .get("agent:run")
+                    .context("agent:run command not registered")?;
+                let result = cmd
+                    .execute(args, &ctx)
                     .await
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 if result.exit_code != 0 {

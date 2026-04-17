@@ -23,6 +23,7 @@ dirs = { workspace = true }
 async-trait = { workspace = true }
 keyring = { workspace = true }
 rpassword = { workspace = true }
+comfy-table = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

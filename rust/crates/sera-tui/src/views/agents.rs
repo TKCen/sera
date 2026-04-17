@@ -103,3 +103,72 @@ impl View for AgentsView {
         frame.render_widget(table, area);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_agent(id: &str, name: &str) -> Agent {
+        Agent {
+            id: id.to_string(),
+            name: name.to_string(),
+            display_name: None,
+            template_ref: "tpl".to_string(),
+            status: "running".to_string(),
+            created_at: "2026-04-10T00:00:00Z".to_string(),
+            updated_at: "2026-04-10T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn new_view_has_no_selection_when_empty() {
+        let view = AgentsView::new();
+        assert!(view.selected_id().is_none());
+    }
+
+    #[test]
+    fn set_agents_resets_selection_to_zero() {
+        let mut view = AgentsView::new();
+        view.set_agents(vec![make_agent("a", "Alpha"), make_agent("b", "Beta")]);
+        view.next();
+        assert_eq!(view.selected_id(), Some(&"b".to_string()));
+
+        // Resetting agents moves back to index 0
+        view.set_agents(vec![make_agent("x", "X"), make_agent("y", "Y")]);
+        assert_eq!(view.selected_id(), Some(&"x".to_string()));
+    }
+
+    #[test]
+    fn navigation_clamps_at_boundaries() {
+        let mut view = AgentsView::new();
+        view.set_agents(vec![
+            make_agent("a", "Alpha"),
+            make_agent("b", "Beta"),
+            make_agent("c", "Gamma"),
+        ]);
+
+        // previous at top does nothing
+        view.previous();
+        assert_eq!(view.selected_id(), Some(&"a".to_string()));
+
+        // advance to last
+        view.next();
+        view.next();
+        assert_eq!(view.selected_id(), Some(&"c".to_string()));
+
+        // next at last does nothing
+        view.next();
+        assert_eq!(view.selected_id(), Some(&"c".to_string()));
+    }
+
+    #[test]
+    fn selected_id_tracks_current_position() {
+        let mut view = AgentsView::new();
+        view.set_agents(vec![make_agent("a", "A"), make_agent("b", "B")]);
+        assert_eq!(view.selected_id(), Some(&"a".to_string()));
+        view.next();
+        assert_eq!(view.selected_id(), Some(&"b".to_string()));
+        view.previous();
+        assert_eq!(view.selected_id(), Some(&"a".to_string()));
+    }
+}

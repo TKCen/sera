@@ -358,3 +358,200 @@ impl View for KnowledgeView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── KnowledgeTier ────────────────────────────────────────────────────────
+
+    #[test]
+    fn tier_from_str_long_term_variants() {
+        assert_eq!(KnowledgeTier::from_str("long_term"), KnowledgeTier::LongTerm);
+        assert_eq!(KnowledgeTier::from_str("long"), KnowledgeTier::LongTerm);
+    }
+
+    #[test]
+    fn tier_from_str_shared() {
+        assert_eq!(KnowledgeTier::from_str("shared"), KnowledgeTier::Shared);
+    }
+
+    #[test]
+    fn tier_from_str_unknown_defaults_to_short_term() {
+        assert_eq!(KnowledgeTier::from_str(""), KnowledgeTier::ShortTerm);
+        assert_eq!(KnowledgeTier::from_str("short_term"), KnowledgeTier::ShortTerm);
+        assert_eq!(KnowledgeTier::from_str("bogus"), KnowledgeTier::ShortTerm);
+    }
+
+    #[test]
+    fn tier_as_str_round_trips() {
+        assert_eq!(KnowledgeTier::ShortTerm.as_str(), "Short");
+        assert_eq!(KnowledgeTier::LongTerm.as_str(), "Long");
+        assert_eq!(KnowledgeTier::Shared.as_str(), "Shared");
+    }
+
+    #[test]
+    fn tier_color_is_distinct() {
+        // Each tier maps to a different color — guards against accidental merges.
+        let colors = [
+            KnowledgeTier::ShortTerm.color(),
+            KnowledgeTier::LongTerm.color(),
+            KnowledgeTier::Shared.color(),
+        ];
+        assert!(colors[0] != colors[1]);
+        assert!(colors[1] != colors[2]);
+        assert!(colors[0] != colors[2]);
+    }
+
+    // ── KnowledgeSortField ───────────────────────────────────────────────────
+
+    #[test]
+    fn sort_field_cycle_wraps_around() {
+        let start = KnowledgeSortField::ByRecency;
+        let after_one = start.next();
+        assert_eq!(after_one, KnowledgeSortField::ByScore);
+        let after_two = after_one.next();
+        assert_eq!(after_two, KnowledgeSortField::ByRecallCount);
+        let after_three = after_two.next();
+        assert_eq!(after_three, KnowledgeSortField::BySize);
+        let wrapped = after_three.next();
+        assert_eq!(wrapped, KnowledgeSortField::ByRecency);
+    }
+
+    // ── KnowledgeEntry::from_json ────────────────────────────────────────────
+
+    #[test]
+    fn from_json_parses_all_fields() {
+        let v = json!({
+            "id": "k1",
+            "title": "Arch notes",
+            "tier": "long_term",
+            "tags": ["rust", "design"],
+            "size_bytes": 1024,
+            "created_at": "2026-04-10T10:00:00Z",
+            "updated_at": "2026-04-15T14:30:00Z",
+            "recall_count": 7,
+            "score": 0.95,
+        });
+        let entry = KnowledgeEntry::from_json(&v);
+        assert_eq!(entry.id, "k1");
+        assert_eq!(entry.title, "Arch notes");
+        assert_eq!(entry.tier, KnowledgeTier::LongTerm);
+        assert_eq!(entry.tags, vec!["rust", "design"]);
+        assert_eq!(entry.size_bytes, 1024);
+        assert_eq!(entry.recall_count, 7);
+        assert!((entry.score - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn from_json_missing_fields_use_defaults() {
+        let entry = KnowledgeEntry::from_json(&json!({}));
+        assert_eq!(entry.id, "");
+        assert_eq!(entry.title, "(no title)");
+        assert_eq!(entry.tier, KnowledgeTier::ShortTerm);
+        assert!(entry.tags.is_empty());
+        assert_eq!(entry.size_bytes, 0);
+        assert_eq!(entry.recall_count, 0);
+        assert_eq!(entry.score, 0.0);
+    }
+
+    // ── KnowledgeView navigation & state ────────────────────────────────────
+
+    fn make_entries(n: usize) -> Vec<KnowledgeEntry> {
+        (0..n)
+            .map(|i| KnowledgeEntry::from_json(&json!({
+                "id": format!("k{i}"),
+                "title": format!("Entry {i}"),
+                "tier": "long_term",
+                "tags": [],
+                "size_bytes": (i as u64) * 100,
+                "created_at": "2026-04-10T00:00:00Z",
+                "updated_at": format!("2026-04-{:02}T00:00:00Z", 10 + i),
+                "recall_count": i as u64,
+                "score": i as f64 * 0.1,
+            })))
+            .collect()
+    }
+
+    #[test]
+    fn navigation_clamps_at_boundaries() {
+        let mut view = KnowledgeView::new();
+        view.set_entries(make_entries(3));
+
+        // After set_entries, ByRecency sort puts the newest updated_at first.
+        // make_entries produces updated_at "2026-04-12", "2026-04-11", "2026-04-10"
+        // so sorted order is k2, k1, k0.
+        let first_id = view.filtered_entries()[0].id.clone();
+        let last_id  = view.filtered_entries()[2].id.clone();
+
+        // previous at zero does nothing
+        view.previous();
+        assert_eq!(view.selected_entry().map(|e| e.id.clone()), Some(first_id.clone()));
+
+        // move to last
+        view.next();
+        view.next();
+        assert_eq!(view.selected_entry().map(|e| e.id.clone()), Some(last_id.clone()));
+
+        // next at last does nothing
+        view.next();
+        assert_eq!(view.selected_entry().map(|e| e.id.clone()), Some(last_id));
+    }
+
+    #[test]
+    fn filter_text_narrows_results() {
+        let mut view = KnowledgeView::new();
+        view.set_entries(make_entries(3));
+
+        assert!(!view.has_filter());
+        assert_eq!(view.filtered_entries().len(), 3);
+
+        view.set_filter("Entry 1".to_string());
+        assert!(view.has_filter());
+        assert_eq!(view.filtered_entries().len(), 1);
+        assert_eq!(view.filtered_entries()[0].id, "k1");
+
+        view.set_filter(String::new());
+        assert!(!view.has_filter());
+        assert_eq!(view.filtered_entries().len(), 3);
+    }
+
+    #[test]
+    fn cycle_sort_changes_field_and_reorders() {
+        let mut view = KnowledgeView::new();
+        // entries with varying recall_count — set_entries sorts by ByRecency by default
+        let mut entries = make_entries(3);
+        // manually set differing scores so sort order is predictable
+        entries[0].score = 0.9;
+        entries[1].score = 0.5;
+        entries[2].score = 0.1;
+        view.set_entries(entries);
+
+        // initial sort: ByRecency — latest updated_at first → k2 > k1 > k0
+        assert_eq!(view.filtered_entries()[0].id, "k2");
+
+        view.cycle_sort(); // → ByScore
+        // ByScore descending: k0(0.9) > k1(0.5) > k2(0.1)
+        assert_eq!(view.filtered_entries()[0].id, "k0");
+    }
+
+    #[test]
+    fn toggle_detail_flips_state() {
+        let mut view = KnowledgeView::new();
+        view.set_entries(make_entries(1));
+
+        assert!(!view.detail_mode);
+        view.toggle_detail();
+        assert!(view.detail_mode);
+        view.toggle_detail();
+        assert!(!view.detail_mode);
+    }
+
+    #[test]
+    fn selected_entry_returns_none_on_empty() {
+        let view = KnowledgeView::new();
+        assert!(view.selected_entry().is_none());
+    }
+}
+

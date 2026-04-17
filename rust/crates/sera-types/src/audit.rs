@@ -110,8 +110,8 @@ mod tests {
 
     #[test]
     fn actor_type_all_variants() {
-        let types = vec![ActorType::Operator, ActorType::Agent, ActorType::System];
-        let expected_names = vec!["operator", "agent", "system"];
+        let types = [ActorType::Operator, ActorType::Agent, ActorType::System];
+        let expected_names = ["operator", "agent", "system"];
 
         for (actor_type, expected) in types.iter().zip(expected_names.iter()) {
             let json = serde_json::to_string(actor_type).unwrap();

@@ -179,7 +179,7 @@ mod iso8601_timestamp_tests {
             // Verify format: contains T separator and timezone indicator
             assert!(ts.contains("T"), "Timestamp {} missing 'T' separator", ts);
             assert!(
-                ts.ends_with("Z") || ts.contains("+") || (ts.rfind("-").map_or(false, |i| i > 10)),
+                ts.ends_with("Z") || ts.contains("+") || (ts.rfind("-").is_some_and(|i| i > 10)),
                 "Timestamp {} missing timezone",
                 ts
             );
@@ -201,7 +201,7 @@ mod iso8601_timestamp_tests {
             assert!(!ts.is_empty());
             assert!(ts.contains("T"), "Missing 'T' separator in {}", ts);
             assert!(
-                ts.contains("Z") || ts.contains("+") || (ts.rfind("-").map_or(false, |i| i > 10)),
+                ts.contains("Z") || ts.contains("+") || (ts.rfind("-").is_some_and(|i| i > 10)),
                 "Missing timezone in {}",
                 ts
             );

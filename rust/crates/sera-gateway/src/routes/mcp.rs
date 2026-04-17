@@ -321,7 +321,7 @@ mod tests {
         assert!(response.success);
         assert!(response.error.is_none());
         assert!(response.output.is_some());
-        assert!(response.duration_ms >= 0);
+        let _ = response.duration_ms; // u64/u32 is always >= 0; drop the tautological assert
     }
 
     #[tokio::test]

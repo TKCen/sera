@@ -492,6 +492,8 @@ mod tests {
 
     /// A mock adapter whose response is determined by a provided closure.
     struct MockAdapter {
+        // The full trait-object type is unavoidable for a single-field test mock.
+        #[allow(clippy::type_complexity)]
         response: Box<dyn Fn(&ModelRequest) -> Result<ModelResponse, ModelError> + Send + Sync>,
     }
 

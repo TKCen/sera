@@ -3,15 +3,30 @@
 //! SPEC-identity-authz §5: Any acting entity is authorized (or denied) via this
 //! trait. The built-in implementation is RBAC; enterprise deployments can swap
 //! in an AuthZen PDP by providing a different `AuthorizationProvider`.
+//!
+//! # Tier behaviour
+//!
+//! | Tier | Provider to use | Policy |
+//! |------|-----------------|--------|
+//! | 1 (local/autonomous) | `DefaultAuthzProvider` | Allow-all (except change actions) |
+//! | 2+ (team/enterprise) | `RbacAuthzProvider` | Casbin RBAC from policy files |
+//!
+//! Use [`RbacAuthzProvider::from_strings`] for in-memory policy (tests/embedded)
+//! or [`RbacAuthzProvider::from_files`] to load `rbac.conf` + `rbac.csv` from
+//! `capability-policies/` at startup.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use sera_types::evolution::{BlastRadius, ChangeArtifactId};
 use sera_types::principal::PrincipalRef;
+
+use crate::casbin_adapter::CasbinAuthzAdapter;
 
 // ---------------------------------------------------------------------------
 // Action
@@ -230,6 +245,139 @@ impl AuthorizationProvider for DefaultAuthzProvider {
 }
 
 // ---------------------------------------------------------------------------
+// RbacAuthzProvider — Tier 2+ casbin-backed RBAC
+// ---------------------------------------------------------------------------
+
+/// Maps a SERA [`Resource`] to a casbin object string.
+///
+/// Format: `<kind>:<id>` (e.g. `tool:bash`, `agent:my-agent`, `system`).
+fn resource_to_obj(resource: &Resource) -> String {
+    match resource {
+        Resource::Session(id) => format!("session:{id}"),
+        Resource::Agent(id) => format!("agent:{id}"),
+        Resource::Tool(id) => format!("tool:{id}"),
+        Resource::Memory(id) => format!("memory:{id}"),
+        Resource::Config(id) => format!("config:{id}"),
+        Resource::Workflow(id) => format!("workflow:{id}"),
+        Resource::System => "system".to_string(),
+        Resource::ChangeArtifact(id) => format!("change_artifact:{}", hex::encode(id.hash)),
+    }
+}
+
+/// Maps a SERA [`Action`] to a casbin action string.
+fn action_to_act(action: &Action) -> String {
+    match action {
+        Action::Read => "read".to_string(),
+        Action::Write => "write".to_string(),
+        Action::Execute => "execute".to_string(),
+        Action::Admin => "admin".to_string(),
+        Action::ToolCall(name) => format!("tool_call:{name}"),
+        Action::SessionOp(op) => format!("session_op:{op}"),
+        Action::MemoryAccess(scope) => format!("memory_access:{scope}"),
+        Action::ConfigChange(path) => format!("config_change:{path}"),
+        Action::ProposeChange(radius) => format!("propose_change:{radius:?}"),
+        Action::ApproveChange(id) => format!("approve_change:{}", hex::encode(id.hash)),
+    }
+}
+
+/// Casbin-backed RBAC authorization provider for Tier 2+ deployments.
+///
+/// Wraps a [`CasbinAuthzAdapter`] in an `Arc<RwLock<_>>` so it can be
+/// shared safely across async tasks without per-request I/O.
+///
+/// # Construction
+///
+/// ```rust,ignore
+/// // From in-memory strings (tests, embedded policies):
+/// let provider = RbacAuthzProvider::from_strings(MODEL_STR, POLICY_CSV).await?;
+///
+/// // From files on disk (production):
+/// let provider = RbacAuthzProvider::from_files(
+///     "capability-policies/rbac.conf",
+///     "capability-policies/rbac.csv",
+/// ).await?;
+/// ```
+///
+/// # Casbin subject mapping
+///
+/// The casbin `sub` is the principal's `id` string. Role assignments
+/// (`g, <id>, <role>`) in the policy CSV drive role-based decisions.
+#[derive(Clone)]
+pub struct RbacAuthzProvider {
+    enforcer: Arc<RwLock<CasbinAuthzAdapter>>,
+}
+
+impl RbacAuthzProvider {
+    /// Construct from in-memory model and policy strings.
+    ///
+    /// Both strings use the same format as casbin `.conf` and `.csv` files.
+    pub async fn from_strings(
+        model_text: &str,
+        policy_text: &str,
+    ) -> Result<Self, AuthzError> {
+        let adapter = CasbinAuthzAdapter::from_strings(model_text, policy_text)
+            .await
+            .map_err(|e| AuthzError::Internal(e.to_string()))?;
+        Ok(Self {
+            enforcer: Arc::new(RwLock::new(adapter)),
+        })
+    }
+
+    /// Construct by reading model and policy from files on disk.
+    ///
+    /// `model_path` — path to the casbin `.conf` model file.
+    /// `policy_path` — path to the casbin `.csv` policy file.
+    pub async fn from_files(
+        model_path: &str,
+        policy_path: &str,
+    ) -> Result<Self, AuthzError> {
+        let model_text = tokio::fs::read_to_string(model_path)
+            .await
+            .map_err(|e| AuthzError::ProviderUnavailable(
+                format!("failed to read model file {model_path}: {e}"),
+            ))?;
+        let policy_text = tokio::fs::read_to_string(policy_path)
+            .await
+            .map_err(|e| AuthzError::ProviderUnavailable(
+                format!("failed to read policy file {policy_path}: {e}"),
+            ))?;
+        Self::from_strings(&model_text, &policy_text).await
+    }
+}
+
+#[async_trait]
+impl AuthorizationProvider for RbacAuthzProvider {
+    async fn check(
+        &self,
+        principal: &PrincipalRef,
+        action: &Action,
+        resource: &Resource,
+        _context: &AuthzContext,
+    ) -> Result<AuthzDecision, AuthzError> {
+        let subject = principal.id.to_string();
+        let object = resource_to_obj(resource);
+        let act = action_to_act(action);
+
+        let enforcer = self.enforcer.read().await;
+        let allowed = enforcer
+            .enforce(&subject, &object, &act)
+            .await
+            .map_err(|e| AuthzError::PolicyError(e.to_string()))?;
+
+        if allowed {
+            Ok(AuthzDecision::Allow)
+        } else {
+            Ok(AuthzDecision::Deny(DenyReason::new(
+                "rbac_deny",
+                format!(
+                    "principal '{subject}' is not permitted to perform '{act}' on '{object}'"
+                ),
+            )))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -367,5 +515,145 @@ mod tests {
             let parsed: AuthzDecision = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(&parsed, decision);
         }
+    }
+
+    // ── RbacAuthzProvider tests ───────────────────────────────────────────────
+
+    /// Minimal RBAC model for tests: subject/object/action equality matching
+    /// with role inheritance via `g`.
+    const TEST_MODEL: &str = r#"[request_definition]
+r = sub, obj, act
+
+[policy_definition]
+p = sub, obj, act
+
+[role_definition]
+g = _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub) && (p.obj == "*" || r.obj == p.obj || keyMatch(r.obj, p.obj)) && (p.act == "*" || r.act == p.act)
+"#;
+
+    /// Builds an `RbacAuthzProvider` from a policy CSV string.
+    async fn make_rbac_provider(policy_csv: &str) -> RbacAuthzProvider {
+        RbacAuthzProvider::from_strings(TEST_MODEL, policy_csv)
+            .await
+            .expect("RbacAuthzProvider init must not fail")
+    }
+
+    fn principal(id: &str) -> PrincipalRef {
+        PrincipalRef {
+            id: PrincipalId::new(id),
+            kind: PrincipalKind::Human,
+        }
+    }
+
+    /// Tier 1 (DefaultAuthzProvider) is unchanged — still allows all
+    /// non-change actions for any principal, regardless of RBAC config.
+    #[tokio::test]
+    async fn tier1_default_provider_unaffected_by_rbac() {
+        let provider = DefaultAuthzProvider;
+        let ctx = AuthzContext::default();
+
+        // An agent principal with no RBAC policy still gets Allow from Tier 1.
+        let agent = PrincipalRef {
+            id: PrincipalId::new("unknown-agent"),
+            kind: PrincipalKind::Agent,
+        };
+
+        for action in &[Action::Read, Action::Write, Action::Execute, Action::ToolCall("bash".to_string())] {
+            let decision = provider
+                .check(&agent, action, &Resource::System, &ctx)
+                .await
+                .expect("Tier 1 check must not fail");
+            assert_eq!(
+                decision,
+                AuthzDecision::Allow,
+                "Tier 1 should allow {action:?} for any principal"
+            );
+        }
+    }
+
+    /// Tier 2 allow: principal has a matching role that grants the requested
+    /// action on the requested resource.
+    #[tokio::test]
+    async fn tier2_rbac_allow_when_role_matches() {
+        // alice has the operator role; operator can read agent resources.
+        let policy = "p, operator, agent:*, read\ng, alice, operator\n";
+        let provider = make_rbac_provider(policy).await;
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(&principal("alice"), &Action::Read, &Resource::Agent("my-agent".to_string()), &ctx)
+            .await
+            .expect("check must not fail");
+
+        assert_eq!(decision, AuthzDecision::Allow, "alice (operator) should be allowed to read agents");
+    }
+
+    /// Tier 2 deny: principal does not have a policy entry for the requested
+    /// action, so the enforcer returns false → `AuthzDecision::Deny`.
+    #[tokio::test]
+    async fn tier2_rbac_deny_when_no_matching_policy() {
+        // bob has observer role; observer cannot write to sessions.
+        let policy = "p, observer, session:*, read\ng, bob, observer\n";
+        let provider = make_rbac_provider(policy).await;
+        let ctx = AuthzContext::default();
+
+        let decision = provider
+            .check(&principal("bob"), &Action::Write, &Resource::Session("sess-1".to_string()), &ctx)
+            .await
+            .expect("check must not fail");
+
+        assert!(
+            matches!(decision, AuthzDecision::Deny(_)),
+            "bob (observer) should be denied write on sessions; got {decision:?}"
+        );
+    }
+
+    /// Tier 2 resource pattern: policy uses a wildcard `tool:*` pattern and the
+    /// enforcer's `keyMatch` matcher resolves concrete tool names against it.
+    #[tokio::test]
+    async fn tier2_rbac_resource_pattern_wildcard() {
+        // agent_role can execute any tool (tool:* pattern).
+        let policy = "p, agent_role, tool:*, execute\ng, agent-42, agent_role\n";
+        let provider = make_rbac_provider(policy).await;
+        let ctx = AuthzContext::default();
+
+        let agent = PrincipalRef {
+            id: PrincipalId::new("agent-42"),
+            kind: PrincipalKind::Agent,
+        };
+
+        // Wildcard should match concrete tool names.
+        for tool in &["bash", "web_search", "read_file"] {
+            let decision = provider
+                .check(
+                    &agent,
+                    &Action::Execute,
+                    &Resource::Tool((*tool).to_string()),
+                    &ctx,
+                )
+                .await
+                .expect("check must not fail");
+            assert_eq!(
+                decision,
+                AuthzDecision::Allow,
+                "agent-42 (agent_role) should be allowed to execute tool:{tool}"
+            );
+        }
+
+        // But write on tools is not in policy.
+        let deny_decision = provider
+            .check(&agent, &Action::Write, &Resource::Tool("bash".to_string()), &ctx)
+            .await
+            .expect("check must not fail");
+        assert!(
+            matches!(deny_decision, AuthzDecision::Deny(_)),
+            "agent-42 should be denied write on tools; got {deny_decision:?}"
+        );
     }
 }

@@ -21,7 +21,7 @@ fn parse_all_agent_templates() {
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
-        if !path.extension().is_some_and(|e| e == "yaml") {
+        if path.extension().is_none_or(|e| e != "yaml") {
             continue;
         }
 
@@ -56,7 +56,7 @@ fn parse_all_sandbox_boundaries() {
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
-        if !path.extension().is_some_and(|e| e == "yaml") {
+        if path.extension().is_none_or(|e| e != "yaml") {
             continue;
         }
 

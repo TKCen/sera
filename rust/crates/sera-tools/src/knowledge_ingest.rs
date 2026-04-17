@@ -815,7 +815,7 @@ mod tests {
         };
         let detector = TextSimilarityDetector::new(config.similarity_threshold);
         let conflicts = KnowledgeIngestPipeline::check_contradictions_with(
-            &[candidate.clone()],
+            std::slice::from_ref(&candidate),
             &existing,
             Some(&config),
             &detector,

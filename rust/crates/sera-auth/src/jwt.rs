@@ -76,7 +76,7 @@ impl Default for JwtService {
 }
 
 /// Helper function to get current unix timestamp.
-#[allow(dead_code)]
+#[allow(dead_code)] // used in tests
 fn current_unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -897,20 +897,20 @@ mod tests {
     ) {
         if let Some(choices) = &chunk.choices {
             for choice in choices {
-                if let Some(delta) = &choice.delta {
-                    if let Some(tc_deltas) = &delta.tool_calls {
-                        for tc_delta in tc_deltas {
-                            let acc = map.entry(tc_delta.index).or_default();
-                            if let Some(id) = &tc_delta.id {
-                                acc.id = id.clone();
+                if let Some(delta) = &choice.delta
+                    && let Some(tc_deltas) = &delta.tool_calls
+                {
+                    for tc_delta in tc_deltas {
+                        let acc = map.entry(tc_delta.index).or_default();
+                        if let Some(id) = &tc_delta.id {
+                            acc.id = id.clone();
+                        }
+                        if let Some(func) = &tc_delta.function {
+                            if let Some(name) = &func.name {
+                                acc.function_name = name.clone();
                             }
-                            if let Some(func) = &tc_delta.function {
-                                if let Some(name) = &func.name {
-                                    acc.function_name = name.clone();
-                                }
-                                if let Some(args) = &func.arguments {
-                                    acc.arguments.push_str(args);
-                                }
+                            if let Some(args) = &func.arguments {
+                                acc.arguments.push_str(args);
                             }
                         }
                     }

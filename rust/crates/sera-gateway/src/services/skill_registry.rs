@@ -224,10 +224,10 @@ mod tests {
         let mut errors = Vec::new();
         if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
             for field in required {
-                if let Some(field_name) = field.as_str() {
-                    if args.get(field_name).is_none() {
-                        errors.push(format!("Missing required field: {field_name}"));
-                    }
+                if let Some(field_name) = field.as_str()
+                    && args.get(field_name).is_none()
+                {
+                    errors.push(format!("Missing required field: {field_name}"));
                 }
             }
         }
@@ -247,10 +247,10 @@ mod tests {
         let mut errors = Vec::new();
         if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
             for field in required {
-                if let Some(field_name) = field.as_str() {
-                    if args.get(field_name).is_none() {
-                        errors.push(format!("Missing required field: {field_name}"));
-                    }
+                if let Some(field_name) = field.as_str()
+                    && args.get(field_name).is_none()
+                {
+                    errors.push(format!("Missing required field: {field_name}"));
                 }
             }
         }

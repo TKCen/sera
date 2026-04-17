@@ -19,7 +19,7 @@ pub mod types;
 pub use api_key::{ApiKeyValidator, StoredApiKey};
 pub use authz::{
     Action, AuthzContext, AuthzDecision, AuthzError, AuthorizationProvider, DefaultAuthzProvider,
-    DenyReason, PendingApprovalHint, Resource,
+    DenyReason, PendingApprovalHint, RbacAuthzProvider, Resource,
 };
 pub use capability::{CapabilityToken, CapabilityTokenError};
 pub use casbin_adapter::{CasbinAuthzAdapter, CasbinError};

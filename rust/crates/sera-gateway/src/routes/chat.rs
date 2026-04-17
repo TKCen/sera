@@ -844,7 +844,7 @@ mod tests {
     /// StreamingDelta events should be concatenated into the final reply.
     #[test]
     fn streaming_deltas_are_joined() {
-        let deltas = vec!["Hello", ", ", "world!"];
+        let deltas = ["Hello", ", ", "world!"];
         let reply_parts: Vec<String> = deltas.iter().map(|s| s.to_string()).collect();
         let reply = if reply_parts.is_empty() {
             "No response generated.".to_string()

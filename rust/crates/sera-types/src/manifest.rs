@@ -301,7 +301,7 @@ spec:
 "#;
         let template: AgentTemplate = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(template.metadata.name, "byoh-rust-example");
-        assert!(template.metadata.builtin == false);
+        assert!(!template.metadata.builtin);
         let sandbox = template.spec.sandbox.as_ref().unwrap();
         assert_eq!(sandbox.image.as_deref(), Some("sera-byoh-rust-agent:latest"));
     }

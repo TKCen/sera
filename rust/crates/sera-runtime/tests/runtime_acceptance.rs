@@ -1,6 +1,5 @@
 //! Runtime acceptance tests — Lane D, P0-6.
 
-use sera_hitl;
 use sera_types::runtime::{TokenUsage, TurnOutcome};
 
 use sera_runtime::compaction::condensers::*;
@@ -46,7 +45,7 @@ fn context_engine_trait_object_safe() {
 
 #[tokio::test]
 async fn four_method_lifecycle_callable() {
-    let mut ctx = TurnContext {
+    let ctx = TurnContext {
         turn_id: Uuid::new_v4(),
         session_key: "sess-1".into(),
         agent_id: "agent-1".into(),
@@ -192,7 +191,7 @@ async fn context_pipeline_wraps_as_context_engine() {
 
 #[test]
 fn turn_context_has_change_artifact_field() {
-    let mut ctx = TurnContext {
+    let ctx = TurnContext {
         turn_id: Uuid::new_v4(),
         session_key: String::new(),
         agent_id: String::new(),

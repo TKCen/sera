@@ -3,6 +3,9 @@ name = "sera-db"
 version.workspace = true
 edition.workspace = true
 
+[features]
+integration = []
+
 [dependencies]
 sera-types.workspace = true
 rusqlite.workspace = true
@@ -19,3 +22,7 @@ sha2.workspace = true
 hex.workspace = true
 zeroize.workspace = true
 rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+uuid = { workspace = true }

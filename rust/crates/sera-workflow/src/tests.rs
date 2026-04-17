@@ -7,10 +7,10 @@ use crate::{
                LightSleepConfig, RemSleepConfig},
     registry::WorkflowRegistry,
     session_key::workflow_session_key,
-    topological_sort, CyclicDependency,
+    topological_sort,
     types::{CronSchedule, EventPattern, ThresholdCondition, ThresholdOperator, WorkflowDef,
             WorkflowTrigger},
-    DependencyType, WorkflowTask, WorkflowTaskDependency, WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,
+    WorkflowTask, WorkflowTaskDependency, WorkflowTaskId, WorkflowTaskStatus, WorkflowTaskType,
 };
 
 // ---------------------------------------------------------------------------

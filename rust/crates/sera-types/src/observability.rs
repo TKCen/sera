@@ -269,4 +269,101 @@ mod tests {
             let _parsed: RunOutcome = serde_json::from_str(&json).unwrap();
         }
     }
+
+    #[test]
+    fn run_outcome_json_shapes() {
+        // Completed — no content field
+        let json = serde_json::to_string(&RunOutcome::Completed).unwrap();
+        assert!(json.contains("\"type\":\"completed\""));
+        assert!(!json.contains("reason"));
+
+        // Failed — reason field present
+        let json = serde_json::to_string(&RunOutcome::Failed("oom killed".to_string())).unwrap();
+        assert!(json.contains("\"type\":\"failed\""));
+        assert!(json.contains("oom killed"));
+
+        // Timeout — no content field
+        let json = serde_json::to_string(&RunOutcome::Timeout).unwrap();
+        assert!(json.contains("\"type\":\"timeout\""));
+
+        // Cancelled — no content field
+        let json = serde_json::to_string(&RunOutcome::Cancelled).unwrap();
+        assert!(json.contains("\"type\":\"cancelled\""));
+    }
+
+    #[test]
+    fn audit_outcome_json_shapes() {
+        // Success — no reason field
+        let json = serde_json::to_string(&AuditOutcome::Success).unwrap();
+        assert!(json.contains("\"type\":\"success\""));
+        assert!(!json.contains("reason"));
+
+        // Failure — reason field present
+        let json = serde_json::to_string(&AuditOutcome::Failure("timeout".to_string())).unwrap();
+        assert!(json.contains("\"type\":\"failure\""));
+        assert!(json.contains("timeout"));
+
+        // Denied — reason field present
+        let json = serde_json::to_string(&AuditOutcome::Denied("tier policy".to_string())).unwrap();
+        assert!(json.contains("\"type\":\"denied\""));
+        assert!(json.contains("tier policy"));
+    }
+
+    #[test]
+    fn proof_bundle_optional_completed_at_omitted() {
+        let bundle = ProofBundle {
+            run_id: "run-no-end".to_string(),
+            agent_id: "agent-1".to_string(),
+            session_key: "sess-1".to_string(),
+            started_at: chrono::DateTime::parse_from_rfc3339("2026-04-17T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            completed_at: None,
+            turn_count: 1,
+            tool_calls: vec![],
+            total_tokens: TokenUsage::default(),
+            outcome: RunOutcome::Timeout,
+        };
+        let json = serde_json::to_string(&bundle).unwrap();
+        assert!(!json.contains("completed_at"));
+        let parsed: ProofBundle = serde_json::from_str(&json).unwrap();
+        assert!(parsed.completed_at.is_none());
+    }
+
+    #[test]
+    fn tool_call_evidence_serde_roundtrip() {
+        let evidence = ToolCallEvidence {
+            tool_name: "read_file".to_string(),
+            arguments_hash: "sha256:deadbeef".to_string(),
+            result_summary: "200 bytes read".to_string(),
+            duration_ms: 12,
+            risk_level: RiskLevel::Read,
+        };
+        let json = serde_json::to_string(&evidence).unwrap();
+        let parsed: ToolCallEvidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tool_name, "read_file");
+        assert_eq!(parsed.arguments_hash, "sha256:deadbeef");
+        assert_eq!(parsed.duration_ms, 12);
+        assert_eq!(parsed.risk_level, RiskLevel::Read);
+    }
+
+    #[test]
+    fn audit_entry_without_trace_ctx_omits_field() {
+        let entry = AuditEntry {
+            id: "audit-min".to_string(),
+            timestamp: chrono::DateTime::parse_from_rfc3339("2026-04-17T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            principal_id: "user-1".to_string(),
+            action: "session.create".to_string(),
+            resource: "session".to_string(),
+            outcome: AuditOutcome::Success,
+            metadata: HashMap::new(),
+            trace_ctx: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("trace_ctx"));
+        let parsed: AuditEntry = serde_json::from_str(&json).unwrap();
+        assert!(parsed.trace_ctx.is_none());
+    }
 }

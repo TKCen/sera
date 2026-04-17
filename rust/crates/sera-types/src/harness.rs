@@ -107,3 +107,132 @@ pub fn validate_plugin_event_namespace(
 ) -> bool {
     event.event_type.starts_with(&plugin.namespace)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_plugin_event(event_type: &str) -> PluginEvent {
+        PluginEvent {
+            event_id: uuid::Uuid::new_v4(),
+            event_type: event_type.to_string(),
+            correlation_id: uuid::Uuid::new_v4(),
+            circle_id: None,
+            session_key: None,
+            occurred_at: chrono::Utc::now(),
+            entity_id: "entity-1".to_string(),
+            entity_type: "agent".to_string(),
+            payload: serde_json::json!({}),
+            actor_type: "user".to_string(),
+            actor_id: "user-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn harness_error_display_agent_not_found() {
+        let err = HarnessError::AgentNotFound("agent-xyz".to_string());
+        assert_eq!(err.to_string(), "agent not found: agent-xyz");
+    }
+
+    #[test]
+    fn harness_error_display_failed() {
+        let err = HarnessError::Failed("connection refused".to_string());
+        assert_eq!(err.to_string(), "harness failed: connection refused");
+    }
+
+    #[test]
+    fn harness_error_display_shutting_down() {
+        let err = HarnessError::ShuttingDown;
+        assert_eq!(err.to_string(), "harness shutting down");
+    }
+
+    #[test]
+    fn new_harness_registry_starts_empty() {
+        let registry = new_harness_registry();
+        // The registry is an Arc<RwLock<HashMap>>; we can get a sync read via blocking.
+        let guard = registry.blocking_read();
+        assert!(guard.is_empty());
+    }
+
+    #[test]
+    fn new_plugin_registry_starts_empty() {
+        let registry = new_plugin_registry();
+        let guard = registry.blocking_read();
+        assert!(guard.is_empty());
+    }
+
+    #[test]
+    fn validate_plugin_event_namespace_matching_prefix() {
+        let plugin = PluginRegistration {
+            name: "my-plugin".to_string(),
+            namespace: "my_plugin.".to_string(),
+        };
+        let event = make_plugin_event("my_plugin.tool_called");
+        assert!(validate_plugin_event_namespace(&plugin, &event));
+    }
+
+    #[test]
+    fn validate_plugin_event_namespace_exact_match() {
+        let plugin = PluginRegistration {
+            name: "my-plugin".to_string(),
+            namespace: "my_plugin".to_string(),
+        };
+        let event = make_plugin_event("my_plugin");
+        assert!(validate_plugin_event_namespace(&plugin, &event));
+    }
+
+    #[test]
+    fn validate_plugin_event_namespace_no_match() {
+        let plugin = PluginRegistration {
+            name: "my-plugin".to_string(),
+            namespace: "my_plugin.".to_string(),
+        };
+        let event = make_plugin_event("other_plugin.something");
+        assert!(!validate_plugin_event_namespace(&plugin, &event));
+    }
+
+    #[test]
+    fn validate_plugin_event_namespace_empty_namespace_matches_all() {
+        let plugin = PluginRegistration {
+            name: "catch-all".to_string(),
+            namespace: String::new(),
+        };
+        let event = make_plugin_event("anything.at.all");
+        // An empty namespace prefix matches every event_type.
+        assert!(validate_plugin_event_namespace(&plugin, &event));
+    }
+
+    #[test]
+    fn plugin_event_serde_roundtrip() {
+        let event = PluginEvent {
+            event_id: uuid::Uuid::nil(),
+            event_type: "sera.tool.bash.executed".to_string(),
+            correlation_id: uuid::Uuid::nil(),
+            circle_id: Some("circle-1".to_string()),
+            session_key: Some("sess-abc".to_string()),
+            occurred_at: chrono::DateTime::parse_from_rfc3339("2026-04-17T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            entity_id: "agent-42".to_string(),
+            entity_type: "agent".to_string(),
+            payload: serde_json::json!({"tool": "bash", "exit_code": 0}),
+            actor_type: "agent".to_string(),
+            actor_id: "agent-42".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: PluginEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.event_id, event.event_id);
+        assert_eq!(parsed.event_type, "sera.tool.bash.executed");
+        assert_eq!(parsed.circle_id.as_deref(), Some("circle-1"));
+        assert_eq!(parsed.session_key.as_deref(), Some("sess-abc"));
+        assert_eq!(parsed.entity_id, "agent-42");
+    }
+
+    #[test]
+    fn plugin_event_optional_fields_omitted_in_json() {
+        let event = make_plugin_event("test.event");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("circle_id"));
+        assert!(!json.contains("session_key"));
+    }
+}

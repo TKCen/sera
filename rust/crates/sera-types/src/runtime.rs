@@ -417,4 +417,198 @@ mod tests {
         assert_eq!(parsed.tool_use_behavior, crate::tool::ToolUseBehavior::Auto);
     }
 
+    #[test]
+    fn token_usage_default_is_zero() {
+        let usage = TokenUsage::default();
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        assert_eq!(usage.computed_total(), 0);
+    }
+
+    #[test]
+    fn turn_outcome_run_again_serde_roundtrip() {
+        let outcome = TurnOutcome::RunAgain {
+            tool_calls: vec![ToolCall {
+                id: "call-1".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({"cmd": "ls"}),
+                result: None,
+            }],
+            tokens_used: TokenUsage { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+            duration_ms: 350,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"run_again\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::RunAgain { tool_calls, tokens_used, duration_ms } = parsed {
+            assert_eq!(tool_calls.len(), 1);
+            assert_eq!(tool_calls[0].name, "bash");
+            assert_eq!(tokens_used.total_tokens, 120);
+            assert_eq!(duration_ms, 350);
+        } else {
+            panic!("expected RunAgain");
+        }
+    }
+
+    #[test]
+    fn turn_outcome_final_output_serde_roundtrip() {
+        let outcome = TurnOutcome::FinalOutput {
+            response: "Here is the answer.".to_string(),
+            tool_calls: vec![],
+            tokens_used: TokenUsage { prompt_tokens: 200, completion_tokens: 80, total_tokens: 280 },
+            duration_ms: 1200,
+            transcript: vec![serde_json::json!({"role": "assistant", "content": "done"})],
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"final_output\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::FinalOutput { response, tool_calls, tokens_used, duration_ms, transcript } = parsed {
+            assert_eq!(response, "Here is the answer.");
+            assert!(tool_calls.is_empty());
+            assert_eq!(tokens_used.total_tokens, 280);
+            assert_eq!(duration_ms, 1200);
+            assert_eq!(transcript.len(), 1);
+        } else {
+            panic!("expected FinalOutput");
+        }
+    }
+
+    #[test]
+    fn turn_outcome_final_output_empty_transcript_omitted() {
+        let outcome = TurnOutcome::FinalOutput {
+            response: "ok".to_string(),
+            tool_calls: vec![],
+            tokens_used: TokenUsage::default(),
+            duration_ms: 10,
+            transcript: vec![],
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        // Empty transcript should be omitted via skip_serializing_if.
+        assert!(!json.contains("transcript"));
+    }
+
+    #[test]
+    fn turn_outcome_handoff_serde_roundtrip() {
+        let outcome = TurnOutcome::Handoff {
+            target_agent_id: "agent-reviewer".to_string(),
+            context: serde_json::json!({"task": "review PR"}),
+            tokens_used: TokenUsage { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 },
+            duration_ms: 200,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"handoff\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::Handoff { target_agent_id, .. } = parsed {
+            assert_eq!(target_agent_id, "agent-reviewer");
+        } else {
+            panic!("expected Handoff");
+        }
+    }
+
+    #[test]
+    fn turn_outcome_compact_serde_roundtrip() {
+        let outcome = TurnOutcome::Compact {
+            tokens_used: TokenUsage { prompt_tokens: 5000, completion_tokens: 500, total_tokens: 5500 },
+            duration_ms: 800,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"compact\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::Compact { tokens_used, duration_ms } = parsed {
+            assert_eq!(tokens_used.total_tokens, 5500);
+            assert_eq!(duration_ms, 800);
+        } else {
+            panic!("expected Compact");
+        }
+    }
+
+    #[test]
+    fn turn_outcome_interruption_serde_roundtrip() {
+        let outcome = TurnOutcome::Interruption {
+            hook_point: "on_tool_call".to_string(),
+            reason: "policy violation".to_string(),
+            duration_ms: 5,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"interruption\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::Interruption { hook_point, reason, .. } = parsed {
+            assert_eq!(hook_point, "on_tool_call");
+            assert_eq!(reason, "policy violation");
+        } else {
+            panic!("expected Interruption");
+        }
+    }
+
+    #[test]
+    fn turn_outcome_waiting_for_approval_serde_roundtrip() {
+        let outcome = TurnOutcome::WaitingForApproval {
+            tool_call: serde_json::json!({"name": "deploy", "args": {}}),
+            ticket_id: "ticket-99".to_string(),
+            tokens_used: TokenUsage { prompt_tokens: 300, completion_tokens: 40, total_tokens: 340 },
+            duration_ms: 100,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"waiting_for_approval\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::WaitingForApproval { ticket_id, tokens_used, .. } = parsed {
+            assert_eq!(ticket_id, "ticket-99");
+            assert_eq!(tokens_used.total_tokens, 340);
+        } else {
+            panic!("expected WaitingForApproval");
+        }
+    }
+
+    #[test]
+    fn turn_outcome_stop_serde_roundtrip() {
+        let outcome = TurnOutcome::Stop {
+            summary: "Task complete, no further action needed.".to_string(),
+            tokens_used: TokenUsage { prompt_tokens: 400, completion_tokens: 60, total_tokens: 460 },
+            duration_ms: 600,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"outcome\":\"stop\""));
+        let parsed: TurnOutcome = serde_json::from_str(&json).unwrap();
+        if let TurnOutcome::Stop { summary, tokens_used, duration_ms } = parsed {
+            assert_eq!(summary, "Task complete, no further action needed.");
+            assert_eq!(tokens_used.total_tokens, 460);
+            assert_eq!(duration_ms, 600);
+        } else {
+            panic!("expected Stop");
+        }
+    }
+
+    #[test]
+    fn health_status_serde_shapes() {
+        // Healthy has no content — should serialize as {"status":"healthy"}
+        let json = serde_json::to_string(&HealthStatus::Healthy).unwrap();
+        assert!(json.contains("\"status\":\"healthy\""));
+        assert!(!json.contains("message"));
+
+        // Degraded carries a message string
+        let json = serde_json::to_string(&HealthStatus::Degraded("slow disk".to_string())).unwrap();
+        assert!(json.contains("\"status\":\"degraded\""));
+        assert!(json.contains("slow disk"));
+
+        // Unhealthy carries a message string
+        let json = serde_json::to_string(&HealthStatus::Unhealthy("OOM".to_string())).unwrap();
+        assert!(json.contains("\"status\":\"unhealthy\""));
+        assert!(json.contains("OOM"));
+    }
+
+    #[test]
+    fn health_status_serde_roundtrip_all_variants() {
+        let variants = vec![
+            HealthStatus::Healthy,
+            HealthStatus::Degraded("latency spike".to_string()),
+            HealthStatus::Unhealthy("disk full".to_string()),
+        ];
+        for variant in variants {
+            let json = serde_json::to_string(&variant).unwrap();
+            let parsed: HealthStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, variant);
+        }
+    }
+
 }

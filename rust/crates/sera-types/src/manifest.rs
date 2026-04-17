@@ -277,6 +277,192 @@ spec:
     }
 
     #[test]
+    fn spec_schedule_roundtrip() {
+        let schedule = SpecSchedule {
+            name: "daily-summary".to_string(),
+            description: Some("Summarize activity daily".to_string()),
+            schedule_type: "cron".to_string(),
+            expression: "0 9 * * *".to_string(),
+            task: "Generate daily summary report".to_string(),
+            status: Some("active".to_string()),
+            category: Some("reporting".to_string()),
+        };
+        let json = serde_json::to_string(&schedule).unwrap();
+        let parsed: SpecSchedule = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "daily-summary");
+        assert_eq!(parsed.schedule_type, "cron");
+        assert_eq!(parsed.expression, "0 9 * * *");
+        assert_eq!(parsed.description.as_deref(), Some("Summarize activity daily"));
+        assert_eq!(parsed.status.as_deref(), Some("active"));
+        assert_eq!(parsed.category.as_deref(), Some("reporting"));
+    }
+
+    #[test]
+    fn spec_schedule_optional_fields_omitted() {
+        let schedule = SpecSchedule {
+            name: "ping".to_string(),
+            description: None,
+            schedule_type: "interval".to_string(),
+            expression: "30s".to_string(),
+            task: "ping health".to_string(),
+            status: None,
+            category: None,
+        };
+        let json = serde_json::to_string(&schedule).unwrap();
+        assert!(!json.contains("description"));
+        assert!(!json.contains("status"));
+        assert!(!json.contains("category"));
+    }
+
+    #[test]
+    fn spec_context_file_roundtrip() {
+        let ctx_file = SpecContextFile {
+            path: "docs/ARCHITECTURE.md".to_string(),
+            label: "architecture".to_string(),
+            max_tokens: Some(4096),
+            priority: Some("high".to_string()),
+        };
+        let json = serde_json::to_string(&ctx_file).unwrap();
+        let parsed: SpecContextFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.path, "docs/ARCHITECTURE.md");
+        assert_eq!(parsed.label, "architecture");
+        assert_eq!(parsed.max_tokens, Some(4096));
+        assert_eq!(parsed.priority.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn spec_context_file_minimal_omits_optionals() {
+        let ctx_file = SpecContextFile {
+            path: "README.md".to_string(),
+            label: "readme".to_string(),
+            max_tokens: None,
+            priority: None,
+        };
+        let json = serde_json::to_string(&ctx_file).unwrap();
+        assert!(!json.contains("max_tokens"));
+        assert!(!json.contains("priority"));
+    }
+
+    #[test]
+    fn subagent_allow_entry_full_roundtrip() {
+        let entry = SubagentAllowEntry {
+            template_ref: "code-reviewer".to_string(),
+            max_instances: Some(3),
+            lifecycle: Some(LifecycleMode::Ephemeral),
+            requires_approval: Some(true),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: SubagentAllowEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.template_ref, "code-reviewer");
+        assert_eq!(parsed.max_instances, Some(3));
+        assert_eq!(parsed.lifecycle, Some(LifecycleMode::Ephemeral));
+        assert_eq!(parsed.requires_approval, Some(true));
+    }
+
+    #[test]
+    fn subagent_allow_entry_minimal_omits_optionals() {
+        let entry = SubagentAllowEntry {
+            template_ref: "helper".to_string(),
+            max_instances: None,
+            lifecycle: None,
+            requires_approval: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("max_instances"));
+        assert!(!json.contains("lifecycle"));
+        assert!(!json.contains("requires_approval"));
+    }
+
+    #[test]
+    fn fallback_model_roundtrip() {
+        let model = FallbackModel {
+            provider: "openai".to_string(),
+            name: "gpt-4o-mini".to_string(),
+            max_complexity: Some(2),
+        };
+        let json = serde_json::to_string(&model).unwrap();
+        let parsed: FallbackModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.provider, "openai");
+        assert_eq!(parsed.name, "gpt-4o-mini");
+        assert_eq!(parsed.max_complexity, Some(2));
+    }
+
+    #[test]
+    fn fallback_model_without_max_complexity() {
+        let model = FallbackModel {
+            provider: "anthropic".to_string(),
+            name: "claude-haiku".to_string(),
+            max_complexity: None,
+        };
+        let json = serde_json::to_string(&model).unwrap();
+        assert!(!json.contains("max_complexity"));
+        let parsed: FallbackModel = serde_json::from_str(&json).unwrap();
+        assert!(parsed.max_complexity.is_none());
+    }
+
+    #[test]
+    fn spec_sandbox_construction_and_roundtrip() {
+        let sandbox = SpecSandbox {
+            image: Some("sera-byoh:latest".to_string()),
+            entrypoint: Some(vec!["/bin/sh".to_string()]),
+            command: Some(vec!["--run".to_string(), "agent.sh".to_string()]),
+            chat_port: Some(8080),
+        };
+        let json = serde_json::to_string(&sandbox).unwrap();
+        let parsed: SpecSandbox = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.image.as_deref(), Some("sera-byoh:latest"));
+        assert_eq!(parsed.entrypoint.as_ref().unwrap(), &["/bin/sh"]);
+        assert_eq!(parsed.command.as_ref().unwrap().len(), 2);
+        assert_eq!(parsed.chat_port, Some(8080));
+    }
+
+    #[test]
+    fn spec_sandbox_optional_fields_omitted() {
+        let sandbox = SpecSandbox {
+            image: None,
+            entrypoint: None,
+            command: None,
+            chat_port: None,
+        };
+        let json = serde_json::to_string(&sandbox).unwrap();
+        assert!(!json.contains("image"));
+        assert!(!json.contains("entrypoint"));
+        assert!(!json.contains("command"));
+        assert!(!json.contains("chat_port"));
+    }
+
+    #[test]
+    fn spec_model_with_fallback_list() {
+        let yaml = r#"
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: fallback-test
+spec:
+  model:
+    provider: anthropic
+    model: claude-opus-4
+    temperature: 0.5
+    fallback:
+      - provider: openai
+        name: gpt-4o
+        maxComplexity: 2
+      - provider: openai
+        name: gpt-4o-mini
+"#;
+        let template: AgentTemplate = serde_yaml::from_str(yaml).unwrap();
+        let model = template.spec.model.unwrap();
+        assert_eq!(model.provider.as_deref(), Some("anthropic"));
+        assert_eq!(model.temperature, Some(0.5));
+        let fallback = model.fallback.as_ref().unwrap();
+        assert_eq!(fallback.len(), 2);
+        assert_eq!(fallback[0].provider, "openai");
+        assert_eq!(fallback[0].name, "gpt-4o");
+        assert_eq!(fallback[0].max_complexity, Some(2));
+        assert!(fallback[1].max_complexity.is_none());
+    }
+
+    #[test]
     fn parse_byoh_rust_template() {
         let yaml = r#"
 apiVersion: sera/v1

@@ -33,6 +33,8 @@ impl From<AppError> for SeraError {
                     }
                 }
             }
+            AppError::BadRequest(msg) => SeraError::new(SeraErrorCode::InvalidInput, msg),
+            AppError::TooManyRequests(msg) => SeraError::new(SeraErrorCode::RateLimited, msg),
             AppError::Auth(_) => SeraError::new(SeraErrorCode::Unauthorized, "Unauthorized"),
             AppError::Forbidden(msg) => SeraError::new(SeraErrorCode::Forbidden, msg),
             AppError::Internal(e) => {

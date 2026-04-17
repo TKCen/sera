@@ -15,7 +15,7 @@ use sera_meta::constitutional::ConstitutionalRegistry;
 use sera_tools::sandbox::SandboxProvider;
 
 use sera_gateway::envelope::GenerationMarker;
-use sera_gateway::evolve_token::EvolveTokenSigner;
+use sera_gateway::evolve_token::{EvolveTokenSigner, ProposalUsageTracker};
 use sera_gateway::harness_dispatch::HarnessRegistry;
 use sera_gateway::kill_switch::KillSwitch;
 use sera_gateway::transcript_persist::TranscriptPersistence;
@@ -67,4 +67,9 @@ pub struct AppState {
     /// rationale behind keeping verification gateway-local rather than in
     /// `sera-auth`.
     pub evolve_token_signer: Arc<EvolveTokenSigner>,
+    /// In-memory counter tracking proposals consumed per capability-token id.
+    /// Enforces [`sera_types::evolution::CapabilityToken::max_proposals`] at
+    /// the gateway layer without requiring a DB write on every proposal.
+    /// Resets on gateway restart — a durable follow-up is tracked separately.
+    pub proposal_usage: Arc<ProposalUsageTracker>,
 }

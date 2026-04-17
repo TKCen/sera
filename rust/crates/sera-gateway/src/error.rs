@@ -21,6 +21,10 @@ pub enum AppError {
     Auth(AuthError),
     /// Forbidden action.
     Forbidden(String),
+    /// Bad request — client-supplied input failed validation.
+    BadRequest(String),
+    /// Rate-limited — caller has exceeded an enforced quota.
+    TooManyRequests(String),
     /// Generic internal errors.
     Internal(anyhow::Error),
     /// Sera-classified errors from the shared error taxonomy.
@@ -45,6 +49,8 @@ impl IntoResponse for AppError {
                     "Internal server error".to_string(),
                 )
             }
+            AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Internal(e) => {

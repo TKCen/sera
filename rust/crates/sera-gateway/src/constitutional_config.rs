@@ -21,6 +21,8 @@
 //! * **File absent** → log INFO, return empty (backward-compat).
 //! * **File present but invalid** → log ERROR, return `Err` (fail-fast).
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -53,7 +55,12 @@ impl RuleEntry {
     /// hash changes whenever either field changes, giving a stable but
     /// deterministic fingerprint without requiring operators to supply raw
     /// bytes in the config file.
-    fn into_rule(self) -> ConstitutionalRule {
+    ///
+    /// Returns `Err` if `id` is empty or whitespace-only.
+    fn into_rule(self) -> Result<ConstitutionalRule, String> {
+        if self.id.trim().is_empty() {
+            return Err("rule id must be non-empty".to_string());
+        }
         let mut hasher = Sha256::new();
         hasher.update(self.id.as_bytes());
         hasher.update(b"|");
@@ -62,7 +69,7 @@ impl RuleEntry {
         let mut content_hash = [0u8; 32];
         content_hash.copy_from_slice(&digest[..32]);
 
-        ConstitutionalRule::new(
+        Ok(ConstitutionalRule::new(
             ConstitutionalRuleBase {
                 id: self.id,
                 description: self.description,
@@ -72,7 +79,7 @@ impl RuleEntry {
             self.scopes,
             self.blast_radii,
             self.required_scopes,
-        )
+        ))
     }
 }
 
@@ -109,8 +116,15 @@ pub async fn seed_registry_from_file(
         })?;
 
     let count = entries.len();
+    let mut seen_ids: HashSet<String> = HashSet::new();
     for entry in entries {
-        registry.register(entry.into_rule()).await;
+        let rule = entry
+            .into_rule()
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+        if !seen_ids.insert(rule.base.id.clone()) {
+            tracing::warn!(rule_id = %rule.base.id, "duplicate rule id — second rule overwrites first");
+        }
+        registry.register(rule).await;
     }
 
     tracing::info!(path, count, "Constitutional rules loaded from file");
@@ -278,7 +292,7 @@ mod tests {
         assert_eq!(entries.len(), 100);
         // Convert all to rules without panic
         for entry in entries {
-            let _rule = entry.into_rule();
+            let _rule = entry.into_rule().expect("valid rule entry should not error");
         }
     }
 
@@ -324,14 +338,15 @@ mod tests {
         assert_eq!(entries[2].id, "rule-rtl-قاعدة");
         // Hashes are computed without panic for multibyte content
         for entry in entries {
-            let _rule = entry.into_rule();
+            let _rule = entry.into_rule().expect("unicode rule entry should not error");
         }
     }
 
     // ---- duplicate rule ids -----------------------------------------------
 
     /// Registry contract: register() uses HashMap::insert, so a second rule
-    /// with the same id OVERWRITES the first. Document this behaviour.
+    /// with the same id OVERWRITES the first. The loader now emits a tracing
+    /// warning when this occurs.
     #[tokio::test]
     async fn duplicate_ids_last_writer_wins() {
         let yaml = r#"
@@ -363,6 +378,10 @@ mod tests {
             "Second version (overwrites first)",
             "the second registration should overwrite the first"
         );
+        // Note: the loader emits tracing::warn!(rule_id = %id, "duplicate rule id …")
+        // for the second "dup-rule" entry. Capturing tracing spans in unit tests
+        // requires `tracing-test` or a custom subscriber; verifying the behavioral
+        // outcome (last-writer-wins + correct count) is the primary assertion here.
     }
 
     // ---- all enforcement_point variants -----------------------------------
@@ -430,25 +449,55 @@ mod tests {
         );
     }
 
-    // ---- empty string in rule fields --------------------------------------
+    // ---- empty / whitespace id rejection ----------------------------------
 
-    /// Empty id and description are currently accepted by the loader (no
-    /// validation layer). This test documents the current behaviour.
-    /// See follow-up: tighten validation to reject empty id.
     #[test]
-    fn empty_id_and_description_accepted_by_parser() {
+    fn empty_id_rejected_at_parse_time() {
         let yaml = r#"
 - id: ""
   description: ""
   enforcement_point: pre_approval
 "#;
-        let entries = parse_rules(yaml).expect("empty strings currently accepted by serde");
+        // serde accepts the YAML; validation fires in into_rule
+        let entries = parse_rules(yaml).expect("empty strings are accepted by serde");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "");
-        assert_eq!(entries[0].description, "");
-        // into_rule does not panic on empty strings
-        let rule = entries.into_iter().next().unwrap().into_rule();
-        assert_eq!(rule.base.id, "");
+        let result = entries.into_iter().next().unwrap().into_rule();
+        assert!(result.is_err(), "empty id must be rejected by into_rule");
+        assert!(
+            result.unwrap_err().contains("non-empty"),
+            "error message should mention 'non-empty'"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_id_rejected() {
+        let yaml = r#"
+- id: "   "
+  description: "desc"
+  enforcement_point: pre_approval
+"#;
+        let entries = parse_rules(yaml).expect("whitespace-only id parses through serde");
+        assert_eq!(entries.len(), 1);
+        let result = entries.into_iter().next().unwrap().into_rule();
+        assert!(result.is_err(), "whitespace-only id must be rejected");
+    }
+
+    #[test]
+    fn empty_description_still_allowed() {
+        let yaml = r#"
+- id: "valid-id"
+  description: ""
+  enforcement_point: pre_approval
+"#;
+        let entries = parse_rules(yaml).expect("valid id + empty description should parse");
+        let rule = entries
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_rule()
+            .expect("empty description must remain allowed");
+        assert_eq!(rule.base.id, "valid-id");
+        assert_eq!(rule.base.description, "");
     }
 
     // ---- YAML alias/anchor (billion-laughs style) -------------------------
@@ -516,8 +565,8 @@ lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
             blast_radii: vec![],
             required_scopes: vec![],
         };
-        let r1 = entry1.into_rule();
-        let r2 = entry2.into_rule();
+        let r1 = entry1.into_rule().expect("valid entry should not error");
+        let r2 = entry2.into_rule().expect("valid entry should not error");
         assert_eq!(r1.base.content_hash, r2.base.content_hash);
     }
 }

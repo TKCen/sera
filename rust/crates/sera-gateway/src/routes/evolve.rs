@@ -103,10 +103,10 @@ pub struct OperatorKeyRequest {
 /// Parse a hex-encoded `ChangeArtifactId` from the URL path.
 fn parse_id(raw: &str) -> Result<ChangeArtifactId, AppError> {
     let bytes = hex::decode(raw)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid change_artifact id: {e}")))?;
+        .map_err(|_| AppError::BadRequest("invalid change_artifact id: not valid hex".to_string()))?;
     if bytes.len() != 32 {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "invalid change_artifact id length: {}",
+        return Err(AppError::BadRequest(format!(
+            "invalid change_artifact id: expected 32 bytes, got {}",
             bytes.len()
         )));
     }
@@ -250,6 +250,13 @@ pub async fn propose(
             body.capability_token.id, body.proposer_principal,
         )));
     }
+
+    // Proposal-budget enforcement: atomically check and increment the
+    // per-token counter. Returns 429 when `used >= max_proposals`.
+    state
+        .proposal_usage
+        .check_and_record(&body.capability_token)
+        .map_err(|e| AppError::TooManyRequests(e.to_string()))?;
 
     let proposer = ChangeProposer {
         principal_id: body.proposer_principal.clone(),
@@ -810,11 +817,11 @@ mod tests {
         assert_eq!(parsed, id);
     }
 
-    /// Invalid hex must surface as `AppError::Internal`, not panic.
+    /// Invalid hex must surface as `AppError::BadRequest`, not panic.
     #[test]
     fn parse_id_rejects_bad_hex() {
         let err = parse_id("not-hex").unwrap_err();
-        assert!(matches!(err, AppError::Internal(_)));
+        assert!(matches!(err, AppError::BadRequest(_)));
     }
 
     /// `PipelineError::NotFound` must become a 404 via the `Db::NotFound`
@@ -1490,47 +1497,58 @@ mod tests {
 
     // ── Malformed ChangeArtifactId in URL ──────────────────────────────────
 
-    /// Non-hex string → parse_id returns Internal (not a panic).
+    /// Non-hex string → parse_id returns BadRequest (not a panic).
     #[test]
-    fn parse_id_non_hex_is_internal_error() {
+    fn parse_id_non_hex_is_bad_request() {
         let err = parse_id("not-hex!!").unwrap_err();
         assert!(
-            matches!(err, AppError::Internal(_)),
-            "non-hex id must return Internal, got: {err:?}"
+            matches!(err, AppError::BadRequest(_)),
+            "non-hex id must return BadRequest, got: {err:?}"
         );
     }
 
-    /// Valid hex but 16 bytes (too short, need 32) → parse_id returns Internal.
+    /// Valid hex but 16 bytes (too short, need 32) → parse_id returns BadRequest.
     #[test]
-    fn parse_id_too_short_is_internal_error() {
+    fn parse_id_too_short_is_bad_request() {
         // 16 bytes = 32 hex chars
         let short = "deadbeef".repeat(4); // 32 hex chars = 16 bytes
         let err = parse_id(&short).unwrap_err();
         assert!(
-            matches!(err, AppError::Internal(_)),
-            "too-short id must return Internal, got: {err:?}"
+            matches!(err, AppError::BadRequest(_)),
+            "too-short id must return BadRequest, got: {err:?}"
         );
     }
 
-    /// Valid hex but 33 bytes (too long) → parse_id returns Internal.
+    /// Valid hex but 33 bytes (too long) → parse_id returns BadRequest.
     #[test]
-    fn parse_id_too_long_is_internal_error() {
+    fn parse_id_too_long_is_bad_request() {
         // 33 bytes = 66 hex chars
         let long = "aa".repeat(33);
         let err = parse_id(&long).unwrap_err();
         assert!(
-            matches!(err, AppError::Internal(_)),
-            "too-long id must return Internal, got: {err:?}"
+            matches!(err, AppError::BadRequest(_)),
+            "too-long id must return BadRequest, got: {err:?}"
         );
     }
 
-    /// Empty string → parse_id returns Internal (not a panic).
+    /// Empty string → parse_id returns BadRequest (not a panic).
     #[test]
-    fn parse_id_empty_is_internal_error() {
+    fn parse_id_empty_is_bad_request() {
         let err = parse_id("").unwrap_err();
         assert!(
-            matches!(err, AppError::Internal(_)),
-            "empty id must return Internal, got: {err:?}"
+            matches!(err, AppError::BadRequest(_)),
+            "empty id must return BadRequest, got: {err:?}"
+        );
+    }
+
+    /// Boundary: 31 bytes (62 hex chars) is also BadRequest.
+    #[test]
+    fn parse_id_31_bytes_is_bad_request() {
+        let input = "aa".repeat(31); // 62 hex chars = 31 bytes
+        let err = parse_id(&input).unwrap_err();
+        assert!(
+            matches!(err, AppError::BadRequest(_)),
+            "31-byte id must return BadRequest, got: {err:?}"
         );
     }
 

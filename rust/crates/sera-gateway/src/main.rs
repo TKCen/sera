@@ -127,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let evolve_token_signer = Arc::new(
         sera_gateway::evolve_token::EvolveTokenSigner::new(evolve_token_secret.into_bytes()),
     );
+    let proposal_usage = sera_gateway::evolve_token::ProposalUsageTracker::new_arc();
 
     let app_state = AppState {
         db,
@@ -152,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
         hook_registry,
         chain_executor,
         evolve_token_signer,
+        proposal_usage,
     };
 
     // Extract queue backend before app_state is moved into the router.

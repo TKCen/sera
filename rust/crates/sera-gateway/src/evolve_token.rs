@@ -43,6 +43,8 @@
 //! `HashSet<BlastRadius>` iteration order. Encoding lengths explicitly keeps
 //! the bytes unambiguous even if a future `BlastRadius` variant is added.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sera_types::evolution::{BlastRadius, CapabilityToken};
@@ -178,6 +180,75 @@ impl EvolveTokenSigner {
         }
 
         Ok(())
+    }
+}
+
+// ── Proposal-usage tracker ─────────────────────────────────────────────────
+
+/// Error returned when a token has exhausted its `max_proposals` budget.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error(
+    "proposal limit reached for token '{token_id}': max_proposals={limit}"
+)]
+pub struct ProposalLimitError {
+    pub token_id: String,
+    pub limit: u32,
+}
+
+/// In-memory counter tracking how many proposals each token id has used.
+///
+/// Keyed on [`CapabilityToken::id`]; value is the number of proposals already
+/// consumed. The counter is intentionally not persisted — gateway restarts
+/// reset counts. A persistence follow-up bead should add a DB-backed backend
+/// when durable enforcement is required.
+///
+/// `std::sync::Mutex` is used because all critical sections are short (HashMap
+/// read/write, no `.await`), making `tokio::sync::Mutex` unnecessary overhead.
+#[derive(Debug, Default)]
+pub struct ProposalUsageTracker {
+    counts: Mutex<HashMap<String, u32>>,
+}
+
+impl ProposalUsageTracker {
+    /// Create a new, empty tracker.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Wrap `Self::new()` in an [`Arc`] — convenience for call sites.
+    pub fn new_arc() -> Arc<Self> {
+        Arc::new(Self::new())
+    }
+
+    /// Atomically check whether the token has budget remaining and, if so,
+    /// increment the counter.
+    ///
+    /// Returns `Ok(())` when `used < max_proposals` and the counter has been
+    /// bumped. Returns [`ProposalLimitError`] when `used >= max_proposals`;
+    /// the counter is **not** incremented in that case.
+    pub fn check_and_record(
+        &self,
+        token: &CapabilityToken,
+    ) -> Result<(), ProposalLimitError> {
+        let mut counts = self.counts.lock().expect("proposal_usage mutex poisoned");
+        let used = counts.entry(token.id.clone()).or_insert(0);
+        if *used >= token.max_proposals {
+            return Err(ProposalLimitError {
+                token_id: token.id.clone(),
+                limit: token.max_proposals,
+            });
+        }
+        *used += 1;
+        Ok(())
+    }
+
+    /// Reset the counter for a specific token id.
+    ///
+    /// Primarily for test isolation; callers can also use this to clear a
+    /// token that has been reissued with a fresh budget.
+    pub fn reset(&self, token_id: &str) {
+        let mut counts = self.counts.lock().expect("proposal_usage mutex poisoned");
+        counts.remove(token_id);
     }
 }
 
@@ -365,5 +436,70 @@ mod tests {
         let mut long_b = long_a.clone();
         long_b[150] ^= 0xff; // differ past byte 128
         assert_ne!(hmac_sha512(&long_a, b"msg"), hmac_sha512(&long_b, b"msg"));
+    }
+
+    // ── ProposalUsageTracker tests ────────────────────────────────────────
+
+    fn tracker_token(id: &str, max_proposals: u32) -> CapabilityToken {
+        CapabilityToken {
+            id: id.to_string(),
+            scopes: HashSet::new(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            max_proposals,
+            signature: [0u8; 64],
+        }
+    }
+
+    #[test]
+    fn tracker_first_use_accepted_and_counter_increments() {
+        // max_proposals=2, first call → Ok (used becomes 1)
+        let tracker = ProposalUsageTracker::new();
+        let tok = tracker_token("tok-a", 2);
+        assert!(tracker.check_and_record(&tok).is_ok());
+    }
+
+    #[test]
+    fn tracker_second_use_accepted() {
+        // max_proposals=2, two calls → both Ok (used becomes 2)
+        let tracker = ProposalUsageTracker::new();
+        let tok = tracker_token("tok-b", 2);
+        assert!(tracker.check_and_record(&tok).is_ok());
+        assert!(tracker.check_and_record(&tok).is_ok());
+    }
+
+    #[test]
+    fn tracker_third_use_rejected_with_limit_error() {
+        // max_proposals=2, third call → ProposalLimitError
+        let tracker = ProposalUsageTracker::new();
+        let tok = tracker_token("tok-c", 2);
+        tracker.check_and_record(&tok).expect("first ok");
+        tracker.check_and_record(&tok).expect("second ok");
+        let err = tracker.check_and_record(&tok).expect_err("third must fail");
+        assert_eq!(err.token_id, "tok-c");
+        assert_eq!(err.limit, 2);
+    }
+
+    #[test]
+    fn tracker_different_token_ids_have_independent_counters() {
+        // Tokens with different ids must not share a counter.
+        let tracker = ProposalUsageTracker::new();
+        let tok_x = tracker_token("tok-x", 1);
+        let tok_y = tracker_token("tok-y", 1);
+        // Exhaust tok-x
+        tracker.check_and_record(&tok_x).expect("tok-x first ok");
+        tracker.check_and_record(&tok_x).expect_err("tok-x second fails");
+        // tok-y is still fresh
+        assert!(tracker.check_and_record(&tok_y).is_ok(), "tok-y should succeed");
+    }
+
+    #[test]
+    fn tracker_reset_clears_counter() {
+        // After reset, a previously-exhausted token is accepted again.
+        let tracker = ProposalUsageTracker::new();
+        let tok = tracker_token("tok-r", 1);
+        tracker.check_and_record(&tok).expect("first ok");
+        tracker.check_and_record(&tok).expect_err("should be exhausted");
+        tracker.reset("tok-r");
+        assert!(tracker.check_and_record(&tok).is_ok(), "after reset should succeed");
     }
 }

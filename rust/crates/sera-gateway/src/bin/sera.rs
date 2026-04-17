@@ -965,10 +965,28 @@ async fn run_hook_point(
 async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>) {
     tracing::info!("Event processing loop started");
 
-    while let Some(msg) = rx.recv().await {
-        if let Err(e) = process_message(&state, &msg).await {
-            tracing::error!(error = %e, "Message processing failed");
-            send_error_to_discord(&state, &msg.channel_id, &e.to_string()).await;
+    loop {
+        // Poll for a message or yield so the executor can make progress.
+        // We check `shutting_down` first so we never block on `recv` after
+        // the flag is set — even if the sender hasn't been dropped yet.
+        if state.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Some(msg) => {
+                        if let Err(e) = process_message(&state, &msg).await {
+                            tracing::error!(error = %e, "Message processing failed");
+                            send_error_to_discord(&state, &msg.channel_id, &e.to_string()).await;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                // Woke to re-check shutting_down; loop back to the flag check.
+            }
         }
     }
 }
@@ -1621,6 +1639,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     //    REST client / token.
     let (discord_tx, discord_rx) = mpsc::channel::<DiscordMessage>(256);
     let mut shared_discord: Option<Arc<DiscordConnector>> = None;
+    let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     for cm in &manifests.connectors {
         let spec: ConnectorSpec = match serde_json::from_value(cm.spec.clone()) {
@@ -1658,6 +1677,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             &token,
             &agent_name,
             discord_tx.clone(),
+            Arc::clone(&shutting_down),
         ));
         shared_discord = Some(Arc::clone(&connector));
 
@@ -1735,8 +1755,6 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             }
         }
     }
-
-    let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let state = Arc::new(AppState {
         db: Mutex::new(db),

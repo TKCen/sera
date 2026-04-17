@@ -144,8 +144,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Discord connector spawned (agent_name={agent_name})");
 
         tokio::spawn(async move {
+            let shutting_down = std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            );
             let connector =
-                discord::DiscordConnector::new(&discord_token, &agent_name, discord_tx);
+                discord::DiscordConnector::new(&discord_token, &agent_name, discord_tx, shutting_down);
             if let Err(e) = connector.run().await {
                 tracing::error!("Discord connector exited with error: {e}");
             }

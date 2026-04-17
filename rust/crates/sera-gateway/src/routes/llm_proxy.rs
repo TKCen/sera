@@ -5,17 +5,46 @@
 
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+use sera_auth::ActingContext;
 use sera_db::metering::MeteringRepository;
 
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Resolve the agent ID for metering/budget attribution.
+///
+/// Priority:
+/// 1. `ActingContext.agent_id` — set by `require_auth` when the JWT carries
+///    an `agent_id` claim. This is the authoritative path for agent-runtime
+///    callers.
+/// 2. `ActingContext.operator_id` prefixed with `op:` — operator-scoped
+///    callers (dashboard, bootstrap API key) don't represent a specific
+///    agent, but we still want a distinct bucket so operator usage doesn't
+///    silently accrue to `"unknown"`.
+/// 3. `X-Agent-Id` header — legacy fallback for containers that don't yet
+///    mint JWTs with `agent_id` claims.
+/// 4. `"unknown"` — last-resort bucket matching the prior behavior.
+fn resolve_agent_id(ctx: &ActingContext, headers: &axum::http::HeaderMap) -> String {
+    if let Some(agent) = ctx.agent_id.as_deref() {
+        return agent.to_string();
+    }
+    if let Some(op) = ctx.operator_id.as_deref() {
+        return format!("op:{op}");
+    }
+    if let Some(hdr) = headers.get("x-agent-id").and_then(|v| v.to_str().ok())
+        && !hdr.is_empty()
+    {
+        return hdr.to_string();
+    }
+    "unknown".to_string()
+}
 
 /// OpenAI-compatible chat completion request.
 #[derive(Debug, Deserialize)]
@@ -76,13 +105,14 @@ pub async fn list_models(State(state): State<AppState>) -> Json<ModelListRespons
 /// Supports both streaming (SSE) and non-streaming responses.
 pub async fn chat_completions(
     State(state): State<AppState>,
+    Extension(ctx): Extension<ActingContext>,
     headers: axum::http::HeaderMap,
     Json(body): Json<ChatCompletionRequest>,
 ) -> Result<Response, AppError> {
-    // Resolve agent ID from X-Agent-Id header (full JWT extraction deferred to sera-auth middleware)
-    let agent_id = headers.get("x-agent-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown");
+    // Resolve agent ID from the auth context (populated by require_auth
+    // middleware), falling back to the X-Agent-Id header for legacy callers.
+    let agent_id = resolve_agent_id(&ctx, &headers);
+    let agent_id = agent_id.as_str();
 
     // Resolve model name
     let model_name = body
@@ -235,4 +265,96 @@ pub async fn chat_completions(
         .header("Content-Type", "application/json")
         .body(Body::from(response_bytes))
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+    use sera_auth::types::AuthMethod;
+
+    fn empty_headers() -> HeaderMap {
+        HeaderMap::new()
+    }
+
+    fn headers_with_agent(agent: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-agent-id", agent.parse().unwrap());
+        h
+    }
+
+    fn ctx_agent(agent: &str) -> ActingContext {
+        ActingContext {
+            operator_id: None,
+            agent_id: Some(agent.to_string()),
+            instance_id: None,
+            api_key_id: None,
+            auth_method: AuthMethod::Jwt,
+        }
+    }
+
+    fn ctx_operator(op: &str) -> ActingContext {
+        ActingContext {
+            operator_id: Some(op.to_string()),
+            agent_id: None,
+            instance_id: None,
+            api_key_id: None,
+            auth_method: AuthMethod::Jwt,
+        }
+    }
+
+    fn ctx_empty() -> ActingContext {
+        ActingContext {
+            operator_id: None,
+            agent_id: None,
+            instance_id: None,
+            api_key_id: None,
+            auth_method: AuthMethod::ApiKey,
+        }
+    }
+
+    #[test]
+    fn auth_context_agent_wins_over_header() {
+        // The JWT-derived agent_id is authoritative — a spoofed X-Agent-Id
+        // header must not override it, otherwise an agent could impersonate
+        // another agent's budget bucket.
+        let ctx = ctx_agent("agent-real");
+        let headers = headers_with_agent("agent-spoof");
+        assert_eq!(resolve_agent_id(&ctx, &headers), "agent-real");
+    }
+
+    #[test]
+    fn operator_context_yields_prefixed_id() {
+        // Operator callers don't have an agent_id but should bucket usage
+        // under a distinct `op:*` key rather than falling through to legacy
+        // header / "unknown".
+        let ctx = ctx_operator("bootstrap");
+        assert_eq!(resolve_agent_id(&ctx, &empty_headers()), "op:bootstrap");
+    }
+
+    #[test]
+    fn header_fallback_when_context_has_no_identity() {
+        // Legacy agent-runtime containers that haven't yet migrated to JWTs
+        // still set X-Agent-Id — the handler must honour it when the
+        // middleware didn't populate the context.
+        let ctx = ctx_empty();
+        assert_eq!(
+            resolve_agent_id(&ctx, &headers_with_agent("agent-legacy")),
+            "agent-legacy"
+        );
+    }
+
+    #[test]
+    fn unknown_when_nothing_provided() {
+        let ctx = ctx_empty();
+        assert_eq!(resolve_agent_id(&ctx, &empty_headers()), "unknown");
+    }
+
+    #[test]
+    fn empty_header_falls_through_to_unknown() {
+        let ctx = ctx_empty();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-agent-id", "".parse().unwrap());
+        assert_eq!(resolve_agent_id(&ctx, &headers), "unknown");
+    }
 }

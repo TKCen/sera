@@ -2,14 +2,35 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+use sera_auth::ActingContext;
+
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Verify that the authenticated caller may speak for `claimed_agent_id`.
+///
+/// Mirrors [`operator_requests::verify_agent_ownership`]: agent-scoped
+/// callers (ActingContext with `agent_id = Some(x)`) may only publish or DM
+/// as themselves. Operator-scoped callers (bootstrap API key, operator JWTs)
+/// may proxy for any agent — they're used by the dashboard and admin tools.
+fn verify_agent_ownership(
+    ctx: &ActingContext,
+    claimed_agent_id: &str,
+) -> Result<(), AppError> {
+    match &ctx.agent_id {
+        Some(caller) if caller == claimed_agent_id => Ok(()),
+        Some(caller) => Err(AppError::Forbidden(format!(
+            "agent '{caller}' may not act as agent '{claimed_agent_id}'"
+        ))),
+        None => Ok(()), // operator-scoped — allowed to proxy
+    }
+}
 
 #[derive(Deserialize)]
 pub struct PublishRequest {
@@ -29,10 +50,13 @@ pub struct PublishResponse {
 /// POST /api/intercom/publish — publish message to a Centrifugo channel
 pub async fn publish(
     State(state): State<AppState>,
+    Extension(ctx): Extension<ActingContext>,
     Json(body): Json<PublishRequest>,
 ) -> Result<Json<PublishResponse>, AppError> {
-    // Agent authorization deferred to sera-auth middleware layer
-    tracing::debug!(agent = %body.agent, "intercom publish: authorization check deferred to middleware");
+    // Agent-scoped callers may only publish as themselves. Operator callers
+    // (dashboard, bootstrap API key) may publish for any agent.
+    verify_agent_ownership(&ctx, &body.agent)?;
+    tracing::debug!(agent = %body.agent, channel = %body.channel, "intercom publish authorized");
     let centrifugo = state
         .centrifugo
         .as_ref()
@@ -70,10 +94,13 @@ pub struct DmResponse {
 /// POST /api/intercom/dm — send direct message between agents
 pub async fn dm(
     State(state): State<AppState>,
+    Extension(ctx): Extension<ActingContext>,
     Json(body): Json<DmRequest>,
 ) -> Result<Json<DmResponse>, AppError> {
-    // Agent authorization deferred to sera-auth middleware layer
-    tracing::debug!(from = %body.from, to = %body.to, "intercom dm: authorization check deferred to middleware");
+    // Enforce that the sender claimed in `from` matches the authenticated
+    // agent. Operator callers may impersonate any sender.
+    verify_agent_ownership(&ctx, &body.from)?;
+    tracing::debug!(from = %body.from, to = %body.to, "intercom dm authorized");
     let centrifugo = state
         .centrifugo
         .as_ref()
@@ -259,6 +286,70 @@ pub async fn get_subscription_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sera_auth::types::AuthMethod;
+
+    fn ctx_for_agent(agent_id: &str) -> ActingContext {
+        ActingContext {
+            operator_id: None,
+            agent_id: Some(agent_id.to_string()),
+            instance_id: None,
+            api_key_id: None,
+            auth_method: AuthMethod::Jwt,
+        }
+    }
+
+    fn ctx_for_operator() -> ActingContext {
+        ActingContext {
+            operator_id: Some("op-1".to_string()),
+            agent_id: None,
+            instance_id: None,
+            api_key_id: None,
+            auth_method: AuthMethod::Jwt,
+        }
+    }
+
+    fn ctx_for_bootstrap_api_key() -> ActingContext {
+        ActingContext {
+            operator_id: Some("bootstrap".to_string()),
+            agent_id: None,
+            instance_id: None,
+            api_key_id: Some("bootstrap".to_string()),
+            auth_method: AuthMethod::ApiKey,
+        }
+    }
+
+    #[test]
+    fn verify_agent_ownership_allows_matching_agent() {
+        let ctx = ctx_for_agent("agent-a");
+        assert!(verify_agent_ownership(&ctx, "agent-a").is_ok());
+    }
+
+    #[test]
+    fn verify_agent_ownership_rejects_cross_agent_impersonation() {
+        let ctx = ctx_for_agent("agent-a");
+        let err = verify_agent_ownership(&ctx, "agent-b").unwrap_err();
+        match err {
+            AppError::Forbidden(msg) => {
+                assert!(msg.contains("agent-a"), "msg must name caller: {msg}");
+                assert!(msg.contains("agent-b"), "msg must name target: {msg}");
+            }
+            other => panic!("expected Forbidden, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_agent_ownership_allows_operator_proxy() {
+        let ctx = ctx_for_operator();
+        assert!(verify_agent_ownership(&ctx, "any-agent").is_ok());
+    }
+
+    #[test]
+    fn verify_agent_ownership_allows_bootstrap_api_key_proxy() {
+        // Dashboard + admin tooling use the bootstrap API key and must be able
+        // to publish/DM as any agent.
+        let ctx = ctx_for_bootstrap_api_key();
+        assert!(verify_agent_ownership(&ctx, "any-agent").is_ok());
+    }
 
     #[test]
     fn publish_request_deserializes() {

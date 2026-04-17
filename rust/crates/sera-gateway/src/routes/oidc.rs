@@ -14,9 +14,38 @@ use std::collections::HashMap;
 use crate::error::AppError;
 use crate::state::AppState;
 
-/// In-memory session store — production path uses Redis or sera-session.
+/// Process-local session store keyed by opaque session token.
+///
+/// Intentionally in-memory for the MVS cut — the gateway runs as a single
+/// process, and session tokens do not need to survive restarts. Swapping this
+/// out for a distributed backend (Redis, or `sera-session` when it grows a
+/// persistent store) only requires replacing the three access points below
+/// (`insert_session`, `lookup_session`, `remove_session`).
 static SESSION_STORE: std::sync::LazyLock<std::sync::RwLock<HashMap<String, OperatorIdentity>>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+
+/// Insert a session mapping. Silently drops if the RwLock is poisoned — a
+/// poisoned lock here means a concurrent writer panicked, which is already a
+/// logged bug; dropping the insert is preferable to panicking the callback.
+fn insert_session(token: String, identity: OperatorIdentity) {
+    if let Ok(mut store) = SESSION_STORE.write() {
+        store.insert(token, identity);
+    }
+}
+
+/// Look up the operator identity behind an opaque session token. Returns
+/// `None` if the token is unknown or the store lock is poisoned.
+pub fn lookup_session(token: &str) -> Option<OperatorIdentity> {
+    SESSION_STORE.read().ok().and_then(|s| s.get(token).cloned())
+}
+
+/// Remove a session mapping (logout). No-op on unknown tokens or poisoned
+/// locks.
+fn remove_session(token: &str) {
+    if let Ok(mut store) = SESSION_STORE.write() {
+        store.remove(token);
+    }
+}
 
 /// Minimal OIDC config response — only issuerUrl and clientId (matches TS)
 #[derive(Serialize)]
@@ -174,11 +203,7 @@ pub async fn callback(
 
     // Create opaque session token (server-side only, never expose raw OIDC token)
     let session_token = format!("sess_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
-    // Store session mapping in in-memory session store
-    if let Ok(mut store) = SESSION_STORE.write() {
-        store.insert(session_token.clone(), identity.clone());
-    }
-    // In-memory session store — production path uses Redis or sera-session
+    insert_session(session_token.clone(), identity.clone());
 
     Ok((
         StatusCode::OK,
@@ -279,6 +304,72 @@ fn base64_url_decode(s: &str) -> Result<String, String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_identity(sub: &str) -> OperatorIdentity {
+        OperatorIdentity {
+            sub: sub.to_string(),
+            roles: vec!["viewer".to_string()],
+            auth_method: "oidc".to_string(),
+            email: Some(format!("{sub}@example.com")),
+            name: Some(format!("User {sub}")),
+        }
+    }
+
+    #[test]
+    fn session_mapping_roundtrip_insert_lookup_remove() {
+        // Use uuid-keyed tokens so this test never collides with other tests
+        // sharing the process-global SESSION_STORE.
+        let token = format!("sess_test_{}", uuid::Uuid::new_v4().simple());
+        let identity = fake_identity("user-42");
+
+        // Insert — should be visible to lookup
+        insert_session(token.clone(), identity.clone());
+        let got = lookup_session(&token).expect("session must be present after insert");
+        assert_eq!(got.sub, identity.sub);
+        assert_eq!(got.email, identity.email);
+        assert_eq!(got.name, identity.name);
+
+        // Remove — subsequent lookup must return None
+        remove_session(&token);
+        assert!(lookup_session(&token).is_none(), "session must be gone after remove");
+    }
+
+    #[test]
+    fn lookup_unknown_session_returns_none() {
+        let token = format!("sess_nonexistent_{}", uuid::Uuid::new_v4().simple());
+        assert!(lookup_session(&token).is_none());
+    }
+
+    #[test]
+    fn remove_unknown_session_is_noop() {
+        // Must not panic or corrupt the store.
+        let token = format!("sess_nonexistent_{}", uuid::Uuid::new_v4().simple());
+        remove_session(&token);
+        assert!(lookup_session(&token).is_none());
+    }
+
+    #[test]
+    fn multiple_sessions_are_independent() {
+        let token_a = format!("sess_a_{}", uuid::Uuid::new_v4().simple());
+        let token_b = format!("sess_b_{}", uuid::Uuid::new_v4().simple());
+        insert_session(token_a.clone(), fake_identity("alice"));
+        insert_session(token_b.clone(), fake_identity("bob"));
+
+        assert_eq!(lookup_session(&token_a).unwrap().sub, "alice");
+        assert_eq!(lookup_session(&token_b).unwrap().sub, "bob");
+
+        remove_session(&token_a);
+        assert!(lookup_session(&token_a).is_none());
+        // token_b must remain unaffected
+        assert_eq!(lookup_session(&token_b).unwrap().sub, "bob");
+
+        remove_session(&token_b);
+    }
+}
+
 /// POST /api/auth/logout — logout endpoint, invalidates session
 pub async fn logout(
     headers: axum::http::HeaderMap,
@@ -286,10 +377,7 @@ pub async fn logout(
     // Extract session token from Authorization header and remove from session store
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
-        if let Ok(mut store) = SESSION_STORE.write() {
-            store.remove(token);
-        }
+        remove_session(token);
     }
-    // In-memory session invalidation — production path uses Redis or sera-session
     Json(serde_json::json!({"loggedOut": true}))
 }

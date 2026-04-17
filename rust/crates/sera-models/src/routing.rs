@@ -1352,7 +1352,7 @@ mod tests {
         // But unknown must still be *selectable* on its own — not filtered
         // out just because it has no health record.
         let solo_pick = policy.select(
-            &[unknown.clone()],
+            std::slice::from_ref(&unknown),
             &store,
             &AgentPreferences::none(),
         );
@@ -1579,7 +1579,7 @@ mod tests {
         assert_eq!(pick.as_ref(), Some(&healthy));
 
         // If the open candidate is the only option, select returns None.
-        let pick_solo = policy.select(&[broken.clone()], &store, &AgentPreferences::none());
+        let pick_solo = policy.select(std::slice::from_ref(&broken), &store, &AgentPreferences::none());
         assert!(
             pick_solo.is_none(),
             "Open-only pool must not produce a selection"
@@ -1598,7 +1598,7 @@ mod tests {
 
         let policy = WeightedRoutingPolicy::with_defaults();
         // With the circuit Open the candidate is filtered.
-        let pick_open = policy.select(&[probing.clone()], &store, &AgentPreferences::none());
+        let pick_open = policy.select(std::slice::from_ref(&probing), &store, &AgentPreferences::none());
         assert!(pick_open.is_none());
 
         // After cooldown, snapshot_at (used internally by select via real-clock
@@ -1614,7 +1614,7 @@ mod tests {
         assert_eq!(snap.circuit, CircuitState::HalfOpen);
         // Now a real-clock select() will see HalfOpen (because the lazy
         // transition persists in the entry) and must produce the candidate.
-        let pick_half = policy.select(&[probing.clone()], &store, &AgentPreferences::none());
+        let pick_half = policy.select(std::slice::from_ref(&probing), &store, &AgentPreferences::none());
         assert_eq!(
             pick_half.as_ref(),
             Some(&probing),
@@ -1698,6 +1698,7 @@ mod tests {
 
     /// Catalog whose `list_models` can be flipped between success and error at
     /// runtime via a shared `Mutex<Vec<ModelInfo>>` or a failure flag.
+    #[allow(dead_code)]
     struct TogglingCatalog {
         name: String,
         // `None` → return an error; `Some(v)` → return v.

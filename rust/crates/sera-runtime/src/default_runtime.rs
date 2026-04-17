@@ -457,6 +457,7 @@ mod tests {
     }
 
     /// Dispatcher that always succeeds.
+    #[allow(dead_code)]
     struct AlwaysOkDispatcher;
 
     #[async_trait::async_trait]
@@ -661,13 +662,6 @@ mod tests {
     #[tokio::test]
     async fn multiple_failing_tools_all_surface_in_issues() {
         // 3 rounds, each with a different tool name failing.
-        let llm = ToolCallingLlm::new(vec![
-            vec![tool_call("c1", "alpha")],
-            vec![tool_call("c2", "beta")],
-            vec![tool_call("c3", "gamma")],
-            vec![], // final
-        ]);
-
         struct CapturingThinkLlm {
             inner: std::sync::Mutex<std::collections::VecDeque<Vec<serde_json::Value>>>,
             last_messages: std::sync::Mutex<Vec<serde_json::Value>>,

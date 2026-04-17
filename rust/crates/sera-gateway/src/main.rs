@@ -313,7 +313,11 @@ fn build_router(
         .route("/api/agents/{id}/tasks/history", get(routes::tasks::get_task_history))
         // Operator requests
         .route("/api/operator-requests/pending/count", get(routes::operator_requests::pending_count))
-        .route("/api/operator-requests", get(routes::operator_requests::list_requests))
+        .route(
+            "/api/operator-requests",
+            get(routes::operator_requests::list_requests)
+                .post(routes::operator_requests::create_request),
+        )
         .route("/api/operator-requests/{id}/respond", post(routes::operator_requests::respond_to_request))
         // Heartbeat + lifecycle
         .route("/api/agents/{id}/heartbeat", post(routes::heartbeat::heartbeat))

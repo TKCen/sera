@@ -220,6 +220,77 @@ pub fn parse_skill_markdown_str(
         )));
     }
 
+    // Validate description: if present, must contain at least one non-whitespace character.
+    if let Some(ref desc) = fm.description
+        && desc.trim().is_empty()
+    {
+        return Err(SkillsError::Format(format!(
+            "field `description` in {} must be non-empty when provided (got an empty or whitespace-only string)",
+            source_path.display()
+        )));
+    }
+
+    // Validate triggers: each element must be non-empty and non-whitespace.
+    for (i, trigger) in fm.triggers.iter().enumerate() {
+        if trigger.trim().is_empty() {
+            return Err(SkillsError::Format(format!(
+                "field `triggers[{i}]` in {} must be a non-empty string (got {:?})",
+                source_path.display(),
+                trigger
+            )));
+        }
+    }
+
+    // Validate context_budget_tokens: 0 is not a useful budget.
+    if fm.context_budget_tokens == Some(0) {
+        return Err(SkillsError::Format(format!(
+            "field `context_budget_tokens` in {} must be a positive integer (got 0)",
+            source_path.display()
+        )));
+    }
+
+    // Validate MCP server names and URLs.
+    if let Some(ref mcp) = fm.mcp_tools {
+        for s in &mcp.stdio_servers {
+            if s.name.trim().is_empty() {
+                return Err(SkillsError::Format(format!(
+                    "field `mcp_tools.stdio_servers[].name` in {} must be non-empty",
+                    source_path.display()
+                )));
+            }
+        }
+        for s in &mcp.sse_servers {
+            if s.name.trim().is_empty() {
+                return Err(SkillsError::Format(format!(
+                    "field `mcp_tools.sse_servers[].name` in {} must be non-empty",
+                    source_path.display()
+                )));
+            }
+            if !s.url.starts_with("http://") && !s.url.starts_with("https://") {
+                return Err(SkillsError::Format(format!(
+                    "field `mcp_tools.sse_servers[].url` in {} must start with http:// or https:// (got {:?})",
+                    source_path.display(),
+                    s.url
+                )));
+            }
+        }
+        for s in &mcp.streamable_http_servers {
+            if s.name.trim().is_empty() {
+                return Err(SkillsError::Format(format!(
+                    "field `mcp_tools.streamable_http_servers[].name` in {} must be non-empty",
+                    source_path.display()
+                )));
+            }
+            if !s.url.starts_with("http://") && !s.url.starts_with("https://") {
+                return Err(SkillsError::Format(format!(
+                    "field `mcp_tools.streamable_http_servers[].url` in {} must start with http:// or https:// (got {:?})",
+                    source_path.display(),
+                    s.url
+                )));
+            }
+        }
+    }
+
     // Validate body is syntactically valid markdown. We only scan (and drop)
     // the events; the raw body text is what the LLM will see.
     let mut opts = Options::empty();
@@ -595,5 +666,138 @@ body
         let raw = "---\nname: budgeted\nversion: 1.0.0\ncontext_budget_tokens: 8192\n---\nbody\n";
         let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
         assert_eq!(parsed.definition.context_budget_tokens, Some(8192));
+    }
+
+    // --- new gap-closing validation tests ---
+
+    #[test]
+    fn empty_description_rejected() {
+        // description: "" must be rejected; field must be non-empty when present.
+        let raw = "---\nname: x\nversion: 1.0.0\ndescription: \"\"\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("`description`"), "msg was: {msg}");
+                assert!(msg.contains("non-empty"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn whitespace_only_description_rejected() {
+        // description: "   " (only spaces) must also be rejected.
+        let raw = "---\nname: x\nversion: 1.0.0\ndescription: \"   \"\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn absent_description_allowed() {
+        // Omitting description entirely is still valid.
+        let raw = "---\nname: x\nversion: 1.0.0\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert!(parsed.definition.description.is_none());
+    }
+
+    #[test]
+    fn empty_trigger_string_rejected() {
+        // triggers: [""] — an empty element must be rejected.
+        let raw = "---\nname: x\nversion: 1.0.0\ntriggers:\n  - \"\"\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("`triggers[0]`"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn whitespace_only_trigger_rejected() {
+        // triggers: ["   "] — whitespace-only element must be rejected.
+        let raw = "---\nname: x\nversion: 1.0.0\ntriggers:\n  - \"   \"\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn context_budget_tokens_zero_rejected() {
+        // context_budget_tokens: 0 is not a useful budget.
+        let raw = "---\nname: x\nversion: 1.0.0\ncontext_budget_tokens: 0\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("`context_budget_tokens`"), "msg was: {msg}");
+                assert!(msg.contains("positive"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_stdio_server_empty_name_rejected() {
+        let raw = "---\nname: x\nversion: 1.0.0\nmcp_tools:\n  stdio_servers:\n    - name: \"\"\n      command: npx\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("stdio_servers"), "msg was: {msg}");
+                assert!(msg.contains("non-empty"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_sse_server_empty_name_rejected() {
+        let raw = "---\nname: x\nversion: 1.0.0\nmcp_tools:\n  sse_servers:\n    - name: \"\"\n      url: https://example.com\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("sse_servers"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_sse_server_bad_url_rejected() {
+        // URL that doesn't start with http:// or https:// must be rejected.
+        let raw = "---\nname: x\nversion: 1.0.0\nmcp_tools:\n  sse_servers:\n    - name: bad\n      url: ftp://example.com\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("sse_servers"), "msg was: {msg}");
+                assert!(msg.contains("http://") || msg.contains("https://"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_sse_server_empty_url_rejected() {
+        let raw = "---\nname: x\nversion: 1.0.0\nmcp_tools:\n  sse_servers:\n    - name: ok\n      url: \"\"\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn mcp_streamable_http_server_bad_url_rejected() {
+        let raw = "---\nname: x\nversion: 1.0.0\nmcp_tools:\n  streamable_http_servers:\n    - name: ok\n      url: ws://example.com\n---\nbody\n";
+        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
+        match err {
+            SkillsError::Format(msg) => {
+                assert!(msg.contains("streamable_http_servers"), "msg was: {msg}");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_http_server_http_url_accepted() {
+        // Plain http:// (not https) must also be valid.
+        let raw = "---\nname: x\nversion: 1.0.0\nmcp_tools:\n  streamable_http_servers:\n    - name: local\n      url: http://localhost:8080/mcp\n---\nbody\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap();
+        assert_eq!(parsed.definition.mcp_servers.len(), 1);
     }
 }

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Skill pack loading and capability discovery for SERA agents"
 
 [dependencies]
+sera-errors = { workspace = true }
 sera-types = { workspace = true }
 sera-plugins = { workspace = true }
 sera-oci = { workspace = true }

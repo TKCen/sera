@@ -63,3 +63,73 @@ impl LaneFailureClass {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ocsf_extension_strings_are_snake_case() {
+        let cases = [
+            (LaneFailureClass::PromptDelivery, "prompt_delivery"),
+            (LaneFailureClass::TrustGate, "trust_gate"),
+            (LaneFailureClass::BranchDivergence, "branch_divergence"),
+            (LaneFailureClass::Compile, "compile"),
+            (LaneFailureClass::Test, "test"),
+            (LaneFailureClass::PluginStartup, "plugin_startup"),
+            (LaneFailureClass::McpStartup, "mcp_startup"),
+            (LaneFailureClass::McpHandshake, "mcp_handshake"),
+            (LaneFailureClass::GatewayRouting, "gateway_routing"),
+            (LaneFailureClass::ToolRuntime, "tool_runtime"),
+            (LaneFailureClass::WorkspaceMismatch, "workspace_mismatch"),
+            (LaneFailureClass::Infra, "infra"),
+            (LaneFailureClass::OrphanReaped, "orphan_reaped"),
+            (LaneFailureClass::ConstitutionalViolation, "constitutional_violation"),
+            (LaneFailureClass::KillSwitchActivated, "kill_switch_activated"),
+        ];
+        for (class, expected) in cases {
+            assert_eq!(class.as_ocsf_extension(), expected, "failed for {class:?}");
+        }
+    }
+
+    #[test]
+    fn lane_failure_class_serde_round_trips() {
+        let original = LaneFailureClass::ConstitutionalViolation;
+        let json = serde_json::to_string(&original).unwrap();
+        // serde rename_all = "snake_case" → "constitutional_violation"
+        assert_eq!(json, r#""constitutional_violation""#);
+        let decoded: LaneFailureClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn lane_failure_class_copy_semantics() {
+        let a = LaneFailureClass::KillSwitchActivated;
+        let b = a; // Copy
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn ocsf_extension_has_no_spaces() {
+        let variants = [
+            LaneFailureClass::PromptDelivery,
+            LaneFailureClass::TrustGate,
+            LaneFailureClass::BranchDivergence,
+            LaneFailureClass::Compile,
+            LaneFailureClass::Test,
+            LaneFailureClass::PluginStartup,
+            LaneFailureClass::McpStartup,
+            LaneFailureClass::McpHandshake,
+            LaneFailureClass::GatewayRouting,
+            LaneFailureClass::ToolRuntime,
+            LaneFailureClass::WorkspaceMismatch,
+            LaneFailureClass::Infra,
+            LaneFailureClass::OrphanReaped,
+            LaneFailureClass::ConstitutionalViolation,
+            LaneFailureClass::KillSwitchActivated,
+        ];
+        for v in variants {
+            assert!(!v.as_ocsf_extension().contains(' '), "{:?} has spaces", v);
+        }
+    }
+}

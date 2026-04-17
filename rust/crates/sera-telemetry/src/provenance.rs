@@ -55,3 +55,58 @@ pub struct RunEvidence {
     /// Terminal outcome string (e.g. `"success"`, `"failure"`, `"abandoned"`).
     pub outcome: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lane_commit_provenance_default_is_all_none() {
+        let p = LaneCommitProvenance::default();
+        assert!(p.git_commit.is_none());
+        assert!(p.branch.is_none());
+        assert!(p.worktree.is_none());
+        assert!(p.canonical_commit.is_none());
+        assert!(p.superseded_by.is_none());
+        assert!(p.lineage.is_empty());
+    }
+
+    #[test]
+    fn cost_record_serde_round_trips() {
+        let record = CostRecord {
+            model: "claude-3-5-sonnet".to_string(),
+            input_tokens: 1000,
+            output_tokens: 200,
+            cache_tokens: 50,
+            cost_micro_usd: 4200,
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded: CostRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.model, record.model);
+        assert_eq!(decoded.input_tokens, record.input_tokens);
+        assert_eq!(decoded.cost_micro_usd, record.cost_micro_usd);
+    }
+
+    #[test]
+    fn run_evidence_has_unique_run_id() {
+        let make = || RunEvidence {
+            run_id: Uuid::new_v4(),
+            tools_exposed: vec![],
+            tools_called: vec![],
+            approvals: vec![],
+            memory_writes: vec![],
+            model_calls: vec![],
+            total_cost: CostRecord {
+                model: "none".to_string(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cost_micro_usd: 0,
+            },
+            outcome: "success".to_string(),
+        };
+        let a = make();
+        let b = make();
+        assert_ne!(a.run_id, b.run_id);
+    }
+}

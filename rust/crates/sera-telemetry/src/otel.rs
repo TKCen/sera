@@ -27,6 +27,39 @@ pub fn init_otel(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_otel_stub_is_ok_for_any_input() {
+        // Without otlp-exporter feature the function is a pure no-op.
+        assert!(init_otel("sera-test", "http://localhost:4317").is_ok());
+    }
+
+    #[test]
+    fn init_otel_stub_ok_empty_strings() {
+        // Even empty inputs are accepted by the no-op stub.
+        assert!(init_otel("", "").is_ok());
+    }
+
+    #[test]
+    fn otel_init_error_display_invalid_endpoint() {
+        let e = OtelInitError::InvalidEndpoint {
+            reason: "empty".to_string(),
+        };
+        assert!(e.to_string().contains("invalid endpoint URL"));
+    }
+
+    #[test]
+    fn otel_init_error_display_provider_setup() {
+        let e = OtelInitError::ProviderSetup {
+            reason: "tls failure".to_string(),
+        };
+        assert!(e.to_string().contains("tracer provider setup failed"));
+    }
+}
+
 /// Initialise the OpenTelemetry triad with OTLP/gRPC export.
 #[cfg(feature = "otlp-exporter")]
 pub fn init_otel(

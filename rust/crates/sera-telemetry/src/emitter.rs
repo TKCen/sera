@@ -106,3 +106,67 @@ pub struct EventMeta {
     /// Logical data type tag for the accompanying payload.
     pub data_type: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_emitter_namespace_is_sera() {
+        let e = Emitter::root();
+        assert_eq!(e.namespace(), "sera");
+    }
+
+    #[test]
+    fn child_emitter_appends_segment() {
+        let root = Emitter::root();
+        let child = root.child("agent");
+        assert_eq!(child.namespace(), "sera.agent");
+        let grandchild = child.child("sandbox");
+        assert_eq!(grandchild.namespace(), "sera.agent.sandbox");
+    }
+
+    #[test]
+    fn with_trace_attaches_and_preserves_namespace() {
+        let root = Emitter::root();
+        let traced = root.with_trace("00-abc-01");
+        assert_eq!(traced.namespace(), "sera");
+        assert_eq!(traced.trace(), Some("00-abc-01"));
+    }
+
+    #[test]
+    fn child_inherits_trace_from_parent() {
+        let root = Emitter::root().with_trace("00-trace-01");
+        let child = root.child("worker");
+        assert_eq!(child.trace(), Some("00-trace-01"));
+    }
+
+    #[test]
+    fn root_has_no_trace_by_default() {
+        assert_eq!(Emitter::root().trace(), None);
+    }
+
+    #[test]
+    fn event_meta_path_is_namespace_dot_name() {
+        let emitter = Emitter::root().child("jobs");
+        let meta = emitter.event_meta("started", "JobStarted");
+        assert_eq!(meta.path, "sera.jobs.started");
+        assert_eq!(meta.name, "started");
+        assert_eq!(meta.data_type, "JobStarted");
+    }
+
+    #[test]
+    fn event_meta_carries_trace() {
+        let emitter = Emitter::root().with_trace("00-xyz-01").child("lane");
+        let meta = emitter.event_meta("done", "LaneDone");
+        assert_eq!(meta.trace.as_deref(), Some("00-xyz-01"));
+    }
+
+    #[test]
+    fn event_meta_ids_are_unique() {
+        let emitter = Emitter::root();
+        let m1 = emitter.event_meta("ping", "Ping");
+        let m2 = emitter.event_meta("ping", "Ping");
+        assert_ne!(m1.id, m2.id);
+    }
+}

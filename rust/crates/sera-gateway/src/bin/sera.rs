@@ -1624,6 +1624,10 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         });
     }
 
+    // Validate that no dev-secret defaults are used in production.
+    // In dev mode this only warns; in production (SERA_ENV=production) it aborts.
+    sera_config::core_config::validate_env_secrets()?;
+
     // Load API key from environment (if set).
     let api_key = std::env::var("SERA_API_KEY").ok().filter(|k| !k.is_empty());
     if api_key.is_some() {

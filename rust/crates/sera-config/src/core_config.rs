@@ -57,6 +57,91 @@ pub enum ConfigError {
     ProvidersParse(String),
     #[error("failed to read file: {0}")]
     FileRead(String),
+    #[error("production config contains insecure dev-secret defaults: {0}")]
+    InsecureSecret(String),
+}
+
+/// Known dev-secret literals that must not be used in production.
+/// These are the hardcoded defaults that ship for local development only.
+const DEV_SECRET_VALUES: &[&str] = &[
+    "sera_bootstrap_dev_123",
+    "lm-studio",
+    "sera-api-key",
+    "sera-token-secret",
+    "sera-dev-master-key-change-me",
+];
+
+/// Validate that none of the sensitive config fields contain known dev-secret defaults.
+///
+/// In production (`SERA_ENV=production`) this returns an error listing every
+/// unsafe field. In all other environments it only emits `tracing::warn!` and
+/// returns `Ok(())` so that local dev is unaffected.
+pub fn validate_production_secrets(config: &CoreConfig) -> Result<(), ConfigError> {
+    let checks: &[(&str, &str)] = &[
+        ("api_key", &config.api_key),
+        ("llm.api_key", &config.llm.api_key),
+        ("centrifugo.api_key", &config.centrifugo.api_key),
+        ("centrifugo.token_secret", &config.centrifugo.token_secret),
+        ("secrets_master_key", &config.secrets_master_key),
+    ];
+
+    validate_secret_checks(checks)
+}
+
+/// Validate secrets read directly from environment variables, without requiring
+/// a fully-constructed `CoreConfig`. Useful for binaries that load config from
+/// a YAML manifest rather than `CoreConfig::from_env()`.
+///
+/// Checks the same set of well-known env vars and applies the same
+/// production-reject / dev-warn logic as [`validate_production_secrets`].
+pub fn validate_env_secrets() -> Result<(), ConfigError> {
+    let api_key = env::var("SERA_API_KEY")
+        .unwrap_or_else(|_| "sera_bootstrap_dev_123".to_string());
+    let llm_api_key = env::var("LLM_API_KEY")
+        .unwrap_or_else(|_| "lm-studio".to_string());
+    let centrifugo_api_key = env::var("CENTRIFUGO_API_KEY")
+        .unwrap_or_else(|_| "sera-api-key".to_string());
+    let centrifugo_token_secret = env::var("CENTRIFUGO_TOKEN_SECRET")
+        .unwrap_or_else(|_| "sera-token-secret".to_string());
+    let secrets_master_key = env::var("SECRETS_MASTER_KEY")
+        .unwrap_or_else(|_| "sera-dev-master-key-change-me".to_string());
+
+    let checks: &[(&str, &str)] = &[
+        ("SERA_API_KEY", &api_key),
+        ("LLM_API_KEY", &llm_api_key),
+        ("CENTRIFUGO_API_KEY", &centrifugo_api_key),
+        ("CENTRIFUGO_TOKEN_SECRET", &centrifugo_token_secret),
+        ("SECRETS_MASTER_KEY", &secrets_master_key),
+    ];
+
+    validate_secret_checks(checks)
+}
+
+fn validate_secret_checks(checks: &[(&str, &str)]) -> Result<(), ConfigError> {
+    let is_production = env::var("SERA_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+
+    let unsafe_fields: Vec<&str> = checks
+        .iter()
+        .filter(|(_, value)| DEV_SECRET_VALUES.contains(value))
+        .map(|(field, _)| *field)
+        .collect();
+
+    if unsafe_fields.is_empty() {
+        return Ok(());
+    }
+
+    let field_list = unsafe_fields.join(", ");
+    if is_production {
+        Err(ConfigError::InsecureSecret(field_list))
+    } else {
+        tracing::warn!(
+            fields = %field_list,
+            "Config contains dev-secret defaults — override before deploying to production"
+        );
+        Ok(())
+    }
 }
 
 impl CoreConfig {
@@ -283,5 +368,141 @@ mod tests {
     fn config_error_display() {
         let err = ConfigError::MissingEnvVar("TEST_VAR".to_string());
         assert!(err.to_string().contains("TEST_VAR"));
+    }
+
+    // ── validate_production_secrets tests ────────────────────────────────────
+
+    fn make_config_with_defaults() -> CoreConfig {
+        CoreConfig {
+            database_url: "postgres://localhost/sera".to_string(),
+            port: 3001,
+            api_key: "sera_bootstrap_dev_123".to_string(),
+            llm: LlmConfig {
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: "lm-studio".to_string(),
+                model: "lmstudio-local".to_string(),
+            },
+            centrifugo: CentrifugoConfig {
+                api_url: "http://centrifugo:8000/api".to_string(),
+                api_key: "sera-api-key".to_string(),
+                token_secret: "sera-token-secret".to_string(),
+            },
+            qdrant: QdrantConfig {
+                url: "http://qdrant:6333".to_string(),
+            },
+            ollama: OllamaConfig {
+                url: "http://host.docker.internal:11434".to_string(),
+            },
+            secrets_master_key: "sera-dev-master-key-change-me".to_string(),
+            providers: None,
+            oidc_issuer: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            external_url: None,
+            web_origin: None,
+        }
+    }
+
+    fn make_config_production_safe() -> CoreConfig {
+        CoreConfig {
+            database_url: "postgres://prod-host/sera".to_string(),
+            port: 3001,
+            api_key: "real-api-key-abc123".to_string(),
+            llm: LlmConfig {
+                base_url: "https://api.openai.com/v1".to_string(),
+                api_key: "sk-real-key".to_string(),
+                model: "gpt-4".to_string(),
+            },
+            centrifugo: CentrifugoConfig {
+                api_url: "https://centrifugo.prod/api".to_string(),
+                api_key: "real-centrifugo-api-key".to_string(),
+                token_secret: "real-token-secret-xyz".to_string(),
+            },
+            qdrant: QdrantConfig {
+                url: "https://qdrant.prod:6333".to_string(),
+            },
+            ollama: OllamaConfig {
+                url: "http://ollama.prod:11434".to_string(),
+            },
+            secrets_master_key: "real-master-key-32-chars-minimum!".to_string(),
+            providers: None,
+            oidc_issuer: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            external_url: None,
+            web_origin: None,
+        }
+    }
+
+    #[test]
+    fn production_mode_rejects_dev_defaults() {
+        let saved = env::var("SERA_ENV").ok();
+        unsafe { env::set_var("SERA_ENV", "production") };
+
+        let config = make_config_with_defaults();
+        let result = validate_production_secrets(&config);
+
+        match &saved {
+            Some(v) => unsafe { env::set_var("SERA_ENV", v) },
+            None => unsafe { env::remove_var("SERA_ENV") },
+        }
+
+        assert!(result.is_err(), "production with dev defaults should fail");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("api_key"), "error should mention api_key field");
+        assert!(msg.contains("insecure dev-secret"), "error should mention dev-secret");
+    }
+
+    #[test]
+    fn production_mode_accepts_overridden_secrets() {
+        let saved = env::var("SERA_ENV").ok();
+        unsafe { env::set_var("SERA_ENV", "production") };
+
+        let config = make_config_production_safe();
+        let result = validate_production_secrets(&config);
+
+        match &saved {
+            Some(v) => unsafe { env::set_var("SERA_ENV", v) },
+            None => unsafe { env::remove_var("SERA_ENV") },
+        }
+
+        assert!(result.is_ok(), "production with real secrets should pass");
+    }
+
+    #[test]
+    fn dev_mode_accepts_dev_defaults_without_error() {
+        let saved = env::var("SERA_ENV").ok();
+        unsafe { env::remove_var("SERA_ENV") };
+
+        let config = make_config_with_defaults();
+        let result = validate_production_secrets(&config);
+
+        match &saved {
+            Some(v) => unsafe { env::set_var("SERA_ENV", v) },
+            None => unsafe { env::remove_var("SERA_ENV") },
+        }
+
+        assert!(result.is_ok(), "dev mode with dev defaults should not error");
+    }
+
+    #[test]
+    fn production_error_lists_all_unsafe_fields() {
+        let saved = env::var("SERA_ENV").ok();
+        unsafe { env::set_var("SERA_ENV", "production") };
+
+        let config = make_config_with_defaults();
+        let result = validate_production_secrets(&config);
+
+        match &saved {
+            Some(v) => unsafe { env::set_var("SERA_ENV", v) },
+            None => unsafe { env::remove_var("SERA_ENV") },
+        }
+
+        let err_msg = result.unwrap_err().to_string();
+        // All five dev-secret fields should appear in the error message
+        assert!(err_msg.contains("api_key"));
+        assert!(err_msg.contains("centrifugo.api_key"));
+        assert!(err_msg.contains("centrifugo.token_secret"));
+        assert!(err_msg.contains("secrets_master_key"));
     }
 }

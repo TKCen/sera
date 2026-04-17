@@ -537,7 +537,433 @@ mod tests {
             .collect()
     }
 
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    fn tool_msg(content: &str) -> serde_json::Value {
+        serde_json::json!({"role": "tool", "content": content})
+    }
+
+    fn system_msg(content: &str) -> serde_json::Value {
+        serde_json::json!({"role": "system", "content": content})
+    }
+
+    // ── NoOpCondenser ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn noop_empty_input() {
+        let c = NoOpCondenser;
+        let result = c.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn noop_single_message() {
+        let c = NoOpCondenser;
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn noop_preserves_all_messages() {
+        let c = NoOpCondenser;
+        let msgs = make_messages(10);
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn noop_name() {
+        assert_eq!(NoOpCondenser.name(), "no_op");
+    }
+
+    // ── RecentEventsCondenser ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn recent_events_empty_input() {
+        let c = RecentEventsCondenser::new(5);
+        let result = c.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn recent_events_single_message() {
+        let c = RecentEventsCondenser::new(5);
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn recent_events_below_budget_passthrough() {
+        let c = RecentEventsCondenser::new(10);
+        let msgs = make_messages(5);
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result.len(), 5);
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn recent_events_at_budget_passthrough() {
+        let c = RecentEventsCondenser::new(5);
+        let msgs = make_messages(5);
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result.len(), 5);
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn recent_events_above_budget_keeps_tail() {
+        let c = RecentEventsCondenser::new(3);
+        let msgs = make_messages(7);
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result.len(), 3);
+        assert_eq!(result, msgs[4..]);
+    }
+
+    #[tokio::test]
+    async fn recent_events_deterministic() {
+        let c = RecentEventsCondenser::new(3);
+        let msgs = make_messages(6);
+        let r1 = c.condense(msgs.clone()).await;
+        let r2 = c.condense(msgs.clone()).await;
+        assert_eq!(r1, r2);
+    }
+
+    #[tokio::test]
+    async fn recent_events_keep_zero_returns_empty() {
+        let c = RecentEventsCondenser::new(0);
+        let msgs = make_messages(5);
+        let result = c.condense(msgs).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn recent_events_name() {
+        assert_eq!(RecentEventsCondenser::new(1).name(), "recent_events");
+    }
+
+    // ── ConversationWindowCondenser ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn conversation_window_empty_input() {
+        let c = ConversationWindowCondenser::new(3);
+        let result = c.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn conversation_window_single_user_message() {
+        let c = ConversationWindowCondenser::new(3);
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hello"})];
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn conversation_window_only_system_messages_preserved() {
+        let c = ConversationWindowCondenser::new(1);
+        let msgs = vec![
+            system_msg("sys1"),
+            system_msg("sys2"),
+        ];
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn conversation_window_trims_to_max_pairs() {
+        let c = ConversationWindowCondenser::new(2); // keep 4 non-system msgs
+        let msgs = make_messages(8); // 8 non-system
+        let result = c.condense(msgs).await;
+        // Should have at most 4 non-system messages
+        let non_system: Vec<_> = result.iter().filter(|m| m["role"] != "system").collect();
+        assert_eq!(non_system.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn conversation_window_drops_leading_tool_result() {
+        let c = ConversationWindowCondenser::new(10);
+        let msgs = vec![
+            tool_msg("result1"),
+            serde_json::json!({"role": "user", "content": "hi"}),
+            serde_json::json!({"role": "assistant", "content": "hello"}),
+        ];
+        let result = c.condense(msgs).await;
+        // Leading tool result should be dropped
+        assert!(result.iter().all(|m| m["role"] != "tool"));
+    }
+
+    #[tokio::test]
+    async fn conversation_window_preserves_system_and_pairs() {
+        let c = ConversationWindowCondenser::new(2);
+        let mut msgs = vec![system_msg("sys")];
+        msgs.extend(make_messages(6));
+        let result = c.condense(msgs).await;
+        assert!(result.iter().any(|m| m["role"] == "system"));
+    }
+
+    #[tokio::test]
+    async fn conversation_window_deterministic() {
+        let c = ConversationWindowCondenser::new(3);
+        let msgs = make_messages(10);
+        let r1 = c.condense(msgs.clone()).await;
+        let r2 = c.condense(msgs.clone()).await;
+        assert_eq!(r1, r2);
+    }
+
+    #[tokio::test]
+    async fn conversation_window_name() {
+        assert_eq!(ConversationWindowCondenser::new(1).name(), "conversation_window");
+    }
+
+    // ── AmortizedForgettingCondenser ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn amortized_forgetting_empty_input() {
+        let c = AmortizedForgettingCondenser::new(0.5);
+        let result = c.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn amortized_forgetting_single_message() {
+        let c = AmortizedForgettingCondenser::new(0.5);
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn amortized_forgetting_ratio_one_keeps_all() {
+        let c = AmortizedForgettingCondenser::new(1.0);
+        let msgs = make_messages(10);
+        let result = c.condense(msgs.clone()).await;
+        // keep = ceil(10 * 1.0) = 10 => no truncation
+        let non_system: Vec<_> = result.iter().filter(|m| m["role"] != "system").collect();
+        assert_eq!(non_system.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn amortized_forgetting_ratio_half_keeps_half() {
+        let c = AmortizedForgettingCondenser::new(0.5);
+        let msgs = make_messages(10); // all non-system
+        let result = c.condense(msgs).await;
+        // keep = ceil(10 * 0.5) = 5
+        assert_eq!(result.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn amortized_forgetting_system_messages_always_kept() {
+        let c = AmortizedForgettingCondenser::new(0.1);
+        let mut msgs = vec![system_msg("sys")];
+        msgs.extend(make_messages(10));
+        let result = c.condense(msgs).await;
+        assert!(result.iter().any(|m| m["role"] == "system"));
+    }
+
+    #[tokio::test]
+    async fn amortized_forgetting_deterministic() {
+        let c = AmortizedForgettingCondenser::new(0.6);
+        let msgs = make_messages(8);
+        let r1 = c.condense(msgs.clone()).await;
+        let r2 = c.condense(msgs.clone()).await;
+        assert_eq!(r1, r2);
+    }
+
+    #[tokio::test]
+    async fn amortized_forgetting_name() {
+        assert_eq!(AmortizedForgettingCondenser::new(0.5).name(), "amortized_forgetting");
+    }
+
+    // ── ObservationMaskingCondenser ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn observation_masking_empty_input() {
+        let c = ObservationMaskingCondenser::new(5);
+        let result = c.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn observation_masking_single_tool_message_below_keep_recent() {
+        let c = ObservationMaskingCondenser::new(5);
+        let msgs = vec![tool_msg("result")];
+        let result = c.condense(msgs.clone()).await;
+        // Only 1 message, keep_recent=5 => cutoff=0, nothing masked
+        assert_eq!(result[0]["content"], "result");
+    }
+
+    #[tokio::test]
+    async fn observation_masking_masks_old_tool_results() {
+        let c = ObservationMaskingCondenser::new(2);
+        let msgs = vec![
+            tool_msg("old result"),
+            tool_msg("another old"),
+            tool_msg("recent 1"),
+            tool_msg("recent 2"),
+        ];
+        let result = c.condense(msgs).await;
+        // cutoff = 4 - 2 = 2: indices 0 and 1 masked
+        assert_eq!(result[0]["content"], "[masked]");
+        assert_eq!(result[1]["content"], "[masked]");
+        assert_eq!(result[2]["content"], "recent 1");
+        assert_eq!(result[3]["content"], "recent 2");
+    }
+
+    #[tokio::test]
+    async fn observation_masking_does_not_mask_non_tool_messages() {
+        let c = ObservationMaskingCondenser::new(1);
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": "old user msg"}),
+            serde_json::json!({"role": "assistant", "content": "old assistant msg"}),
+            tool_msg("recent"),
+        ];
+        let result = c.condense(msgs).await;
+        // cutoff = 3 - 1 = 2: indices 0 and 1 in cutoff range but not role=tool
+        assert_eq!(result[0]["content"], "old user msg");
+        assert_eq!(result[1]["content"], "old assistant msg");
+        assert_eq!(result[2]["content"], "recent");
+    }
+
+    #[tokio::test]
+    async fn observation_masking_keep_recent_ge_len_no_masking() {
+        let c = ObservationMaskingCondenser::new(10);
+        let msgs = vec![tool_msg("a"), tool_msg("b"), tool_msg("c")];
+        let result = c.condense(msgs).await;
+        // cutoff = 3 - 10 = 0 (saturating), nothing masked
+        assert_eq!(result[0]["content"], "a");
+        assert_eq!(result[1]["content"], "b");
+        assert_eq!(result[2]["content"], "c");
+    }
+
+    #[tokio::test]
+    async fn observation_masking_deterministic() {
+        let c = ObservationMaskingCondenser::new(2);
+        let msgs = vec![tool_msg("x"), tool_msg("y"), tool_msg("z"), tool_msg("w")];
+        let r1 = c.condense(msgs.clone()).await;
+        let r2 = c.condense(msgs.clone()).await;
+        assert_eq!(r1, r2);
+    }
+
+    #[tokio::test]
+    async fn observation_masking_name() {
+        assert_eq!(ObservationMaskingCondenser::new(1).name(), "observation_masking");
+    }
+
+    // ── BrowserOutputCondenser ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn browser_output_empty_input() {
+        let c = BrowserOutputCondenser::new(100);
+        let result = c.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn browser_output_single_short_message_unchanged() {
+        let c = BrowserOutputCondenser::new(100);
+        let msgs = vec![tool_msg("short")];
+        let result = c.condense(msgs.clone()).await;
+        assert_eq!(result[0]["content"], "short");
+    }
+
+    #[tokio::test]
+    async fn browser_output_below_threshold_unchanged() {
+        let c = BrowserOutputCondenser::new(100);
+        let content = "a".repeat(50);
+        let msgs = vec![tool_msg(&content)];
+        let result = c.condense(msgs).await;
+        assert_eq!(result[0]["content"], content.as_str());
+    }
+
+    #[tokio::test]
+    async fn browser_output_at_threshold_unchanged() {
+        let c = BrowserOutputCondenser::new(50);
+        let content = "a".repeat(50);
+        let msgs = vec![tool_msg(&content)];
+        let result = c.condense(msgs).await;
+        // exactly at threshold => not above => unchanged
+        assert_eq!(result[0]["content"].as_str().unwrap().len(), 50);
+    }
+
+    #[tokio::test]
+    async fn browser_output_above_threshold_truncated() {
+        let c = BrowserOutputCondenser::new(10);
+        let content = "a".repeat(100);
+        let msgs = vec![tool_msg(&content)];
+        let result = c.condense(msgs).await;
+        let truncated = result[0]["content"].as_str().unwrap();
+        assert!(truncated.contains("... [truncated, 100 chars total]"));
+        assert!(truncated.starts_with(&"a".repeat(10)));
+    }
+
+    #[tokio::test]
+    async fn browser_output_only_truncates_tool_messages() {
+        let c = BrowserOutputCondenser::new(5);
+        let long_content = "x".repeat(100);
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": long_content.clone()}),
+            serde_json::json!({"role": "assistant", "content": long_content.clone()}),
+            tool_msg(&long_content),
+        ];
+        let result = c.condense(msgs).await;
+        // user and assistant messages should NOT be truncated
+        assert_eq!(result[0]["content"].as_str().unwrap().len(), 100);
+        assert_eq!(result[1]["content"].as_str().unwrap().len(), 100);
+        // tool message should be truncated
+        assert!(result[2]["content"].as_str().unwrap().contains("[truncated"));
+    }
+
+    #[tokio::test]
+    async fn browser_output_deterministic() {
+        let c = BrowserOutputCondenser::new(20);
+        let msgs = vec![tool_msg(&"z".repeat(100))];
+        let r1 = c.condense(msgs.clone()).await;
+        let r2 = c.condense(msgs.clone()).await;
+        assert_eq!(r1, r2);
+    }
+
+    #[tokio::test]
+    async fn browser_output_name() {
+        assert_eq!(BrowserOutputCondenser::new(100).name(), "browser_output");
+    }
+
     // ── LlmSummarizingCondenser ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn summarizing_condenser_empty_input() {
+        let model = MockAdapter::ok("{}");
+        let condenser = LlmSummarizingCondenser::new(model);
+        let result = condenser.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn summarizing_condenser_single_message() {
+        let model = MockAdapter::ok("{}");
+        let condenser = LlmSummarizingCondenser::with_keep_recent(model, 5);
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let result = condenser.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn summarizing_condenser_at_boundary_no_llm_call() {
+        // keep_recent == msgs.len() => passthrough, LLM should NOT be called
+        // Use the error adapter — if LLM were called, it would change behavior
+        let model = MockAdapter::err();
+        let condenser = LlmSummarizingCondenser::with_keep_recent(model, 3);
+        let msgs = make_messages(3);
+        let result = condenser.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn summarizing_condenser_name() {
+        let model = MockAdapter::ok("{}");
+        assert_eq!(LlmSummarizingCondenser::new(model).name(), "llm_summarizing");
+    }
 
     #[tokio::test]
     async fn summarizing_condenser_replaces_old_messages() {
@@ -575,6 +1001,42 @@ mod tests {
     // ── LlmAttentionCondenser ─────────────────────────────────────────────────
 
     #[tokio::test]
+    async fn attention_condenser_empty_input() {
+        let model = MockAdapter::ok("[]");
+        let condenser = LlmAttentionCondenser::new(model);
+        let result = condenser.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attention_condenser_no_user_message_passthrough() {
+        // No user message → query is empty → return original unchanged
+        let model = MockAdapter::ok("[0]");
+        let condenser = LlmAttentionCondenser::new(model);
+        let msgs = vec![
+            serde_json::json!({"role": "assistant", "content": "something"}),
+        ];
+        let result = condenser.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn attention_condenser_empty_indices_fallback() {
+        // LLM returns empty array → fallback to original
+        let model = MockAdapter::ok("[]");
+        let condenser = LlmAttentionCondenser::new(model);
+        let msgs = make_messages(4); // has user messages
+        let result = condenser.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn attention_condenser_name() {
+        let model = MockAdapter::ok("[]");
+        assert_eq!(LlmAttentionCondenser::new(model).name(), "llm_attention");
+    }
+
+    #[tokio::test]
     async fn attention_condenser_selects_indices() {
         // LLM returns indices [0, 2] — two non-system messages to keep
         let model = MockAdapter::ok("[0, 2]");
@@ -607,6 +1069,38 @@ mod tests {
     }
 
     // ── StructuredSummaryCondenser ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn structured_summary_condenser_empty_input() {
+        let model = MockAdapter::ok("{}");
+        let condenser = StructuredSummaryCondenser::new(model);
+        let result = condenser.condense(vec![]).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn structured_summary_condenser_single_message() {
+        let model = MockAdapter::ok("{}");
+        let condenser = StructuredSummaryCondenser::with_keep_recent(model, 5);
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let result = condenser.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn structured_summary_condenser_at_boundary_no_llm_call() {
+        let model = MockAdapter::err();
+        let condenser = StructuredSummaryCondenser::with_keep_recent(model, 3);
+        let msgs = make_messages(3);
+        let result = condenser.condense(msgs.clone()).await;
+        assert_eq!(result, msgs);
+    }
+
+    #[tokio::test]
+    async fn structured_summary_condenser_name() {
+        let model = MockAdapter::ok("{}");
+        assert_eq!(StructuredSummaryCondenser::new(model).name(), "structured_summary");
+    }
 
     #[tokio::test]
     async fn structured_summary_condenser_replaces_old_messages() {

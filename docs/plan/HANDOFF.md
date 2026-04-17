@@ -9,9 +9,9 @@
 
 ## 1. Current state
 
-**Branch:** `sera20` (11 new commits in Session 27 Wave 1+2 on top of Session 26)
-**Last commit:** `0816e25 docs: Session 27 Wave 1+2 report — 10 beads closed, ~80 new tests`
-**Test count:** ~2,947 (2,867 Session 26 baseline + ~80 Session 27 wave additions; cargo test --workspace exit 0)
+**Branch:** `sera20` (16 new commits in Session 27 Waves 1-4 on top of Session 26)
+**Last commit:** `530f6b5 sera-jwtj: integrate MemoryBlock into sera-runtime context injection path`
+**Test count:** ~2,963 (2,867 Session 26 baseline + ~96 Session 27 wave additions; cargo test --workspace exit 0)
 **Phase progress:** Phase 2 at 98%, Phase 3 at 85%; sera-commands new foundation crate added; MemoryBlock (2-tier) types landed; WASM hook metering live; Postgres-backed proposal quota; LaneCounterStore trait + Postgres backend (wiring pending).
 
 ---
@@ -84,41 +84,34 @@ Wave 1 hit a working-tree divergence when one agent used `git stash && git reset
 
 ## 3. Ready follow-ups
 
-Session 27 Wave 1+2 closed 10 beads (see §1a). Wave 3 in flight at handoff time: sera-occf + sera-1yi4 (likely landed by read time). Remaining queue:
+Session 27 Waves 1-4 closed 13 beads (see §1a). Remaining queue:
 
 1. **sera-bsq2** — Wire `PostgresLaneCounter` into LaneQueue admission path
    - sera-e8nq landed the standalone store; gateway wiring is the next step
    - Expected to touch `sera-gateway/src/main.rs` + `sera-db/src/lane_queue.rs`
 
-2. **sera-jwtj** — Integrate MemoryBlock into sera-runtime context injection
-   - sera-jj87 landed the types; runtime ContextEngine wiring + `memory_pressure` event emission on `flush_min_turns=6` overflow is next
-   - Needs hook_point wiring into pre_agent_turn / context_memory alias
-
-3. **sera-1yi4** — ShadowSessionExecutor scaffold (Wave 3, in flight)
-   - sera-runtime shadow execution path for parallel constitutional validation
-   - Prerequisite for full self-evolution loop
-
-4. **sera-occf** — Secret hot-reload for EvolveTokenSigner (Wave 3, in flight)
-   - Live key rotation with grace-period verification
-
-5. **sera-sbh9** — sera-auth CapabilityTokenIssuer
+2. **sera-sbh9** — sera-auth CapabilityTokenIssuer
    - Share CapabilityToken type between sera-gateway and agent-runtime
    - Currently duplicated; unify under sera-auth
 
-6. **sera-gateway TraitToolRegistry migration** (not yet a bead)
+3. **sera-gateway TraitToolRegistry migration** (not yet a bead)
    - Migrate 14+ Tool-trait adapters from ToolExecutor to TraitToolRegistry
    - Thread ToolContext through ToolDispatcher::dispatch
    - Unlocks tool-level policy enforcement (authorization, rate limits, audit)
 
-7. **Mail gate Design B** (not yet a bead)
+4. **Mail gate Design B** (not yet a bead)
    - Deferred decision: pattern-matching vs thread-id for mail gate correlation
    - Spec exists (SPEC-workflow §4.6); needs design decision before implementation
 
-8. **sera-tj02** — Delete Phase 1 legacy main.rs (low-priority cleanup)
+5. **sera-tj02** — Delete Phase 1 legacy main.rs (low-priority cleanup)
    - `sera-gateway/src/main.rs` has Discord code but no consumer; live path is `bin/sera.rs`
+   - Needs impact assessment before removing the named binary target
 
-9. **sera-pmzb** — File logging for gateway + Discord REST errors
+6. **sera-pmzb** — File logging for gateway + Discord REST errors
    - Gateway lacks file appender; Discord `send_message` failures are currently invisible
+
+7. **Semantic-search Tier-2 memory** (extension of sera-jwtj)
+   - MemoryBlock Tier-1 is wired; on-demand Tier-2 semantic search via HybridScorer is the next integration layer
 
 ---
 

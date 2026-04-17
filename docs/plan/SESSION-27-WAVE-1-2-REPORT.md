@@ -59,13 +59,30 @@ Session 27 Wave 1 + 2 were coordinated ultrawork dispatches targeting Session 26
 
 Verification: `cargo test --workspace` exit 0, `cargo clippy --workspace -- -D warnings` exit 0.
 
-## Wave 4 — Queued
+## Wave 4 — In progress
 
-- **sera-bsq2** Wire PostgresLaneCounter into LaneQueue admission path
-- **sera-jwtj** Integrate MemoryBlock into sera-runtime context injection
-- **sera-sbh9** sera-auth CapabilityTokenIssuer unification
-- **sera-tj02** Delete Phase 1 legacy main.rs
+### Landed
+
+| Bead | Task | Commit | Tests |
+|------|------|--------|-------|
+| sera-jwtj | MemoryBlock integration into sera-runtime context injection. `MemoryBlockAssembler` prepends rendered Tier-1 block as a system message before LLM dispatch; `tracing::info!` emits `memory_pressure` when `overflow_turns >= flush_min_turns`. `Option<Mutex<MemoryBlockAssembler>>` field on `DefaultRuntime` with builder method. Empty block / disabled assembler are no-ops. | `530f6b5` | +5 unit +6 integration |
+
+### Queued
+
+- **sera-bsq2** Wire `PostgresLaneCounter` into LaneQueue admission path
+- **sera-sbh9** sera-auth `CapabilityTokenIssuer` unification
+- **sera-tj02** Delete Phase 1 legacy `main.rs` (needs impact assessment first)
 - **sera-pmzb** File logging for gateway + Discord REST errors
+
+---
+
+## Totals — Session 27 Waves 1-4
+
+- **13 beads closed** (sera-e7xi, sera-pfup, sera-9p9e, sera-jj87, sera-kp6e, sera-5cj, sera-jjms, sera-d54o, sera-zbsu, sera-e8nq, sera-1yi4, sera-occf, sera-jwtj)
+- **16 commits** on `origin/sera20` (`1e6701c..530f6b5`)
+- **1 new workspace crate** (`sera-commands`, 29th)
+- **~96 new tests** added
+- **Verification green** (`cargo test --workspace`, `cargo clippy --workspace -- -D warnings`)
 
 ---
 

@@ -264,8 +264,7 @@ mod tests {
         // Forge a token that claims to be HS384 but is encoded with HMAC key
         // material. The jsonwebtoken library should reject this when we decode
         // with the HS256 `DecodingKey`.
-        let mut header = Header::default();
-        header.alg = Algorithm::HS384;
+        let header = Header { alg: Algorithm::HS384, ..Header::default() };
         let key = EncodingKey::from_secret(secret.as_bytes());
         let forged = encode(&header, &claims, &key).expect("encode forged token");
 

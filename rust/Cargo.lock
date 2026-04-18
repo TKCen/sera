@@ -5402,18 +5402,23 @@ name = "sera-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "crossterm 0.28.1",
+ "futures-util",
+ "once_cell",
  "ratatui",
  "reqwest 0.12.28",
- "sera-types",
+ "sera-e2e-harness",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
- "uuid",
+ "wiremock",
 ]
 
 [[package]]

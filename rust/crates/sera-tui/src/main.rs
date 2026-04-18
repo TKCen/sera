@@ -1,72 +1,136 @@
-//! SERA TUI — terminal user interface built with ratatui + crossterm.
+//! SERA TUI — operator terminal UI built with ratatui + crossterm.
 //!
-//! Replaces the Go TUI (tui/).
-//! Provides a dashboard for viewing and interacting with SERA agent instances.
-//! Also works as a CLI when invoked with subcommands.
+//! Four panes rotate under Tab / Shift-Tab:
+//! * **Agents** — list of agent instances (GET /api/agents)
+//! * **Session** — metadata + streaming transcript (SSE where available)
+//! * **HITL** — pending permission requests, approve/reject/escalate
+//! * **Evolve** — read-only view over evolve proposals
+//!
+//! All keybindings are configurable via [`keybindings::TuiKeybindings`].
+//! No hardcoded key-code checks in dispatch code (project CLAUDE.md rule).
 
-use anyhow::Result;
-use clap::Parser;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::prelude::*;
 use std::io;
 use std::time::Duration;
 
-mod api;
+use anyhow::{Context, Result};
+use clap::Parser;
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use tokio::sync::mpsc;
+
 mod app;
-mod cli;
-mod cli_commands;
+mod client;
+mod config;
+mod input;
+mod keybindings;
 mod ui;
 mod views;
 
+use app::{App, Runtime};
+use client::GatewayClient;
+use config::Config;
+use input::translate;
+use keybindings::TuiKeybindings;
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = cli::Cli::parse();
-    let client = api::ApiClient::new(args.api_url, args.api_key);
+    let cfg = Config::parse();
+    install_panic_hook();
 
-    match args.command {
-        None | Some(cli::Commands::Tui) => run_tui(client).await,
-        Some(cmd) => cli_commands::dispatch(client, cmd).await,
-    }
+    let client = GatewayClient::new(
+        &cfg.api_url,
+        &cfg.api_key,
+        Duration::from_secs(cfg.timeout_secs),
+    )
+    .context("building gateway client")?;
+
+    let mut terminal = init_terminal().context("initialising terminal")?;
+    let tick = Duration::from_millis(cfg.tick_ms);
+    let result = run(&mut terminal, client, tick).await;
+    restore_terminal(&mut terminal).ok();
+    result
 }
 
-/// Launch the interactive ratatui TUI.
-async fn run_tui(client: api::ApiClient) -> Result<()> {
-    // Setup terminal
+/// Initialise crossterm + alternate screen and return a ratatui Terminal.
+fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut out = io::stdout();
+    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(out);
+    Ok(Terminal::new(backend)?)
+}
 
-    let mut app = app::App::new(client);
+/// Restore terminal state on exit.  Safe to call twice (idempotent).
+fn restore_terminal<B: ratatui::backend::Backend + io::Write>(
+    terminal: &mut Terminal<B>,
+) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
 
-    // Initial data load
-    app.refresh().await;
+/// A panic hook that restores the terminal before printing the panic.
+/// Without this, a panic mid-render leaves the operator's shell in raw
+/// mode and useless.
+fn install_panic_hook() {
+    let original = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        original(info);
+    }));
+}
 
-    // Main loop — 'q' quits, 'r' refreshes, 'm' opens knowledge view
+/// Main event loop.
+async fn run<B: ratatui::backend::Backend + io::Write>(
+    terminal: &mut Terminal<B>,
+    client: GatewayClient,
+    tick: Duration,
+) -> Result<()> {
+    let (sse_tx, mut sse_rx) = mpsc::unbounded_channel();
+    let mut app = App::new(client, TuiKeybindings::defaults());
+    let mut runtime = Runtime::new(sse_tx);
+
+    // Initial fetch.
+    Runtime::refresh_all(&mut app).await;
+
     loop {
-        terminal.draw(|f| app.render(f))?;
+        terminal.draw(|f| ui::render(f, &mut app))?;
 
-        if event::poll(Duration::from_millis(250))?
+        // Drain any pending SSE updates first — non-blocking.
+        while let Ok(update) = sse_rx.try_recv() {
+            app.apply_sse(update);
+        }
+
+        // Poll crossterm for input with a short budget so SSE + timer
+        // have a chance to run each tick.
+        if event::poll(tick)?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            match key.code {
-                KeyCode::Char('q') => break,
-                KeyCode::Char('r') => app.refresh().await,
-                other => app.handle_key(other).await,
-            }
+            let action = translate(&key, &app.keybindings);
+            app.dispatch(action);
+        }
+
+        // Execute any commands the dispatcher queued.
+        if !app.pending.is_empty() {
+            runtime.execute(&mut app).await;
+        }
+
+        if app.should_quit {
+            break;
         }
     }
-
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
 
     Ok(())
 }

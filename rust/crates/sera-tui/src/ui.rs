@@ -1,65 +1,158 @@
-//! Shared UI rendering helpers.
-// TODO(sera-2q1d): helper fns are part of the shared UI library; not all are
-// called by existing views yet but form the intended public API surface.
-#![allow(dead_code)]
+//! Central render entry point.
+//!
+//! Owns only the top-level layout (title bar, body, footer) — each pane
+//! delegates to its view module.
 
-use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::Frame;
 
-/// Create a centered block with a title.
-pub fn centered_block(title: &str) -> ratatui::widgets::Block<'_> {
-    ratatui::widgets::Block::default()
-        .title(format!(" {} ", title))
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+use crate::app::{actions::ViewKind, App, StatusLevel};
+use crate::client::ConnectionState;
+
+/// Render the whole screen.
+pub fn render(frame: &mut Frame, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(frame.area());
+
+    render_title(frame, chunks[0], app);
+
+    // Body is the focused view rendered full-area.
+    match app.focus {
+        ViewKind::Agents => app.agents.render(frame, chunks[1], true),
+        ViewKind::Session => app.session.render(frame, chunks[1], true),
+        ViewKind::Hitl => app.hitl.render(frame, chunks[1], true),
+        ViewKind::Evolve => app.evolve.render(frame, chunks[1], true),
+    }
+
+    render_footer(frame, chunks[2], app);
 }
 
-/// Create a styled error message.
-pub fn error_text(message: &str) -> Paragraph<'_> {
-    Paragraph::new(message).style(Style::default().fg(Color::Red).bold())
+fn render_title(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let tabs = [
+        ViewKind::Agents,
+        ViewKind::Session,
+        ViewKind::Hitl,
+        ViewKind::Evolve,
+    ];
+    let mut spans: Vec<Span<'_>> = Vec::with_capacity(tabs.len() * 2 + 4);
+    spans.push(Span::styled(
+        " SERA ",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw("│ "));
+    for (i, v) in tabs.iter().enumerate() {
+        let focused = *v == app.focus;
+        let style = if focused {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(format!(" {} ", v.label()), style));
+        if i + 1 < tabs.len() {
+            spans.push(Span::raw(" "));
+        }
+    }
+    spans.push(Span::raw("  "));
+    spans.push(conn_badge(app.connection));
+
+    let title = Paragraph::new(Line::from(spans))
+        .block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(title, area);
 }
 
-/// Create a styled info message.
-pub fn info_text(message: &str) -> Paragraph<'_> {
-    Paragraph::new(message).style(Style::default().fg(Color::Green))
+fn conn_badge(state: ConnectionState) -> Span<'static> {
+    let (label, color) = match state {
+        ConnectionState::Connected => ("● connected", Color::Green),
+        ConnectionState::Reconnecting => ("● reconnecting", Color::Yellow),
+        ConnectionState::Disconnected => ("● disconnected", Color::Red),
+    };
+    Span::styled(
+        label,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
 }
 
-/// Create a styled warning message.
-pub fn warning_text(message: &str) -> Paragraph<'_> {
-    Paragraph::new(message).style(Style::default().fg(Color::Yellow))
+fn render_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let hint = app.footer_hint();
+    let status_style = match app.status.level {
+        StatusLevel::Info => Style::default().fg(Color::Green),
+        StatusLevel::Warn => Style::default().fg(Color::Yellow),
+        StatusLevel::Error => Style::default().fg(Color::Red),
+    };
+
+    // Split footer into hint (top line) and status (bottom line).
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(area);
+
+    let hint_p = Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(hint_p, chunks[0]);
+    let status_p = Paragraph::new(app.status.text.clone()).style(status_style);
+    frame.render_widget(status_p, chunks[1]);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
+    use crate::client::{ConnectionState, GatewayClient};
+    use crate::keybindings::TuiKeybindings;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
-    #[test]
-    fn centered_block_title_has_padding_spaces() {
-        let block = centered_block("Hello");
-        // Title is wrapped with spaces: " Hello "
-        let title_str = format!("{:?}", block);
-        assert!(title_str.contains("Hello"));
+    fn client() -> GatewayClient {
+        GatewayClient::new(
+            "http://127.0.0.1:1",
+            "test",
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap()
     }
 
     #[test]
-    fn error_text_style_is_red() {
-        let para = error_text("oops");
-        let debug = format!("{:?}", para);
-        // ratatui Debug format: Style::new().red().bold()
-        assert!(debug.contains(".red()"));
+    fn render_agents_view_produces_output() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        let backend = TestBackend::new(80, 20);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(rendered.contains("SERA"));
+        assert!(rendered.contains("Agents"));
     }
 
     #[test]
-    fn info_text_style_is_green() {
-        let para = info_text("ok");
-        let debug = format!("{:?}", para);
-        assert!(debug.contains(".green()"));
-    }
-
-    #[test]
-    fn warning_text_style_is_yellow() {
-        let para = warning_text("watch out");
-        let debug = format!("{:?}", para);
-        assert!(debug.contains(".yellow()"));
+    fn connection_badge_labels_all_states() {
+        for (state, expect) in [
+            (ConnectionState::Connected, "connected"),
+            (ConnectionState::Reconnecting, "reconnecting"),
+            (ConnectionState::Disconnected, "disconnected"),
+        ] {
+            let span = conn_badge(state);
+            assert!(
+                span.content.contains(expect),
+                "badge for {state:?} did not mention {expect}"
+            );
+        }
     }
 }

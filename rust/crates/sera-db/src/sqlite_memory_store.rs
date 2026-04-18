@@ -350,6 +350,7 @@ fn row_to_entry(row: Row, embedding: Vec<f32>) -> SemanticEntry {
         created_at: row.created_at,
         last_accessed_at: row.last_touched_at,
         promoted: row.promoted,
+        scope: None,
     }
 }
 

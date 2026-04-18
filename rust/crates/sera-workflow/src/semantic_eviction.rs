@@ -180,6 +180,7 @@ impl DreamingCandidatePicker for StatsDreamingPicker {
                 query_embedding: Some(probe.clone()),
                 top_k: top_n,
                 similarity_threshold: None,
+                scope: None,
             };
             match store.query(q).await {
                 Ok(mut hits) => {
@@ -544,6 +545,7 @@ mod tests {
             created_at: Utc::now() - ChronoDuration::days(age_days),
             last_accessed_at: None,
             promoted,
+            scope: None,
         }
     }
 

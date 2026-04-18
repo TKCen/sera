@@ -331,25 +331,33 @@ impl EvolveTokenSigner {
         required: BlastRadius,
     ) -> Result<(), EvolveTokenError> {
         // ── 1. Signature check (current key, then grace-period keys) ──
-        let sig_ok = {
-            let current_guard = self.current.read().expect("current RwLock poisoned");
-            if current_guard.secret.is_empty() {
+        //
+        // NOTE: we must not hold `self.current.read()` while acquiring
+        // `self.history.read()`. `rotate()` takes `history.write()` before
+        // `current.write()`; holding read guards in the opposite order would
+        // deadlock a concurrent rotate that has `history.write` and is
+        // waiting for `current.write`. Clone the secret out and drop the
+        // current guard before touching history.
+        let current_secret: Vec<u8> = {
+            let guard = self.current.read().expect("current RwLock poisoned");
+            if guard.secret.is_empty() {
                 return Err(EvolveTokenError::EmptySecret);
             }
+            guard.secret.clone()
+        };
 
-            let expected = Self::mac_with_key(&current_guard.secret, token);
-            if constant_time_eq_64(&expected, &token.signature) {
-                true
-            } else {
-                // Try grace-period keys from history.
-                let history_guard = self.history.read().expect("history RwLock poisoned");
-                history_guard
-                    .active_grace_keys(self.grace)
-                    .any(|k| {
-                        let exp = Self::mac_with_key(&k.secret, token);
-                        constant_time_eq_64(&exp, &token.signature)
-                    })
-            }
+        let expected = Self::mac_with_key(&current_secret, token);
+        let sig_ok = if constant_time_eq_64(&expected, &token.signature) {
+            true
+        } else {
+            // Try grace-period keys from history.
+            let history_guard = self.history.read().expect("history RwLock poisoned");
+            history_guard
+                .active_grace_keys(self.grace)
+                .any(|k| {
+                    let exp = Self::mac_with_key(&k.secret, token);
+                    constant_time_eq_64(&exp, &token.signature)
+                })
         };
 
         if !sig_ok {

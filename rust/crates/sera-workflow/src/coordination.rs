@@ -17,11 +17,17 @@
 //! by opaque [`ParticipantId`] strings and tasks are represented by a single
 //! serde_json::Value payload.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use sera_types::circle::{
+    BlackboardEntry, BlackboardRetention, TerminationCondition, AGENT_DECISION_ARTIFACT,
+};
 
 /// Identifier for a coordination participant (agent, sub-circle, or human).
 pub type ParticipantId = String;
@@ -419,6 +425,223 @@ impl CircleMemory {
 }
 
 // =========================================================================
+// CircleBlackboard (SPEC-circles §3f / bead sera-8d1.3)
+// =========================================================================
+
+/// Monotonic cursor into a [`CircleBlackboard`].
+///
+/// Acts as an index into the append-only log. After compaction, cursors
+/// remain valid: callers can always ask for "everything after this cursor".
+pub type BlackboardCursor = u64;
+
+/// Starting cursor value — readers that pass this get the full current
+/// snapshot (up to retention).
+pub const BLACKBOARD_START: BlackboardCursor = 0;
+
+/// Append-only shared artifact bus for a Circle session.
+///
+/// Entries are stored in insertion order with a monotonically-increasing
+/// cursor (`seq`). [`BlackboardRetention`] is applied on every append.
+///
+/// Thread-safety is the *caller's* responsibility — wrap in `Arc<Mutex<_>>`
+/// (or a lock-free cell) for concurrent producers.
+pub struct CircleBlackboard {
+    entries: VecDeque<(BlackboardCursor, BlackboardEntry)>,
+    retention: BlackboardRetention,
+    next_seq: BlackboardCursor,
+    /// Wall-clock start for `Timeout` predicates. Monotonic; tests may
+    /// override via [`CircleBlackboard::set_started_at`].
+    started_at: Instant,
+    /// External-signal latch — consulted by `ExternalSignal`.
+    external_signal: bool,
+}
+
+impl std::fmt::Debug for CircleBlackboard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CircleBlackboard")
+            .field("entries", &self.entries.len())
+            .field("retention", &self.retention)
+            .field("next_seq", &self.next_seq)
+            .field("external_signal", &self.external_signal)
+            .finish()
+    }
+}
+
+impl CircleBlackboard {
+    /// Create a new blackboard with unbounded retention.
+    pub fn new() -> Self {
+        Self::with_retention(BlackboardRetention::default())
+    }
+
+    /// Create a new blackboard with the given retention policy.
+    pub fn with_retention(retention: BlackboardRetention) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            retention,
+            next_seq: 1,
+            started_at: Instant::now(),
+            external_signal: false,
+        }
+    }
+
+    /// Replace the session-start instant. Useful for deterministic timeout
+    /// tests; production code should leave the default.
+    pub fn set_started_at(&mut self, when: Instant) {
+        self.started_at = when;
+    }
+
+    /// Append a new entry. Returns its assigned cursor.
+    /// Compaction via [`BlackboardRetention`] runs on every append.
+    pub fn append(&mut self, entry: BlackboardEntry) -> BlackboardCursor {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.entries.push_back((seq, entry));
+        self.compact();
+        seq
+    }
+
+    /// Convenience: build and append an entry with the current wall clock.
+    pub fn record(
+        &mut self,
+        participant_id: impl Into<String>,
+        artifact_type: impl Into<String>,
+        payload: Value,
+    ) -> BlackboardCursor {
+        let entry = BlackboardEntry {
+            participant_id: participant_id.into(),
+            timestamp: Utc::now(),
+            artifact_type: artifact_type.into(),
+            payload,
+        };
+        self.append(entry)
+    }
+
+    /// Entries with a cursor strictly greater than `cursor`.
+    /// Pass [`BLACKBOARD_START`] to receive the full current snapshot.
+    pub fn entries_since(&self, cursor: BlackboardCursor) -> Vec<&BlackboardEntry> {
+        self.entries
+            .iter()
+            .filter(|(seq, _)| *seq > cursor)
+            .map(|(_, e)| e)
+            .collect()
+    }
+
+    /// All entries authored by `participant_id`, in insertion order.
+    pub fn entries_by_participant(&self, participant_id: &str) -> Vec<&BlackboardEntry> {
+        self.entries
+            .iter()
+            .filter(|(_, e)| e.participant_id == participant_id)
+            .map(|(_, e)| e)
+            .collect()
+    }
+
+    /// Cloned snapshot of all live entries in insertion order.
+    pub fn snapshot(&self) -> Vec<BlackboardEntry> {
+        self.entries.iter().map(|(_, e)| e.clone()).collect()
+    }
+
+    /// Current live entry count.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Total entries ever appended (includes dropped-by-retention).
+    pub fn total_appended(&self) -> u64 {
+        self.next_seq.saturating_sub(1)
+    }
+
+    /// True when the blackboard has zero live entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Current retention policy.
+    pub fn retention(&self) -> &BlackboardRetention {
+        &self.retention
+    }
+
+    /// Replace the retention policy, applying it immediately.
+    pub fn set_retention(&mut self, retention: BlackboardRetention) {
+        self.retention = retention;
+        self.compact();
+    }
+
+    /// Trigger the `ExternalSignal` termination branch.
+    pub fn signal_external_stop(&mut self) {
+        self.external_signal = true;
+    }
+
+    /// Whether the external stop signal has been raised.
+    pub fn external_signal_raised(&self) -> bool {
+        self.external_signal
+    }
+
+    /// Evaluate a [`TerminationCondition`] against this blackboard.
+    pub fn evaluate(&self, cond: &TerminationCondition) -> bool {
+        match cond {
+            TerminationCondition::MaxMessages(n) => self.total_appended() >= u64::from(*n),
+            TerminationCondition::TextMention(needle) => self.entries.iter().any(|(_, e)| {
+                payload_contains_text(&e.payload, needle)
+                    || e.artifact_type.contains(needle.as_str())
+            }),
+            TerminationCondition::Timeout(d) => self.started_at.elapsed() >= *d,
+            TerminationCondition::AgentDecision => self
+                .entries
+                .iter()
+                .any(|(_, e)| e.artifact_type == AGENT_DECISION_ARTIFACT),
+            TerminationCondition::ExternalSignal => self.external_signal,
+            TerminationCondition::And(a, b) => self.evaluate(a) && self.evaluate(b),
+            TerminationCondition::Or(a, b) => self.evaluate(a) || self.evaluate(b),
+        }
+    }
+
+    /// Apply retention to trim oldest entries.
+    fn compact(&mut self) {
+        if let Some(max_age) = self.retention.max_age {
+            let cutoff = Utc::now() - chrono::Duration::from_std(max_age).unwrap_or_default();
+            while let Some((_, front)) = self.entries.front() {
+                if front.timestamp < cutoff {
+                    self.entries.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+        if let Some(max_entries) = self.retention.max_entries {
+            let cap = max_entries.get();
+            while self.entries.len() > cap {
+                self.entries.pop_front();
+            }
+        }
+    }
+}
+
+impl Default for CircleBlackboard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Recursive walk — any string leaf in `payload` containing `needle` wins.
+fn payload_contains_text(payload: &Value, needle: &str) -> bool {
+    match payload {
+        Value::String(s) => s.contains(needle),
+        Value::Array(xs) => xs.iter().any(|v| payload_contains_text(v, needle)),
+        Value::Object(map) => map.values().any(|v| payload_contains_text(v, needle)),
+        _ => false,
+    }
+}
+
+/// Why a [`Coordinator::run`] loop terminated.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CircleStopReason {
+    /// A [`TerminationCondition`] evaluated true against the blackboard.
+    Condition,
+    /// The aggregator produced a final result and no condition was set.
+    Completed,
+}
+
+// =========================================================================
 // CoordinationPolicy
 // =========================================================================
 
@@ -491,6 +714,8 @@ pub enum CoordinationError {
     Aggregation(#[from] AggregationError),
     #[error("convergence exhausted without a successful outcome")]
     ConvergenceExhausted,
+    #[error("terminated by TerminationCondition")]
+    TerminatedByCondition,
 }
 
 pub struct Coordinator {
@@ -500,6 +725,15 @@ pub struct Coordinator {
     /// Optional observer for sub-agent `delegate-task` dispatches — bead
     /// `sera-8d1.1` (GH#144). See [`SubagentDelegationObserver`].
     pub(crate) subagent_observer: Option<Arc<dyn SubagentDelegationObserver>>,
+    /// Shared blackboard — populated by policy branches (Party mode in
+    /// bead `sera-8d1.2`) and read by termination predicates.
+    ///
+    /// Bead `sera-8d1.3` (GH#146).
+    pub(crate) blackboard: Arc<Mutex<CircleBlackboard>>,
+    /// Active termination condition evaluated after each round of
+    /// [`Coordinator::run`]. `None` disables blackboard-driven termination
+    /// and relies solely on aggregator / convergence semantics.
+    pub(crate) termination: Option<TerminationCondition>,
 }
 
 impl Coordinator {
@@ -513,7 +747,47 @@ impl Coordinator {
             concurrency,
             aggregator,
             subagent_observer: None,
+            blackboard: Arc::new(Mutex::new(CircleBlackboard::new())),
+            termination: None,
         }
+    }
+
+    /// Attach a pre-built blackboard (e.g. with a custom retention policy).
+    pub fn with_blackboard(mut self, blackboard: CircleBlackboard) -> Self {
+        self.blackboard = Arc::new(Mutex::new(blackboard));
+        self
+    }
+
+    /// Set the termination condition evaluated after each round.
+    pub fn with_termination(mut self, cond: TerminationCondition) -> Self {
+        self.termination = Some(cond);
+        self
+    }
+
+    /// Shared blackboard handle — clone the `Arc` for concurrent producers.
+    pub fn blackboard_handle(&self) -> Arc<Mutex<CircleBlackboard>> {
+        self.blackboard.clone()
+    }
+
+    /// Borrow the blackboard via the stored lock. Panics on poisoned lock.
+    pub fn blackboard(&self) -> std::sync::MutexGuard<'_, CircleBlackboard> {
+        self.blackboard.lock().expect("blackboard lock poisoned")
+    }
+
+    /// True when the configured [`TerminationCondition`] evaluates true
+    /// against the current blackboard. Always `false` when no condition
+    /// is set.
+    pub fn should_terminate(&self) -> bool {
+        match &self.termination {
+            Some(cond) => self.blackboard().evaluate(cond),
+            None => false,
+        }
+    }
+
+    /// Raise the external stop signal. Used by embedders for the
+    /// [`TerminationCondition::ExternalSignal`] branch.
+    pub fn signal_external_stop(&self) {
+        self.blackboard().signal_external_stop();
     }
 
     pub fn run(
@@ -529,7 +803,13 @@ impl Coordinator {
 
         let scheduler = ConcurrencyScheduler::new(self.concurrency);
 
-        match &self.policy {
+        // Pre-run termination check — e.g. external signal already raised.
+        if self.should_terminate() {
+            self.archive_session(CircleStopReason::Condition);
+            return Err(CoordinationError::TerminatedByCondition);
+        }
+
+        let result = match &self.policy {
             CoordinationPolicy::Sequential
             | CoordinationPolicy::Parallel
             | CoordinationPolicy::Pipeline { .. }
@@ -541,7 +821,7 @@ impl Coordinator {
                     .map(|p| (p.clone(), task.clone()))
                     .collect();
                 let results = scheduler.run(pairs, exec);
-                Ok(self.aggregator.aggregate(&results)?)
+                self.aggregator.aggregate(&results)?
             }
             CoordinationPolicy::Debate {
                 proposer,
@@ -552,6 +832,7 @@ impl Coordinator {
                 let mut last: Option<AggregatedResult> = None;
                 let mut current_task = task.clone();
                 const SAFETY_CAP: u32 = 64;
+                let mut terminated_by_condition = false;
                 while state.iterations() < SAFETY_CAP {
                     let pairs = vec![
                         (proposer.clone(), current_task.clone()),
@@ -574,10 +855,48 @@ impl Coordinator {
                     if stop {
                         break;
                     }
+                    // Post-round termination check for long-running loops.
+                    if self.should_terminate() {
+                        terminated_by_condition = true;
+                        break;
+                    }
                 }
-                last.ok_or(CoordinationError::ConvergenceExhausted)
+                if terminated_by_condition {
+                    self.archive_session(CircleStopReason::Condition);
+                    return Err(CoordinationError::TerminatedByCondition);
+                }
+                last.ok_or(CoordinationError::ConvergenceExhausted)?
             }
+        };
+
+        // Post-run termination check — e.g. MaxMessages reached during this
+        // round via participant-side blackboard appends.
+        if self.should_terminate() {
+            self.archive_session(CircleStopReason::Condition);
+            return Err(CoordinationError::TerminatedByCondition);
         }
+
+        self.archive_session(CircleStopReason::Completed);
+        Ok(result)
+    }
+
+    /// Emit a stop marker into the blackboard on termination.  The marker
+    /// is append-only so external archivers (DB sinks, audit) can replay it.
+    fn archive_session(&self, reason: CircleStopReason) {
+        let mut bb = self.blackboard();
+        let total = bb.total_appended();
+        bb.append(BlackboardEntry {
+            participant_id: "__coordinator__".into(),
+            timestamp: Utc::now(),
+            artifact_type: "circle_session_archived".into(),
+            payload: serde_json::json!({
+                "reason": match reason {
+                    CircleStopReason::Condition => "condition",
+                    CircleStopReason::Completed => "completed",
+                },
+                "total_entries": total,
+            }),
+        });
     }
 }
 
@@ -1059,5 +1378,242 @@ mod tests {
             .kind(),
             "consensus"
         );
+    }
+
+    // =====================================================================
+    // Blackboard + TerminationCondition (bead sera-8d1.3 / GH#146)
+    // =====================================================================
+
+    fn bb_entry(participant: &str, artifact: &str, payload: Value) -> BlackboardEntry {
+        BlackboardEntry {
+            participant_id: participant.into(),
+            timestamp: Utc::now(),
+            artifact_type: artifact.into(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn termination_max_messages_fires_at_limit() {
+        let mut bb = CircleBlackboard::new();
+        let cond = TerminationCondition::MaxMessages(3);
+        for i in 0..3 {
+            assert!(!bb.evaluate(&cond), "should not terminate at i={i}");
+            bb.append(bb_entry("p", "message", json!(i)));
+        }
+        assert!(bb.evaluate(&cond), "should terminate after 3 messages");
+    }
+
+    #[test]
+    fn termination_text_mention_fires_on_payload_match() {
+        let mut bb = CircleBlackboard::new();
+        let cond = TerminationCondition::TextMention("ADJOURN".into());
+        bb.append(bb_entry("p", "message", json!("hello")));
+        assert!(!bb.evaluate(&cond));
+        bb.append(bb_entry("p", "message", json!("please ADJOURN now")));
+        assert!(bb.evaluate(&cond));
+    }
+
+    #[test]
+    fn termination_timeout_fires_after_elapsed_duration() {
+        let mut bb = CircleBlackboard::new();
+        let cond = TerminationCondition::Timeout(std::time::Duration::from_millis(50));
+        assert!(!bb.evaluate(&cond));
+        // Rewind the "started_at" 60ms into the past.
+        bb.set_started_at(Instant::now() - std::time::Duration::from_millis(60));
+        assert!(bb.evaluate(&cond));
+    }
+
+    #[test]
+    fn termination_agent_decision_fires_on_stop_artifact() {
+        let mut bb = CircleBlackboard::new();
+        let cond = TerminationCondition::AgentDecision;
+        bb.append(bb_entry("p", "message", json!("normal")));
+        assert!(!bb.evaluate(&cond));
+        bb.append(bb_entry("p", AGENT_DECISION_ARTIFACT, json!({"reason": "done"})));
+        assert!(bb.evaluate(&cond));
+    }
+
+    #[test]
+    fn termination_external_signal_triggered_via_api() {
+        let coord = Coordinator::new(
+            CoordinationPolicy::Sequential,
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        )
+        .with_termination(TerminationCondition::ExternalSignal);
+        assert!(!coord.should_terminate());
+        coord.signal_external_stop();
+        assert!(coord.should_terminate());
+    }
+
+    #[test]
+    fn termination_and_requires_both_true() {
+        let mut bb = CircleBlackboard::new();
+        let cond = TerminationCondition::And(
+            Box::new(TerminationCondition::MaxMessages(2)),
+            Box::new(TerminationCondition::TextMention("go".into())),
+        );
+        bb.append(bb_entry("p", "message", json!("first")));
+        bb.append(bb_entry("p", "message", json!("second")));
+        // MaxMessages satisfied but TextMention not.
+        assert!(!bb.evaluate(&cond));
+        bb.append(bb_entry("p", "message", json!("time to go")));
+        assert!(bb.evaluate(&cond));
+    }
+
+    #[test]
+    fn termination_or_fires_on_either() {
+        let mut bb = CircleBlackboard::new();
+        let cond = TerminationCondition::Or(
+            Box::new(TerminationCondition::TextMention("halt".into())),
+            Box::new(TerminationCondition::MaxMessages(100)),
+        );
+        assert!(!bb.evaluate(&cond));
+        bb.append(bb_entry("p", "message", json!("please halt")));
+        assert!(bb.evaluate(&cond));
+    }
+
+    #[test]
+    fn termination_nested_composition() {
+        // And(MaxMessages(2), Or(TextMention("X"), Timeout(1s)))
+        let cond = TerminationCondition::And(
+            Box::new(TerminationCondition::MaxMessages(2)),
+            Box::new(TerminationCondition::Or(
+                Box::new(TerminationCondition::TextMention("X".into())),
+                Box::new(TerminationCondition::Timeout(
+                    std::time::Duration::from_secs(1),
+                )),
+            )),
+        );
+
+        let mut bb = CircleBlackboard::new();
+        bb.append(bb_entry("p", "message", json!("a")));
+        assert!(!bb.evaluate(&cond));
+        bb.append(bb_entry("p", "message", json!("b")));
+        // MaxMessages now satisfied, but inner Or has neither X nor timeout.
+        assert!(!bb.evaluate(&cond));
+        bb.append(bb_entry("p", "message", json!("X marks it")));
+        assert!(bb.evaluate(&cond));
+    }
+
+    #[test]
+    fn blackboard_compaction_by_max_entries() {
+        let cap = std::num::NonZeroUsize::new(3).unwrap();
+        let mut bb =
+            CircleBlackboard::with_retention(BlackboardRetention::with_max_entries(cap));
+        for i in 0..10 {
+            bb.append(bb_entry("p", "message", json!(i)));
+        }
+        assert_eq!(bb.len(), 3);
+        assert_eq!(bb.total_appended(), 10);
+        let snap = bb.snapshot();
+        // oldest retained should be the 8th (0-indexed: payload 7,8,9)
+        assert_eq!(snap[0].payload, json!(7));
+        assert_eq!(snap[2].payload, json!(9));
+    }
+
+    #[test]
+    fn blackboard_compaction_by_max_age() {
+        // Use very-small max_age so appends trim themselves by the time the
+        // retention window passes via a sleep.
+        let mut bb = CircleBlackboard::with_retention(BlackboardRetention::with_max_age(
+            std::time::Duration::from_millis(40),
+        ));
+        bb.append(bb_entry("p", "message", json!("old")));
+        std::thread::sleep(std::time::Duration::from_millis(70));
+        bb.append(bb_entry("p", "message", json!("fresh")));
+        // 'old' was older than max_age at the time 'fresh' was appended and
+        // should have been compacted out.
+        let snap = bb.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].payload, json!("fresh"));
+    }
+
+    #[test]
+    fn blackboard_entries_since_returns_only_new() {
+        let mut bb = CircleBlackboard::new();
+        let c1 = bb.append(bb_entry("p", "message", json!(1)));
+        let _c2 = bb.append(bb_entry("p", "message", json!(2)));
+        let _c3 = bb.append(bb_entry("p", "message", json!(3)));
+
+        let since_start = bb.entries_since(BLACKBOARD_START);
+        assert_eq!(since_start.len(), 3);
+
+        let since_first = bb.entries_since(c1);
+        assert_eq!(since_first.len(), 2);
+        assert_eq!(since_first[0].payload, json!(2));
+        assert_eq!(since_first[1].payload, json!(3));
+    }
+
+    #[test]
+    fn blackboard_entries_by_participant_filters_correctly() {
+        let mut bb = CircleBlackboard::new();
+        bb.append(bb_entry("alice", "message", json!(1)));
+        bb.append(bb_entry("bob", "message", json!(2)));
+        bb.append(bb_entry("alice", "message", json!(3)));
+        let alice_entries = bb.entries_by_participant("alice");
+        assert_eq!(alice_entries.len(), 2);
+        assert_eq!(alice_entries[0].payload, json!(1));
+        assert_eq!(alice_entries[1].payload, json!(3));
+    }
+
+    #[test]
+    fn coordinator_termination_archives_and_errors() {
+        // Pre-populate the blackboard so MaxMessages(1) fires before
+        // Coordinator::run even dispatches.
+        let coord = Coordinator::new(
+            CoordinationPolicy::Sequential,
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        )
+        .with_termination(TerminationCondition::MaxMessages(1));
+        coord
+            .blackboard()
+            .append(bb_entry("p", "message", json!("pre")));
+
+        let task = CoordTask {
+            task_id: "x".into(),
+            payload: json!(null),
+        };
+        let exec: Box<ExecFn> = Box::new(|p, t| ok(p, &t.task_id, json!(p.clone())));
+        let err = coord
+            .run(task, &["a".into()], exec.as_ref())
+            .expect_err("should terminate");
+        assert!(matches!(err, CoordinationError::TerminatedByCondition));
+
+        // Session must be archived in the blackboard.
+        let archived = coord
+            .blackboard()
+            .snapshot()
+            .iter()
+            .any(|e| e.artifact_type == "circle_session_archived");
+        assert!(archived, "expected archival marker");
+    }
+
+    #[test]
+    fn coordinator_post_run_archives_completed() {
+        let coord = Coordinator::new(
+            CoordinationPolicy::Parallel,
+            ConcurrencyPolicy::Sequential,
+            Box::new(AllComplete),
+        );
+        let task = CoordTask {
+            task_id: "done".into(),
+            payload: json!(null),
+        };
+        let exec: Box<ExecFn> = Box::new(|p, t| ok(p, &t.task_id, json!(p.clone())));
+        let _ = coord
+            .run(task, &["a".into(), "b".into()], exec.as_ref())
+            .unwrap();
+        let archived = coord
+            .blackboard()
+            .snapshot()
+            .iter()
+            .any(|e| {
+                e.artifact_type == "circle_session_archived"
+                    && e.payload["reason"] == json!("completed")
+            });
+        assert!(archived);
     }
 }

@@ -2,6 +2,7 @@
 //! and the full sera-core domain model.
 
 pub mod agent_tool;
+pub mod circle;
 pub mod circle_activity;
 pub mod envelope;
 pub mod llm;

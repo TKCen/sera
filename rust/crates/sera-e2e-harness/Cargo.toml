@@ -1,0 +1,44 @@
+[package]
+name = "sera-e2e-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cross-crate end-to-end test harness for SERA 2.0 — boots the gateway binary and drives the full turn loop."
+
+[features]
+# No real integration tests run by default — the test bodies are gated behind
+# `integration` so a plain `cargo test --workspace` stays fast and deterministic.
+default = []
+integration = []
+# Enterprise profile — PostgreSQL + pgvector store.
+postgres = ["integration"]
+# Streaming profile — asserts on Centrifugo `thought_stream` events.
+centrifugo = ["integration"]
+
+[dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "process", "io-util", "sync"] }
+tempfile = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+wiremock = { workspace = true }
+# Direct SQLite reads for audit/transcript assertions — the autonomous
+# gateway exposes neither `/api/audit` nor a memory-segment endpoint, so the
+# test reads rows out of sera.db directly.
+rusqlite = { workspace = true }
+
+# Workspace crates — we depend on these so the e2e crate can drive CLI command
+# objects in-process and read the SQLite store the gateway wrote.
+sera-cli      = { path = "../sera-cli" }
+sera-commands = { workspace = true }
+sera-types    = { workspace = true }
+sera-db       = { workspace = true }
+sera-testing  = { workspace = true }
+
+[dev-dependencies]
+# Everything the integration test needs (httpmock-style scripted LLM + temp fs
+# + in-process CLI driver) is already covered by the main `[dependencies]`
+# section, so the dev-only surface stays minimal.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

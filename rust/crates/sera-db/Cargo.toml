@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [features]
+default = ["sqlite-vec"]
 integration = []
+sqlite-vec = ["dep:sqlite-vec"]
 
 [dependencies]
 sera-types.workspace = true
@@ -26,7 +28,9 @@ rand.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 pgvector = { version = "0.4", features = ["sqlx"] }
+sqlite-vec = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 uuid = { workspace = true }
+tempfile = { workspace = true }

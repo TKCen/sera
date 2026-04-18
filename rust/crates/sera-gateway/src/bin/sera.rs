@@ -37,6 +37,12 @@ use sera_db::lane_queue_counter::{
     InMemoryLaneCounter, LaneCounterStoreDyn, PostgresLaneCounter,
 };
 use sera_db::sqlite::SqliteDb;
+// sera-vzce: SqliteMemoryStore is the zero-infra SemanticMemoryStore tier
+// (FTS5 + sqlite-vec + RRF). Pairs with PgVectorStore for the enterprise
+// path. Importer left in place so the wiring below can slot it in without
+// another touch of this file.
+#[allow(unused_imports)]
+use sera_db::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
 use sera_types::event::Event as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
@@ -1734,6 +1740,14 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     let db_path = PathBuf::from("sera.db");
     tracing::info!(path = %db_path.display(), "Opening SQLite database");
     let db = SqliteDb::open(&db_path)?;
+
+    // 2a. SemanticMemoryStore (Tier-2 recall) backend selection.
+    // sera-vzce left this as a TODO so the MVS boot path stays minimal:
+    //   * SERA_MEMORY_BACKEND=sqlite (or unset, no DATABASE_URL) →
+    //     `SqliteMemoryStore::open(SERA_DB_PATH or "./sera.db", embedding)`
+    //   * DATABASE_URL set → `PgVectorStore::new(pool).initialize()`
+    // Wire once the runtime carries an Arc<dyn EmbeddingService> through
+    // to this boot path.
 
     // 3. Resolve Discord connector if configured.  We create a shared Arc so
     //    the gateway listener and the event-loop response sender use the same

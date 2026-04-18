@@ -25,6 +25,7 @@ sera-runtime.workspace = true
 sera-hooks.workspace = true
 sera-hitl.workspace = true
 sera-workflow.workspace = true
+sera-mail = { path = "../sera-mail" }
 sera-session.workspace = true
 sera-meta.workspace = true
 serde.workspace = true

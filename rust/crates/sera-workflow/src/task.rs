@@ -227,9 +227,11 @@ impl fmt::Display for MailThreadId {
 /// closed. Pattern-based inbox-wide matching is deferred to a post-MVS
 /// refinement.
 ///
-// TODO(post-MVS): consider AwaitType::Mail { pattern: MailPattern } for richer
-// inbox-wide event matching (Design B). File a follow-up bead before removing
-// this comment.
+/// Ingress correlation (sera-uwk0): the scheduler side (this trait, MailEvent,
+/// is_mail_ready) is pattern-agnostic — the `sera-mail` crate implements the
+/// B1 (RFC 5322 headers) → B2 (body-nonce) → B3 (drop) correlator that maps
+/// inbound replies back to a pending gate. Option A (sender+subject matching)
+/// was explicitly rejected as spoofable; see `.omc/wiki/mail-gate-correlation.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MailEvent {

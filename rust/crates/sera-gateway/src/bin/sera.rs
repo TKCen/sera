@@ -43,6 +43,12 @@ use sera_db::sqlite::SqliteDb;
 // another touch of this file.
 #[allow(unused_imports)]
 use sera_db::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
+// sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
+// SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
+use sera_mail::{
+    parse_raw_message, CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex,
+    InMemoryMailLookup, MailCorrelator,
+};
 use sera_types::event::Event as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
@@ -364,6 +370,16 @@ struct AppState {
     /// `AppState::shutting_down.load(Ordering::SeqCst)`.
     #[allow(dead_code)]
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    /// Mail gate ingress correlator (sera-uwk0). Maps inbound email replies
+    /// back to pending Mail-gate workflow instances via RFC 5322 headers with
+    /// a SERA-issued body-nonce fallback. Consulted by the
+    /// `POST /api/mail/inbound` webhook.
+    mail_correlator: Arc<HeaderMailCorrelator>,
+    /// Scheduler-side [`sera_workflow::MailLookup`] fed by the correlator.
+    /// Exported so workflow DI can consume it when the ready-queue wires
+    /// through here; the correlator pushes `ReplyReceived` events into it.
+    #[allow(dead_code)]
+    mail_lookup: Arc<InMemoryMailLookup>,
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -1905,6 +1921,17 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         }
     }
 
+    // sera-uwk0: build the mail correlator + lookup pair. The correlator owns
+    // the envelope index; the lookup bridges correlator output back to
+    // `sera_workflow::MailLookup` for the ready-queue. Both live in AppState
+    // so outbound transport (sera-tools) can register envelopes via the same
+    // correlator and future ready-queue wiring can consume the lookup.
+    let mail_lookup = Arc::new(InMemoryMailLookup::new());
+    let mail_correlator = Arc::new(HeaderMailCorrelator::new(
+        Arc::new(InMemoryEnvelopeIndex::default()),
+        Some(mail_lookup.clone()),
+    ));
+
     let state = Arc::new(AppState {
         db: Mutex::new(db),
         manifests,
@@ -1919,6 +1946,8 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         chain_executor,
         harnesses,
         shutting_down: Arc::clone(&shutting_down),
+        mail_correlator,
+        mail_lookup,
     });
 
     // 4. Start event processing loop.
@@ -2064,6 +2093,96 @@ async fn shutdown_signal() {
     }
 }
 
+/// Response payload for `/api/mail/inbound`.
+///
+/// Records whether the raw inbound message correlated to a pending Mail gate
+/// and at which tier (B1 headers / B2 body-nonce) it resolved, or the
+/// drop reason otherwise. The webhook always returns `200 OK` on a well-formed
+/// MIME blob — "no match" is a normal outcome, not an error.
+#[derive(Serialize)]
+struct MailInboundResponse {
+    /// `"resolved"` or `"dropped"`.
+    outcome: &'static str,
+    /// Present on resolution. Opaque gate id echoed back for caller-side
+    /// correlation / logging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gate_id: Option<String>,
+    /// Present on resolution. RFC 5322 Message-ID used as the thread id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_id: Option<String>,
+    /// Present on resolution. Ladder tier that matched (`"b1_headers"` /
+    /// `"b2_body_nonce"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tier: Option<String>,
+    /// Present on drop. Reason tag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+/// `POST /api/mail/inbound` — sera-uwk0.
+///
+/// Accepts a raw RFC 5322 MIME blob as the request body and pushes it through
+/// the [`HeaderMailCorrelator`]. On a match the correlator notifies the
+/// [`InMemoryMailLookup`] which the workflow ready-queue consults via
+/// `MailLookup::thread_event`.
+///
+/// Transport (SMTP / IMAP / webhook) is explicitly out of scope — see the
+/// external mail gateway (discord-bridge / sera-tools egress plane) for that.
+async fn mail_inbound_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<MailInboundResponse>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let msg = parse_raw_message(&body).map_err(|e| {
+        tracing::warn!(error = %e, "inbound mail parse failed");
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let outcome = state
+        .mail_correlator
+        .correlate(&msg)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "mail correlator failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let resp = match outcome {
+        CorrelationOutcome::Resolved { gate_id, thread_id, tier } => MailInboundResponse {
+            outcome: "resolved",
+            gate_id: Some(gate_id.as_str().to_string()),
+            thread_id: Some(thread_id.as_str().to_string()),
+            tier: Some(
+                match tier {
+                    sera_mail::CorrelationTier::B1Headers => "b1_headers",
+                    sera_mail::CorrelationTier::B2BodyNonce => "b2_body_nonce",
+                    sera_mail::CorrelationTier::B2ReplyToToken => "b2_reply_to_token",
+                }
+                .to_string(),
+            ),
+            reason: None,
+        },
+        CorrelationOutcome::Dropped { reason } => MailInboundResponse {
+            outcome: "dropped",
+            gate_id: None,
+            thread_id: None,
+            tier: None,
+            reason: Some(
+                match reason {
+                    sera_mail::DropReason::NoMatch => "no_match",
+                    sera_mail::DropReason::Spoof => "spoof",
+                    sera_mail::DropReason::MalformedHeaders => "malformed_headers",
+                }
+                .to_string(),
+            ),
+        },
+    };
+
+    Ok(Json(resp))
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -2074,6 +2193,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/agents/{id}", get(agent_by_id_handler))
         .route("/api/sessions", get(sessions_handler))
         .route("/api/sessions/{id}/transcript", get(transcript_handler))
+        // sera-uwk0: mail gate ingress correlator webhook.
+        .route("/api/mail/inbound", post(mail_inbound_handler))
         .with_state(state)
 }
 
@@ -2112,6 +2233,11 @@ mod tests {
             chain_executor,
             harnesses: test_harnesses().await,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         })
     }
 
@@ -2128,6 +2254,11 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         })
     }
 
@@ -2144,6 +2275,11 @@ mod tests {
             chain_executor,
             harnesses: test_harnesses().await,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         })
     }
 
@@ -2160,6 +2296,11 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         })
     }
 
@@ -2681,6 +2822,11 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -2700,6 +2846,11 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -2720,6 +2871,11 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -2740,6 +2896,11 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));

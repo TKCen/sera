@@ -73,6 +73,12 @@ use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
 use route_plugins::PluginsAppState;
 
+// Party-mode handler (sera-8d1.2 / GH#145) — generic over PartyAppState trait
+// so the handler lives in the library without depending on the binary's AppState.
+#[path = "../party.rs"]
+mod party;
+use party::PartyAppState;
+
 // Re-use sera-core's Discord connector.
 #[path = "../discord.rs"]
 mod discord;
@@ -441,6 +447,27 @@ impl PluginsAppState for AppState {
     }
     fn plugin_registry(&self) -> Arc<InMemoryPluginRegistry> {
         Arc::clone(&self.plugin_registry)
+    }
+}
+
+// ── sera-8d1.2-follow: party-mode wiring ────────────────────────────────────
+//
+// The MVS AppState uses SqliteDb, so circle membership cannot be resolved from
+// the DB without a Postgres-backed CircleRepository. The stub below returns
+// `None` for every circle (→ 404) until the production member resolver lands.
+// Tracked as a follow-up: wire `resolve_party_members` to real LLM-backed
+// `sera_workflow::coordination::PartyMember` implementations once the
+// Postgres path is available in this binary.
+impl PartyAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn resolve_party_members(
+        &self,
+        _circle_id: &str,
+    ) -> Option<Vec<Arc<dyn sera_workflow::coordination::PartyMember>>> {
+        // Stub: production resolver not yet wired — always returns None (404).
+        None
     }
 }
 
@@ -2407,6 +2434,16 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/plugins", get(route_plugins::list_plugins::<AppState>))
         .route("/api/plugins/{id}/call", post(route_plugins::call_plugin::<AppState>))
         .route("/api/plugins/hot-reload", post(route_plugins::hot_reload::<AppState>))
+        // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
+        .route(
+            "/api/circles/{id}/party",
+            post(party::start_party::<AppState>),
+        )
+        // TODO(sera-8d1.4-follow): wire GET/PUT /api/circles/{id}/constitution
+        // once routes/circles.rs constitution handlers are refactored to use a
+        // trait (they currently depend on the Postgres-backed `crate::state::AppState`
+        // and `crate::error::AppError` from the library, incompatible with this
+        // binary's SqliteDb-backed AppState).
         .with_state(state)
 }
 
@@ -3626,5 +3663,73 @@ mod tests {
         assert!(by_point.contains_key("post_turn"), "post_turn point missing: {:?}", by_point);
         assert_eq!(by_point["pre_turn"].as_array().unwrap().len(), 1);
         assert_eq!(by_point["post_turn"].as_array().unwrap().len(), 1);
+    }
+
+    // ── sera-8d1.2-follow: party route smoke tests ────────────────────────────
+
+    /// Without a bearer token the party route must return 401.
+    #[tokio::test]
+    async fn party_route_requires_auth() {
+        let state = {
+            let hook_registry = Arc::new(HookRegistry::new());
+            let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+            Arc::new(AppState {
+                db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+                manifests: test_manifests(),
+                discord: None,
+                api_key: Some("secret".to_owned()),
+                lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+                hook_registry,
+                chain_executor,
+                harnesses: std::collections::HashMap::new(),
+                shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                    Arc::new(InMemoryEnvelopeIndex::default()),
+                    None,
+                )),
+                mail_lookup: Arc::new(InMemoryMailLookup::new()),
+                a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+                a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                    Ok(serde_json::json!({"status": "test"}))
+                })),
+                agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+                plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            })
+        };
+        let app = build_router(state);
+        let body = serde_json::json!({"prompt": "x", "synthesizer": "lead"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/circles/test-id/party")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// With no api_key configured (autonomous mode), missing bearer still gets
+    /// 404 (circle not found via stub) — proves the route IS registered.
+    #[tokio::test]
+    async fn party_route_registered_returns_404_for_unknown_circle() {
+        let app = build_router(test_state());
+        let body = serde_json::json!({"prompt": "x", "synthesizer": "lead"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/circles/no-such-circle/party")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 404 = route matched, circle not found via stub — NOT "no route matched"
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

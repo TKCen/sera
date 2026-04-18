@@ -22,7 +22,7 @@ use clap::{Parser, Subcommand};
 use futures_util::stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -54,6 +54,24 @@ use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
+
+// ── Phase-3 SPEC-interop crates ──────────────────────────────────────────────
+use sera_a2a::{A2aClient, A2aRequest, A2aRouter, InProcRouter, LoopbackTransport};
+#[allow(unused_imports)]
+use sera_agui::AgUiEvent;
+use sera_plugins::InMemoryPluginRegistry;
+
+// Route modules for Phase-3 endpoints (included directly into the binary).
+#[path = "../routes/a2a.rs"]
+mod route_a2a;
+#[path = "../routes/agui.rs"]
+mod route_agui;
+#[path = "../routes/plugins.rs"]
+mod route_plugins;
+
+use route_a2a::{A2aAppState, A2aPeerRegistry};
+use route_agui::{AguiAppState, AguiHub};
+use route_plugins::PluginsAppState;
 
 // Re-use sera-core's Discord connector.
 #[path = "../discord.rs"]
@@ -380,6 +398,50 @@ struct AppState {
     /// through here; the correlator pushes `ReplyReceived` events into it.
     #[allow(dead_code)]
     mail_lookup: Arc<InMemoryMailLookup>,
+    // ── Phase-3 SPEC-interop ─────────────────────────────────────────────────
+    /// Known A2A peers and the inbound router (SPEC-interop §4).
+    a2a_peers: Arc<RwLock<A2aPeerRegistry>>,
+    /// Inbound A2A JSON-RPC router — dispatches `tasks/*` methods.
+    a2a_router: Arc<InProcRouter>,
+    /// AG-UI broadcast hub — SSE subscribers for `/api/agui/stream`.
+    agui_hub: Arc<RwLock<AguiHub>>,
+    /// Plugin registry — backing store for `/api/plugins` routes.
+    plugin_registry: Arc<InMemoryPluginRegistry>,
+}
+
+// ── Phase-3 trait impls ──────────────────────────────────────────────────────
+
+impl A2aAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn a2a_peers(&self) -> Arc<RwLock<A2aPeerRegistry>> {
+        Arc::clone(&self.a2a_peers)
+    }
+    fn a2a_router(&self) -> Arc<dyn A2aRouter> {
+        Arc::clone(&self.a2a_router) as Arc<dyn A2aRouter>
+    }
+    fn a2a_client(&self) -> A2aClient {
+        A2aClient::new(LoopbackTransport::from_arc(Arc::clone(&self.a2a_router)))
+    }
+}
+
+impl AguiAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn agui_hub(&self) -> Arc<RwLock<AguiHub>> {
+        Arc::clone(&self.agui_hub)
+    }
+}
+
+impl PluginsAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn plugin_registry(&self) -> Arc<InMemoryPluginRegistry> {
+        Arc::clone(&self.plugin_registry)
+    }
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -2045,6 +2107,12 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         shutting_down: Arc::clone(&shutting_down),
         mail_correlator,
         mail_lookup,
+        a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+        a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+            Ok(serde_json::json!({"status": "no handler registered"}))
+        })),
+        agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+        plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
     });
 
     // 4. Start event processing loop.
@@ -2330,6 +2398,15 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/hooks", get(hooks_list_handler))
         // sera-uwk0: mail gate ingress correlator webhook.
         .route("/api/mail/inbound", post(mail_inbound_handler))
+        // ── Phase-3 SPEC-interop routes (sera-ne64) ──────────────────────────
+        .route("/api/a2a/send", post(route_a2a::send_message::<AppState>))
+        .route("/api/a2a/peers", get(route_a2a::list_peers::<AppState>))
+        .route("/api/a2a/accept", post(route_a2a::accept::<AppState>))
+        .route("/api/agui/stream", get(route_agui::stream_events::<AppState>))
+        .route("/api/agui/emit", post(route_agui::emit_event::<AppState>))
+        .route("/api/plugins", get(route_plugins::list_plugins::<AppState>))
+        .route("/api/plugins/{id}/call", post(route_plugins::call_plugin::<AppState>))
+        .route("/api/plugins/hot-reload", post(route_plugins::hot_reload::<AppState>))
         .with_state(state)
 }
 
@@ -2373,6 +2450,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2394,6 +2477,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2415,6 +2504,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2436,6 +2531,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2962,6 +3063,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -2986,6 +3093,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -3011,6 +3124,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -3036,6 +3155,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
@@ -3467,6 +3592,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         });
 
         let app = build_router(Arc::clone(&state));

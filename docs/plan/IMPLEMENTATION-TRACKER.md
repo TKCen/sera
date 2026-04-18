@@ -271,13 +271,13 @@ Full approval workflow with escalation chains. Remaining: speculative execution 
 
 Design types + coordination scaffold in sera-workflow. Full 7-policy implementation, blackboard, convergence incomplete.
 
-### SPEC-interop ⚠️ 65% Complete
+### SPEC-interop ✅ 85% Complete
 
-sera-mcp (70 tests — gating, rmcp_bridge, errors), sera-a2a (15 tests — Client, InProcRouter, Capabilities), sera-agui (17 tests — EventSink, SSE stream adapter) all substantively implemented in S26. Core protocol shapes complete; full end-to-end gateway integration pending.
+sera-mcp (70 tests), sera-a2a (15 tests), sera-agui (17 tests) all substantively implemented in S26. Gateway HTTP routes now wired (sera-ne64): POST /api/a2a/send, GET /api/a2a/peers, POST /api/a2a/accept, GET /api/agui/stream (SSE), POST /api/agui/emit, GET /api/plugins, POST /api/plugins/{id}/call, POST /api/plugins/hot-reload. Remaining: external HTTP A2A transport (loopback only now), full gRPC plugin dispatch.
 
-### SPEC-plugins ⚠️ 50% Complete
+### SPEC-plugins ✅ 65% Complete
 
-Public API re-exports + integration tests landed (S26); 48 tests. gRPC registry, SDK, circuit breaker scaffolded. Full plugin lifecycle and hot-reload not yet wired.
+Public API re-exports + integration tests landed (S26); 48 tests. gRPC registry, SDK, circuit breaker scaffolded. Gateway routes wired (sera-ne64): list, call (stub/501), hot-reload (stub). Full gRPC dispatch and live hot-reload pending (follow-up beads filed).
 
 ---
 

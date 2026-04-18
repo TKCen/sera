@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx;
 
 use sera_db::circles::CircleRepository;
@@ -131,6 +132,86 @@ pub async fn delete_circle(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ── Constitution routes (sera-8d1.4) ─────────────────────────────────────────
+
+/// Response body for GET /api/circles/{id}/constitution.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConstitutionResponse {
+    /// The current constitution markdown text, or null if none.
+    pub text: Option<String>,
+    /// Current version number (0 if no versions recorded yet).
+    pub version: i32,
+}
+
+/// Request body for PUT /api/circles/{id}/constitution.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConstitutionRequest {
+    /// New markdown constitution text. Send `null` or omit to clear.
+    pub text: Option<String>,
+    /// Identifier of the principal making the change (recorded in audit trail).
+    pub changed_by: Option<String>,
+}
+
+/// GET /api/circles/{id}/constitution — returns current constitution + version.
+pub async fn get_constitution(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ConstitutionResponse>, AppError> {
+    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    let versions =
+        CircleRepository::get_constitution_versions(state.db.inner(), &row.id.to_string())
+            .await?;
+    let version = versions.last().map(|v| v.version).unwrap_or(0);
+    Ok(Json(ConstitutionResponse {
+        text: row.constitution,
+        version,
+    }))
+}
+
+/// PUT /api/circles/{id}/constitution — update constitution + record audit entry.
+pub async fn update_constitution(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateConstitutionRequest>,
+) -> Result<Json<ConstitutionResponse>, AppError> {
+    // Resolve the circle first so we have a stable UUID.
+    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    let circle_id = row.id.to_string();
+
+    // Compute SHA-256 of the new text (empty string hash for None/clear).
+    let text_ref = body.text.as_deref().unwrap_or("");
+    let hash = hex::encode(Sha256::digest(text_ref.as_bytes()));
+
+    let changed_by = body
+        .changed_by
+        .as_deref()
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Write the updated constitution text and record the audit entry.
+    CircleRepository::update_constitution(
+        state.db.inner(),
+        &circle_id,
+        body.text.as_deref(),
+    )
+    .await?;
+
+    let new_version = CircleRepository::record_constitution_update(
+        state.db.inner(),
+        &circle_id,
+        &hash,
+        &changed_by,
+    )
+    .await?;
+
+    Ok(Json(ConstitutionResponse {
+        text: body.text,
+        version: new_version,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +253,45 @@ mod tests {
         let req: UpdateCircleRequest = serde_json::from_str(input).unwrap();
         assert_eq!(req.display_name, Some("New Name".to_string()));
         assert_eq!(req.description, None);
+    }
+
+    // ── Constitution route type tests (sera-8d1.4) ────────────────────────────
+
+    #[test]
+    fn constitution_response_serializes_camel_case() {
+        let resp = ConstitutionResponse {
+            text: Some("# Stack".to_string()),
+            version: 3,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["text"], "# Stack");
+        assert_eq!(json["version"], 3);
+    }
+
+    #[test]
+    fn constitution_response_null_text_serializes() {
+        let resp = ConstitutionResponse {
+            text: None,
+            version: 0,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["text"].is_null());
+        assert_eq!(json["version"], 0);
+    }
+
+    #[test]
+    fn update_constitution_request_deserializes_full() {
+        let input = r#"{"text":"# Rules\n- Be safe","changedBy":"alice"}"#;
+        let req: UpdateConstitutionRequest = serde_json::from_str(input).unwrap();
+        assert_eq!(req.text.as_deref(), Some("# Rules\n- Be safe"));
+        assert_eq!(req.changed_by.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn update_constitution_request_deserializes_clear() {
+        let input = r#"{}"#;
+        let req: UpdateConstitutionRequest = serde_json::from_str(input).unwrap();
+        assert!(req.text.is_none());
+        assert!(req.changed_by.is_none());
     }
 }

@@ -31,6 +31,7 @@ members = [
   "crates/sera-oci",
   "crates/sera-commands",
   "crates/sera-cli",
+  "crates/sera-e2e-harness",
 ]
 
 [workspace.package]

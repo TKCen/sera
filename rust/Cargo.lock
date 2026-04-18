@@ -4559,6 +4559,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-e2e-harness"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "sera-cli",
+ "sera-commands",
+ "sera-db",
+ "sera-testing",
+ "sera-types",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "sera-errors"
 version = "0.1.0"
 dependencies = [

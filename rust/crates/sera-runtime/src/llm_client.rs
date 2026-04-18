@@ -774,6 +774,7 @@ impl LlmProvider for LlmClient {
                 completion_tokens: result.completion_tokens,
                 total_tokens: result.prompt_tokens + result.completion_tokens,
             },
+            plan: None,
         })
     }
 }

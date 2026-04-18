@@ -201,6 +201,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::field_reassign_with_default)]
     async fn dispatch_policy_denied() {
         let dispatcher = make_dispatcher();
         let tool_call = serde_json::json!({

@@ -19,8 +19,8 @@ describe('AuditService.getEntries', () => {
 
   it('uses QueryBuilder to construct queries correctly', async () => {
     vi.mocked(pool.query)
-      .mockResolvedValueOnce({ rows: [{ count: '10' }] }) // count query
-      .mockResolvedValueOnce({ rows: [] }); // entries query
+      .mockResolvedValueOnce({ rows: [{ count: '10' }] } as any) // count query
+      .mockResolvedValueOnce({ rows: [] } as any); // entries query
 
     await service.getEntries({
       actorId: 'test-actor',
@@ -44,8 +44,8 @@ describe('AuditService.getEntries', () => {
 
   it('handles empty filters', async () => {
     vi.mocked(pool.query)
-      .mockResolvedValueOnce({ rows: [{ count: '0' }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [{ count: '0' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any);
 
     await service.getEntries({});
 

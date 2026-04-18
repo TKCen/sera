@@ -63,10 +63,10 @@ export const createAuditRouter = (): Router => {
       }
 
       const result = await auditService.getEntries({
-        actorId,
-        eventType,
-        from,
-        to,
+        ...(actorId ? { actorId } : {}),
+        ...(eventType ? { eventType } : {}),
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
         limit,
         offset,
       });

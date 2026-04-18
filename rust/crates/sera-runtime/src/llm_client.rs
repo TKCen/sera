@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use sera_models::{AccountPool, ProviderKind, ReasoningLevel, ThinkingConfig};
+use sera_telemetry::{record_credential_outcome, CredentialOutcome};
 use sera_types::llm::ThinkingLevel;
 use sera_types::runtime::TokenUsage;
 use sera_types::tool::ToolUseBehavior;
@@ -38,8 +39,14 @@ pub enum LlmError {
     #[error("context overflow: {0}")]
     ContextOverflow(String),
 
-    #[error("rate limited: {0}")]
-    RateLimited(String),
+    /// HTTP 429 / pool exhaustion. `retry_after` carries either a server
+    /// `Retry-After` header (for direct 429s) or the soonest cooldown
+    /// expiry across the credential pool.
+    #[error("rate limited: {message}")]
+    RateLimited {
+        message: String,
+        retry_after: Option<Duration>,
+    },
 
     #[error("provider unavailable: {0}")]
     ProviderUnavailable(String),
@@ -49,6 +56,16 @@ pub enum LlmError {
 
     #[error("request error: {0}")]
     RequestError(String),
+}
+
+impl LlmError {
+    /// Convenience constructor for a 429 with no `Retry-After`.
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::RateLimited {
+            message: message.into(),
+            retry_after: None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -465,10 +482,17 @@ impl LlmClient {
                     Err(sera_models::PoolError::NoAccountsAvailable {
                         provider_id,
                         total,
+                        min_cooldown_remaining,
                     }) => {
-                        return Err(LlmError::ProviderUnavailable(format!(
-                            "all {total} account(s) for provider '{provider_id}' are rate-limited or unavailable"
-                        )));
+                        // Sera-hjem: surface as RateLimited with the soonest
+                        // cooldown expiry so callers can sleep instead of
+                        // burning CPU on retries.
+                        return Err(LlmError::RateLimited {
+                            message: format!(
+                                "all {total} account(s) for provider '{provider_id}' are rate-limited or unavailable"
+                            ),
+                            retry_after: min_cooldown_remaining,
+                        });
                     }
                     Err(sera_models::PoolError::EmptyPool(provider_id)) => {
                         return Err(LlmError::RequestError(format!(
@@ -537,25 +561,74 @@ impl LlmClient {
 
         if status.is_success() {
             if let Some(g) = guard {
+                let provider = self.account_pool_provider_label();
+                let credential_id = g.credential_id().to_string();
+                record_credential_outcome(&provider, &credential_id, CredentialOutcome::Success);
                 g.mark_success();
             }
             return Ok(response);
         }
 
-        // Non-success → classify, then inform the pool about the failure kind
-        // before propagating.
+        // Non-success → grab Retry-After before consuming the body, then
+        // classify and inform the pool about the failure kind.
+        let retry_after = parse_retry_after(response.headers());
         let error_body = response.text().await.unwrap_or_default();
-        let classified = classify_http_error(status.as_u16(), &error_body);
+        let classified = classify_http_error(status.as_u16(), &error_body, retry_after);
         if let Some(g) = guard {
+            let provider = self.account_pool_provider_label();
+            let credential_id = g.credential_id().to_string();
             match &classified {
-                Err(LlmError::RateLimited(_)) => g.mark_rate_limited(),
-                Err(LlmError::ProviderUnavailable(_)) => g.mark_unavailable(),
-                // Non-pool errors (context overflow, request-error 4xx) are not
-                // the account's fault — leave state untouched.
-                _ => g.mark_success(),
+                Err(LlmError::RateLimited { retry_after, .. }) => {
+                    record_credential_outcome(
+                        &provider,
+                        &credential_id,
+                        CredentialOutcome::RateLimited,
+                    );
+                    g.record_429(*retry_after);
+                }
+                Err(LlmError::ProviderUnavailable(_)) => {
+                    record_credential_outcome(
+                        &provider,
+                        &credential_id,
+                        CredentialOutcome::Error5xx,
+                    );
+                    g.mark_unavailable();
+                }
+                Err(LlmError::RequestError(_)) if is_non_retryable_status(status.as_u16()) => {
+                    // Sera-hjem: 4xx other than 429 is the credential's fault
+                    // — disable it so round-robin skips it permanently.
+                    record_credential_outcome(
+                        &provider,
+                        &credential_id,
+                        CredentialOutcome::Error4xx,
+                    );
+                    g.record_non_retryable_error();
+                }
+                _ if (500..=599).contains(&status.as_u16()) => {
+                    record_credential_outcome(
+                        &provider,
+                        &credential_id,
+                        CredentialOutcome::Error5xx,
+                    );
+                    g.mark_success();
+                }
+                // Context overflow / unclassified — not the credential's
+                // fault, leave state untouched and don't taint counters.
+                _ => {
+                    g.mark_success();
+                }
             }
         }
         classified
+    }
+
+    /// Provider label for telemetry counters.  Falls back to the configured
+    /// model name when no pool is attached.
+    fn account_pool_provider_label(&self) -> String {
+        self.account_pool
+            .as_ref()
+            .map(|p| p.provider_id().to_string())
+            .unwrap_or_else(|| self.model.clone())
     }
 
     /// Parse an SSE stream into a complete `LlmChatResult`.
@@ -812,11 +885,18 @@ impl LlmProvider for LlmClient {
 // ---------------------------------------------------------------------------
 
 /// Classify an HTTP error into the appropriate `LlmError` variant.
-fn classify_http_error(status: u16, body: &str) -> Result<reqwest::Response, LlmError> {
+fn classify_http_error(
+    status: u16,
+    body: &str,
+    retry_after: Option<Duration>,
+) -> Result<reqwest::Response, LlmError> {
     let lower_body = body.to_lowercase();
 
     match status {
-        429 => Err(LlmError::RateLimited(truncate_error(body))),
+        429 => Err(LlmError::RateLimited {
+            message: truncate_error(body),
+            retry_after,
+        }),
         503 => Err(LlmError::ProviderUnavailable(truncate_error(body))),
         400 if lower_body.contains("context_length_exceeded")
             || lower_body.contains("maximum context length")
@@ -830,6 +910,32 @@ fn classify_http_error(status: u16, body: &str) -> Result<reqwest::Response, Llm
             truncate_error(body)
         ))),
     }
+}
+
+/// True when the HTTP status indicates a credential-level fault that should
+/// disable the credential (4xx except 429).  5xx is treated as transient via
+/// the existing unavailable path.
+fn is_non_retryable_status(status: u16) -> bool {
+    matches!(status, 400..=499) && status != 429
+}
+
+/// Parse `Retry-After` from response headers.
+///
+/// Honours both numeric-seconds form (`Retry-After: 30`) and HTTP-date form
+/// (`Retry-After: Wed, 21 Oct 2026 07:28:00 GMT`).  Returns `None` when the
+/// header is absent or unparseable.
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let raw = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())?
+        .trim();
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    // HTTP-date form: convert to seconds from now via httpdate when available.
+    // We avoid pulling in an extra dep — a misformatted header just falls
+    // through to the default backoff.
+    None
 }
 
 /// Truncate long error bodies for display.
@@ -1010,14 +1116,14 @@ mod tests {
 
     #[test]
     fn test_error_rate_limited() {
-        let err = classify_http_error(429, "rate limit exceeded").unwrap_err();
-        assert!(matches!(err, LlmError::RateLimited(_)));
+        let err = classify_http_error(429, "rate limit exceeded", None).unwrap_err();
+        assert!(matches!(err, LlmError::RateLimited { .. }));
         assert!(err.to_string().contains("rate limit exceeded"));
     }
 
     #[test]
     fn test_error_provider_unavailable() {
-        let err = classify_http_error(503, "service unavailable").unwrap_err();
+        let err = classify_http_error(503, "service unavailable", None).unwrap_err();
         assert!(matches!(err, LlmError::ProviderUnavailable(_)));
     }
 
@@ -1026,6 +1132,7 @@ mod tests {
         let err = classify_http_error(
             400,
             r#"{"error":{"message":"This model's maximum context length is 8192 tokens"}}"#,
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, LlmError::ContextOverflow(_)));
@@ -1036,6 +1143,7 @@ mod tests {
         let err = classify_http_error(
             400,
             r#"{"error":{"code":"context_length_exceeded","message":"too long"}}"#,
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, LlmError::ContextOverflow(_)));
@@ -1043,19 +1151,19 @@ mod tests {
 
     #[test]
     fn test_error_context_overflow_keyword3() {
-        let err = classify_http_error(400, "too many tokens in the request").unwrap_err();
+        let err = classify_http_error(400, "too many tokens in the request", None).unwrap_err();
         assert!(matches!(err, LlmError::ContextOverflow(_)));
     }
 
     #[test]
     fn test_error_generic_400() {
-        let err = classify_http_error(400, "bad request: missing field").unwrap_err();
+        let err = classify_http_error(400, "bad request: missing field", None).unwrap_err();
         assert!(matches!(err, LlmError::RequestError(_)));
     }
 
     #[test]
     fn test_error_generic_500() {
-        let err = classify_http_error(500, "internal server error").unwrap_err();
+        let err = classify_http_error(500, "internal server error", None).unwrap_err();
         assert!(matches!(err, LlmError::RequestError(_)));
         assert!(err.to_string().contains("HTTP 500"));
     }
@@ -1185,7 +1293,7 @@ mod tests {
         let err = LlmError::ContextOverflow("too big".to_string());
         assert_eq!(err.to_string(), "context overflow: too big");
 
-        let err = LlmError::RateLimited("slow down".to_string());
+        let err = LlmError::rate_limited("slow down");
         assert_eq!(err.to_string(), "rate limited: slow down");
 
         let err = LlmError::ProviderUnavailable("down".to_string());
@@ -1494,21 +1602,21 @@ mod tests {
     #[test]
     fn error_401_maps_to_request_error() {
         // 401 is not specially handled — falls through to generic RequestError
-        let err = classify_http_error(401, "unauthorized").unwrap_err();
+        let err = classify_http_error(401, "unauthorized", None).unwrap_err();
         assert!(matches!(err, LlmError::RequestError(_)));
         assert!(err.to_string().contains("HTTP 401"));
     }
 
     #[test]
     fn error_404_maps_to_request_error() {
-        let err = classify_http_error(404, "not found").unwrap_err();
+        let err = classify_http_error(404, "not found", None).unwrap_err();
         assert!(matches!(err, LlmError::RequestError(_)));
         assert!(err.to_string().contains("HTTP 404"));
     }
 
     #[test]
     fn error_502_maps_to_request_error() {
-        let err = classify_http_error(502, "bad gateway").unwrap_err();
+        let err = classify_http_error(502, "bad gateway", None).unwrap_err();
         assert!(matches!(err, LlmError::RequestError(_)));
         assert!(err.to_string().contains("HTTP 502"));
     }
@@ -1516,14 +1624,14 @@ mod tests {
     #[test]
     fn error_context_overflow_context_window_keyword() {
         // "context window" keyword (distinct from "context_length_exceeded")
-        let err = classify_http_error(400, "exceeded the context window limit").unwrap_err();
+        let err = classify_http_error(400, "exceeded the context window limit", None).unwrap_err();
         assert!(matches!(err, LlmError::ContextOverflow(_)));
     }
 
     #[test]
     fn error_400_non_overflow_body_is_request_error() {
         // 400 with body that doesn't match any overflow keyword
-        let err = classify_http_error(400, "invalid model specified").unwrap_err();
+        let err = classify_http_error(400, "invalid model specified", None).unwrap_err();
         assert!(matches!(err, LlmError::RequestError(_)));
         assert!(err.to_string().contains("HTTP 400"));
     }
@@ -1547,8 +1655,8 @@ mod tests {
 
     #[test]
     fn error_empty_body_classifies_cleanly() {
-        let err = classify_http_error(429, "").unwrap_err();
-        assert!(matches!(err, LlmError::RateLimited(_)));
+        let err = classify_http_error(429, "", None).unwrap_err();
+        assert!(matches!(err, LlmError::RateLimited { .. }));
     }
 
     // =========================================================================

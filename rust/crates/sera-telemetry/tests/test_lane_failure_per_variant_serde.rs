@@ -100,7 +100,7 @@ fn lane_failure_class_hash_is_consistent() {
         *counts.entry(*variant).or_insert(0) += 1;
     }
     // Each variant appears exactly once in SERDE_CASES.
-    for (_, count) in &counts {
+    for count in counts.values() {
         assert_eq!(*count, 1);
     }
     assert_eq!(counts.len(), 15);

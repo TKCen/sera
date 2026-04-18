@@ -14,6 +14,7 @@ pub mod generation;
 pub mod lane_failure;
 pub mod otel;
 pub mod provenance;
+pub mod provider_credentials;
 pub mod sera_errors;
 
 pub use audit::{AuditBackend, AuditEntry, AuditError, audit_append, set_audit_backend};
@@ -22,3 +23,7 @@ pub use generation::{BuildIdentity, GenerationLabel, GenerationMarker};
 pub use lane_failure::LaneFailureClass;
 pub use otel::{OtelInitError, init_otel};
 pub use provenance::{CostRecord, LaneCommitProvenance, RunEvidence};
+pub use provider_credentials::{
+    record as record_credential_outcome, snapshot as credential_snapshot, CounterSnapshot,
+    CredentialOutcome,
+};

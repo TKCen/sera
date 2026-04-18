@@ -22,6 +22,7 @@
 pub mod error;
 pub mod self_patch;
 pub mod loader;
+pub mod md_loader;
 pub mod skill_pack;
 pub mod bundle;
 pub mod markdown;
@@ -41,6 +42,7 @@ pub use loader::{SkillLoader, FileSystemSkillPack};
 pub use skill_pack::SkillPack;
 pub use bundle::SkillBundle;
 pub use markdown::{parse_skill_markdown_file, parse_skill_markdown_str, ParsedSkillMarkdown};
+pub use md_loader::{load_skill_md, parse_skill_md, Skill, DEFAULT_TIER};
 pub use markdown_pack::MarkdownSkillPack;
 pub use knowledge_schema::{KnowledgeSchemaValidator, SchemaViolation, ViolationSeverity, default_schema};
 pub use knowledge_activity_log::{

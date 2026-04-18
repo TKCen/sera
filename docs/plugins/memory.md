@@ -435,3 +435,22 @@ Minimum acceptance criteria:
 - **Built-in implementations:** `sera-db/src/pgvector_store.rs` (PostgreSQL + pgvector), `sera-db/src/sqlite_fts_store.rs` (landing in bead sera-vzce)
 - **Integration point:** `sera-gateway/src/services/memory.rs` (wiring, context injection)
 - **Tools using the store:** `sera-runtime` memory_search, memory_write tools
+
+---
+
+## 9. Session Transcript Indexing (sera-4nj)
+
+At session close, `sera-session::SemanticTranscriptIndexer` writes a compact
+summary of the conversation into the configured `SemanticMemoryStore`:
+
+- **Tier tag:** `SegmentKind::Custom("session_transcript")`
+- **Content:** user messages + final assistant responses + tool-call summaries
+  (`[tool:<name>] args={…}`), with raw tool results and chain-of-thought
+  excluded.
+- **Tags:** `kind:session_transcript`, `session_id:<id>`, `started_at:<ts>`
+- **Size caps:** 2 000 chars/entry, 32 000 chars/transcript blob.
+- **Failure policy:** errors log at `warn`; session close never blocks.
+
+Plugins implementing custom `SemanticMemoryStore`s should treat transcript
+rows like any other entry. Filter on the tag or the `Custom("session_transcript")`
+tier to locate or exclude them during bespoke recall strategies.

@@ -199,3 +199,20 @@ println!("body bytes: {}", def.body.unwrap().len());
 1. Pick `name`, `version`, `description`; put them in YAML frontmatter.
 2. Move `context_injection` text into the markdown body verbatim.
 3. Copy `tools` into frontmatter; add `triggers` for keyword activation.
+
+---
+
+## SKILL.md Simple Format (sera-4nj)
+
+In addition to the strict AgentSkills markdown format above, SERA ships a
+permissive single-file SKILL.md variant for human-authored skills. Schema:
+
+| Field         | Required | Type                     | Notes                              |
+| ------------- | -------- | ------------------------ | ---------------------------------- |
+| `name`        | yes      | string                   | Non-empty identifier               |
+| `description` | yes      | string                   | Non-empty trigger hint             |
+| `inputs`      | no       | `map<string, string>`    | Free-form input schema             |
+| `tier`        | no       | `1 \| 2 \| 3`            | Defaults to `1`                    |
+
+Unknown frontmatter keys are logged at `warn` and ignored — typos and
+experimental fields don't break the load. Loader: `sera_skills::load_skill_md`.

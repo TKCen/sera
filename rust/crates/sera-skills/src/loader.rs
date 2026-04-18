@@ -133,6 +133,28 @@ impl SkillLoader {
         &self.markdown_paths
     }
 
+    /// Load a single SKILL.md file directly from any configured path.
+    ///
+    /// Unlike [`SkillLoader::load`] which resolves pack directories, this
+    /// helper searches each configured path for a matching `.md` file and
+    /// returns the parsed [`crate::md_loader::Skill`]. First-match wins.
+    ///
+    /// `file_stem` is the base name without the `.md` extension — e.g.
+    /// `"lookup-invoice"` resolves to `<root>/lookup-invoice.md`.
+    pub async fn load_single_md(
+        &self,
+        file_stem: &str,
+    ) -> Result<crate::md_loader::Skill, SkillsError> {
+        for base in &self.markdown_paths {
+            let md_path = base.join(format!("{file_stem}.md"));
+            if md_path.exists() {
+                debug!(path = %md_path.display(), "loading SKILL.md");
+                return crate::md_loader::load_skill_md(&md_path).await;
+            }
+        }
+        Err(SkillsError::NotFound(format!("{file_stem}.md")))
+    }
+
     /// Legacy pack search paths (after markdown).
     pub fn legacy_paths(&self) -> &[PathBuf] {
         &self.legacy_paths

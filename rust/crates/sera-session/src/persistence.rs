@@ -4,9 +4,12 @@
 //! This module handles the conversion between in-memory transcripts and
 //! their persistent storage representations.
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
+use crate::indexer::TranscriptIndexer;
 use crate::transcript::{Transcript, TranscriptEntry};
 
 /// Errors that can occur during transcript persistence operations.
@@ -101,16 +104,39 @@ impl PersistedTranscript {
 /// A session manager that handles transcript persistence.
 ///
 /// Provides a higher-level interface for managing session transcripts
-/// with automatic persistence on updates.
+/// with automatic persistence on updates. When a [`TranscriptIndexer`] is
+/// wired via [`SessionManager::with_indexer`], [`close_session`] extracts a
+/// compact summary of the transcript and pushes it into the indexer's
+/// semantic memory backend.
 pub struct SessionManager {
     /// Base directory for storing transcripts.
     storage_path: PathBuf,
+    /// Optional transcript indexer invoked on [`close_session`]. Failures
+    /// are logged at `warn` level; they MUST NOT block session close.
+    indexer: Option<Arc<dyn TranscriptIndexer>>,
 }
 
 impl SessionManager {
     /// Create a new session manager with the given storage path.
     pub fn new(storage_path: PathBuf) -> Self {
-        Self { storage_path }
+        Self {
+            storage_path,
+            indexer: None,
+        }
+    }
+
+    /// Attach a transcript indexer. The indexer is consulted by
+    /// [`SessionManager::close_session`] before the transcript file is
+    /// removed. Errors from the indexer are logged and swallowed so they
+    /// cannot stall the close path.
+    pub fn with_indexer(mut self, indexer: Arc<dyn TranscriptIndexer>) -> Self {
+        self.indexer = Some(indexer);
+        self
+    }
+
+    /// Whether this manager has a transcript indexer wired in.
+    pub fn has_indexer(&self) -> bool {
+        self.indexer.is_some()
     }
 
     /// Get the path for a session's transcript file.
@@ -148,6 +174,49 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Close a session: index the transcript (best-effort) and persist a
+    /// final copy to disk.
+    ///
+    /// `agent_id` and `started_at` are forwarded to the indexer as metadata
+    /// so future recalls can be traced back to this session.
+    ///
+    /// Indexing is best-effort: any error from the indexer is logged at
+    /// `warn` and then dropped. This method returns `Ok(())` once the
+    /// transcript file has been written successfully even if indexing
+    /// failed.
+    pub async fn close_session(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        started_at: chrono::DateTime<chrono::Utc>,
+        transcript: &Transcript,
+    ) -> Result<(), PersistenceError> {
+        if let Some(indexer) = &self.indexer {
+            match indexer
+                .index_transcript(agent_id, session_id, started_at, transcript)
+                .await
+            {
+                Ok(id) => {
+                    tracing::debug!(
+                        session_id,
+                        agent_id,
+                        memory_id = %id,
+                        "session transcript indexed on close"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        session_id,
+                        agent_id,
+                        error = %err,
+                        "session transcript indexing failed; close continues"
+                    );
+                }
+            }
+        }
+        self.save_transcript(session_id, transcript)
+    }
+
     /// Delete a session's transcript.
     pub fn delete_transcript(&self, session_id: &str) -> Result<(), PersistenceError> {
         let path = self.transcript_path(session_id);
@@ -181,7 +250,13 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexer::{IndexerError, TranscriptIndexer};
     use crate::transcript::{ContentBlock, Role};
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use sera_types::MemoryId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use uuid::Uuid;
 
     fn make_entry(role: Role, text: &str) -> TranscriptEntry {
@@ -314,6 +389,110 @@ mod tests {
         let path = std::path::PathBuf::from("/tmp/nonexistent-sera-session-xyz.json");
         let result = PersistedTranscript::load_from_file(&path);
         assert!(matches!(result, Err(PersistenceError::NotFound(_))));
+    }
+
+    // ── close_session + indexer tests ───────────────────────────────────────
+
+    /// Tracks how many times an indexer was invoked and what args it saw.
+    #[derive(Default)]
+    struct SpyIndexer {
+        calls: AtomicUsize,
+        last: Mutex<Option<(String, String)>>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl TranscriptIndexer for SpyIndexer {
+        async fn index_transcript(
+            &self,
+            agent_id: &str,
+            session_id: &str,
+            _started_at: chrono::DateTime<chrono::Utc>,
+            _transcript: &Transcript,
+        ) -> Result<MemoryId, IndexerError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.last.lock().unwrap() = Some((agent_id.to_string(), session_id.to_string()));
+            if self.fail {
+                return Err(IndexerError::Empty);
+            }
+            Ok(MemoryId::new("spy-id"))
+        }
+    }
+
+    #[tokio::test]
+    async fn close_session_invokes_indexer_and_saves() {
+        let dir = std::env::temp_dir().join(format!("sera-close-test-{}", Uuid::new_v4()));
+        let spy: Arc<SpyIndexer> = Arc::new(SpyIndexer::default());
+        let manager = SessionManager::new(dir.clone())
+            .with_indexer(spy.clone() as Arc<dyn TranscriptIndexer>);
+        assert!(manager.has_indexer());
+
+        let mut t = Transcript::new();
+        t.append(make_entry(Role::User, "first user message"));
+
+        manager
+            .close_session("sess-close", "agent-a", Utc::now(), &t)
+            .await
+            .unwrap();
+
+        assert_eq!(spy.calls.load(Ordering::SeqCst), 1);
+        let last = spy.last.lock().unwrap().clone().unwrap();
+        assert_eq!(last.0, "agent-a");
+        assert_eq!(last.1, "sess-close");
+
+        // Transcript file exists.
+        let loaded = manager.load_transcript("sess-close").unwrap();
+        assert!(loaded.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn close_session_indexer_failure_does_not_block() {
+        let dir = std::env::temp_dir().join(format!("sera-close-fail-{}", Uuid::new_v4()));
+        let spy: Arc<SpyIndexer> = Arc::new(SpyIndexer {
+            calls: AtomicUsize::new(0),
+            last: Mutex::new(None),
+            fail: true,
+        });
+        let manager = SessionManager::new(dir.clone())
+            .with_indexer(spy.clone() as Arc<dyn TranscriptIndexer>);
+
+        let mut t = Transcript::new();
+        t.append(make_entry(Role::User, "still gets saved"));
+
+        // Even though the indexer errored, close_session returns Ok and
+        // the transcript is persisted.
+        manager
+            .close_session("sess-fail", "agent-a", Utc::now(), &t)
+            .await
+            .unwrap();
+
+        let loaded = manager.load_transcript("sess-fail").unwrap();
+        assert!(loaded.is_some());
+        assert_eq!(spy.calls.load(Ordering::SeqCst), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn close_session_without_indexer_still_saves() {
+        let dir = std::env::temp_dir().join(format!("sera-close-noidx-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+        assert!(!manager.has_indexer());
+
+        let mut t = Transcript::new();
+        t.append(make_entry(Role::Assistant, "answer"));
+
+        manager
+            .close_session("sess-noidx", "agent-a", Utc::now(), &t)
+            .await
+            .unwrap();
+
+        let loaded = manager.load_transcript("sess-noidx").unwrap();
+        assert!(loaded.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

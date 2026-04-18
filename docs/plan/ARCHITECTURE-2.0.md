@@ -311,6 +311,47 @@ Spec: [`SPEC-plugins.md`](specs/SPEC-plugins.md) (gRPC plugin interface, mTLS, T
 
 ---
 
+## 6a. Agent Delegation (bead sera-a1u)
+
+SERA exposes two complementary delegation paths to agents:
+
+1. **Fire-and-forget spawn** via the `spawn-ephemeral` tool — the caller
+   hands off a task and does not wait for the result. Best when the parent
+   has nothing useful to do after dispatch (e.g. "log and move on"
+   triggers, notification dispatch). Flows through sera-core's sandboxed
+   subagent runner.
+2. **Richer session primitives** — `session_spawn`, `session_yield`, and
+   `session_send`. These let a parent stay in conversation with a named
+   child session across multiple turns without blocking its own loop.
+
+| Tool | Risk | Use it when… |
+|---|---|---|
+| `session_spawn` | `Execute` | You need a named child session you can refer to later (e.g. "start the researcher and keep working"). Returns a stable `session_id`. |
+| `session_yield` | `Read` | You want to pause the current turn and wait for the child's next event. Returns the event as a tool result (bounded by `timeout_secs`, default 120 s). |
+| `session_send` | `Write` | You want to push a message into a named child session. Fire-and-forget unless a peer is yielding on the same session. |
+
+Under the hood, the three tools share a `DelegationBus` (see
+`sera-runtime/src/delegation_bus.rs`) — a lightweight in-process pub/sub
+over child-session events. The bus exposes four event types:
+
+- `MessageEmitted { content }` — intermediate child output (e.g. streaming
+  delta coalesced for the parent).
+- `TurnCompleted { output }` — child finished one turn with a final answer.
+- `SessionClosed { reason }` — child session terminated.
+- `Error { message }` — child produced an error.
+
+Each `subscribe_next(session_id)` call returns a fresh
+`tokio::sync::oneshot::Receiver`. Multiple concurrent yields on the same
+session queue as independent subscribers; a `publish` call fires each
+pending oneshot with a clone of the event in FIFO order, so two sibling
+agents may both yield on the same child and each receive the response.
+
+**Rule of thumb:** default to `spawn-ephemeral` when you don't need the
+reply; reach for `session_spawn` + `session_yield` whenever the parent
+needs to interleave its own reasoning with the child's answers.
+
+---
+
 ## 7. Deployment Tiers
 
 All tiers run the **same binary**. The tier table describes common groupings of config activations — not separate architectures or code paths.
@@ -496,3 +537,50 @@ connection without `DATABASE_URL`. Run with:
 ```bash
 cargo test -p sera-gateway --test local_boot_test
 ```
+
+## Session Transcript Indexing (sera-4nj)
+
+On session close, the runtime extracts a compact summary of the conversation
+and persists it into the `SemanticMemoryStore` so future sessions can recall
+it via the standard `ContextEnricher` recall path.
+
+**Pipeline:**
+
+1. Session transitions to `Archived` / `Closed`.
+2. `SemanticTranscriptIndexer::index_transcript(agent_id, session_id, started_at, transcript)` runs.
+3. The indexer strips tool-result payloads, summarises tool-use calls as
+   `[tool:<name>] args={k1,k2}`, drops internal thinking blocks, and joins
+   the remaining user + assistant text.
+4. The blob is stored as a `SemanticEntry` with
+   `tier = SegmentKind::Custom("session_transcript")` and tag
+   `kind:session_transcript` plus `session_id:…` / `started_at:…`.
+5. Subsequent sessions surface past transcripts through the existing
+   semantic-recall path — no new query code needed.
+
+**Size policy:** raw tool I/O is never persisted; per-entry text is capped at
+`MAX_ENTRY_CHARS` (2 000) and the composite blob at `MAX_BLOB_CHARS` (32 000).
+
+**Failure policy:** indexing is best-effort. Store errors log at `warn` and
+the session close path continues unimpeded.
+
+## SKILL.md Format (sera-4nj)
+
+Skills can be authored as a single `.md` file with YAML frontmatter:
+
+```markdown
+---
+name: lookup-invoice
+description: Find an invoice by its external id via the finance API
+inputs:
+  invoice_id: string
+tier: 1
+---
+
+# Behaviour
+When asked about invoices, ...
+```
+
+The loader (`sera_skills::md_loader::load_skill_md`) validates `name` and
+`description` as required fields, defaults `tier` to `1`, and logs at `warn`
+(without failing) for unknown frontmatter keys so user-authored files stay
+resilient to drift.

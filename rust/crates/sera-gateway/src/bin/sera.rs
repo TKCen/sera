@@ -1777,6 +1777,20 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     //   * DATABASE_URL set → `PgVectorStore::new(pool).initialize()`
     // Wire once the runtime carries an Arc<dyn EmbeddingService> through
     // to this boot path.
+    //
+    // sera-4nj: once `semantic_store: Arc<dyn SemanticMemoryStore>` exists
+    // above, build the session-transcript indexer here:
+    //
+    //     let transcript_indexer: Arc<dyn sera_session::TranscriptIndexer> =
+    //         Arc::new(sera_session::SemanticTranscriptIndexer::new(
+    //             semantic_store.clone(),
+    //         ));
+    //
+    // and forward it into `SessionManager::with_indexer(transcript_indexer)`
+    // when the persistence-backed session manager is constructed. The
+    // indexer fires on session close (SessionState::Archived/Closed) and is
+    // best-effort — failures log at `warn` and never block the close path.
+    let _ = std::marker::PhantomData::<sera_session::SemanticTranscriptIndexer>;
 
     // 3. Resolve Discord connector if configured.  We create a shared Arc so
     //    the gateway listener and the event-loop response sender use the same

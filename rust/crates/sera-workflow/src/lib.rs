@@ -17,6 +17,7 @@
 
 pub mod claim;
 pub mod coordination;
+pub mod memory_manager;
 pub mod dreaming;
 pub mod source_ingest;
 pub mod error;
@@ -73,6 +74,12 @@ pub use coordination::{
     Outcome, ParticipantId, ResultAggregator, WorkflowMemoryManager,
 };
 pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
+
+// Re-exports — coordinator-scoped workflow memory (SPEC-workflow-engine §memory).
+pub use memory_manager::{
+    AgentId, InstanceId, MemoryManager, StepSummary, WorkflowMemoryManager as CoordinatorMemoryManager,
+    WorkflowMemorySnapshot,
+};
 
 // Re-exports — Sleeptime Memory Consolidation (SPEC-memory §2b / sera-40o).
 pub use sleeptime::{

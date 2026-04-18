@@ -43,9 +43,11 @@ pub mod memory_assembler;
 pub mod subagent;
 pub mod turn;
 
+pub mod permissions;
 pub mod sera_errors;
 pub mod semantic;
 pub mod shadow;
+pub mod tool_hooks;
 
 // Retained modules
 pub mod config;

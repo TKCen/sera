@@ -46,6 +46,8 @@ impl From<ToolError> for SeraError {
             ToolError::NotFound(_) => SeraErrorCode::NotFound,
             ToolError::ExecutionFailed(_) => SeraErrorCode::Internal,
             ToolError::InvalidArguments(_) => SeraErrorCode::InvalidInput,
+            ToolError::AbortedByHook { .. } => SeraErrorCode::Forbidden,
+            ToolError::PermissionDenied { .. } => SeraErrorCode::Forbidden,
         };
         SeraError::with_source(code, err.to_string(), err)
     }

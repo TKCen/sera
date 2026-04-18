@@ -96,6 +96,13 @@ pub enum ToolError {
     ExecutionFailed(String),
     #[error("invalid arguments: {0}")]
     InvalidArguments(String),
+    /// A pre-tool hook aborted the call before execution.
+    #[error("tool call aborted by hook: {reason}")]
+    AbortedByHook { reason: String },
+    /// The caller's permission mode was insufficient and escalation was
+    /// denied by the [`crate::permissions::EscalationAuthority`].
+    #[error("permission denied for tool call: {reason}")]
+    PermissionDenied { reason: String },
 }
 
 /// Trait for dispatching tool calls from the act step.

@@ -33,7 +33,9 @@ use std::time::Duration;
 
 use chrono::Utc;
 use sera_types::memory::{MemorySegment, SegmentKind};
-use sera_types::{EmbeddingService, ScoredEntry, SemanticMemoryStore, SemanticQuery};
+use sera_types::{
+    EmbeddingService, ScopeHierarchy, ScoredEntry, SemanticMemoryStore, SemanticQuery,
+};
 
 use super::hybrid::{tokenise, Candidate, HybridRetrievalConfig, HybridScorer};
 
@@ -69,6 +71,16 @@ pub struct ContextEnricherConfig {
     pub recall_char_budget: usize,
     /// Hybrid rerank configuration. Must pass [`HybridRetrievalConfig::validate`].
     pub hybrid: HybridRetrievalConfig,
+    /// GH#140 — when `true`, the enricher calls
+    /// [`SemanticMemoryStore::query_hierarchical`] with [`Self::scope_hierarchy`]
+    /// instead of the agent-only [`SemanticMemoryStore::query`]. Leaving this
+    /// `false` preserves the pre-GH#140 behaviour byte-for-byte.
+    pub hierarchical_scopes_enabled: bool,
+    /// Scope chain used by the hierarchical query when
+    /// [`Self::hierarchical_scopes_enabled`] is `true`. `None` together with
+    /// the flag set means "no hierarchy configured"; the enricher falls back
+    /// to the agent-only path for safety.
+    pub scope_hierarchy: Option<ScopeHierarchy>,
 }
 
 impl Default for ContextEnricherConfig {
@@ -80,6 +92,8 @@ impl Default for ContextEnricherConfig {
             timeout_ms: 150,
             recall_char_budget: 512,
             hybrid: HybridRetrievalConfig::default(),
+            hierarchical_scopes_enabled: false,
+            scope_hierarchy: None,
         }
     }
 }
@@ -242,20 +256,47 @@ impl ContextEnricher {
             })?;
 
         let pool_size = self.config.top_k.saturating_mul(4).max(self.config.top_k);
-        let query = SemanticQuery {
-            agent_id: self.agent_id.clone(),
-            tier_filter: None,
-            text: Some(user_message.to_string()),
-            query_embedding: Some(query_embedding.clone()),
-            top_k: pool_size,
-            similarity_threshold: self.config.similarity_threshold,
-            scope: None,
+
+        // GH#140: walk Agent → Circle → Org → Global when the flag is on AND a
+        // hierarchy is configured. Otherwise fall back to the agent-only path
+        // so existing deployments stay byte-identical.
+        let hits = if self.config.hierarchical_scopes_enabled
+            && let Some(hierarchy) = self.config.scope_hierarchy.as_ref()
+        {
+            let merged = self
+                .store
+                .query_hierarchical(hierarchy, query_embedding.clone(), pool_size)
+                .await
+                .map_err(|e| EnrichmentFailure::Store(e.to_string()))?;
+            // Rebuild `ScoredEntry`s from `MemoryHit`s so the downstream
+            // hybrid scorer sees the dampened scores. Per-signal sub-scores
+            // are flattened onto the composite since the hierarchy merge
+            // has already picked the best per-id row.
+            merged
+                .into_iter()
+                .map(|hit| ScoredEntry {
+                    score: hit.dampened_score,
+                    index_score: 0.0,
+                    vector_score: hit.raw_score,
+                    recency_score: 0.0,
+                    entry: hit.entry,
+                })
+                .collect()
+        } else {
+            let query = SemanticQuery {
+                agent_id: self.agent_id.clone(),
+                tier_filter: None,
+                text: Some(user_message.to_string()),
+                query_embedding: Some(query_embedding.clone()),
+                top_k: pool_size,
+                similarity_threshold: self.config.similarity_threshold,
+                scope: None,
+            };
+            self.store
+                .query(query)
+                .await
+                .map_err(|e| EnrichmentFailure::Store(e.to_string()))?
         };
-        let hits = self
-            .store
-            .query(query)
-            .await
-            .map_err(|e| EnrichmentFailure::Store(e.to_string()))?;
         Ok((query_embedding, hits))
     }
 
@@ -602,6 +643,8 @@ mod tests {
             timeout_ms: 500,
             recall_char_budget: 256,
             hybrid: HybridRetrievalConfig::default(),
+            hierarchical_scopes_enabled: false,
+            scope_hierarchy: None,
         }
     }
 
@@ -803,5 +846,128 @@ mod tests {
     fn truncate_to_returns_input_when_shorter() {
         let out = truncate_to("hi", 50);
         assert_eq!(out, "hi");
+    }
+
+    // ── GH#140: hierarchical scope enrichment ──────────────────────────────
+
+    use sera_testing::semantic_memory::InMemorySemanticStore;
+    use sera_types::{Damping, Scope, ScopeHierarchy};
+
+    fn scoped_entry(agent: &str, content: &str, scope: Scope) -> SemanticEntry {
+        SemanticEntry {
+            id: MemoryId::new(format!("{agent}-{content}")),
+            agent_id: agent.to_string(),
+            content: content.to_string(),
+            embedding: vec![1.0, 0.0, 0.0, 0.0],
+            tier: SegmentKind::MemoryRecall(content.to_string()),
+            tags: vec![],
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            promoted: false,
+            scope: Some(scope),
+        }
+    }
+
+    #[tokio::test]
+    async fn hierarchical_flag_on_merges_three_scope_levels() {
+        let embedding = Arc::new(FixedEmbedding::new(vec![1.0, 0.0, 0.0, 0.0]));
+        let store = Arc::new(InMemorySemanticStore::new());
+        store
+            .put(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
+            .await
+            .unwrap();
+        store
+            .put(scoped_entry("agent-a", "circle-row", Scope::Circle("ring".into())))
+            .await
+            .unwrap();
+        store
+            .put(scoped_entry("agent-a", "org-row", Scope::Org("acme".into())))
+            .await
+            .unwrap();
+        store
+            .put(scoped_entry("agent-a", "global-row", Scope::Global))
+            .await
+            .unwrap();
+
+        let mut cfg = enabled_config();
+        cfg.hierarchical_scopes_enabled = true;
+        cfg.scope_hierarchy = Some(ScopeHierarchy {
+            agent: "agent-a".into(),
+            circle: Some("ring".into()),
+            org: Some("acme".into()),
+            damping: Damping::default(),
+        });
+        // top_k=10 to ensure all 4 hits survive the hybrid rerank cap
+        cfg.top_k = 10;
+        let enricher = ContextEnricher::new(embedding, store, cfg, "agent-a");
+
+        let result = enricher.enrich("recall please", 10_000).await;
+        assert!(result.query_embedding.is_some());
+        // All 3 segments should come from distinct scope levels (cap=3).
+        assert_eq!(result.segments.len(), MAX_RECALL_SEGMENTS);
+        let contents: Vec<String> = result.segments.iter().map(|s| s.content.clone()).collect();
+        // Exactly one scope is omitted — the lowest-dampened one (global).
+        // Order is not guaranteed post-hybrid rerank, but agent/circle/org
+        // must all be present.
+        assert!(contents.iter().any(|c| c == "agent-row"));
+        assert!(contents.iter().any(|c| c == "circle-row"));
+        assert!(contents.iter().any(|c| c == "org-row"));
+    }
+
+    #[tokio::test]
+    async fn hierarchical_flag_off_returns_only_agent_hits() {
+        let embedding = Arc::new(FixedEmbedding::new(vec![1.0, 0.0, 0.0, 0.0]));
+        let store = Arc::new(InMemorySemanticStore::new());
+        store
+            .put(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
+            .await
+            .unwrap();
+        // Rows under non-agent scopes but NOT agent_id=agent-a → invisible
+        // to the agent-only path.
+        store
+            .put(scoped_entry("agent-b", "other-agent", Scope::Agent("agent-b".into())))
+            .await
+            .unwrap();
+
+        let mut cfg = enabled_config();
+        cfg.hierarchical_scopes_enabled = false;
+        cfg.scope_hierarchy = Some(ScopeHierarchy {
+            agent: "agent-a".into(),
+            circle: Some("ring".into()),
+            org: Some("acme".into()),
+            damping: Damping::default(),
+        });
+        let enricher = ContextEnricher::new(embedding, store, cfg, "agent-a");
+
+        let result = enricher.enrich("recall please", 10_000).await;
+        assert_eq!(result.segments.len(), 1);
+        assert_eq!(result.segments[0].content, "agent-row");
+    }
+
+    #[tokio::test]
+    async fn hierarchical_flag_on_without_hierarchy_falls_back_to_agent() {
+        let embedding = Arc::new(FixedEmbedding::new(vec![1.0, 0.0, 0.0, 0.0]));
+        let store = Arc::new(InMemorySemanticStore::new());
+        store
+            .put(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
+            .await
+            .unwrap();
+        store
+            .put(scoped_entry("agent-a", "global-row", Scope::Global))
+            .await
+            .unwrap();
+
+        let mut cfg = enabled_config();
+        cfg.hierarchical_scopes_enabled = true;
+        cfg.scope_hierarchy = None; // flag on but no hierarchy configured
+        let enricher = ContextEnricher::new(embedding, store, cfg, "agent-a");
+
+        let result = enricher.enrich("recall", 10_000).await;
+        // Agent-only path: global-row leaks in because it still carries
+        // agent_id=agent-a (test row metadata), but it's NOT the dampened
+        // hierarchical merge — it's a straight agent_id filter.
+        assert!(!result.segments.is_empty());
+        let contents: Vec<String> = result.segments.iter().map(|s| s.content.clone()).collect();
+        assert!(contents.iter().any(|c| c == "agent-row"));
     }
 }

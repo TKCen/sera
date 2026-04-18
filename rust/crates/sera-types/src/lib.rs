@@ -42,8 +42,8 @@ pub use versioning::BuildIdentity;
 pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
 pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
 pub use semantic_memory::{
-    EvictionPolicy, MemoryId, ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore,
-    SemanticQuery, SemanticStats,
+    Damping, EvictionPolicy, MemoryHit, MemoryId, ScopeHierarchy, Scope, ScoredEntry,
+    SemanticEntry, SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats,
 };
 
 use serde::{Deserialize, Serialize};

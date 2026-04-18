@@ -19,17 +19,28 @@
 //!     tags              TEXT[]      NOT NULL DEFAULT '{}',
 //!     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 //!     last_accessed_at  TIMESTAMPTZ,
-//!     promoted          BOOLEAN     NOT NULL DEFAULT false
+//!     promoted          BOOLEAN     NOT NULL DEFAULT false,
+//!     scope_kind        TEXT        NOT NULL DEFAULT 'agent',
+//!     scope_key         TEXT        NOT NULL DEFAULT ''
 //! );
 //!
 //! CREATE INDEX IF NOT EXISTS idx_semantic_memory_agent_id
 //!     ON semantic_memory_entries (agent_id);
 //! CREATE INDEX IF NOT EXISTS idx_semantic_memory_created_at
 //!     ON semantic_memory_entries (created_at);
+//! CREATE INDEX IF NOT EXISTS idx_semantic_memory_scope
+//!     ON semantic_memory_entries (scope_kind, scope_key);
 //! CREATE INDEX IF NOT EXISTS idx_semantic_memory_embedding
 //!     ON semantic_memory_entries USING ivfflat (embedding vector_cosine_ops)
 //!     WITH (lists = 100);
 //! ```
+//!
+//! ## Hierarchical scopes (GH#140)
+//!
+//! Rows persist the [`Scope`] they belong to via the `scope_kind` / `scope_key`
+//! columns. Pre-migration rows self-backfill via the column defaults
+//! (`'agent'` / `''`) so callers see them under `Scope::Agent(agent_id)`
+//! semantics with an empty key — no backfill query is required.
 //!
 //! ## Dimensions
 //!
@@ -50,8 +61,8 @@
 use chrono::{DateTime, Utc};
 use pgvector::Vector as PgVector;
 use sera_types::{
-    EvictionPolicy, MemoryId, ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore,
-    SemanticQuery, SemanticStats, memory::SegmentKind,
+    EvictionPolicy, MemoryId, ScoredEntry, Scope, SemanticEntry, SemanticError,
+    SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
 };
 use sqlx::PgPool;
 use sqlx::Row;
@@ -154,7 +165,9 @@ impl PgVectorStore {
                 tags              TEXT[]      NOT NULL DEFAULT '{{}}',
                 created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
                 last_accessed_at  TIMESTAMPTZ,
-                promoted          BOOLEAN     NOT NULL DEFAULT false
+                promoted          BOOLEAN     NOT NULL DEFAULT false,
+                scope_kind        TEXT        NOT NULL DEFAULT 'agent',
+                scope_key         TEXT        NOT NULL DEFAULT ''
             )",
             dims = self.dimensions
         );
@@ -162,6 +175,25 @@ impl PgVectorStore {
             .execute(&self.pool)
             .await
             .map_err(|e| SemanticError::Backend(format!("create semantic_memory_entries: {e}")))?;
+
+        // Additive migration for pre-GH#140 deployments: these are no-ops on
+        // fresh tables thanks to `IF NOT EXISTS`. Pre-migration rows
+        // self-backfill via the column defaults — no UPDATE required.
+        sqlx::query(
+            "ALTER TABLE semantic_memory_entries
+                ADD COLUMN IF NOT EXISTS scope_kind TEXT NOT NULL DEFAULT 'agent'",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SemanticError::Backend(format!("add scope_kind column: {e}")))?;
+
+        sqlx::query(
+            "ALTER TABLE semantic_memory_entries
+                ADD COLUMN IF NOT EXISTS scope_key TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SemanticError::Backend(format!("add scope_key column: {e}")))?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_semantic_memory_agent_id
@@ -180,6 +212,14 @@ impl PgVectorStore {
         .map_err(|e| SemanticError::Backend(format!("create created_at index: {e}")))?;
 
         sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_semantic_memory_scope
+             ON semantic_memory_entries (scope_kind, scope_key)",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SemanticError::Backend(format!("create scope index: {e}")))?;
+
+        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_semantic_memory_embedding
              ON semantic_memory_entries USING ivfflat (embedding vector_cosine_ops)
              WITH (lists = 100)",
@@ -189,6 +229,15 @@ impl PgVectorStore {
         .map_err(|e| SemanticError::Backend(format!("create ivfflat index: {e}")))?;
 
         Ok(())
+    }
+
+    /// Translate a [`Scope`] to its SQL `(scope_kind, scope_key)` tuple.
+    ///
+    /// Thin wrapper around [`Scope::kind_str`] + [`Scope::key_str`] kept
+    /// local for test-coverage reporting (GH#140). Public so integration
+    /// harnesses can drive the same mapping without re-implementing it.
+    pub fn scope_to_sql(scope: &Scope) -> (&'static str, &str) {
+        (scope.kind_str(), scope.key_str())
     }
 
     fn validate_dims(&self, v: &[f32]) -> Result<(), SemanticError> {
@@ -237,6 +286,14 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<SemanticEntry, SemanticEr
         .try_get("promoted")
         .map_err(|e| SemanticError::Backend(format!("row.promoted: {e}")))?;
 
+    let scope_kind: String = row
+        .try_get("scope_kind")
+        .map_err(|e| SemanticError::Backend(format!("row.scope_kind: {e}")))?;
+    let scope_key: String = row
+        .try_get("scope_key")
+        .map_err(|e| SemanticError::Backend(format!("row.scope_key: {e}")))?;
+    let scope = Scope::from_parts(&scope_kind, &scope_key).ok();
+
     Ok(SemanticEntry {
         id: MemoryId::new(id.to_string()),
         agent_id,
@@ -247,7 +304,7 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<SemanticEntry, SemanticEr
         created_at: time_to_chrono(created_at),
         last_accessed_at: last_accessed_at.map(time_to_chrono),
         promoted,
-        scope: None,
+        scope,
     })
 }
 
@@ -267,11 +324,23 @@ impl SemanticMemoryStore for PgVectorStore {
         let embedding = PgVector::from(entry.embedding.clone());
         let tier = Json(entry.tier.clone());
 
+        // GH#140 scope persistence. `None` back-compat maps to
+        // `Scope::Agent(agent_id)` so pre-migration callers stay visible
+        // under agent-only queries.
+        let effective_scope = entry
+            .scope
+            .clone()
+            .unwrap_or_else(|| Scope::Agent(entry.agent_id.clone()));
+        let (scope_kind, scope_key) = (
+            effective_scope.kind_str().to_string(),
+            effective_scope.key_str().to_string(),
+        );
+
         sqlx::query(
             r#"
             INSERT INTO semantic_memory_entries
-                (id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                (id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted, scope_kind, scope_key)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (id) DO UPDATE SET
                 agent_id         = EXCLUDED.agent_id,
                 content          = EXCLUDED.content,
@@ -279,7 +348,9 @@ impl SemanticMemoryStore for PgVectorStore {
                 tier             = EXCLUDED.tier,
                 tags             = EXCLUDED.tags,
                 last_accessed_at = EXCLUDED.last_accessed_at,
-                promoted         = EXCLUDED.promoted
+                promoted         = EXCLUDED.promoted,
+                scope_kind       = EXCLUDED.scope_kind,
+                scope_key        = EXCLUDED.scope_key
             "#,
         )
         .bind(id)
@@ -291,6 +362,8 @@ impl SemanticMemoryStore for PgVectorStore {
         .bind(chrono_to_time(entry.created_at))
         .bind(entry.last_accessed_at.map(chrono_to_time))
         .bind(entry.promoted)
+        .bind(scope_kind)
+        .bind(scope_key)
         .execute(&self.pool)
         .await
         .map_err(|e| SemanticError::Backend(format!("put insert: {e}")))?;
@@ -312,48 +385,50 @@ impl SemanticMemoryStore for PgVectorStore {
 
         let top_k = query.top_k.max(1) as i64;
 
+        // GH#140: when the caller pins a `Scope`, filter on
+        // `(scope_kind, scope_key)`. Otherwise preserve the pre-hierarchy
+        // `agent_id`-only path so back-compat callers stay unchanged.
+        let scope_filter: Option<(&'static str, String)> = query
+            .scope
+            .as_ref()
+            .map(|s| (s.kind_str(), s.key_str().to_string()));
+
         // `embedding <=> $v` returns cosine distance in [0, 2]. We convert
         // to similarity in [-1, 1] via `1 - distance`.
-        let sql = match (&query.tier_filter, query.similarity_threshold) {
-            (Some(_), Some(_)) => {
-                "SELECT id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted,
-                    1 - (embedding <=> $1) AS vector_score
-                 FROM semantic_memory_entries
-                 WHERE agent_id = $2
-                   AND tier = $3
-                   AND (1 - (embedding <=> $1)) >= $4
-                 ORDER BY embedding <=> $1 ASC, created_at DESC
-                 LIMIT $5"
-            }
-            (Some(_), None) => {
-                "SELECT id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted,
-                    1 - (embedding <=> $1) AS vector_score
-                 FROM semantic_memory_entries
-                 WHERE agent_id = $2
-                   AND tier = $3
-                 ORDER BY embedding <=> $1 ASC, created_at DESC
-                 LIMIT $4"
-            }
-            (None, Some(_)) => {
-                "SELECT id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted,
-                    1 - (embedding <=> $1) AS vector_score
-                 FROM semantic_memory_entries
-                 WHERE agent_id = $2
-                   AND (1 - (embedding <=> $1)) >= $3
-                 ORDER BY embedding <=> $1 ASC, created_at DESC
-                 LIMIT $4"
-            }
-            (None, None) => {
-                "SELECT id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted,
-                    1 - (embedding <=> $1) AS vector_score
-                 FROM semantic_memory_entries
-                 WHERE agent_id = $2
-                 ORDER BY embedding <=> $1 ASC, created_at DESC
-                 LIMIT $3"
-            }
+        let where_primary = if scope_filter.is_some() {
+            "scope_kind = $2 AND scope_key = $3"
+        } else {
+            "agent_id = $2"
         };
+        // Number of params consumed by the primary filter (for $N offsets).
+        let primary_count = if scope_filter.is_some() { 3 } else { 2 };
 
-        let mut builder = sqlx::query(sql).bind(pg_vec).bind(&query.agent_id);
+        let mut sql = format!(
+            "SELECT id, agent_id, content, embedding, tier, tags, created_at, last_accessed_at, promoted, scope_kind, scope_key,
+                1 - (embedding <=> $1) AS vector_score
+             FROM semantic_memory_entries
+             WHERE {where_primary}"
+        );
+
+        let mut next_param = primary_count + 1;
+        if query.tier_filter.is_some() {
+            sql.push_str(&format!(" AND tier = ${next_param}"));
+            next_param += 1;
+        }
+        if query.similarity_threshold.is_some() {
+            sql.push_str(&format!(" AND (1 - (embedding <=> $1)) >= ${next_param}"));
+            next_param += 1;
+        }
+        sql.push_str(&format!(
+            " ORDER BY embedding <=> $1 ASC, created_at DESC LIMIT ${next_param}"
+        ));
+
+        let mut builder = sqlx::query(&sql).bind(pg_vec);
+        if let Some((kind, key)) = scope_filter.as_ref() {
+            builder = builder.bind(*kind).bind(key);
+        } else {
+            builder = builder.bind(&query.agent_id);
+        }
         if let Some(tier) = &query.tier_filter {
             builder = builder.bind(Json(tier.clone()));
         }
@@ -573,5 +648,56 @@ mod tests {
         let uuid = Uuid::new_v4();
         let id = MemoryId::new(uuid.to_string());
         assert_eq!(PgVectorStore::parse_id(&id).unwrap(), uuid);
+    }
+
+    // GH#140 — Scope → SQL mapping unit tests. DB-backed tests for the
+    // round-trip live under `#[cfg(feature = "integration")]` in the sqlx
+    // fixtures; the mapping helper itself needs no Postgres so it stays in
+    // unit-test land.
+
+    #[test]
+    fn scope_to_sql_agent_carries_key() {
+        let s = Scope::Agent("agent-42".into());
+        let (kind, key) = PgVectorStore::scope_to_sql(&s);
+        assert_eq!(kind, "agent");
+        assert_eq!(key, "agent-42");
+    }
+
+    #[test]
+    fn scope_to_sql_circle_carries_key() {
+        let s = Scope::Circle("ring-1".into());
+        let (kind, key) = PgVectorStore::scope_to_sql(&s);
+        assert_eq!(kind, "circle");
+        assert_eq!(key, "ring-1");
+    }
+
+    #[test]
+    fn scope_to_sql_org_carries_key() {
+        let s = Scope::Org("acme".into());
+        let (kind, key) = PgVectorStore::scope_to_sql(&s);
+        assert_eq!(kind, "org");
+        assert_eq!(key, "acme");
+    }
+
+    #[test]
+    fn scope_to_sql_global_has_empty_key() {
+        let s = Scope::Global;
+        let (kind, key) = PgVectorStore::scope_to_sql(&s);
+        assert_eq!(kind, "global");
+        assert_eq!(key, "");
+    }
+
+    #[test]
+    fn scope_roundtrip_via_from_parts() {
+        for s in [
+            Scope::Agent("a".into()),
+            Scope::Circle("c".into()),
+            Scope::Org("o".into()),
+            Scope::Global,
+        ] {
+            let (kind, key) = PgVectorStore::scope_to_sql(&s);
+            let back = Scope::from_parts(kind, key).unwrap();
+            assert_eq!(back, s);
+        }
     }
 }

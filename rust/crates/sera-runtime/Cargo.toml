@@ -66,3 +66,4 @@ local-embedding = ["dep:fastembed"]
 [dev-dependencies]
 tempfile.workspace = true
 wiremock.workspace = true
+sera-testing.workspace = true

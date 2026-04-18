@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sera_types::{
-    EvictionPolicy, MemoryId, ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore,
-    SemanticQuery, SemanticStats, memory::SegmentKind,
+    EvictionPolicy, MemoryId, ScoredEntry, Scope, SemanticEntry, SemanticError,
+    SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
 };
 use uuid::Uuid;
 
@@ -131,10 +131,26 @@ impl SemanticMemoryStore for InMemorySemanticStore {
                 .unwrap_or(true)
         };
 
+        // GH#140: when the caller pins a `Scope`, filter on the row's
+        // effective scope (defaulting to `Scope::Agent(agent_id)` for
+        // back-compat rows that were written without `scope`).
+        let matches_scope = |entry: &SemanticEntry| -> bool {
+            match &query.scope {
+                None => entry.agent_id == query.agent_id,
+                Some(target) => {
+                    let effective = entry
+                        .scope
+                        .clone()
+                        .unwrap_or_else(|| Scope::Agent(entry.agent_id.clone()));
+                    &effective == target
+                }
+            }
+        };
+
         let mut scored: Vec<ScoredEntry> = guard
             .rows
             .values()
-            .filter(|e| e.agent_id == query.agent_id && matches_tier(e))
+            .filter(|e| matches_scope(e) && matches_tier(e))
             .map(|entry| {
                 let vs = cosine(&entry.embedding, &probe);
                 let rs = recency_norm(entry.created_at, now);
@@ -532,5 +548,347 @@ mod tests {
     fn cosine_identical_is_one() {
         let a = vec![1.0, 2.0, 3.0];
         assert!((cosine(&a, &a) - 1.0).abs() < 1e-6);
+    }
+
+    // ── GH#140: hierarchical scope tests ──────────────────────────────────
+
+    use sera_types::{Damping, Scope, ScopeHierarchy};
+
+    fn mk_scoped(
+        agent: &str,
+        content: &str,
+        emb: Vec<f32>,
+        scope: Option<Scope>,
+    ) -> SemanticEntry {
+        SemanticEntry {
+            id: MemoryId::new(""),
+            agent_id: agent.into(),
+            content: content.into(),
+            embedding: emb,
+            tier: SegmentKind::MemoryRecall("r".into()),
+            tags: vec![],
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            promoted: false,
+            scope,
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_filter_matches_single_scope_exactly() {
+        let store = InMemorySemanticStore::new();
+        store
+            .put(mk_scoped(
+                "a",
+                "agent-row",
+                vec![1.0, 0.0],
+                Some(Scope::Agent("a".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "circle-row",
+                vec![1.0, 0.0],
+                Some(Scope::Circle("ring".into())),
+            ))
+            .await
+            .unwrap();
+
+        let q = SemanticQuery {
+            agent_id: "a".into(),
+            scope: Some(Scope::Circle("ring".into())),
+            tier_filter: None,
+            text: None,
+            query_embedding: Some(vec![1.0, 0.0]),
+            top_k: 10,
+            similarity_threshold: None,
+        };
+        let hits = store.query(q).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entry.content, "circle-row");
+    }
+
+    #[tokio::test]
+    async fn scope_filter_treats_missing_scope_as_agent() {
+        // Pre-migration row: no scope set. Expect it to be visible as
+        // Scope::Agent(agent_id).
+        let store = InMemorySemanticStore::new();
+        store
+            .put(mk_scoped("alice", "legacy", vec![1.0, 0.0], None))
+            .await
+            .unwrap();
+
+        let q = SemanticQuery {
+            agent_id: "alice".into(),
+            scope: Some(Scope::Agent("alice".into())),
+            tier_filter: None,
+            text: None,
+            query_embedding: Some(vec![1.0, 0.0]),
+            top_k: 10,
+            similarity_threshold: None,
+        };
+        let hits = store.query(q).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entry.content, "legacy");
+    }
+
+    #[tokio::test]
+    async fn hierarchical_query_merges_across_levels() {
+        let store = InMemorySemanticStore::new();
+        store
+            .put(mk_scoped(
+                "a",
+                "agent-hit",
+                vec![1.0, 0.0],
+                Some(Scope::Agent("a".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "circle-hit",
+                vec![1.0, 0.0],
+                Some(Scope::Circle("ring".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "org-hit",
+                vec![1.0, 0.0],
+                Some(Scope::Org("acme".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "global-hit",
+                vec![1.0, 0.0],
+                Some(Scope::Global),
+            ))
+            .await
+            .unwrap();
+
+        let hierarchy = ScopeHierarchy {
+            agent: "a".into(),
+            circle: Some("ring".into()),
+            org: Some("acme".into()),
+            damping: Damping::default(),
+        };
+
+        let hits = store
+            .query_hierarchical(&hierarchy, vec![1.0, 0.0], 10)
+            .await
+            .unwrap();
+
+        // All four scopes contribute one row.
+        assert_eq!(hits.len(), 4);
+        let contents: Vec<&str> = hits.iter().map(|h| h.entry.content.as_str()).collect();
+        assert!(contents.contains(&"agent-hit"));
+        assert!(contents.contains(&"circle-hit"));
+        assert!(contents.contains(&"org-hit"));
+        assert!(contents.contains(&"global-hit"));
+    }
+
+    #[tokio::test]
+    async fn hierarchical_damping_orders_agent_above_global() {
+        let store = InMemorySemanticStore::new();
+        // All hits have identical raw cosine similarity (1.0) — the only
+        // tiebreaker is the per-level damping factor.
+        store
+            .put(mk_scoped(
+                "a",
+                "agent-row",
+                vec![1.0, 0.0],
+                Some(Scope::Agent("a".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "circle-row",
+                vec![1.0, 0.0],
+                Some(Scope::Circle("ring".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "org-row",
+                vec![1.0, 0.0],
+                Some(Scope::Org("acme".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "global-row",
+                vec![1.0, 0.0],
+                Some(Scope::Global),
+            ))
+            .await
+            .unwrap();
+
+        let hierarchy = ScopeHierarchy {
+            agent: "a".into(),
+            circle: Some("ring".into()),
+            org: Some("acme".into()),
+            damping: Damping::default(),
+        };
+
+        let hits = store
+            .query_hierarchical(&hierarchy, vec![1.0, 0.0], 10)
+            .await
+            .unwrap();
+
+        // Expect agent > circle > org > global by dampened score.
+        assert_eq!(hits.len(), 4);
+        assert_eq!(hits[0].entry.content, "agent-row");
+        assert_eq!(hits[1].entry.content, "circle-row");
+        assert_eq!(hits[2].entry.content, "org-row");
+        assert_eq!(hits[3].entry.content, "global-row");
+        assert!(hits[0].dampened_score > hits[1].dampened_score);
+        assert!(hits[1].dampened_score > hits[2].dampened_score);
+        assert!(hits[2].dampened_score > hits[3].dampened_score);
+    }
+
+    #[tokio::test]
+    async fn hierarchical_tiebreak_by_recency() {
+        let store = InMemorySemanticStore::new();
+        // Two entries in the same scope with identical vector score —
+        // the newer one must win the sort tiebreak.
+        let mut older = mk_scoped(
+            "a",
+            "older",
+            vec![1.0, 0.0],
+            Some(Scope::Agent("a".into())),
+        );
+        older.created_at = Utc::now() - chrono::Duration::seconds(120);
+        let newer = mk_scoped(
+            "a",
+            "newer",
+            vec![1.0, 0.0],
+            Some(Scope::Agent("a".into())),
+        );
+        store.put(older).await.unwrap();
+        store.put(newer).await.unwrap();
+
+        let hierarchy = ScopeHierarchy::agent_only("a");
+        let hits = store
+            .query_hierarchical(&hierarchy, vec![1.0, 0.0], 10)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].entry.content, "newer");
+    }
+
+    #[tokio::test]
+    async fn agent_only_hierarchy_still_checks_global() {
+        // `ScopeHierarchy::agent_only` always appends `Scope::Global`.
+        // Rows in Circle / Org scope should be invisible.
+        let store = InMemorySemanticStore::new();
+        store
+            .put(mk_scoped(
+                "a",
+                "agent-row",
+                vec![1.0, 0.0],
+                Some(Scope::Agent("a".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "circle-row",
+                vec![1.0, 0.0],
+                Some(Scope::Circle("ring".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "global-row",
+                vec![1.0, 0.0],
+                Some(Scope::Global),
+            ))
+            .await
+            .unwrap();
+
+        let hierarchy = ScopeHierarchy::agent_only("a");
+        let hits = store
+            .query_hierarchical(&hierarchy, vec![1.0, 0.0], 10)
+            .await
+            .unwrap();
+
+        let contents: Vec<&str> = hits.iter().map(|h| h.entry.content.as_str()).collect();
+        assert!(contents.contains(&"agent-row"));
+        assert!(contents.contains(&"global-row"));
+        assert!(
+            !contents.contains(&"circle-row"),
+            "circle row must not leak into agent-only hierarchy"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_hierarchical_query_preserves_backcompat() {
+        // Flag-off regression — without `scope`, the query must hit every
+        // row for the agent regardless of scope_kind.
+        let store = InMemorySemanticStore::new();
+        store
+            .put(mk_scoped(
+                "a",
+                "agent-row",
+                vec![1.0, 0.0],
+                Some(Scope::Agent("a".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "circle-row",
+                vec![1.0, 0.0],
+                Some(Scope::Circle("ring".into())),
+            ))
+            .await
+            .unwrap();
+        store
+            .put(mk_scoped(
+                "a",
+                "legacy-row",
+                vec![1.0, 0.0],
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let q = SemanticQuery {
+            agent_id: "a".into(),
+            scope: None,
+            tier_filter: None,
+            text: None,
+            query_embedding: Some(vec![1.0, 0.0]),
+            top_k: 10,
+            similarity_threshold: None,
+        };
+        // Expect 2: agent-row and legacy-row (both map to agent_id=a).
+        // circle-row belongs to a circle, not agent a.
+        let hits = store.query(q).await.unwrap();
+        let contents: Vec<&str> = hits.iter().map(|h| h.entry.content.as_str()).collect();
+        assert!(contents.contains(&"agent-row"));
+        assert!(contents.contains(&"legacy-row"));
+        // The circle row belongs to `a` by agent_id but has Scope::Circle;
+        // pre-scope behaviour keyed on agent_id only, so it stays visible
+        // under the back-compat path.
+        assert!(contents.contains(&"circle-row"));
     }
 }

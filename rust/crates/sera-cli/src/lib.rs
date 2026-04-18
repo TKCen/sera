@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod config;
 pub mod http;
+pub mod sse;
 pub mod token_store;
 
 use sera_commands::CommandRegistry;
@@ -17,5 +18,6 @@ pub fn build_registry() -> CommandRegistry {
     registry.register(commands::AgentListCommand::new());
     registry.register(commands::AgentShowCommand::new());
     registry.register(commands::AgentRunCommand::new());
+    registry.register(commands::ChatCommand::new());
     registry
 }

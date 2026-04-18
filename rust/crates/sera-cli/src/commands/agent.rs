@@ -27,7 +27,11 @@ use sera_commands::{
 };
 
 use crate::http::build_client_with_token;
+use crate::sse::{SseClient, StreamEvent};
 use crate::token_store::{best_available_store, TokenStore};
+
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -492,6 +496,12 @@ impl Command for AgentRunCommand {
                         .long("raw")
                         .help("Output raw JSON response for debugging")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("no-stream")
+                        .long("no-stream")
+                        .help("Disable streaming; return the full reply in a single JSON response")
+                        .action(clap::ArgAction::SetTrue),
                 ),
         )
     }
@@ -515,6 +525,7 @@ impl Command for AgentRunCommand {
             .trim_end_matches('/')
             .to_owned();
         let raw = args.get("raw").map(|v| v == "true").unwrap_or(false);
+        let no_stream = args.get("no-stream").map(|v| v == "true").unwrap_or(false);
 
         let token = self
             .store
@@ -525,49 +536,156 @@ impl Command for AgentRunCommand {
         let client = build_client_with_token(&token)
             .map_err(|e| CommandError::Execution(e.to_string()))?;
 
-        // POST /api/chat — send both `agent` (autonomous gateway) and
-        // `agentInstanceId` (full gateway) so the payload works against either.
-        let payload = json!({
-            "agent": id,
-            "agentInstanceId": id,
-            "message": prompt,
-            "stream": false,
-        });
-
-        let url = format!("{endpoint}/api/chat");
-        let response = client
-            .post(&url)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| CommandError::Execution(format!("request failed: {e}")))?;
-
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(CommandError::Execution(
-                "token rejected — run `sera auth login` again".into(),
-            ));
-        }
-        if !response.status().is_success() {
-            let status = response.status();
-            let body_text = response.text().await.unwrap_or_default();
-            return Err(CommandError::Execution(format!(
-                "gateway returned HTTP {status}: {body_text}"
-            )));
+        // `--raw` implies synchronous mode — there's no raw JSON to print in
+        // streaming mode.  Similarly, `--no-stream` opts into the legacy
+        // blocking behaviour.  Default is streaming.
+        if no_stream || raw {
+            return run_sync(client, &endpoint, &id, &prompt, raw).await;
         }
 
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| CommandError::Execution(format!("failed to parse response: {e}")))?;
-
-        if raw {
-            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
-        } else {
-            print_run_output(&body);
-        }
-
-        Ok(CommandResult::ok(body))
+        run_streaming(client, endpoint, id, prompt).await
     }
+}
+
+/// Synchronous turn — matches the pre-streaming behaviour.
+async fn run_sync(
+    client: reqwest::Client,
+    endpoint: &str,
+    id: &str,
+    prompt: &str,
+    raw: bool,
+) -> Result<CommandResult, CommandError> {
+    let payload = json!({
+        "agent": id,
+        "agentInstanceId": id,
+        "message": prompt,
+        "stream": false,
+    });
+
+    let url = format!("{endpoint}/api/chat");
+    let response = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| CommandError::Execution(format!("request failed: {e}")))?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(CommandError::Execution(
+            "token rejected — run `sera auth login` again".into(),
+        ));
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        return Err(CommandError::Execution(format!(
+            "gateway returned HTTP {status}: {body_text}"
+        )));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| CommandError::Execution(format!("failed to parse response: {e}")))?;
+
+    if raw {
+        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+    } else {
+        print_run_output(&body);
+    }
+
+    Ok(CommandResult::ok(body))
+}
+
+/// Streaming turn — uses the SSE endpoint and writes tokens as they arrive.
+/// On failure, falls back to synchronous mode so the command still works
+/// against gateways that haven't implemented streaming yet.
+async fn run_streaming(
+    client: reqwest::Client,
+    endpoint: String,
+    id: String,
+    prompt: String,
+) -> Result<CommandResult, CommandError> {
+    let sse = SseClient::new(client.clone(), endpoint.clone());
+    let payload = json!({
+        "agent": id,
+        "agentInstanceId": id,
+        "message": prompt,
+        "stream": true,
+    });
+
+    let mut stream = match sse.post_stream("/api/chat", payload).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!(error = %e, "streaming not available, falling back to sync");
+            return run_sync(client, &endpoint, &id, &prompt, false).await;
+        }
+    };
+
+    let mut stdout = tokio::io::stdout();
+    let mut assembled = String::new();
+    let mut session_id = String::new();
+    let mut usage: Option<serde_json::Value> = None;
+
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(StreamEvent::Token { delta, session_id: sid }) => {
+                if session_id.is_empty() && !sid.is_empty() {
+                    session_id = sid;
+                }
+                stdout.write_all(delta.as_bytes()).await.ok();
+                stdout.flush().await.ok();
+                assembled.push_str(&delta);
+            }
+            Ok(StreamEvent::ToolCall { name, args }) => {
+                println!("\n* tool: {name}({args})");
+            }
+            Ok(StreamEvent::ToolResult { name, result }) => {
+                println!("\n* tool result [{name}]: {result}");
+            }
+            Ok(StreamEvent::HitlPending { id }) => {
+                println!("\n[HITL pending: {id}]");
+            }
+            Ok(StreamEvent::MemoryPressure { message }) => {
+                println!("\n[memory: {message}]");
+            }
+            Ok(StreamEvent::Error { message }) => {
+                eprintln!("\nerror: {message}");
+                break;
+            }
+            Ok(StreamEvent::Done { usage: u }) => {
+                usage = u;
+                break;
+            }
+            Ok(StreamEvent::Other { event, .. }) => {
+                tracing::debug!(%event, "unhandled sse event");
+            }
+            Err(e) => {
+                return Err(CommandError::Execution(format!("stream error: {e}")));
+            }
+        }
+    }
+
+    // Ensure a trailing newline so the shell prompt starts on a fresh line.
+    println!();
+
+    // Emit session info and usage on stderr to match the sync path.
+    if !session_id.is_empty() {
+        eprintln!("session: {session_id}");
+    }
+    if let Some(u) = &usage {
+        let total = u.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+        if total > 0 {
+            eprintln!("tokens: {total}");
+        }
+    }
+
+    let body = json!({
+        "reply": assembled,
+        "session_id": session_id,
+        "usage": usage,
+    });
+    Ok(CommandResult::ok(body))
 }
 
 fn print_run_output(body: &serde_json::Value) {

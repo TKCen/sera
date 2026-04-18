@@ -276,6 +276,8 @@ async fn agent_run_posts_turn_and_returns_reply() {
         ("endpoint", &server.uri()),
         ("id", "agent-1"),
         ("prompt", "say hello"),
+        // Stream mode is default; these tests exercise the legacy sync path.
+        ("no-stream", "true"),
     ]);
     let result = cmd.execute(a, &CommandContext::new()).await;
     assert!(result.is_ok(), "agent run should succeed: {:?}", result);
@@ -311,6 +313,7 @@ async fn agent_run_with_thoughts_renders_tool_calls() {
         ("endpoint", &server.uri()),
         ("id", "agent-1"),
         ("prompt", "list files"),
+        ("no-stream", "true"),
     ]);
     let result = cmd.execute(a, &CommandContext::new()).await;
     assert!(result.is_ok(), "agent run with thoughts should succeed: {:?}", result);
@@ -480,6 +483,7 @@ async fn agent_run_autonomous_response_shape() {
         ("endpoint", &server.uri()),
         ("id", "sera"),
         ("prompt", "hello"),
+        ("no-stream", "true"),
     ]);
     let result = cmd.execute(a, &CommandContext::new()).await;
     assert!(result.is_ok(), "agent run (autonomous response shape) should succeed: {:?}", result);
@@ -487,6 +491,44 @@ async fn agent_run_autonomous_response_shape() {
     let data = result.unwrap().data;
     assert_eq!(data["response"], "Hello from autonomous mode!");
     assert_eq!(data["session_id"], "sess-auto-001");
+}
+
+// ---------------------------------------------------------------------------
+// Streaming (default path)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn agent_run_streams_tokens_and_finishes() {
+    // Wiremock will return an SSE response body — the client's streaming
+    // path consumes it and reassembles the reply.
+    let server = MockServer::start().await;
+    let sse_body = "event: message\ndata: {\"delta\":\"Hello \",\"session_id\":\"sess-stream\"}\n\n\
+                    event: message\ndata: {\"delta\":\"world!\",\"session_id\":\"sess-stream\"}\n\n\
+                    event: done\ndata: {\"status\":\"complete\",\"usage\":{\"total_tokens\":12}}\n\n";
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(sse_body, "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let store = seeded_store("test-token");
+    let cmd = AgentRunCommand::with_store(store);
+    let a = args(&[
+        ("endpoint", &server.uri()),
+        ("id", "sera"),
+        ("prompt", "hi"),
+        // default: streaming
+    ]);
+    let result = cmd.execute(a, &CommandContext::new()).await;
+    assert!(result.is_ok(), "streaming run should succeed: {:?}", result);
+    let data = result.unwrap().data;
+    assert_eq!(data["reply"], "Hello world!");
+    assert_eq!(data["session_id"], "sess-stream");
+    assert_eq!(data["usage"]["total_tokens"], 12);
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +541,7 @@ fn registry_contains_agent_commands() {
     assert!(registry.get("agent:list").is_some(), "agent:list not in registry");
     assert!(registry.get("agent:show").is_some(), "agent:show not in registry");
     assert!(registry.get("agent:run").is_some(), "agent:run not in registry");
-    // Total: 4 original + 3 agent = 7
-    assert_eq!(registry.len(), 7);
+    assert!(registry.get("chat").is_some(), "chat not in registry");
+    // Total: 4 original + 3 agent + 1 chat = 8
+    assert_eq!(registry.len(), 8);
 }

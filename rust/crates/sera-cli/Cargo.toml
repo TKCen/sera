@@ -24,6 +24,15 @@ async-trait = { workspace = true }
 keyring = { workspace = true }
 rpassword = { workspace = true }
 comfy-table = { workspace = true }
+bytes = "1"
+futures-util = { workspace = true }
+async-stream = { workspace = true }
+tokio-stream = { workspace = true }
+
+[features]
+# Enables the chat_smoke integration test which boots a real gateway via
+# sera-e2e-harness and runs the `sera chat` REPL as a subprocess.
+integration = []
 
 [dev-dependencies]
 tokio = { workspace = true }

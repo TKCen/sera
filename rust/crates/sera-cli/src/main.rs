@@ -50,6 +50,23 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Interactive streaming REPL against an agent
+    Chat(ChatArgs),
+}
+
+#[derive(clap::Args)]
+struct ChatArgs {
+    /// Session to resume.  If absent, --agent must be given.
+    session_id: Option<String>,
+    /// Agent to open a new session against.
+    #[arg(long)]
+    agent: Option<String>,
+    /// Gateway base URL (overrides config endpoint)
+    #[arg(long, short = 'e', value_name = "URL")]
+    endpoint: Option<String>,
+    /// Alias for --endpoint (kept for parity with the bead spec)
+    #[arg(long, value_name = "URL")]
+    api_url: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -86,6 +103,9 @@ enum AgentCommand {
         /// Output raw JSON response for debugging
         #[arg(long)]
         raw: bool,
+        /// Disable streaming; return the full reply in a single JSON response
+        #[arg(long)]
+        no_stream: bool,
     },
 }
 
@@ -259,7 +279,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            AgentCommand::Run { id, prompt, endpoint, raw } => {
+            AgentCommand::Run { id, prompt, endpoint, raw, no_stream } => {
                 let mut args = CommandArgs::new();
                 let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
                 args.insert("endpoint", resolved);
@@ -267,6 +287,9 @@ async fn main() -> Result<()> {
                 args.insert("prompt", prompt);
                 if raw {
                     args.insert("raw", "true".to_string());
+                }
+                if no_stream {
+                    args.insert("no-stream", "true".to_string());
                 }
                 let cmd = registry
                     .get("agent:run")
@@ -280,6 +303,32 @@ async fn main() -> Result<()> {
                 }
             }
         },
+
+        Commands::Chat(chat_args) => {
+            let mut args = CommandArgs::new();
+            let resolved = chat_args
+                .api_url
+                .clone()
+                .or_else(|| chat_args.endpoint.clone())
+                .unwrap_or_else(|| config.endpoint.clone());
+            args.insert("endpoint", resolved);
+            if let Some(a) = chat_args.agent {
+                args.insert("agent", a);
+            }
+            if let Some(s) = chat_args.session_id {
+                args.insert("session", s);
+            }
+            let cmd = registry
+                .get("chat")
+                .context("chat command not registered")?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
     }
 
     Ok(())

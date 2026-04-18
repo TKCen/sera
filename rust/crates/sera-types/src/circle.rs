@@ -193,6 +193,89 @@ pub struct Circle {
 }
 
 // =========================================================================
+// Party mode types (sera-8d1.2 / GH#145)
+// =========================================================================
+
+/// Default number of rounds a Party mode run allows before synthesis.
+pub const DEFAULT_PARTY_MAX_ROUNDS: u32 = 3;
+
+/// Ordering for Party mode turn-taking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartyOrdering {
+    /// Iterate members in declaration order each round.
+    #[default]
+    RoundRobin,
+    /// Iterate members by importance (descending). Requires an importance
+    /// hint per member; without hints falls back to [`PartyOrdering::RoundRobin`].
+    ImportanceBased,
+}
+
+/// Configuration for a Party mode coordination run.
+///
+/// A Party mode session broadcasts the same prompt to all members, collects
+/// their responses (with inter-member visibility via the blackboard), repeats
+/// for `max_rounds` rounds, then feeds the transcript to the `synthesizer`
+/// for a final synthesis turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartyConfig {
+    /// Maximum number of discussion rounds before synthesis.
+    #[serde(default = "default_party_max_rounds")]
+    pub max_rounds: u32,
+    /// Ordering for turn-taking within each round.
+    #[serde(default)]
+    pub ordering: PartyOrdering,
+    /// Participant id of the agent that synthesizes the final output.
+    pub synthesizer: String,
+}
+
+fn default_party_max_rounds() -> u32 {
+    DEFAULT_PARTY_MAX_ROUNDS
+}
+
+impl PartyConfig {
+    /// Build a config with the default `max_rounds` and `RoundRobin` ordering.
+    pub fn new(synthesizer: impl Into<String>) -> Self {
+        Self {
+            max_rounds: DEFAULT_PARTY_MAX_ROUNDS,
+            ordering: PartyOrdering::RoundRobin,
+            synthesizer: synthesizer.into(),
+        }
+    }
+}
+
+/// A single response posted by a party member during a round.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PartyResponse {
+    /// Participant id of the responder.
+    pub participant_id: String,
+    /// Free-form response text.
+    pub text: String,
+    /// Wall-clock timestamp when the response was posted.
+    pub posted_at: DateTime<Utc>,
+}
+
+/// A complete round of party-mode prompts + responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartyRound {
+    /// 1-indexed round number.
+    pub round_no: u32,
+    /// Wall-clock timestamp when the round's prompt was broadcast.
+    pub prompts_sent_at: DateTime<Utc>,
+    /// Responses posted during this round, in arrival order.
+    pub responses: Vec<PartyResponse>,
+}
+
+/// Structured outcome of a Party mode run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartyOutcome {
+    /// All rounds run, in order.
+    pub rounds: Vec<PartyRound>,
+    /// Final synthesized output produced by the synthesizer participant.
+    pub synthesis: String,
+}
+
+// =========================================================================
 // serde adapters
 // =========================================================================
 
@@ -331,6 +414,98 @@ mod tests {
         let parsed: Circle = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.name, "engineering");
         assert!(matches!(parsed.constitution, Some(ConstitutionRef::Inline { .. })));
+    }
+
+    // ── Party mode serde tests (sera-8d1.2) ──────────────────────────────────
+
+    #[test]
+    fn party_config_yaml_round_trip_defaults() {
+        let cfg = PartyConfig::new("lead");
+        let yaml = serde_yaml::to_string(&cfg).unwrap();
+        let parsed: PartyConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.max_rounds, DEFAULT_PARTY_MAX_ROUNDS);
+        assert_eq!(parsed.synthesizer, "lead");
+        assert_eq!(parsed.ordering, PartyOrdering::RoundRobin);
+    }
+
+    #[test]
+    fn party_config_yaml_explicit_values() {
+        let yaml = "max_rounds: 5\nordering: importance_based\nsynthesizer: alice\n";
+        let parsed: PartyConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.max_rounds, 5);
+        assert_eq!(parsed.ordering, PartyOrdering::ImportanceBased);
+        assert_eq!(parsed.synthesizer, "alice");
+    }
+
+    #[test]
+    fn party_config_yaml_missing_optional_fields_uses_defaults() {
+        let yaml = "synthesizer: bob\n";
+        let parsed: PartyConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.max_rounds, DEFAULT_PARTY_MAX_ROUNDS);
+        assert_eq!(parsed.ordering, PartyOrdering::RoundRobin);
+        assert_eq!(parsed.synthesizer, "bob");
+    }
+
+    #[test]
+    fn party_ordering_serde_round_trip() {
+        for o in [PartyOrdering::RoundRobin, PartyOrdering::ImportanceBased] {
+            let yaml = serde_yaml::to_string(&o).unwrap();
+            let parsed: PartyOrdering = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(parsed, o);
+        }
+    }
+
+    #[test]
+    fn party_response_serde_round_trip() {
+        let resp = PartyResponse {
+            participant_id: "alice".to_string(),
+            text: "hello world".to_string(),
+            posted_at: Utc::now(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: PartyResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, resp);
+    }
+
+    #[test]
+    fn party_round_yaml_round_trip() {
+        let round = PartyRound {
+            round_no: 2,
+            prompts_sent_at: Utc::now(),
+            responses: vec![
+                PartyResponse {
+                    participant_id: "alice".into(),
+                    text: "a".into(),
+                    posted_at: Utc::now(),
+                },
+                PartyResponse {
+                    participant_id: "bob".into(),
+                    text: "b".into(),
+                    posted_at: Utc::now(),
+                },
+            ],
+        };
+        let yaml = serde_yaml::to_string(&round).unwrap();
+        let parsed: PartyRound = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.round_no, 2);
+        assert_eq!(parsed.responses.len(), 2);
+        assert_eq!(parsed.responses[0].participant_id, "alice");
+    }
+
+    #[test]
+    fn party_outcome_json_round_trip() {
+        let outcome = PartyOutcome {
+            rounds: vec![PartyRound {
+                round_no: 1,
+                prompts_sent_at: Utc::now(),
+                responses: vec![],
+            }],
+            synthesis: "final answer".to_string(),
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        let parsed: PartyOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.rounds.len(), 1);
+        assert_eq!(parsed.synthesis, "final answer");
     }
 
     #[test]

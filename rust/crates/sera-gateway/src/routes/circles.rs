@@ -212,6 +212,13 @@ pub async fn update_constitution(
     }))
 }
 
+// ── Party mode route (sera-8d1.2 / GH#145) ───────────────────────────────────
+//
+// See [`crate::party`] (via `src/party.rs`) for the actual handler, state
+// trait, and tests. Splitting the party route out of this DB-oriented module
+// lets the handler live in the crate's lib surface without pulling in
+// `AppError` / `AppState`, which are binary-only types.
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,4 +301,7 @@ mod tests {
         assert!(req.text.is_none());
         assert!(req.changed_by.is_none());
     }
+
+    // Party route tests live in [`sera_gateway::party`] (src/party.rs) since
+    // those handlers don't depend on the DB-backed `AppState` used here.
 }

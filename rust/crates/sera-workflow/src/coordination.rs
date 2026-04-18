@@ -26,7 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use sera_types::circle::{
-    BlackboardEntry, BlackboardRetention, TerminationCondition, AGENT_DECISION_ARTIFACT,
+    BlackboardEntry, BlackboardRetention, PartyConfig, PartyOrdering, PartyOutcome, PartyResponse,
+    PartyRound, TerminationCondition, AGENT_DECISION_ARTIFACT,
 };
 
 /// Identifier for a coordination participant (agent, sub-circle, or human).
@@ -668,6 +669,15 @@ pub enum CoordinationPolicy {
         voters: Vec<ParticipantId>,
         quorum: f32,
     },
+    /// BMAD-style party mode — all members discuss in rounds via the
+    /// blackboard, a designated synthesizer produces the final output.
+    ///
+    /// Drive this variant via [`Coordinator::run_party`] rather than
+    /// [`Coordinator::run`]; `run` returns `NoParticipants` for Party because
+    /// the party loop is self-directed via [`PartyMember`] trait objects.
+    ///
+    /// Bead `sera-8d1.2` (GH#145).
+    Party { config: PartyConfig },
 }
 
 impl CoordinationPolicy {
@@ -680,6 +690,7 @@ impl CoordinationPolicy {
             CoordinationPolicy::Council { .. } => "council",
             CoordinationPolicy::Hierarchical { .. } => "hierarchical",
             CoordinationPolicy::Consensus { .. } => "consensus",
+            CoordinationPolicy::Party { .. } => "party",
         }
     }
 
@@ -698,6 +709,10 @@ impl CoordinationPolicy {
                 v
             }
             CoordinationPolicy::Consensus { voters, .. } => voters.clone(),
+            // Party is driven by `run_party`, which supplies its own member
+            // list; `run` rejects Party via NoParticipants by returning an
+            // empty fallback here.
+            CoordinationPolicy::Party { .. } => Vec::new(),
         }
     }
 }
@@ -716,6 +731,11 @@ pub enum CoordinationError {
     ConvergenceExhausted,
     #[error("terminated by TerminationCondition")]
     TerminatedByCondition,
+    /// Returned when [`Coordinator::run_party`] is invoked with a policy that
+    /// is not [`CoordinationPolicy::Party`], or when a party run is missing
+    /// its synthesizer from the supplied member list.
+    #[error("party configuration invalid: {0}")]
+    PartyConfig(String),
 }
 
 pub struct Coordinator {
@@ -796,6 +816,16 @@ impl Coordinator {
         fallback_participants: &[ParticipantId],
         exec: &ExecFn,
     ) -> Result<AggregatedResult, CoordinationError> {
+        // Party is not driven via `run` — embedders call `run_party` directly
+        // with their [`PartyMember`] implementations. Surface this as a
+        // dedicated error before the fallback participant check so callers
+        // get a helpful message rather than `NoParticipants`.
+        if let CoordinationPolicy::Party { .. } = &self.policy {
+            return Err(CoordinationError::PartyConfig(
+                "use Coordinator::run_party for Party coordination".into(),
+            ));
+        }
+
         let participants = self.policy.participants(fallback_participants);
         if participants.is_empty() {
             return Err(CoordinationError::NoParticipants);
@@ -867,6 +897,8 @@ impl Coordinator {
                 }
                 last.ok_or(CoordinationError::ConvergenceExhausted)?
             }
+            // Handled by the early-return `PartyConfig` branch above.
+            CoordinationPolicy::Party { .. } => unreachable!("Party handled above"),
         };
 
         // Post-run termination check — e.g. MaxMessages reached during this
@@ -951,6 +983,226 @@ impl Coordinator {
     pub fn publish_subagent_notice(&self, notice: SubagentDelegationNotice) {
         if let Some(obs) = &self.subagent_observer {
             obs.on_delegation(notice);
+        }
+    }
+}
+
+// =========================================================================
+// Party mode (bead sera-8d1.2 / GH#145)
+// =========================================================================
+
+/// A member of a Party mode coordination.
+///
+/// The runtime seam is intentionally minimal: each member is prompted with
+/// the round's broadcast prompt plus a snapshot of every blackboard entry
+/// posted up to (but not including) this member's turn. Members return their
+/// response text as a plain `String`.
+///
+/// Implementations live outside this crate; `sera-runtime` wires real LLM
+/// members, while tests use the lightweight [`EchoPartyMember`] fixture.
+/// This trait is synchronous for determinism in tests — real LLM-backed
+/// implementations can block on a tokio runtime internally.
+pub trait PartyMember: Send + Sync {
+    /// Stable participant id — matches the id used in blackboard entries.
+    fn id(&self) -> &str;
+
+    /// Optional importance hint consulted when the Party config uses
+    /// [`PartyOrdering::ImportanceBased`]. Higher values run earlier.
+    ///
+    /// Default is `None` — callers with no importance signal fall back to
+    /// [`PartyOrdering::RoundRobin`] ordering.
+    fn importance(&self) -> Option<f32> {
+        None
+    }
+
+    /// Produce a response for `prompt` given the visible transcript.
+    fn respond(&self, prompt: &str, transcript: &[BlackboardEntry]) -> String;
+}
+
+/// Party-mode blackboard artifact types. Kept here rather than in
+/// `sera-types` because they are pure runtime coordination markers, not
+/// data types that survive YAML round-trip.
+pub const PARTY_PROMPT_ARTIFACT: &str = "party.prompt";
+pub const PARTY_RESPONSE_ARTIFACT: &str = "party.response";
+pub const PARTY_SYNTHESIS_ARTIFACT: &str = "party.synthesis";
+
+impl Coordinator {
+    /// Run a Party mode coordination against a slice of [`PartyMember`]s.
+    ///
+    /// Flow:
+    /// 1. Append the broadcast `prompt` to the blackboard as `party.prompt`.
+    /// 2. For each of `max_rounds` rounds, iterate members in the order
+    ///    dictated by [`PartyOrdering`]; each member sees the full blackboard
+    ///    transcript up to its turn and appends its response as
+    ///    `party.response`.
+    /// 3. Honor the configured [`TerminationCondition`] — stop early if
+    ///    `should_terminate()` fires between rounds.
+    /// 4. After the last round, feed the full transcript to the synthesizer
+    ///    (matched from `members` by id) and archive its output as
+    ///    `party.synthesis`.
+    ///
+    /// Returns a structured [`PartyOutcome`] on success; the blackboard
+    /// receives one `circle_session_archived` entry at the end.
+    ///
+    /// # Errors
+    /// - `PartyConfig` if the coordinator's policy isn't `Party`, members is
+    ///   empty, or the configured synthesizer id is absent from `members`.
+    /// - `TerminatedByCondition` if a configured termination condition fires
+    ///   before synthesis runs.
+    pub fn run_party(
+        &self,
+        prompt: &str,
+        members: &[&dyn PartyMember],
+    ) -> Result<PartyOutcome, CoordinationError> {
+        let cfg = match &self.policy {
+            CoordinationPolicy::Party { config } => config.clone(),
+            _ => {
+                return Err(CoordinationError::PartyConfig(
+                    "run_party requires CoordinationPolicy::Party".into(),
+                ));
+            }
+        };
+        if members.is_empty() {
+            return Err(CoordinationError::NoParticipants);
+        }
+        if !members.iter().any(|m| m.id() == cfg.synthesizer) {
+            return Err(CoordinationError::PartyConfig(format!(
+                "synthesizer '{}' not present in party members",
+                cfg.synthesizer
+            )));
+        }
+
+        // Pre-run termination check — e.g. external signal already raised.
+        if self.should_terminate() {
+            self.archive_session(CircleStopReason::Condition);
+            return Err(CoordinationError::TerminatedByCondition);
+        }
+
+        let order = party_turn_order(&cfg.ordering, members);
+        let mut rounds: Vec<PartyRound> = Vec::with_capacity(cfg.max_rounds as usize);
+
+        for round_idx in 0..cfg.max_rounds {
+            let round_no = round_idx + 1;
+            // Broadcast the prompt for this round.
+            let prompts_sent_at = Utc::now();
+            {
+                let mut bb = self.blackboard();
+                bb.append(BlackboardEntry {
+                    participant_id: "__coordinator__".into(),
+                    timestamp: prompts_sent_at,
+                    artifact_type: PARTY_PROMPT_ARTIFACT.into(),
+                    payload: serde_json::json!({
+                        "round": round_no,
+                        "prompt": prompt,
+                    }),
+                });
+            }
+
+            let mut responses: Vec<PartyResponse> = Vec::with_capacity(order.len());
+            for member_idx in order.iter().copied() {
+                // Each member sees the full current blackboard snapshot.
+                let transcript = self.blackboard().snapshot();
+                let member = members[member_idx];
+                let text = member.respond(prompt, &transcript);
+                let posted_at = Utc::now();
+                {
+                    let mut bb = self.blackboard();
+                    bb.append(BlackboardEntry {
+                        participant_id: member.id().to_string(),
+                        timestamp: posted_at,
+                        artifact_type: PARTY_RESPONSE_ARTIFACT.into(),
+                        payload: serde_json::json!({
+                            "round": round_no,
+                            "text": text,
+                        }),
+                    });
+                }
+                responses.push(PartyResponse {
+                    participant_id: member.id().to_string(),
+                    text,
+                    posted_at,
+                });
+
+                // Fine-grained termination check — e.g. MaxMessages may fire
+                // mid-round once enough responses have been posted.
+                if self.should_terminate() {
+                    rounds.push(PartyRound {
+                        round_no,
+                        prompts_sent_at,
+                        responses,
+                    });
+                    self.archive_session(CircleStopReason::Condition);
+                    return Err(CoordinationError::TerminatedByCondition);
+                }
+            }
+
+            rounds.push(PartyRound {
+                round_no,
+                prompts_sent_at,
+                responses,
+            });
+
+            // Post-round termination check.
+            if self.should_terminate() {
+                self.archive_session(CircleStopReason::Condition);
+                return Err(CoordinationError::TerminatedByCondition);
+            }
+        }
+
+        // Synthesis turn — the synthesizer sees the full transcript and
+        // produces the final output.
+        let transcript = self.blackboard().snapshot();
+        let synthesizer = members
+            .iter()
+            .find(|m| m.id() == cfg.synthesizer)
+            .copied()
+            .expect("synthesizer presence checked above");
+        let synthesis = synthesizer.respond(prompt, &transcript);
+        {
+            let mut bb = self.blackboard();
+            bb.append(BlackboardEntry {
+                participant_id: synthesizer.id().to_string(),
+                timestamp: Utc::now(),
+                artifact_type: PARTY_SYNTHESIS_ARTIFACT.into(),
+                payload: serde_json::json!({
+                    "text": synthesis,
+                }),
+            });
+        }
+
+        self.archive_session(CircleStopReason::Completed);
+
+        Ok(PartyOutcome { rounds, synthesis })
+    }
+}
+
+/// Compute a turn order (indices into `members`) for a single Party round.
+///
+/// For [`PartyOrdering::RoundRobin`], this is just `0..members.len()`.
+/// For [`PartyOrdering::ImportanceBased`], members are sorted by descending
+/// `importance()`. Members without an importance hint are stable-sorted
+/// after those with hints; when *no* member supplies a hint, we fall back
+/// to RoundRobin ordering.
+///
+/// TODO(sera-8d1.2-importance): Surface an explicit importance override
+/// per-round via the Circle manifest so callers can tune priority without
+/// modifying member implementations (separate follow-up bead).
+fn party_turn_order(ordering: &PartyOrdering, members: &[&dyn PartyMember]) -> Vec<usize> {
+    let default_order: Vec<usize> = (0..members.len()).collect();
+    match ordering {
+        PartyOrdering::RoundRobin => default_order,
+        PartyOrdering::ImportanceBased => {
+            let any_hint = members.iter().any(|m| m.importance().is_some());
+            if !any_hint {
+                return default_order;
+            }
+            let mut order = default_order;
+            order.sort_by(|a, b| {
+                let ia = members[*a].importance().unwrap_or(f32::NEG_INFINITY);
+                let ib = members[*b].importance().unwrap_or(f32::NEG_INFINITY);
+                ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            order
         }
     }
 }
@@ -1615,5 +1867,293 @@ mod tests {
                     && e.payload["reason"] == json!("completed")
             });
         assert!(archived);
+    }
+
+    // =====================================================================
+    // Party mode (bead sera-8d1.2 / GH#145)
+    // =====================================================================
+
+    /// Deterministic party member used in tests. Responds with a canned
+    /// template containing its id and the round count observed in the
+    /// transcript so assertions can verify it ran N times.
+    struct EchoMember {
+        id: String,
+        importance: Option<f32>,
+    }
+
+    impl EchoMember {
+        fn new(id: &str) -> Self {
+            Self {
+                id: id.to_string(),
+                importance: None,
+            }
+        }
+        fn with_importance(id: &str, i: f32) -> Self {
+            Self {
+                id: id.to_string(),
+                importance: Some(i),
+            }
+        }
+    }
+
+    impl PartyMember for EchoMember {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn importance(&self) -> Option<f32> {
+            self.importance
+        }
+        fn respond(&self, _prompt: &str, transcript: &[BlackboardEntry]) -> String {
+            let prior = transcript
+                .iter()
+                .filter(|e| {
+                    e.participant_id == self.id
+                        && e.artifact_type == PARTY_RESPONSE_ARTIFACT
+                })
+                .count();
+            format!("{}:round-{}", self.id, prior + 1)
+        }
+    }
+
+    #[test]
+    fn party_round_robin_three_members_two_rounds() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 2,
+            ordering: PartyOrdering::RoundRobin,
+            synthesizer: "carol".into(),
+        };
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let alice = EchoMember::new("alice");
+        let bob = EchoMember::new("bob");
+        let carol = EchoMember::new("carol");
+        let members: Vec<&dyn PartyMember> = vec![&alice, &bob, &carol];
+        let outcome = coord
+            .run_party("Discuss the plan", &members)
+            .expect("party run succeeds");
+
+        assert_eq!(outcome.rounds.len(), 2);
+        assert_eq!(outcome.rounds[0].round_no, 1);
+        assert_eq!(outcome.rounds[1].round_no, 2);
+        // Each member posted exactly 2 responses (one per round).
+        for id in &["alice", "bob", "carol"] {
+            let count: usize = outcome
+                .rounds
+                .iter()
+                .map(|r| r.responses.iter().filter(|x| x.participant_id == *id).count())
+                .sum();
+            assert_eq!(count, 2, "member {id} did not post twice");
+        }
+        // Synthesis text should reflect the synthesizer's id.
+        assert!(
+            outcome.synthesis.starts_with("carol:"),
+            "synthesis did not come from synthesizer: {}",
+            outcome.synthesis
+        );
+
+        // Blackboard has one prompt per round, one response per member per
+        // round, one synthesis, plus one session_archived marker.
+        let bb = coord.blackboard();
+        let prompts = bb
+            .snapshot()
+            .iter()
+            .filter(|e| e.artifact_type == PARTY_PROMPT_ARTIFACT)
+            .count();
+        let responses = bb
+            .snapshot()
+            .iter()
+            .filter(|e| e.artifact_type == PARTY_RESPONSE_ARTIFACT)
+            .count();
+        let synthesis = bb
+            .snapshot()
+            .iter()
+            .filter(|e| e.artifact_type == PARTY_SYNTHESIS_ARTIFACT)
+            .count();
+        assert_eq!(prompts, 2);
+        assert_eq!(responses, 6); // 3 members × 2 rounds
+        assert_eq!(synthesis, 1);
+    }
+
+    #[test]
+    fn party_blackboard_cursor_advances_between_rounds() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 2,
+            ordering: PartyOrdering::RoundRobin,
+            synthesizer: "a".into(),
+        };
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let a = EchoMember::new("a");
+        let b = EchoMember::new("b");
+        let members: Vec<&dyn PartyMember> = vec![&a, &b];
+        coord
+            .run_party("q", &members)
+            .expect("party run succeeds");
+
+        // Entries are strictly ordered — round 1 responses appear before
+        // round 2 prompt, which appears before round 2 responses.
+        let snap = coord.blackboard().snapshot();
+        let first_round_prompt_pos = snap
+            .iter()
+            .position(|e| {
+                e.artifact_type == PARTY_PROMPT_ARTIFACT && e.payload["round"] == 1
+            })
+            .unwrap();
+        let second_round_prompt_pos = snap
+            .iter()
+            .position(|e| {
+                e.artifact_type == PARTY_PROMPT_ARTIFACT && e.payload["round"] == 2
+            })
+            .unwrap();
+        assert!(first_round_prompt_pos < second_round_prompt_pos);
+    }
+
+    #[test]
+    fn party_synthesis_invoked_after_final_round() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 1,
+            ordering: PartyOrdering::RoundRobin,
+            synthesizer: "syn".into(),
+        };
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let a = EchoMember::new("a");
+        let syn = EchoMember::new("syn");
+        let members: Vec<&dyn PartyMember> = vec![&a, &syn];
+        let outcome = coord.run_party("q", &members).unwrap();
+        // Synthesis comes after the responses it sees — syn should see its
+        // own round-1 response already in the transcript → "syn:round-2".
+        assert_eq!(outcome.synthesis, "syn:round-2");
+    }
+
+    #[test]
+    fn party_early_termination_via_max_messages() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 5,
+            ordering: PartyOrdering::RoundRobin,
+            synthesizer: "a".into(),
+        };
+        // 3 members × 5 rounds = 15 responses, plus 5 prompts = 20 entries.
+        // MaxMessages(3) should fire during round 1 (after the first prompt
+        // and first few responses).
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        )
+        .with_termination(TerminationCondition::MaxMessages(3));
+        let a = EchoMember::new("a");
+        let b = EchoMember::new("b");
+        let c = EchoMember::new("c");
+        let members: Vec<&dyn PartyMember> = vec![&a, &b, &c];
+        let err = coord
+            .run_party("q", &members)
+            .expect_err("should terminate early");
+        assert!(matches!(err, CoordinationError::TerminatedByCondition));
+        // Session archival marker must be present.
+        let archived = coord
+            .blackboard()
+            .snapshot()
+            .iter()
+            .any(|e| e.artifact_type == "circle_session_archived");
+        assert!(archived);
+    }
+
+    #[test]
+    fn party_importance_based_ordering_sorts_members() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 1,
+            ordering: PartyOrdering::ImportanceBased,
+            synthesizer: "z".into(),
+        };
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let low = EchoMember::with_importance("low", 0.1);
+        let high = EchoMember::with_importance("high", 9.0);
+        let mid = EchoMember::with_importance("mid", 5.0);
+        let z = EchoMember::with_importance("z", 0.0);
+        let members: Vec<&dyn PartyMember> = vec![&low, &high, &mid, &z];
+        let outcome = coord.run_party("q", &members).unwrap();
+        let ids: Vec<_> = outcome.rounds[0]
+            .responses
+            .iter()
+            .map(|r| r.participant_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["high", "mid", "low", "z"]);
+    }
+
+    #[test]
+    fn party_importance_based_with_no_hints_falls_back_to_round_robin() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 1,
+            ordering: PartyOrdering::ImportanceBased,
+            synthesizer: "c".into(),
+        };
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let a = EchoMember::new("a");
+        let b = EchoMember::new("b");
+        let c = EchoMember::new("c");
+        let members: Vec<&dyn PartyMember> = vec![&a, &b, &c];
+        let outcome = coord.run_party("q", &members).unwrap();
+        let ids: Vec<_> = outcome.rounds[0]
+            .responses
+            .iter()
+            .map(|r| r.participant_id.clone())
+            .collect();
+        // Fallback is declaration order.
+        assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn party_rejects_missing_synthesizer() {
+        let cfg = sera_types::circle::PartyConfig {
+            max_rounds: 1,
+            ordering: PartyOrdering::RoundRobin,
+            synthesizer: "ghost".into(),
+        };
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let a = EchoMember::new("a");
+        let members: Vec<&dyn PartyMember> = vec![&a];
+        let err = coord.run_party("q", &members).expect_err("synth missing");
+        assert!(matches!(err, CoordinationError::PartyConfig(_)));
+    }
+
+    #[test]
+    fn party_run_via_generic_run_errors_with_party_config() {
+        let cfg = sera_types::circle::PartyConfig::new("a");
+        let coord = Coordinator::new(
+            CoordinationPolicy::Party { config: cfg },
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        let task = CoordTask {
+            task_id: "x".into(),
+            payload: json!(null),
+        };
+        let exec: Box<ExecFn> = Box::new(|p, t| ok(p, &t.task_id, json!(p.clone())));
+        let err = coord
+            .run(task, &["a".into()], exec.as_ref())
+            .expect_err("party requires run_party");
+        assert!(matches!(err, CoordinationError::PartyConfig(_)));
     }
 }

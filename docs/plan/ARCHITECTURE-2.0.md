@@ -205,7 +205,92 @@ See individual crate docs and specs for the full signatures:
 
 ---
 
-## 5. Four Extension Points
+## 4.3 SemanticMemoryStore Trait (Tier-2 Pluggable Memory)
+
+The `SemanticMemoryStore` trait (in `sera-types::semantic_memory`) is the user-extensible seam for custom memory backends. See [`docs/plugins/memory.md`](../plugins/memory.md) for the full plugin contract.
+
+```rust
+#[async_trait]
+pub trait SemanticMemoryStore: Send + Sync + 'static {
+    async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError>;
+    async fn query(&self, query: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError>;
+    async fn delete(&self, id: &MemoryId) -> Result<(), SemanticError>;
+    async fn evict(&self, policy: &EvictionPolicy) -> Result<usize, SemanticError>;
+    async fn stats(&self) -> Result<SemanticStats, SemanticError>;
+    async fn promote(&self, id: &MemoryId) -> Result<(), SemanticError>;
+    async fn touch(&self, id: &MemoryId) -> Result<(), SemanticError>;
+    async fn maintenance(&self) -> Result<(), SemanticError>;
+}
+```
+
+---
+
+## 5. Memory Tiers
+
+Memory is a **two-tier injection model** (SPEC-memory §2.1, ARCHITECTURE-ADDENDUM-2026-04-16 §1): a compact injected block (always present) + pluggable semantic search (on-demand retrieval).
+
+### Tier 0 — MemoryBlock (In-Process)
+
+Always active. Built into `sera-runtime`, injected into every turn at the gateway. A priority-ordered buffer of context segments with character-budget constraints.
+
+**Structure** (from SPEC-memory §2.1):
+- `segments: Vec<MemorySegment>` — ordered by priority
+- `char_budget: usize` — total token budget
+- Each segment: `source`, `content`, `priority` (0 = highest), `recency_boost`, `char_count`
+
+**Key invariants** (from HANDOFF §4.37):
+- `SegmentKind::Soul` is priority 0 — never trimmed
+- `record_turn()` increments `overflow_turns` and returns true when `flush_min_turns` is reached
+- Default `flush_min_turns: 6` — auto-prompt skill creation after N tool calls
+- Memory pressure can trigger dreaming, skill creation, or operator notification
+
+**Responsibility:** Gateway or runtime assembles the block; runtime receives it as opaque injected context.
+
+### Tier 1 — SemanticMemoryStore (Pluggable)
+
+The **trait-based extensibility seam** at `sera-types::semantic_memory::SemanticMemoryStore`. Users plug in custom backends here.
+
+**Built-in implementations:**
+
+| Backend | Crate | Scope | Dependencies |
+|---|---|---|---|
+| `SqliteFtsMemoryStore` | sera-db (landing bead sera-vzce) | Single-node dev | SQLite FTS5 + sqlite-vec, zero external deps |
+| `PgVectorStore` | sera-db | Multi-node production | PostgreSQL + pgvector extension, HNSW/IVFFlat indexes |
+| User-built (plugin) | any user crate or dylib | Any | Implementing the trait |
+
+**Contract** (full spec in [`docs/plugins/memory.md`](../../plugins/memory.md)):
+
+- `put(entry)` — idempotent by `MemoryId`; embed-and-index if embedding provider wired; fail loudly on error (no silent `vec![0.0; dims]`)
+- `query(SemanticQuery)` — hybrid when possible; return `ScoredEntry` with at least one of `index_score`/`vector_score` populated
+- `delete(id)` — remove by id; return `NotFound` if absent
+- `evict(policy)` — prune by `max_per_agent` and `ttl_days`; respect `promoted_exempt` flag
+- `promote(id)` — mark row as exempt from eviction; used by dreaming-workflow consolidation
+- `touch(id)` — update `last_accessed_at` for recency tracking
+- `stats()` — return aggregate snapshot: total rows, per-agent top-k, oldest/newest timestamps
+- `maintenance()` — opportunistic operations (e.g., `REINDEX CONCURRENTLY`) on weekly cron
+
+**Multi-tenant isolation:** All operations scoped by `agent_id`. Queries MUST filter by `agent_id` before vector operations.
+
+**Error policy:** Fail loudly. No silent fallbacks, no degenerate embeddings. Any backend-level issue (database down, embedding failure, dimension mismatch) surfaces as `SemanticError`.
+
+### Tier 2 — ContextEnricher (Auto-Promotion)
+
+Wired in bead sera-0yqq (closed). Auto-promotes top-k `SemanticMemoryStore` hits into the `MemoryBlock` on each turn without a second LLM prompt. Transparent to the runtime.
+
+**Decision matrix** — which tier for your deployment:
+
+| Scenario | Tier 0 only | Tier 0+1 | Tier 0+1+2 |
+|---|---|---|---|
+| Single-node dev (no embeddings) | X | — | — |
+| Single-node with semantic recall | X | X | — |
+| Small team (SQLite FTS) | X | X | — |
+| Multi-pod production | X | X | X |
+| GPU-accelerated RAG | X | X | X |
+| Thin-client harness (BYOH) | — | X | X |
+
+---
+
+## 6. Four Extension Points
 
 SERA has exactly four extension mechanisms. They must not be conflated.
 
@@ -226,7 +311,7 @@ Spec: [`SPEC-plugins.md`](specs/SPEC-plugins.md) (gRPC plugin interface, mTLS, T
 
 ---
 
-## 6. Deployment Tiers
+## 7. Deployment Tiers
 
 All tiers run the **same binary**. The tier table describes common groupings of config activations — not separate architectures or code paths.
 
@@ -297,7 +382,7 @@ Spec: [`SPEC-deployment.md`](specs/SPEC-deployment.md).
 
 ---
 
-## 7. Key Design Principles
+## 8. Key Design Principles
 
 These principles (established 2026-04-13) inform every crate boundary and trait decision:
 
@@ -313,7 +398,7 @@ Full rationale: [`ARCHITECTURE-ADDENDUM-2026-04-13.md`](ARCHITECTURE-ADDENDUM-20
 
 ---
 
-## 8. Crate Documentation Index
+## 9. Crate Documentation Index
 
 | Crate | Doc | Status |
 |---|---|---|
@@ -340,7 +425,7 @@ Full rationale: [`ARCHITECTURE-ADDENDUM-2026-04-13.md`](ARCHITECTURE-ADDENDUM-20
 
 ---
 
-## 9. Navigation
+## 10. Navigation
 
 | Question | Go to |
 |---|---|

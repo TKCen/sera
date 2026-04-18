@@ -352,12 +352,12 @@ struct AppState {
     /// (autonomous mode — all access allowed per MVS §6.5).
     api_key: Option<String>,
     /// Lane-aware message queue for managing concurrent agent runs.
-    // TODO(sera-2q1d): wired into AppState; route handlers will consume this in a later phase.
-    #[allow(dead_code)]
+    /// Consumed by the Discord message loop (`process_message`) and the HTTP
+    /// `chat_handler` to admit turns and release lane slots on completion.
     lane_queue: Mutex<LaneQueue>,
-    /// Hook registry for lifecycle event hooks.
-    // TODO(sera-2q1d): wired into AppState; consumed via chain_executor, registry kept for direct lookup.
-    #[allow(dead_code)]
+    /// Hook registry for lifecycle event hooks. Chain-style execution runs
+    /// through `chain_executor`; direct lookup/introspection (e.g. the
+    /// `/api/hooks` listing route) goes through this handle.
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
     chain_executor: Arc<ChainExecutor>,
@@ -520,10 +520,67 @@ async fn chat_handler(
     let session = db
         .get_or_create_session(&agent_name)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let session_id = session.id.clone();
+    let session_key = format!("http:{}:{}", agent_name, session_id);
+    drop(db); // Release DB lock before touching the lane queue.
 
+    // ── Lane queue admission ──────────────────────────────────────────────
+    // Mirrors the Discord `process_message` pattern: enqueue the event to
+    // check whether the lane is idle; if a run is already active for this
+    // session or the queue is closed, short-circuit before we touch the
+    // transcript or dispatch to the harness. On `Ready`/`Interrupt` we
+    // dequeue immediately so `active_run_count` tracks this in-flight turn,
+    // and we release the slot via `complete_run` once `execute_turn` returns.
+    let admission_event = DomainEvent::api_message(
+        &agent_name,
+        &session_key,
+        PrincipalRef {
+            id: PrincipalId::new("http-chat"),
+            kind: PrincipalKind::Human,
+        },
+        &req.message,
+    );
+    {
+        let mut lq = state.lane_queue.lock().await;
+        match lq.enqueue(admission_event) {
+            sera_db::lane_queue::EnqueueResult::Ready => {
+                let _ = lq.dequeue(&session_key);
+            }
+            sera_db::lane_queue::EnqueueResult::Interrupt => {
+                tracing::info!(session_key = %session_key, "Chat interrupt: active run should be aborted");
+                let _ = lq.dequeue(&session_key);
+            }
+            sera_db::lane_queue::EnqueueResult::Queued
+            | sera_db::lane_queue::EnqueueResult::Steer => {
+                tracing::info!(session_key = %session_key, "Chat message queued behind active turn");
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+            sera_db::lane_queue::EnqueueResult::Closed => {
+                tracing::warn!(session_key = %session_key, "Chat rejected: lane queue is closed for shutdown");
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            }
+        }
+    }
+
+    // Helper: release the lane slot we acquired above. Called on every exit
+    // path. The Discord loop does the equivalent explicitly (see
+    // `process_message` ~L1310); the HTTP chat handler follows the same
+    // pattern rather than the `LaneRunGuard` RAII pattern in
+    // `sera_gateway::routes::chat` because AppState is not cloneable into a
+    // guard without restructuring.
+    async fn release_lane(state: &Arc<AppState>, session_key: &str) {
+        let mut lq = state.lane_queue.lock().await;
+        lq.complete_run(session_key);
+    }
+
+    let db = state.db.lock().await;
     // Save the user message to transcript.
-    db.append_transcript(&session.id, "user", Some(&req.message), None, None)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Err(e) = db.append_transcript(&session.id, "user", Some(&req.message), None, None) {
+        drop(db);
+        tracing::error!(error = %e, "Failed to append user transcript");
+        release_lane(&state, &session_key).await;
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     // Audit: message received.
     let _ = db.append_audit(
@@ -535,8 +592,6 @@ async fn chat_handler(
 
     // Get recent transcript for context.
     let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
-    let session_id = session.id.clone();
-    let session_key = format!("http:{}:{}", agent_name, session_id);
     drop(db); // Release lock before dispatching to harness.
 
     if req.stream {
@@ -555,6 +610,15 @@ async fn chat_handler(
                 match fold_state {
                     StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, session_key, message_id } => {
                         let result = execute_turn(&agent_spec, &transcript, &message, &harness, &session_key).await;
+
+                        // Release the lane slot — the turn is complete even
+                        // though we still need to stream the reply back out.
+                        // This matches the Discord loop, which releases the
+                        // slot immediately after `execute_turn` returns.
+                        {
+                            let mut lq = state.lane_queue.lock().await;
+                            lq.complete_run(&session_key);
+                        }
 
                         // Save tool events and assistant response.
                         {
@@ -617,11 +681,17 @@ async fn chat_handler(
         let result =
             execute_turn(&agent_spec, &transcript, &req.message, &harness, &session_key).await;
 
+        // Release the lane slot now that the turn has completed. Mirrors the
+        // `complete_run` call in the Discord message loop after `execute_turn`.
+        release_lane(&state, &session_key).await;
+
         // Save tool events and assistant response.
         let db = state.db.lock().await;
         persist_tool_events(&db, &session_id, &result.tool_events);
-        db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Err(e) = db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None) {
+            tracing::error!(error = %e, "Failed to append assistant transcript");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
 
         let _ = db.append_audit(
             "response_sent",
@@ -2210,6 +2280,41 @@ async fn mail_inbound_handler(
     Ok(Json(resp))
 }
 
+/// `GET /api/hooks` — list every hook registered in the in-process
+/// [`HookRegistry`], grouped by [`HookPoint`]. Consumed by operators and the
+/// dashboard to introspect which hook modules are loaded without replaying a
+/// full chain via [`ChainExecutor`]. This is the direct-lookup entry point
+/// kept alongside the chain-executor path.
+async fn hooks_list_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let metadata = state.hook_registry.list();
+
+    // Group by hook point: for each hook, emit one entry under every point
+    // it declares as supported. Operators expect per-point breakdowns when
+    // debugging hook chains (see SPEC-hooks §registry introspection).
+    let mut by_point: std::collections::BTreeMap<String, Vec<&sera_types::hook::HookMetadata>> =
+        std::collections::BTreeMap::new();
+    for meta in &metadata {
+        for point in &meta.supported_points {
+            let key = serde_json::to_value(point)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("{:?}", point));
+            by_point.entry(key).or_default().push(meta);
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "hooks": metadata,
+        "by_point": by_point,
+        "count": metadata.len(),
+    })))
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -2220,6 +2325,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/agents/{id}", get(agent_by_id_handler))
         .route("/api/sessions", get(sessions_handler))
         .route("/api/sessions/{id}/transcript", get(transcript_handler))
+        // sera-2q1d: read-only hook registry introspection — lists every hook
+        // registered with the in-process `HookRegistry`, grouped by `HookPoint`.
+        .route("/api/hooks", get(hooks_list_handler))
         // sera-uwk0: mail gate ingress correlator webhook.
         .route("/api/mail/inbound", post(mail_inbound_handler))
         .with_state(state)
@@ -3181,5 +3289,211 @@ mod tests {
         let channel_id = "ch_999";
         let key = format!("discord:{}:{}", agent_name, channel_id);
         assert_eq!(key, "discord:reviewer:ch_999");
+    }
+
+    // -- Lane-queue admission for the HTTP chat handler (sera-2q1d) --
+
+    /// Helper: pre-seed a session for the `sera` agent and mark its lane as
+    /// actively processing so the next chat call observes a busy lane. Returns
+    /// the session_key that was occupied.
+    async fn occupy_sera_lane(state: &Arc<AppState>) -> String {
+        // Create the session the handler would create, so we know the key
+        // ahead of time. get_or_create_session returns the same row on the
+        // handler's subsequent lookup for the same agent.
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera").unwrap().id
+        };
+        let session_key = format!("http:sera:{}", session_id);
+
+        let principal = PrincipalRef {
+            id: PrincipalId::new("http-chat"),
+            kind: PrincipalKind::Human,
+        };
+        let event = DomainEvent::api_message("sera", &session_key, principal, "occupying");
+        let mut lq = state.lane_queue.lock().await;
+        assert_eq!(lq.enqueue(event), sera_db::lane_queue::EnqueueResult::Ready);
+        let _ = lq.dequeue(&session_key);
+        assert_eq!(lq.active_runs(), 1);
+        session_key
+    }
+
+    /// When the same session already has an in-flight turn, a concurrent
+    /// `/api/chat` submission must be rejected at the admission boundary with
+    /// `429 Too Many Requests` rather than racing through to the harness.
+    #[tokio::test]
+    async fn turn_admission_rejects_when_lane_full() {
+        let state = test_state_async().await;
+        let _busy_key = occupy_sera_lane(&state).await;
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "second turn" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "second concurrent turn for the same session must be rejected by lane admission"
+        );
+
+        // The active run count must still reflect the pre-existing occupant —
+        // the rejected attempt did not consume an extra slot.
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(active, 1, "admission rejection must not leak a run slot");
+    }
+
+    /// After a chat turn completes, the lane counter must return to its
+    /// baseline (zero active runs) so a later submission on the same session
+    /// can be admitted. Regression guard for the `complete_run` wiring on the
+    /// sync path of `chat_handler`.
+    #[tokio::test]
+    async fn turn_admission_decrements_on_completion() {
+        let state = test_state_async().await;
+
+        // Baseline: no active runs.
+        assert_eq!(state.lane_queue.lock().await.active_runs(), 0);
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "one turn" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Counter must be back to zero after the handler returns.
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(
+            active, 0,
+            "lane counter must decrement back to baseline after turn completion"
+        );
+
+        // A follow-up submission should therefore be admitted (not 429).
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "follow up" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "follow-up turn must be admitted once the prior run has completed"
+        );
+    }
+
+    /// `GET /api/hooks` must surface every hook registered in the in-process
+    /// [`HookRegistry`], grouped by the hook points each module declares as
+    /// supported. Exercises the direct-lookup path kept alongside chain
+    /// execution.
+    #[tokio::test]
+    async fn hooks_list_route_returns_registered_points() {
+        use sera_types::hook::{
+            HookContext, HookMetadata, HookPoint, HookResult,
+        };
+
+        // Minimal test hook that advertises two supported points so the
+        // `by_point` grouping in the handler exercises more than one key.
+        struct TestHook;
+        #[async_trait::async_trait]
+        impl sera_hooks::Hook for TestHook {
+            fn metadata(&self) -> HookMetadata {
+                HookMetadata {
+                    name: "test-hook".to_string(),
+                    description: "Hook registered for the /api/hooks list test".to_string(),
+                    version: "0.0.1".to_string(),
+                    supported_points: vec![HookPoint::PreTurn, HookPoint::PostTurn],
+                    author: None,
+                }
+            }
+            async fn init(&mut self, _config: serde_json::Value) -> Result<(), sera_hooks::HookError> {
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _ctx: &HookContext,
+            ) -> Result<HookResult, sera_hooks::HookError> {
+                Ok(HookResult::pass())
+            }
+        }
+
+        // Build a state where the HookRegistry has one hook registered. We
+        // can't mutate Arc<HookRegistry> after the fact, so build the state
+        // manually with a populated registry.
+        let mut registry = HookRegistry::new();
+        registry.register(Box::new(TestHook));
+        let hook_registry = Arc::new(registry);
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+        let state = Arc::new(AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: None,
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
+            harnesses: std::collections::HashMap::new(),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
+        });
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/hooks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["count"], 1);
+        let hooks = json["hooks"].as_array().expect("hooks is an array");
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["name"], "test-hook");
+
+        let by_point = json["by_point"].as_object().expect("by_point is an object");
+        assert!(by_point.contains_key("pre_turn"), "pre_turn point missing: {:?}", by_point);
+        assert!(by_point.contains_key("post_turn"), "post_turn point missing: {:?}", by_point);
+        assert_eq!(by_point["pre_turn"].as_array().unwrap().len(), 1);
+        assert_eq!(by_point["post_turn"].as_array().unwrap().len(), 1);
     }
 }

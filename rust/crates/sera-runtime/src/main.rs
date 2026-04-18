@@ -697,6 +697,23 @@ async fn run_ndjson_loop(
                 json.push('\n');
                 stdout.write_all(json.as_bytes()).await?;
             }
+            Ok(TurnOutcome::PlanEmitted { plan_tool_calls, rationale, .. }) => {
+                let summary = format!(
+                    "[plan_emitted: {} tool call(s); rationale={:?}]",
+                    plan_tool_calls.len(),
+                    rationale
+                );
+                let delta = Event {
+                    id: uuid::Uuid::new_v4(),
+                    submission_id: submission.id,
+                    msg: EventMsg::StreamingDelta { delta: summary },
+                    timestamp: chrono::Utc::now(),
+                    parent_session_key: submission_parent_key.clone(),
+                };
+                json = serde_json::to_string(&delta)?;
+                json.push('\n');
+                stdout.write_all(json.as_bytes()).await?;
+            }
             Err(e) => {
                 tracing::error!("execute_turn failed: {e:?}");
                 let err_event = Event {

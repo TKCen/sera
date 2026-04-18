@@ -249,6 +249,7 @@ impl ContextEnricher {
             query_embedding: Some(query_embedding.clone()),
             top_k: pool_size,
             similarity_threshold: self.config.similarity_threshold,
+            scope: None,
         };
         let hits = self
             .store
@@ -584,6 +585,7 @@ mod tests {
                 created_at: Utc::now(),
                 last_accessed_at: None,
                 promoted: false,
+                scope: None,
             },
             score,
             index_score: score,

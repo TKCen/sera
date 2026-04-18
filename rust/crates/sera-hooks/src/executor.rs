@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sera_types::hook::{
-    CHAIN_ABORTED_CODE, ChainResult, HookChain, HookContext, HookPoint, HookResult,
+    CHAIN_ABORTED_CODE, ChainResult, HookChain, HookContext, HookInstance, HookPoint, HookResult,
 };
 use tokio::time::{Duration, timeout};
 use tracing::{debug, warn};
 
 use crate::cancel::HookCancellation;
 use crate::error::HookError;
-use crate::registry::HookRegistry;
+use crate::registry::{HookRegistry, HookTier};
 
 /// Executes hook chains stored in a shared [`HookRegistry`].
 pub struct ChainExecutor {
@@ -54,6 +54,12 @@ impl ChainExecutor {
     /// = 0`. If it fires mid-chain, the current hook's future is dropped
     /// (via `tokio::select!`) and the same aborted outcome is returned with
     /// `hooks_executed` reflecting hooks that completed before cancellation.
+    ///
+    /// Hooks are dispatched in two passes: [`HookTier::Internal`] hooks run
+    /// first (in their original chain order), then [`HookTier::Plugin`] hooks
+    /// run second.  Unknown hooks (not found in the registry) are treated as
+    /// Internal for ordering purposes so that `fail_open` / `fail_closed`
+    /// semantics are unchanged.
     pub async fn execute_chain_cancellable(
         &self,
         chain: &HookChain,
@@ -70,7 +76,20 @@ impl ChainExecutor {
             return Ok(aborted_result(ctx, 0, chain_start.elapsed().as_millis() as u64, None));
         }
 
-        for instance in &chain.hooks {
+        // Split hook instances into Internal-first, Plugin-second order while
+        // preserving relative ordering within each tier.
+        let (internal_instances, plugin_instances): (Vec<&HookInstance>, Vec<&HookInstance>) =
+            chain.hooks.iter().partition(|inst| {
+                self.registry
+                    .tier(&inst.hook_ref)
+                    .unwrap_or(HookTier::Internal)
+                    == HookTier::Internal
+            });
+
+        let ordered: Vec<&HookInstance> =
+            internal_instances.into_iter().chain(plugin_instances).collect();
+
+        for instance in ordered {
             // Respect the enabled flag.
             if !instance.enabled {
                 debug!(hook = %instance.hook_ref, chain = %chain.name, "skipping disabled hook");

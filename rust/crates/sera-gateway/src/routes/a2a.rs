@@ -180,14 +180,13 @@ pub trait A2aAppState: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
         routing::{get, post},
         Router,
     };
-    use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, A2aTransport, A2aError, LoopbackTransport};
+    use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, LoopbackTransport};
     use tower::ServiceExt;
 
     // --- minimal AppState for tests ---

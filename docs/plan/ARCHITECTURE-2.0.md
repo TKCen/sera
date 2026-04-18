@@ -436,3 +436,63 @@ Full rationale: [`ARCHITECTURE-ADDENDUM-2026-04-13.md`](ARCHITECTURE-ADDENDUM-20
 | How do I build / test the workspace? | [`rust/CLAUDE.md`](../../rust/CLAUDE.md) |
 | What is the migration plan from TypeScript? | [`rust/MIGRATION-PLAN.md`](../../rust/MIGRATION-PLAN.md) |
 | What is the implementation order? | [`docs/IMPLEMENTATION-ORDER.md`](../IMPLEMENTATION-ORDER.md) |
+
+---
+
+## 11. Local profile: boot matrix
+
+SERA 2.0 ships with a dual-backend data layer so `sera-gateway start` boots
+against either a pure-SQLite local profile (zero infra) or a Postgres-backed
+enterprise profile (`DATABASE_URL` set). Each repository trait has both
+implementations; the gateway chooses at boot.
+
+| Store | Local (SQLite) | Enterprise (Postgres) | Trait |
+| ----- | -------------- | --------------------- | ----- |
+| Secrets | `SqliteSecretsStore` | `PgSecretsStore` | `sera_db::secrets::SecretsStore` |
+| Schedules | `SqliteScheduleStore` | `PgScheduleStore` | `sera_db::schedules::ScheduleStore` |
+| Audit | `SqliteAuditStore` | `PgAuditStore` | `sera_db::audit::AuditStore` |
+| Metering | `SqliteMeteringStore` | `PgMeteringStore` | `sera_db::metering::MeteringStore` |
+| Agents | `SqliteAgentStore` | `PgAgentStore` | `sera_db::agents::AgentStore` |
+| Lane counters | `InMemoryLaneCounter` | `PostgresLaneCounter` | `sera_db::lane_queue_counter::LaneCounterStore` |
+| Proposal usage | `InMemoryProposalUsageStore` | `PostgresProposalUsageStore` | `sera_db::proposal_usage::ProposalUsageStore` |
+| Semantic memory | `SqliteMemoryStore` (FTS5 + sqlite-vec + RRF) | `PgVectorStore` | `sera_types::semantic_memory::SemanticMemoryStore` |
+
+### Schema provisioning
+
+All SQLite-backed tables are created idempotently via
+[`sera_db::sqlite_schema::init_all`](../../rust/crates/sera-db/src/sqlite_schema.rs),
+which the gateway calls once at boot before any store is constructed. Each
+module also exposes its own `init_schema(conn)` so ad-hoc deployments can
+opt into a subset.
+
+Tables created on the local profile: `agent_instances`, `agent_templates`,
+`audit_trail`, `token_usage`, `usage_events`, `token_quotas`, `schedules`,
+`secrets`. The existing `sessions`, `transcript`, `queue`, `audit_log`, and
+`training_exports` tables (owned by `SqliteDb`) are created by
+[`sera_db::sqlite::SqliteDb::initialize`](../../rust/crates/sera-db/src/sqlite.rs)
+and remain independent of `sqlite_schema::init_all`.
+
+### Selection rule
+
+```
+if DATABASE_URL is set and Postgres reachable → Pg<Store>
+else                                           → Sqlite<Store>
+```
+
+The enterprise path keeps the full sqlx-backed surface (PostgreSQL arrays,
+`NOW()`, `make_interval`, JSONB). The local path substitutes `datetime('now')`,
+`datetime('now', '-N hours')`, and JSON text serialisation for array columns
+(`tags`, `allowed_agents`). Multi-tenant isolation is preserved in both
+backends — every `agent_id` / `actor_id` / `agent_instance_id` filter applies
+identically.
+
+### Testing the local boot
+
+An integration smoke test lives at
+[`rust/crates/sera-gateway/tests/local_boot_test.rs`](../../rust/crates/sera-gateway/tests/local_boot_test.rs)
+and verifies all five SQLite stores can be constructed from a shared in-memory
+connection without `DATABASE_URL`. Run with:
+
+```bash
+cargo test -p sera-gateway --test local_boot_test
+```

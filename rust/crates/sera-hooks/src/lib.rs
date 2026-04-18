@@ -42,7 +42,7 @@ pub use cancel::HookCancellation;
 pub use error::{HookAbortSignal, HookError};
 pub use executor::ChainExecutor;
 pub use hook_trait::Hook;
-pub use registry::HookRegistry;
+pub use registry::{HookRegistry, HookTier};
 
 #[cfg(test)]
 mod tests;

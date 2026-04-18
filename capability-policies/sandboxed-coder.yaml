@@ -1,0 +1,89 @@
+# sandboxed-coder — Sandboxed coding agent policy
+#
+# Purpose: Grants read/write access within the agent's working directory and
+# the ability to run test commands. Outbound network is disabled except for
+# LLM provider traffic (handled by the SERA gateway — not enforced here at
+# the application layer). No access to host secrets beyond what is explicitly
+# listed. Suitable for automated coding, refactoring, and test-running agents
+# operating inside a tier-2 Docker sandbox. Pair with sandboxBoundary: tier-2.
+#
+# Typical use: policyRef: sandboxed-coder in the agent manifest.
+
+apiVersion: sera/v1
+kind: CapabilityPolicy
+metadata:
+  name: sandboxed-coder
+  description: Read/write within workspace + test execution, no outbound network
+
+capabilities:
+  filesystem:
+    read: true
+    write: true
+    delete: true
+    scope:
+      - '/workspace/**'
+      - '/tmp/**'
+
+  network:
+    outbound:
+      # LLM provider traffic is routed through the SERA LiteLLM gateway
+      # and handled at the infrastructure layer — no additional allowlist
+      # entries needed here.
+      allow: []
+      deny: ['*']
+
+  exec:
+    shell: true
+    commands:
+      allow:
+        - 'cargo *'
+        - 'rustfmt *'
+        - 'clippy *'
+        - 'npm *'
+        - 'bun *'
+        - 'npx *'
+        - 'bunx *'
+        - 'tsc *'
+        - 'vitest *'
+        - 'pytest *'
+        - 'python *'
+        - 'node *'
+        - 'git diff *'
+        - 'git status'
+        - 'git log *'
+      deny:
+        - 'git push *'
+        - 'git remote *'
+        - 'curl *'
+        - 'wget *'
+        - 'ssh *'
+        - 'scp *'
+
+  llm:
+    models: ['*']
+    budget:
+      hourly: 100000
+      daily: 500000
+    toolCalling: true
+    streaming: true
+
+  memory:
+    read: true
+    write: true
+    delete: false
+    scopes: [own, circle]
+    writeRateLimit: 20
+
+  intercom:
+    publish:
+      - 'thoughts:*'
+      - 'circle:engineering'
+    subscribe:
+      - 'circle:engineering'
+    directMessage: []
+
+  docker:
+    spawnSubagents: false
+
+  secrets:
+    access: []

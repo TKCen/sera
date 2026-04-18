@@ -1,0 +1,1 @@
+/home/entity/projects/sera/tui/target/debug/sera-tui: /home/entity/projects/sera/tui/src/api.rs /home/entity/projects/sera/tui/src/main.rs /home/entity/projects/sera/tui/src/models.rs /home/entity/projects/sera/tui/src/ui.rs /home/entity/projects/sera/tui/src/ws.rs

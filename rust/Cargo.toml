@@ -1,18 +1,38 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/sera-domain",
+  "crates/sera-types",
   "crates/sera-config",
   "crates/sera-db",
   "crates/sera-auth",
   "crates/sera-events",
-  "crates/sera-docker",
+  "crates/sera-tools",
   "crates/sera-testing",
-  "crates/sera-core",
+  "crates/sera-gateway",
   "crates/sera-runtime",
   "crates/sera-tui",
   "crates/sera-byoh-agent",
-  "crates/sera-runtime",
+  "crates/sera-hitl",
+  "crates/sera-hooks",
+  "crates/sera-workflow",
+  "crates/sera-telemetry",
+  "crates/sera-queue",
+  "crates/sera-errors",
+  "crates/sera-cache",
+  "crates/sera-secrets",
+  "crates/sera-session",
+  "crates/sera-models",
+  "crates/sera-skills",
+  "crates/sera-meta",
+  "crates/sera-mcp",
+  "crates/sera-a2a",
+  "crates/sera-agui",
+  "crates/sera-plugins",
+  "crates/sera-oci",
+  "crates/sera-commands",
+  "crates/sera-cli",
+  "crates/sera-e2e-harness",
+  "crates/sera-mail",
 ]
 
 [workspace.package]
@@ -36,7 +56,8 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json", "time", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "sqlite", "json", "time", "uuid"] }
+rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
 
 # Auth
 jsonwebtoken = "9"
@@ -47,6 +68,11 @@ bollard = "0.18"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# WASM runtime
+wasmtime = "26"
+wasmtime-wasi = "26"
 
 # Error handling
 thiserror = "2"
@@ -55,14 +81,26 @@ anyhow = "1"
 # Testing
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
+proptest = "1"
 
 # Crypto
 sha2 = "0.10"
+
+# Semver constraints (sera-skills SkillRef versioning)
+semver = "1"
+
+# TOML config (sera-skills lockfile)
+toml = "0.8"
 aes-gcm = "0.10"
 hex = "0.4"
 base64 = "0.22"
 urlencoding = "2"
 zeroize = { version = "1", features = ["derive"] }
+argon2 = "0.5"
+casbin = "2"
+
+# WebSocket
+tokio-tungstenite = { version = "0.26", features = ["connect", "rustls-tls-webpki-roots"] }
 
 # Streaming
 tokio-stream = "0.1"
@@ -85,6 +123,7 @@ crossterm = "0.28"
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }
 rand = "0.8"
+regex = "1"
 
 # File watching
 notify = "7"
@@ -92,16 +131,94 @@ notify-debouncer-mini = "0.5"
 
 # Scheduling
 cron = "0.13"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Credential storage (sera-cli auth)
+# On Linux we intentionally omit secret-service features (requires libdbus-1-dev
+# which is unavailable in the WSL build environment).  The FileTokenStore fallback
+# is used on Linux automatically.
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+rpassword = "7"
+
+# Platform-appropriate directories (data_root default resolution)
+dirs = "5"
+
+# Tabular CLI output
+comfy-table = "7"
+
+# Async trait support
+async-trait = "0.1"
+
+# MCP (Model Context Protocol) — Anthropic official Rust SDK
+# Pinned to ^1.3 per SPEC-dependencies §8.4; resolves to 1.5.x under semver caret.
+# See docs/plan/PLUGIN-MCP-ECOSYSTEM.md §5 for the integration plan.
+rmcp = { version = "1.3", default-features = false, features = [
+  "client",
+  "transport-child-process",
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+  "reqwest",
+] }
+
+# OTel triad — EXACT version pins are load-bearing.
+# These three crates must move together; drift produces compile-time trait-bound errors.
+# See SPEC-dependencies §8.4 and HANDOFF §6.2 before changing any of these pins.
+opentelemetry        = { version = "=0.27", features = ["trace"] }   # EXACT — load-bearing triad
+opentelemetry-otlp   = "=0.27"   # EXACT
+tracing-opentelemetry = "=0.28"  # EXACT
+
+once_cell = "1"
+tiktoken-rs = "0.5"
+
+# Markdown parsing (AgentSkills frontmatter+body validation in sera-skills)
+pulldown-cmark = { version = "0.12", default-features = false }
+figment    = { version = "0.10", features = ["env", "toml"] }
+schemars   = { version = "1", features = ["derive"] }
+jsonschema = { version = "0.46", default-features = false }
+
+# LSP (code-introspection tools — sera-tools::lsp)
+async-lsp   = "0.2"
+lsp-types   = "0.97"
+dashmap     = "6"
+url         = "2"
+which       = "8"
 
 # Workspace crates
-sera-domain = { path = "crates/sera-domain" }
+sera-types = { path = "crates/sera-types" }
+sera-telemetry = { path = "crates/sera-telemetry" }
 sera-config = { path = "crates/sera-config" }
 sera-db = { path = "crates/sera-db" }
 sera-auth = { path = "crates/sera-auth" }
 sera-events = { path = "crates/sera-events" }
-sera-docker = { path = "crates/sera-docker" }
+sera-tools = { path = "crates/sera-tools" }
+sera-runtime = { path = "crates/sera-runtime" }
 sera-testing = { path = "crates/sera-testing" }
+sera-hitl = { path = "crates/sera-hitl" }
+sera-hooks = { path = "crates/sera-hooks" }
+sera-workflow = { path = "crates/sera-workflow" }
+sera-queue = { path = "crates/sera-queue" }
+sera-errors = { path = "crates/sera-errors" }
+sera-cache = { path = "crates/sera-cache" }
+sera-secrets = { path = "crates/sera-secrets" }
+sera-session = { path = "crates/sera-session" }
+sera-models = { path = "crates/sera-models" }
+sera-skills = { path = "crates/sera-skills" }
+sera-meta = { path = "crates/sera-meta" }
+sera-mcp = { path = "crates/sera-mcp" }
+sera-a2a = { path = "crates/sera-a2a" }
+sera-agui = { path = "crates/sera-agui" }
+sera-plugins = { path = "crates/sera-plugins" }
+sera-oci = { path = "crates/sera-oci" }
+sera-commands = { path = "crates/sera-commands" }
+
+# OCI distribution client (ecosystem phase S — plugin manifest pull)
+oci-distribution = { version = "0.11", default-features = false, features = ["rustls-tls"] }
+
+# HTTP mocking (dev-only — mock OCI registry in tests)
+wiremock = "0.6"
 
 [profile.release]
 lto = true

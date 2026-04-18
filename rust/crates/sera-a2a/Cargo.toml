@@ -1,0 +1,20 @@
+[package]
+name = "sera-a2a"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+acp-compat = []
+
+[dependencies]
+sera-types = { workspace = true }
+sera-errors = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

@@ -3,13 +3,24 @@ name = "sera-runtime"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "sera_runtime"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sera-runtime"
 path = "src/main.rs"
 
 [dependencies]
-sera-domain.workspace = true
+sera-types.workspace = true
 sera-config.workspace = true
+sera-errors.workspace = true
+sera-db.workspace = true
+sera-hooks.workspace = true
+sera-hitl.workspace = true
+sera-auth.workspace = true
+sera-models.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -20,8 +31,38 @@ tracing-subscriber.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
+clap.workspace = true
+atty = "0.2"
 axum.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
 tokio-stream.workspace = true
 async-stream.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+tiktoken-rs.workspace = true
+
+fs2 = "0.4"
+rand.workspace = true
+
+# Optional: pure-local CPU embeddings via fastembed-rs (ONNX Runtime + tokenizers).
+# Gated behind the `local-embedding` feature so default builds pay zero binary
+# cost — see `semantic::providers::local` for the wire-up.
+# `rustls-tls` variants match the workspace-wide TLS stack decision (see rust/CLAUDE.md).
+fastembed = { version = "5.13", default-features = false, features = [
+  "ort-download-binaries-rustls-tls",
+  "hf-hub-rustls-tls",
+], optional = true }
+
+[features]
+# Enable tests that require a live external provider (Ollama, OpenAI).
+# Off by default so `cargo test` passes in hermetic CI.
+integration = []
+# Enable the pure-local CPU embedding provider (sera-1t0t).
+# Pulls in fastembed + ONNX Runtime + tokenizers; off by default.
+local-embedding = ["dep:fastembed"]
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true

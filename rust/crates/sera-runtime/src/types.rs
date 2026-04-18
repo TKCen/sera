@@ -10,9 +10,7 @@ pub struct TaskInput {
     pub prompt: String,
     #[serde(default)]
     pub context: Vec<ChatMessage>,
-    #[allow(dead_code)]
     pub agent_id: Option<String>,
-    #[allow(dead_code)]
     pub session_id: Option<String>,
     pub max_iterations: Option<u32>,
 }
@@ -83,7 +81,9 @@ pub struct UsageStats {
 }
 
 /// LLM response from the chat completions endpoint.
+// TODO(sera-2q1d): deserialized from LLM API responses; fields read selectively.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LlmResponse {
     pub choices: Vec<LlmChoice>,
     #[serde(default)]
@@ -91,37 +91,36 @@ pub struct LlmResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LlmChoice {
     pub message: ChatMessage,
     pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct LlmUsage {
     #[serde(default)]
     pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
     #[serde(default)]
-    #[allow(dead_code)]
     pub cache_creation_tokens: u32,
     #[serde(default)]
-    #[allow(dead_code)]
     pub cache_read_tokens: u32,
     #[serde(default)]
-    #[allow(dead_code)]
     pub total_tokens: u32,
 }
 
 /// Tool definition sent to the LLM.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     #[serde(rename = "type")]
     pub tool_type: String,
     pub function: FunctionDefinition,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionDefinition {
     pub name: String,
     pub description: String,

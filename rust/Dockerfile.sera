@@ -1,0 +1,44 @@
+# ── sera + sera-runtime multi-stage build ─────────────────────────────────────
+# Produces a single image with both the gateway (`sera`) and the runtime
+# (`sera-runtime`) binaries.  The gateway spawns the runtime as a child
+# process via StdioHarness (NDJSON on stdin/stdout).
+#
+# Build from repo root:
+#   docker build -f rust/Dockerfile.sera -t sera:latest .
+
+# ── Stage 1: Builder ─────────────────────────────────────────────────────────
+FROM rust:1-slim-bookworm AS builder
+
+WORKDIR /build
+
+# Build dependencies (rustls = no libssl-dev needed)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy full workspace source
+COPY rust/ .
+
+# Build both binaries in release mode
+RUN cargo build --release --bin sera --bin sera-runtime
+
+# ── Stage 2: Runner ──────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy both binaries
+COPY --from=builder /build/target/release/sera /usr/local/bin/sera
+COPY --from=builder /build/target/release/sera-runtime /usr/local/bin/sera-runtime
+
+# Default config path (mount or COPY your sera.yaml here)
+ENV SERA_RUNTIME_BIN=/usr/local/bin/sera-runtime
+
+EXPOSE 3001
+
+ENTRYPOINT ["sera", "start"]
+CMD ["-c", "/app/sera.yaml"]

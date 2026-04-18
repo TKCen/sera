@@ -1,4 +1,5 @@
 //! Runtime configuration from environment variables.
+#![allow(dead_code)]
 
 /// Runtime configuration — read from env vars set by sera-core when spawning the container.
 #[derive(Debug, Clone)]
@@ -14,6 +15,41 @@ pub struct RuntimeConfig {
     pub context_window: usize,
     pub compaction_strategy: String,
     pub max_tokens: u32,
+    /// When `true`, inject a `## Circle Activity` section into the system prompt.
+    /// Defaults to `false` so existing prompts are unchanged.
+    pub circle_activity_enabled: bool,
+    /// Master flag for Tier-2 semantic enrichment (sera-0yqq).
+    ///
+    /// When `false` (default), [`crate::context_engine::ContextEnricher`] is a
+    /// pure no-op: no embedding calls, no store queries, no promoted recall
+    /// segments. Turns proceed with lexical-only scoring in `HybridScorer`.
+    pub semantic_enrichment_enabled: bool,
+    /// How many store hits to request before hybrid rerank.
+    ///
+    /// Final promotion is still capped at
+    /// [`crate::context_engine::MAX_RECALL_SEGMENTS`] (3).
+    pub semantic_top_k: usize,
+    /// Minimum composite score for a store hit to survive initial filtering.
+    /// Forwarded to [`sera_types::SemanticQuery::similarity_threshold`].
+    pub semantic_similarity_threshold: Option<f32>,
+    /// Wall-clock timeout on the combined embedding + store query, in
+    /// milliseconds. Past this budget the enricher degrades silently to an
+    /// empty segment list.
+    pub semantic_enrichment_timeout_ms: u64,
+    /// When `true`, `TraitToolRegistry::execute` runs a per-tool PDP check via
+    /// `ToolContext::authz` before the `ToolPolicy` check.
+    ///
+    /// Defaults to `false` — safe rollout kill-switch.  Set
+    /// `TOOL_AUTHZ_ENABLED=true` (or `=1`) to enable enforcement.
+    pub tool_authz_enabled: bool,
+    /// Optional inline role → action-kind grants for `RoleBasedAuthzProvider`.
+    ///
+    /// Format: `TOOL_AUTHZ_ROLES=<role>:<action_kind>[,<action_kind>...][;<role>:...]`
+    ///
+    /// Example: `TOOL_AUTHZ_ROLES=operator:tool_call,read;admin:tool_call,read,write,admin`
+    ///
+    /// When absent, an allow-all `DefaultAuthzProvider` stub is installed.
+    pub tool_authz_roles: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -45,7 +81,28 @@ impl RuntimeConfig {
             max_tokens: std::env::var("MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(4096),
+                .unwrap_or(crate::llm_client::DEFAULT_MAX_TOKENS),
+            circle_activity_enabled: std::env::var("CIRCLE_ACTIVITY_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            semantic_enrichment_enabled: std::env::var("SEMANTIC_ENRICHMENT_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            semantic_top_k: std::env::var("SEMANTIC_TOP_K")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3),
+            semantic_similarity_threshold: std::env::var("SEMANTIC_SIMILARITY_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            semantic_enrichment_timeout_ms: std::env::var("SEMANTIC_ENRICHMENT_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(150),
+            tool_authz_enabled: std::env::var("TOOL_AUTHZ_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            tool_authz_roles: std::env::var("TOOL_AUTHZ_ROLES").ok(),
         }
     }
 }

@@ -1,0 +1,28 @@
+[package]
+name = "sera-telemetry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sera-errors.workspace = true
+sera-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+once_cell.workspace = true
+time.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+
+[features]
+default = []
+otlp-exporter = ["opentelemetry-otlp/grpc-tonic"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

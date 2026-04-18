@@ -1,0 +1,503 @@
+#!/usr/bin/env bash
+# sera — Main wrapper CLI for CLAWHIP lane orchestration
+#
+# Usage:
+#   sera plan <slug> --issue N --message "..." [--fast]
+#   sera exec <slug>
+#   sera review <slug>
+#   sera status [slug]
+#   sera worktree mark-reclaimable <slug> [--pr N]
+#   sera worktree list
+#   sera worktree gc
+#   sera answer <slug> --text "..."
+#   sera diagnose <slug>
+#
+# Environment:
+#   SERA_ROOT      — SERA repo root (default: auto-detected)
+#   WORKTREE_PARENT — worktree parent dir (default: ~/source/sera-wt)
+#   DISCORD_CHANNEL — Discord channel for signals (default: 1493263362753302749)
+#   SERA_DISCORD_CLAWHIP_BOT_TOKEN — clawhip Discord bot token
+
+set -euo pipefail
+
+# ── Self-location ───────────────────────────────────────────────────────────
+# Determine project root: this script lives at <project>/scripts/sera
+# cd to the dir containing this script, then go up one level to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERA_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKTREE_PARENT="${WORKTREE_PARENT:-${HOME}/source/sera-wt}"
+DISCORD_CHANNEL="${DISCORD_CHANNEL:-1493263362753302749}"
+CLAWHIP_BOT_TOKEN="${CLAWHIP_DISCORD_TOKEN:-}"
+# sera sets SCRIPT_DIR=/home/entity/projects/sera (project root)
+# Each lib file uses its own BASH_SOURCE[0] to find its own directory
+source "$(dirname "${BASH_SOURCE[0]}")/lib/task.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/wrapperLedger.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/worktree.sh"
+
+# ── Keyword watching ─────────────────────────────────────────────────────────
+# These bubble up to Discord when seen in tmux output
+KEYWORDS="✻ Worked for,● APPROVED,✓ Closed,compile error,thread panicked,FATAL,ERROR,✗"
+
+# ── Usage ───────────────────────────────────────────────────────────────────
+usage() {
+  cat <<EOF
+sera — CLAWHIP lane orchestration for SERA development
+
+Usage:
+  sera plan <slug> --issue N --message "..." [--fast]
+                  Create worktree, task artifact, launch planner lane
+
+  sera exec <slug>
+                  Dispatch executor lane from task.json
+
+  sera review <slug>
+                  Dispatch review lane
+
+  sera status [slug]
+                  Show lane state from ledger
+
+  sera worktree mark-reclaimable <slug> [--pr N]
+                  Mark worktree reclaimable, optionally record PR number
+
+  sera worktree list
+                  List all SERA worktrees
+
+  sera worktree gc
+                  Show reclaimable worktrees (does not auto-delete)
+
+  sera answer <slug> --text "..."
+                  Inject operator answer into a paused lane
+
+  sera diagnose <slug>
+                  Failure diagnosis: tmux log + artifact presence + ledger state
+
+Flags:
+  --fast   Skip OMC planner, go straight to executor (for tightly-anchored tasks)
+
+Examples:
+  sera plan issue-142 --issue 142 --message "Add MemoryBlock to sera-types"
+  sera exec issue-142-memory-block
+  sera review issue-142-memory-block
+  sera answer issue-142-memory-block --text "Use tier-2 policy"
+  sera worktree mark-reclaimable issue-142-memory-block --pr 87
+EOF
+}
+
+# ── Signal sender ──────────────────────────────────────────────────────────────
+# signal <verb> <slug> [extra_kv_pairs...]
+# Sends a structured JSON signal to Discord via clawhip send
+signal() {
+  local verb="$1"
+  local slug="$2"
+  shift 2
+
+  local entry
+  entry="$(ledger_get "$slug" 2>/dev/null || echo '{}')"
+
+  local task_id session cwd artifact_root
+  task_id="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('taskId',''))" 2>/dev/null || echo '')"
+  session="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(','.join(d.get('session_names',[])))" 2>/dev/null || echo '')"
+  cwd="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || echo '')"
+  artifact_root="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('artifact_root',''))" 2>/dev/null || echo '')"
+
+  local timestamp
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  local extras=""
+  while [[ $# -gt 0 ]]; do
+    extras="${extras}, \"$1\""
+    shift
+  done
+
+  # Build JSON safely via sys.argv — no shell interpolation in Python string
+  local payload
+  payload="$(python3 - "$verb" "$slug" "$task_id" "$session" "$cwd" "$artifact_root" "$DISCORD_CHANNEL" "$timestamp" "$extras" <<'PYEOF'
+import json, sys
+verb = sys.argv[1]; slug = sys.argv[2]; task_id = sys.argv[3]
+session = sys.argv[4]; cwd = sys.argv[5]; artifact_root = sys.argv[6]
+channel = sys.argv[7]; timestamp = sys.argv[8]; extras = sys.argv[9:]
+d = {
+    "verb": verb, "slug": slug, "taskId": task_id,
+    "session": session, "cwd": cwd, "artifact_root": artifact_root,
+    "channel": channel, "timestamp": timestamp
+}
+for e in extras:
+    if '=' in e:
+        k, _, v = e.partition('=')
+        d[k] = v
+print(json.dumps(d))
+PYEOF
+)"
+
+  echo "[signal] ${verb} → Discord: ${payload}"
+
+  if [[ -n "$CLAWHIP_BOT_TOKEN" ]]; then
+    clawhip send \
+      --event "sera.${verb,,}" \
+      --message "$payload" \
+      --channel "${DISCORD_CHANNEL}" \
+      2>/dev/null || true
+  fi
+}
+
+# ── Lane launcher ─────────────────────────────────────────────────────────────
+# launch_lane <lane_type> <slug> <tmux_session> <omc_omx_args...>
+# lane_type: omc | omx | review
+launch_lane() {
+  local lane_type="$1"
+  local slug="$2"
+  local session="$3"
+  shift 3
+
+  local wt_path
+  wt_path="$(worktree_path "$slug")"
+
+  echo "[sera] Launching ${lane_type} lane: ${session} in ${wt_path}"
+
+  # Register session with ledger
+  ledger_add_session "$slug" "$session"
+  ledger_update "$slug" "last_lane=${lane_type}" "status=active"
+
+  # Launch via clawhip tmux new
+  clawhip tmux new \
+    --session "${session}" \
+    --channel "${DISCORD_CHANNEL}" \
+    --keywords "${KEYWORDS}" \
+    --cwd "${wt_path}" \
+    --attach \
+    -- "$@"
+
+  echo "[sera] Lane ${session} finished"
+}
+
+# ── PLAN command ───────────────────────────────────────────────────────────────
+cmd_plan() {
+  local slug=""
+  local issue=""
+  local message=""
+  local fast=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --issue) issue="$2"; shift 2 ;;
+      --message) message="$2"; shift 2 ;;
+      --fast) fast=true; shift ;;
+      *) slug="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$slug" || -z "$message" ]]; then
+    echo "[sera] ERROR: plan requires <slug> and --message" >&2
+    return 1
+  fi
+
+  # Determine task ID
+  local task_num
+  task_num="$(date +%s | rev | cut -c1-4)"
+  local task_id="TASK-${task_num}"
+
+  # Create or reuse worktree
+  if ! worktree_exists "$slug"; then
+    worktree_create "$slug" "$issue"
+  fi
+
+  local wt_path
+  wt_path="$(worktree_path "$slug")"
+
+  # Create task artifact
+  task_create "$task_id" "$message" "$wt_path"
+
+  # Create ledger entry
+  if ! ledger_get "$slug" &>/dev/null; then
+    ledger_create "$slug" "$slug" "$wt_path" "$task_id" "$issue"
+  fi
+
+  # Run planner lane or go straight to exec (fast-path)
+  local session_base="omc-${slug}"
+  local run_num=1
+  while ledger_get "$slug" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('$session_base-r'$run_num in d.get('session_names',[]))" 2>/dev/null | grep -q true; do
+    ((run_num++))
+  done
+  local session="${session_base}-r${run_num}"
+
+  if $fast; then
+    echo "[sera] Fast-path: skipping planner, going straight to executor"
+    signal "HANDOFF" "$slug" "note=\"Fast-path: planner skipped\""
+    cmd_exec "$slug"
+    return $?
+  fi
+
+  # OMC planner lane
+  launch_lane "omc" "$slug" "$session" \
+    omc --madmax --plan "Read artifacts/tasks/${task_id}.md. Confirm bounded, execution-ready, and safe for detached OMX implementation. State execution approach briefly. Write plan to artifacts/handoffs/${task_id}-HANDOFF.md. Stop."
+
+  signal "HANDOFF" "$slug" "note=\"Planner done\""
+
+  echo "[sera] Plan complete: ${task_id}"
+  echo "[sera] Run 'sera exec ${slug}' to dispatch executor lane"
+}
+
+# ── EXEC command ──────────────────────────────────────────────────────────────
+cmd_exec() {
+  local slug="$1"
+  shift
+
+  local wt_path
+  wt_path="$(worktree_path "$slug")"
+
+  if [[ ! -d "$wt_path" ]]; then
+    echo "[sera] ERROR: worktree not found for ${slug}" >&2
+    return 1
+  fi
+
+  local entry
+  entry="$(ledger_get "$slug" 2>/dev/null || echo '{}')"
+  local task_id
+  task_id="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('taskId',''))" 2>/dev/null || echo '')"
+
+  if [[ -z "$task_id" ]]; then
+    echo "[sera] ERROR: No taskId found in ledger for ${slug}" >&2
+    return 1
+  fi
+
+  # Determine execution mode from task
+  local mode
+  mode="$(task_read "$task_id" "execution.mode" 2>/dev/null || echo 'exec')"
+
+  local run_num=1
+  local session_base="omx-${slug}"
+  while ledger_get "$slug" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('$session_base-r'$run_num in d.get('session_names',[]))" 2>/dev/null | grep -q true; do
+    ((run_num++))
+  done
+  local session="${session_base}-r${run_num}"
+
+  echo "[sera] Executor: mode=${mode}, task=${task_id}"
+
+  case "$mode" in
+    exec)
+      launch_lane "omx" "$slug" "$session" \
+        omx exec --dangerously-bypass-approvals-and-sandbox --high \
+          "Read artifacts/tasks/${task_id}.json. Implement the goal. Write artifacts/handoffs/${task_id}-HANDOFF.md with files changed, result, and verification status. Stop."
+      ;;
+    ralph)
+      launch_lane "omx" "$slug" "$session" \
+        omx ralph --dangerously-bypass-approvals-and-sandbox --high \
+          "Read artifacts/tasks/${task_id}.json. Implement goal using iterative verify/fix loop. Stop when stopCondition is met."
+      ;;
+    team)
+      local team_size
+      team_size="$(task_read "$task_id" "execution.teamSize" 2>/dev/null || echo '2')"
+      launch_lane "omx" "$slug" "$session" \
+        omx team --size "$team_size" --dangerously-bypass-approvals-and-sandbox --high \
+          "Read artifacts/tasks/${task_id}.json. Implement in parallel using team mode. Coordinate via artifacts/handoffs/${task_id}-HANDOFF.md."
+      ;;
+    *)
+      echo "[sera] ERROR: Unknown execution mode: ${mode}" >&2
+      return 1
+  esac
+
+  signal "HANDOFF" "$slug" "note=\"Executor done\""
+  echo "[sera] Executor done: ${task_id}"
+}
+
+# ── REVIEW command ─────────────────────────────────────────────────────────────
+cmd_review() {
+  local slug="$1"
+
+  local wt_path
+  wt_path="$(worktree_path "$slug")"
+
+  local entry
+  entry="$(ledger_get "$slug" 2>/dev/null || echo '{}')"
+  local task_id
+  task_id="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('taskId',''))" 2>/dev/null || echo '')"
+
+  if [[ -z "$task_id" ]]; then
+    echo "[sera] ERROR: No taskId found in ledger for ${slug}" >&2
+    return 1
+  fi
+
+  local run_num=1
+  local session_base="review-${slug}"
+  while ledger_get "$slug" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('$session_base-r'$run_num in d.get('session_names',[]))" 2>/dev/null | grep -q true; do
+    ((run_num++))
+  done
+  local session="${session_base}-r${run_num}"
+
+  launch_lane "review" "$slug" "$session" \
+    omx exec --dangerously-bypass-approvals-and-sandbox --high \
+      "Review artifacts/handoffs/${task_id}-HANDOFF.md and changed files. Verify task goal was met. Write artifacts/review/${task_id}-REVIEW.md with verdict (approve|block), findings, and verification performed."
+
+  signal "REVIEW" "$slug" "verdict=$(cat "${ARTIFACTS_REVIEW}/${task_id}-REVIEW.md" 2>/dev/null | grep -m1 'verdict' | cut -d' ' -f2- || echo 'unknown')"
+  echo "[sera] Review done: ${task_id}"
+}
+
+# ── STATUS command ────────────────────────────────────────────────────────────
+cmd_status() {
+  local slug="${1:-}"
+
+  if [[ -z "$slug" ]]; then
+    echo "=== Active Lanes ==="
+    ledger_list "active"
+    echo ""
+    echo "=== Waiting on Operator ==="
+    ledger_list "waiting_on_operator"
+    echo ""
+    echo "=== Review Ready ==="
+    ledger_list "review_ready"
+    echo ""
+    echo "=== Reclaimable ==="
+    ledger_list "reclaimable"
+  else
+    ledger_get "$slug"
+  fi
+}
+
+# ── ANSWER command (lane pause/resume) ────────────────────────────────────────
+cmd_answer() {
+  local slug=""
+  local text=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --text) text="$2"; shift 2 ;;
+      *) slug="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$slug" || -z "$text" ]]; then
+    echo "[sera] ERROR: answer requires <slug> and --text" >&2
+    return 1
+  fi
+
+  local entry
+  entry="$(ledger_get "$slug" 2>/dev/null || echo '{}')"
+  local sessions
+  sessions="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('session_names',[])))" 2>/dev/null || echo '')"
+
+  if [[ -z "$sessions" ]]; then
+    echo "[sera] ERROR: No active sessions found for ${slug}" >&2
+    return 1
+  fi
+
+  # Inject into the most recent running session
+  local session
+  session="$(echo "$sessions" | tail -1)"
+
+  echo "[sera] Injecting answer into ${session}: ${text}"
+  tmux send-keys -t "${session}" "${text}" Enter
+
+  ledger_update "$slug" "status=active"
+
+  echo "[sera] Answer injected"
+}
+
+# ── DIAGNOSE command ───────────────────────────────────────────────────────────
+cmd_diagnose() {
+  local slug="$1"
+
+  if [[ -z "$slug" ]]; then
+    echo "[sera] ERROR: diagnose requires <slug>" >&2
+    return 1
+  fi
+
+  local entry
+  entry="$(ledger_get "$slug" 2>/dev/null || echo '{}')"
+  local sessions cwd artifact_root
+  sessions="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(','.join(d.get('session_names',[])))" 2>/dev/null || echo '')"
+  cwd="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || echo '')"
+  artifact_root="$(echo "$entry" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('artifact_root',''))" 2>/dev/null || echo '')"
+
+  echo "=== Ledger State ==="
+  ledger_get "$slug"
+  echo ""
+
+  echo "=== tmux Sessions ==="
+  for session in $(echo "$sessions" | tr ',' '\n'); do
+    if tmux has-session -t "$session" 2>/dev/null; then
+      echo "  LIVE: $session"
+      tmux capture-pane -t "$session" -p | tail -5
+    else
+      echo "  DEAD: $session"
+    fi
+  done
+  echo ""
+
+  echo "=== Artifact Presence ==="
+  if [[ -n "$cwd" ]]; then
+    echo "  cwd: ${cwd}"
+    echo "  exists: $([ -d "$cwd" ] && echo YES || echo NO)"
+  fi
+  if [[ -n "$artifact_root" ]]; then
+    echo "  artifact_root: ${artifact_root}"
+    ls "$artifact_root/" 2>/dev/null || echo "  (empty or missing)"
+  fi
+  echo ""
+
+  echo "=== Git Status ==="
+  if [[ -d "$cwd" ]]; then
+    git -C "$cwd" status --short 2>/dev/null || echo "(not a git dir)"
+  fi
+}
+
+# ── WORKTREE subcommands ────────────────────────────────────────────────────────
+cmd_worktree() {
+  local subcmd="${1:-}"
+  shift || true
+
+  case "$subcmd" in
+    list)
+      worktree_list
+      ;;
+    gc)
+      ledger_gc
+      ;;
+    mark-reclaimable)
+      local slug="${1:-}"
+      local pr=""
+      [[ "$2" == "--pr" ]] && pr="$3"
+      if [[ -z "$slug" ]]; then
+        echo "[sera] ERROR: worktree mark-reclaimable requires <slug>" >&2
+        return 1
+      fi
+      ledger_mark_reclaimable "$slug" "$pr"
+      ;;
+    remove)
+      local slug="${1:-}"
+      local force="${2:-}"
+      if [[ -z "$slug" ]]; then
+        echo "[sera] ERROR: worktree remove requires <slug>" >&2
+        return 1
+      fi
+      worktree_remove "$slug" "$force"
+      ;;
+    bootstrap)
+      local slug="${1:-}"
+      if [[ -z "$slug" ]]; then
+        echo "[sera] ERROR: worktree bootstrap requires <slug>" >&2
+        return 1
+      fi
+      worktree_bootstrap "$slug"
+      ;;
+    *)
+      echo "[sera] ERROR: unknown worktree subcommand: $subcmd" >&2
+      usage
+      return 1
+      ;;
+  esac
+}
+
+# ── Main dispatch ───────────────────────────────────────────────────────────────
+COMMAND="${1:-}"
+
+case "$COMMAND" in
+  plan)           shift; cmd_plan "$@" ;;
+  exec)           shift; cmd_exec "$@" ;;
+  review)         shift; cmd_review "$@" ;;
+  status)         shift; cmd_status "$@" ;;
+  answer)         shift; cmd_answer "$@" ;;
+  diagnose)       shift; cmd_diagnose "$@" ;;
+  worktree)       shift; cmd_worktree "$@" ;;
+  -h|--help|help) usage ;;
+  *)              usage ;;
+esac

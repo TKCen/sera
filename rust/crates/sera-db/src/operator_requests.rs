@@ -39,34 +39,21 @@ impl OperatorRequestRepository {
         agent_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<OperatorRequestRow>, DbError> {
-        // Build dynamic query
-        let mut query = String::from(
+        let mut qb = sqlx::QueryBuilder::new(
             "SELECT id, agent_id, agent_name, type, title, payload, status, response, created_at, resolved_at
              FROM operator_requests WHERE 1=1",
         );
-        let mut param_idx = 1;
 
-        if status.is_some() {
-            query.push_str(&format!(" AND status = ${param_idx}"));
-            param_idx += 1;
-        }
-        if agent_id.is_some() {
-            query.push_str(&format!(" AND agent_id = ${param_idx}"));
-            param_idx += 1;
-        }
-
-        query.push_str(&format!(" ORDER BY created_at DESC LIMIT ${param_idx}"));
-
-        let mut q = sqlx::query_as::<_, OperatorRequestRow>(&query);
         if let Some(s) = status {
-            q = q.bind(s);
+            qb.push(" AND status = ").push_bind(s);
         }
         if let Some(a) = agent_id {
-            q = q.bind(a);
+            qb.push(" AND agent_id = ").push_bind(a);
         }
-        q = q.bind(limit);
 
-        let rows = q.fetch_all(pool).await?;
+        qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+
+        let rows = qb.build_query_as::<OperatorRequestRow>().fetch_all(pool).await?;
         Ok(rows)
     }
 

@@ -7,11 +7,18 @@ edition.workspace = true
 name = "sera-tui"
 path = "src/main.rs"
 
+[features]
+default = []
+# Spin up a real gateway binary (via sera-e2e-harness) and render each
+# view once against ratatui's TestBackend.  Off by default so a bare
+# `cargo check -p sera-tui` stays fast.
+integration = ["dep:sera-e2e-harness", "dep:tempfile", "dep:wiremock"]
+
 [dependencies]
-sera-domain.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -19,4 +26,16 @@ thiserror.workspace = true
 anyhow.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
-uuid.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+once_cell.workspace = true
+bytes = "1"
+
+# Optional integration-test support.  Cargo does not permit dev-dependencies
+# to be optional, so the harness/mock stack lives up here with a feature flag.
+sera-e2e-harness = { path = "../sera-e2e-harness", optional = true }
+tempfile = { workspace = true, optional = true }
+wiremock = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }

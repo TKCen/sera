@@ -3,13 +3,27 @@ name = "sera-auth"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["jwt", "basic-auth"]
+jwt = []
+basic-auth = ["dep:argon2"]
+enterprise = []
+
 [dependencies]
-sera-domain.workspace = true
+sera-types.workspace = true
 sera-db.workspace = true
+sera-errors.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 jsonwebtoken.workspace = true
+rand.workspace = true
+hex.workspace = true
 axum.workspace = true
+async-trait = { workspace = true }
+argon2 = { workspace = true, optional = true }
+casbin = "2"
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true, features = ["serde"] }

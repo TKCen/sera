@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# sera-omc — Launch an OMC (Claude Code) session with clawhip monitoring
+#
+# Usage:
+#   sera-omc                          # auto-generated session name
+#   sera-omc <bead-id>                # claim bead + named session + handoff
+#   sera-omc <bead-id> [omc-args...]  # pass extra args to omc
+
+set -euo pipefail
+
+DISCORD_CHANNEL="1493263362753302749"
+KEYWORDS="✻ Worked for,● APPROVED,✓ Closed,compile error,thread panicked,FATAL"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERA_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/..")"
+
+# shellcheck source=lib/beads.sh
+source "${SCRIPT_DIR}/lib/beads.sh"
+
+BEAD_ID=""
+OMC_ARGS=()
+
+if [[ $# -gt 0 ]] && [[ "$1" =~ ^[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+$ ]]; then
+  BEAD_ID="$1"
+  shift
+fi
+OMC_ARGS=("$@")
+
+if [[ -n "$BEAD_ID" ]]; then
+  SESSION="omc-sera-${BEAD_ID}"
+  echo "[sera-omc] Claiming bead ${BEAD_ID}..."
+  bead_claim "${BEAD_ID}" || true
+  HANDOFF="${SERA_ROOT}/artifacts/handoffs/omc-sera-${BEAD_ID}.md"
+  bead_gen_handoff "${BEAD_ID}" "${HANDOFF}" || true
+else
+  SESSION="omc-sera-$(date +%s | rev | cut -c1-4)"
+fi
+
+echo "[sera-omc] Starting monitored session: ${SESSION}"
+
+exec clawhip tmux new \
+  --session "${SESSION}" \
+  --channel "${DISCORD_CHANNEL}" \
+  --keywords "${KEYWORDS}" \
+  --cwd "${SERA_ROOT}" \
+  --attach \
+  -- omc "${OMC_ARGS[@]+"${OMC_ARGS[@]}"}"

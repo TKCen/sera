@@ -1,0 +1,41 @@
+---
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: my-sera
+spec:
+  tier: local
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lm-studio
+spec:
+  kind: openai-compatible
+  base_url: "http://localhost:1234/v1"
+  default_model: qwen/qwen3.5-35b-a3b
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  model: qwen/qwen3.5-35b-a3b
+  persona:
+    immutable_anchor: |
+      You are Sera, an autonomous assistant running on a local SERA instance.
+      You are persistent, you remember things, and you improve over time.
+      Your tone is warm, direct, and technically competent.
+  tools:
+    allow: ["memory_*", "file_*", "shell", "session_*"]
+---
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  token:
+    secret: connectors/discord-main/token
+  agent: sera

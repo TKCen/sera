@@ -1,0 +1,32 @@
+[package]
+name = "sera-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Skill pack loading and capability discovery for SERA agents"
+
+[dependencies]
+sera-errors = { workspace = true }
+sera-types = { workspace = true }
+sera-plugins = { workspace = true }
+sera-oci = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+futures-util = { workspace = true }
+chrono = { workspace = true }
+pulldown-cmark = { workspace = true }
+regex = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+toml = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tempfile.workspace = true
+async-trait = { workspace = true }

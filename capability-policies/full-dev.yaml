@@ -1,0 +1,104 @@
+# full-dev — Full developer agent policy
+#
+# Purpose: Grants the broad set of capabilities expected by a senior developer
+# agent — read/write/delete filesystem access, shell execution with common dev
+# tools, outbound network to source registries and VCS hosts (via egress
+# allowlist), and the ability to spawn sub-agents for parallelism. Intended
+# for the primary coding agent in a team. Must be paired with
+# sandboxBoundary: tier-2 (hard ceiling enforced by the runtime — this policy
+# cannot exceed it). Do not use for untrusted or third-party agents.
+#
+# Typical use: policyRef: full-dev in the agent manifest.
+
+apiVersion: sera/v1
+kind: CapabilityPolicy
+metadata:
+  name: full-dev
+  description: Full developer access — read/write/exec/network with egress allowlist, tier-2 sandbox
+
+capabilities:
+  filesystem:
+    read: true
+    write: true
+    delete: true
+    scope:
+      - '/workspace/**'
+      - '/tmp/**'
+      - '/home/**'
+
+  network:
+    outbound:
+      allow:
+        - 'api.github.com'
+        - 'github.com'
+        - 'registry.npmjs.org'
+        - 'pypi.org'
+        - 'crates.io'
+        - 'static.crates.io'
+        - 'index.crates.io'
+        - 'objects.githubusercontent.com'
+      deny:
+        - '169.254.169.254'  # cloud metadata endpoints
+        - '100.100.100.200'  # Alibaba metadata
+
+  exec:
+    shell: true
+    commands:
+      allow:
+        - 'cargo *'
+        - 'rustfmt *'
+        - 'rust-analyzer *'
+        - 'npm *'
+        - 'bun *'
+        - 'npx *'
+        - 'bunx *'
+        - 'tsc *'
+        - 'vitest *'
+        - 'pytest *'
+        - 'python *'
+        - 'python3 *'
+        - 'node *'
+        - 'git *'
+        - 'make *'
+        - 'docker build *'
+        - 'docker run *'
+      deny:
+        - 'docker run --privileged *'
+        - 'sudo *'
+        - 'su *'
+        - 'chmod 777 *'
+        - 'curl * | bash'
+        - 'wget * | bash'
+
+  llm:
+    models: ['*']
+    budget:
+      hourly: 200000
+      daily: 1000000
+    toolCalling: true
+    streaming: true
+
+  memory:
+    read: true
+    write: true
+    delete: true
+    scopes: [own, circle]
+    writeRateLimit: 50
+
+  intercom:
+    publish:
+      - 'thoughts:*'
+      - 'circle:engineering'
+      - 'circle:ops'
+    subscribe:
+      - 'circle:engineering'
+      - 'circle:ops'
+    directMessage: ['architect', 'qa-agent', 'reviewer']
+
+  docker:
+    spawnSubagents: true
+    allowedRoles: ['researcher', 'tester', 'reviewer']
+    maxSubagents: 5
+
+  secrets:
+    access: ['GITHUB_TOKEN', 'NPM_TOKEN']

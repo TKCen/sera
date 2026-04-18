@@ -1,0 +1,32 @@
+# Example SERA plugin manifest — api_version: sera/v1
+#
+# Parse with: PluginManifestV1::from_yaml(yaml)
+# Validation rules:
+#   - api_version must be exactly "sera/v1"
+#   - name must match ^[a-z][a-z0-9-]*$
+
+api_version: sera/v1
+name: hello-plugin
+version: "1.0.0"
+kind: Tool
+description: "A minimal hello-world Tool plugin for SERA."
+author: "SERA Team"
+license: "Apache-2.0"
+homepage: "https://github.com/sera-ai/hello-plugin"
+
+# Path relative to the plugin root, or a container image reference.
+entry_point: "bin/hello-plugin"
+
+# Capability strings this plugin requires from the gateway.
+capabilities:
+  - "fs:read"
+
+# Minimum sandbox tier (1 = dev/local, 2 = staging, 3 = production).
+requires_tier: 1
+
+# Environment variables injected into the plugin process at startup.
+env:
+  LOG_LEVEL: info
+
+# Volume mounts (only needed for containerised plugins).
+volumes: []

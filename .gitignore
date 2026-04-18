@@ -82,3 +82,12 @@ site/
 .dolt/
 *.db
 .beads-credential-key
+.omx/
+
+# Untracked directories to ignore
+artifacts/
+secrets/
+
+# Architecture visualization tool artifact
+sera_arch_config.json
+

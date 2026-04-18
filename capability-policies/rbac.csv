@@ -1,0 +1,46 @@
+# SERA RBAC policy — placeholder for Tier 2+ deployments.
+# Format: p, <role>, <resource_pattern>, <action>
+#         g, <principal_id>, <role>
+#
+# See SPEC-identity-authz §5.3 for role definitions.
+# NOTE: This is a minimal placeholder. Production deployments should extend
+# this file via the config store or an external AuthZen PDP.
+
+# ── Role permissions ──────────────────────────────────────────────────────────
+
+# admin: full access to everything
+p, admin, *, *
+
+# operator: agent config, session management, monitoring (no system admin)
+p, operator, agent:*, *
+p, operator, session:*, *
+p, operator, workflow:*, *
+p, operator, tool:*, read
+p, operator, tool:*, execute
+p, operator, memory:*, read
+p, operator, config:*, read
+
+# user: interact with assigned agents, read sessions, limited tool access
+p, user, agent:*, read
+p, user, session:*, read
+p, user, session:*, execute
+p, user, tool:bash, execute
+p, user, tool:web_search, execute
+p, user, memory:*, read
+
+# observer: read-only across transcripts and metrics
+p, observer, agent:*, read
+p, observer, session:*, read
+p, observer, memory:*, read
+p, observer, workflow:*, read
+
+# agent: default for agent principals — tool execution within scoped policy
+p, agent_role, tool:*, execute
+p, agent_role, memory:*, *
+p, agent_role, session:*, read
+
+# ── Default role assignments ───────────────────────────────────────────────────
+# These are bootstrap assignments. Real deployments populate via the API.
+
+g, admin, admin
+g, system, admin

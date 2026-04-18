@@ -1,0 +1,22 @@
+[package]
+name = "sera-oci"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OCI registry client for SERA plugin and skill pack distribution"
+
+[dependencies]
+sera-errors = { workspace = true }
+oci-distribution = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+sha2 = { workspace = true }
+hex = { workspace = true }

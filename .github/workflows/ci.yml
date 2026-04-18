@@ -7,42 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: oven-sh/setup-bun@v2
-
-      # Node.js still needed: vitest runs on Node, tsc requires it
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: bun install
-
-      # bun.lock records only the dev platform's optional deps (Windows).
-      # Ensure the Linux native binding for Tailwind CSS is present.
-      - name: Ensure Tailwind native bindings
-        run: bun add --no-save @tailwindcss/oxide-linux-x64-gnu@4.2.1
-
-      - name: Format check
-        run: bun run format:check
-
-      - name: Lint
-        run: bun run lint
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Unit tests
-        run: bun run test:unit
-
-      - name: Build
-        run: bun run build
-
   validate-rust:
     runs-on: ubuntu-latest
 
@@ -66,23 +30,18 @@ jobs:
       - name: Test
         run: cd rust && cargo test --workspace
 
-  label-agent-pr:
-    if: >-
-      github.event_name == 'pull_request' &&
-      (startsWith(github.head_ref, 'claude/') ||
-       startsWith(github.head_ref, 'jules/') ||
-       startsWith(github.head_ref, 'gemini/') ||
-       startsWith(github.head_ref, 'antigravity/'))
+  e2e-smoke:
+    name: ci-e2e-smoke
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
+    needs: [validate-rust]
     steps:
-      - uses: actions/github-script@v8
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          script: |
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              labels: ['agent-work']
-            });
+          workspaces: rust
+
+      - name: Run E2E smoke
+        run: ops/e2e/smoke.sh

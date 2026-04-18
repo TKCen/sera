@@ -39,28 +39,46 @@ cargo check -p sera-core
 
 | Crate             | Type | Purpose                                                 |
 | ----------------- | ---- | ------------------------------------------------------- |
-| `sera-domain`     | lib  | Shared types, enums, IDs (leaf crate, no internal deps) |
+| `sera-types`      | lib  | Shared types, enums, IDs (leaf crate, no internal deps) |
 | `sera-config`     | lib  | Environment/file config loading                         |
 | `sera-db`         | lib  | PostgreSQL via sqlx, migrations, repositories           |
 | `sera-auth`       | lib  | API keys, JWT, OIDC, axum middleware                    |
 | `sera-events`     | lib  | Audit trail, Centrifugo pub/sub, lifecycle events       |
-| `sera-docker`     | lib  | Container lifecycle via bollard                         |
-| `sera-core`       | bin  | Main API server (axum) — replaces TypeScript core       |
-| `sera-runtime`    | bin  | Agent worker binary — runs inside containers            |
+| `sera-hooks`      | lib  | In-process hook registry + chain executor               |
+| `sera-hitl`       | lib  | HITL approval routing, escalation chains                |
+| `sera-workflow`   | lib  | Workflow engine, dreaming config, cron scheduling       |
+| `sera-telemetry`  | lib  | OTel tracing, AuditBackend, LaneFailureClass            |
+| `sera-queue`      | lib  | QueueBackend trait, LocalQueueBackend, GlobalThrottle    |
+| `sera-tools`      | lib  | SandboxProvider, SsrfValidator, BashAstChecker          |
+| `sera-errors`     | lib  | Unified error codes, SeraError, HTTP status mapping     |
+| `sera-cache`      | lib  | Cache layer scaffold                                    |
+| `sera-secrets`    | lib  | Secrets management scaffold                             |
+| `sera-session`    | lib  | 6-state SessionStateMachine, ContentBlock transcript    |
+| `sera-gateway`    | bin  | Main API server + SQ/EQ gateway (axum)                  |
+| `sera-runtime`    | both | Agent worker binary + lib (ContextEngine, Condensers)   |
 | `sera-tui`        | bin  | Terminal UI (ratatui) — replaces Go TUI                 |
-| `sera-testing`    | lib  | Test utilities, fixtures, golden tests                  |
+| `sera-testing`    | lib  | Test utilities, MockQueueBackend, MockSandboxProvider   |
+| `sera-models`     | lib  | Model provider abstractions (ModelProvider trait)        |
+| `sera-skills`     | lib  | Skill pack loading, filesystem-based discovery           |
+| `sera-meta`       | lib  | Self-evolution: 3-tier policy, shadow sessions, rules    |
 | `sera-byoh-agent` | bin  | BYOH agent reference implementation                     |
+| `sera-mcp`        | lib  | MCP server/client bridge (SPEC-interop §3)              |
+| `sera-a2a`        | lib  | A2A protocol adapter, vendored types (SPEC-interop §4)  |
+| `sera-agui`       | lib  | AG-UI streaming protocol, 17 event types (SPEC-interop §6) |
+| `sera-plugins`    | lib  | gRPC plugin registry, SDK, circuit breaker (SPEC-plugins)   |
 
 ## Dependency Graph
 
 ```
-sera-domain (leaf)
+sera-types (leaf)
   └─ sera-config
   └─ sera-db ← sera-auth
-  └─ sera-events ← sera-docker
-  └─ sera-core (all above)
-  └─ sera-runtime (domain + config only)
-  └─ sera-tui (domain + reqwest only)
+  └─ sera-events
+  └─ sera-tools (sandbox, ssrf, kill-switch)
+  └─ sera-gateway (all above + queue + transport + envelope)
+  └─ sera-runtime (types + config + context-engine + condensers)
+  └─ sera-tui (types + reqwest only)
+  └─ sera-session (types + serde)
 ```
 
 ## Development Workflow
@@ -103,3 +121,11 @@ DATABASE_URL=postgres://sera:sera@localhost:5432/sera cargo test --workspace --f
 - **bollard on Windows uses named pipes**: Docker client connects via `//./pipe/docker_engine` on Windows, not `/var/run/docker.sock`. The bollard crate handles this automatically.
 - **serde_yaml 0.9 is deprecated but stable**: The crate works fine; the maintainer recommends alternatives for new projects, but for SERA's manifest parsing it's adequate.
 - **Use `tls-rustls` not `tls-native-tls` for sqlx and reqwest**: WSL2 and minimal Docker images lack `libssl-dev`. Using `rustls-tls` (pure Rust TLS) avoids the system OpenSSL dependency. Set `default-features = false` on reqwest to prevent it pulling in `native-tls`.
+- **MVS crate mapping**: The MVS review plan's 8 crates map to the existing workspace: sera-types→sera-domain, sera-config→sera-config (manifest_loader module), sera-errors→distributed thiserror, sera-db→sera-db (sqlite module), sera-memory→sera-domain::memory, sera-tools→sera-runtime::tools::mvs_tools, sera-models→sera-runtime::llm_client, sera-gateway→sera-core (discord module + bin/sera.rs).
+- **SQLite via rusqlite (not sqlx)**: MVS uses rusqlite for SQLite — simpler for embedded use. sqlx remains for PostgreSQL in the enterprise path. Both coexist in sera-db.
+- **Workspace Cargo.toml had duplicate sera-runtime member**: Fixed — was listed twice causing no error but was incorrect.
+- **sera-runtime is bin-only**: To reuse reasoning loop and tools from sera-core's MVS binary, sera-runtime needs a `[lib]` section or the logic must be inlined. Currently bin-only.
+- **K8s-style config lives in sera-config::manifest_loader**: Single-file YAML with --- separators. Secret resolution via SERA_SECRET_* env vars. Types in sera-domain::config_manifest.
+- **thiserror v2 auto-detects `source` fields**: Any field named `source` in a thiserror enum is treated as `#[source]`, requiring `std::error::Error`. Use `reason` instead for plain String error context.
+- **Edition 2024 let-chains**: Collapsible if statements should use `if cond && let Ok(x) = expr { ... }` syntax. Clippy enforces this with `-D warnings`.
+- **async-trait for Hook trait**: The in-process Hook trait uses `async_trait` crate. When WASM lands, the WasmHookAdapter will implement the same trait.

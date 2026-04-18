@@ -1,10 +1,12 @@
 //! SERA Database Layer — PostgreSQL access via sqlx with compile-time checked queries.
 //!
 //! Design rules (from RUST-MIGRATION-PLAN.md):
-//! - Domain objects live in `sera-domain`
+//! - Domain objects live in `sera-types`
 //! - SQL rows and query code live here in `sera-db`
 //! - No leaking `sqlx::Row` or SQL types into handler/business layers
 
+pub mod sqlite;
+pub mod sqlite_schema;
 pub mod pool;
 pub mod agents;
 pub mod audit;
@@ -18,11 +20,18 @@ pub mod delegations;
 pub mod memory;
 pub mod notifications;
 pub mod operator_requests;
+pub mod pgvector_store;
+pub mod sqlite_memory_store;
 pub mod secrets;
 pub mod tasks;
 pub mod webhooks;
 pub mod job_queue;
+pub mod lane_queue;
+pub mod lane_queue_counter;
+pub mod training_exports;
+pub mod proposal_usage;
 pub mod error;
 
 pub use pool::DbPool;
 pub use error::DbError;
+pub use sqlite_memory_store::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};

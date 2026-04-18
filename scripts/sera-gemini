@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# sera-gemini — Launch a Gemini CLI session with clawhip monitoring
+#
+# Usage:
+#   sera-gemini                          # auto-generated session name
+#   sera-gemini <bead-id>                # claim bead + named session + handoff
+#   sera-gemini <bead-id> [gemini-args...]  # pass extra args to gemini
+
+set -euo pipefail
+
+DISCORD_CHANNEL="1493263362753302749"
+KEYWORDS="✻ Worked for,● APPROVED,✓ Closed,compile error,thread panicked,FATAL"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERA_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/..")"
+
+# shellcheck source=lib/beads.sh
+source "${SCRIPT_DIR}/lib/beads.sh"
+
+BEAD_ID=""
+GEMINI_ARGS=()
+
+if [[ $# -gt 0 ]] && [[ "$1" =~ ^[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+$ ]]; then
+  BEAD_ID="$1"
+  shift
+fi
+GEMINI_ARGS=("$@")
+
+if [[ -n "$BEAD_ID" ]]; then
+  SESSION="gemini-sera-${BEAD_ID}"
+  echo "[sera-gemini] Claiming bead ${BEAD_ID}..."
+  bead_claim "${BEAD_ID}" || true
+  HANDOFF="${SERA_ROOT}/artifacts/handoffs/gemini-sera-${BEAD_ID}.md"
+  bead_gen_handoff "${BEAD_ID}" "${HANDOFF}" || true
+else
+  SESSION="gemini-sera-$(date +%s | rev | cut -c1-4)"
+fi
+
+echo "[sera-gemini] Starting monitored session: ${SESSION}"
+
+exec clawhip tmux new \
+  --session "${SESSION}" \
+  --channel "${DISCORD_CHANNEL}" \
+  --keywords "${KEYWORDS}" \
+  --cwd "${SERA_ROOT}" \
+  --attach \
+  -- gemini --approval-mode yolo "${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}"

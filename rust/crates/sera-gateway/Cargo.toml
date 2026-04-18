@@ -1,0 +1,83 @@
+[package]
+name = "sera-gateway"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "sera_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sera-gateway"
+path = "src/bin/sera.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rusqlite.workspace = true
+sera-types.workspace = true
+sera-db.workspace = true
+sera-auth.workspace = true
+sera-events.workspace = true
+sera-tools.workspace = true
+sera-config.workspace = true
+sera-errors.workspace = true
+sera-runtime.workspace = true
+sera-hooks.workspace = true
+sera-hitl.workspace = true
+sera-workflow.workspace = true
+sera-mail = { path = "../sera-mail" }
+sera-session.workspace = true
+sera-meta.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+time.workspace = true
+jsonwebtoken.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+urlencoding.workspace = true
+
+tokio-tungstenite.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+async-stream.workspace = true
+futures-util.workspace = true
+# qdrant-client and git2 deferred — native deps need Docker build env
+# openidconnect deferred — uses reqwest directly for token exchange
+rand.workspace = true
+cron.workspace = true
+chrono.workspace = true
+regex.workspace = true
+async-trait.workspace = true
+sera-queue.workspace = true
+sera-secrets.workspace = true
+
+[features]
+default = ["in-process"]
+in-process = []
+stdio = []
+grpc = []
+webhook-back = []
+connector-discord = []
+enterprise = []
+
+[dev-dependencies]
+sera-testing.workspace = true
+insta.workspace = true
+tempfile.workspace = true
+async-stream.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true

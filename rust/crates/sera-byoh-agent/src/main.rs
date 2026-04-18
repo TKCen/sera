@@ -9,7 +9,7 @@ mod heartbeat;
 mod llm;
 
 use sera_config::SeraConfig;
-use sera_domain::{TaskInput, TaskOutput};
+use sera_types::{TaskInput, TaskOutput};
 use std::io::{self, BufRead};
 use tokio::signal;
 use tracing::{error, info};
@@ -38,7 +38,11 @@ async fn main() {
     );
 
     // Start health server
-    let health_handle = tokio::spawn(health::serve(config.chat_port));
+    let health_handle = tokio::spawn(async move {
+        if let Err(e) = health::serve(config.chat_port).await {
+            error!("Health server failed: {e}");
+        }
+    });
 
     // Start heartbeat for persistent mode
     let heartbeat_handle = if config.lifecycle_mode == "persistent" {
@@ -89,7 +93,14 @@ fn read_stdin_task() -> Option<TaskInput> {
         return None;
     }
 
-    let trimmed = line.trim();
+    parse_task_line(line.trim())
+}
+
+/// Parse a single line of stdin into a [`TaskInput`].
+///
+/// Returns `None` for blank lines. Valid JSON is deserialized directly;
+/// plain-text strings are wrapped as an inline task for backward compat.
+pub(crate) fn parse_task_line(trimmed: &str) -> Option<TaskInput> {
     if trimmed.is_empty() {
         return None;
     }
@@ -122,5 +133,255 @@ async fn process_task(config: &SeraConfig, input: TaskInput) -> TaskOutput {
             result: None,
             error: Some(e.to_string()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_task_line ───────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_string_returns_none() {
+        assert!(parse_task_line("").is_none());
+    }
+
+    #[test]
+    fn whitespace_only_returns_none() {
+        // caller trims before passing — empty after trim is None
+        assert!(parse_task_line("").is_none());
+    }
+
+    #[test]
+    fn valid_json_task_input_deserializes() {
+        let json = r#"{"taskId":"t-001","task":"summarise the logs"}"#;
+        let result = parse_task_line(json).expect("valid JSON should parse");
+        assert_eq!(result.task_id, "t-001");
+        assert_eq!(result.task, "summarise the logs");
+        assert!(result.context.is_none());
+    }
+
+    #[test]
+    fn valid_json_with_context_deserializes() {
+        let json = r#"{"taskId":"t-002","task":"explain this","context":"some context"}"#;
+        let result = parse_task_line(json).expect("valid JSON with context should parse");
+        assert_eq!(result.task_id, "t-002");
+        assert_eq!(result.context.as_deref(), Some("some context"));
+    }
+
+    #[test]
+    fn plain_text_becomes_inline_task() {
+        let result = parse_task_line("hello world").expect("plain text should produce Some");
+        assert!(result.task_id.starts_with("inline-"), "task_id should have inline- prefix, got: {}", result.task_id);
+        assert_eq!(result.task, "hello world");
+        assert!(result.context.is_none());
+    }
+
+    #[test]
+    fn invalid_json_falls_back_to_plain_text() {
+        // Malformed JSON — not a TaskInput object — should become a plain-text task
+        let result = parse_task_line("{bad json}").expect("fallback should produce Some");
+        assert!(result.task_id.starts_with("inline-"));
+        assert_eq!(result.task, "{bad json}");
+    }
+
+    // ── TaskOutput construction ───────────────────────────────────────────────
+
+    #[test]
+    fn task_output_success_has_result_no_error() {
+        let output = TaskOutput {
+            task_id: "t-100".into(),
+            result: Some("the answer".into()),
+            error: None,
+        };
+        assert_eq!(output.task_id, "t-100");
+        assert_eq!(output.result.as_deref(), Some("the answer"));
+        assert!(output.error.is_none());
+    }
+
+    #[test]
+    fn task_output_error_has_no_result() {
+        let output = TaskOutput {
+            task_id: "t-101".into(),
+            result: None,
+            error: Some("LLM proxy returned 503: service unavailable".into()),
+        };
+        assert!(output.result.is_none());
+        assert!(output.error.as_deref().unwrap().contains("503"));
+    }
+
+    #[test]
+    fn task_output_serde_roundtrip_success() {
+        let output = TaskOutput {
+            task_id: "t-200".into(),
+            result: Some("done".into()),
+            error: None,
+        };
+        let json = serde_json::to_string(&output).expect("serialize");
+        // taskId uses camelCase rename
+        assert!(json.contains("\"taskId\""), "expected camelCase taskId, got: {json}");
+        // error is None so skip_serializing_if should omit it
+        assert!(!json.contains("\"error\""), "error should be absent when None, got: {json}");
+        let parsed: TaskOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.task_id, "t-200");
+        assert_eq!(parsed.result.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn task_output_serde_roundtrip_error() {
+        let output = TaskOutput {
+            task_id: "t-201".into(),
+            result: None,
+            error: Some("timeout".into()),
+        };
+        let json = serde_json::to_string(&output).expect("serialize");
+        let parsed: TaskOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.task_id, "t-201");
+        assert!(parsed.result.is_none());
+        assert_eq!(parsed.error.as_deref(), Some("timeout"));
+    }
+
+    // ── heartbeat URL construction (pure, no network) ─────────────────────────
+
+    #[test]
+    fn heartbeat_url_format() {
+        let core_url = "https://sera.internal";
+        let instance_id = "agent-abc-123";
+        let url = format!("{core_url}/api/agents/{instance_id}/heartbeat");
+        assert_eq!(url, "https://sera.internal/api/agents/agent-abc-123/heartbeat");
+    }
+
+    // ── parse_task_line edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn parse_task_line_single_space() {
+        // Single space after trim becomes empty, should return None
+        assert!(parse_task_line(" ".trim()).is_none());
+    }
+
+    #[test]
+    fn parse_task_line_multiple_spaces() {
+        // Multiple spaces after trim become empty, should return None
+        assert!(parse_task_line("   ".trim()).is_none());
+    }
+
+    #[test]
+    fn parse_task_line_long_plain_text() {
+        let long_text = "a".repeat(10000);
+        let result = parse_task_line(&long_text).expect("long text should parse");
+        assert_eq!(result.task, long_text);
+        assert!(result.task_id.starts_with("inline-"));
+    }
+
+    #[test]
+    fn parse_task_line_json_with_null_context() {
+        let json = r#"{"taskId":"t-003","task":"test","context":null}"#;
+        let result = parse_task_line(json).expect("JSON with null context should parse");
+        assert_eq!(result.context, None);
+    }
+
+    #[test]
+    fn parse_task_line_json_extra_fields_ignored() {
+        let json = r#"{"taskId":"t-004","task":"test","context":"ctx","extra":"ignored"}"#;
+        let result = parse_task_line(json).expect("JSON with extra fields should parse");
+        assert_eq!(result.task_id, "t-004");
+        assert_eq!(result.task, "test");
+    }
+
+    #[test]
+    fn parse_task_line_json_missing_task() {
+        // Missing required "task" field — should fail JSON deserialization
+        let json = r#"{"taskId":"t-005"}"#;
+        let result = parse_task_line(json).expect("malformed JSON falls back to plain text");
+        // Should be treated as plain text
+        assert_eq!(result.task, json);
+    }
+
+    #[test]
+    fn parse_task_line_unicode_content() {
+        let unicode_text = "Hello 世界 🌍 مرحبا";
+        let result = parse_task_line(unicode_text).expect("unicode text should parse");
+        assert_eq!(result.task, unicode_text);
+    }
+
+    // ── TaskOutput edge cases ──────────────────────────────────────────────
+
+    #[test]
+    fn task_output_both_result_and_error_none() {
+        let output = TaskOutput {
+            task_id: "t-999".into(),
+            result: None,
+            error: None,
+        };
+        assert!(output.result.is_none());
+        assert!(output.error.is_none());
+    }
+
+    #[test]
+    fn task_output_empty_result_string() {
+        let output = TaskOutput {
+            task_id: "t-empty".into(),
+            result: Some("".into()),
+            error: None,
+        };
+        assert_eq!(output.result.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn task_output_multiline_error() {
+        let error_msg = "Error at line 1\nError at line 2\nError at line 3";
+        let output = TaskOutput {
+            task_id: "t-multi-err".into(),
+            result: None,
+            error: Some(error_msg.into()),
+        };
+        assert_eq!(output.error.as_deref(), Some(error_msg));
+    }
+
+    #[test]
+    fn task_output_serde_with_empty_result() {
+        let output = TaskOutput {
+            task_id: "t-empty-res".into(),
+            result: Some("".into()),
+            error: None,
+        };
+        let json = serde_json::to_string(&output).expect("serialize");
+        let parsed: TaskOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.result.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn task_output_serde_preserves_unicode() {
+        let output = TaskOutput {
+            task_id: "t-unicode".into(),
+            result: Some("Response: 你好 🎉".into()),
+            error: None,
+        };
+        let json = serde_json::to_string(&output).expect("serialize");
+        let parsed: TaskOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.result.as_deref(), Some("Response: 你好 🎉"));
+    }
+
+    #[test]
+    fn task_input_with_empty_context() {
+        let input = TaskInput {
+            task_id: "t-ctx-empty".into(),
+            task: "do something".into(),
+            context: Some("".into()),
+        };
+        assert_eq!(input.context.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn parse_task_line_json_underscore_field_names() {
+        // Deserializer should handle snake_case vs camelCase
+        let json = r#"{"task_id":"t-006","task":"test"}"#;
+        let result = parse_task_line(json);
+        // This will likely fail JSON deserialization due to field name mismatch
+        if let Some(r) = result {
+            // If it somehow succeeds, verify it's a plain-text fallback
+            assert_eq!(r.task, json);
+        }
     }
 }

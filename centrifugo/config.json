@@ -1,56 +1,46 @@
 {
-  "health": {
-    "enabled": true
-  },
-  "client": {
-    "allowed_origins": ["*"],
-    "insecure": true,
-    "token": {
-      "hmac_secret_key": "sera-token-secret"
+  "health": true,
+  "allowed_origins": ["*"],
+  "token_hmac_secret_key": "sera-token-secret",
+  "api_key": "sera-api-key",
+  "client_insecure": true,
+  "namespaces": [
+    {
+      "name": "thoughts",
+      "history_size": 100,
+      "history_ttl": "3600s",
+      "allow_subscribe_for_client": true
+    },
+    {
+      "name": "tokens",
+      "history_size": 0,
+      "history_ttl": "0s",
+      "presence": false,
+      "allow_subscribe_for_client": true
+    },
+    {
+      "name": "agent",
+      "history_size": 10,
+      "history_ttl": "600s",
+      "allow_subscribe_for_client": true
+    },
+    {
+      "name": "private",
+      "history_size": 100,
+      "history_ttl": "3600s",
+      "allow_subscribe_for_client": false
+    },
+    {
+      "name": "circle",
+      "history_size": 50,
+      "history_ttl": "14400s",
+      "allow_subscribe_for_client": false
+    },
+    {
+      "name": "system",
+      "history_size": 20,
+      "history_ttl": "1800s",
+      "allow_subscribe_for_client": true
     }
-  },
-  "http_api": {
-    "key": "sera-api-key"
-  },
-  "channel": {
-    "namespaces": [
-      {
-        "name": "thoughts",
-        "history_size": 100,
-        "history_ttl": "3600s",
-        "allow_subscribe_for_client": true
-      },
-      {
-        "name": "tokens",
-        "history_size": 0,
-        "history_ttl": "0s",
-        "presence": false,
-        "allow_subscribe_for_client": true
-      },
-      {
-        "name": "agent",
-        "history_size": 10,
-        "history_ttl": "600s",
-        "allow_subscribe_for_client": true
-      },
-      {
-        "name": "private",
-        "history_size": 100,
-        "history_ttl": "3600s",
-        "allow_subscribe_for_client": false
-      },
-      {
-        "name": "circle",
-        "history_size": 50,
-        "history_ttl": "14400s",
-        "allow_subscribe_for_client": false
-      },
-      {
-        "name": "system",
-        "history_size": 20,
-        "history_ttl": "1800s",
-        "allow_subscribe_for_client": true
-      }
-    ]
-  }
+  ]
 }

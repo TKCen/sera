@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+# sera-dev — Unified SERA development environment wrapper
+#
+# Usage:
+#   sera-dev status          Health check: git, Rust workspace, beads, tmux
+#   sera-dev work [task-id]  Claim a bead and show work context
+#   sera-dev claim <bead-id> Claim bead, generate handoff, show context
+#   sera-dev finish <bead-id> Close bead and push changes
+#   sera-dev maintain        Run clippy, tests, and TS validation
+#   sera-dev help            Show this help
+#
+# Works from any directory inside the repo.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=lib/beads.sh
+source "${SCRIPT_DIR}/lib/beads.sh"
+
+ROOT="$(find_repo_root)"
+if [[ -z "$ROOT" ]]; then
+  echo "Error: must be run from inside the sera git repository" >&2
+  exit 1
+fi
+
+RUST_DIR="${ROOT}/rust"
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+cmd_status() {
+  local errors=0
+
+  header "Git"
+  local branch
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+  info "Branch: ${YELLOW}${branch}${NC}"
+
+  local staged unstaged untracked
+  staged="$(git -C "$ROOT" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')"
+  unstaged="$(git -C "$ROOT" diff --name-only 2>/dev/null | wc -l | tr -d ' ')"
+  untracked="$(git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')"
+  info "Staged: ${staged}  Unstaged: ${unstaged}  Untracked: ${untracked}"
+
+  local ahead behind
+  ahead="$(git -C "$ROOT" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+  behind="$(git -C "$ROOT" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo '?')"
+  info "Ahead: ${ahead}  Behind: ${behind}"
+
+  header "Claimed Beads"
+  if check_command bd; then
+    local in_progress
+    in_progress="$(bd list --status=in_progress 2>/dev/null || true)"
+    if [[ -z "$in_progress" ]]; then
+      info "No beads in progress"
+    else
+      echo "$in_progress" | sed 's/^/  /'
+    fi
+  else
+    warn "bd not found — skipping claimed beads"
+  fi
+
+  header "Rust Workspace"
+  if check_command cargo; then
+    local rust_out
+    if rust_out="$(cargo check --workspace --manifest-path "${RUST_DIR}/Cargo.toml" 2>&1)"; then
+      pass "cargo check --workspace"
+    else
+      fail "cargo check --workspace"
+      echo "$rust_out" | tail -20 | sed 's/^/    /'
+      errors=$((errors + 1))
+    fi
+  else
+    warn "cargo not found — skipping Rust checks"
+  fi
+
+  header "Beads (bd)"
+  if check_command bd; then
+    echo ""
+    bd ready 2>/dev/null || warn "bd ready failed"
+  else
+    warn "bd not found — skipping beads status"
+  fi
+
+  header "Tmux Sessions"
+  if check_command tmux; then
+    local sessions
+    sessions="$(tmux list-sessions 2>/dev/null || true)"
+    if [[ -z "$sessions" ]]; then
+      info "No active tmux sessions"
+    else
+      echo "$sessions" | sed 's/^/  /'
+    fi
+  else
+    warn "tmux not found — skipping session list"
+  fi
+
+  echo ""
+  if [[ "$errors" -gt 0 ]]; then
+    echo -e "${YELLOW}Status complete — ${errors} issue(s) found${NC}"
+  else
+    echo -e "${GREEN}Status complete — all checks passed${NC}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# work
+# ---------------------------------------------------------------------------
+
+cmd_work() {
+  local task_id="${1:-}"
+
+  if [[ -z "$task_id" ]]; then
+    header "Available Work"
+    if check_command bd; then
+      bd ready 2>/dev/null || warn "bd ready failed"
+    else
+      warn "bd not found — install beads to see available work"
+    fi
+    echo ""
+    info "Usage: sera-dev work <task-id>  to claim a specific task"
+    return 0
+  fi
+
+  header "Work: ${task_id}"
+
+  if ! check_command bd; then
+    warn "bd not found — cannot claim task automatically"
+    info "Task: ${task_id}"
+    return 0
+  fi
+
+  if bead_claim "$task_id"; then
+    pass "Claimed: ${task_id}"
+  else
+    warn "Could not claim ${task_id} (may already be claimed or not found)"
+  fi
+
+  echo ""
+  bd show "$task_id" 2>/dev/null || true
+
+  echo ""
+  info "Docs: ${ROOT}/docs/ARCHITECTURE.md"
+  info "Rust: cd ${RUST_DIR} && cargo check --workspace"
+}
+
+# ---------------------------------------------------------------------------
+# claim
+# ---------------------------------------------------------------------------
+
+cmd_claim() {
+  local bead_id="${1:-}"
+
+  if [[ -z "$bead_id" ]]; then
+    header "Claim a Bead"
+    info "Usage: sera-dev claim <bead-id>"
+    echo ""
+    if check_command bd; then
+      info "Available work:"
+      bd ready 2>/dev/null || warn "bd ready failed"
+    fi
+    return 0
+  fi
+
+  header "Claiming: ${bead_id}"
+
+  if ! check_command bd; then
+    warn "bd not found — cannot claim bead"
+    return 1
+  fi
+
+  bead_check_blockers "$bead_id" || warn "Proceeding despite potential blockers"
+
+  if bead_claim "$bead_id"; then
+    pass "Claimed: ${bead_id}"
+  else
+    warn "Could not claim ${bead_id} (may already be claimed or not found)"
+  fi
+
+  echo ""
+  bd show "$bead_id" 2>/dev/null || true
+
+  local handoff="${ROOT}/artifacts/handoffs/omc-sera-${bead_id}.md"
+  echo ""
+  if bead_gen_handoff "$bead_id" "$handoff"; then
+    info "Handoff: ${handoff}"
+  fi
+
+  echo ""
+  info "Next: sera-omc ${bead_id}   (launch OMC session)"
+  info "      sera-omx ${bead_id}   (launch Codex session)"
+}
+
+# ---------------------------------------------------------------------------
+# finish
+# ---------------------------------------------------------------------------
+
+cmd_finish() {
+  local bead_id="${1:-}"
+
+  if [[ -z "$bead_id" ]]; then
+    header "Finish a Bead"
+    info "Usage: sera-dev finish <bead-id>"
+    echo ""
+    if check_command bd; then
+      local in_progress
+      in_progress="$(bd list --status=in_progress 2>/dev/null || true)"
+      if [[ -n "$in_progress" ]]; then
+        info "In-progress beads:"
+        echo "$in_progress" | sed 's/^/  /'
+      fi
+    fi
+    return 0
+  fi
+
+  header "Finishing: ${bead_id}"
+
+  local errors=0
+
+  # Push git changes
+  info "Pushing git changes..."
+  if git -C "$ROOT" pull --rebase 2>&1 | tail -3 | sed 's/^/  /'; then
+    pass "git pull --rebase"
+  else
+    fail "git pull --rebase"
+    errors=$((errors + 1))
+  fi
+
+  if git -C "$ROOT" push 2>&1 | tail -3 | sed 's/^/  /'; then
+    pass "git push"
+  else
+    fail "git push"
+    errors=$((errors + 1))
+  fi
+
+  # Close the bead
+  if check_command bd; then
+    if bead_close "$bead_id"; then
+      pass "Closed bead: ${bead_id}"
+    else
+      warn "Could not close bead ${bead_id} — close manually with: bd close ${bead_id}"
+      errors=$((errors + 1))
+    fi
+  else
+    warn "bd not found — close bead manually: bd close ${bead_id}"
+  fi
+
+  echo ""
+  if [[ "$errors" -gt 0 ]]; then
+    echo -e "${YELLOW}Finish complete — ${errors} step(s) need attention${NC}"
+  else
+    echo -e "${GREEN}All done — bead closed and changes pushed${NC}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# maintain
+# ---------------------------------------------------------------------------
+
+cmd_maintain() {
+  local passed=0 failed=0
+
+  header "Rust: clippy"
+  if check_command cargo; then
+    if cargo clippy --workspace --manifest-path "${RUST_DIR}/Cargo.toml" -- -D warnings 2>&1; then
+      pass "cargo clippy"
+      passed=$((passed + 1))
+    else
+      fail "cargo clippy"
+      failed=$((failed + 1))
+    fi
+  else
+    warn "cargo not found — skipping clippy"
+  fi
+
+  header "Rust: tests"
+  if check_command cargo; then
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+      if cargo test --workspace --manifest-path "${RUST_DIR}/Cargo.toml" 2>&1; then
+        pass "cargo test --workspace"
+        passed=$((passed + 1))
+      else
+        fail "cargo test --workspace"
+        failed=$((failed + 1))
+      fi
+    else
+      warn "DATABASE_URL not set — skipping integration tests (set it to run full suite)"
+      if cargo test --workspace --manifest-path "${RUST_DIR}/Cargo.toml" \
+           --exclude sera-db 2>&1; then
+        pass "cargo test (no DB)"
+        passed=$((passed + 1))
+      else
+        fail "cargo test (no DB)"
+        failed=$((failed + 1))
+      fi
+    fi
+  else
+    warn "cargo not found — skipping Rust tests"
+  fi
+
+  header "TypeScript: validate"
+  if [[ -f "${ROOT}/scripts/validate.sh" ]]; then
+    if bash "${ROOT}/scripts/validate.sh" 2>&1; then
+      pass "scripts/validate.sh"
+      passed=$((passed + 1))
+    else
+      fail "scripts/validate.sh"
+      failed=$((failed + 1))
+    fi
+  else
+    warn "scripts/validate.sh not found — skipping TS checks"
+  fi
+
+  echo ""
+  echo -e "${BOLD}Summary:${NC} ${GREEN}${passed} passed${NC}  ${RED}${failed} failed${NC}"
+  if [[ "$failed" -gt 0 ]]; then
+    echo -e "${YELLOW}Fix the failures above before pushing.${NC}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# help / usage
+# ---------------------------------------------------------------------------
+
+cmd_help() {
+  cat <<'EOF'
+
+sera-dev — SERA development environment wrapper
+
+USAGE:
+  sera-dev <command> [args]
+
+COMMANDS:
+  status               Health check: git, Rust workspace, beads, tmux
+  work [task-id]       Show available work or claim a specific bead
+  claim <bead-id>      Claim bead, generate handoff file, show context
+  finish <bead-id>     Close bead and push git changes
+  maintain             Run clippy, tests, and TypeScript validation
+  help                 Show this help
+
+EXAMPLES:
+  sera-dev status
+  sera-dev work
+  sera-dev claim sera-t6ta
+  sera-dev finish sera-t6ta
+  sera-dev maintain
+
+INTEGRATION:
+  Requires: git (always), cargo (Rust checks), bd (beads), tmux (session list)
+  Missing tools produce warnings, not errors.
+
+WORKFLOW:
+  1. sera-dev claim <bead-id>    # claim and generate handoff
+  2. sera-omc <bead-id>          # launch monitored OMC session
+  3. [do the work]
+  4. sera-dev finish <bead-id>   # close bead and push
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+COMMAND="${1:-help}"
+shift || true
+
+case "$COMMAND" in
+  status)   cmd_status "$@" ;;
+  work)     cmd_work "$@" ;;
+  claim)    cmd_claim "$@" ;;
+  finish)   cmd_finish "$@" ;;
+  maintain) cmd_maintain "$@" ;;
+  help|--help|-h) cmd_help ;;
+  *)
+    echo -e "${RED}Unknown command: ${COMMAND}${NC}" >&2
+    cmd_help >&2
+    exit 1
+    ;;
+esac

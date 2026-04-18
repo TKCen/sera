@@ -81,4 +81,66 @@ mod tests {
             "broadcast:circle:circle-1"
         );
     }
+
+    // ------------------------------------------------------------------
+    // All builders accept empty string without panicking
+    // ------------------------------------------------------------------
+    #[test]
+    fn channel_builders_accept_empty_id() {
+        assert_eq!(ChannelNamespace::agent_channel(""), "agent:");
+        assert_eq!(ChannelNamespace::agent_thoughts(""), "agent::thoughts");
+        assert_eq!(ChannelNamespace::agent_tokens(""), "agent::tokens");
+        assert_eq!(ChannelNamespace::internal_agent(""), "internal:agent:");
+        assert_eq!(ChannelNamespace::broadcast_circle(""), "broadcast:circle:");
+    }
+
+    // ------------------------------------------------------------------
+    // Channel names with special characters (UUIDs, hyphens, underscores)
+    // ------------------------------------------------------------------
+    #[test]
+    fn channel_builders_accept_uuid_style_ids() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(
+            ChannelNamespace::agent_channel(id),
+            format!("agent:{}", id)
+        );
+        assert_eq!(
+            ChannelNamespace::agent_thoughts(id),
+            format!("agent:{}:thoughts", id)
+        );
+        assert_eq!(
+            ChannelNamespace::agent_tokens(id),
+            format!("agent:{}:tokens", id)
+        );
+        assert_eq!(
+            ChannelNamespace::internal_agent(id),
+            format!("internal:agent:{}", id)
+        );
+        assert_eq!(
+            ChannelNamespace::broadcast_circle(id),
+            format!("broadcast:circle:{}", id)
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Distinct instance IDs always produce distinct channel names
+    // ------------------------------------------------------------------
+    #[test]
+    fn distinct_ids_produce_distinct_channels() {
+        let ids = ["inst-a", "inst-b", "inst-c"];
+        let channels: Vec<String> = ids.iter().map(|id| ChannelNamespace::agent_channel(id)).collect();
+        // All unique
+        let mut deduped = channels.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(channels.len(), deduped.len());
+    }
+
+    // ------------------------------------------------------------------
+    // broadcast_system is constant (no args)
+    // ------------------------------------------------------------------
+    #[test]
+    fn broadcast_system_is_stable() {
+        assert_eq!(ChannelNamespace::broadcast_system(), ChannelNamespace::broadcast_system());
+    }
 }

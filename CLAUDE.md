@@ -16,6 +16,8 @@ Load selectively based on your task — do not load everything upfront:
 | `docs/epics/{n}-{name}.md`     | Implementing stories — acceptance criteria and DB schema for that epic            |
 | `docs/openapi.yaml`            | Adding or modifying API endpoints — path-level spec for all ~190 endpoints        |
 | `docs/AGENT-WORKFLOW.md`       | Multi-agent coordination — agent roles, issue flow, validation loops              |
+| `docs/plan/`                   | SERA 2.0 MVS specs — Rust migration plans and phase specs                         |
+| `rust/CLAUDE.md`               | Rust workspace — crate map, toolchain, dev workflow                               |
 
 ## Environment
 
@@ -28,10 +30,14 @@ Load selectively based on your task — do not load everything upfront:
 
 ```
 sera/
-  core/                  # sera-core API server        → see core/CLAUDE.md
-  core/agent-runtime/    # Agent worker process         → see core/agent-runtime/CLAUDE.md
+  core/                  # sera-core API server (TS)    → see core/CLAUDE.md
+  core/agent-runtime/    # Agent worker process (TS)    → see core/agent-runtime/CLAUDE.md
+  rust/                  # Rust workspace (SERA 2.0)    → see rust/CLAUDE.md
   web/                   # sera-web dashboard           → see web/CLAUDE.md
-  tui/                   # Go terminal UI               → see tui/CLAUDE.md
+  tui/                   # Rust terminal UI (ratatui)   → see tui/CLAUDE.md
+  cli/                   # Go CLI (auth flows)          → see cli/CLAUDE.md
+  tools/discord-bridge/  # Discord sidecar              → see tools/discord-bridge/CLAUDE.md
+  e2e/                   # Playwright E2E tests         → see e2e/CLAUDE.md
   docs/                  # Architecture and epic specs  (load on demand — see table above)
   agents/                # Agent YAML manifests (instances)
   templates/             # AgentTemplate definitions
@@ -102,6 +108,7 @@ When completing a workflow loop or resolving a non-trivial issue, check whether 
 - **Squid egress proxy fails on `docker restart`**: The squid PID file persists across restarts, causing `FATAL: Squid is already running`. Workaround: `docker compose down sera-egress-proxy && docker compose up -d sera-egress-proxy`. See #363.
 - **API endpoints require auth header**: All `/api/*` endpoints (except `/api/health/*`) require `Authorization: Bearer <key>`. Dev key: `sera_bootstrap_dev_123`.
 - **Prettier format check differs between Windows and Linux**: Jules PRs formatted on Linux may fail CI format check when our pre-commit hook reformats on Windows. Always run `bun run format` before pushing.
+- **Use `sera-omc`/`sera-omx` for monitored sessions**: Run `scripts/sera-omc [bead-id]` instead of bare `omc` to launch a clawhip-monitored tmux session with Discord notifications (keywords: "✻ Worked for", "● APPROVED", "✓ Closed", "FATAL", etc.). Use `scripts/sera-omx [bead-id]` for Codex (OMX) sessions. Both scripts auto-claim the bead if provided and name the session `omc-sera-<bead-id>`.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->

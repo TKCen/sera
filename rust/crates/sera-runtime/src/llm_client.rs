@@ -4,7 +4,8 @@
 //! Works with LM Studio, Ollama, OpenAI, and any OpenAI-compatible API.
 
 use async_trait::async_trait;
-use sera_models::{AccountPool, ProviderKind, ThinkingConfig};
+use sera_models::{AccountPool, ProviderKind, ReasoningLevel, ThinkingConfig};
+use sera_types::llm::ThinkingLevel;
 use sera_types::runtime::TokenUsage;
 use sera_types::tool::ToolUseBehavior;
 
@@ -153,6 +154,29 @@ struct NonStreamingFunction {
 }
 
 // ---------------------------------------------------------------------------
+// ThinkingLevel → ThinkingConfig bridge (sera-1rv8)
+// ---------------------------------------------------------------------------
+
+/// Convert a [`ThinkingLevel`] from `sera-types` into the wire-layer
+/// [`ThinkingConfig`] used by [`LlmClient`].
+///
+/// `ThinkingLevel::XHigh` maps to `ReasoningLevel::High` (the highest level
+/// `ReasoningLevel` supports) while keeping the Anthropic/Gemini budget at
+/// the XHigh token ceiling via `budget_tokens`.
+pub fn thinking_config_from_level(level: Option<ThinkingLevel>) -> ThinkingConfig {
+    match level {
+        None | Some(ThinkingLevel::None) => ThinkingConfig::OFF,
+        Some(ThinkingLevel::Low) => ThinkingConfig::new(ReasoningLevel::Low),
+        Some(ThinkingLevel::Medium) => ThinkingConfig::new(ReasoningLevel::Medium),
+        Some(ThinkingLevel::High) => ThinkingConfig::new(ReasoningLevel::High),
+        // XHigh: use High effort string but extend the token budget to 32 768.
+        Some(ThinkingLevel::XHigh) => {
+            ThinkingConfig::new(ReasoningLevel::High).with_budget(32_768)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
 
@@ -188,6 +212,10 @@ pub struct LlmClient {
 impl LlmClient {
     pub fn new(config: &RuntimeConfig) -> Self {
         let timeout = Duration::from_secs(DEFAULT_LLM_TIMEOUT_SECS);
+        // sera-1rv8: translate RuntimeConfig.thinking_level (ThinkingLevel from
+        // sera-types) into a ThinkingConfig + ProviderKind for the wire layer.
+        let thinking = thinking_config_from_level(config.thinking_level);
+        let provider_kind = ProviderKind::infer(&config.llm_model);
         Self {
             client: reqwest::Client::builder()
                 .timeout(timeout)
@@ -199,8 +227,8 @@ impl LlmClient {
             max_tokens: config.max_tokens,
             timeout,
             account_pool: None,
-            thinking: ThinkingConfig::default(),
-            provider_kind: ProviderKind::Generic,
+            thinking,
+            provider_kind,
         }
     }
 
@@ -1704,5 +1732,126 @@ mod tests {
             .with_provider_kind(ProviderKind::Anthropic);
         assert_eq!(c.thinking().level, sera_models::ReasoningLevel::High);
         assert_eq!(c.provider_kind(), ProviderKind::Anthropic);
+    }
+
+    // =========================================================================
+    // sera-1rv8 — thinking_config_from_level conversion
+    // =========================================================================
+
+    #[test]
+    fn thinking_config_from_none_is_off() {
+        let cfg = thinking_config_from_level(None);
+        assert!(cfg.is_off());
+        assert!(cfg.budget_tokens.is_none());
+    }
+
+    #[test]
+    fn thinking_config_from_thinking_level_none_is_off() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::None));
+        assert!(cfg.is_off());
+    }
+
+    #[test]
+    fn thinking_config_from_low_maps_to_reasoning_low() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::Low));
+        assert_eq!(cfg.level, sera_models::ReasoningLevel::Low);
+        assert!(cfg.budget_tokens.is_none());
+    }
+
+    #[test]
+    fn thinking_config_from_medium_maps_to_reasoning_medium() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::Medium));
+        assert_eq!(cfg.level, sera_models::ReasoningLevel::Medium);
+        assert!(cfg.budget_tokens.is_none());
+    }
+
+    #[test]
+    fn thinking_config_from_high_maps_to_reasoning_high() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::High));
+        assert_eq!(cfg.level, sera_models::ReasoningLevel::High);
+        assert!(cfg.budget_tokens.is_none());
+    }
+
+    #[test]
+    fn thinking_config_from_xhigh_maps_to_high_with_32768_budget() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::XHigh));
+        assert_eq!(cfg.level, sera_models::ReasoningLevel::High);
+        assert_eq!(cfg.budget_tokens, Some(32_768));
+    }
+
+    #[test]
+    fn xhigh_anthropic_body_uses_32768_budget() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::XHigh));
+        let mut body = serde_json::json!({});
+        cfg.apply_to_body(&mut body, ProviderKind::Anthropic);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], serde_json::json!(32_768u32));
+    }
+
+    #[test]
+    fn xhigh_openai_maps_to_high_effort() {
+        let cfg = thinking_config_from_level(Some(ThinkingLevel::XHigh));
+        let mut body = serde_json::json!({});
+        cfg.apply_to_body(&mut body, ProviderKind::OpenAi);
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    // =========================================================================
+    // sera-1rv8 — RuntimeConfig.thinking_level propagates into LlmClient
+    // =========================================================================
+
+    fn make_runtime_config_with_thinking(level: Option<ThinkingLevel>) -> crate::config::RuntimeConfig {
+        crate::config::RuntimeConfig {
+            llm_base_url: "http://localhost:1234/v1".into(),
+            llm_model: "claude-3-5-sonnet".into(),
+            llm_api_key: "test-key".into(),
+            chat_port: 8080,
+            agent_id: "test-agent".into(),
+            lifecycle_mode: "task".into(),
+            core_url: "http://localhost:3001".into(),
+            api_key: "test-api-key".into(),
+            context_window: 128_000,
+            compaction_strategy: "summarize".into(),
+            max_tokens: 4096,
+            circle_activity_enabled: false,
+            semantic_enrichment_enabled: false,
+            semantic_top_k: 3,
+            semantic_similarity_threshold: None,
+            semantic_enrichment_timeout_ms: 150,
+            hierarchical_scopes_enabled: false,
+            tool_authz_enabled: false,
+            tool_authz_roles: None,
+            thinking_level: level,
+        }
+    }
+
+    #[test]
+    fn runtime_config_thinking_none_gives_off_client() {
+        let config = make_runtime_config_with_thinking(None);
+        let client = LlmClient::new(&config);
+        assert!(client.thinking().is_off());
+    }
+
+    #[test]
+    fn runtime_config_thinking_medium_propagates_to_client() {
+        let config = make_runtime_config_with_thinking(Some(ThinkingLevel::Medium));
+        let client = LlmClient::new(&config);
+        assert_eq!(client.thinking().level, sera_models::ReasoningLevel::Medium);
+    }
+
+    #[test]
+    fn runtime_config_thinking_xhigh_propagates_budget_to_client() {
+        let config = make_runtime_config_with_thinking(Some(ThinkingLevel::XHigh));
+        let client = LlmClient::new(&config);
+        assert_eq!(client.thinking().level, sera_models::ReasoningLevel::High);
+        assert_eq!(client.thinking().budget_tokens, Some(32_768));
+    }
+
+    #[test]
+    fn runtime_config_model_name_infers_provider_kind() {
+        // "claude-3-5-sonnet" → Anthropic
+        let config = make_runtime_config_with_thinking(None);
+        let client = LlmClient::new(&config);
+        assert_eq!(client.provider_kind(), ProviderKind::Anthropic);
     }
 }

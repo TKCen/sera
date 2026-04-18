@@ -1,7 +1,14 @@
 //! Provider configuration — parses providers.json.
 //! Maps from TS: ProviderRegistry + providers.json format.
+//!
+//! Also contains the [`ProviderAccountsConfig`] helper (sera-jvi) that reads
+//! per-provider API-key lists from environment variables of the form
+//! `SERA_<PROVIDER>_KEYS=comma,separated,list` and exposes them in a shape
+//! the gateway / runtime can turn into a
+//! [`sera_models::account_pool::AccountPool`].
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Top-level providers.json structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +144,60 @@ impl ProvidersConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// sera-jvi — per-provider account list (env-driven)
+// ---------------------------------------------------------------------------
+
+/// Per-provider account list read from `SERA_<PROVIDER>_KEYS` env vars.
+///
+/// Format: `SERA_<PROVIDER>_KEYS=key1,key2,key3`.  Whitespace is trimmed;
+/// empty tokens are ignored.  Provider names are normalised to lowercase.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderAccountsConfig {
+    /// provider_id (lowercase, e.g. "openai", "anthropic") -> api keys.
+    pub accounts: BTreeMap<String, Vec<String>>,
+}
+
+impl ProviderAccountsConfig {
+    /// Scan every env var matching `SERA_*_KEYS` and collect the keys per
+    /// provider.  Returns an empty config when no matching vars are set.
+    pub fn from_env() -> Self {
+        let mut accounts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (name, value) in std::env::vars() {
+            if let Some(provider) = Self::extract_provider(&name) {
+                let keys: Vec<String> = value
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                if !keys.is_empty() {
+                    accounts.insert(provider, keys);
+                }
+            }
+        }
+        Self { accounts }
+    }
+
+    fn extract_provider(name: &str) -> Option<String> {
+        let inner = name.strip_prefix("SERA_")?.strip_suffix("_KEYS")?;
+        if inner.is_empty() {
+            return None;
+        }
+        Some(inner.to_ascii_lowercase())
+    }
+
+    /// Returns `true` when no providers have any keys configured.
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty()
+    }
+
+    /// Keys for a specific provider (case-insensitive lookup).
+    pub fn keys_for(&self, provider_id: &str) -> Option<&Vec<String>> {
+        self.accounts.get(&provider_id.to_ascii_lowercase())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +287,69 @@ mod tests {
             assert!(!config.providers.is_empty());
         }
         // Skip if file not found — CI may not have it
+    }
+
+    // -----------------------------------------------------------------------
+    // sera-jvi — ProviderAccountsConfig
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_provider_parses_well_formed_var_name() {
+        assert_eq!(
+            ProviderAccountsConfig::extract_provider("SERA_OPENAI_KEYS"),
+            Some("openai".to_string())
+        );
+        assert_eq!(
+            ProviderAccountsConfig::extract_provider("SERA_ANTHROPIC_KEYS"),
+            Some("anthropic".to_string())
+        );
+        assert_eq!(
+            ProviderAccountsConfig::extract_provider("SERA_DEEP_SEEK_KEYS"),
+            Some("deep_seek".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_provider_rejects_non_matching_names() {
+        assert_eq!(ProviderAccountsConfig::extract_provider("OPENAI_KEYS"), None);
+        assert_eq!(ProviderAccountsConfig::extract_provider("SERA_OPENAI"), None);
+        assert_eq!(ProviderAccountsConfig::extract_provider("SERA__KEYS"), None);
+        assert_eq!(ProviderAccountsConfig::extract_provider("SERA_KEYS"), None);
+    }
+
+    #[test]
+    fn from_env_collects_comma_separated_lists() {
+        // SAFETY: single-threaded test block, namespaced vars to avoid
+        // collisions with other tests.
+        let var = "SERA_JVI_FROM_ENV_TEST_KEYS";
+        unsafe { std::env::set_var(var, "sk-a, sk-b ,sk-c") };
+        // Parse directly from a synthetic map via from_env, then clean up.
+        let cfg = ProviderAccountsConfig::from_env();
+        unsafe { std::env::remove_var(var) };
+
+        let keys = cfg
+            .keys_for("jvi_from_env_test")
+            .expect("keys should be present");
+        assert_eq!(keys, &vec!["sk-a".to_string(), "sk-b".to_string(), "sk-c".to_string()]);
+    }
+
+    #[test]
+    fn from_env_empty_value_skips_provider() {
+        let var = "SERA_JVI_EMPTY_TEST_KEYS";
+        unsafe { std::env::set_var(var, "   ,  ") };
+        let cfg = ProviderAccountsConfig::from_env();
+        unsafe { std::env::remove_var(var) };
+        assert!(cfg.keys_for("jvi_empty_test").is_none());
+    }
+
+    #[test]
+    fn keys_for_is_case_insensitive() {
+        let var = "SERA_JVI_CASE_TEST_KEYS";
+        unsafe { std::env::set_var(var, "k1") };
+        let cfg = ProviderAccountsConfig::from_env();
+        unsafe { std::env::remove_var(var) };
+
+        assert!(cfg.keys_for("JVI_Case_Test").is_some());
+        assert!(cfg.keys_for("jvi_case_test").is_some());
     }
 }

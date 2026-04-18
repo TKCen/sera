@@ -23,12 +23,18 @@
 //! let response = provider.chat(request).await?;
 //! ```
 
+pub mod account_pool;
 pub mod error;
 pub mod provider;
 pub mod response;
 pub mod routing;
 pub mod sera_errors;
+pub mod thinking;
 
+pub use account_pool::{
+    AccountGuard, AccountPool, AccountState, CooldownConfig, CooldownReason, PoolError,
+    ProviderAccount,
+};
 pub use error::ModelError;
 pub use provider::{ModelProvider, ProviderConfig};
 pub use response::ModelResponse;
@@ -38,3 +44,4 @@ pub use routing::{
     RoutingError, RoutingPolicy, StaticProviderCatalog, WeightedRoutingPolicy,
     WeightedScoreConfig,
 };
+pub use thinking::{ProviderKind, ReasoningLevel, ThinkingConfig};

@@ -4,6 +4,7 @@
 //! Works with LM Studio, Ollama, OpenAI, and any OpenAI-compatible API.
 
 use async_trait::async_trait;
+use sera_models::{AccountPool, ProviderKind, ThinkingConfig};
 use sera_types::runtime::TokenUsage;
 use sera_types::tool::ToolUseBehavior;
 
@@ -13,6 +14,7 @@ use crate::types::{ChatMessage, ToolCall, ToolCallFunction, ToolDefinition};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -155,6 +157,17 @@ struct NonStreamingFunction {
 // ---------------------------------------------------------------------------
 
 /// HTTP client for the LLM proxy endpoint.
+///
+/// Supports three LLM-auth modes:
+/// 1. **Single-account (default)** — uses `base_url` + `api_key` directly.
+/// 2. **Account pool (sera-jvi)** — when `account_pool` is set, every request
+///    acquires an account from the pool.  Rate-limit / unavailability errors
+///    flip the account into cooldown; exhaustion returns
+///    [`LlmError::ProviderUnavailable`].
+///
+/// Optional provider-agnostic reasoning config (sera-48v) is threaded through
+/// `thinking` + `provider_kind` so each request emits the correct native
+/// parameter (`reasoning.effort` / `enable_thinking` / `thinking` block).
 pub struct LlmClient {
     client: reqwest::Client,
     base_url: String,
@@ -162,6 +175,14 @@ pub struct LlmClient {
     api_key: String,
     max_tokens: u32,
     timeout: Duration,
+    /// When `Some`, each request acquires an account from the pool and
+    /// overrides `base_url` + `api_key` for that request only.  When `None`,
+    /// falls back to the single-account env-driven auth.
+    account_pool: Option<Arc<AccountPool>>,
+    /// Provider-agnostic reasoning config applied to every outgoing request.
+    thinking: ThinkingConfig,
+    /// Provider kind used to map `thinking` to a native request field.
+    provider_kind: ProviderKind,
 }
 
 impl LlmClient {
@@ -177,6 +198,9 @@ impl LlmClient {
             api_key: config.llm_api_key.clone(),
             max_tokens: config.max_tokens,
             timeout,
+            account_pool: None,
+            thinking: ThinkingConfig::default(),
+            provider_kind: ProviderKind::Generic,
         }
     }
 
@@ -199,7 +223,49 @@ impl LlmClient {
             api_key: api_key.unwrap_or_default().to_string(),
             max_tokens: DEFAULT_MAX_TOKENS,
             timeout,
+            account_pool: None,
+            thinking: ThinkingConfig::default(),
+            provider_kind: ProviderKind::Generic,
         }
+    }
+
+    /// Attach an [`AccountPool`] — every subsequent request will acquire an
+    /// account from the pool, falling back to cooldown-aware failover.
+    #[must_use]
+    pub fn with_account_pool(mut self, pool: Arc<AccountPool>) -> Self {
+        self.account_pool = Some(pool);
+        self
+    }
+
+    /// Apply a unified [`ThinkingConfig`].  Pair with `with_provider_kind` so
+    /// the client knows which native parameter to emit.
+    #[must_use]
+    pub fn with_thinking(mut self, thinking: ThinkingConfig) -> Self {
+        self.thinking = thinking;
+        self
+    }
+
+    /// Set the [`ProviderKind`] that maps [`ThinkingConfig`] onto native
+    /// request fields.
+    #[must_use]
+    pub fn with_provider_kind(mut self, provider_kind: ProviderKind) -> Self {
+        self.provider_kind = provider_kind;
+        self
+    }
+
+    /// Access the active thinking config (mostly for diagnostics / tests).
+    pub fn thinking(&self) -> &ThinkingConfig {
+        &self.thinking
+    }
+
+    /// Access the configured provider kind.
+    pub fn provider_kind(&self) -> ProviderKind {
+        self.provider_kind
+    }
+
+    /// True when an account pool is attached.
+    pub fn has_account_pool(&self) -> bool {
+        self.account_pool.is_some()
     }
 
     // ------------------------------------------------------------------
@@ -249,6 +315,10 @@ impl LlmClient {
             body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
         }
 
+        // sera-48v: thread the unified reasoning config into the native
+        // provider parameter (no-op for Off + Generic providers).
+        self.thinking.apply_to_body(&mut body, self.provider_kind);
+
         let response = self.send_request(&body).await?;
 
         // Parse the streaming SSE body
@@ -292,6 +362,9 @@ impl LlmClient {
         } else if tool_use_behavior.forbids_tools() {
             body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
         }
+
+        // sera-48v: mirror streaming path — apply reasoning config.
+        self.thinking.apply_to_body(&mut body, self.provider_kind);
 
         let response = self.send_request(&body).await?;
 
@@ -346,16 +419,58 @@ impl LlmClient {
     // ------------------------------------------------------------------
 
     /// Send the HTTP POST and classify any HTTP-level error.
+    ///
+    /// When an [`AccountPool`] is attached (sera-jvi), this acquires an
+    /// account for the request, substitutes its `api_key` (and per-account
+    /// `base_url` override, if any), and reports success / rate-limit /
+    /// unavailability back to the pool so cooldown state evolves.
     async fn send_request(
         &self,
         body: &serde_json::Value,
     ) -> Result<reqwest::Response, LlmError> {
-        let url = format!("{}/chat/completions", self.base_url);
+        // Acquire an account up-front if a pool is attached.  Otherwise fall
+        // back to the single-account env path.
+        let guard = match &self.account_pool {
+            Some(pool) => {
+                match pool.acquire() {
+                    Ok(g) => Some(g),
+                    Err(sera_models::PoolError::NoAccountsAvailable {
+                        provider_id,
+                        total,
+                    }) => {
+                        return Err(LlmError::ProviderUnavailable(format!(
+                            "all {total} account(s) for provider '{provider_id}' are rate-limited or unavailable"
+                        )));
+                    }
+                    Err(sera_models::PoolError::EmptyPool(provider_id)) => {
+                        return Err(LlmError::RequestError(format!(
+                            "account pool for provider '{provider_id}' is empty"
+                        )));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let (url, api_key) = match &guard {
+            Some(g) => {
+                let base = g
+                    .effective_base_url()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| self.base_url.clone());
+                let key = g.account().api_key.clone();
+                (format!("{base}/chat/completions"), key)
+            }
+            None => (
+                format!("{}/chat/completions", self.base_url),
+                self.api_key.clone(),
+            ),
+        };
 
         let result = tokio::time::timeout(self.timeout, async {
             self.client
                 .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Authorization", format!("Bearer {api_key}"))
                 .header("Content-Type", "application/json")
                 .json(body)
                 .send()
@@ -365,13 +480,24 @@ impl LlmClient {
 
         let response = match result {
             Err(_) => {
+                // Treat outer timeout as transient unavailability of the
+                // currently-selected account.
+                if let Some(g) = guard {
+                    g.mark_unavailable();
+                }
                 return Err(LlmError::Timeout(format!(
                     "request timed out after {:?}",
                     self.timeout
                 )));
             }
             Ok(Err(e)) => {
-                if e.is_timeout() {
+                let is_timeout = e.is_timeout();
+                if let Some(g) = guard {
+                    // Network-level failure → treat as provider unavailable so
+                    // the pool tries the next account next time.
+                    g.mark_unavailable();
+                }
+                if is_timeout {
                     return Err(LlmError::Timeout(e.to_string()));
                 }
                 return Err(LlmError::RequestError(e.to_string()));
@@ -382,13 +508,26 @@ impl LlmClient {
         let status = response.status();
 
         if status.is_success() {
+            if let Some(g) = guard {
+                g.mark_success();
+            }
             return Ok(response);
         }
 
-        // Read body for error classification
+        // Non-success → classify, then inform the pool about the failure kind
+        // before propagating.
         let error_body = response.text().await.unwrap_or_default();
-
-        classify_http_error(status.as_u16(), &error_body)
+        let classified = classify_http_error(status.as_u16(), &error_body);
+        if let Some(g) = guard {
+            match &classified {
+                Err(LlmError::RateLimited(_)) => g.mark_rate_limited(),
+                Err(LlmError::ProviderUnavailable(_)) => g.mark_unavailable(),
+                // Non-pool errors (context overflow, request-error 4xx) are not
+                // the account's fault — leave state untouched.
+                _ => g.mark_success(),
+            }
+        }
+        classified
     }
 
     /// Parse an SSE stream into a complete `LlmChatResult`.
@@ -706,6 +845,27 @@ fn build_streaming_body(
     tools: &[ToolDefinition],
     tool_use_behavior: &ToolUseBehavior,
 ) -> Result<serde_json::Value, LlmError> {
+    build_streaming_body_with_thinking(
+        model,
+        max_tokens,
+        messages,
+        tools,
+        tool_use_behavior,
+        &ThinkingConfig::default(),
+        ProviderKind::Generic,
+    )
+}
+
+#[cfg(test)]
+fn build_streaming_body_with_thinking(
+    model: &str,
+    max_tokens: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    tool_use_behavior: &ToolUseBehavior,
+    thinking: &ThinkingConfig,
+    provider_kind: ProviderKind,
+) -> Result<serde_json::Value, LlmError> {
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
@@ -722,6 +882,8 @@ fn build_streaming_body(
     } else if tool_use_behavior.forbids_tools() {
         body["tool_choice"] = tool_use_behavior.to_openai_tool_choice();
     }
+
+    thinking.apply_to_body(&mut body, provider_kind);
 
     Ok(body)
 }
@@ -1441,5 +1603,105 @@ mod tests {
         assert!(chunk.choices.is_none());
         let usage = chunk.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 5);
+    }
+
+    // =========================================================================
+    // sera-48v — ThinkingConfig wired through body builder
+    // =========================================================================
+
+    #[test]
+    fn streaming_body_applies_openai_reasoning_effort() {
+        let cfg = ThinkingConfig::new(sera_models::ReasoningLevel::Medium);
+        let body = build_streaming_body_with_thinking(
+            "o1",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+            &cfg,
+            ProviderKind::OpenAi,
+        )
+        .unwrap();
+        assert_eq!(body["reasoning"]["effort"], "medium");
+    }
+
+    #[test]
+    fn streaming_body_applies_qwen_enable_thinking() {
+        let cfg = ThinkingConfig::new(sera_models::ReasoningLevel::High);
+        let body = build_streaming_body_with_thinking(
+            "qwen-max",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+            &cfg,
+            ProviderKind::Qwen,
+        )
+        .unwrap();
+        assert_eq!(body["enable_thinking"], true);
+    }
+
+    #[test]
+    fn streaming_body_off_omits_reasoning_for_openai() {
+        let body = build_streaming_body_with_thinking(
+            "o1",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+            &ThinkingConfig::default(),
+            ProviderKind::OpenAi,
+        )
+        .unwrap();
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn streaming_body_off_still_sets_qwen_false() {
+        let body = build_streaming_body_with_thinking(
+            "qwen",
+            512,
+            &[make_user_msg("hi")],
+            &[],
+            &ToolUseBehavior::Auto,
+            &ThinkingConfig::default(),
+            ProviderKind::Qwen,
+        )
+        .unwrap();
+        assert_eq!(body["enable_thinking"], false);
+    }
+
+    // =========================================================================
+    // sera-jvi — LlmClient builder / pool attachment
+    // =========================================================================
+
+    #[test]
+    fn new_client_has_no_account_pool_by_default() {
+        let c = LlmClient::with_params("http://x", "m", None, 1000);
+        assert!(!c.has_account_pool());
+        assert_eq!(c.provider_kind(), ProviderKind::Generic);
+        assert!(c.thinking().is_off());
+    }
+
+    #[test]
+    fn client_with_account_pool_reports_true() {
+        use sera_models::{AccountPool, CooldownConfig, ProviderAccount};
+        let pool = Arc::new(AccountPool::new(
+            "openai",
+            vec![ProviderAccount::new("k0", "sk-0", None)],
+            CooldownConfig::default(),
+        ));
+        let c = LlmClient::with_params("http://x", "m", None, 1000)
+            .with_account_pool(pool);
+        assert!(c.has_account_pool());
+    }
+
+    #[test]
+    fn client_with_thinking_stores_config() {
+        let c = LlmClient::with_params("http://x", "m", None, 1000)
+            .with_thinking(ThinkingConfig::new(sera_models::ReasoningLevel::High))
+            .with_provider_kind(ProviderKind::Anthropic);
+        assert_eq!(c.thinking().level, sera_models::ReasoningLevel::High);
+        assert_eq!(c.provider_kind(), ProviderKind::Anthropic);
     }
 }

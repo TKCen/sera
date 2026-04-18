@@ -1,0 +1,29 @@
+name: "SERA CodeQL config"
+
+# Path filters apply to the source roots CodeQL scans. The `legacy/` directory
+# holds the pre-SERA-2.0 TypeScript implementation slated for Phase-7
+# decommission — findings there would be noise (the code is frozen and will
+# be removed), so we exclude it outright.
+#
+# `paths-ignore` accepts gitignore-style globs. Keep entries minimal — every
+# exclusion is a potential blind spot in security scanning.
+
+paths-ignore:
+  - "legacy/**"
+  - "**/node_modules/**"
+  - "**/target/**"
+  - "**/*.min.js"
+
+# Only scan the current-gen source trees explicitly.
+paths:
+  - "rust/**"
+  - "web/**"
+  - "tui/**"
+  - "cli/**"
+  - "tools/**"
+  - "e2e/**"
+  - "scripts/**"
+
+# Use the default query suites; add language-specific extras here if needed.
+# queries:
+#   - uses: security-extended

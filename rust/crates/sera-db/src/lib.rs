@@ -6,6 +6,7 @@
 //! - No leaking `sqlx::Row` or SQL types into handler/business layers
 
 pub mod sqlite;
+pub mod sqlite_schema;
 pub mod pool;
 pub mod agents;
 pub mod audit;

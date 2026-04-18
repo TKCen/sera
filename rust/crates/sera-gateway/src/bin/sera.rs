@@ -1757,6 +1757,19 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     tracing::info!(path = %db_path.display(), "Opening SQLite database");
     let db = SqliteDb::open(&db_path)?;
 
+    // sera-mwb4: provision all local-first store tables (secrets, schedules,
+    // audit_trail, token_usage/usage_events/token_quotas, agent_instances/
+    // agent_templates) on the same SQLite file. `init_all` is idempotent so
+    // this is safe across restarts. When DATABASE_URL is set the enterprise
+    // path uses the sqlx-backed Pg repositories instead — these tables are
+    // harmless on local-only deployments but unused.
+    {
+        let init_conn = rusqlite::Connection::open(&db_path)?;
+        if let Err(e) = sera_db::sqlite_schema::init_all(&init_conn) {
+            tracing::warn!(error = %e, "sqlite_schema::init_all failed; local-first stores may be unavailable");
+        }
+    }
+
     // 2a. SemanticMemoryStore (Tier-2 recall) backend selection.
     // sera-vzce left this as a TODO so the MVS boot path stays minimal:
     //   * SERA_MEMORY_BACKEND=sqlite (or unset, no DATABASE_URL) →

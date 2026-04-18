@@ -25,6 +25,13 @@ pub struct ResolvedCapabilities {
     pub capabilities: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_packages: Option<Vec<String>>,
+    /// Allow-list of agent ids this principal may invoke as a sub-agent
+    /// via the agent-as-tool registry (bead `sera-8d1.1`, GH#144).
+    ///
+    /// `None` means "no sub-agent dispatch allowed". An empty `Some(vec![])`
+    /// also denies all targets — only ids explicitly listed are permitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagents_allowed: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +124,7 @@ mod tests {
             }),
             capabilities: Some(vec!["CAP_NET_BIND_SERVICE".to_string()]),
             skill_packages: Some(vec!["core-skills".to_string()]),
+            subagents_allowed: Some(vec!["researcher".to_string()]),
         };
         let json = serde_json::to_string(&caps).unwrap();
         let parsed: ResolvedCapabilities = serde_json::from_str(&json).unwrap();

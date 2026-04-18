@@ -31,6 +31,7 @@
 //! See `CLAUDE.md` for module map, environment variables, and protocol details.
 
 // New modules (Lane D, P0-6)
+pub mod agent_tool_registry;
 pub mod circle_activity;
 pub mod compaction;
 pub mod context_engine;

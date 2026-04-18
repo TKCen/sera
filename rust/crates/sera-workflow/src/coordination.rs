@@ -497,6 +497,9 @@ pub struct Coordinator {
     pub policy: CoordinationPolicy,
     pub concurrency: ConcurrencyPolicy,
     pub aggregator: Box<dyn ResultAggregator>,
+    /// Optional observer for sub-agent `delegate-task` dispatches — bead
+    /// `sera-8d1.1` (GH#144). See [`SubagentDelegationObserver`].
+    pub(crate) subagent_observer: Option<Arc<dyn SubagentDelegationObserver>>,
 }
 
 impl Coordinator {
@@ -509,6 +512,7 @@ impl Coordinator {
             policy,
             concurrency,
             aggregator,
+            subagent_observer: None,
         }
     }
 
@@ -573,6 +577,61 @@ impl Coordinator {
                 }
                 last.ok_or(CoordinationError::ConvergenceExhausted)
             }
+        }
+    }
+}
+
+// =========================================================================
+// Sub-agent delegation observer (bead sera-8d1.1 / GH#144)
+// =========================================================================
+
+/// Notice delivered to a [`SubagentDelegationObserver`] when an agent invokes
+/// the `delegate-task` agent-tool from `sera_runtime::agent_tool_registry`.
+///
+/// Mirrors `sera_runtime::agent_tool_registry::DelegationNotice` field-for-field
+/// so adapters can be a thin re-pack.  We avoid taking a dep on sera-runtime
+/// to keep the dependency graph acyclic — embedders bridge the two via a
+/// `CoordinatorHook` impl that pushes into a `SubagentDelegationObserver`.
+#[derive(Debug, Clone)]
+pub struct SubagentDelegationNotice {
+    /// The agent that issued the delegate-task call.
+    pub caller: ParticipantId,
+    /// The agent that received the delegated task.
+    pub target: ParticipantId,
+    /// Tokens credited back to the caller's budget for this dispatch.
+    pub tokens_used: u64,
+}
+
+/// Trait the workflow coordinator implements to observe sub-agent delegate
+/// calls.  See bead `sera-8d1.1` (GH#144).
+///
+/// TODO(sera-8d1.1): `Coordinator::run` currently has no central event bus
+/// to publish into.  When the workflow event bus lands, replace this trait
+/// with a publish into that bus.  Until then, embedders register an
+/// observer via `Coordinator::with_subagent_observer` and bridge it to the
+/// runtime registry's `CoordinatorHook` themselves.
+pub trait SubagentDelegationObserver: Send + Sync + 'static {
+    /// Called once per successful synchronous delegate-task dispatch.
+    fn on_delegation(&self, notice: SubagentDelegationNotice);
+}
+
+impl Coordinator {
+    /// Attach a sub-agent delegation observer.  See
+    /// [`SubagentDelegationObserver`] for the consumer contract.
+    pub fn with_subagent_observer(
+        mut self,
+        observer: Arc<dyn SubagentDelegationObserver>,
+    ) -> Self {
+        self.subagent_observer = Some(observer);
+        self
+    }
+
+    /// Manually publish a delegation notice through the attached observer
+    /// (if any). Wire-up: an `agent_tool_registry::CoordinatorHook` impl
+    /// can call this to forward notices into the workflow coordinator.
+    pub fn publish_subagent_notice(&self, notice: SubagentDelegationNotice) {
+        if let Some(obs) = &self.subagent_observer {
+            obs.on_delegation(notice);
         }
     }
 }
@@ -926,6 +985,50 @@ mod tests {
             AggregatedResult::Final(Outcome::Success(_)) => {}
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn subagent_delegation_observer_receives_notice() {
+        struct Recorder(Arc<Mutex<Vec<SubagentDelegationNotice>>>);
+        impl SubagentDelegationObserver for Recorder {
+            fn on_delegation(&self, notice: SubagentDelegationNotice) {
+                self.0.lock().unwrap().push(notice);
+            }
+        }
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let coord = Coordinator::new(
+            CoordinationPolicy::Sequential,
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        )
+        .with_subagent_observer(Arc::new(Recorder(log.clone())));
+
+        coord.publish_subagent_notice(SubagentDelegationNotice {
+            caller: "parent".into(),
+            target: "worker".into(),
+            tokens_used: 17,
+        });
+
+        let entries = log.lock().unwrap().clone();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].caller, "parent");
+        assert_eq!(entries[0].target, "worker");
+        assert_eq!(entries[0].tokens_used, 17);
+    }
+
+    #[test]
+    fn subagent_observer_absent_is_noop() {
+        // No observer attached — must not panic.
+        let coord = Coordinator::new(
+            CoordinationPolicy::Sequential,
+            ConcurrencyPolicy::Sequential,
+            Box::new(FirstSuccess),
+        );
+        coord.publish_subagent_notice(SubagentDelegationNotice {
+            caller: "p".into(),
+            target: "t".into(),
+            tokens_used: 0,
+        });
     }
 
     #[test]

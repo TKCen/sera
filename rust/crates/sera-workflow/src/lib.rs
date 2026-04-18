@@ -71,7 +71,8 @@ pub use coordination::{
     AggregatedResult, AggregationError, AllComplete, CircleMemory, ConcurrencyPolicy,
     ConcurrencyScheduler, ConvergenceConfig, ConvergenceState, CoordResult, CoordTask,
     CoordinationError, CoordinationPolicy, Coordinator, Custom, ExecFn, FirstSuccess, Majority,
-    Outcome, ParticipantId, ResultAggregator, WorkflowMemoryManager,
+    Outcome, ParticipantId, ResultAggregator, SubagentDelegationNotice,
+    SubagentDelegationObserver, WorkflowMemoryManager,
 };
 pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
 

@@ -8,6 +8,7 @@
 //! [`TraitToolRegistry::register`].
 
 pub mod centrifugo;
+pub mod delegation;
 pub mod dispatcher;
 pub mod file_edit;
 pub mod file_ops;
@@ -120,6 +121,21 @@ impl TraitToolRegistry {
         self.register(Box::new(memory_search::MemorySearchTool::new(
             embedding, store,
         )));
+        self
+    }
+
+    /// Register the three delegation tools (`session_spawn`, `session_yield`,
+    /// `session_send`) bound to the supplied [`crate::delegation_bus::DelegationBus`].
+    ///
+    /// Separate from [`Self::with_builtins`] because these tools need a
+    /// runtime-supplied bus instance so spawner/yielder/sender share the same
+    /// subscriber registry. See bead sera-a1u.
+    pub fn with_delegation(mut self, bus: crate::delegation_bus::DelegationBus) -> Self {
+        let (spawn_tool, yield_tool, send_tool) =
+            delegation::build_delegation_tools(bus);
+        self.register(Box::new(spawn_tool));
+        self.register(Box::new(yield_tool));
+        self.register(Box::new(send_tool));
         self
     }
 
@@ -489,5 +505,26 @@ mod trait_registry_tests {
         let on = TraitToolRegistry::with_builtins_and_authz(true);
         assert_eq!(off.list().len(), 14);
         assert_eq!(on.list().len(), 14);
+    }
+
+    /// `with_delegation` adds exactly three tools (`session_spawn`,
+    /// `session_yield`, `session_send`) to the registry — bead sera-a1u.
+    #[test]
+    fn with_delegation_adds_three_session_tools() {
+        use crate::delegation_bus::DelegationBus;
+        let bus = DelegationBus::new();
+        let registry = TraitToolRegistry::with_builtins().with_delegation(bus);
+        let list = registry.list();
+        assert_eq!(
+            list.len(),
+            14 + 3,
+            "expected 14 builtins + 3 delegation tools"
+        );
+        for name in ["session_spawn", "session_yield", "session_send"] {
+            assert!(
+                registry.get(name).is_some(),
+                "{name} not registered"
+            );
+        }
     }
 }

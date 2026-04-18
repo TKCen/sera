@@ -302,7 +302,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Build tool registry with authz kill-switch flag, and dispatcher.
     // All builtins are native `Tool` impls post bead sera-ttrm-5.
-    let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled);
+    //
+    // sera-a1u: every runtime owns a shared DelegationBus so the three
+    // delegation tools (session_spawn / session_yield / session_send) can
+    // coordinate over a single subscriber registry.
+    let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
+    let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled)
+        .with_delegation(delegation_bus);
     let registry = Arc::new(registry);
     let dispatcher = RegistryDispatcher::new(Arc::clone(&registry));
 
@@ -316,9 +322,14 @@ async fn main() -> anyhow::Result<()> {
         })
         .collect();
 
-    // Build the DefaultRuntime
+    // Build the DefaultRuntime.
+    //
+    // sera-jvi + sera-48v: opportunistically attach an [`AccountPool`] and a
+    // unified [`ThinkingConfig`] when the corresponding env vars are set.
+    // Absence of either preserves the legacy single-account / no-reasoning
+    // behaviour byte-for-byte.
     let context_engine = Box::new(ContextPipeline::new());
-    let llm_client = Box::new(LlmClient::new(&config));
+    let llm_client = Box::new(build_llm_client(&config));
     let runtime = DefaultRuntime::new(context_engine)
         .with_llm(llm_client)
         .with_tool_dispatcher(Box::new(dispatcher))
@@ -753,6 +764,73 @@ fn submission_to_turn_context(
         parent_session_key,
         tool_use_behavior: Default::default(),
     }
+}
+
+/// Build an [`LlmClient`] with optional sera-jvi account pool + sera-48v
+/// thinking config attached.
+///
+/// The runtime stays fully backwards-compatible: when `SERA_<PROVIDER>_KEYS`
+/// is not set for the inferred provider id, no pool is attached and the
+/// client falls back to the single-account `LLM_BASE_URL` / `LLM_API_KEY`
+/// path.  Likewise `SERA_REASONING_LEVEL` defaults to `off` when unset.
+fn build_llm_client(config: &RuntimeConfig) -> LlmClient {
+    use sera_config::providers::ProviderAccountsConfig;
+    use sera_models::{
+        AccountPool, CooldownConfig, ProviderAccount, ProviderKind, ReasoningLevel, ThinkingConfig,
+    };
+
+    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
+    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
+    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
+    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
+        .unwrap_or_else(|_| config.llm_model.clone());
+    let provider_kind = ProviderKind::infer(&provider_id);
+
+    // Thinking / reasoning level.
+    let level = std::env::var("SERA_REASONING_LEVEL")
+        .ok()
+        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "" => Some(ReasoningLevel::Off),
+            "low" => Some(ReasoningLevel::Low),
+            "medium" | "med" => Some(ReasoningLevel::Medium),
+            "high" => Some(ReasoningLevel::High),
+            _ => None,
+        })
+        .unwrap_or(ReasoningLevel::Off);
+    let budget = std::env::var("SERA_REASONING_BUDGET_TOKENS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok());
+    let mut thinking = ThinkingConfig::new(level);
+    thinking.budget_tokens = budget;
+
+    let mut client = LlmClient::new(config)
+        .with_thinking(thinking)
+        .with_provider_kind(provider_kind);
+
+    // Account pool (sera-jvi).  Only attached when at least one key is
+    // configured for the active provider id.
+    let accounts_cfg = ProviderAccountsConfig::from_env();
+    if let Some(keys) = accounts_cfg.keys_for(&provider_id)
+        && !keys.is_empty()
+    {
+        let accounts: Vec<ProviderAccount> = keys
+            .iter()
+            .enumerate()
+            .map(|(idx, key)| ProviderAccount::new(format!("{provider_id}-{idx}"), key.clone(), None))
+            .collect();
+        let pool = Arc::new(
+            AccountPool::new(provider_id.clone(), accounts, CooldownConfig::default())
+                .with_default_base_url(config.llm_base_url.clone()),
+        );
+        tracing::info!(
+            provider = %provider_id,
+            account_count = keys.len(),
+            "Attached LLM account pool (sera-jvi)"
+        );
+        client = client.with_account_pool(pool);
+    }
+
+    client
 }
 
 /// Send periodic heartbeats to sera-core.

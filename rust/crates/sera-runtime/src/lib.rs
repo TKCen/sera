@@ -35,6 +35,7 @@ pub mod circle_activity;
 pub mod compaction;
 pub mod context_engine;
 pub mod delegation;
+pub mod delegation_bus;
 pub mod handoff;
 pub mod harness;
 pub mod memory_assembler;

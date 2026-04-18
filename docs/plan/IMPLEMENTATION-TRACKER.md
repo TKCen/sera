@@ -46,18 +46,31 @@ The SERA Rust workspace is **fully scaffolded** with **all 28 planned crates** p
 11. **Session 26 waves 1-6** — ~20 beads closed, ~366 new tests across 20 crates; RoleBasedAuthzProvider (Tier-1.5), ToolUseBehavior enforcement, commit_overlay bugfix, llm_proxy JWT impersonation fix, Timer gate, PermissionOverrides+HookCancellation, BYOH build_* seam extraction, contracts.rs golden YAML harness
 12. **Session 26 waves 7-21** — 21 further beads closed, ~412 additional tests; all 6 AwaitType gates, /api/evolve/* routes, JWT P1 hardening (nbf+iss+aud), SIGTERM graceful shutdown + LaneQueue drain, HMAC-SHA-512 CapabilityToken signing, ConstitutionalRegistry YAML seeding, sera-errors unified across 20+ crates, 4 production bugs fixed (shadow_store data loss, llm_proxy impersonation, JWT nbf bypass, parse_id 500→400)
 
-### Remaining Gaps
+### Remaining Gaps (refreshed 2026-04-18)
 
-1. **DB-backed ProposalUsageTracker** — restart-safe max_proposals enforcement for /api/evolve/propose
-2. **Secret hot-reload for EvolveTokenSigner** — EvolveTokenSigner reads key at startup; rotation not live
-3. **sera-auth CapabilityTokenIssuer** — share type between gateway + agent-runtime
-4. **sera-gateway TraitToolRegistry migration** — 14+ Tool-trait adapters still in ToolExecutor
-5. **LaneRunGuard drop-time race** — potential race during shutdown exit (follow-up to SIGTERM work)
-6. **Postgres LaneQueue pending_count backend** — currently in-memory only
-7. **Mail gate Design B** — pattern-matching vs thread-id decision deferred
-8. **Circles coordination** — 7-policy implementation, blackboard, convergence incomplete (~40%)
-9. **WASM fuel metering** — `sera-hooks` fuel + memory caps not yet configured
-10. **ShadowSessionExecutor** — sera-runtime shadow execution path (sera-yif4 alt)
+Closed since Session 26 (moved out of this list):
+- DB-backed ProposalUsageTracker — done in sera-zbsu (HANDOFF §4.33)
+- sera-auth CapabilityTokenIssuer — unified in sera-sbh9 (HANDOFF §4.43)
+- TraitToolRegistry migration — 5-bead chain closed (sera-ilk2/26me/h7dn/sebr/cdan)
+- Tier-2 semantic memory — 4-bead chain closed (sera-czpa/dmpl/0yqq/7bc3)
+- Mail gate Design B — implemented in sera-uwk0
+- LaneRunGuard shutdown race — resolved in sera-d54o (HANDOFF §4.40)
+- Postgres LaneQueue counter — wired in sera-bsq2 (HANDOFF §4.41/4.44)
+- WASM fuel + memory + wall-clock caps — enforced in sera-jjms (HANDOFF §4.35)
+- sera-px3w P0 silent degenerate embeddings — removed by sera-czpa
+
+Still open:
+
+1. **Secret hot-reload for EvolveTokenSigner** — key loaded at startup; rotation requires restart (HANDOFF §4.29). In-progress this session.
+2. **Circles coordination** — 7-policy implementation, blackboard, convergence incomplete (~40%)
+3. **ShadowSessionExecutor** — sera-runtime shadow execution path (sera-yif4 alt)
+4. **ReactMode::PlanAndAct** — planning phase not separated; only `Default` / `ByOrder` variants exist. In-progress this session.
+5. **Gateway sera-2q1d follow-ups** — `lane_queue` + `hook_registry` fields still `#[allow(dead_code)]` in AppState; route handlers don't consume them yet. In-progress this session.
+6. **Hierarchical memory scopes** — agent→circle→org scope traversal over SemanticMemoryStore (sera-1qfm; GH#140)
+7. **Phase 3 end-to-end integration** — sera-mcp/a2a/agui/plugins core protocol shapes done; full gateway wiring incomplete
+8. **Enterprise secrets providers** — Vault, AWS SM, Azure KV backends still scaffolds
+9. **Circle WorkflowMemoryManager** — coordinator-scoped summary missing from sera-workflow
+10. **change_artifact provenance** — not populated from gateway pipeline (SPEC-self-evolution integration)
 
 ---
 

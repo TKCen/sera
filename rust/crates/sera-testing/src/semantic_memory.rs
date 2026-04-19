@@ -311,7 +311,6 @@ mod tests {
             created_at: Utc::now(),
             last_accessed_at: None,
             promoted: false,
-            scope: None,
         }
     }
 
@@ -331,7 +330,6 @@ mod tests {
             query_embedding: Some(vec![1.0, 0.0, 0.0]),
             top_k: 5,
             similarity_threshold: None,
-            scope: None,
         };
         let hits = store.query(q).await.unwrap();
         assert_eq!(hits.len(), 1);
@@ -371,7 +369,6 @@ mod tests {
             query_embedding: Some(vec![1.0, 0.0]),
             top_k: 5,
             similarity_threshold: None,
-            scope: None,
         };
         let hits = store.query(q).await.unwrap();
         assert_eq!(hits.len(), 1);
@@ -398,7 +395,6 @@ mod tests {
             query_embedding: Some(vec![1.0, 0.0]),
             top_k: 10,
             similarity_threshold: Some(0.5),
-            scope: None,
         };
         let hits = store.query(q).await.unwrap();
         assert_eq!(hits.len(), 1);
@@ -514,7 +510,6 @@ mod tests {
             query_embedding: Some(vec![1.0, 0.0]),
             top_k: 10,
             similarity_threshold: None,
-            scope: None,
         };
         let hits = store.query(q).await.unwrap();
         assert_eq!(hits.len(), 1);

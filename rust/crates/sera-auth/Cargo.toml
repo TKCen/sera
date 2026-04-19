@@ -27,8 +27,3 @@ argon2 = { workspace = true, optional = true }
 casbin = "2"
 uuid = { workspace = true, features = ["v4"] }
 chrono = { workspace = true, features = ["serde"] }
-sha2 = { workspace = true }
-sera-secrets = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }

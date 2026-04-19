@@ -220,20 +220,6 @@ impl AgentRuntime for DefaultRuntime {
             ..sera_types::tool::ToolContext::default()
         };
 
-        // Respect per-turn react_mode override when present in metadata.
-        // Metadata schema: {"react_mode": "default" | "by_order" | "plan_and_act"}.
-        // Unknown values fall back to Default so upstream typos never brick a turn.
-        let initial_react_mode = ctx
-            .metadata
-            .get("react_mode")
-            .and_then(|v| v.as_str())
-            .map(|s| match s {
-                "plan_and_act" | "PlanAndAct" => ReactMode::PlanAndAct,
-                "by_order" | "ByOrder" => ReactMode::ByOrder,
-                _ => ReactMode::Default,
-            })
-            .unwrap_or(ReactMode::Default);
-
         let mut turn_ctx = turn::TurnContext {
             turn_id: uuid::Uuid::new_v4(),
             session_key: ctx.session_key,
@@ -243,7 +229,7 @@ impl AgentRuntime for DefaultRuntime {
             handoffs: vec![],
             watch_signals: HashSet::new(),
             change_artifact: ctx.change_artifact.map(|id| id.to_string()),
-            react_mode: initial_react_mode,
+            react_mode: ReactMode::Default,
             doom_loop_count: 0,
             enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
@@ -254,12 +240,6 @@ impl AgentRuntime for DefaultRuntime {
 
         // Per-tool failure counter, reset on session end (i.e. when this method returns).
         let mut tool_failure_counts: HashMap<String, u32> = HashMap::new();
-
-        // Pending plan staged by ReactMode::PlanAndAct. When `Some`, the
-        // runtime skips the LLM call on the next iteration and dispatches the
-        // plan's tool calls directly via act(). This implements the planning /
-        // execution separation as two distinct iterations sharing one turn.
-        let mut pending_plan: Option<turn::Plan> = None;
 
         for _iteration in 0..self.max_tool_iterations {
             // 1. Observe — filter messages, run ConstitutionalGate hooks on input
@@ -397,42 +377,14 @@ impl AgentRuntime for DefaultRuntime {
             // 2. Think — call LLM
             // The OnLlmStart hook may have mutated turn_ctx.tool_use_behavior before
             // this point to enforce per-turn policy gates (SPEC-runtime §6.3).
-            //
-            // ReactMode::PlanAndAct two-phase flow:
-            //   * First iteration: turn::think captures the plan and returns
-            //     ThinkResult with empty tool_calls; react() surfaces
-            //     TurnOutcome::PlanEmitted, which this loop traps below to
-            //     stage the plan into `pending_plan` and continue.
-            //   * Next iteration: when `pending_plan` is Some, we synthesize
-            //     a ThinkResult carrying the plan's tool_calls directly —
-            //     bypassing the LLM — so act() dispatches them in a separate
-            //     step. This is the planning/execution separation requested
-            //     by the task.
-            let think_result = if let Some(plan) = pending_plan.take() {
-                tracing::debug!(
-                    session_key = %turn_ctx.session_key,
-                    plan_tool_call_count = plan.tool_calls.len(),
-                    "PlanAndAct: dispatching staged plan (skipping LLM call)"
-                );
-                turn::ThinkResult {
-                    response: serde_json::json!({
-                        "role": "assistant",
-                        "content": plan.rationale.clone(),
-                    }),
-                    tool_calls: plan.tool_calls.clone(),
-                    tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
-                }
-            } else {
-                turn::think(
-                    &observed,
-                    &turn_ctx.tools,
-                    &turn_ctx.react_mode,
-                    self.llm.as_deref(),
-                    &turn_ctx.tool_use_behavior,
-                )
-                .await
-            };
+            let think_result = turn::think(
+                &observed,
+                &turn_ctx.tools,
+                &turn_ctx.react_mode,
+                self.llm.as_deref(),
+                &turn_ctx.tool_use_behavior,
+            )
+            .await;
 
             // 3. Act — dispatch tool calls, doom-loop detection
             let act_result = turn::act(&mut turn_ctx, &think_result, self.tool_dispatcher.as_deref()).await;
@@ -503,47 +455,6 @@ impl AgentRuntime for DefaultRuntime {
                         duration_ms,
                         transcript,
                     });
-                }
-                // PlanAndAct: the planning phase completed — persist the
-                // assistant message (rationale), stage the plan for the next
-                // iteration's act phase, and continue the loop.
-                TurnOutcome::PlanEmitted {
-                    plan_tool_calls,
-                    rationale,
-                    created_at_ms,
-                    ..
-                } => {
-                    tracing::info!(
-                        session_key = %turn_ctx.session_key,
-                        tool_call_count = plan_tool_calls.len(),
-                        "PlanAndAct: plan emitted, staging for act phase"
-                    );
-                    // Record the assistant message (rationale-only) so the
-                    // turn transcript preserves the planning step.
-                    turn_ctx.messages.push(think_result.response);
-                    // Re-stage the plan. The plan field on ThinkResult holds
-                    // the original wire-format tool calls; prefer that to
-                    // avoid the ToolCall → Value round-trip on re-dispatch.
-                    let staged = think_result
-                        .plan
-                        .clone()
-                        .unwrap_or_else(|| turn::Plan {
-                            tool_calls: plan_tool_calls
-                                .iter()
-                                .map(|tc| serde_json::json!({
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc.name,
-                                        "arguments": tc.arguments.to_string(),
-                                    },
-                                }))
-                                .collect(),
-                            rationale,
-                            created_at_ms,
-                        });
-                    pending_plan = Some(staged);
-                    turn_ctx.doom_loop_count += 1;
                 }
                 // Any other outcome (Handoff, Interruption, etc.) — return immediately
                 other => return Ok(other),
@@ -731,7 +642,6 @@ mod tests {
                 response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                 tool_calls: calls,
                 tokens: sera_types::runtime::TokenUsage::default(),
-                plan: None,
             })
         }
     }
@@ -907,7 +817,6 @@ mod tests {
                     response: serde_json::json!({"role": "assistant", "content": "done"}),
                     tool_calls: vec![],
                     tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
                 });
             }
             // Calls 1-3: return a single tool call to trigger failures.
@@ -915,7 +824,6 @@ mod tests {
                 response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                 tool_calls: vec![tool_call(&format!("c{current}"), "fragile")],
                 tokens: sera_types::runtime::TokenUsage::default(),
-                plan: None,
             })
         }
     }
@@ -985,7 +893,6 @@ mod tests {
                     response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                     tool_calls: calls,
                     tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
                 })
             }
         }
@@ -1067,14 +974,12 @@ mod tests {
                         response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                         tool_calls: vec![tool_call(&format!("c{n}"), "flaky")],
                         tokens: sera_types::runtime::TokenUsage::default(),
-                        plan: None,
                     })
                 } else {
                     Ok(turn::ThinkResult {
                         response: serde_json::json!({"role": "assistant", "content": "done"}),
                         tool_calls: vec![],
                         tokens: sera_types::runtime::TokenUsage::default(),
-                        plan: None,
                     })
                 }
             }
@@ -1139,7 +1044,6 @@ mod tests {
                     response: serde_json::json!({"role": "assistant", "content": "hi"}),
                     tool_calls: vec![],
                     tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
                 })
             }
         }
@@ -1194,7 +1098,6 @@ mod tests {
                         completion_tokens: 5,
                         total_tokens: 15,
                     },
-                    plan: None,
                 })
             }
         }
@@ -1282,7 +1185,6 @@ mod tests {
                     response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                     tool_calls: vec![tool_call("cx", "looping-tool")],
                     tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
                 })
             }
         }
@@ -1460,7 +1362,6 @@ mod tests {
                     response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                     tool_calls: vec![tool_call("cx", "t")],
                     tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
                 })
             }
         }
@@ -1508,7 +1409,6 @@ mod tests {
                     response: serde_json::json!({"role": "assistant", "content": "[stub]"}),
                     tool_calls: calls,
                     tokens: sera_types::runtime::TokenUsage::default(),
-                    plan: None,
                 })
             }
         }
@@ -1575,194 +1475,6 @@ mod tests {
         assert!(
             matches!(outcome, TurnOutcome::FinalOutput { .. }),
             "expected FinalOutput with no dispatcher, got {:?}", outcome
-        );
-    }
-
-    // ── ReactMode::PlanAndAct tests ───────────────────────────────────────────
-
-    /// Dispatcher that records every tool call it dispatches by name, so the
-    /// PlanAndAct tests can assert the plan is actually executed on the
-    /// second iteration (not the first planning pass).
-    struct RecordingDispatcher {
-        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl turn::ToolDispatcher for RecordingDispatcher {
-        async fn dispatch(
-            &self,
-            tc: &serde_json::Value,
-            _ctx: &sera_types::tool::ToolContext,
-        ) -> Result<serde_json::Value, turn::ToolError> {
-            let name = tc
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string();
-            let id = tc
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            self.seen.lock().unwrap().push(name);
-            Ok(serde_json::json!({
-                "tool_call_id": id,
-                "role": "tool",
-                "content": "ok",
-            }))
-        }
-    }
-
-    /// LLM that records how many times it was called so tests can verify
-    /// `PlanAndAct` only calls the model during the planning iteration and
-    /// not during the subsequent execution iteration (which dispatches the
-    /// staged plan without re-consulting the model).
-    struct CountingPlanLlm {
-        calls: std::sync::Mutex<u32>,
-        rounds: std::sync::Mutex<std::collections::VecDeque<Vec<serde_json::Value>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl turn::LlmProvider for CountingPlanLlm {
-        async fn chat(
-            &self,
-            _messages: &[serde_json::Value],
-            _tools: &[serde_json::Value],
-        ) -> Result<turn::ThinkResult, turn::ThinkError> {
-            *self.calls.lock().unwrap() += 1;
-            let calls = self.rounds.lock().unwrap().pop_front().unwrap_or_default();
-            Ok(turn::ThinkResult {
-                response: serde_json::json!({
-                    "role": "assistant",
-                    "content": "i intend to call tools per plan",
-                }),
-                tool_calls: calls,
-                tokens: sera_types::runtime::TokenUsage::default(),
-                plan: None,
-            })
-        }
-    }
-
-    fn plan_and_act_ctx() -> TurnContext {
-        let mut ctx = make_turn_context();
-        ctx.metadata.insert(
-            "react_mode".to_string(),
-            serde_json::Value::String("plan_and_act".to_string()),
-        );
-        ctx
-    }
-
-    #[tokio::test]
-    async fn react_mode_plan_and_act_emits_plan_then_executes() {
-        // First think: emit tool calls → plan staged, no dispatch.
-        // Second think: runtime consumes the staged plan (no LLM call) and
-        // dispatches the plan's tool calls.
-        // Third think: no tool calls → FinalOutput.
-        let llm = CountingPlanLlm {
-            calls: std::sync::Mutex::new(0),
-            rounds: std::sync::Mutex::new(
-                vec![
-                    vec![tool_call("p1", "plan-tool-a"), tool_call("p2", "plan-tool-b")],
-                    // Third round only fires if the LLM is re-called after
-                    // plan dispatch — exercises the "plan then final" path.
-                    vec![],
-                ]
-                .into(),
-            ),
-        };
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let dispatcher = RecordingDispatcher { seen: seen.clone() };
-
-        let runtime = DefaultRuntime::new(make_context_engine())
-            .with_llm(Box::new(llm))
-            .with_tool_dispatcher(Box::new(dispatcher));
-
-        let outcome = runtime
-            .execute_turn(plan_and_act_ctx())
-            .await
-            .expect("execute_turn");
-
-        // Loop sequence: think(call 1) → PlanEmitted → staged → act dispatches
-        // plan → RunAgain → think(call 2, no tools) → FinalOutput.
-        assert!(
-            matches!(outcome, TurnOutcome::FinalOutput { .. }),
-            "expected FinalOutput after plan dispatch, got {:?}",
-            outcome
-        );
-        let seen_names = seen.lock().unwrap().clone();
-        assert_eq!(
-            seen_names,
-            vec!["plan-tool-a".to_string(), "plan-tool-b".to_string()],
-            "plan's tool calls must dispatch in order during the act phase"
-        );
-    }
-
-    #[tokio::test]
-    async fn react_mode_plan_and_act_no_tools_falls_through_to_final() {
-        // When PlanAndAct is active but the model emits zero tool calls,
-        // the plan path is a no-op — the turn completes as FinalOutput with
-        // no dispatches.
-        let llm = CountingPlanLlm {
-            calls: std::sync::Mutex::new(0),
-            rounds: std::sync::Mutex::new(vec![vec![]].into()),
-        };
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let dispatcher = RecordingDispatcher { seen: seen.clone() };
-
-        let runtime = DefaultRuntime::new(make_context_engine())
-            .with_llm(Box::new(llm))
-            .with_tool_dispatcher(Box::new(dispatcher));
-
-        let outcome = runtime
-            .execute_turn(plan_and_act_ctx())
-            .await
-            .expect("execute_turn");
-
-        assert!(
-            matches!(outcome, TurnOutcome::FinalOutput { .. }),
-            "expected FinalOutput when plan has zero tool calls, got {:?}",
-            outcome
-        );
-        assert!(
-            seen.lock().unwrap().is_empty(),
-            "no tools should have been dispatched; saw {:?}",
-            seen.lock().unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn react_mode_default_unchanged() {
-        // Regression: Default mode must behave exactly as before — one tool
-        // call round, dispatched immediately (no plan staging), then final
-        // output. Verifies the PlanAndAct plumbing is strictly opt-in.
-        let llm = ToolCallingLlm::new(vec![
-            vec![tool_call("c1", "immediate-tool")],
-            vec![],
-        ]);
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let dispatcher = RecordingDispatcher { seen: seen.clone() };
-
-        let runtime = DefaultRuntime::new(make_context_engine())
-            .with_llm(Box::new(llm))
-            .with_tool_dispatcher(Box::new(dispatcher));
-
-        // Default mode — no react_mode metadata override.
-        let outcome = runtime
-            .execute_turn(make_turn_context())
-            .await
-            .expect("execute_turn");
-
-        assert!(
-            matches!(outcome, TurnOutcome::FinalOutput { .. }),
-            "expected FinalOutput under Default mode, got {:?}",
-            outcome
-        );
-        let seen_names = seen.lock().unwrap().clone();
-        assert_eq!(
-            seen_names,
-            vec!["immediate-tool".to_string()],
-            "Default mode dispatches the tool call in the same iteration as think"
         );
     }
 }

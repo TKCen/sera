@@ -149,7 +149,6 @@ impl TranscriptIndexer for SemanticTranscriptIndexer {
             created_at: Utc::now(),
             last_accessed_at: None,
             promoted: false,
-            scope: None,
         };
 
         let id = self.store.put(entry).await?;
@@ -549,7 +548,6 @@ mod tests {
                 query_embedding: None,
                 top_k: 10,
                 similarity_threshold: None,
-                scope: None,
             })
             .await
             .unwrap();

@@ -82,7 +82,6 @@ impl turn::LlmProvider for CapturingLlm {
             response: serde_json::json!({"role": "assistant", "content": "done"}),
             tool_calls: vec![],
             tokens: sera_types::runtime::TokenUsage::default(),
-            plan: None,
         })
     }
 }

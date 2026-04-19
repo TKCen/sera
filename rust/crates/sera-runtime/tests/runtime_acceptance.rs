@@ -102,7 +102,6 @@ async fn doom_loop_triggers_interruption() {
         response: serde_json::json!({}),
         tool_calls: vec![],
         tokens: TokenUsage::default(),
-        plan: None,
     };
 
     let result = turn::act(&mut ctx, &think_result, None).await;

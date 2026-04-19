@@ -74,14 +74,6 @@ pub struct ModelRequest {
     /// Constrain output to a specific format (SPEC-runtime §5.1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
-
-    /// Provider-agnostic reasoning intensity (default: [`ThinkingLevel::None`]).
-    ///
-    /// Set to [`ThinkingLevel::Low`] or higher to enable chain-of-thought
-    /// reasoning on providers that support it.  When [`ThinkingLevel::None`],
-    /// the provider-native reasoning parameter is omitted entirely.
-    #[serde(default, skip_serializing_if = "crate::llm::ThinkingLevel::is_none")]
-    pub thinking: crate::llm::ThinkingLevel,
 }
 
 // ── FinishReason ──────────────────────────────────────────────────────────────
@@ -230,7 +222,6 @@ mod tests {
             max_tokens: Some(1024),
             stop_sequences: None,
             response_format: None,
-            thinking: Default::default(),
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -256,7 +247,6 @@ mod tests {
             max_tokens: None,
             stop_sequences: None,
             response_format: None,
-            thinking: Default::default(),
         };
         let json = serde_json::to_string(&request).unwrap();
         // Optional fields should be omitted

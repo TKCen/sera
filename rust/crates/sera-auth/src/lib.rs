@@ -24,7 +24,7 @@ pub use authz::{
 };
 pub use capability::{
     CapabilityToken, CapabilityTokenError, CapabilityTokenIssuer, ChangeProposer,
-    DefaultCapabilityTokenIssuer, EvolveTokenError, EvolveTokenSigner, ROTATION_GRACE_SECS,
+    DefaultCapabilityTokenIssuer,
 };
 pub use casbin_adapter::{CasbinAuthzAdapter, CasbinError};
 pub use error::AuthError;

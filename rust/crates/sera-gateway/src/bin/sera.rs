@@ -412,6 +412,10 @@ struct AppState {
     chain_executor: Arc<ChainExecutor>,
     /// Pre-connected runtime harnesses keyed by agent name.
     harnesses: std::collections::HashMap<String, Arc<StdioHarness>>,
+    /// Latch that flips to `true` after the first successful runtime probe.
+    /// Drives `/api/health/ready` — see `probe_runtime_ready`. Stays `false`
+    /// across docker restarts because the gateway process is recreated.
+    runtime_ready: Arc<std::sync::atomic::AtomicBool>,
     /// Shutdown flag observed by long-running background loops. Flipped to
     /// `true` after a SIGTERM/Ctrl+C signal so loops can exit their next
     /// iteration instead of blocking the drain phase. Written by the
@@ -501,6 +505,22 @@ impl PartyAppState for AppState {
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
+}
+
+/// Response shape for `/api/health/ready` — distinguishes "process up"
+/// (liveness) from "runtime connected to its LLM provider" (readiness).
+/// See `docs/signal-system-design.md` for the rationale: clients must not
+/// dispatch turns until the harness has confirmed connectivity, otherwise
+/// the first turn after a docker restart races the LM Studio reconnect and
+/// returns an empty reply.
+#[derive(Serialize)]
+struct ReadinessResponse {
+    /// `"ready"` when every harness has answered a probe successfully,
+    /// `"not_ready"` otherwise.
+    status: &'static str,
+    /// `true` once any successful runtime probe has been observed during
+    /// this process lifetime. Latches on first success; resets on restart.
+    runtime_connected: bool,
 }
 
 #[derive(Deserialize)]
@@ -594,8 +614,90 @@ fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), StatusC
 
 // ── HTTP handlers ───────────────────────────────────────────────────────────
 
+/// Liveness — the gateway process is up and serving HTTP. Mirrors the
+/// docker `HEALTHCHECK` contract: returns 200 the moment axum is listening,
+/// independent of runtime/LM Studio state. Pair with `/api/health/ready`
+/// for traffic-gate semantics.
 async fn health_handler() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+/// Default per-harness probe timeout when `SERA_READINESS_PROBE_TIMEOUT_SECS`
+/// is unset. Picked to be larger than a typical LM Studio cold-start reply
+/// but well under the docker compose `start_period` so the readiness gate
+/// closes promptly when the runtime is genuinely down.
+const DEFAULT_READINESS_PROBE_TIMEOUT_SECS: u64 = 5;
+
+fn readiness_probe_timeout() -> std::time::Duration {
+    let secs = std::env::var("SERA_READINESS_PROBE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_READINESS_PROBE_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Probe every registered runtime harness with a trivial turn. Returns
+/// `true` only when every harness answers within `readiness_probe_timeout()`
+/// with a non-empty reply — proves the runtime ↔ LM Studio path is live.
+///
+/// Latches success in `state.runtime_ready` so subsequent calls are O(1)
+/// and never re-probe. The latch never clears for the process lifetime;
+/// a docker restart spawns a new process that starts cold.
+///
+/// Returns `false` if the harness map is empty (no runtime registered yet).
+async fn probe_runtime_ready(state: &AppState) -> bool {
+    use std::sync::atomic::Ordering;
+
+    if state.runtime_ready.load(Ordering::Acquire) {
+        return true;
+    }
+    if state.harnesses.is_empty() {
+        return false;
+    }
+
+    let timeout = readiness_probe_timeout();
+    for harness in state.harnesses.values() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": "ping",
+        })];
+        let probe = harness.send_turn(messages, "__sera_readiness_probe__");
+        match tokio::time::timeout(timeout, probe).await {
+            Ok(Ok(events)) if !events.response.trim().is_empty() => {}
+            _ => return false,
+        }
+    }
+
+    state.runtime_ready.store(true, Ordering::Release);
+    true
+}
+
+/// Readiness — the runtime harness has confirmed end-to-end connectivity to
+/// its LLM provider. Returns 503 until the first successful probe. Solves
+/// the empty-reply race after `docker restart`: `/api/health` flips to 200
+/// the moment axum binds, but the harness child has not yet handshaken with
+/// LM Studio, so the first user turn returns an empty reply. Clients should
+/// gate traffic on this endpoint, not `/api/health`.
+async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if probe_runtime_ready(&state).await {
+        (
+            StatusCode::OK,
+            Json(ReadinessResponse {
+                status: "ready",
+                runtime_connected: true,
+            }),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ReadinessResponse {
+                status: "not_ready",
+                runtime_connected: false,
+            }),
+        )
+            .into_response()
+    }
 }
 
 async fn chat_handler(
@@ -2249,6 +2351,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         hook_registry,
         chain_executor,
         harnesses,
+        runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         shutting_down: Arc::clone(&shutting_down),
         mail_correlator,
         mail_lookup,
@@ -2532,6 +2635,12 @@ fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/health", get(health_handler))
+        // Readiness gate — distinct from liveness above. Returns 503 until
+        // the runtime harness has answered a probe successfully, closing the
+        // empty-reply race window after `docker restart`. Clients (load
+        // balancers, eval harness `warmup_sera`, etc.) should poll this
+        // before dispatching real turns.
+        .route("/api/health/ready", get(readiness_handler))
         .route("/api/auth/me", get(auth_me_handler))
         .route("/api/chat", post(chat_handler))
         .route("/api/agents", get(agents_handler))
@@ -2622,6 +2731,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: test_harnesses().await,
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -2649,6 +2759,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -2676,6 +2787,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: test_harnesses().await,
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -2703,6 +2815,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -2925,6 +3038,165 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
+    }
+
+    // -- Readiness endpoint (empty-reply race fix) --
+    //
+    // The race: after `docker restart`, axum binds and `/api/health` answers
+    // 200 immediately, but the runtime child has not yet handshaken with LM
+    // Studio. The first chat turn races the reconnect and returns an empty
+    // reply. The fix is `/api/health/ready`, which actively probes a harness
+    // and returns 503 until the runtime answers.
+
+    /// Liveness must stay 200 even when no harness is registered. This is the
+    /// docker `HEALTHCHECK` contract — the gateway process is up.
+    #[tokio::test]
+    async fn liveness_returns_200_even_without_harness() {
+        let state = test_state();
+        assert!(state.harnesses.is_empty(), "precondition: no harness");
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Race-condition repro: with no harness yet registered, the readiness
+    /// probe must close the gate (503). This is the post-restart window
+    /// where `/api/health` would otherwise return 200 prematurely.
+    #[tokio::test]
+    async fn readiness_returns_503_when_no_harness_registered() {
+        let state = test_state();
+        assert!(state.harnesses.is_empty());
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "not_ready");
+        assert_eq!(json["runtime_connected"], false);
+    }
+
+    /// Race-condition repro: a registered harness that never answers (the
+    /// post-restart pre-handshake window simulated by `spawn_mock_hang`)
+    /// must keep the gate closed. Uses a tight probe timeout so the test
+    /// does not stall the suite for the default 5s.
+    #[tokio::test]
+    async fn readiness_returns_503_when_harness_does_not_respond() {
+        // Tight bound — the hung harness will sit forever, so the probe must
+        // give up quickly. Env var must be set BEFORE the handler runs.
+        // SAFETY: tests in this binary do not read this var concurrently.
+        unsafe {
+            std::env::set_var("SERA_READINESS_PROBE_TIMEOUT_SECS", "1");
+        }
+
+        let mut state = test_state_async().await;
+        // Replace the always-good mock with a hanging mock.
+        let hanging = Arc::new(StdioHarness::spawn_mock_hang().await.unwrap());
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), hanging);
+        let app = build_router(state);
+
+        let started = std::time::Instant::now();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        unsafe {
+            std::env::remove_var("SERA_READINESS_PROBE_TIMEOUT_SECS");
+        }
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            elapsed < std::time::Duration::from_secs(4),
+            "probe should give up within ~1s, got {:?}",
+            elapsed
+        );
+    }
+
+    /// Once the harness answers a probe successfully, readiness flips to
+    /// 200 — this is the "runtime is connected" transition the eval
+    /// harness's `warmup_sera` was working around externally.
+    #[tokio::test]
+    async fn readiness_flips_to_200_after_successful_probe() {
+        let state = test_state_async().await;
+        // Precondition: latch is cold and the mock harness is wired in.
+        assert!(!state
+            .runtime_ready
+            .load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.harnesses.is_empty());
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ready");
+        assert_eq!(json["runtime_connected"], true);
+        // Latch must persist across calls so subsequent probes are O(1).
+        assert!(state
+            .runtime_ready
+            .load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    /// Once the latch is set, readiness must answer 200 even with no harness
+    /// registered — proves the cached fast path bypasses the probe and
+    /// cannot regress to false after a transient harness disappearance.
+    #[tokio::test]
+    async fn readiness_uses_cached_latch_on_repeat_calls() {
+        let state = test_state();
+        state
+            .runtime_ready
+            .store(true, std::sync::atomic::Ordering::Release);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     // -- Chat endpoint --
@@ -3235,6 +3507,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -3265,6 +3538,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -3296,6 +3570,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -3327,6 +3602,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -3803,6 +4079,7 @@ mod tests {
             hook_registry,
             chain_executor,
             harnesses: std::collections::HashMap::new(),
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -3862,7 +4139,8 @@ mod tests {
                 hook_registry,
                 chain_executor,
                 harnesses: std::collections::HashMap::new(),
-                shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mail_correlator: Arc::new(HeaderMailCorrelator::new(
                     Arc::new(InMemoryEnvelopeIndex::default()),
                     None,

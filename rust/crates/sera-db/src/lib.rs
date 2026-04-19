@@ -23,6 +23,7 @@ pub mod operator_requests;
 pub mod pgvector_store;
 pub mod sqlite_memory_store;
 pub mod secrets;
+pub mod signals;
 pub mod tasks;
 pub mod webhooks;
 pub mod job_queue;

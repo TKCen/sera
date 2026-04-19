@@ -2,9 +2,22 @@
 //!
 //! Written to `<root>/bash/active/corrections.yaml` on first boot if the
 //! file does not yet exist. Rewriting an existing file would clobber
-//! hand-tuned rules, so the seeder is strictly idempotent — callers that
-//! want a pristine seed must delete the file first.
-
+//! hand-tuned rules, so the seeder is strictly idempotent.
+//!
+//! ## Immutable vs Mutable
+//!
+//! Seed rules are **compiled into the binary** — they cannot be changed without
+//! a recompile. They serve as the stable starting point only.
+//!
+//! All **evolvable rules** live in the YAML catalog at:
+//!   `~/.sera/tool-corrections/bash/active/corrections.yaml`
+//!
+//! YAML rules **shadow seed rules** — if a YAML rule has the same `id` as a
+//! seed rule, the YAML version takes precedence. The agent can:
+//!   - Add new rules to `active/corrections.yaml` (hot-reloaded)
+//!   - Modify or delete YAML rules without recompiling
+//!   - Propose new rules in `proposed/` for human approval
+//!
 use std::io;
 use std::path::{Path, PathBuf};
 

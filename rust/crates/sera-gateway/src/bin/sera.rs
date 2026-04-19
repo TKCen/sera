@@ -39,10 +39,12 @@ use sera_db::lane_queue_counter::{
 use sera_db::sqlite::SqliteDb;
 // sera-vzce: SqliteMemoryStore is the zero-infra SemanticMemoryStore tier
 // (FTS5 + sqlite-vec + RRF). Pairs with PgVectorStore for the enterprise
-// path. Importer left in place so the wiring below can slot it in without
-// another touch of this file.
+// path. Wired in the boot path below via backend selection on
+// SERA_MEMORY_BACKEND + DATABASE_URL.
+use sera_db::pgvector_store::PgVectorStore;
 #[allow(unused_imports)]
 use sera_db::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
+use sera_types::SemanticMemoryStore;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_mail::{
@@ -87,6 +89,18 @@ use discord::{DiscordConnector, DiscordMessage};
 // ── Doctor module ────────────────────────────────────────────────────────────
 #[path = "../doctor.rs"]
 mod doctor;
+
+/// Selection predicate for the Tier-2 semantic memory backend.
+///
+/// `backend_pref` is the lowercased, trimmed value of `SERA_MEMORY_BACKEND`
+/// (or `None` when unset). `database_url` is the value of `DATABASE_URL`
+/// (or `None` when unset). Returns `true` when the pgvector path should be
+/// attempted — the caller still falls back to SqliteMemoryStore on any
+/// connect or init failure.
+fn wants_pgvector_backend(backend_pref: Option<&str>, database_url: Option<&str>) -> bool {
+    matches!(backend_pref, Some("pgvector"))
+        || (backend_pref.is_none() && database_url.is_some())
+}
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -1976,27 +1990,84 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         }
     }
 
-    // 2a. SemanticMemoryStore (Tier-2 recall) backend selection.
-    // sera-vzce left this as a TODO so the MVS boot path stays minimal:
-    //   * SERA_MEMORY_BACKEND=sqlite (or unset, no DATABASE_URL) →
-    //     `SqliteMemoryStore::open(SERA_DB_PATH or "./sera.db", embedding)`
-    //   * DATABASE_URL set → `PgVectorStore::new(pool).initialize()`
-    // Wire once the runtime carries an Arc<dyn EmbeddingService> through
-    // to this boot path.
+    // 2a. SemanticMemoryStore (Tier-2 recall) backend selection (sera-vzce /
+    // sera-clmw). Selection rules, in order:
+    //   * SERA_MEMORY_BACKEND=pgvector → require DATABASE_URL, initialize
+    //     the `vector` extension and schema; on failure fall back to
+    //     SqliteMemoryStore so the gateway still boots in degraded mode.
+    //   * SERA_MEMORY_BACKEND=sqlite → always SqliteMemoryStore, ignoring
+    //     DATABASE_URL (useful to pin local-first even on enterprise hosts).
+    //   * unset + DATABASE_URL set → pgvector (with the same fallback).
+    //   * otherwise → SqliteMemoryStore at SERA_DB_PATH (default ./sera.db).
     //
-    // sera-4nj: once `semantic_store: Arc<dyn SemanticMemoryStore>` exists
-    // above, build the session-transcript indexer here:
-    //
-    //     let transcript_indexer: Arc<dyn sera_session::TranscriptIndexer> =
-    //         Arc::new(sera_session::SemanticTranscriptIndexer::new(
-    //             semantic_store.clone(),
-    //         ));
-    //
-    // and forward it into `SessionManager::with_indexer(transcript_indexer)`
-    // when the persistence-backed session manager is constructed. The
-    // indexer fires on session close (SessionState::Archived/Closed) and is
-    // best-effort — failures log at `warn` and never block the close path.
-    let _ = std::marker::PhantomData::<sera_session::SemanticTranscriptIndexer>;
+    // Embedding service wiring stays `None` here: the SQLite path works
+    // keyword-only via FTS5/BM25, and the pgvector path requires callers
+    // to supply `query_embedding` on the query side. When the runtime
+    // carries an `Arc<dyn EmbeddingService>` through to boot, pass it into
+    // `SqliteMemoryStore::open(path, Some(embedder))` to enable the hybrid
+    // (BM25 + vector + RRF) recall path.
+    let backend_pref = std::env::var("SERA_MEMORY_BACKEND")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let want_pgvector = wants_pgvector_backend(backend_pref.as_deref(), database_url.as_deref());
+
+    let semantic_store: Arc<dyn SemanticMemoryStore> = 'store: {
+        if want_pgvector {
+            match &database_url {
+                Some(url) => match sera_db::DbPool::connect(url).await {
+                    Ok(pool) => {
+                        let store = PgVectorStore::new(pool.inner().clone());
+                        match store.initialize().await {
+                            Ok(()) => {
+                                tracing::info!(
+                                    "SemanticMemoryStore backend: PgVectorStore (DATABASE_URL set)"
+                                );
+                                break 'store Arc::new(store);
+                            }
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                "PgVectorStore::initialize failed; falling back to SqliteMemoryStore"
+                            ),
+                        }
+                    }
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "PgVectorStore connect failed; falling back to SqliteMemoryStore"
+                    ),
+                },
+                None => tracing::warn!(
+                    "SERA_MEMORY_BACKEND=pgvector but DATABASE_URL is unset; falling back to SqliteMemoryStore"
+                ),
+            }
+        }
+
+        let sqlite_path = std::env::var("SERA_DB_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| db_path.clone());
+        let store = SqliteMemoryStore::open(&sqlite_path, None)?;
+        tracing::info!(
+            path = %sqlite_path.display(),
+            vec_available = store.vector_available(),
+            "SemanticMemoryStore backend: SqliteMemoryStore"
+        );
+        Arc::new(store)
+    };
+
+    // sera-4nj: transcript indexer is built eagerly so SessionManager
+    // construction can wire it via `SessionManager::with_indexer(...)` once
+    // the persistence-backed manager lands in AppState. Indexing runs
+    // best-effort on session close (SessionState::Archived/Closed) and is
+    // guaranteed not to block the close path.
+    let _transcript_indexer: Arc<dyn sera_session::TranscriptIndexer> = Arc::new(
+        sera_session::SemanticTranscriptIndexer::new(semantic_store.clone()),
+    );
+    let _semantic_store = semantic_store;
 
     // 3. Resolve Discord connector if configured.  We create a shared Arc so
     //    the gateway listener and the event-loop response sender use the same
@@ -2502,6 +2573,29 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
+
+    #[test]
+    fn pgvector_selected_when_env_pin() {
+        assert!(wants_pgvector_backend(Some("pgvector"), None));
+        assert!(wants_pgvector_backend(Some("pgvector"), Some("postgres://x")));
+    }
+
+    #[test]
+    fn sqlite_pin_ignores_database_url() {
+        assert!(!wants_pgvector_backend(Some("sqlite"), Some("postgres://x")));
+        assert!(!wants_pgvector_backend(Some("sqlite"), None));
+    }
+
+    #[test]
+    fn auto_falls_back_on_database_url() {
+        assert!(wants_pgvector_backend(None, Some("postgres://x")));
+        assert!(!wants_pgvector_backend(None, None));
+    }
+
+    #[test]
+    fn unknown_backend_pref_falls_back_to_sqlite() {
+        assert!(!wants_pgvector_backend(Some("redis"), Some("postgres://x")));
+    }
 
     fn test_manifests() -> ManifestSet {
         parse_manifests(TEMPLATE_YAML).unwrap()

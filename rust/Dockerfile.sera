@@ -19,8 +19,11 @@ RUN apt-get update && \
 # Copy full workspace source
 COPY rust/ .
 
-# Build both binaries in release mode
-RUN cargo build --release --bin sera --bin sera-runtime
+# Build both binaries in release mode.
+# Note: the gateway binary is named `sera-gateway` in Cargo.toml (sera-gateway
+# crate) but installed as `sera` in the image. `--bin sera` would build the CLI
+# (sera-cli crate), which lacks the `start` subcommand.
+RUN cargo build --release --bin sera-gateway --bin sera-runtime
 
 # ── Stage 2: Runner ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runner
@@ -31,8 +34,9 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy both binaries
-COPY --from=builder /build/target/release/sera /usr/local/bin/sera
+# Copy both binaries (gateway binary is renamed from sera-gateway -> sera
+# because its internal clap name is "sera" and error messages reference it).
+COPY --from=builder /build/target/release/sera-gateway /usr/local/bin/sera
 COPY --from=builder /build/target/release/sera-runtime /usr/local/bin/sera-runtime
 
 # Default config path (mount or COPY your sera.yaml here)

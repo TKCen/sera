@@ -1,0 +1,8 @@
+rust/target/
+rust/.cargo/
+.omc/
+.git/
+node_modules/
+core/node_modules/
+web/node_modules/
+web/dist/

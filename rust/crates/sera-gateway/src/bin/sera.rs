@@ -330,6 +330,17 @@ impl StdioHarness {
             r#"done"#,
         );
 
+        Self::spawn_with_script(script).await
+    }
+
+    /// Spawn a mock runtime that consumes submissions but never emits events.
+    /// Used to exercise the turn timeout path — a live child with an open
+    /// stdout that simply never produces output.
+    async fn spawn_mock_hang() -> anyhow::Result<Self> {
+        Self::spawn_with_script("while IFS= read -r line; do :; done").await
+    }
+
+    async fn spawn_with_script(script: &str) -> anyhow::Result<Self> {
         let mut cmd = tokio::process::Command::new("bash");
         cmd.args(["-c", script])
             .stdin(std::process::Stdio::piped())
@@ -967,6 +978,22 @@ enum StreamState {
 
 // ── Turn execution (dispatched to sera-runtime harness) ─────────────────────
 
+/// Upper bound on how long a single turn may block waiting on the runtime
+/// harness. Prevents a hung runtime from wedging the lane queue forever: the
+/// lane slot is released by the caller after `execute_turn` returns, so a
+/// timeout here guarantees the slot is eventually freed even if the harness
+/// never responds. Override with `SERA_TURN_TIMEOUT_SECS`.
+const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn turn_timeout() -> std::time::Duration {
+    std::env::var("SERA_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(DEFAULT_TURN_TIMEOUT)
+}
+
 /// Execute a turn by dispatching to a pre-connected sera-runtime harness.
 ///
 /// The gateway builds the conversation messages from the transcript and sends
@@ -1030,8 +1057,9 @@ async fn execute_turn(
         }));
     }
 
-    match harness.send_turn(messages, session_key).await {
-        Ok(events) => MvsTurnResult {
+    let timeout = turn_timeout();
+    match tokio::time::timeout(timeout, harness.send_turn(messages, session_key)).await {
+        Ok(Ok(events)) => MvsTurnResult {
             reply: events.response,
             tool_events: events.tool_events,
             usage: UsageInfo {
@@ -1040,10 +1068,29 @@ async fn execute_turn(
                 total_tokens: 0,
             },
         },
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!(error = %e, "Runtime harness turn failed");
             MvsTurnResult {
                 reply: format!("[sera] Runtime error: {e}"),
+                tool_events: vec![],
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            }
+        }
+        Err(_elapsed) => {
+            tracing::error!(
+                session_key = %session_key,
+                timeout_secs = timeout.as_secs(),
+                "Runtime harness turn timed out; releasing lane"
+            );
+            MvsTurnResult {
+                reply: format!(
+                    "[sera] Runtime timed out after {}s",
+                    timeout.as_secs()
+                ),
                 tool_events: vec![],
                 usage: UsageInfo {
                     prompt_tokens: 0,
@@ -3570,6 +3617,45 @@ mod tests {
             StatusCode::OK,
             "follow-up turn must be admitted once the prior run has completed"
         );
+    }
+
+    /// A hung runtime harness (alive stdio, no output) must not wedge the turn
+    /// indefinitely. Regression guard for the lane-wedge bug: if
+    /// `harness.send_turn` never completes, a bounded `tokio::time::timeout`
+    /// wrapper lets `execute_turn` return within the timeout so the caller can
+    /// release the lane slot.
+    #[tokio::test]
+    async fn send_turn_times_out_when_harness_hangs() {
+        let harness = StdioHarness::spawn_mock_hang().await.unwrap();
+        let start = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            harness.send_turn(Vec::new(), "test-session"),
+        )
+        .await;
+
+        assert!(result.is_err(), "expected Elapsed when harness never responds");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "timeout must fire near its bound, not after the test harness limit"
+        );
+    }
+
+    /// `turn_timeout` must fall back to [`DEFAULT_TURN_TIMEOUT`] when the
+    /// `SERA_TURN_TIMEOUT_SECS` env var is absent or unparseable.
+    #[test]
+    fn turn_timeout_defaults_when_env_unset() {
+        // Snapshot, clear, restore — keep this test hermetic so parallel
+        // invocations do not observe each other's environment.
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: test-only env mutation; no threads observe the transient
+        // unset state because the value is read inside `turn_timeout` below.
+        unsafe { std::env::remove_var("SERA_TURN_TIMEOUT_SECS") };
+        assert_eq!(turn_timeout(), DEFAULT_TURN_TIMEOUT);
+        if let Some(v) = prior {
+            // SAFETY: restoring the pre-test value; same caveat as above.
+            unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", v) };
+        }
     }
 
     /// `GET /api/hooks` must surface every hook registered in the in-process

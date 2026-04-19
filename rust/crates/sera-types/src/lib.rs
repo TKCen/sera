@@ -34,6 +34,7 @@ pub mod sandbox;
 pub mod secrets;
 pub mod session;
 pub mod semantic_memory;
+pub mod signal;
 pub mod skill;
 pub mod tool;
 pub mod training_export;

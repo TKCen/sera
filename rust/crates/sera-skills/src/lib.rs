@@ -36,6 +36,7 @@ pub mod sources;
 pub mod resolver;
 pub mod lockfile;
 pub mod cli;
+pub mod trigger_dispatcher;
 
 pub use error::SkillsError;
 pub use loader::{SkillLoader, FileSystemSkillPack};
@@ -61,3 +62,4 @@ pub use source::{ResolvedSkill, SkillSearchHit, SkillSource};
 pub use sources::{FileSystemSource, OciSkillPuller, PluginSource, RegistrySource};
 pub use resolver::{ResolvedSkillBundle, SkillResolver, SkillResolverBuilder};
 pub use lockfile::{LockReconciliation, SkillLockEntry, SkillLockFile, LOCKFILE_SCHEMA_VERSION};
+pub use trigger_dispatcher::{MatchReason, SkillMatch, TriggerDispatcher};

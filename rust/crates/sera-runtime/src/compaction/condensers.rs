@@ -277,7 +277,6 @@ impl Condenser for LlmSummarizingCondenser {
             max_tokens: Some(1024),
             stop_sequences: None,
             response_format: Some(ResponseFormat::Json),
-            thinking: Default::default(),
         };
 
         match self.model.chat_completion(request).await {
@@ -371,7 +370,6 @@ impl Condenser for LlmAttentionCondenser {
             max_tokens: Some(512),
             stop_sequences: None,
             response_format: Some(ResponseFormat::Json),
-            thinking: Default::default(),
         };
 
         match self.model.chat_completion(request).await {
@@ -457,7 +455,6 @@ impl Condenser for StructuredSummaryCondenser {
             max_tokens: Some(1024),
             stop_sequences: None,
             response_format: Some(ResponseFormat::Json),
-            thinking: Default::default(),
         };
 
         match self.model.chat_completion(request).await {

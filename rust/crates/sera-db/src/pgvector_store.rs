@@ -247,7 +247,6 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<SemanticEntry, SemanticEr
         created_at: time_to_chrono(created_at),
         last_accessed_at: last_accessed_at.map(time_to_chrono),
         promoted,
-        scope: None,
     })
 }
 

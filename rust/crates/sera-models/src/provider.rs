@@ -404,7 +404,6 @@ mod tests {
 
     fn make_mock_request() -> ModelRequest {
         ModelRequest {
-            thinking: Default::default(),
             messages: vec![json!({"role": "user", "content": "ping"})],
             tools: None,
             temperature: Some(0.0),

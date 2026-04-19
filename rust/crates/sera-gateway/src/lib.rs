@@ -8,6 +8,7 @@ pub mod harness_dispatch;
 pub mod kill_switch;
 pub mod party;
 pub mod plugin;
+pub mod signals;
 pub mod process_manager;
 pub mod session_persist;
 pub mod transcript_persist;

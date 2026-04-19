@@ -1,0 +1,29 @@
+---
+id: sera-internal-0002
+title: Use the grep tool to locate a symbol before answering
+suite: sera-internal
+version: 1
+tags: [tool-use, code-search]
+setup:
+  memory_seed: []
+  skills: []
+  sandbox_tier: 1
+input:
+  prompt: "Where is the function `execute_turn` defined in this workspace? Don't guess — search."
+expected:
+  assertions:
+    - kind: tool_called
+      values: ["grep"]
+    - kind: contains_any
+      values: ["sera-gateway", "execute_turn"]
+budget:
+  max_turns: 4
+  max_tokens: 3000
+  max_wall_seconds: 90
+---
+
+## Rationale
+
+Measures whether the model reaches for the grep tool instead of hallucinating
+a file path. The `tool_called` assertion is the primary signal; the
+`contains_any` assertion is a weaker correctness check on the final answer.

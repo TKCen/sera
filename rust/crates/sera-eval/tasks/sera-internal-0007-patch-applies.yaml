@@ -1,0 +1,34 @@
+---
+id: sera-internal-0007
+title: Produce a unified diff that applies cleanly to a known file
+suite: sera-internal
+version: 1
+tags: [tool-use, patch, code-gen]
+setup:
+  memory_seed: []
+  skills: []
+  sandbox_tier: 1
+input:
+  prompt: |
+    Write a unified diff that replaces the string "TODO: wire runner" with
+    "runner wired" in `rust/crates/sera-eval/src/runner.rs`. Output only the
+    patch, nothing else.
+expected:
+  assertions:
+    - kind: regex
+      values: ["(?s)---.*\\+\\+\\+.*@@.*"]
+    - kind: contains_all
+      values: ["runner wired"]
+budget:
+  max_turns: 2
+  max_tokens: 3000
+  max_wall_seconds: 60
+---
+
+## Rationale
+
+Exercises patch generation — the `regex` assertion enforces basic unified-diff
+structure (`---`, `+++`, `@@` hunk markers) and `contains_all` verifies the
+replacement string landed in the patch. Weaker than `patch_applies`
+(which requires a sandbox apply step), but runs with zero filesystem
+side-effects so it fits the stub test profile.

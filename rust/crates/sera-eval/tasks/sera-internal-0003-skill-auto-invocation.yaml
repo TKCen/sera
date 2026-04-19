@@ -1,0 +1,30 @@
+---
+id: sera-internal-0003
+title: Trigger the commit skill on a "commit this" request
+suite: sera-internal
+version: 1
+tags: [skills, dispatcher]
+setup:
+  memory_seed: []
+  skills: ["commit"]
+  sandbox_tier: 1
+input:
+  prompt: "Commit the pending changes with a reasonable message."
+expected:
+  assertions:
+    - kind: tool_called
+      values: ["skill.commit"]
+    - kind: not_contains
+      values: ["I cannot", "I don't have access"]
+budget:
+  max_turns: 5
+  max_tokens: 3000
+  max_wall_seconds: 90
+---
+
+## Rationale
+
+Validates the SkillTrigger dispatcher: the commit skill should be auto-invoked
+when the user's phrasing matches its trigger patterns. A model that refuses
+("I cannot commit for you") is a failure — it indicates the harness failed to
+expose the skill as a tool.

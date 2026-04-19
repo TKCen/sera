@@ -89,7 +89,7 @@ fn seed_bootstrap_catches_every_canonical_antipattern() {
 }
 
 #[test]
-fn seed_rules_match_the_five_skill_ids() {
+fn seed_rules_match_expected_skill_ids() {
     // Regression on the ID set — the skill names these exactly.
     let ids: Vec<_> = bash_seed_rules().into_iter().map(|r| r.id).collect();
     let mut expected = vec![
@@ -98,6 +98,7 @@ fn seed_rules_match_the_five_skill_ids() {
         "echo-to-file-creation".to_string(),
         "git-push-force-to-protected-branch".to_string(),
         "secret-inline-in-command".to_string(),
+        "monitor-sleep-file-poll".to_string(),
     ];
     expected.sort();
     let mut actual = ids;

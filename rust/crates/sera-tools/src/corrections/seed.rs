@@ -2,9 +2,22 @@
 //!
 //! Written to `<root>/bash/active/corrections.yaml` on first boot if the
 //! file does not yet exist. Rewriting an existing file would clobber
-//! hand-tuned rules, so the seeder is strictly idempotent — callers that
-//! want a pristine seed must delete the file first.
-
+//! hand-tuned rules, so the seeder is strictly idempotent.
+//!
+//! ## Immutable vs Mutable
+//!
+//! Seed rules are **compiled into the binary** — they cannot be changed without
+//! a recompile. They serve as the stable starting point only.
+//!
+//! All **evolvable rules** live in the YAML catalog at:
+//!   `~/.sera/tool-corrections/bash/active/corrections.yaml`
+//!
+//! YAML rules **shadow seed rules** — if a YAML rule has the same `id` as a
+//! seed rule, the YAML version takes precedence. The agent can:
+//!   - Add new rules to `active/corrections.yaml` (hot-reloaded)
+//!   - Modify or delete YAML rules without recompiling
+//!   - Propose new rules in `proposed/` for human approval
+//!
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -114,6 +127,24 @@ pub fn bash_seed_rules() -> Vec<CorrectionRule> {
                  path or environment variable name; the Secrets Manager injects it at execution \
                  time. Inline values end up in shell history and audit logs."
                     .to_string(),
+            added_by: "seed".to_string(),
+            added_at: now,
+            hit_count: 0,
+            last_hit: None,
+        },
+        // Monitor anti-pattern: sleep N; followed by a file-read command (wc, tail, cat, head, ls).
+        // This is the Monitor's "wait for file" pattern — it burns cycles polling.
+        // Correct: use `until <check>; do sleep 2; done` or run_in_background with piped output.
+        CorrectionRule {
+            id: "monitor-sleep-file-poll".to_string(),
+            antipattern: "sleep N; <file-read command>".to_string(),
+            pattern: r"\bsleep\s+\d+\s*;\s*(?:wc|cat|head|tail|ls|stat|test)\s".to_string(),
+            matches: MatchKind::Regex,
+            severity: CorrectionSeverity::Block,
+            correction:
+                "Use Monitor with an until-loop (`until <condition>; do sleep 2; done`) for \
+                 file-existence polling. For watching background task output, use run_in_background: true \
+                 and pipe directly or read the output file when the task completes.".to_string(),
             added_by: "seed".to_string(),
             added_at: now,
             hit_count: 0,
@@ -233,3 +264,4 @@ mod tests {
         assert!(!wrote_second, "seed must not clobber an existing catalog");
     }
 }
+

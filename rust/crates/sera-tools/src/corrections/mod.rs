@@ -11,8 +11,7 @@
 //! - Corrections are **data**, not code — the model can add rules via a
 //!   meta-tool without a recompile.
 //! - Per-tool scoping — a bad rule for `bash` cannot affect `runtime` tools.
-//! - Proposed rules land in `proposed/`; an admin promotes them to `active/`
-//!   (auto-promotion is out of scope here — a future skill can close that
+//! - Active rules are loaded from `active/corrections.yaml` and hot-reloaded on change.
 //!   loop after N clean uses).
 //! - Cap of 50 active rules per tool to bound preflight cost.
 

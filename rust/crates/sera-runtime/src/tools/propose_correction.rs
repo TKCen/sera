@@ -1,9 +1,10 @@
 //! Meta-tool: the agent proposes a new correction rule.
 //!
-//! Writes the rule to `<root>/<tool>/proposed/<id>.yaml`. It is NOT enforced
-//! until an admin promotes it — see [`sera_tools::corrections::CorrectionCatalog::approve`].
-//! A future skill can auto-promote rules that fire N times without triggering
-//! any complaint.
+//! Meta-tool: the agent proposes a new correction rule.
+//!
+//! Writes the rule to `<root>/<tool>/active/corrections.yaml`. The rule goes live
+//! immediately and is enforced on the next invocation. A circuit breaker will
+//! auto-pause rules that block >50% of calls in a rolling 50-call window.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,7 +36,7 @@ impl Tool for ProposeCorrection {
             description:
                 "Propose a new tool-layer correction rule that blocks or warns on a specific \
                  invocation pattern. The proposed rule is written to disk for admin review — it \
-                 does not take effect until approved."
+                 goes live immediately — the circuit breaker auto-pauses bad rules."
                     .to_string(),
             version: "1.0.0".to_string(),
             author: None,
@@ -223,14 +224,14 @@ impl Tool for ProposeCorrection {
 
         let path = self
             .catalog
-            .propose(tool_name, rule)
+            .add_rule(tool_name, rule)
             .map_err(|e| ToolError::ExecutionFailed(format!("propose: {e}")))?;
 
         Ok(ToolOutput::success(format!(
             "Proposed correction rule '{id}' for tool '{tool_name}'.\n\
              Reason: {reason}\n\
              Written to: {}\n\
-             This rule is NOT yet enforced — an admin must approve it.",
+             The rule is live immediately — the circuit breaker will auto-pause it if it fires >50% of the time.",
             path.display()
         )))
     }
@@ -257,7 +258,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn valid_proposal_is_written_to_proposed_dir() {
+    async fn add_rule_goes_live_immediately() {
         let dir = TempDir::new().unwrap();
         let cat = Arc::new(CorrectionCatalog::load(dir.path()).unwrap());
         let tool = ProposeCorrection::new(cat.clone());
@@ -276,11 +277,11 @@ mod tests {
         let out = tool.execute(input, make_ctx()).await.unwrap();
         assert!(!out.is_error);
         assert!(out.content.contains("Proposed"));
-        // Proposed rules are not enforced.
-        assert!(cat.check("bash", "echo secret").is_none());
-        // But the file landed in proposed/.
-        let proposed = dir.path().join("bash").join("proposed").join("my-rule.yaml");
-        assert!(proposed.exists());
+        // Rule is live immediately — enforced on next matching invocation.
+        assert!(cat.check("bash", "echo secret").is_some());
+        // File landed in active/.
+        let active = dir.path().join("bash").join("active").join("corrections.yaml");
+        assert!(active.exists());
     }
 
     #[tokio::test]

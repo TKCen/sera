@@ -231,11 +231,11 @@ fn require_env(key: &str) -> Result<String, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    // Note: these tests mutate process env vars and must run with `--test-threads=1`
-    // for sera-config, or accept occasional flakiness from parallel execution.
-    // In practice, cargo runs each crate's tests in a single binary so ordering
-    // is the main concern.
+    // SERA_ENV-mutating tests serialize on this lock to avoid racing on the
+    // process-global env var when cargo runs them in parallel within one binary.
+    static SERA_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn core_config_requires_database_url() {
@@ -436,6 +436,7 @@ mod tests {
 
     #[test]
     fn production_mode_rejects_dev_defaults() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SERA_ENV").ok();
         unsafe { env::set_var("SERA_ENV", "production") };
 
@@ -455,6 +456,7 @@ mod tests {
 
     #[test]
     fn production_mode_accepts_overridden_secrets() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SERA_ENV").ok();
         unsafe { env::set_var("SERA_ENV", "production") };
 
@@ -471,6 +473,7 @@ mod tests {
 
     #[test]
     fn dev_mode_accepts_dev_defaults_without_error() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SERA_ENV").ok();
         unsafe { env::remove_var("SERA_ENV") };
 
@@ -487,6 +490,7 @@ mod tests {
 
     #[test]
     fn production_error_lists_all_unsafe_fields() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SERA_ENV").ok();
         unsafe { env::set_var("SERA_ENV", "production") };
 

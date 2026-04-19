@@ -9,6 +9,7 @@
 
 pub mod agent_tools;
 pub mod centrifugo;
+pub mod correction_hook;
 pub mod delegation;
 pub mod dispatcher;
 pub mod file_edit;
@@ -20,6 +21,7 @@ pub mod http_request;
 pub mod knowledge;
 pub mod memory_search;
 pub mod mvs_tools;
+pub mod propose_correction;
 pub mod shell_exec;
 pub mod spawn;
 pub mod tool_search;
@@ -137,6 +139,19 @@ impl TraitToolRegistry {
         self.register(Box::new(spawn_tool));
         self.register(Box::new(yield_tool));
         self.register(Box::new(send_tool));
+        self
+    }
+
+    /// Register the `propose-correction` meta-tool bound to a shared
+    /// correction catalog. The agent uses it to submit new anti-pattern rules
+    /// (written to `proposed/`, never auto-promoted). Pair this with the
+    /// corresponding [`crate::tools::correction_hook::CorrectionHook`] to get
+    /// the full tool-layer reinforcement loop.
+    pub fn with_corrections(
+        mut self,
+        catalog: std::sync::Arc<sera_tools::corrections::CorrectionCatalog>,
+    ) -> Self {
+        self.register(Box::new(propose_correction::ProposeCorrection::new(catalog)));
         self
     }
 

@@ -173,8 +173,8 @@ async fn main() -> Result<()> {
     }
 
     eprintln!("\n=== generating report ===");
-    let raw_opt = (!skip_raw).then(|| raw_run_id.as_str());
-    let full_opt = (!skip_full).then(|| full_run_id.as_str());
+    let raw_opt = (!skip_raw).then_some(raw_run_id.as_str());
+    let full_opt = (!skip_full).then_some(full_run_id.as_str());
     render_report(&db_path, &report_path, &tasks, raw_opt, full_opt, &git_sha)?;
     eprintln!("wrote {}", report_path.display());
     Ok(())
@@ -741,7 +741,7 @@ fn render_report(
     if let Some(f) = &full {
         md.push_str(&format_summary_row("full", f));
     }
-    md.push_str("\n");
+    md.push('\n');
 
     md.push_str("## Per-task results\n\n");
     md.push_str("| Task | Raw | Full | Raw lat | Full lat | Raw turns | Full turns | Notes |\n");
@@ -780,7 +780,7 @@ fn render_report(
             notes
         ));
     }
-    md.push_str("\n");
+    md.push('\n');
 
     md.push_str("## What the harness can and cannot grade today\n\n");
     let unsupported_seen = collect_unsupported(&[raw.as_ref(), full.as_ref()]);
@@ -795,7 +795,7 @@ fn render_report(
         for k in &unsupported_seen {
             md.push_str(&format!("- `{}`\n", k));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     md.push_str("## Caveats and gaps in this run\n\n");

@@ -91,3 +91,9 @@ secrets/
 # Architecture visualization tool artifact
 sera_arch_config.json
 
+# Local operator config (holds referential secrets — use SERA_SECRET_* env vars)
+sera.yaml
+
+# Gateway runtime logs
+logs/
+

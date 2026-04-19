@@ -301,19 +301,6 @@ cmd_maintain() {
     warn "cargo not found — skipping Rust tests"
   fi
 
-  header "TypeScript: validate"
-  if [[ -f "${ROOT}/scripts/validate.sh" ]]; then
-    if bash "${ROOT}/scripts/validate.sh" 2>&1; then
-      pass "scripts/validate.sh"
-      passed=$((passed + 1))
-    else
-      fail "scripts/validate.sh"
-      failed=$((failed + 1))
-    fi
-  else
-    warn "scripts/validate.sh not found — skipping TS checks"
-  fi
-
   echo ""
   echo -e "${BOLD}Summary:${NC} ${GREEN}${passed} passed${NC}  ${RED}${failed} failed${NC}"
   if [[ "$failed" -gt 0 ]]; then

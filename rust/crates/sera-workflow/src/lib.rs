@@ -17,6 +17,7 @@
 
 pub mod claim;
 pub mod coordination;
+pub mod memory_manager;
 pub mod dreaming;
 pub mod source_ingest;
 pub mod error;
@@ -67,12 +68,20 @@ pub use termination::{
 
 // Re-exports — Circle coordination (SPEC-circles).
 pub use coordination::{
-    AggregatedResult, AggregationError, AllComplete, CircleMemory, ConcurrencyPolicy,
-    ConcurrencyScheduler, ConvergenceConfig, ConvergenceState, CoordResult, CoordTask,
-    CoordinationError, CoordinationPolicy, Coordinator, Custom, ExecFn, FirstSuccess, Majority,
-    Outcome, ParticipantId, ResultAggregator, WorkflowMemoryManager,
+    AggregatedResult, AggregationError, AllComplete, BlackboardCursor, CircleBlackboard,
+    CircleMemory, CircleStopReason, ConcurrencyPolicy, ConcurrencyScheduler, ConvergenceConfig,
+    ConvergenceState, CoordResult, CoordTask, CoordinationError, CoordinationPolicy, Coordinator,
+    Custom, ExecFn, FirstSuccess, Majority, Outcome, ParticipantId, PartyMember, ResultAggregator,
+    SubagentDelegationNotice, SubagentDelegationObserver, WorkflowMemoryManager,
+    BLACKBOARD_START, PARTY_PROMPT_ARTIFACT, PARTY_RESPONSE_ARTIFACT, PARTY_SYNTHESIS_ARTIFACT,
 };
 pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
+
+// Re-exports — coordinator-scoped workflow memory (SPEC-workflow-engine §memory).
+pub use memory_manager::{
+    AgentId, InstanceId, MemoryManager, StepSummary, WorkflowMemoryManager as CoordinatorMemoryManager,
+    WorkflowMemorySnapshot,
+};
 
 // Re-exports — Sleeptime Memory Consolidation (SPEC-memory §2b / sera-40o).
 pub use sleeptime::{

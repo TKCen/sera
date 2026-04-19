@@ -46,6 +46,8 @@ impl From<ToolError> for SeraError {
             ToolError::NotFound(_) => SeraErrorCode::NotFound,
             ToolError::ExecutionFailed(_) => SeraErrorCode::Internal,
             ToolError::InvalidArguments(_) => SeraErrorCode::InvalidInput,
+            ToolError::AbortedByHook { .. } => SeraErrorCode::Forbidden,
+            ToolError::PermissionDenied { .. } => SeraErrorCode::Forbidden,
         };
         SeraError::with_source(code, err.to_string(), err)
     }
@@ -80,7 +82,7 @@ impl From<LlmError> for SeraError {
     fn from(err: LlmError) -> Self {
         let code = match &err {
             LlmError::ContextOverflow(_) => SeraErrorCode::ResourceExhausted,
-            LlmError::RateLimited(_) => SeraErrorCode::RateLimited,
+            LlmError::RateLimited { .. } => SeraErrorCode::RateLimited,
             LlmError::ProviderUnavailable(_) => SeraErrorCode::Unavailable,
             LlmError::Timeout(_) => SeraErrorCode::Timeout,
             LlmError::RequestError(_) => SeraErrorCode::Internal,
@@ -217,7 +219,7 @@ mod tests {
 
     #[test]
     fn llm_rate_limited_maps_to_rate_limited() {
-        let e: SeraError = LlmError::RateLimited("429".into()).into();
+        let e: SeraError = LlmError::rate_limited("429").into();
         assert_eq!(e.code, SeraErrorCode::RateLimited);
     }
 

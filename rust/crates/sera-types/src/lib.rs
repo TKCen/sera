@@ -1,8 +1,11 @@
 //! SERA Domain Types — shared types matching the BYOH contract schemas
 //! and the full sera-core domain model.
 
+pub mod agent_tool;
+pub mod circle;
 pub mod circle_activity;
 pub mod envelope;
+pub mod llm;
 pub mod harness;
 pub mod evolution;
 pub mod versioning;
@@ -31,17 +34,19 @@ pub mod sandbox;
 pub mod secrets;
 pub mod session;
 pub mod semantic_memory;
+pub mod signal;
 pub mod skill;
 pub mod tool;
 pub mod training_export;
 
 pub use evolution::*;
+pub use llm::ThinkingLevel;
 pub use versioning::BuildIdentity;
 pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
 pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
 pub use semantic_memory::{
-    EvictionPolicy, MemoryId, ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore,
-    SemanticQuery, SemanticStats,
+    Damping, EvictionPolicy, MemoryHit, MemoryId, ScopeHierarchy, Scope, ScoredEntry,
+    SemanticEntry, SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats,
 };
 
 use serde::{Deserialize, Serialize};

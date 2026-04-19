@@ -63,6 +63,16 @@ async fn setup_rate_limited_server() -> MockServer {
     server
 }
 
+/// Test config that disables the new sticky-fallback window so the legacy
+/// integration tests continue to round-robin / fail-over predictably.
+fn integ_cfg() -> CooldownConfig {
+    CooldownConfig {
+        sticky_fallback_window: Duration::ZERO,
+        failure_threshold: 3,
+        ..CooldownConfig::default()
+    }
+}
+
 #[tokio::test]
 async fn pool_fails_over_from_rate_limited_to_healthy() {
     let bad = setup_rate_limited_server().await;
@@ -76,7 +86,7 @@ async fn pool_fails_over_from_rate_limited_to_healthy() {
             ProviderAccount::new("bad", "sk-bad", Some(bad.uri())),
             ProviderAccount::new("good", "sk-good", Some(good.uri())),
         ],
-        CooldownConfig::default(),
+        integ_cfg(),
     ));
 
     // LlmClient's fallback base_url / api_key should never be used because
@@ -88,7 +98,7 @@ async fn pool_fails_over_from_rate_limited_to_healthy() {
     // cooling-down → caller sees RateLimited.
     let first = client.chat_non_streaming(&[user_msg("hi")], &[]).await;
     match first {
-        Err(sera_runtime::llm_client::LlmError::RateLimited(_)) => {}
+        Err(sera_runtime::llm_client::LlmError::RateLimited { .. }) => {}
         Err(other) => panic!("expected RateLimited, got {other:?}"),
         Ok(_) => panic!("first call should hit the 429 account"),
     }
@@ -117,7 +127,7 @@ async fn pool_exhausted_returns_provider_unavailable() {
         // Long cooldown so we can't "expire" between the two hits.
         CooldownConfig {
             rate_limit_duration: Duration::from_secs(60),
-            ..CooldownConfig::default()
+            ..integ_cfg()
         },
     ));
 
@@ -129,16 +139,22 @@ async fn pool_exhausted_returns_provider_unavailable() {
     // Second hit → 429 on account 1
     let _ = client.chat_non_streaming(&[user_msg("b")], &[]).await;
 
-    // Third hit → pool is exhausted → LlmError::ProviderUnavailable
+    // Third hit → pool is exhausted → LlmError::RateLimited (sera-hjem) with
+    // the soonest cooldown expiry attached so callers can sleep instead of
+    // spinning on retries.
     let result = client.chat_non_streaming(&[user_msg("c")], &[]).await;
     match result {
-        Err(sera_runtime::llm_client::LlmError::ProviderUnavailable(msg)) => {
+        Err(sera_runtime::llm_client::LlmError::RateLimited { message, retry_after }) => {
             assert!(
-                msg.contains("rate-limited") || msg.contains("unavailable"),
-                "unexpected message: {msg}"
+                message.contains("rate-limited") || message.contains("unavailable"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                retry_after.is_some(),
+                "exhausted pool should report soonest expiry"
             );
         }
-        Err(other) => panic!("expected ProviderUnavailable, got {other:?}"),
+        Err(other) => panic!("expected RateLimited, got {other:?}"),
         Ok(_) => panic!("pool should be exhausted"),
     }
 }

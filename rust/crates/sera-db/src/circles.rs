@@ -3,6 +3,16 @@
 use sqlx::PgPool;
 use crate::error::DbError;
 
+/// Row type for `circle_constitution_versions` table.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ConstitutionVersionRow {
+    pub circle_id: String,
+    pub version: i32,
+    pub text_hash: String,
+    pub changed_by: String,
+    pub changed_at: time::OffsetDateTime,
+}
+
 /// Row type for circles table.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CircleRow {
@@ -77,5 +87,72 @@ impl CircleRepository {
             });
         }
         Ok(())
+    }
+
+    /// Update the `constitution` column on a circle.
+    pub async fn update_constitution(
+        pool: &PgPool,
+        circle_id: &str,
+        constitution_text: Option<&str>,
+    ) -> Result<(), DbError> {
+        let affected = sqlx::query(
+            "UPDATE circles SET constitution = $1, updated_at = NOW()
+             WHERE id::text = $2 OR name = $2"
+        )
+        .bind(constitution_text)
+        .bind(circle_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(DbError::NotFound {
+                entity: "circle",
+                key: "id",
+                value: circle_id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Append a constitution audit entry for `circle_id`, returning the new version number.
+    ///
+    /// The version is `MAX(version) + 1` for that circle, or `1` if none exist.
+    pub async fn record_constitution_update(
+        pool: &PgPool,
+        circle_id: &str,
+        text_hash: &str,
+        changed_by: &str,
+    ) -> Result<i32, DbError> {
+        let row: (i32,) = sqlx::query_as(
+            "INSERT INTO circle_constitution_versions (circle_id, version, text_hash, changed_by)
+             SELECT $1,
+                    COALESCE((SELECT MAX(version) FROM circle_constitution_versions WHERE circle_id = $1), 0) + 1,
+                    $2,
+                    $3
+             RETURNING version"
+        )
+        .bind(circle_id)
+        .bind(text_hash)
+        .bind(changed_by)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    /// Retrieve all audit entries for a circle, ordered by version ascending.
+    pub async fn get_constitution_versions(
+        pool: &PgPool,
+        circle_id: &str,
+    ) -> Result<Vec<ConstitutionVersionRow>, DbError> {
+        let rows = sqlx::query_as::<_, ConstitutionVersionRow>(
+            "SELECT circle_id, version, text_hash, changed_by, changed_at
+             FROM circle_constitution_versions
+             WHERE circle_id = $1
+             ORDER BY version ASC"
+        )
+        .bind(circle_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
     }
 }

@@ -130,6 +130,23 @@ pub enum TurnOutcome {
         tokens_used: TokenUsage,
         duration_ms: u64,
     },
+    /// A plan was emitted by the think step (ReactMode::PlanAndAct).
+    ///
+    /// The runtime entered a planning-only think pass and produced a list of
+    /// intended tool calls without dispatching them. The turn is at a
+    /// checkpoint — downstream code (e.g. a review/approval surface in a
+    /// future ticket) may inspect/mutate the plan, after which the runtime
+    /// re-enters act() to execute the plan's tool_calls.
+    PlanEmitted {
+        /// Intended tool calls captured from the model's planning response.
+        plan_tool_calls: Vec<ToolCall>,
+        /// Model-authored rationale (assistant message text, if any).
+        rationale: String,
+        /// Monotonic epoch millis when the plan was produced.
+        created_at_ms: u64,
+        tokens_used: TokenUsage,
+        duration_ms: u64,
+    },
 }
 
 // ── Capabilities ─────────────────────────────────────────────────────────────

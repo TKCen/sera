@@ -314,6 +314,25 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Add circle constitution section — injected as system-prompt prefix.
+    ///
+    /// Constitution text is marked `required: true` and assigned the highest
+    /// priority (priority 5) so it precedes all other sections. It does NOT
+    /// count against memory budgets — callers must NOT include its char-count
+    /// in the `system_prompt_chars` argument passed to
+    /// [`crate::memory_budget::compute_memory_char_budget`].
+    pub fn add_constitution(mut self, text: &str) -> Self {
+        if !text.is_empty() {
+            self.sections.push(PromptSection {
+                id: "constitution".to_string(),
+                priority: 5, // Highest priority — always first
+                content: format!("## Circle Constitution\n\n{}", text),
+                required: true,
+            });
+        }
+        self
+    }
+
     /// Add circle activity section (peer agent summaries).
     ///
     /// Formats entries as `- [agent-id @ timestamp] summary` bullets under
@@ -513,6 +532,59 @@ mod tests {
             .build();
 
         assert!(!prompt.contains("## Circle Activity"), "section must not appear when entries are empty");
+    }
+
+    // ── Constitution tests (sera-8d1.4) ──────────────────────────────────────
+
+    #[test]
+    fn test_constitution_included_when_circle_has_one() {
+        let prompt = SystemPromptBuilder::new(10_000)
+            .add_identity("worker", "")
+            .add_constitution("# Stack\n- Rust\n- axum")
+            .build();
+
+        assert!(
+            prompt.contains("## Circle Constitution"),
+            "constitution heading must be present"
+        );
+        assert!(prompt.contains("# Stack"), "constitution body must be present");
+        // Constitution should appear BEFORE identity because priority=5 < 10.
+        let constitution_pos = prompt.find("## Circle Constitution").unwrap();
+        let identity_pos = prompt.find("You are a worker").unwrap();
+        assert!(
+            constitution_pos < identity_pos,
+            "constitution must precede identity section"
+        );
+    }
+
+    #[test]
+    fn test_constitution_omitted_when_no_circle() {
+        let prompt = SystemPromptBuilder::new(10_000)
+            .add_identity("worker", "")
+            .build();
+
+        assert!(
+            !prompt.contains("## Circle Constitution"),
+            "constitution section must not appear when no circle"
+        );
+    }
+
+    #[test]
+    fn test_missing_file_constitution_skipped_gracefully() {
+        // Simulate the caller resolving a File variant and getting None on error.
+        // When constitution text is None, add_constitution is not called.
+        let resolved: Option<String> = None; // file not found — warn and skip
+
+        let mut builder = SystemPromptBuilder::new(10_000).add_identity("worker", "");
+        if let Some(text) = &resolved {
+            builder = builder.add_constitution(text);
+        }
+        let prompt = builder.build();
+
+        assert!(
+            !prompt.contains("## Circle Constitution"),
+            "missing file must not fail session or inject empty section"
+        );
     }
 
     #[test]

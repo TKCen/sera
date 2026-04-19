@@ -53,6 +53,9 @@ pub enum CooldownReason {
     ProviderUnavailable,
     /// Repeated failures triggered exponential backoff.
     RepeatedFailure,
+    /// Non-retryable 4xx (e.g. 401/403/404) — disables the credential
+    /// until an operator clears it.
+    NonRetryable,
 }
 
 impl CooldownReason {
@@ -61,6 +64,7 @@ impl CooldownReason {
             CooldownReason::RateLimited => "rate_limited",
             CooldownReason::ProviderUnavailable => "provider_unavailable",
             CooldownReason::RepeatedFailure => "repeated_failure",
+            CooldownReason::NonRetryable => "non_retryable",
         }
     }
 }
@@ -79,12 +83,21 @@ pub enum AccountState {
         until: Instant,
         reason: CooldownReason,
     },
+    /// Persistently disabled (e.g. invalid credential — non-retryable 4xx).
+    /// `acquire()` always skips. Cleared only by an explicit operator action
+    /// via [`ProviderAccount::force_available`].
+    Disabled { reason: CooldownReason },
 }
 
 impl AccountState {
     /// True if this state is still cooling down at `now`.
     pub fn is_cooling_down(&self, now: Instant) -> bool {
         matches!(self, AccountState::CoolingDown { until, .. } if *until > now)
+    }
+
+    /// True if this state is `Disabled` (skipped by round-robin until cleared).
+    pub fn is_disabled(&self) -> bool {
+        matches!(self, AccountState::Disabled { .. })
     }
 }
 
@@ -95,16 +108,20 @@ impl AccountState {
 /// Tuning knobs for cooldown durations.
 #[derive(Debug, Clone)]
 pub struct CooldownConfig {
-    /// Base TTL for a 429 rate-limit cooldown.
+    /// Base TTL for a 429 rate-limit cooldown when no `Retry-After` is supplied.
     pub rate_limit_duration: Duration,
     /// Base TTL for a provider-unavailable / 5xx cooldown.
     pub provider_unavailable_duration: Duration,
     /// Base TTL for a repeated-failure cooldown (doubles each step until max).
     pub failure_base_duration: Duration,
-    /// Hard upper bound on any cooldown duration.
+    /// Hard upper bound on any cooldown duration. Sera-hjem default: 5 min.
     pub max_duration: Duration,
     /// Failure count (per account) after which repeated-failure backoff kicks in.
     pub failure_threshold: u32,
+    /// "Sticky fallback" window: after a successful call on a fallback
+    /// credential, the pool stays on that credential for this duration before
+    /// round-robin resumes. `Duration::ZERO` disables sticky behaviour.
+    pub sticky_fallback_window: Duration,
 }
 
 impl Default for CooldownConfig {
@@ -112,9 +129,10 @@ impl Default for CooldownConfig {
         Self {
             rate_limit_duration: Duration::from_secs(60),
             provider_unavailable_duration: Duration::from_secs(30),
-            failure_base_duration: Duration::from_secs(300), // 5m
-            max_duration: Duration::from_secs(3600),         // 1h
-            failure_threshold: 3,
+            failure_base_duration: Duration::from_secs(60), // 1m base for 429 backoff
+            max_duration: Duration::from_secs(300),         // 5m cap (sera-hjem)
+            failure_threshold: 1, // exponential backoff doubles from the first 429
+            sticky_fallback_window: Duration::from_secs(300), // 5m sticky window
         }
     }
 }
@@ -140,8 +158,19 @@ impl CooldownConfig {
 /// Errors returned by the pool.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum PoolError {
-    #[error("no accounts available for provider '{provider_id}' (all {total} rate-limited or unavailable)")]
-    NoAccountsAvailable { provider_id: String, total: usize },
+    #[error(
+        "no accounts available for provider '{provider_id}' \
+         (all {total} rate-limited, disabled or unavailable; \
+         soonest cooldown expiry in {min_cooldown_remaining:?})"
+    )]
+    NoAccountsAvailable {
+        provider_id: String,
+        total: usize,
+        /// Smallest remaining cooldown across all accounts. `None` when every
+        /// non-disabled account is permanently disabled (no cooldown to wait
+        /// for) or when the pool is empty.
+        min_cooldown_remaining: Option<Duration>,
+    },
 
     #[error("pool for provider '{0}' is empty — no accounts configured")]
     EmptyPool(String),
@@ -225,8 +254,14 @@ impl ProviderAccount {
         *s = AccountState::CoolingDown { until, reason };
     }
 
+    fn set_disabled(&self, reason: CooldownReason) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        *s = AccountState::Disabled { reason };
+    }
+
     /// Lazily flip back to Available if the cooldown expired. Returns `true`
     /// if the account is now `Available` (either freshly expired or already).
+    /// `Disabled` accounts always return `false`.
     fn refresh_state(&self, now: Instant) -> bool {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match &*s {
@@ -239,6 +274,17 @@ impl ProviderAccount {
                     false
                 }
             }
+            AccountState::Disabled { .. } => false,
+        }
+    }
+
+    /// Remaining cooldown duration at `now`. Returns `None` for `Available`
+    /// or `Disabled` accounts.
+    fn remaining_cooldown(&self, now: Instant) -> Option<Duration> {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        match &*s {
+            AccountState::CoolingDown { until, .. } if *until > now => Some(*until - now),
+            _ => None,
         }
     }
 }
@@ -246,6 +292,15 @@ impl ProviderAccount {
 // ---------------------------------------------------------------------------
 // AccountPool
 // ---------------------------------------------------------------------------
+
+/// "Sticky fallback" hint — when a fallback credential succeeds, the pool
+/// pins acquisitions to that credential index until `until` expires, so the
+/// caller is not bounced back to a still-recovering primary mid-burst.
+#[derive(Debug, Clone, Copy)]
+struct StickyHint {
+    idx: usize,
+    until: Instant,
+}
 
 /// Pool of provider accounts for a single provider id.
 #[derive(Debug)]
@@ -255,6 +310,9 @@ pub struct AccountPool {
     next_idx: AtomicUsize,
     cooldown: CooldownConfig,
     default_base_url: Option<String>,
+    /// Active sticky fallback (interior mutability so `acquire` can pin
+    /// without taking `&mut self`).
+    sticky: Mutex<Option<StickyHint>>,
 }
 
 impl AccountPool {
@@ -271,6 +329,7 @@ impl AccountPool {
             next_idx: AtomicUsize::new(0),
             cooldown,
             default_base_url: None,
+            sticky: Mutex::new(None),
         }
     }
 
@@ -296,9 +355,16 @@ impl AccountPool {
         self.default_base_url.as_deref()
     }
 
-    /// Acquire the next available account (round-robin, skipping cooled-down
-    /// entries).  Returns [`PoolError::NoAccountsAvailable`] when every
-    /// account is cooling down.
+    /// Acquire the next available account.
+    ///
+    /// Selection order:
+    /// 1. If a sticky-fallback hint is active and the pinned credential is
+    ///    still available at `now`, return it (sera-hjem stickiness).
+    /// 2. Otherwise round-robin from `next_idx`, skipping cooling-down or
+    ///    `Disabled` entries.
+    ///
+    /// Returns [`PoolError::NoAccountsAvailable`] (with the soonest cooldown
+    /// expiry, if any) when no usable account exists.
     pub fn acquire(self: &Arc<Self>) -> Result<AccountGuard, PoolError> {
         if self.accounts.is_empty() {
             return Err(PoolError::EmptyPool(self.provider_id.clone()));
@@ -307,7 +373,34 @@ impl AccountPool {
         let now = Instant::now();
         let len = self.accounts.len();
 
-        // One full pass over all accounts starting at `next_idx`.
+        // 1) Sticky-fallback: prefer the pinned credential while it's hot.
+        let sticky_idx = {
+            let mut s = self.sticky.lock().unwrap_or_else(|e| e.into_inner());
+            match *s {
+                Some(StickyHint { until, idx }) if until > now && idx < len => Some(idx),
+                Some(_) => {
+                    *s = None;
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some(idx) = sticky_idx {
+            let account = &self.accounts[idx];
+            if account.refresh_state(now) {
+                return Ok(AccountGuard {
+                    pool: Arc::clone(self),
+                    account: Arc::clone(account),
+                    sticky_idx: Some(idx),
+                    completed: false,
+                });
+            }
+            // Sticky credential lapsed — drop the hint and fall through.
+            let mut s = self.sticky.lock().unwrap_or_else(|e| e.into_inner());
+            *s = None;
+        }
+
+        // 2) Round-robin scan.
         let start = self.next_idx.fetch_add(1, Ordering::Relaxed);
         for offset in 0..len {
             let idx = (start.wrapping_add(offset)) % len;
@@ -316,15 +409,54 @@ impl AccountPool {
                 return Ok(AccountGuard {
                     pool: Arc::clone(self),
                     account: Arc::clone(account),
+                    sticky_idx: Some(idx),
                     completed: false,
                 });
             }
         }
 
+        // 3) Exhaustion — compute soonest expiry across the cooling accounts.
+        let min_cooldown_remaining = self
+            .accounts
+            .iter()
+            .filter_map(|a| a.remaining_cooldown(now))
+            .min();
+
         Err(PoolError::NoAccountsAvailable {
             provider_id: self.provider_id.clone(),
             total: len,
+            min_cooldown_remaining,
         })
+    }
+
+    /// Set / clear the sticky-fallback pin. Public for tests and operator
+    /// tooling; normal use goes via [`AccountGuard::mark_success`].
+    pub fn set_sticky(&self, idx: usize, until: Instant) {
+        if idx >= self.accounts.len() {
+            return;
+        }
+        let mut s = self.sticky.lock().unwrap_or_else(|e| e.into_inner());
+        *s = Some(StickyHint { idx, until });
+    }
+
+    /// Clear any active sticky-fallback pin.
+    pub fn clear_sticky(&self) {
+        let mut s = self.sticky.lock().unwrap_or_else(|e| e.into_inner());
+        *s = None;
+    }
+
+    /// Inspect the active sticky pin (for tests/diagnostics).
+    pub fn sticky_idx(&self) -> Option<usize> {
+        self.sticky
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|h| h.idx)
+    }
+
+    /// Configured sticky-fallback window (mirrors `CooldownConfig`).
+    pub fn sticky_window(&self) -> Duration {
+        self.cooldown.sticky_fallback_window
     }
 
     /// True when at least one account is currently available.
@@ -367,7 +499,33 @@ impl AccountPool {
                 let dur = self.cooldown.exp_backoff(failures.max(self.cooldown.failure_threshold));
                 account.set_cooldown(now + dur, reason);
             }
+            CooldownReason::NonRetryable => {
+                // No backoff math — disable persistently.
+                account.bump_failures();
+                account.set_disabled(reason);
+            }
         }
+    }
+
+    /// Apply a 429 cooldown that honours an explicit `Retry-After` from the
+    /// provider when it is at least as long as the exponentially-backed-off
+    /// default.  Bumps the failure counter so subsequent 429s extend the
+    /// backoff (capped at [`CooldownConfig::max_duration`]).
+    fn apply_rate_limited(&self, account: &ProviderAccount, retry_after: Option<Duration>) {
+        let now = Instant::now();
+        let failures = account.bump_failures();
+        // Base = max(server-supplied retry_after, exponential backoff).
+        let backoff = if failures >= self.cooldown.failure_threshold {
+            self.cooldown.exp_backoff(failures)
+        } else {
+            self.cooldown.rate_limit_duration
+        };
+        let base = match retry_after {
+            Some(server) => server.max(backoff),
+            None => backoff,
+        };
+        let capped = base.min(self.cooldown.max_duration);
+        account.set_cooldown(now + capped, CooldownReason::RateLimited);
     }
 }
 
@@ -383,6 +541,9 @@ impl AccountPool {
 pub struct AccountGuard {
     pool: Arc<AccountPool>,
     account: Arc<ProviderAccount>,
+    /// Index of the acquired credential — needed to set the sticky-fallback
+    /// pin on success.
+    sticky_idx: Option<usize>,
     completed: bool,
 }
 
@@ -390,6 +551,11 @@ impl AccountGuard {
     /// The acquired account.
     pub fn account(&self) -> &ProviderAccount {
         &self.account
+    }
+
+    /// User-facing credential id for telemetry / logs.
+    pub fn credential_id(&self) -> &str {
+        &self.account.id
     }
 
     /// Effective base URL (account override or pool default, if any).
@@ -400,22 +566,47 @@ impl AccountGuard {
             .or(self.pool.default_base_url())
     }
 
-    /// Record a successful call.  Clears the failure counter.
+    /// Record a successful call.  Clears the failure counter and pins the
+    /// sticky-fallback hint to this credential for
+    /// [`CooldownConfig::sticky_fallback_window`].
     pub fn mark_success(mut self) {
         self.account.reset_failures();
+        let window = self.pool.cooldown.sticky_fallback_window;
+        if !window.is_zero()
+            && let Some(idx) = self.sticky_idx
+        {
+            let until = Instant::now() + window;
+            self.pool.set_sticky(idx, until);
+        }
         self.completed = true;
     }
 
+    /// Sera-hjem alias for [`AccountGuard::mark_success`].
+    pub fn record_success(self) {
+        self.mark_success();
+    }
+
     /// Mark the account as rate-limited (HTTP 429).  Starts / extends the
-    /// rate-limit cooldown.
+    /// rate-limit cooldown using the default exponential backoff.
     pub fn mark_rate_limited(mut self) {
-        self.pool.apply_cooldown(&self.account, CooldownReason::RateLimited);
+        self.pool.apply_rate_limited(&self.account, None);
+        self.pool.clear_sticky();
+        self.completed = true;
+    }
+
+    /// Sera-hjem: 429 with optional server-supplied `Retry-After`.  When
+    /// supplied, the longer of (server retry_after, exponential backoff) is
+    /// used, capped at [`CooldownConfig::max_duration`].
+    pub fn record_429(mut self, retry_after: Option<Duration>) {
+        self.pool.apply_rate_limited(&self.account, retry_after);
+        self.pool.clear_sticky();
         self.completed = true;
     }
 
     /// Mark the account as unavailable (HTTP 5xx / network error).
     pub fn mark_unavailable(mut self) {
         self.pool.apply_cooldown(&self.account, CooldownReason::ProviderUnavailable);
+        self.pool.clear_sticky();
         self.completed = true;
     }
 
@@ -423,6 +614,16 @@ impl AccountGuard {
     /// backoff if the threshold was crossed.
     pub fn mark_failure(mut self) {
         self.pool.apply_cooldown(&self.account, CooldownReason::RepeatedFailure);
+        self.pool.clear_sticky();
+        self.completed = true;
+    }
+
+    /// Sera-hjem: persistently disable this credential — used for non-retryable
+    /// 4xx responses (401, 403, 404 etc.).  The credential is permanently
+    /// skipped by `acquire()` until [`ProviderAccount::force_available`].
+    pub fn record_non_retryable_error(mut self) {
+        self.pool.apply_cooldown(&self.account, CooldownReason::NonRetryable);
+        self.pool.clear_sticky();
         self.completed = true;
     }
 }
@@ -446,15 +647,22 @@ impl Drop for AccountGuard {
 mod tests {
     use super::*;
 
+    /// Test helper: round-robin-friendly config with sticky-fallback disabled
+    /// and the legacy 60s rate-limit baseline (failure_threshold=3).  Tests
+    /// that exercise sticky behaviour build their own config explicitly.
+    fn round_robin_config() -> CooldownConfig {
+        CooldownConfig {
+            sticky_fallback_window: Duration::ZERO,
+            failure_threshold: 3,
+            ..CooldownConfig::default()
+        }
+    }
+
     fn make_pool(n: usize) -> Arc<AccountPool> {
         let accounts: Vec<ProviderAccount> = (0..n)
             .map(|i| ProviderAccount::new(format!("k{i}"), format!("sk-{i}"), None))
             .collect();
-        Arc::new(AccountPool::new(
-            "openai",
-            accounts,
-            CooldownConfig::default(),
-        ))
+        Arc::new(AccountPool::new("openai", accounts, round_robin_config()))
     }
 
     // ── Round-robin distribution ──────────────────────────────────────────────
@@ -506,7 +714,7 @@ mod tests {
     fn rate_limit_duration_matches_config() {
         let short = CooldownConfig {
             rate_limit_duration: Duration::from_millis(1),
-            ..CooldownConfig::default()
+            ..round_robin_config()
         };
         let pool = Arc::new(AccountPool::new(
             "openai",
@@ -531,7 +739,7 @@ mod tests {
     fn cooldown_expiry_restores_account_on_acquire() {
         let short = CooldownConfig {
             rate_limit_duration: Duration::from_millis(1),
-            ..CooldownConfig::default()
+            ..round_robin_config()
         };
         let pool = Arc::new(AccountPool::new(
             "openai",
@@ -562,9 +770,17 @@ mod tests {
 
         let err = pool.acquire().expect_err("pool should be exhausted");
         match err {
-            PoolError::NoAccountsAvailable { provider_id, total } => {
+            PoolError::NoAccountsAvailable {
+                provider_id,
+                total,
+                min_cooldown_remaining,
+            } => {
                 assert_eq!(provider_id, "openai");
                 assert_eq!(total, 2);
+                assert!(
+                    min_cooldown_remaining.is_some(),
+                    "exhausted pool should report a soonest expiry"
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -594,7 +810,7 @@ mod tests {
         // here the default is 60s, so we use a fresh short-cooldown pool.
         let short = CooldownConfig {
             rate_limit_duration: Duration::from_millis(1),
-            ..CooldownConfig::default()
+            ..round_robin_config()
         };
         let pool = Arc::new(AccountPool::new(
             "openai",
@@ -798,5 +1014,292 @@ mod tests {
             pool.accounts[0].state_snapshot(),
             AccountState::Available
         ));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // sera-hjem additions
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Pool builder for sera-hjem tests — exposes sticky window + non-default
+    /// failure threshold knobs without inheriting the round-robin shim.
+    fn make_hjem_pool(n: usize, cfg: CooldownConfig) -> Arc<AccountPool> {
+        let accounts: Vec<ProviderAccount> = (0..n)
+            .map(|i| ProviderAccount::new(format!("k{i}"), format!("sk-{i}"), None))
+            .collect();
+        Arc::new(AccountPool::new("openai", accounts, cfg))
+    }
+
+    fn no_sticky_cfg() -> CooldownConfig {
+        CooldownConfig {
+            sticky_fallback_window: Duration::ZERO,
+            failure_threshold: 1,
+            failure_base_duration: Duration::from_millis(10),
+            rate_limit_duration: Duration::from_millis(10),
+            max_duration: Duration::from_secs(300),
+            ..CooldownConfig::default()
+        }
+    }
+
+    // Round-robin across multiple credentials (no sticky bias).
+    #[test]
+    fn hjem_round_robin_selects_each_credential_at_least_once() {
+        let pool = make_hjem_pool(3, no_sticky_cfg());
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..3 {
+            let g = pool.acquire().expect("acquire");
+            seen.insert(g.account().id.clone());
+            g.mark_success();
+        }
+        assert_eq!(seen.len(), 3, "every credential should be picked: {seen:?}");
+    }
+
+    // 429 cooldown skips the offending key.
+    #[test]
+    fn hjem_429_cools_down_and_round_robin_skips() {
+        let pool = make_hjem_pool(2, no_sticky_cfg());
+        let g = pool.acquire().expect("acquire");
+        let bad = g.account().id.clone();
+        g.record_429(None);
+
+        let g2 = pool.acquire().expect("acquire fallback");
+        assert_ne!(g2.account().id, bad);
+    }
+
+    // Exponential backoff doubles each consecutive 429.
+    #[test]
+    fn hjem_exponential_backoff_doubles_each_consecutive_429() {
+        let cfg = CooldownConfig {
+            failure_threshold: 1,
+            rate_limit_duration: Duration::from_secs(10),
+            failure_base_duration: Duration::from_secs(10),
+            max_duration: Duration::from_secs(3600),
+            sticky_fallback_window: Duration::ZERO,
+            ..CooldownConfig::default()
+        };
+        // First 429: failures=1 → exp_backoff(1) = 10s
+        assert_eq!(cfg.exp_backoff(1), Duration::from_secs(10));
+        // Second 429: failures=2 → 20s
+        assert_eq!(cfg.exp_backoff(2), Duration::from_secs(20));
+        // Third 429: failures=3 → 40s
+        assert_eq!(cfg.exp_backoff(3), Duration::from_secs(40));
+    }
+
+    // Sticky fallback: after a successful call on a fallback credential, the
+    // pool stays on it for the configured window.
+    #[test]
+    fn hjem_sticky_fallback_pins_after_success() {
+        let cfg = CooldownConfig {
+            sticky_fallback_window: Duration::from_secs(60),
+            failure_threshold: 1,
+            rate_limit_duration: Duration::from_millis(10),
+            ..CooldownConfig::default()
+        };
+        let pool = make_hjem_pool(3, cfg);
+
+        // Burn the first credential (k0) → 429.
+        let g0 = pool.acquire().expect("acquire k0");
+        let primary = g0.account().id.clone();
+        g0.record_429(None);
+
+        // Acquire fallback (whichever round-robin lands on next).
+        let g1 = pool.acquire().expect("acquire fallback");
+        let fallback = g1.account().id.clone();
+        assert_ne!(fallback, primary);
+        g1.mark_success();
+
+        // Subsequent acquires within the sticky window must keep returning
+        // the same fallback credential.
+        for _ in 0..5 {
+            let g = pool.acquire().expect("acquire sticky");
+            assert_eq!(g.account().id, fallback, "sticky fallback should pin");
+            g.mark_success();
+        }
+    }
+
+    // Sticky window expires → round-robin resumes.
+    #[test]
+    fn hjem_sticky_window_expires_then_round_robin_resumes() {
+        let cfg = CooldownConfig {
+            sticky_fallback_window: Duration::from_millis(20),
+            failure_threshold: 3,
+            rate_limit_duration: Duration::from_millis(5),
+            ..CooldownConfig::default()
+        };
+        let pool = make_hjem_pool(3, cfg);
+
+        // Burn k0 briefly so a fallback is chosen.
+        let g0 = pool.acquire().expect("acquire k0");
+        let primary = g0.account().id.clone();
+        g0.record_429(None);
+
+        let g1 = pool.acquire().expect("fallback");
+        let fallback = g1.account().id.clone();
+        assert_ne!(fallback, primary);
+        g1.mark_success();
+
+        // Wait for sticky window to expire AND k0 cooldown to expire.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // After expiry, round-robin should yield variety across the 3 keys.
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..6 {
+            let g = pool.acquire().expect("acquire");
+            seen.insert(g.account().id.clone());
+            g.mark_success();
+            // Each success re-pins sticky → clear it so we keep rotating.
+            pool.clear_sticky();
+        }
+        assert!(
+            seen.len() >= 2,
+            "post-sticky round-robin should hit multiple keys: {seen:?}"
+        );
+    }
+
+    // Non-retryable error disables the credential persistently.
+    #[test]
+    fn hjem_non_retryable_disables_credential_permanently() {
+        let pool = make_hjem_pool(2, no_sticky_cfg());
+        let g = pool.acquire().expect("acquire");
+        let bad = g.account().id.clone();
+        g.record_non_retryable_error();
+
+        // Even after waiting, disabled credential is never selected.
+        std::thread::sleep(Duration::from_millis(50));
+        for _ in 0..6 {
+            let g = pool.acquire().expect("acquire");
+            assert_ne!(
+                g.account().id,
+                bad,
+                "disabled credential must never be returned"
+            );
+            g.mark_success();
+        }
+        // State snapshot reports Disabled.
+        let bad_snapshot = pool
+            .accounts
+            .iter()
+            .find(|a| a.id == bad)
+            .expect("find bad")
+            .state_snapshot();
+        assert!(matches!(bad_snapshot, AccountState::Disabled { .. }));
+    }
+
+    // All-in-cooldown returns NoAccountsAvailable with min-expiry duration.
+    #[test]
+    fn hjem_all_in_cooldown_returns_min_cooldown_remaining() {
+        // Long cooldown so we can read the soonest-expiry value reliably.
+        let cfg = CooldownConfig {
+            rate_limit_duration: Duration::from_secs(60),
+            failure_threshold: 5,
+            sticky_fallback_window: Duration::ZERO,
+            ..CooldownConfig::default()
+        };
+        let pool = make_hjem_pool(2, cfg);
+
+        let g0 = pool.acquire().expect("k0");
+        g0.record_429(None);
+        let g1 = pool.acquire().expect("k1");
+        g1.record_429(None);
+
+        let err = pool.acquire().expect_err("exhausted");
+        match err {
+            PoolError::NoAccountsAvailable {
+                total,
+                min_cooldown_remaining,
+                ..
+            } => {
+                assert_eq!(total, 2);
+                let remaining = min_cooldown_remaining.expect("should report min expiry");
+                // Remaining must be positive and ≤ rate_limit_duration.
+                assert!(remaining > Duration::ZERO);
+                assert!(remaining <= Duration::from_secs(60));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // record_429 honours server-supplied retry_after when longer than backoff.
+    #[test]
+    fn hjem_record_429_honours_long_retry_after() {
+        let cfg = CooldownConfig {
+            rate_limit_duration: Duration::from_secs(1),
+            failure_threshold: 5,
+            max_duration: Duration::from_secs(300),
+            sticky_fallback_window: Duration::ZERO,
+            ..CooldownConfig::default()
+        };
+        let pool = make_hjem_pool(1, cfg);
+        let g = pool.acquire().expect("acquire");
+        g.record_429(Some(Duration::from_secs(120)));
+
+        let snap = pool.accounts[0].state_snapshot();
+        match snap {
+            AccountState::CoolingDown { until, .. } => {
+                let remaining = until.saturating_duration_since(Instant::now());
+                // Should be close to 120s (server retry_after wins over 1s default).
+                assert!(remaining > Duration::from_secs(100), "remaining: {remaining:?}");
+            }
+            other => panic!("expected CoolingDown, got {other:?}"),
+        }
+    }
+
+    // record_429 caps cooldown at max_duration even when retry_after is huge.
+    #[test]
+    fn hjem_record_429_caps_at_max_duration() {
+        let cfg = CooldownConfig {
+            rate_limit_duration: Duration::from_secs(1),
+            failure_threshold: 5,
+            max_duration: Duration::from_secs(300),
+            sticky_fallback_window: Duration::ZERO,
+            ..CooldownConfig::default()
+        };
+        let pool = make_hjem_pool(1, cfg);
+        let g = pool.acquire().expect("acquire");
+        g.record_429(Some(Duration::from_secs(10_000)));
+
+        let snap = pool.accounts[0].state_snapshot();
+        match snap {
+            AccountState::CoolingDown { until, .. } => {
+                let remaining = until.saturating_duration_since(Instant::now());
+                assert!(
+                    remaining <= Duration::from_secs(301),
+                    "max_duration cap not honoured: {remaining:?}"
+                );
+            }
+            other => panic!("expected CoolingDown, got {other:?}"),
+        }
+    }
+
+    // CooldownReason::NonRetryable surfaces in the as_str() label set used by
+    // telemetry counters.
+    #[test]
+    fn hjem_non_retryable_reason_string() {
+        assert_eq!(CooldownReason::NonRetryable.as_str(), "non_retryable");
+    }
+
+    // force_available clears Disabled state too (operator override).
+    #[test]
+    fn hjem_force_available_clears_disabled() {
+        let pool = make_hjem_pool(1, no_sticky_cfg());
+        let g = pool.acquire().expect("acquire");
+        g.record_non_retryable_error();
+        assert!(matches!(
+            pool.accounts[0].state_snapshot(),
+            AccountState::Disabled { .. }
+        ));
+        pool.accounts[0].force_available();
+        assert!(matches!(
+            pool.accounts[0].state_snapshot(),
+            AccountState::Available
+        ));
+    }
+
+    // CredentialHandle.credential_id passes through to the account id.
+    #[test]
+    fn hjem_credential_id_accessor() {
+        let pool = make_hjem_pool(1, no_sticky_cfg());
+        let g = pool.acquire().expect("acquire");
+        assert_eq!(g.credential_id(), "k0");
+        g.mark_success();
     }
 }

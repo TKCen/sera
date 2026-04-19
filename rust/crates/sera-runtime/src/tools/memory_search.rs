@@ -232,6 +232,7 @@ impl Tool for MemorySearchTool {
             query_embedding: Some(query_embedding),
             top_k,
             similarity_threshold: None,
+            scope: None,
         };
         let hits: Vec<ScoredEntry> = self
             .store
@@ -483,6 +484,7 @@ mod tests {
                 created_at: Utc::now(),
                 last_accessed_at: None,
                 promoted: false,
+                scope: None,
             },
             score,
             index_score: score,

@@ -1,13 +1,20 @@
 //! Session manager — wraps sera-db SQLite for transcript persistence.
 
 use crate::types::ChatMessage;
+use sera_db::signals::{SignalStore, StoredSignal};
 use sera_db::sqlite::SqliteDb;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Manages session state and transcript for the MVS turn loop.
 /// Backed by sera-db SQLite for persistence.
 pub struct SessionManager {
     db: SqliteDb,
+    /// Optional signal inbox. When set, [`SessionManager::resume_session`]
+    /// drains queued signals for the agent so the NDJSON event stream can
+    /// push them into the next turn's context. When `None`, signal delivery
+    /// is disabled (legacy path).
+    signal_store: Option<Arc<dyn SignalStore>>,
 }
 
 #[allow(dead_code)]
@@ -16,14 +23,47 @@ impl SessionManager {
     pub fn new(db_path: &str) -> anyhow::Result<Self> {
         let db = SqliteDb::open(Path::new(db_path))
             .map_err(|e| anyhow::anyhow!("Failed to open SQLite DB at {db_path}: {e}"))?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            signal_store: None,
+        })
     }
 
     /// Create a session manager backed by an in-memory database (useful for tests).
     pub fn new_in_memory() -> anyhow::Result<Self> {
         let db = SqliteDb::open_in_memory()
             .map_err(|e| anyhow::anyhow!("Failed to open in-memory SQLite DB: {e}"))?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            signal_store: None,
+        })
+    }
+
+    /// Attach a signal inbox store. Subsequent calls to
+    /// [`SessionManager::resume_session`] will drain queued signals for the
+    /// resuming agent and mark them delivered.
+    pub fn with_signal_store(mut self, store: Arc<dyn SignalStore>) -> Self {
+        self.signal_store = Some(store);
+        self
+    }
+
+    /// Resume an existing session for `agent_id`, returning the session id
+    /// and any signals queued for the agent while it was offline. Drained
+    /// signals are already marked delivered in the inbox — callers should
+    /// inject them into the next turn's context.
+    pub async fn resume_session(
+        &self,
+        agent_id: &str,
+    ) -> anyhow::Result<(String, Vec<StoredSignal>)> {
+        let session_id = self.get_or_create_session(agent_id)?;
+        let drained = match &self.signal_store {
+            Some(store) => store
+                .drain_pending(agent_id)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to drain signals for {agent_id}: {e}"))?,
+            None => Vec::new(),
+        };
+        Ok((session_id, drained))
     }
 
     /// Get or create the active session for an agent. Returns the session ID.
@@ -250,5 +290,82 @@ mod tests {
         assert_eq!(t1[0].content.as_deref(), Some("msg1"));
         assert_eq!(t2.len(), 1);
         assert_eq!(t2[0].content.as_deref(), Some("msg2"));
+    }
+
+    // ── Signal inbox integration (sera-signal-system) ────────────────────────
+
+    use rusqlite::Connection;
+    use sera_db::signals::{SignalStore, SqliteSignalStore};
+    use sera_types::signal::Signal;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    fn new_signal_store() -> Arc<dyn SignalStore> {
+        let conn = Connection::open_in_memory().unwrap();
+        SqliteSignalStore::init_schema(&conn).unwrap();
+        Arc::new(SqliteSignalStore::new(Arc::new(AsyncMutex::new(conn))))
+    }
+
+    #[tokio::test]
+    async fn resume_session_without_store_returns_empty_signals() {
+        let sm = SessionManager::new_in_memory().unwrap();
+        let (sid, signals) = sm.resume_session("agent-x").await.unwrap();
+        assert!(!sid.is_empty());
+        assert!(signals.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resume_session_drains_pending_signals() {
+        let store = new_signal_store();
+        let sig = Signal::Done {
+            artifact_id: "art".into(),
+            summary: "ok".into(),
+            duration_ms: 10,
+        };
+        store.enqueue("agent-y", &sig).await.unwrap();
+
+        let sm = SessionManager::new_in_memory()
+            .unwrap()
+            .with_signal_store(Arc::clone(&store));
+        let (_sid, signals) = sm.resume_session("agent-y").await.unwrap();
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].signal, sig);
+
+        // Second resume should drain nothing — signals marked delivered.
+        let (_sid2, signals2) = sm.resume_session("agent-y").await.unwrap();
+        assert!(signals2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resume_session_only_drains_target_agent() {
+        let store = new_signal_store();
+        store
+            .enqueue(
+                "agent-a",
+                &Signal::Started {
+                    task_id: "t".into(),
+                    description: "".into(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .enqueue(
+                "agent-b",
+                &Signal::Started {
+                    task_id: "t".into(),
+                    description: "".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let sm = SessionManager::new_in_memory()
+            .unwrap()
+            .with_signal_store(Arc::clone(&store));
+        let (_sid, signals) = sm.resume_session("agent-a").await.unwrap();
+        assert_eq!(signals.len(), 1);
+        // agent-b still has its signal pending.
+        let pending_b = store.peek_pending("agent-b").await.unwrap();
+        assert_eq!(pending_b.len(), 1);
     }
 }

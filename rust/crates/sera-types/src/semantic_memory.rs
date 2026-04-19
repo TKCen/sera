@@ -41,6 +41,181 @@ use thiserror::Error;
 
 use crate::memory::SegmentKind;
 
+// ── Scope ─────────────────────────────────────────────────────────────────────
+
+/// Hierarchical memory scope (GH#140).
+///
+/// Scopes form a containment hierarchy: `Agent` ⊂ `Circle` ⊂ `Org` ⊂ `Global`.
+/// [`SemanticMemoryStore::query_hierarchical`] walks this chain with per-level
+/// dampening, falling back to broader scopes when the narrower scope yields
+/// insufficient results.
+///
+/// When a [`SemanticEntry`] has `scope: None` it is treated as
+/// `Scope::Agent(agent_id)` for backward compatibility.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", content = "id", rename_all = "snake_case")]
+pub enum Scope {
+    /// Scoped to a single agent instance.
+    Agent(String),
+    /// Scoped to a named circle (group of agents sharing memory).
+    Circle(String),
+    /// Scoped to an organisation (all agents in a tenant).
+    Org(String),
+    /// Globally visible across all tenants (operator-managed rows only).
+    Global,
+}
+
+impl Scope {
+    /// Stable SQL discriminant (`"agent"`, `"circle"`, `"org"`, `"global"`).
+    ///
+    /// Maps onto the pgvector `scope_kind` column added for GH#140 so
+    /// callers can translate between the enum and SQL without a custom
+    /// encoder.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Scope::Agent(_) => "agent",
+            Scope::Circle(_) => "circle",
+            Scope::Org(_) => "org",
+            Scope::Global => "global",
+        }
+    }
+
+    /// SQL `scope_key` value. `Global` has no key; we return an empty
+    /// string so the column can stay non-null.
+    pub fn key_str(&self) -> &str {
+        match self {
+            Scope::Agent(k) | Scope::Circle(k) | Scope::Org(k) => k.as_str(),
+            Scope::Global => "",
+        }
+    }
+
+    /// Reconstruct a [`Scope`] from a `(kind, key)` tuple as stored in
+    /// SQL. Returns [`SemanticError::Serialization`] when `kind` is
+    /// unknown.
+    pub fn from_parts(kind: &str, key: &str) -> Result<Self, SemanticError> {
+        match kind {
+            "agent" => Ok(Scope::Agent(key.to_string())),
+            "circle" => Ok(Scope::Circle(key.to_string())),
+            "org" => Ok(Scope::Org(key.to_string())),
+            "global" => Ok(Scope::Global),
+            other => Err(SemanticError::Serialization(format!(
+                "unknown scope kind '{other}'"
+            ))),
+        }
+    }
+}
+
+/// Per-level score dampening applied by
+/// [`SemanticMemoryStore::query_hierarchical`] (GH#140).
+///
+/// Scores returned by each per-level `query` are multiplied by the
+/// matching factor before the hierarchical merge. Defaults dampen
+/// outward so agent-level memories beat circle memories at equal raw
+/// cosine, circle beats org, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Damping {
+    /// Multiplier for agent-scope hits (default `1.0`).
+    pub agent: f32,
+    /// Multiplier for circle-scope hits (default `0.7`).
+    pub circle: f32,
+    /// Multiplier for org-scope hits (default `0.5`).
+    pub org: f32,
+    /// Multiplier for global-scope hits (default `0.3`).
+    pub global: f32,
+}
+
+impl Default for Damping {
+    fn default() -> Self {
+        Self {
+            agent: 1.0,
+            circle: 0.7,
+            org: 0.5,
+            global: 0.3,
+        }
+    }
+}
+
+impl Damping {
+    /// Factor for the supplied [`Scope`] variant.
+    pub fn for_scope(&self, scope: &Scope) -> f32 {
+        match scope {
+            Scope::Agent(_) => self.agent,
+            Scope::Circle(_) => self.circle,
+            Scope::Org(_) => self.org,
+            Scope::Global => self.global,
+        }
+    }
+}
+
+/// Configuration for a hierarchical recall walk (GH#140).
+///
+/// [`Self::levels`] returns the ordered list of scopes to query — always
+/// starting with `Agent(agent)`, optionally including `Circle` / `Org`
+/// when the corresponding field is `Some`, and always ending with
+/// `Global`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeHierarchy {
+    /// Required — the most specific scope.
+    pub agent: String,
+    /// Optional circle scope walked after `agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circle: Option<String>,
+    /// Optional org scope walked after `circle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
+    /// Per-level dampening applied by
+    /// [`SemanticMemoryStore::query_hierarchical`].
+    #[serde(default)]
+    pub damping: Damping,
+}
+
+impl ScopeHierarchy {
+    /// Construct a hierarchy pinned to `agent` with no circle/org and
+    /// the default damping profile.
+    pub fn agent_only(agent: impl Into<String>) -> Self {
+        Self {
+            agent: agent.into(),
+            circle: None,
+            org: None,
+            damping: Damping::default(),
+        }
+    }
+
+    /// Ordered list of scopes to query, from most specific to most
+    /// general. `Agent` and `Global` are always present; `Circle` and
+    /// `Org` are included when their fields are populated.
+    pub fn levels(&self) -> Vec<Scope> {
+        let mut out = Vec::with_capacity(4);
+        out.push(Scope::Agent(self.agent.clone()));
+        if let Some(c) = &self.circle {
+            out.push(Scope::Circle(c.clone()));
+        }
+        if let Some(o) = &self.org {
+            out.push(Scope::Org(o.clone()));
+        }
+        out.push(Scope::Global);
+        out
+    }
+}
+
+/// Single hit returned from [`SemanticMemoryStore::query_hierarchical`].
+///
+/// Lighter than [`ScoredEntry`] — carries the row, the scope level that
+/// produced it, the dampened score used for ordering, and the raw
+/// undampened composite score for downstream rerankers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryHit {
+    /// The matched row.
+    pub entry: SemanticEntry,
+    /// Scope level that produced this hit.
+    pub scope: Scope,
+    /// Score after the per-level damping factor has been applied.
+    pub dampened_score: f32,
+    /// Raw undampened composite score (same units as
+    /// [`ScoredEntry::score`]).
+    pub raw_score: f32,
+}
+
 /// Stable identifier for a semantic-memory row.
 ///
 /// Backends are free to choose the id space (UUIDv4 in `PgVectorStore`;
@@ -113,6 +288,12 @@ pub struct SemanticEntry {
     /// policies with `promoted_exempt = true`.
     #[serde(default)]
     pub promoted: bool,
+    /// Hierarchical memory scope (GH#140). When `None`, the row is treated
+    /// as `Scope::Agent(agent_id)` for back-compat. Populated rows can be
+    /// reached via [`SemanticMemoryStore::query_hierarchical`] so lookups
+    /// walk agent → circle → org → global with per-level dampening.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
 }
 
 /// Parameters for [`SemanticMemoryStore::query`].
@@ -121,8 +302,15 @@ pub struct SemanticEntry {
 /// the result set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticQuery {
-    /// Mandatory tenant scope.
+    /// Mandatory tenant scope. When `scope` is also supplied, backends
+    /// filter on the scope first and `agent_id` is still accepted as the
+    /// caller-identity breadcrumb (useful for audit logging).
     pub agent_id: String,
+    /// Optional hierarchical scope filter (GH#140). When `Some`, backends
+    /// match rows whose `scope` equals this value. When `None`, backends
+    /// fall back to agent-only filtering (pre-hierarchy behaviour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
     /// Only match rows whose `tier` equals this value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier_filter: Option<SegmentKind>,
@@ -236,6 +424,80 @@ pub trait SemanticMemoryStore: Send + Sync + 'static {
     /// [`ScoredEntry::score`] with ties broken by `created_at` desc.
     async fn query(&self, query: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError>;
 
+    /// Hierarchical similarity search (GH#140, bead sera-1qfm).
+    ///
+    /// Iterates `hierarchy.levels()` from most specific (`Agent`) to most
+    /// general (`Global`), issues a per-level [`Self::query`] for each,
+    /// multiplies each result's composite score by the matching damping
+    /// factor, merges across levels, deduplicates by [`MemoryId`] (keeping
+    /// the highest dampened score), re-sorts by dampened score and returns
+    /// the top `k` hits.
+    ///
+    /// The default implementation fans out via [`Self::query`] so every
+    /// backend inherits it for free; overrides are welcome when a
+    /// single-round-trip union-query is cheaper than N sequential calls.
+    async fn query_hierarchical(
+        &self,
+        hierarchy: &ScopeHierarchy,
+        query_embedding: Vec<f32>,
+        k: usize,
+    ) -> Result<Vec<MemoryHit>, SemanticError> {
+        use std::collections::HashMap;
+
+        let k = k.max(1);
+        let mut best: HashMap<MemoryId, MemoryHit> = HashMap::new();
+
+        for scope in hierarchy.levels() {
+            let damping = hierarchy.damping.for_scope(&scope);
+            // `Scope::Agent(agent_id)` levels preserve back-compat with the
+            // pre-hierarchy agent-only filter; broader scopes use the
+            // caller-supplied `agent` as the audit breadcrumb while the
+            // actual filter is carried by `SemanticQuery::scope`.
+            let per_level_query = SemanticQuery {
+                agent_id: hierarchy.agent.clone(),
+                scope: Some(scope.clone()),
+                tier_filter: None,
+                text: None,
+                query_embedding: Some(query_embedding.clone()),
+                top_k: k,
+                similarity_threshold: None,
+            };
+            let hits = match self.query(per_level_query).await {
+                Ok(h) => h,
+                Err(SemanticError::Backend(_)) => continue, // tolerate level-miss
+                Err(e) => return Err(e),
+            };
+            for scored in hits {
+                let raw = scored.score;
+                let dampened = raw * damping;
+                let id = scored.entry.id.clone();
+                let candidate = MemoryHit {
+                    entry: scored.entry,
+                    scope: scope.clone(),
+                    dampened_score: dampened,
+                    raw_score: raw,
+                };
+                best.entry(id)
+                    .and_modify(|existing| {
+                        if candidate.dampened_score > existing.dampened_score {
+                            *existing = candidate.clone();
+                        }
+                    })
+                    .or_insert(candidate);
+            }
+        }
+
+        let mut merged: Vec<MemoryHit> = best.into_values().collect();
+        merged.sort_by(|a, b| {
+            b.dampened_score
+                .partial_cmp(&a.dampened_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.entry.created_at.cmp(&a.entry.created_at))
+        });
+        merged.truncate(k);
+        Ok(merged)
+    }
+
     /// Remove the row identified by `id`. Returns
     /// [`SemanticError::NotFound`] if the id is not in the store.
     async fn delete(&self, id: &MemoryId) -> Result<(), SemanticError>;
@@ -340,6 +602,7 @@ mod tests {
             created_at: Utc::now(),
             last_accessed_at: None,
             promoted: true,
+            scope: None,
         };
         let json = serde_json::to_string(&e).unwrap();
         let back: SemanticEntry = serde_json::from_str(&json).unwrap();

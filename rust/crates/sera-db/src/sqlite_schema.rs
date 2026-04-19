@@ -17,6 +17,7 @@ use crate::audit::SqliteAuditStore;
 use crate::metering::SqliteMeteringStore;
 use crate::schedules::SqliteScheduleStore;
 use crate::secrets::SqliteSecretsStore;
+use crate::signals::SqliteSignalStore;
 
 /// Create every SQLite-backed table used by the gateway's local-first boot
 /// path. Safe to call on a pre-populated DB — each per-module `init_schema`
@@ -27,6 +28,7 @@ pub fn init_all(conn: &Connection) -> rusqlite::Result<()> {
     SqliteMeteringStore::init_schema(conn)?;
     SqliteScheduleStore::init_schema(conn)?;
     SqliteSecretsStore::init_schema(conn)?;
+    SqliteSignalStore::init_schema(conn)?;
     Ok(())
 }
 
@@ -49,6 +51,7 @@ mod tests {
             "token_quotas",
             "schedules",
             "secrets",
+            "agent_signals",
         ] {
             let count: i64 = conn
                 .query_row(

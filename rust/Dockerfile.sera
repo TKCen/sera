@@ -13,17 +13,27 @@ WORKDIR /build
 
 # Build dependencies (rustls = no libssl-dev needed)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends pkg-config && \
+    apt-get install -y --no-install-recommends pkg-config curl && \
     rm -rf /var/lib/apt/lists/*
+
+# Install sccache for compiler caching
+RUN curl -sSL https://github.com/mozilla/sccache/releases/download/v0.8.1/sccache-v0.8.1-x86_64-unknown-linux-musl.tar.gz | tar xz && \
+    mv sccache-v0.8.1-x86_64-unknown-linux-musl/sccache /usr/local/bin/ && \
+    rm -rf sccache-v0.8.1-x86_64-unknown-linux-musl
 
 # Copy full workspace source
 COPY rust/ .
 
-# Build both binaries in release mode.
+# Build both binaries in release mode with sccache.
 # Note: the gateway binary is named `sera-gateway` in Cargo.toml (sera-gateway
 # crate) but installed as `sera` in the image. `--bin sera` would build the CLI
 # (sera-cli crate), which lacks the `start` subcommand.
-RUN cargo build --release --bin sera-gateway --bin sera-runtime
+ENV RUSTC_WRAPPER=/usr/local/bin/sccache
+ENV SCCACHE_DIR=/build/.sccache
+ENV SCCACHE_CACHE_SIZE=20G
+ENV CARGO_REGISTRY_CACHE=/root/.cargo/registry
+RUN cargo build --release --bin sera-gateway --bin sera-runtime && \
+    sccache --show-stats
 
 # ── Stage 2: Runner ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runner

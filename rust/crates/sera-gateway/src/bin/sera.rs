@@ -459,12 +459,10 @@ const FLAGGED_OPERATIONS: &[&str] = &[
 /// return the matching pattern if found.
 fn detect_flagged_operation(msg: &str) -> Option<&'static str> {
     let lower = msg.to_ascii_lowercase();
-    for pat in FLAGGED_OPERATIONS {
-        if lower.contains(pat) {
-            return Some(pat);
-        }
-    }
-    None
+    FLAGGED_OPERATIONS
+        .iter()
+        .find(|pat| lower.contains(**pat))
+        .copied()
 }
 
 // ── Shared state ────────────────────────────────────────────────────────────
@@ -1237,6 +1235,7 @@ fn turn_timeout() -> std::time::Duration {
 /// The gateway builds the conversation messages from the transcript and sends
 /// them to the harness. The harness (sera-runtime) owns LLM calls and tool
 /// execution — the gateway never touches those.
+#[allow(clippy::too_many_arguments)]
 async fn execute_turn(
     agent_spec: &AgentSpec,
     transcript: &[sera_db::sqlite::TranscriptRow],
